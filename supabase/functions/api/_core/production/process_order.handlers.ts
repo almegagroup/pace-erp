@@ -1037,6 +1037,28 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
     const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10));
     const perPage = Math.min(100, Math.max(10, parseInt(url.searchParams.get("per_page") ?? "20", 10)));
 
+    // Without this, any authenticated production role saw every company's Process
+    // POs the moment the Company filter was left blank - the only guard was the
+    // route-level capability check, which says nothing about *which* company. Scope
+    // to the caller's own companies (erp_map.user_companies) unless SA/GA.
+    let allowedCompanyIds: string[] | null = null;
+    if (ctx.roleCode !== "SA" && ctx.roleCode !== "GA") {
+      const { data: userCompanies, error: userCompaniesError } = await serviceRoleClient
+        .schema("erp_map")
+        .from("user_companies")
+        .select("company_id")
+        .eq("auth_user_id", ctx.auth_user_id);
+      if (userCompaniesError) {
+        console.error("[process_order.listProcessOrders] user_companies query failed:", JSON.stringify(userCompaniesError));
+        throw new Error("PROD_PO_LIST_FAILED");
+      }
+      const resolvedCompanyIds = ((userCompanies ?? []) as JsonRecord[]).map((row) => String(row.company_id ?? ""));
+      allowedCompanyIds = resolvedCompanyIds;
+      if (companyId && !resolvedCompanyIds.includes(companyId)) {
+        return poErr(req, ctx, "PROD_PO_COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
+
     let query = serviceRoleClient
       .schema("erp_production")
       .from("process_order")
@@ -1050,6 +1072,7 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
       .order("created_at", { ascending: false });
 
     if (companyId) query = query.eq("company_id", companyId);
+    else if (allowedCompanyIds) query = query.in("company_id", allowedCompanyIds);
     if (poNumber) query = query.eq("po_number", poNumber);
     if (status) query = query.eq("status", status);
     if (poTypeList.length > 0) query = query.in("po_type", poTypeList);
@@ -1146,11 +1169,7 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
     const { data: po, error } = await serviceRoleClient
       .schema("erp_production")
       .from("process_order")
-      .select(`
-        *,
-        stroke:stroke_master!stroke_master_id(id, stroke_number, description, status),
-        machine:machine_master!machine_id(id, machine_code, machine_name)
-      `)
+      .select("*")
       .eq("id", id)
       .maybeSingle();
 
@@ -1161,13 +1180,49 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Process order not found");
 
     const poRow = po as JsonRecord;
-    const materialMap = await getMaterialMapByIds(
-      [String(poRow.material_id ?? "")],
-      "[process_order.getProcessOrder]",
-      "PROD_PO_FETCH_FAILED",
-      "id, pace_code, material_name, shade_code, base_uom_code",
-    );
-    const lines = await fetchOrderLines(id, toTrimmedString(poRow.stroke_master_id) || null);
+    const strokeMasterId = toTrimmedString(poRow.stroke_master_id) || null;
+    const machineId = toTrimmedString(poRow.machine_id) || null;
+
+    // stroke_master lives in erp_production, machine_master in erp_master - the old
+    // PostgREST embed shorthand (`table!fk_column(...)`) can't resolve a cross-schema
+    // relationship reliably from a single-schema request context, so it 500'd. Fetch
+    // both explicitly instead, matching the pattern already used everywhere else in
+    // this file (e.g. listProcessOrdersHandler's own stroke/machine lookups).
+    const [materialMap, strokeResult, machineResult] = await Promise.all([
+      getMaterialMapByIds(
+        [String(poRow.material_id ?? "")],
+        "[process_order.getProcessOrder]",
+        "PROD_PO_FETCH_FAILED",
+        "id, pace_code, material_name, shade_code, base_uom_code",
+      ),
+      strokeMasterId
+        ? serviceRoleClient
+            .schema("erp_production")
+            .from("stroke_master")
+            .select("id, stroke_number, description, status")
+            .eq("id", strokeMasterId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      machineId
+        ? serviceRoleClient
+            .schema("erp_master")
+            .from("machine_master")
+            .select("id, machine_code, machine_name")
+            .eq("id", machineId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+
+    if (strokeResult.error) {
+      console.error("[process_order.getProcessOrder] stroke query failed:", JSON.stringify(strokeResult.error));
+      throw new Error("PROD_PO_FETCH_FAILED");
+    }
+    if (machineResult.error) {
+      console.error("[process_order.getProcessOrder] machine query failed:", JSON.stringify(machineResult.error));
+      throw new Error("PROD_PO_FETCH_FAILED");
+    }
+
+    const lines = await fetchOrderLines(id, strokeMasterId);
     const { data: packOrders, error: packErr } = await serviceRoleClient
       .schema("erp_production")
       .from("packing_order")
@@ -1183,6 +1238,8 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
       data: {
         ...poRow,
         material: materialMap.get(String(poRow.material_id ?? "")) ?? null,
+        stroke: strokeResult.data ?? null,
+        machine: machineResult.data ?? null,
         lines,
         packing_orders: packOrders ?? [],
       },
