@@ -34,7 +34,11 @@ Columns, in this exact order: **Sl No | Material Type | Material Name | Pace Cod
 - Keep Single Entry / Bulk Entry toggle buttons as-is (already correct per business owner).
 - Keep Add Row, Submit For Approval, Back To List, Refresh actions as-is.
 
-**Currency — do not silently pick one.** No `currency_code` column exists anywhere (`opening_stock_document` or `companies`) — confirmed via direct DB check. The current hardcoded `Intl.NumberFormat("en-BD", {currency: "BDT"})` needs to become `Intl.NumberFormat("en-IN", {currency: "INR"})` as the new default, **plus** add a lightweight, purely client-side currency selector (hardcoded short list: INR, BDT, USD — no master table, no backend field, formatting-only) next to the Total Value summary. If this scope reads as insufficient once you're in the code (e.g. the business owner actually wants the choice persisted per document), stop and flag it in the log rather than guessing — this was an explicit open decision in the source doc, not a locked spec.
+**Currency — matches the already-established PO/CSN/STO pattern, do not invent a new mechanism.** `POCreatePage.jsx` already does exactly this: `const CURRENCY_OPTIONS = ["INR", "USD"];`, default `"INR"`, a plain `<select>`, stored as a `currency_code` TEXT column (no master table, no FX conversion — `csn.handlers.ts` just reads back whichever line's stored value). Apply the same here:
+- Add `currency_code TEXT NOT NULL DEFAULT 'INR'` to `erp_procurement.opening_stock_document` (one small migration — this is a genuine schema addition, unlike the company-scoping check).
+- Frontend: same `CURRENCY_OPTIONS = ["INR", "USD"]` constant, a `<select>` on the document header (Page 1, next to Cut-off Date), default `"INR"`.
+- `Intl.NumberFormat` calls for Total Value formatting read the document's stored `currency_code` (map `"INR"` → locale `"en-IN"`, `"USD"` → `"en-US"`) instead of the old hardcoded `"en-BD"/"BDT"`.
+- IN06's approval page displays the same stored `currency_code`, read-only (currency is set once at creation, not re-chosen at approval).
 
 ---
 
@@ -67,14 +71,14 @@ Columns, in this exact order: **Sl No | Material Type | Material Name | Pace Cod
 ## Hard rules
 
 1. Do not touch the actual stock-posting RPC call (`post_stock_movement`) or its P561/P563/P565 movement-type selection — this brief is entry/approval UX and an ACL gate only.
-2. Do not add a currency master table or a stored `currency_code` column without explicit confirmation — the source doc left this genuinely undecided (see Change 1's currency note).
+2. Currency is resolved per Change 1: add the `opening_stock_document.currency_code` column (default `'INR'`), matching PO's existing pattern exactly — do not add a full currency master table, FX conversion, or per-line currency (Opening Stock is document-level, one currency per document).
 3. SA/GA must bypass the company-scoping check entirely — do not accidentally block them.
 4. No raw UUIDs anywhere in either page (R-01).
 5. IN05's entry table has no pagination; IN06's approval table has pagination (25/page). Do not swap these.
 
 ## Out of scope
 
-- Currency master / multi-currency valuation (flagged, not decided)
+- A real currency master table or FX conversion — only the PO-style hardcoded `["INR","USD"]` + stored `currency_code` column, per Change 1
 - Any change to WAR/costing (Section 104, separate deferred item)
 - Opening Stock's UOM-conversion mechanism (flagged in a prior session note — only one material in Dev has a registered alternate UOM and its conversion factor isn't even set; not touched here)
 
