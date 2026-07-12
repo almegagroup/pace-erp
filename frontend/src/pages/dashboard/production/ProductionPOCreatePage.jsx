@@ -73,7 +73,7 @@ function machineLabel(machine) {
 }
 
 function storageLocationLabel(location) {
-  return [location.code || location.location_code, location.name || location.location_name].filter(Boolean).join(" - ");
+  return [location?.code || location?.location_code, location?.name || location?.location_name].filter(Boolean).join(" - ");
 }
 
 function deriveSegmentCode(poType, mtsSegmentCode) {
