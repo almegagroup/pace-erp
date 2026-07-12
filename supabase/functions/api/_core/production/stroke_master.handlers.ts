@@ -491,7 +491,7 @@ export async function createStrokeMasterHandler(
       }
     }
 
-    return okResponse({ id: sm.id }, ctx.request_id, req, 201);
+    return okResponse({ id: sm.id }, ctx.request_id, req);
   } catch (err) {
     console.error("[stroke_master.createStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_CREATE_FAILED";
@@ -753,7 +753,7 @@ export async function revertStrokeMasterHandler(
     // Cannot revert if any Process Orders reference this stroke
     const { count } = await serviceRoleClient.schema("erp_production").from("process_order")
       .select("id", { count: "exact", head: true }).eq("stroke_master_id", id)
-      .not("status", "eq", "REVERSED");
+      .not("status", "eq", "REVERSED") as { count?: number };
     if ((count ?? 0) > 0) {
       return strokeError(req, ctx, "PROD_STROKE_IN_USE", 409, "Cannot revert — active Process Orders reference this stroke");
     }
