@@ -7,9 +7,10 @@
  * Authority: Frontend
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
+import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -113,6 +114,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   const [entryMode, setEntryMode] = useState(ENTRY_MODES.SINGLE);
   const [singleForm, setSingleForm] = useState(createEmptySingleForm());
   const [bulkRows, setBulkRows] = useState([createBulkRow(1), createBulkRow(2), createBulkRow(3)]);
+  const [entryDrawerOpen, setEntryDrawerOpen] = useState(false);
   const [editingLineId, setEditingLineId] = useState("");
   const [editForm, setEditForm] = useState(createEmptySingleForm());
   const [saving, setSaving] = useState(false);
@@ -248,6 +250,10 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
 
   function removeBulkRow(key) {
     setBulkRows((current) => (current.length === 1 ? current : current.filter((row) => row.key !== key)));
+  }
+
+  function closeEntryDrawer() {
+    setEntryDrawerOpen(false);
   }
 
   async function handleAddSingleLine() {
@@ -396,6 +402,21 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       setSaving(false);
     }
   }
+
+  useEffect(() => {
+    if (!entryDrawerOpen) return undefined;
+
+    function handleDrawerEscape(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+      closeEntryDrawer();
+    }
+
+    window.addEventListener("keydown", handleDrawerEscape, true);
+    return () => window.removeEventListener("keydown", handleDrawerEscape, true);
+  }, [entryDrawerOpen]);
 
   return (
     <ErpScreenScaffold
@@ -621,6 +642,31 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                     <div className="mb-4 text-lg font-semibold text-slate-900">
                       Single entry or bulk entry
                     </div>
+                    <div className="flex justify-start">
+                      <button
+                        type="button"
+                        onClick={() => setEntryDrawerOpen(true)}
+                        className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950"
+                      >
+                        Open Entry Drawer
+                      </button>
+                    </div>
+                    <DrawerBase
+                      visible={entryDrawerOpen}
+                      title="Opening Stock Entry"
+                      onEscape={closeEntryDrawer}
+                      onClose={closeEntryDrawer}
+                      width="min(1120px, calc(100vw - 24px))"
+                      actions={(
+                        <button
+                          type="button"
+                          onClick={closeEntryDrawer}
+                          className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+                        >
+                          Close
+                        </button>
+                      )}
+                    >
                     <div className="grid gap-4">
                       <div className="flex gap-2">
                         <button
@@ -887,6 +933,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                         </div>
                       )}
                     </div>
+                    </DrawerBase>
                   </div>
                 ) : null}
               </div>

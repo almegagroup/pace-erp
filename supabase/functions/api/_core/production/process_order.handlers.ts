@@ -107,7 +107,7 @@ async function getStorageLocationMapByIds(
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
     .from("storage_location_master")
-    .select("id, location_code, location_name")
+    .select("id, code, name")
     .in("id", ids);
   if (error) {
     console.error(`${logPrefix} storage location query failed:`, JSON.stringify(error));
