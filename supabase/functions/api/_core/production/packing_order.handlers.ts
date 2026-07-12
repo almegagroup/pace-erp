@@ -22,7 +22,7 @@ import {
   parsePositiveInt,
   getIdFromPath,
 } from "./production.shared.ts";
-import { generateCompanyDocNumber } from "./production.utils.ts";
+import { generateGlobalDocNumber } from "./production.utils.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -254,7 +254,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       ? fillQtyPerPack * numPacks
       : parsePositiveNumber(body.planned_qty_kg) ?? null;
 
-    const poNumber = await generateCompanyDocNumber(companyId, "PACK_PO");
+    const poNumber = await generateGlobalDocNumber("PACK_PO");
     const now = new Date().toISOString();
 
     const { data: packPo, error: insertErr } = await serviceRoleClient

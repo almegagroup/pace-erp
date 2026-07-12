@@ -30,7 +30,7 @@ import {
   generateBatchNumber,
   upsertBatchNumberInstanceForProcessOrder,
 } from "./batch_series.handlers.ts";
-import { generateCompanyDocNumber } from "./production.utils.ts";
+import { generateGlobalDocNumber } from "./production.utils.ts";
 
 type JsonRecord = Record<string, unknown>;
 type StockPostingResult = { stock_document_id: string; stock_ledger_id: string };
@@ -1295,7 +1295,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       }
     }
 
-    const poNumber = await generateCompanyDocNumber(companyId, "PROC_PO");
+    const poNumber = await generateGlobalDocNumber("PROC_PO");
     const now = new Date().toISOString();
 
     const { data: insertedPo, error: poErrInsert } = await serviceRoleClient

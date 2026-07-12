@@ -537,9 +537,14 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
 | SO | 900001 | 9xxxxx |
 | DC | 910001 | 91xxxx |
 | SALES_INVOICE | 920001 | 92xxxx |
+| SFG_QA | 950001 | 95xxxx |
+| PROC_PO | 930001 | 93xxxx |
+| PACK_PO | 940001 | 94xxxx |
 
 > ⚠️ Prod deploy এর আগে prod DB তেও same MCP SQL চালাতে হবে (starting_number set)।
 > Schema/code change নেই — pure data config।
+
+**PROC_PO/PACK_PO correction (2026-07-13):** Process PO ও Packing PO আগে ভুলভাবে company-scoped, FY-prefixed number নিতো (`erp_procurement.company_doc_number_series`/`generate_company_doc_number()` — format যেমন `ASCPROC2627-0001`), এই §8-এর global-range convention থেকে ভিন্ন — Gate-27 বানানোর সময় production module নিজের আলাদা mechanism ব্যবহার করেছিল। এখন ঠিক করা হয়েছে: উপরের table-এ `PROC_PO`/`PACK_PO` নতুন global range পেয়েছে, পুরনো company-scoped ৮টা row (৪ company × ২ doc type) `active=false` করা হয়েছে dev-এ, আর `process_order.handlers.ts`/`packing_order.handlers.ts`-এর কোড নতুন `generateGlobalDocNumber()` (production.utils.ts) ব্যবহার করছে — `generate_doc_number()` RPC দিয়ে, company param ছাড়াই। পুরনো `ASCPROC2627-0001` স্টাইলের PO numbers historical data হিসেবে থেকে যাবে, নতুন সব PO plain global number পাবে (৯৩০০০১, ৯৪০০০১ থেকে শুরু)। **Prod deploy-এর আগে prod DB-তেও এই একই MCP data change (নতুন row insert + পুরনো row deactivate) চালাতে হবে** — এটাও pure data config, migration না।
 
 ---
 
