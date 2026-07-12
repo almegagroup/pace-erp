@@ -27,6 +27,33 @@ function materialLabel(material) {
   return [material?.pace_code, material?.material_name].filter(Boolean).join(" - ");
 }
 
+function buildActualMaterialOptions(line) {
+  const options = [{ value: "", label: "(same)" }];
+  const seen = new Set([""]);
+  for (const material of line.allowed_alternate_materials ?? []) {
+    if (!material?.id || seen.has(material.id)) continue;
+    seen.add(material.id);
+    options.push({
+      value: material.id,
+      label: materialLabel(material) || "Registered alternate",
+    });
+  }
+  if (line.registered_alternate_material_id && !seen.has(line.registered_alternate_material_id)) {
+    seen.add(line.registered_alternate_material_id);
+    options.push({
+      value: line.registered_alternate_material_id,
+      label: materialLabel(line.registered_alternate_material) || "Registered alternate",
+    });
+  }
+  if (line.actual_material_id && !seen.has(line.actual_material_id)) {
+    options.push({
+      value: line.actual_material_id,
+      label: materialLabel(line.actual_material) || "Selected alternate",
+    });
+  }
+  return options;
+}
+
 function storageLocationLabel(location) {
   return [location?.code || location?.location_code, location?.name || location?.location_name].filter(Boolean).join(" - ");
 }
@@ -67,6 +94,7 @@ function makeDraftRow(line) {
     dosage_pct: line.dosage_pct ?? "",
     registered_alternate_material_id: line.registered_alternate_material_id || "",
     registered_alternate_material_label: materialLabel(line.registered_alternate_material),
+    allowed_alternate_material_options: buildActualMaterialOptions(line),
     actual_material_id: line.actual_material_id || "",
     issue_sloc_id: line.issue_sloc_id || line.issue_storage_location?.id || "",
     planned_qty: String(line.planned_qty ?? 0),
@@ -411,11 +439,8 @@ export default function ProductionPOFinalPage() {
                           ? availabilityByKey.get(`${previewMaterialId}::${row.issue_sloc_id}`) ?? null
                           : null;
                         const isShort = Boolean(availability && values.actual > Number(availability.available_qty ?? 0));
-                        const actualMaterialOptions = row.registered_alternate_material_id
-                          ? [
-                              { value: "", label: "(same)" },
-                              { value: row.registered_alternate_material_id, label: row.registered_alternate_material_label || "Registered alternate" },
-                            ]
+                        const actualMaterialOptions = row.allowed_alternate_material_options?.length
+                          ? row.allowed_alternate_material_options
                           : [{ value: "", label: "(same)" }];
                         return (
                           <tr key={row.key} className={isShort ? "bg-rose-50" : "border-b border-slate-100"}>
@@ -445,7 +470,7 @@ export default function ProductionPOFinalPage() {
                                 onChange={(value) => updateRow(row.key, { actual_material_id: value })}
                                 options={actualMaterialOptions}
                                 placeholder="(same)"
-                                disabled={!row.id || !row.registered_alternate_material_id}
+                                disabled={!row.id || actualMaterialOptions.length <= 1}
                               />
                             </td>
                             <td className="px-3 py-2">

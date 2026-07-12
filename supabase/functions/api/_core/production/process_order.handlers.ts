@@ -215,6 +215,24 @@ async function fetchStrokeAlternates(strokeMasterId: string | null): Promise<Map
   return result;
 }
 
+async function fetchAllowedAlternateIdsByStroke(
+  strokeMasterId: string | null,
+  logPrefix: string,
+  errorCode: string,
+): Promise<Map<string, string[]>> {
+  if (!strokeMasterId) return new Map<string, string[]>();
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("stroke_line")
+    .select("material_id, alternate_material_id, material_group_id")
+    .eq("stroke_master_id", strokeMasterId);
+  if (error) {
+    console.error(`${logPrefix} stroke-line alternate query failed:`, JSON.stringify(error));
+    throw new Error(errorCode);
+  }
+  return buildAllowedAlternateIdsByStrokeLines((data ?? []) as JsonRecord[], logPrefix, errorCode);
+}
+
 async function buildAllowedAlternateIdsByStrokeLines(
   strokeLines: JsonRecord[],
   logPrefix: string,
@@ -263,11 +281,18 @@ async function fetchOrderLines(orderId: string, strokeMasterId: string | null = 
   }
 
   const lines = (data ?? []) as JsonRecord[];
-  const alternateMap = await fetchStrokeAlternates(strokeMasterId);
+  const [alternateMap, allowedAlternateMap] = await Promise.all([
+    fetchStrokeAlternates(strokeMasterId),
+    fetchAllowedAlternateIdsByStroke(
+      strokeMasterId,
+      "[process_order.fetchOrderLines]",
+      "PROD_PO_FETCH_FAILED",
+    ),
+  ]);
   const materialIds = [
     ...lines.map((line) => String(line.material_id ?? "")),
     ...lines.map((line) => String(line.actual_material_id ?? "")),
-    ...Array.from(alternateMap.values()).map((line) => String(line.alternate_material_id ?? "")),
+    ...Array.from(allowedAlternateMap.values()).flat(),
   ];
   const slocIds = lines.map((line) => String(line.issue_sloc_id ?? ""));
 
@@ -288,6 +313,7 @@ async function fetchOrderLines(orderId: string, strokeMasterId: string | null = 
   return lines.map((line) => {
     const alternate = alternateMap.get(String(line.material_id ?? "")) ?? null;
     const alternateMaterialId = toTrimmedString(alternate?.alternate_material_id);
+    const allowedAlternateIds = allowedAlternateMap.get(String(line.material_id ?? "")) ?? [];
     return {
       ...line,
       dosage_pct: line.dosage_pct ?? alternate?.dosage_pct ?? null,
@@ -297,6 +323,10 @@ async function fetchOrderLines(orderId: string, strokeMasterId: string | null = 
       registered_alternate_material: alternateMaterialId
         ? materialMap.get(alternateMaterialId) ?? null
         : null,
+      allowed_alternate_material_ids: allowedAlternateIds,
+      allowed_alternate_materials: allowedAlternateIds
+        .map((materialId) => materialMap.get(materialId) ?? null)
+        .filter(Boolean),
       issue_storage_location: slocMap.get(String(line.issue_sloc_id ?? "")) ?? null,
     };
   });
@@ -567,7 +597,11 @@ async function applyFinalOrVerifyLineUpdates(params: {
   const existingLines = await fetchOrderLines(orderId, toTrimmedString(po.stroke_master_id) || null);
   const existingLineMap = new Map(existingLines.map((line) => [String(line.id), line]));
   const existingReservationMap = await fetchReservationRowsBySourceLineIds(existingLines.map((line) => String(line.id)));
-  const strokeAlternates = await fetchStrokeAlternates(toTrimmedString(po.stroke_master_id) || null);
+  const allowedAlternateMap = await fetchAllowedAlternateIdsByStroke(
+    toTrimmedString(po.stroke_master_id) || null,
+    "[process_order.applyFinalOrVerifyLineUpdates]",
+    "PROD_PO_FETCH_FAILED",
+  );
   let nextDisplayOrder = existingLines.reduce((maxValue, line) => Math.max(maxValue, Number(line.display_order ?? 0)), 0) + 1;
   const now = new Date().toISOString();
 
@@ -584,9 +618,7 @@ async function applyFinalOrVerifyLineUpdates(params: {
 
       let nextActualMaterialId = toTrimmedString(bodyLine.actual_material_id) || null;
       const currentActualMaterialId = toTrimmedString(existingLine.actual_material_id) || null;
-      const registeredAlternateId = toTrimmedString(
-        strokeAlternates.get(String(existingLine.material_id))?.alternate_material_id,
-      ) || null;
+      const allowedAlternateIds = new Set(allowedAlternateMap.get(String(existingLine.material_id)) ?? []);
       const nextStorageLocationId = toTrimmedString(bodyLine.storage_location_id) || null;
       const currentStorageLocationId = toTrimmedString(existingLine.issue_sloc_id) || null;
 
@@ -618,7 +650,7 @@ async function applyFinalOrVerifyLineUpdates(params: {
       }
 
       if (nextActualMaterialId !== currentActualMaterialId) {
-        if (nextActualMaterialId && nextActualMaterialId !== registeredAlternateId) {
+        if (nextActualMaterialId && !allowedAlternateIds.has(nextActualMaterialId)) {
           return {
             response: poErr(req, ctx, "PROD_PO_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id must match the registered alternate"),
           };
@@ -2065,7 +2097,11 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
     const existingLines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
     const existingReservationMap = await fetchReservationRowsBySourceLineIds(existingLines.map((line) => String(line.id)));
-    const strokeAlternates = await fetchStrokeAlternates(toTrimmedString(po.stroke_master_id) || null);
+    const allowedAlternateMap = await fetchAllowedAlternateIdsByStroke(
+      toTrimmedString(po.stroke_master_id) || null,
+      "[process_order.editProcessOrder]",
+      "PROD_PO_FETCH_FAILED",
+    );
     const now = new Date().toISOString();
 
     if (machineId !== undefined && machineId) {
@@ -2098,13 +2134,11 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
       let nextActualMaterialId = Object.prototype.hasOwnProperty.call(bodyLine ?? {}, "actual_material_id")
         ? (toTrimmedString(bodyLine?.actual_material_id) || null)
         : currentActualMaterialId;
-      const registeredAlternateId = toTrimmedString(
-        strokeAlternates.get(String(line.material_id))?.alternate_material_id,
-      ) || null;
+      const allowedAlternateIds = new Set(allowedAlternateMap.get(String(line.material_id)) ?? []);
       if (!nextActualMaterialId || nextActualMaterialId === String(line.material_id)) {
         nextActualMaterialId = null;
       }
-      if (nextActualMaterialId && nextActualMaterialId !== registeredAlternateId) {
+      if (nextActualMaterialId && !allowedAlternateIds.has(nextActualMaterialId)) {
         return poErr(req, ctx, "PROD_PO_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id must match the registered alternate");
       }
 

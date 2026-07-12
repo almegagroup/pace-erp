@@ -299,6 +299,44 @@ export default function StrokeMasterPage() {
     finally { setSaving(false); }
   }
 
+  async function handleSaveApproveDraft() {
+    setAttemptedSave(true);
+    if (!detail.default_storage_location_id) {
+      toast("Default Storage Location is required.", "error");
+      return;
+    }
+    const sum = dosageSumOf(detailEditLines);
+    if (Math.abs(sum - 100) > 0.01) {
+      toast(`Dosage must sum to 100. Current: ${sum.toFixed(2)}%`, "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      await updateStrokeMaster(detail.id, {
+        description: detail.description,
+        base_uom_code: detail.base_uom_code,
+        conversion_uom_code: detail.conversion_uom_code,
+        conversion_factor: detail.conversion_factor,
+        default_storage_location_id: detail.default_storage_location_id,
+        lines: detailEditLines.map((l) => ({
+          material_id: l.material_id,
+          line_material_type: l.line_material_type,
+          dosage_pct: parseFloat(l.dosage_pct),
+          material_group_id: l.has_alternate ? (l.material_group_id || null) : null,
+          default_storage_location_id: l.default_storage_location_id || null,
+        })),
+      });
+      await approveStrokeMaster(detail.id);
+      toast("Stroke approved (ACTIVE).");
+      setDrawerOpen(false);
+      qc.invalidateQueries({ queryKey: ["prod-stroke-masters"] });
+    } catch (err) {
+      toast(friendlyErr(err.code) || err.message, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function runAction(fn, id, successMsg) {
     setSaving(true);
     try {
@@ -496,7 +534,7 @@ export default function StrokeMasterPage() {
         actions={renderDrawerActions(detail ? [
           ...(detail.status === "DRAFT" ? [
             { label: "Save", tone: "neutral", onClick: handleSaveDraft, disabled: saving },
-            { label: "Approve", tone: "primary", onClick: () => runAction(approveStrokeMaster, detail.id, "Stroke approved (ACTIVE)."), disabled: saving },
+            { label: "Approve", tone: "primary", onClick: handleSaveApproveDraft, disabled: saving },
             { label: "Reject", tone: "danger", onClick: () => runAction(rejectStrokeMaster, detail.id, "Stroke rejected and deleted."), disabled: saving },
           ] : []),
           ...(detail.status === "APPROVED" ? [
