@@ -109,8 +109,6 @@ export default function OpeningStockListPage() {
       ),
     [companies],
   );
-  const runtimeCompanyLabel = companyMap.get(runtimeCompanyId) ?? runtimeCompanyId ?? "";
-
   const queryError =
     documentQuery.error?.message ||
     companiesQuery.error?.message ||
@@ -314,7 +312,20 @@ export default function OpeningStockListPage() {
 
           <ErpSectionCard eyebrow="Create" title="New opening stock document">
             <div className="grid gap-3">
-              <ErpFieldPreview label="Company" value={runtimeCompanyLabel || "Current company not resolved"} />
+              <ErpDenseFormRow label="Company" required>
+                <select
+                  value={form.company_id}
+                  onChange={(event) => setForm((current) => ({ ...current, company_id: event.target.value }))}
+                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                >
+                  <option value="">Select company</option>
+                  {companyOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </ErpDenseFormRow>
               <div className="grid gap-3 md:grid-cols-2">
                 <ErpDenseFormRow label="Cut-off Date" required>
                   <input

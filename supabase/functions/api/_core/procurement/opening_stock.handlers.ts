@@ -237,16 +237,33 @@ function isAdminBypass(ctx: ProcurementHandlerContext): boolean {
   return ctx.context.isAdmin === true || isSuperAdmin(ctx.roleCode) || isGlobalAdmin(ctx.roleCode);
 }
 
-function assertOpeningStockCompanyScope(
+async function assertOpeningStockCompanyScope(
   ctx: ProcurementHandlerContext,
   companyId: string,
-): void {
+): Promise<void> {
   if (isAdminBypass(ctx)) {
     return;
   }
 
-  const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  if (!scopedCompanyId || scopedCompanyId !== toTrimmedString(companyId)) {
+  const normalizedCompanyId = toTrimmedString(companyId);
+  if (!normalizedCompanyId) {
+    throw new Error("OPENING_STOCK_SCOPE_VIOLATION");
+  }
+
+  // Matches the trust model every other create flow in this codebase already uses
+  // (e.g. Process PO's own Company dropdown) - any company the user is assigned to
+  // via erp_map.user_companies is fair game, not just their current active session
+  // context. A user with 4 companies (e.g. DIRECTOR) must be able to create for any
+  // of the 4 without first "switching" anything - there is no such switcher today.
+  const { data, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id)
+    .eq("company_id", normalizedCompanyId)
+    .maybeSingle();
+
+  if (error || !data) {
     throw new Error("OPENING_STOCK_SCOPE_VIOLATION");
   }
 }
@@ -315,7 +332,7 @@ export async function createOpeningStockDocumentHandler(
       );
     }
 
-    assertOpeningStockCompanyScope(ctx, companyId);
+    await assertOpeningStockCompanyScope(ctx, companyId);
 
     let existingQuery = serviceRoleClient
       .schema("erp_procurement")
@@ -1109,7 +1126,7 @@ export async function approveOpeningStockDocumentHandler(
     assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const document = await fetchOpeningStockDocument(documentId);
-    assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
+    await assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
     if (toUpperTrimmedString(document.status) !== "SUBMITTED") {
       return openingStockErrorResponse(
         req,
