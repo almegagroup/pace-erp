@@ -442,22 +442,16 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
         </ErpSectionCard>
       ) : (
         <div className="grid gap-4">
-          <div className="grid gap-4 xl:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <ErpFieldPreview label="Document #" value={detail.document_number} tone={getStatusTone(detail.status)} badge={detail.status} />
             <ErpFieldPreview label="Company" value={companyLabel || detail.company_id} />
             <ErpFieldPreview label="Cut-off Date" value={formatDate(detail.cut_off_date)} caption={`Created: ${formatDateTime(detail.created_at)}`} />
+            <ErpFieldPreview label="Currency" value={currencyCode} />
+            <ErpFieldPreview label="Notes" value={detail.notes || "No notes"} />
+            <ErpFieldPreview label="Submitted At" value={formatDateTime(detail.submitted_at)} />
+            <ErpFieldPreview label="Approved At" value={formatDateTime(detail.approved_at)} />
+            <ErpFieldPreview label="Posted At" value={formatDateTime(detail.posted_at)} />
           </div>
-
-          <ErpSectionCard eyebrow="Header" title="Document Header">
-            <div className="grid gap-3 xl:grid-cols-2">
-              <ErpFieldPreview label="Status" value={detail.status} tone={getStatusTone(detail.status)} />
-              <ErpFieldPreview label="Currency" value={currencyCode} />
-              <ErpFieldPreview label="Notes" value={detail.notes || "No notes"} multiline />
-              <ErpFieldPreview label="Submitted At" value={formatDateTime(detail.submitted_at)} />
-              <ErpFieldPreview label="Approved At" value={formatDateTime(detail.approved_at)} />
-              <ErpFieldPreview label="Posted At" value={formatDateTime(detail.posted_at)} />
-            </div>
-          </ErpSectionCard>
 
           {!isBlockedPlaceholder ? (
             <ErpSectionCard
@@ -469,424 +463,429 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                 </div>
               )}
             >
-            <div className="grid gap-3">
-              <ErpDenseGrid
-                columns={[
-                  { key: "line_number", label: "Line #", width: "70px" },
-                  {
-                    key: "material_id",
-                    label: "Material",
-                    render: (row) => {
-                      const material = materialMap.get(row.material_id);
-                      return material
-                        ? `${material.material_name ?? "Material"} (${material.pace_code ?? material.material_code ?? material.id})`
-                        : row.material_id;
-                    },
-                  },
-                  {
-                    key: "storage_location_id",
-                    label: "Storage Location",
-                    render: (row) => {
-                      const location = locationMap.get(row.storage_location_id);
-                      return location
-                        ? `${location.location_code ?? location.location_name ?? location.id}`
-                        : row.storage_location_id;
-                    },
-                  },
-                  { key: "stock_type", label: "Stock Type", width: "170px" },
-                  { key: "quantity", label: "Qty", width: "100px" },
-                  { key: "rate_per_unit", label: "Rate", width: "100px" },
-                  {
-                    key: "total_value",
-                    label: "Total Value",
-                    width: "140px",
-                    render: (row) => formatCurrency(row.total_value, currencyCode),
-                  },
-                  { key: "movement_type_code", label: "Movement", width: "100px" },
-                  {
-                    key: "action",
-                    label: "Action",
-                    width: "180px",
-                    render: (row) =>
-                      detail.status === "DRAFT" ? (
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => startEditLine(row)}
-                            className="border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleRemoveLine(row.id)}
-                            className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ) : (
-                        "—"
-                      ),
-                  },
-                ]}
-                rows={lines}
-                rowKey={(row) => row.id}
-                emptyMessage={loading ? "Loading opening stock lines..." : "No lines added yet."}
-                maxHeight="360px"
-              />
-
-              {detail.status === "DRAFT" && editingLineId ? (
-                <div className="grid gap-3 rounded border border-sky-200 bg-sky-50 p-4">
-                  <div className="text-sm font-semibold text-sky-900">Edit Line</div>
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    <ErpDenseFormRow label="Storage Location">
-                      <select
-                        value={editForm.storage_location_id}
-                        onChange={(event) => setEditForm((current) => ({ ...current, storage_location_id: event.target.value }))}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      >
-                        <option value="">Select storage location</option>
-                        {locationOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Stock Type">
-                      <select
-                        value={editForm.stock_type}
-                        onChange={(event) => setEditForm((current) => ({ ...current, stock_type: event.target.value }))}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      >
-                        {STOCK_TYPES.map((stockType) => (
-                          <option key={stockType} value={stockType}>
-                            {stockType}
-                          </option>
-                        ))}
-                      </select>
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Quantity">
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={editForm.quantity}
-                        onChange={(event) => setEditForm((current) => ({ ...current, quantity: event.target.value }))}
-                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Rate Per Unit">
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={editForm.rate_per_unit}
-                        onChange={(event) => setEditForm((current) => ({ ...current, rate_per_unit: event.target.value }))}
-                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      />
-                    </ErpDenseFormRow>
-                    {selectedEditMaterial?.material_type === "SFG" || selectedEditMaterial?.material_type === "FG" ? (
-                      <ErpDenseFormRow label="Batch Number">
-                        <input
-                          type="text"
-                          value={editForm.batch_number}
-                          onChange={(event) => setEditForm((current) => ({ ...current, batch_number: event.target.value.toUpperCase() }))}
-                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        />
-                      </ErpDenseFormRow>
-                    ) : null}
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void handleSaveEdit()}
-                      className="border border-sky-700 bg-sky-100 px-3 py-1 text-sm font-semibold text-sky-950"
-                    >
-                      Save Line
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEditingLineId("")}
-                      className="border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-            </ErpSectionCard>
-          ) : null}
-
-          {detail.status === "DRAFT" && !isBlockedPlaceholder ? (
-            <ErpSectionCard eyebrow="Add Line" title="Single entry or bulk entry">
               <div className="grid gap-4">
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setEntryMode(ENTRY_MODES.SINGLE)}
-                    className={`border px-3 py-1 text-sm font-semibold ${
-                      entryMode === ENTRY_MODES.SINGLE
-                        ? "border-sky-700 bg-sky-100 text-sky-950"
-                        : "border-slate-300 bg-white text-slate-700"
-                    }`}
-                  >
-                    Single Entry
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEntryMode(ENTRY_MODES.BULK)}
-                    className={`border px-3 py-1 text-sm font-semibold ${
-                      entryMode === ENTRY_MODES.BULK
-                        ? "border-sky-700 bg-sky-100 text-sky-950"
-                        : "border-slate-300 bg-white text-slate-700"
-                    }`}
-                  >
-                    Bulk Entry
-                  </button>
-                </div>
+                <ErpDenseGrid
+                  columns={[
+                    { key: "line_number", label: "Line #", width: "70px" },
+                    {
+                      key: "material_id",
+                      label: "Material",
+                      render: (row) => {
+                        const material = materialMap.get(row.material_id);
+                        return material
+                          ? `${material.material_name ?? "Material"} (${material.pace_code ?? material.material_code ?? material.id})`
+                          : row.material_id;
+                      },
+                    },
+                    {
+                      key: "storage_location_id",
+                      label: "Storage Location",
+                      render: (row) => {
+                        const location = locationMap.get(row.storage_location_id);
+                        return location
+                          ? `${location.location_code ?? location.location_name ?? location.id}`
+                          : row.storage_location_id;
+                      },
+                    },
+                    { key: "stock_type", label: "Stock Type", width: "170px" },
+                    { key: "quantity", label: "Qty", width: "100px" },
+                    { key: "rate_per_unit", label: "Rate", width: "100px" },
+                    {
+                      key: "total_value",
+                      label: "Total Value",
+                      width: "140px",
+                      render: (row) => formatCurrency(row.total_value, currencyCode),
+                    },
+                    { key: "movement_type_code", label: "Movement", width: "100px" },
+                    {
+                      key: "action",
+                      label: "Action",
+                      width: "180px",
+                      render: (row) =>
+                        detail.status === "DRAFT" ? (
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => startEditLine(row)}
+                              className="border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleRemoveLine(row.id)}
+                              className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ) : (
+                          "—"
+                        ),
+                    },
+                  ]}
+                  rows={lines}
+                  rowKey={(row) => row.id}
+                  emptyMessage={loading ? "Loading opening stock lines..." : "No lines added yet."}
+                />
 
-                {entryMode === ENTRY_MODES.SINGLE ? (
-                  <div className="grid gap-3">
-                    <ErpDenseFormRow label="Material" required>
-                      <ErpComboboxField
-                        value={singleForm.material_id}
-                        onChange={(value) => setSingleForm((current) => ({ ...current, material_id: value }))}
-                        options={materialOptions}
-                        blankLabel="Select material"
-                      />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Storage Location" required>
-                      <select
-                        value={singleForm.storage_location_id}
-                        onChange={(event) => setSingleForm((current) => ({ ...current, storage_location_id: event.target.value }))}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      >
-                        <option value="">Select storage location</option>
-                        {locationOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Stock Type" required>
-                      <select
-                        value={singleForm.stock_type}
-                        onChange={(event) => setSingleForm((current) => ({ ...current, stock_type: event.target.value }))}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      >
-                        {STOCK_TYPES.map((stockType) => (
-                          <option key={stockType} value={stockType}>
-                            {stockType}
-                          </option>
-                        ))}
-                      </select>
-                    </ErpDenseFormRow>
-                    {selectedSingleMaterial?.material_type === "SFG" || selectedSingleMaterial?.material_type === "FG" ? (
-                      <ErpDenseFormRow label="Batch Number">
-                        <input
-                          type="text"
-                          value={singleForm.batch_number}
-                          onChange={(event) => setSingleForm((current) => ({ ...current, batch_number: event.target.value.toUpperCase() }))}
-                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        />
+                {detail.status === "DRAFT" && editingLineId ? (
+                  <div className="grid gap-3 rounded border border-sky-200 bg-sky-50 p-4">
+                    <div className="text-sm font-semibold text-sky-900">Edit Line</div>
+                    <div className="grid gap-3 xl:grid-cols-2">
+                      <ErpDenseFormRow label="Storage Location">
+                        <select
+                          value={editForm.storage_location_id}
+                          onChange={(event) => setEditForm((current) => ({ ...current, storage_location_id: event.target.value }))}
+                          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                        >
+                          <option value="">Select storage location</option>
+                          {locationOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
                       </ErpDenseFormRow>
-                    ) : null}
-                    <div className="grid gap-3 xl:grid-cols-3">
-                      <ErpDenseFormRow label="Quantity" required>
+                      <ErpDenseFormRow label="Stock Type">
+                        <select
+                          value={editForm.stock_type}
+                          onChange={(event) => setEditForm((current) => ({ ...current, stock_type: event.target.value }))}
+                          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                        >
+                          {STOCK_TYPES.map((stockType) => (
+                            <option key={stockType} value={stockType}>
+                              {stockType}
+                            </option>
+                          ))}
+                        </select>
+                      </ErpDenseFormRow>
+                      <ErpDenseFormRow label="Quantity">
                         <input
                           type="number"
                           min="0"
                           step="any"
-                          value={singleForm.quantity}
-                          onChange={(event) => setSingleForm((current) => ({ ...current, quantity: event.target.value }))}
+                          value={editForm.quantity}
+                          onChange={(event) => setEditForm((current) => ({ ...current, quantity: event.target.value }))}
                           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                         />
                       </ErpDenseFormRow>
-                      <ErpDenseFormRow label="Rate Per Unit" required>
+                      <ErpDenseFormRow label="Rate Per Unit">
                         <input
                           type="number"
                           min="0"
                           step="any"
-                          value={singleForm.rate_per_unit}
-                          onChange={(event) => setSingleForm((current) => ({ ...current, rate_per_unit: event.target.value }))}
+                          value={editForm.rate_per_unit}
+                          onChange={(event) => setEditForm((current) => ({ ...current, rate_per_unit: event.target.value }))}
                           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                         />
                       </ErpDenseFormRow>
-                      <ErpDenseFormRow label="Total Value">
-                        <input
-                          value={formatCurrency(totalValue, currencyCode)}
-                          readOnly
-                          className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-sm text-slate-900 outline-none"
-                        />
-                      </ErpDenseFormRow>
-                    </div>
-                    <div>
-                      <button
-                        type="button"
-                        onClick={() => void handleAddSingleLine()}
-                        disabled={saving}
-                        className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {saving ? "Adding..." : "Add Line"}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="grid gap-3">
-                    <div className="rounded-lg border border-slate-200 bg-white">
-                      <div className="overflow-x-auto">
-                        <table className="min-w-full border-collapse text-sm">
-                          <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-600">
-                            <tr>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Sl No</th>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Material Type</th>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Material Name</th>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Pace Code (auto)</th>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Storage Location</th>
-                                  <th className="border-b border-slate-200 px-3 py-2 text-left">Status</th>
-                                  <th className="border-b border-slate-200 px-3 py-2 text-left">Base UOM</th>
-                                  <th className="border-b border-slate-200 px-3 py-2 text-left">Batch Number</th>
-                                  <th className="border-b border-slate-200 px-3 py-2 text-left">Counted Stock</th>
-                                  <th className="border-b border-slate-200 px-3 py-2 text-left">Zero Stock</th>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Rate</th>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Total Value</th>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Action</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {bulkRows.map((row, index) => {
-                              const material = materialMap.get(row.material_id);
-                              return (
-                                <tr key={row.key} className="align-top even:bg-slate-50/40">
-                                  <td className="border-b border-slate-100 px-3 py-2">{index + 1}</td>
-                                  <td className="border-b border-slate-100 px-3 py-2">{material?.material_type ?? "—"}</td>
-                                  <td className="border-b border-slate-100 px-3 py-2 min-w-[260px]">
-                                    <ErpComboboxField
-                                      value={row.material_id}
-                                      onChange={(value) => updateBulkRow(row.key, { material_id: value })}
-                                      options={materialOptions}
-                                      blankLabel="Select material"
-                                    />
-                                  </td>
-                                  <td className="border-b border-slate-100 px-3 py-2">{material?.pace_code ?? "—"}</td>
-                                  <td className="border-b border-slate-100 px-3 py-2 min-w-[240px]">
-                                    <select
-                                      value={row.storage_location_id}
-                                      onChange={(event) => updateBulkRow(row.key, { storage_location_id: event.target.value })}
-                                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                                    >
-                                      <option value="">Select location</option>
-                                      {locationOptions.map((option) => (
-                                        <option key={option.value} value={option.value}>
-                                          {option.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </td>
-                                  <td className="border-b border-slate-100 px-3 py-2 min-w-[170px]">
-                                    <select
-                                      value={row.stock_type}
-                                      onChange={(event) => updateBulkRow(row.key, { stock_type: event.target.value })}
-                                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                                    >
-                                      {STOCK_TYPES.map((stockType) => (
-                                        <option key={stockType} value={stockType}>
-                                          {stockType}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </td>
-                                  <td className="border-b border-slate-100 px-3 py-2">{material?.base_uom_code ?? "—"}</td>
-                                  <td className="border-b border-slate-100 px-3 py-2 min-w-[180px]">
-                                    {material?.material_type === "SFG" || material?.material_type === "FG" ? (
-                                      <input
-                                        type="text"
-                                        value={row.batch_number}
-                                        onChange={(event) => updateBulkRow(row.key, { batch_number: event.target.value.toUpperCase() })}
-                                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                                      />
-                                    ) : (
-                                      <span className="text-slate-400">—</span>
-                                    )}
-                                  </td>
-                                  <td className="border-b border-slate-100 px-3 py-2 min-w-[130px]">
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      step="any"
-                                      value={row.is_zero_stock ? "0" : row.quantity}
-                                      disabled={row.is_zero_stock}
-                                      onChange={(event) => updateBulkRow(row.key, { quantity: event.target.value })}
-                                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-500"
-                                    />
-                                  </td>
-                                  <td className="border-b border-slate-100 px-3 py-2">
-                                    <input
-                                      type="checkbox"
-                                      checked={Boolean(row.is_zero_stock)}
-                                      onChange={(event) => updateBulkRow(row.key, {
-                                        is_zero_stock: event.target.checked,
-                                        quantity: event.target.checked ? "0" : row.quantity,
-                                      })}
-                                      className="h-4 w-4"
-                                    />
-                                  </td>
-                                  <td className="border-b border-slate-100 px-3 py-2 min-w-[130px]">
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      step="any"
-                                      placeholder="Optional"
-                                      value={row.rate_per_unit}
-                                      onChange={(event) => updateBulkRow(row.key, { rate_per_unit: event.target.value })}
-                                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                                    />
-                                  </td>
-                                  <td className="border-b border-slate-100 px-3 py-2">
-                                    {formatCurrency(Number(row.quantity || 0) * Number(row.rate_per_unit || 0), currencyCode)}
-                                  </td>
-                                  <td className="border-b border-slate-100 px-3 py-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => removeBulkRow(row.key)}
-                                      className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700"
-                                    >
-                                      Remove
-                                    </button>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                    <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                      {BATCH_NUMBER_HELP_TEXT}
+                      {selectedEditMaterial?.material_type === "SFG" || selectedEditMaterial?.material_type === "FG" ? (
+                        <ErpDenseFormRow label="Batch Number">
+                          <input
+                            type="text"
+                            value={editForm.batch_number}
+                            onChange={(event) => setEditForm((current) => ({ ...current, batch_number: event.target.value.toUpperCase() }))}
+                            className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                          />
+                        </ErpDenseFormRow>
+                      ) : null}
                     </div>
                     <div className="flex gap-2">
                       <button
                         type="button"
-                        onClick={appendBulkRow}
-                        className="border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700"
+                        onClick={() => void handleSaveEdit()}
+                        className="border border-sky-700 bg-sky-100 px-3 py-1 text-sm font-semibold text-sky-950"
                       >
-                        Add Row
+                        Save Line
                       </button>
                       <button
                         type="button"
-                        onClick={() => void handleAddBulkLines()}
-                        disabled={saving}
-                        className="border border-sky-700 bg-sky-100 px-3 py-1 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={() => setEditingLineId("")}
+                        className="border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700"
                       >
-                        {saving ? "Adding..." : "Add All Lines"}
+                        Cancel
                       </button>
                     </div>
                   </div>
-                )}
+                ) : null}
+
+                {detail.status === "DRAFT" ? (
+                  <div className="border-t border-slate-200 pt-4">
+                    <div className="mb-1 text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">
+                      Add Line
+                    </div>
+                    <div className="mb-4 text-lg font-semibold text-slate-900">
+                      Single entry or bulk entry
+                    </div>
+                    <div className="grid gap-4">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEntryMode(ENTRY_MODES.SINGLE)}
+                          className={`border px-3 py-1 text-sm font-semibold ${
+                            entryMode === ENTRY_MODES.SINGLE
+                              ? "border-sky-700 bg-sky-100 text-sky-950"
+                              : "border-slate-300 bg-white text-slate-700"
+                          }`}
+                        >
+                          Single Entry
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEntryMode(ENTRY_MODES.BULK)}
+                          className={`border px-3 py-1 text-sm font-semibold ${
+                            entryMode === ENTRY_MODES.BULK
+                              ? "border-sky-700 bg-sky-100 text-sky-950"
+                              : "border-slate-300 bg-white text-slate-700"
+                          }`}
+                        >
+                          Bulk Entry
+                        </button>
+                      </div>
+
+                      {entryMode === ENTRY_MODES.SINGLE ? (
+                        <div className="grid gap-3">
+                          <ErpDenseFormRow label="Material" required>
+                            <ErpComboboxField
+                              value={singleForm.material_id}
+                              onChange={(value) => setSingleForm((current) => ({ ...current, material_id: value }))}
+                              options={materialOptions}
+                              blankLabel="Select material"
+                            />
+                          </ErpDenseFormRow>
+                          <ErpDenseFormRow label="Storage Location" required>
+                            <select
+                              value={singleForm.storage_location_id}
+                              onChange={(event) => setSingleForm((current) => ({ ...current, storage_location_id: event.target.value }))}
+                              className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                            >
+                              <option value="">Select storage location</option>
+                              {locationOptions.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </ErpDenseFormRow>
+                          <ErpDenseFormRow label="Stock Type" required>
+                            <select
+                              value={singleForm.stock_type}
+                              onChange={(event) => setSingleForm((current) => ({ ...current, stock_type: event.target.value }))}
+                              className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                            >
+                              {STOCK_TYPES.map((stockType) => (
+                                <option key={stockType} value={stockType}>
+                                  {stockType}
+                                </option>
+                              ))}
+                            </select>
+                          </ErpDenseFormRow>
+                          {selectedSingleMaterial?.material_type === "SFG" || selectedSingleMaterial?.material_type === "FG" ? (
+                            <ErpDenseFormRow label="Batch Number">
+                              <input
+                                type="text"
+                                value={singleForm.batch_number}
+                                onChange={(event) => setSingleForm((current) => ({ ...current, batch_number: event.target.value.toUpperCase() }))}
+                                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                              />
+                            </ErpDenseFormRow>
+                          ) : null}
+                          <div className="grid gap-3 xl:grid-cols-3">
+                            <ErpDenseFormRow label="Quantity" required>
+                              <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={singleForm.quantity}
+                                onChange={(event) => setSingleForm((current) => ({ ...current, quantity: event.target.value }))}
+                                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                              />
+                            </ErpDenseFormRow>
+                            <ErpDenseFormRow label="Rate Per Unit" required>
+                              <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={singleForm.rate_per_unit}
+                                onChange={(event) => setSingleForm((current) => ({ ...current, rate_per_unit: event.target.value }))}
+                                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                              />
+                            </ErpDenseFormRow>
+                            <ErpDenseFormRow label="Total Value">
+                              <input
+                                value={formatCurrency(totalValue, currencyCode)}
+                                readOnly
+                                className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-sm text-slate-900 outline-none"
+                              />
+                            </ErpDenseFormRow>
+                          </div>
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => void handleAddSingleLine()}
+                              disabled={saving}
+                              className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {saving ? "Adding..." : "Add Line"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="grid gap-3">
+                          <div className="rounded-lg border border-slate-200 bg-white">
+                            <div className="overflow-x-auto">
+                              <table className="min-w-full border-collapse text-sm">
+                                <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-600">
+                                  <tr>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Sl No</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Material Type</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Material Name</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Pace Code (auto)</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Storage Location</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Status</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Base UOM</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Batch Number</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Counted Stock</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Zero Stock</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Rate</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Total Value</th>
+                                    <th className="border-b border-slate-200 px-3 py-2 text-left">Action</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {bulkRows.map((row, index) => {
+                                    const material = materialMap.get(row.material_id);
+                                    return (
+                                      <tr key={row.key} className="align-top even:bg-slate-50/40">
+                                        <td className="border-b border-slate-100 px-3 py-2">{index + 1}</td>
+                                        <td className="border-b border-slate-100 px-3 py-2">{material?.material_type ?? "—"}</td>
+                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[260px]">
+                                          <ErpComboboxField
+                                            value={row.material_id}
+                                            onChange={(value) => updateBulkRow(row.key, { material_id: value })}
+                                            options={materialOptions}
+                                            blankLabel="Select material"
+                                          />
+                                        </td>
+                                        <td className="border-b border-slate-100 px-3 py-2">{material?.pace_code ?? "—"}</td>
+                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[240px]">
+                                          <select
+                                            value={row.storage_location_id}
+                                            onChange={(event) => updateBulkRow(row.key, { storage_location_id: event.target.value })}
+                                            className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                          >
+                                            <option value="">Select location</option>
+                                            {locationOptions.map((option) => (
+                                              <option key={option.value} value={option.value}>
+                                                {option.label}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </td>
+                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[170px]">
+                                          <select
+                                            value={row.stock_type}
+                                            onChange={(event) => updateBulkRow(row.key, { stock_type: event.target.value })}
+                                            className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                          >
+                                            {STOCK_TYPES.map((stockType) => (
+                                              <option key={stockType} value={stockType}>
+                                                {stockType}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </td>
+                                        <td className="border-b border-slate-100 px-3 py-2">{material?.base_uom_code ?? "—"}</td>
+                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[180px]">
+                                          {material?.material_type === "SFG" || material?.material_type === "FG" ? (
+                                            <input
+                                              type="text"
+                                              value={row.batch_number}
+                                              onChange={(event) => updateBulkRow(row.key, { batch_number: event.target.value.toUpperCase() })}
+                                              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                            />
+                                          ) : (
+                                            <span className="text-slate-400">—</span>
+                                          )}
+                                        </td>
+                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[130px]">
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            step="any"
+                                            value={row.is_zero_stock ? "0" : row.quantity}
+                                            disabled={row.is_zero_stock}
+                                            onChange={(event) => updateBulkRow(row.key, { quantity: event.target.value })}
+                                            className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-500"
+                                          />
+                                        </td>
+                                        <td className="border-b border-slate-100 px-3 py-2">
+                                          <input
+                                            type="checkbox"
+                                            checked={Boolean(row.is_zero_stock)}
+                                            onChange={(event) => updateBulkRow(row.key, {
+                                              is_zero_stock: event.target.checked,
+                                              quantity: event.target.checked ? "0" : row.quantity,
+                                            })}
+                                            className="h-4 w-4"
+                                          />
+                                        </td>
+                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[130px]">
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            step="any"
+                                            placeholder="Optional"
+                                            value={row.rate_per_unit}
+                                            onChange={(event) => updateBulkRow(row.key, { rate_per_unit: event.target.value })}
+                                            className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                          />
+                                        </td>
+                                        <td className="border-b border-slate-100 px-3 py-2">
+                                          {formatCurrency(Number(row.quantity || 0) * Number(row.rate_per_unit || 0), currencyCode)}
+                                        </td>
+                                        <td className="border-b border-slate-100 px-3 py-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => removeBulkRow(row.key)}
+                                            className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700"
+                                          >
+                                            Remove
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                          <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            {BATCH_NUMBER_HELP_TEXT}
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={appendBulkRow}
+                              className="border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700"
+                            >
+                              Add Row
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleAddBulkLines()}
+                              disabled={saving}
+                              className="border border-sky-700 bg-sky-100 px-3 py-1 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {saving ? "Adding..." : "Add All Lines"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </ErpSectionCard>
           ) : null}
