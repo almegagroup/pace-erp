@@ -31,6 +31,12 @@ function storageLocationLabel(location) {
   return [location?.code || location?.location_code, location?.name || location?.location_name].filter(Boolean).join(" - ");
 }
 
+function validateVerifyPoStatus(status) {
+  return String(status || "").toUpperCase() === "FINAL"
+    ? ""
+    : "This Process PO is not applicable for Verify. Only `FINAL` is allowed.";
+}
+
 function computeRowValues(row) {
   const planned = Number(row.planned_qty || 0);
   const actual = Number(row.actual_qty || 0);
@@ -75,7 +81,10 @@ function makeDraftRow(line) {
 export default function ProductionPOVerifyPage() {
   const qc = useQueryClient();
   const [companyId, setCompanyId] = useState("");
-  const [orderId, setOrderId] = useState("");
+  const [selectedOrderId, setSelectedOrderId] = useState("");
+  const [activeOrderId, setActiveOrderId] = useState("");
+  const [poNumberInput, setPoNumberInput] = useState("");
+  const [submittedPoNumber, setSubmittedPoNumber] = useState("");
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [rows, setRows] = useState([]);
@@ -98,10 +107,23 @@ export default function ProductionPOVerifyPage() {
     [ordersQ.data],
   );
 
+  const lookupQ = useQuery({
+    queryKey: ["production-verify-lookup", submittedPoNumber],
+    enabled: Boolean(submittedPoNumber),
+    queryFn: async () => {
+      const result = await listProcessOrders({ po_number: submittedPoNumber, per_page: 10 });
+      const options = Array.isArray(result) ? result : result?.data ?? [];
+      const match = options.find((order) => String(order.po_number || "").toUpperCase() === submittedPoNumber.toUpperCase()) ?? null;
+      if (!match?.id) return { match: null, blockedMessage: "Process PO not found." };
+      const blockedMessage = validateVerifyPoStatus(match.status);
+      return { match, blockedMessage };
+    },
+  });
+
   const detailQ = useQuery({
-    queryKey: ["production-verify-detail", orderId],
-    queryFn: () => getProcessOrder(orderId),
-    enabled: Boolean(orderId),
+    queryKey: ["production-verify-detail", activeOrderId],
+    queryFn: () => getProcessOrder(activeOrderId),
+    enabled: Boolean(activeOrderId),
   });
 
   const materialQ = useMaterialOptionsQuery({ status: "ACTIVE", limit: 500 });
@@ -122,6 +144,20 @@ export default function ProductionPOVerifyPage() {
   );
 
   const po = detailQ.data ?? null;
+  const lookupMessage = useMemo(() => {
+    if (lookupQ.error) return lookupQ.error.message || "Process PO lookup failed.";
+    if (!submittedPoNumber || lookupQ.isFetching) return "";
+    return lookupQ.data?.blockedMessage || "";
+  }, [lookupQ.data?.blockedMessage, lookupQ.error, lookupQ.isFetching, submittedPoNumber]);
+
+  useEffect(() => {
+    const match = lookupQ.data?.match ?? null;
+    if (!match?.id) return;
+    setCompanyId(String(match.company_id || ""));
+    setSelectedOrderId(lookupQ.data?.blockedMessage ? "" : match.id);
+    setActiveOrderId(lookupQ.data?.blockedMessage ? "" : match.id);
+  }, [lookupQ.data]);
+
   useEffect(() => {
     setRows((po?.lines ?? []).map(makeDraftRow));
   }, [po]);
@@ -138,13 +174,13 @@ export default function ProductionPOVerifyPage() {
   }, [rows]);
 
   const availabilityPreviewQ = useQuery({
-    queryKey: ["production-verify-availability-preview", companyId, orderId, debouncedPreviewRows],
+    queryKey: ["production-verify-availability-preview", companyId, activeOrderId, debouncedPreviewRows],
     queryFn: () => availabilityPreviewProcessOrder({
       company_id: companyId,
-      process_order_id: orderId,
+      process_order_id: activeOrderId,
       overrides: debouncedPreviewRows,
     }),
-    enabled: Boolean(companyId && orderId),
+    enabled: Boolean(companyId && activeOrderId),
   });
   const availabilityByKey = useMemo(
     () => new Map((availabilityPreviewQ.data ?? []).map((row) => [`${row.material_id}::${row.storage_location_id}`, row])),
@@ -154,6 +190,35 @@ export default function ProductionPOVerifyPage() {
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+  }
+
+  function resetSelection(nextCompanyId = "") {
+    setCompanyId(nextCompanyId);
+    setSelectedOrderId("");
+    setActiveOrderId("");
+    setSubmittedPoNumber("");
+    setPoNumberInput("");
+    setRows([]);
+  }
+
+  function handleLookupSubmit(event) {
+    event.preventDefault();
+    const nextPoNumber = String(poNumberInput || "").trim().toUpperCase();
+    setSelectedOrderId("");
+    setActiveOrderId("");
+    setRows([]);
+    if (nextPoNumber && nextPoNumber === submittedPoNumber) {
+      lookupQ.refetch();
+      return;
+    }
+    setSubmittedPoNumber(nextPoNumber);
+  }
+
+  function handleLoadSelected() {
+    if (!selectedOrderId) return;
+    setSubmittedPoNumber("");
+    setPoNumberInput("");
+    setActiveOrderId(selectedOrderId);
   }
 
   function updateRow(key, patch) {
@@ -224,29 +289,70 @@ export default function ProductionPOVerifyPage() {
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Select Process PO">
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-600">Company</label>
-            <ErpComboboxField
-              value={companyId}
-              onChange={(value) => {
-                setCompanyId(value);
-                setOrderId("");
-              }}
-              options={companyOptions}
-              placeholder="-- Select company --"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-600">Process PO</label>
-            <ErpComboboxField
-              value={orderId}
-              onChange={setOrderId}
-              options={orderOptions}
-              placeholder="-- Select process PO --"
-              emptyStateLabel={ordersQ.isLoading ? "Loading process orders..." : "No FINAL process POs"}
-              disabled={!companyId}
-            />
+        <div className="flex flex-col gap-4">
+          <form onSubmit={handleLookupSubmit} className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-600">PO Number</label>
+              <input
+                className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                value={poNumberInput}
+                onChange={(event) => setPoNumberInput(event.target.value)}
+                placeholder="Paste or enter Process PO number, then press Enter"
+                autoComplete="off"
+              />
+            </div>
+            <div className="flex items-end justify-end">
+              <button
+                type="submit"
+                disabled={lookupQ.isFetching || !String(poNumberInput || "").trim()}
+                className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+              >
+                {lookupQ.isFetching ? "Loading..." : "Search"}
+              </button>
+            </div>
+          </form>
+
+          {lookupMessage ? (
+            <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {lookupMessage}
+            </div>
+          ) : null}
+
+          {detailQ.isFetching && activeOrderId ? (
+            <p className="text-sm text-slate-500">Loading Process PO details...</p>
+          ) : null}
+
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-600">Company</label>
+              <ErpComboboxField
+                value={companyId}
+                onChange={(value) => resetSelection(value)}
+                options={companyOptions}
+                placeholder="-- Select company --"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-600">Process PO</label>
+              <ErpComboboxField
+                value={selectedOrderId}
+                onChange={setSelectedOrderId}
+                options={orderOptions}
+                placeholder="-- Select process PO --"
+                emptyStateLabel={ordersQ.isLoading ? "Loading process orders..." : "No FINAL process POs"}
+                disabled={!companyId}
+              />
+            </div>
+            <div className="flex items-end justify-end">
+              <button
+                type="button"
+                onClick={handleLoadSelected}
+                disabled={!selectedOrderId || detailQ.isFetching}
+                className="rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+              >
+                {detailQ.isFetching && activeOrderId === selectedOrderId ? "Loading..." : "Load"}
+              </button>
+            </div>
           </div>
         </div>
       </ErpSectionCard>
