@@ -72,7 +72,7 @@ function formatDate(value) {
 
 function formatLocationLabel(location) {
   if (!location) return "Unresolved storage location";
-  return `${location.location_code ?? location.location_name ?? "Storage Location"} (${location.location_type ?? "STORE"})`;
+  return `${location.code ?? location.location_code ?? location.name ?? location.location_name ?? "Storage Location"} (${location.location_type ?? "STORE"})`;
 }
 
 function mapLineForEditing(line) {

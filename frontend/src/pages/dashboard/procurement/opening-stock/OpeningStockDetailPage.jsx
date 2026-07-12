@@ -101,7 +101,7 @@ function getStatusTone(status) {
 
 function formatLocationLabel(location) {
   if (!location) return "--";
-  return `${location.location_code ?? location.location_name ?? "Storage Location"} (${location.location_type ?? "STORE"})`;
+  return `${location.code ?? location.location_code ?? location.name ?? location.location_name ?? "Storage Location"} (${location.location_type ?? "STORE"})`;
 }
 
 export default function OpeningStockDetailPage({ documentId: documentIdProp = "" }) {
