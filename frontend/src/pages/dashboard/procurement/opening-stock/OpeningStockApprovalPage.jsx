@@ -35,6 +35,7 @@ const CURRENCY_LOCALE_MAP = Object.freeze({
   INR: "en-IN",
   USD: "en-US",
 });
+const BATCH_NUMBER_HELP_TEXT = "Required for MTO/HPS Prodshades - leave blank if this is an MTS (IWC/Powder) item; MTS batch integration is not yet supported here.";
 
 function formatCurrency(value, currencyCode = "INR") {
   const numericValue = Number(value ?? 0);
@@ -64,6 +65,7 @@ function mapLineForEditing(line) {
     is_zero_stock: line.is_zero_stock === true || Number(line.quantity ?? 0) === 0,
     entered_uom_code: String(line.entered_uom_code ?? ""),
     entered_quantity: String(line.entered_quantity ?? line.quantity ?? ""),
+    batch_number: String(line.batch_number ?? ""),
   };
 }
 
@@ -77,6 +79,7 @@ function serializeEditableLine(line) {
     is_zero_stock: Boolean(line.is_zero_stock),
     entered_uom_code: line.entered_uom_code || "",
     entered_quantity: String(line.entered_quantity ?? ""),
+    batch_number: String(line.batch_number ?? ""),
   });
 }
 
@@ -100,6 +103,7 @@ export default function OpeningStockApprovalPage() {
   const detail = documentQuery.data ?? null;
   const companyId = detail?.company_id || "";
   const currencyCode = detail?.currency_code || "INR";
+  const documentMaterialType = String(detail?.material_type || "").toUpperCase();
 
   const materialQuery = useMaterialOptionsQuery({ limit: 500, status: "ACTIVE" });
   const locationQuery = useStorageLocationsQuery(
@@ -108,7 +112,13 @@ export default function OpeningStockApprovalPage() {
   );
   const companiesQuery = useCompaniesQuery();
 
-  const materials = materialQuery.materials;
+  const materials = useMemo(
+    () =>
+      materialQuery.materials.filter((material) => (
+        !documentMaterialType || String(material.material_type || "").toUpperCase() === documentMaterialType
+      )),
+    [documentMaterialType, materialQuery.materials],
+  );
   const locations = useMemo(
     () => (
       Array.isArray(locationQuery.data?.data)
@@ -223,6 +233,9 @@ export default function OpeningStockApprovalPage() {
         }
         const selectedMaterial = materialMap.get(nextLine.material_id);
         nextLine.entered_uom_code = selectedMaterial?.base_uom_code || nextLine.entered_uom_code || "";
+        if (selectedMaterial?.material_type !== "SFG" && selectedMaterial?.material_type !== "FG") {
+          nextLine.batch_number = "";
+        }
         return nextLine;
       }),
     );
@@ -257,6 +270,7 @@ export default function OpeningStockApprovalPage() {
           material_id: line.material_id,
           storage_location_id: line.storage_location_id,
           stock_type: line.stock_type,
+          batch_number: line.batch_number || null,
           quantity: line.is_zero_stock ? 0 : Number(line.quantity),
           rate_per_unit: Number(line.rate_per_unit || 0),
           is_zero_stock: Boolean(line.is_zero_stock),
@@ -392,6 +406,7 @@ export default function OpeningStockApprovalPage() {
                           <th className="border-b border-slate-200 px-3 py-2 text-left">Storage Location</th>
                           <th className="border-b border-slate-200 px-3 py-2 text-left">Status</th>
                           <th className="border-b border-slate-200 px-3 py-2 text-left">Base UOM</th>
+                          <th className="border-b border-slate-200 px-3 py-2 text-left">Batch Number</th>
                           <th className="border-b border-slate-200 px-3 py-2 text-left">Counted Stock</th>
                           <th className="border-b border-slate-200 px-3 py-2 text-left">Zero Stock</th>
                           <th className="border-b border-slate-200 px-3 py-2 text-left">Rate</th>
@@ -443,6 +458,18 @@ export default function OpeningStockApprovalPage() {
                                 </select>
                               </td>
                               <td className="border-b border-slate-100 px-3 py-2">{material?.base_uom_code ?? line.entered_uom_code ?? "—"}</td>
+                              <td className="border-b border-slate-100 px-3 py-2 min-w-[180px]">
+                                {material?.material_type === "SFG" || material?.material_type === "FG" ? (
+                                  <input
+                                    type="text"
+                                    value={line.batch_number}
+                                    onChange={(event) => updateLine(line.id, { batch_number: event.target.value.toUpperCase() })}
+                                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                  />
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
                               <td className="border-b border-slate-100 px-3 py-2 min-w-[130px]">
                                 <input
                                   type="number"
@@ -481,6 +508,9 @@ export default function OpeningStockApprovalPage() {
                       </tbody>
                     </table>
                   </div>
+                </div>
+                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {BATCH_NUMBER_HELP_TEXT}
                 </div>
 
                 <div className="flex items-center justify-between">

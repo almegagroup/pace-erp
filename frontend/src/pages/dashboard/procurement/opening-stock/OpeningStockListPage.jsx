@@ -27,6 +27,8 @@ import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMaste
 
 const STATUS_OPTIONS = ["", "DRAFT", "SUBMITTED", "APPROVED", "POSTED"];
 const CURRENCY_OPTIONS = ["INR", "USD"];
+const MATERIAL_TYPE_OPTIONS = ["RM", "PM", "INT", "SFG", "FG"];
+const PO_TYPE_OPTIONS = ["MTO", "HPS", "MTS", "MTEST"];
 
 function formatDate(value) {
   if (!value) return "-";
@@ -45,6 +47,8 @@ export default function OpeningStockListPage() {
     company_id: runtimeCompanyId,
     cut_off_date: "",
     currency_code: "INR",
+    material_type: "RM",
+    po_type: "",
     notes: "",
   });
   const [saving, setSaving] = useState(false);
@@ -111,10 +115,16 @@ export default function OpeningStockListPage() {
     documentQuery.error?.message ||
     companiesQuery.error?.message ||
     "";
+  const requiresPoType = form.material_type === "SFG" || form.material_type === "FG";
 
   async function handleCreateDocument() {
-    if (!form.company_id || !form.cut_off_date) {
-      setError("Company and cut-off date are required.");
+    if (!form.company_id || !form.cut_off_date || !form.material_type) {
+      setError("Company, cut-off date, and material type are required.");
+      return;
+    }
+
+    if (requiresPoType && !form.po_type) {
+      setError("PO Type is required for SFG/FG opening stock documents.");
       return;
     }
 
@@ -126,10 +136,19 @@ export default function OpeningStockListPage() {
         company_id: form.company_id,
         cut_off_date: form.cut_off_date,
         currency_code: form.currency_code,
+        material_type: form.material_type,
+        po_type: requiresPoType ? form.po_type : null,
         notes: form.notes.trim() || null,
       });
       setNotice(`Opening stock document ${created.document_number ?? "created"} is ready in DRAFT.`);
-      setForm((current) => ({ ...current, cut_off_date: "", notes: "", currency_code: "INR" }));
+      setForm((current) => ({
+        ...current,
+        cut_off_date: "",
+        currency_code: "INR",
+        material_type: "RM",
+        po_type: "",
+        notes: "",
+      }));
       await Promise.all([documentQuery.refetch(), companiesQuery.refetch()]);
       if (created?.id) {
         openScreen("PROC_OPENING_STOCK_DETAIL", { context: { id: created.id } });
@@ -319,6 +338,48 @@ export default function OpeningStockListPage() {
                   </select>
                 </ErpDenseFormRow>
               </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ErpDenseFormRow label="Material Type" required>
+                  <select
+                    value={form.material_type}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        material_type: event.target.value,
+                        po_type: event.target.value === "SFG" || event.target.value === "FG"
+                          ? current.po_type
+                          : "",
+                      }))}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    {MATERIAL_TYPE_OPTIONS.map((materialType) => (
+                      <option key={materialType} value={materialType}>
+                        {materialType}
+                      </option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+                {requiresPoType ? (
+                  <ErpDenseFormRow label="PO Type" required>
+                    <select
+                      value={form.po_type}
+                      onChange={(event) => setForm((current) => ({ ...current, po_type: event.target.value }))}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    >
+                      <option value="">Select PO Type</option>
+                      {PO_TYPE_OPTIONS.map((poType) => (
+                        <option key={poType} value={poType}>
+                          {poType}
+                        </option>
+                      ))}
+                    </select>
+                  </ErpDenseFormRow>
+                ) : (
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">
+                    PO Type is used only for SFG/FG opening stock documents.
+                  </div>
+                )}
+              </div>
               <ErpDenseFormRow label="Notes">
                 <textarea
                   value={form.notes}
@@ -327,7 +388,7 @@ export default function OpeningStockListPage() {
                 />
               </ErpDenseFormRow>
               <div className="rounded border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                One document per company + cut-off date combination. Currency is stored once at document level.
+                One document per company + cut-off date + material scope combination. Currency is stored once at document level.
               </div>
             </div>
           </ErpSectionCard>

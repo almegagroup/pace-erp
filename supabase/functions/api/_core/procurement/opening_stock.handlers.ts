@@ -26,6 +26,8 @@ type OpeningStockLineRow = Record<string, unknown>;
 const DOCUMENT_STATUSES = new Set(["DRAFT", "SUBMITTED", "APPROVED", "POSTED"]);
 const STOCK_TYPES = new Set(["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"]);
 const CURRENCY_CODES = new Set(["INR", "USD"]);
+const OPENING_STOCK_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "SFG", "FG"]);
+const OPENING_STOCK_PO_TYPES = new Set(["MTO", "HPS", "MTS", "MTEST"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -175,6 +177,44 @@ async function fetchMaterialBaseUom(materialId: string): Promise<string> {
   return String(data.base_uom_code);
 }
 
+async function fetchMaterialType(materialId: string): Promise<string> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("material_type")
+    .eq("id", materialId)
+    .single();
+
+  if (error || !data?.material_type) {
+    throw new Error("OPENING_STOCK_MATERIAL_NOT_FOUND");
+  }
+
+  return toUpperTrimmedString(data.material_type);
+}
+
+async function fetchMaterialTypesByIds(materialIds: string[]): Promise<Map<string, string>> {
+  const uniqueIds = [...new Set(materialIds.map((id) => toTrimmedString(id)).filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("id, material_type")
+    .in("id", uniqueIds);
+
+  if (error) {
+    throw new Error("OPENING_STOCK_MATERIAL_FETCH_FAILED");
+  }
+
+  return new Map(
+    (data ?? [])
+      .filter((row: JsonRecord) => row?.id && row?.material_type)
+      .map((row: JsonRecord) => [toTrimmedString(row.id), toUpperTrimmedString(row.material_type)]),
+  );
+}
+
 function ensureDraftDocument(document: OpeningStockDocumentRow): void {
   if (toUpperTrimmedString(document.status) !== "DRAFT") {
     throw new Error("OPENING_STOCK_DOCUMENT_NOT_DRAFT");
@@ -184,6 +224,12 @@ function ensureDraftDocument(document: OpeningStockDocumentRow): void {
 function ensureSubmittedDocument(document: OpeningStockDocumentRow): void {
   if (toUpperTrimmedString(document.status) !== "SUBMITTED") {
     throw new Error("OPENING_STOCK_DOCUMENT_NOT_SUBMITTED");
+  }
+}
+
+function ensureDocumentMaterialScope(document: OpeningStockDocumentRow, materialType: string): void {
+  if (toUpperTrimmedString(document.material_type) !== materialType) {
+    throw new Error("OPENING_STOCK_DOCUMENT_MATERIAL_SCOPE_MISMATCH");
   }
 }
 
@@ -215,15 +261,17 @@ export async function createOpeningStockDocumentHandler(
     const companyId = toTrimmedString(body.company_id);
     const cutOffDate = toTrimmedString(body.cut_off_date);
     const currencyCode = toUpperTrimmedString(body.currency_code || "INR") || "INR";
+    const materialType = toUpperTrimmedString(body.material_type);
+    const poType = toUpperTrimmedString(body.po_type) || null;
     const notes = toTrimmedString(body.notes);
 
-    if (!companyId || !cutOffDate) {
+    if (!companyId || !cutOffDate || !materialType) {
       return openingStockErrorResponse(
         req,
         ctx,
         "OPENING_STOCK_DOCUMENT_CREATE_INVALID",
         400,
-        "company_id and cut_off_date are required.",
+        "company_id, cut_off_date, and material_type are required.",
       );
     }
 
@@ -237,15 +285,49 @@ export async function createOpeningStockDocumentHandler(
       );
     }
 
+    if (!OPENING_STOCK_MATERIAL_TYPES.has(materialType)) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_MATERIAL_TYPE_INVALID",
+        400,
+        "material_type must be RM, PM, INT, SFG, or FG.",
+      );
+    }
+
+    if (materialType === "SFG" || materialType === "FG") {
+      if (!poType || !OPENING_STOCK_PO_TYPES.has(poType)) {
+        return openingStockErrorResponse(
+          req,
+          ctx,
+          "OPENING_STOCK_PO_TYPE_INVALID",
+          400,
+          "po_type must be MTO, HPS, MTS, or MTEST for SFG/FG opening stock documents.",
+        );
+      }
+    } else if (poType) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_PO_TYPE_INVALID",
+        400,
+        "po_type is allowed only for SFG/FG opening stock documents.",
+      );
+    }
+
     assertOpeningStockCompanyScope(ctx, companyId);
 
-    const { data: existing, error: existingError } = await serviceRoleClient
+    let existingQuery = serviceRoleClient
       .schema("erp_procurement")
       .from("opening_stock_document")
       .select("id")
       .eq("company_id", companyId)
       .eq("cut_off_date", cutOffDate)
-      .maybeSingle();
+      .eq("material_type", materialType);
+
+    existingQuery = poType === null ? existingQuery.is("po_type", null) : existingQuery.eq("po_type", poType);
+
+    const { data: existing, error: existingError } = await existingQuery.maybeSingle();
 
     if (existingError) {
       return openingStockErrorResponse(
@@ -276,6 +358,8 @@ export async function createOpeningStockDocumentHandler(
         company_id: companyId,
         cut_off_date: cutOffDate,
         currency_code: currencyCode,
+        material_type: materialType,
+        po_type: poType,
         status: "DRAFT",
         notes: notes || null,
         created_by: ctx.auth_user_id,
@@ -473,6 +557,7 @@ export async function addOpeningStockLineHandler(
     const materialId = toTrimmedString(body.material_id);
     const storageLocationId = toTrimmedString(body.storage_location_id);
     const stockType = toUpperTrimmedString(body.stock_type);
+    const batchNumber = toTrimmedString(body.batch_number) || null;
     const isZeroStock = body.is_zero_stock === true;
     const quantity = isZeroStock ? 0 : parsePositiveNumber(body.quantity);
     const ratePerUnit = parseNonNegativeNumber(body.rate_per_unit) ?? 0;
@@ -501,6 +586,9 @@ export async function addOpeningStockLineHandler(
 
     const document = await fetchOpeningStockDocument(documentId);
     ensureDraftDocument(document);
+    const materialType = await fetchMaterialType(materialId);
+    ensureDocumentMaterialScope(document, materialType);
+    const normalizedBatchNumber = materialType === "SFG" || materialType === "FG" ? batchNumber : null;
 
     const { data: lastLine, error: lastLineError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -535,6 +623,7 @@ export async function addOpeningStockLineHandler(
         is_zero_stock: isZeroStock,
         entered_uom_code: enteredUomCode,
         entered_quantity: enteredQuantity,
+        batch_number: normalizedBatchNumber,
         movement_type_code: deriveMovementType(stockType),
       })
       .select("*")
@@ -555,6 +644,8 @@ export async function addOpeningStockLineHandler(
     const code = error instanceof Error ? error.message : "OPENING_STOCK_LINE_CREATE_FAILED";
     const status = code === "SA_REQUIRED"
       ? 403
+      : code === "OPENING_STOCK_DOCUMENT_MATERIAL_SCOPE_MISMATCH"
+      ? 409
       : code.includes("NOT_DRAFT")
       ? 409
       : code.includes("NOT_FOUND")
@@ -603,6 +694,30 @@ export async function updateOpeningStockLineHandler(
     }
     if (body.entered_quantity !== undefined) {
       patch.entered_quantity = parseNonNegativeNumber(body.entered_quantity);
+    }
+    if (body.batch_number !== undefined) {
+      const { data: existingLine, error: existingLineError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("opening_stock_line")
+        .select("material_id")
+        .eq("id", lineId)
+        .eq("document_id", documentId)
+        .single();
+
+      if (existingLineError || !existingLine?.material_id) {
+        return openingStockErrorResponse(
+          req,
+          ctx,
+          "OPENING_STOCK_LINE_NOT_FOUND",
+          404,
+          "Opening stock line not found.",
+        );
+      }
+
+      const materialType = await fetchMaterialType(String(existingLine.material_id));
+      patch.batch_number = materialType === "SFG" || materialType === "FG"
+        ? toTrimmedString(body.batch_number) || null
+        : null;
     }
     if (body.stock_type !== undefined) {
       const stockType = toUpperTrimmedString(body.stock_type);
@@ -745,6 +860,9 @@ export async function batchUpdateOpeningStockLinesHandler(
     const existingById = new Map(
       ((existingRows ?? []) as OpeningStockLineRow[]).map((row) => [toTrimmedString(row.id), row]),
     );
+    const materialTypesById = await fetchMaterialTypesByIds(
+      ((existingRows ?? []) as OpeningStockLineRow[]).map((row) => toTrimmedString(row.material_id)),
+    );
 
     if (existingById.size !== lineIds.length) {
       return openingStockErrorResponse(
@@ -800,12 +918,21 @@ export async function batchUpdateOpeningStockLinesHandler(
       }
 
       const materialId = toTrimmedString(patch.material_id || existing.material_id);
+      const materialType = materialTypesById.get(materialId) ?? await fetchMaterialType(materialId);
+      ensureDocumentMaterialScope(document, materialType);
       const enteredUomCode = patch.entered_uom_code !== undefined
         ? toTrimmedString(patch.entered_uom_code) || null
         : toTrimmedString(existing.entered_uom_code) || null;
       const enteredQuantity = patch.entered_quantity !== undefined
         ? parseNonNegativeNumber(patch.entered_quantity)
         : parseNonNegativeNumber(existing.entered_quantity);
+      const batchNumber = materialType === "SFG" || materialType === "FG"
+        ? (
+          patch.batch_number !== undefined
+            ? toTrimmedString(patch.batch_number) || null
+            : toTrimmedString(existing.batch_number) || null
+        )
+        : null;
 
       updates.push({
         id: lineId,
@@ -818,6 +945,7 @@ export async function batchUpdateOpeningStockLinesHandler(
         rate_per_unit: rate,
         entered_uom_code: enteredUomCode,
         entered_quantity: enteredQuantity ?? quantity,
+        batch_number: batchNumber,
         is_zero_stock: isZeroStock,
         movement_type_code: deriveMovementType(stockType),
       });
@@ -843,6 +971,8 @@ export async function batchUpdateOpeningStockLinesHandler(
     const code = error instanceof Error ? error.message : "OPENING_STOCK_LINE_BATCH_UPDATE_FAILED";
     const status = code === "SA_REQUIRED"
       ? 403
+      : code === "OPENING_STOCK_DOCUMENT_MATERIAL_SCOPE_MISMATCH"
+      ? 409
       : code.includes("NOT_SUBMITTED")
       ? 409
       : code.includes("NOT_FOUND")
@@ -1009,6 +1139,7 @@ export async function postOpeningStockDocumentHandler(
           p_direction: "IN",
           p_posted_by: ctx.auth_user_id,
           p_reversal_of_id: null,
+          p_batch_number: toTrimmedString(line.batch_number) || null,
         });
 
       if (rpcResult.error || !Array.isArray(rpcResult.data) || rpcResult.data.length === 0) {

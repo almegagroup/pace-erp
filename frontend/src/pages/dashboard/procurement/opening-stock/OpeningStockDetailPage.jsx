@@ -38,12 +38,14 @@ const CURRENCY_LOCALE_MAP = Object.freeze({
   INR: "en-IN",
   USD: "en-US",
 });
+const BATCH_NUMBER_HELP_TEXT = "Required for MTO/HPS Prodshades - leave blank if this is an MTS (IWC/Powder) item; MTS batch integration is not yet supported here.";
 
 function createEmptySingleForm() {
   return {
     material_id: "",
     storage_location_id: "",
     stock_type: "UNRESTRICTED",
+    batch_number: "",
     quantity: "",
     rate_per_unit: "",
   };
@@ -55,6 +57,7 @@ function createBulkRow(index) {
     material_id: "",
     storage_location_id: "",
     stock_type: "UNRESTRICTED",
+    batch_number: "",
     quantity: "",
     rate_per_unit: "",
     is_zero_stock: false,
@@ -120,6 +123,11 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   const detail = detailQuery.data ?? null;
   const companyId = detail?.company_id || "";
   const currencyCode = detail?.currency_code || "INR";
+  const documentMaterialType = String(detail?.material_type || "").toUpperCase();
+  const documentPoType = String(detail?.po_type || "").toUpperCase();
+  const isBlockedPlaceholder =
+    (documentMaterialType === "SFG" || documentMaterialType === "FG") &&
+    (documentPoType === "MTO" || documentPoType === "HPS");
 
   const materialQuery = useMaterialOptionsQuery({ limit: 500, status: "ACTIVE" });
   const locationQuery = useStorageLocationsQuery(
@@ -128,7 +136,13 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   );
   const companiesQuery = useCompaniesQuery();
 
-  const materials = materialQuery.materials;
+  const materials = useMemo(
+    () =>
+      materialQuery.materials.filter((material) => (
+        !documentMaterialType || String(material.material_type || "").toUpperCase() === documentMaterialType
+      )),
+    [documentMaterialType, materialQuery.materials],
+  );
   const locations = useMemo(
     () => (
       Array.isArray(locationQuery.data?.data)
@@ -166,6 +180,8 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     () => new Map(materials.map((material) => [material.id, material])),
     [materials],
   );
+  const selectedSingleMaterial = materialMap.get(singleForm.material_id);
+  const selectedEditMaterial = materialMap.get(editForm.material_id);
   const materialOptions = useMemo(
     () =>
       materials.map((material) => ({
@@ -244,6 +260,10 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
         material_id: singleForm.material_id,
         storage_location_id: singleForm.storage_location_id,
         stock_type: singleForm.stock_type,
+        batch_number:
+          selectedSingleMaterial?.material_type === "SFG" || selectedSingleMaterial?.material_type === "FG"
+            ? singleForm.batch_number.trim().toUpperCase() || null
+            : null,
         quantity: Number(singleForm.quantity),
         rate_per_unit: Number(singleForm.rate_per_unit),
       });
@@ -285,6 +305,10 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
             is_zero_stock: Boolean(row.is_zero_stock),
             entered_uom_code: baseUom,
             entered_quantity: quantity,
+            batch_number:
+              material?.material_type === "SFG" || material?.material_type === "FG"
+                ? row.batch_number.trim().toUpperCase() || null
+                : null,
           });
         }),
       );
@@ -306,6 +330,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       stock_type: line.stock_type,
       quantity: String(line.quantity ?? ""),
       rate_per_unit: String(line.rate_per_unit ?? ""),
+      batch_number: String(line.batch_number ?? ""),
     });
   }
 
@@ -318,6 +343,10 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       await updateOpeningStockLine(detail.id, editingLineId, {
         storage_location_id: editForm.storage_location_id,
         stock_type: editForm.stock_type,
+        batch_number:
+          selectedEditMaterial?.material_type === "SFG" || selectedEditMaterial?.material_type === "FG"
+            ? editForm.batch_number.trim().toUpperCase() || null
+            : null,
         quantity: Number(editForm.quantity),
         rate_per_unit: Number(editForm.rate_per_unit),
       });
@@ -430,15 +459,16 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
             </div>
           </ErpSectionCard>
 
-          <ErpSectionCard
-            eyebrow="Lines"
-            title="Opening stock lines"
-            aside={(
-              <div className="text-sm font-semibold text-slate-600">
-                Total Lines: {lines.length} | Total Value: {formatCurrency(computedTotalValue, currencyCode)}
-              </div>
-            )}
-          >
+          {!isBlockedPlaceholder ? (
+            <ErpSectionCard
+              eyebrow="Lines"
+              title="Opening stock lines"
+              aside={(
+                <div className="text-sm font-semibold text-slate-600">
+                  Total Lines: {lines.length} | Total Value: {formatCurrency(computedTotalValue, currencyCode)}
+                </div>
+              )}
+            >
             <div className="grid gap-3">
               <ErpDenseGrid
                 columns={[
@@ -557,6 +587,16 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                         className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                       />
                     </ErpDenseFormRow>
+                    {selectedEditMaterial?.material_type === "SFG" || selectedEditMaterial?.material_type === "FG" ? (
+                      <ErpDenseFormRow label="Batch Number">
+                        <input
+                          type="text"
+                          value={editForm.batch_number}
+                          onChange={(event) => setEditForm((current) => ({ ...current, batch_number: event.target.value.toUpperCase() }))}
+                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                        />
+                      </ErpDenseFormRow>
+                    ) : null}
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -577,9 +617,10 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                 </div>
               ) : null}
             </div>
-          </ErpSectionCard>
+            </ErpSectionCard>
+          ) : null}
 
-          {detail.status === "DRAFT" ? (
+          {detail.status === "DRAFT" && !isBlockedPlaceholder ? (
             <ErpSectionCard eyebrow="Add Line" title="Single entry or bulk entry">
               <div className="grid gap-4">
                 <div className="flex gap-2">
@@ -644,6 +685,16 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                         ))}
                       </select>
                     </ErpDenseFormRow>
+                    {selectedSingleMaterial?.material_type === "SFG" || selectedSingleMaterial?.material_type === "FG" ? (
+                      <ErpDenseFormRow label="Batch Number">
+                        <input
+                          type="text"
+                          value={singleForm.batch_number}
+                          onChange={(event) => setSingleForm((current) => ({ ...current, batch_number: event.target.value.toUpperCase() }))}
+                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                        />
+                      </ErpDenseFormRow>
+                    ) : null}
                     <div className="grid gap-3 xl:grid-cols-3">
                       <ErpDenseFormRow label="Quantity" required>
                         <input
@@ -696,10 +747,11 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                               <th className="border-b border-slate-200 px-3 py-2 text-left">Material Name</th>
                               <th className="border-b border-slate-200 px-3 py-2 text-left">Pace Code (auto)</th>
                               <th className="border-b border-slate-200 px-3 py-2 text-left">Storage Location</th>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Status</th>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Base UOM</th>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Counted Stock</th>
-                              <th className="border-b border-slate-200 px-3 py-2 text-left">Zero Stock</th>
+                                  <th className="border-b border-slate-200 px-3 py-2 text-left">Status</th>
+                                  <th className="border-b border-slate-200 px-3 py-2 text-left">Base UOM</th>
+                                  <th className="border-b border-slate-200 px-3 py-2 text-left">Batch Number</th>
+                                  <th className="border-b border-slate-200 px-3 py-2 text-left">Counted Stock</th>
+                                  <th className="border-b border-slate-200 px-3 py-2 text-left">Zero Stock</th>
                               <th className="border-b border-slate-200 px-3 py-2 text-left">Rate</th>
                               <th className="border-b border-slate-200 px-3 py-2 text-left">Total Value</th>
                               <th className="border-b border-slate-200 px-3 py-2 text-left">Action</th>
@@ -749,6 +801,18 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                     </select>
                                   </td>
                                   <td className="border-b border-slate-100 px-3 py-2">{material?.base_uom_code ?? "—"}</td>
+                                  <td className="border-b border-slate-100 px-3 py-2 min-w-[180px]">
+                                    {material?.material_type === "SFG" || material?.material_type === "FG" ? (
+                                      <input
+                                        type="text"
+                                        value={row.batch_number}
+                                        onChange={(event) => updateBulkRow(row.key, { batch_number: event.target.value.toUpperCase() })}
+                                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                      />
+                                    ) : (
+                                      <span className="text-slate-400">—</span>
+                                    )}
+                                  </td>
                                   <td className="border-b border-slate-100 px-3 py-2 min-w-[130px]">
                                     <input
                                       type="number"
@@ -801,6 +865,9 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                         </table>
                       </div>
                     </div>
+                    <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                      {BATCH_NUMBER_HELP_TEXT}
+                    </div>
                     <div className="flex gap-2">
                       <button
                         type="button"
@@ -821,6 +888,12 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                   </div>
                 )}
               </div>
+            </ErpSectionCard>
+          ) : null}
+
+          {detail && isBlockedPlaceholder ? (
+            <ErpSectionCard eyebrow="Entry" title="Opening Stock Entry">
+              <div className="text-sm text-slate-700">Will open after implementation</div>
             </ErpSectionCard>
           ) : null}
         </div>
