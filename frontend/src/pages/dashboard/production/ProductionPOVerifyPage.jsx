@@ -391,7 +391,7 @@ export default function ProductionPOVerifyPage() {
                               )}
                             </td>
                             <td className="px-3 py-2 text-right font-mono">{values.variance.toFixed(3)}</td>
-                            <td className="px-3 py-2">261</td>
+                            <td className="px-3 py-2">P261</td>
                             <td className="px-3 py-2 text-center">
                               {!row.is_formulation_line && (
                                 <button
@@ -432,7 +432,7 @@ export default function ProductionPOVerifyPage() {
                         <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputActualQty.toFixed(3)}</td>
                         <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputApprovedQty.toFixed(3)}</td>
                         <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputVariance.toFixed(3)}</td>
-                        <td className="border-b border-slate-100 px-3 py-2">101</td>
+                        <td className="border-b border-slate-100 px-3 py-2">P101</td>
                       </tr>
                     </tbody>
                   </table>

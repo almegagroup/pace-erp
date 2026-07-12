@@ -51,7 +51,12 @@ function companyLabel(company) {
 }
 
 function prodshadeLabel(item) {
-  return [item.external_code, item.shade_code, item.material_name].filter(Boolean).join(" - ");
+  const prodCode = item.material?.pace_code || item.pace_code || null;
+  const shadeCode = item.material?.external_code || item.external_code || item.material?.shade_code || item.shade_code || null;
+  const materialName = item.material?.material_name || item.material_name || null;
+  return [prodCode, shadeCode, materialName]
+    .filter((value, index, list) => Boolean(value) && list.indexOf(value) === index)
+    .join(" - ");
 }
 
 function materialLabel(material) {
@@ -97,6 +102,7 @@ export default function ProductionPOCreatePage() {
 
   const companiesQ = useCompaniesForOmQuery();
   const companies = companiesQ.data ?? [];
+  const effectiveCompanyId = processForm.company_id || (companies.length === 1 ? companies[0].id : "");
   const companyOptions = useMemo(
     () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Unnamed company" })),
     [companies],
@@ -116,12 +122,12 @@ export default function ProductionPOCreatePage() {
   );
 
   const approvedStrokesQ = useQuery({
-    queryKey: ["production-create-approved-strokes", processForm.company_id],
+    queryKey: ["production-create-approved-strokes", effectiveCompanyId],
     queryFn: () => listStrokeMasters({
-      company_id: processForm.company_id || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: "APPROVED",
     }),
-    enabled: Boolean(processForm.company_id),
+    enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
 
@@ -182,13 +188,13 @@ export default function ProductionPOCreatePage() {
   const mtestSkuPath = processForm.po_type === "MTEST" && selectedMaterialType === "FG";
 
   const strokesQ = useQuery({
-    queryKey: ["production-create-strokes", processForm.company_id, processForm.prodshade_material_id],
+    queryKey: ["production-create-strokes", effectiveCompanyId, processForm.prodshade_material_id],
     queryFn: () => listStrokeMasters({
-      company_id: processForm.company_id || undefined,
+      company_id: effectiveCompanyId || undefined,
       material_id: processForm.prodshade_material_id || undefined,
       status: "APPROVED",
     }),
-    enabled: Boolean(processForm.company_id && processForm.prodshade_material_id && !mtestSkuPath),
+    enabled: Boolean(effectiveCompanyId && processForm.prodshade_material_id && !mtestSkuPath),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
   const strokeOptions = useMemo(
@@ -211,9 +217,9 @@ export default function ProductionPOCreatePage() {
   });
 
   const machinesQ = useQuery({
-    queryKey: ["production-create-machines", processForm.company_id],
-    queryFn: () => listMachines({ company_id: processForm.company_id, active: true }),
-    enabled: Boolean(processForm.company_id),
+    queryKey: ["production-create-machines", effectiveCompanyId],
+    queryFn: () => listMachines({ company_id: effectiveCompanyId, active: true }),
+    enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
   const machineOptions = useMemo(
@@ -222,8 +228,8 @@ export default function ProductionPOCreatePage() {
   );
 
   const storageLocationQ = useStorageLocationOptionsQuery(
-    { company_id: processForm.company_id || undefined },
-    { enabled: Boolean(processForm.company_id) },
+    { company_id: effectiveCompanyId || undefined },
+    { enabled: Boolean(effectiveCompanyId) },
   );
   const storageLocationOptions = useMemo(
     () => (storageLocationQ.storageLocations ?? []).map((location) => ({
@@ -234,9 +240,9 @@ export default function ProductionPOCreatePage() {
   );
 
   const segmentLocationsQ = useQuery({
-    queryKey: ["production-create-segment-locations", processForm.company_id],
-    queryFn: () => listSegmentLocations({ company_id: processForm.company_id }),
-    enabled: Boolean(processForm.company_id),
+    queryKey: ["production-create-segment-locations", effectiveCompanyId],
+    queryFn: () => listSegmentLocations({ company_id: effectiveCompanyId }),
+    enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
 
@@ -312,19 +318,19 @@ export default function ProductionPOCreatePage() {
   const availabilityPreviewQ = useQuery({
     queryKey: [
       "production-create-availability-preview",
-      processForm.company_id,
+      effectiveCompanyId,
       processForm.stroke_master_id,
       processForm.planned_qty_kg,
       debouncedCreatePreview,
     ],
     queryFn: () => availabilityPreviewProcessOrder({
-      company_id: processForm.company_id,
+      company_id: effectiveCompanyId,
       stroke_master_id: processForm.stroke_master_id,
       planned_qty: processForm.planned_qty_kg,
       overrides: debouncedCreatePreview,
     }),
     enabled: Boolean(
-      processForm.company_id
+      effectiveCompanyId
       && processForm.stroke_master_id
       && Number(processForm.planned_qty_kg || 0) > 0,
     ),
@@ -396,7 +402,7 @@ export default function ProductionPOCreatePage() {
       }
       return next;
     });
-    if (field !== "planned_qty_kg" && field !== "planned_start_date" && field !== "machine_id" && field !== "mts_segment_code") {
+    if (field === "company_id" || field === "po_type" || field === "prodshade_material_id") {
       setProcessStep(1);
     }
   }
@@ -406,7 +412,7 @@ export default function ProductionPOCreatePage() {
   }
 
   function handleStepOneNext() {
-    if (!processForm.company_id || !processForm.po_type || !processForm.prodshade_material_id) {
+    if (!effectiveCompanyId || !processForm.po_type || !processForm.prodshade_material_id) {
       toast("Company, PO Type, and Material are required.", "error");
       return;
     }
@@ -432,7 +438,7 @@ export default function ProductionPOCreatePage() {
       toast("MTEST create remains blocked here because the locked brief/frontend contract does not define the full create payload for this repo.", "error");
       return;
     }
-    if (!processForm.company_id || !processForm.prodshade_material_id || !processForm.planned_qty_kg || !derivedSegmentCode) {
+    if (!effectiveCompanyId || !processForm.prodshade_material_id || !processForm.planned_qty_kg || !derivedSegmentCode) {
       toast("Company, Material, Segment, and Batch Size are required.", "error");
       return;
     }
@@ -452,7 +458,7 @@ export default function ProductionPOCreatePage() {
     setSaving(true);
     try {
       const payload = {
-        company_id: processForm.company_id,
+        company_id: effectiveCompanyId,
         po_type: processForm.po_type,
         segment_code: derivedSegmentCode,
         prodshade_material_id: processForm.prodshade_material_id,
@@ -539,7 +545,7 @@ export default function ProductionPOCreatePage() {
                   <div className="flex flex-col gap-1">
                     <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
                     <ErpComboboxField
-                      value={processForm.company_id}
+                      value={effectiveCompanyId}
                       onChange={(value) => updateProcess("company_id", value)}
                       options={companyOptions}
                       placeholder="-- Select company --"
@@ -641,7 +647,7 @@ export default function ProductionPOCreatePage() {
                   </div>
                   <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
                     <div className="text-xs font-medium text-slate-500">Company</div>
-                    <div className="mt-1 text-sm font-medium text-slate-900">{companyOptions.find((option) => option.value === processForm.company_id)?.label || "--"}</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">{companyOptions.find((option) => option.value === effectiveCompanyId)?.label || "--"}</div>
                   </div>
                   <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
                     <div className="text-xs font-medium text-slate-500">PO Type</div>
@@ -700,7 +706,7 @@ export default function ProductionPOCreatePage() {
                         options={machineOptions}
                         placeholder="-- Select machine --"
                         emptyStateLabel={machinesQ.isLoading ? "Loading machines..." : "No active machines for this company"}
-                        disabled={!processForm.company_id}
+                        disabled={!effectiveCompanyId}
                       />
                     </div>
                   )}
@@ -821,7 +827,7 @@ export default function ProductionPOCreatePage() {
                                 />
                               </td>
                               <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{row.standard_qty.toFixed(3)}</td>
-                              <td className="border-b border-slate-100 px-3 py-2">261</td>
+                              <td className="border-b border-slate-100 px-3 py-2">P261</td>
                               <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
                                 {row.available_qty == null ? "--" : row.available_qty.toFixed(3)}
                               </td>
