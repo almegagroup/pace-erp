@@ -36,3 +36,7 @@ export function assertManagerOrSARole(ctx: OmHandlerContext): void {
     throw new Error("MANAGER_OR_SA_REQUIRED");
   }
 }
+
+// Any authenticated user with a resolved company/session context - matches the
+// production domain's own assertProdReadRole pattern for read-only master lookups.
+export function assertOmReadContext(_ctx: OmHandlerContext): void {}

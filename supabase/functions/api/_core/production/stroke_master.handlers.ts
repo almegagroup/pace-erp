@@ -328,7 +328,7 @@ export async function getStrokeMasterHandler(
     const { data: lineRows, error: linesErr } = await serviceRoleClient
       .schema("erp_production")
       .from("stroke_line")
-      .select("id, material_id, line_material_type, material_group_id, default_storage_location_id, dosage_pct, display_order")
+      .select("id, material_id, alternate_material_id, line_material_type, material_group_id, default_storage_location_id, dosage_pct, display_order")
       .eq("stroke_master_id", id)
       .order("display_order");
     if (linesErr) {
@@ -341,6 +341,7 @@ export async function getStrokeMasterHandler(
       getMaterialMapByIds([
         String(stroke.prodshade_material_id ?? ""),
         ...lines.map((l) => String(l.material_id ?? "")),
+        ...lines.map((l) => String(l.alternate_material_id ?? "")),
       ]),
       getMaterialGroupMapByIds(lines.map((l) => String(l.material_group_id ?? ""))),
       getStorageLocationMapByIds([
@@ -363,6 +364,7 @@ export async function getStrokeMasterHandler(
         lines: lines.map((l) => ({
           ...l,
           material: materialMap.get(String(l.material_id ?? "")) ?? null,
+          alternate_material: l.alternate_material_id ? materialMap.get(String(l.alternate_material_id)) ?? null : null,
           material_group: groupMap.get(String(l.material_group_id ?? "")) ?? null,
           default_storage_location: slocMap.get(String(l.default_storage_location_id ?? "")) ?? null,
         })),

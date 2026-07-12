@@ -11,7 +11,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertOmAdminContext, assertOmSaContext } from "./shared.ts";
+import { assertOmReadContext, assertOmSaContext } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -96,7 +96,7 @@ export async function listMachinesHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertOmReadContext(ctx);
 
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));

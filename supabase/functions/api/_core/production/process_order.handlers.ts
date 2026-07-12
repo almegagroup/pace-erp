@@ -379,15 +379,23 @@ function buildAvailabilityKey(materialId: string, storageLocationId: string): st
   return `${materialId}::${storageLocationId}`;
 }
 
-function buildLineLocationOverrideMap(overrides: unknown): Map<string, string> {
-  const map = new Map<string, string>();
+interface LineOverride {
+  storageLocationId: string | null;
+  actualMaterialId: string | null;
+}
+
+// Keyed by the line's Formulation material_id (never the substitute) so callers can always
+// find an override by looking up the stroke line's own material_id.
+function buildLineOverrideMap(overrides: unknown): Map<string, LineOverride> {
+  const map = new Map<string, LineOverride>();
   if (!Array.isArray(overrides)) return map;
   for (const entry of overrides as JsonRecord[]) {
     const materialId = toTrimmedString(entry.material_id);
-    const storageLocationId = toTrimmedString(entry.storage_location_id);
-    if (materialId && storageLocationId) {
-      map.set(materialId, storageLocationId);
-    }
+    if (!materialId) continue;
+    map.set(materialId, {
+      storageLocationId: toTrimmedString(entry.storage_location_id) || null,
+      actualMaterialId: toTrimmedString(entry.actual_material_id) || null,
+    });
   }
   return map;
 }
@@ -861,11 +869,11 @@ export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: 
       if (!strokeMasterId || !plannedQty) {
         return poErr(req, ctx, "PROD_PO_INVALID", 400, "stroke_master_id and planned_qty required when process_order_id is absent");
       }
-      const overrideMap = buildLineLocationOverrideMap(overrides);
+      const overrideMap = buildLineOverrideMap(overrides);
       const { data: strokeLines, error: strokeLinesErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
-        .select("material_id, dosage_pct, default_storage_location_id")
+        .select("material_id, alternate_material_id, dosage_pct, default_storage_location_id")
         .eq("stroke_master_id", strokeMasterId);
       if (strokeLinesErr) {
         console.error("[process_order.availabilityPreview] stroke-line query failed:", JSON.stringify(strokeLinesErr));
@@ -873,16 +881,21 @@ export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: 
       }
 
       for (const strokeLine of (strokeLines ?? []) as JsonRecord[]) {
-        const materialId = String(strokeLine.material_id);
-        const storageLocationId = overrideMap.get(materialId)
+        const formulationMaterialId = String(strokeLine.material_id);
+        const override = overrideMap.get(formulationMaterialId) ?? null;
+        const registeredAlternateId = toTrimmedString(strokeLine.alternate_material_id) || null;
+        const effectiveMaterialId = (override?.actualMaterialId && override.actualMaterialId === registeredAlternateId)
+          ? override.actualMaterialId
+          : formulationMaterialId;
+        const storageLocationId = override?.storageLocationId
           ?? toTrimmedString(strokeLine.default_storage_location_id)
           ?? null;
         if (!storageLocationId) continue;
         const qty = (Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty;
-        const key = buildAvailabilityKey(materialId, storageLocationId);
+        const key = buildAvailabilityKey(effectiveMaterialId, storageLocationId);
         const current = needed.get(key);
         needed.set(key, {
-          materialId,
+          materialId: effectiveMaterialId,
           storageLocationId,
           qty: (current?.qty ?? 0) + qty,
         });
@@ -1081,7 +1094,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const plannedStartDate = toTrimmedString(body.planned_start_date) || null;
     const outputStorageLocationId = toTrimmedString(body.output_storage_location_id) || null;
     const notes = toTrimmedString(body.notes);
-    const lineLocationOverrideMap = buildLineLocationOverrideMap(body.line_location_overrides);
+    const lineOverrideMap = buildLineOverrideMap(body.line_location_overrides);
 
     if (!companyId || !VALID_PO_TYPES.has(poType) || !VALID_SEGMENTS.has(segmentCode) || !materialId || !plannedQty) {
       return poErr(req, ctx, "PROD_PO_INVALID", 400, "company_id, po_type, segment_code, material_id, planned_qty required");
@@ -1114,26 +1127,36 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const { data: strokeLines, error: strokeLinesErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
-        .select("material_id, dosage_pct, default_storage_location_id")
+        .select("material_id, alternate_material_id, dosage_pct, default_storage_location_id")
         .eq("stroke_master_id", strokeId);
       if (strokeLinesErr) {
         console.error("[process_order.createProcessOrder] stroke-line query failed:", JSON.stringify(strokeLinesErr));
         throw new Error("PROD_PO_CREATE_FAILED");
       }
 
+      for (const strokeLine of (strokeLines ?? []) as JsonRecord[]) {
+        const override = lineOverrideMap.get(String(strokeLine.material_id)) ?? null;
+        const registeredAlternateId = toTrimmedString(strokeLine.alternate_material_id) || null;
+        if (override?.actualMaterialId && override.actualMaterialId !== registeredAlternateId) {
+          return poErr(req, ctx, "PROD_PO_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id must match the registered alternate");
+        }
+      }
+
       if ((strokeLines ?? []).length > 0) {
         const needed = new Map<string, AvailabilityNeed>();
         for (const strokeLine of (strokeLines ?? []) as JsonRecord[]) {
-          const materialId = String(strokeLine.material_id);
-          const storageLocationId = lineLocationOverrideMap.get(materialId)
+          const formulationMaterialId = String(strokeLine.material_id);
+          const override = lineOverrideMap.get(formulationMaterialId) ?? null;
+          const effectiveMaterialId = override?.actualMaterialId || formulationMaterialId;
+          const storageLocationId = override?.storageLocationId
             ?? toTrimmedString(strokeLine.default_storage_location_id)
             ?? null;
           if (!storageLocationId) continue;
           const qty = (Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty;
-          const key = buildAvailabilityKey(materialId, storageLocationId);
+          const key = buildAvailabilityKey(effectiveMaterialId, storageLocationId);
           const current = needed.get(key);
           needed.set(key, {
-            materialId,
+            materialId: effectiveMaterialId,
             storageLocationId,
             qty: (current?.qty ?? 0) + qty,
           });
@@ -1185,7 +1208,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const { data: strokeLines, error: strokeLineErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
-        .select("material_id, dosage_pct, display_order, default_storage_location_id")
+        .select("material_id, alternate_material_id, dosage_pct, display_order, default_storage_location_id")
         .eq("stroke_master_id", strokeId)
         .order("display_order");
       if (strokeLineErr) {
@@ -1194,25 +1217,33 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       }
 
       if ((strokeLines ?? []).length > 0) {
-        const lineRows = ((strokeLines ?? []) as JsonRecord[]).map((strokeLine) => ({
-          process_order_id: poId,
-          material_id: strokeLine.material_id,
-          planned_qty: Number(((Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty).toFixed(4)),
-          actual_qty: null,
-          uom_code: "KG",
-          issue_sloc_id: lineLocationOverrideMap.get(String(strokeLine.material_id))
-            ?? toTrimmedString(strokeLine.default_storage_location_id)
-            ?? null,
-          is_rm: true,
-          display_order: strokeLine.display_order,
-          dosage_pct: strokeLine.dosage_pct,
-          is_formulation_line: true,
-        }));
+        const lineRows = ((strokeLines ?? []) as JsonRecord[]).map((strokeLine) => {
+          const override = lineOverrideMap.get(String(strokeLine.material_id)) ?? null;
+          const registeredAlternateId = toTrimmedString(strokeLine.alternate_material_id) || null;
+          const actualMaterialId = (override?.actualMaterialId && override.actualMaterialId === registeredAlternateId)
+            ? override.actualMaterialId
+            : null;
+          return {
+            process_order_id: poId,
+            material_id: strokeLine.material_id,
+            actual_material_id: actualMaterialId,
+            planned_qty: Number(((Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty).toFixed(4)),
+            actual_qty: null,
+            uom_code: "KG",
+            issue_sloc_id: override?.storageLocationId
+              ?? toTrimmedString(strokeLine.default_storage_location_id)
+              ?? null,
+            is_rm: true,
+            display_order: strokeLine.display_order,
+            dosage_pct: strokeLine.dosage_pct,
+            is_formulation_line: true,
+          };
+        });
         const { data: createdLines, error: lineErr } = await serviceRoleClient
           .schema("erp_production")
           .from("process_order_line")
           .insert(lineRows)
-          .select("id, material_id, planned_qty, issue_sloc_id, is_rm, uom_code");
+          .select("id, material_id, actual_material_id, planned_qty, issue_sloc_id, is_rm, uom_code");
         if (lineErr) {
           console.error("[process_order.createProcessOrder] prepopulate line insert failed:", JSON.stringify(lineErr));
           throw new Error("PROD_PO_LINE_PREPOPULATE_FAILED");
@@ -1364,7 +1395,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         source_id: poId,
         source_line_id: line.id,
         company_id: companyId,
-        material_id: line.material_id,
+        material_id: toTrimmedString(line.actual_material_id) || line.material_id,
         storage_location_id: line.issue_sloc_id ?? null,
         required_qty: line.planned_qty,
         uom_code: toTrimmedString(line.uom_code) || "KG",

@@ -256,7 +256,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/pack-codes":                  { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "VIEW" },
   "POST:/api/production/pack-codes":                 { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "WRITE" },
   "POST:/api/production/pack-codes/toggle":          { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "EDIT" },
-  "GET:/api/production/prodshades":                  { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "VIEW" },
+  "GET:/api/production/prodshades":                  { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
   "GET:/api/production/pack-configs":                { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "VIEW" },
   "POST:/api/production/pack-configs":               { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "WRITE" },
   "GET:/api/production/batch-series":                { skipAcl: false, resourceCode: "SA_PROD_BATCH_SERIES", action: "VIEW" },

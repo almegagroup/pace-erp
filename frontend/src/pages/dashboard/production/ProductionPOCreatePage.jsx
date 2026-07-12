@@ -12,31 +12,31 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useCompaniesForOmQuery, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import {
   availabilityPreviewProcessOrder,
-  createProcessOrder,
   createPackingOrder,
+  createProcessOrder,
   getStrokeMaster,
   listApprovedProdshades,
+  listSegmentLocations,
   listStrokeMasters,
 } from "./prodApi.js";
 import { listMachines } from "../om/omApi.js";
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
-const PROCESS_SEGMENTS = ["ADMIX", "HPS", "IWC", "POWDER", "INT"];
+const MTS_SEGMENTS = ["IWC", "POWDER"];
 const TABS = ["Process PO", "Packing PO"];
 
 const EMPTY_PROCESS = {
   company_id: "",
   po_type: "MTO",
-  segment_code: "",
   prodshade_material_id: "",
   stroke_master_id: "",
   machine_id: "",
   planned_qty_kg: "",
   planned_start_date: "",
-  notes: "",
+  mts_segment_code: "",
 };
 
 const EMPTY_PACKING = {
@@ -55,6 +55,10 @@ function prodshadeLabel(item) {
   return [item.external_code, item.shade_code, item.material_name].filter(Boolean).join(" - ");
 }
 
+function materialLabel(material) {
+  return [material?.pace_code || material?.external_code, material?.material_name].filter(Boolean).join(" - ");
+}
+
 function strokeLabel(stroke) {
   const prodshade = stroke.material?.external_code || stroke.material?.shade_code || "Prodshade";
   return `${prodshade} - stroke #${stroke.stroke_number}${stroke.description ? ` - ${stroke.description}` : ""}`;
@@ -68,13 +72,27 @@ function storageLocationLabel(location) {
   return [location.code || location.location_code, location.name || location.location_name].filter(Boolean).join(" - ");
 }
 
+function deriveSegmentCode(poType, mtsSegmentCode) {
+  if (poType === "MTO") return "ADMIX";
+  if (poType === "HPS") return "HPS";
+  if (poType === "INT") return "INT";
+  if (poType === "MTS") return mtsSegmentCode || "";
+  return "";
+}
+
+function buildOutputReferenceValue(value) {
+  return value || "--";
+}
+
 export default function ProductionPOCreatePage() {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState(0);
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
+  const [processStep, setProcessStep] = useState(1);
   const [processForm, setProcessForm] = useState({ ...EMPTY_PROCESS });
   const [packingForm, setPackingForm] = useState({ ...EMPTY_PACKING });
+  const [lineActualMaterialOverrides, setLineActualMaterialOverrides] = useState({});
   const [lineLocationOverrides, setLineLocationOverrides] = useState({});
   const [debouncedCreatePreview, setDebouncedCreatePreview] = useState([]);
 
@@ -85,15 +103,68 @@ export default function ProductionPOCreatePage() {
     [companies],
   );
 
+  useEffect(() => {
+    if (companies.length === 1 && !processForm.company_id) {
+      setProcessForm((current) => ({ ...current, company_id: companies[0].id }));
+    }
+  }, [companies, processForm.company_id]);
+
+  const materialsQ = useMaterialOptionsQuery({ status: "ACTIVE", limit: 500 });
+  const materialRows = materialsQ.materials ?? [];
+  const materialById = useMemo(
+    () => new Map(materialRows.map((material) => [material.id, material])),
+    [materialRows],
+  );
+
   const prodshadesQ = useQuery({
     queryKey: ["production-create-prodshades"],
     queryFn: () => listApprovedProdshades({}),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
-  const prodshadeOptions = useMemo(
-    () => (prodshadesQ.data ?? []).map((item) => ({ value: item.material_id, label: prodshadeLabel(item) || "Prodshade" })),
-    [prodshadesQ.data],
+
+  const approvedProdshades = useMemo(
+    () => (prodshadesQ.data ?? []).map((item) => ({
+      ...item,
+      material: materialById.get(item.material_id) ?? null,
+    })),
+    [materialById, prodshadesQ.data],
   );
+
+  const fgMaterialOptions = useMemo(
+    () => materialRows
+      .filter((material) => String(material.material_type || "").toUpperCase() === "FG")
+      .map((material) => ({
+        value: material.id,
+        label: materialLabel(material) || "SKU",
+      })),
+    [materialRows],
+  );
+
+  const prodshadeOptions = useMemo(() => {
+    const approvedOptions = approvedProdshades
+      .filter((item) => {
+        if (!item.material) return true;
+        const materialType = String(item.material.material_type || "").toUpperCase();
+        if (processForm.po_type === "MTEST") return materialType === "SFG" || materialType === "INT";
+        return materialType === "SFG" || materialType === "INT";
+      })
+      .map((item) => ({ value: item.material_id, label: prodshadeLabel(item) || "Material" }));
+
+    if (processForm.po_type !== "MTEST") return approvedOptions;
+
+    const seen = new Set(approvedOptions.map((option) => option.value));
+    const merged = [...approvedOptions];
+    for (const option of fgMaterialOptions) {
+      if (!seen.has(option.value)) merged.push(option);
+    }
+    return merged;
+  }, [approvedProdshades, fgMaterialOptions, processForm.po_type]);
+
+  const selectedMaterial = materialById.get(processForm.prodshade_material_id) ?? null;
+  const selectedMaterialType = String(selectedMaterial?.material_type || "").toUpperCase();
+  const derivedSegmentCode = deriveSegmentCode(processForm.po_type, processForm.mts_segment_code);
+  const machineRequired = ["MTO", "HPS", "MTS", "INT"].includes(processForm.po_type);
+  const mtestSkuPath = processForm.po_type === "MTEST" && selectedMaterialType === "FG";
 
   const strokesQ = useQuery({
     queryKey: ["production-create-strokes", processForm.company_id, processForm.prodshade_material_id],
@@ -102,17 +173,18 @@ export default function ProductionPOCreatePage() {
       material_id: processForm.prodshade_material_id || undefined,
       status: "APPROVED",
     }),
-    enabled: Boolean(processForm.company_id && processForm.prodshade_material_id && processForm.po_type !== "MTEST"),
+    enabled: Boolean(processForm.company_id && processForm.prodshade_material_id && !mtestSkuPath),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
   const strokeOptions = useMemo(
     () => (strokesQ.data ?? []).map((stroke) => ({ value: stroke.id, label: strokeLabel(stroke) })),
     [strokesQ.data],
   );
+
   const strokeDetailQ = useQuery({
     queryKey: ["production-create-stroke-detail", processForm.stroke_master_id],
     queryFn: () => getStrokeMaster(processForm.stroke_master_id),
-    enabled: Boolean(processForm.stroke_master_id && processForm.po_type !== "MTEST"),
+    enabled: Boolean(processForm.stroke_master_id),
   });
 
   const machinesQ = useQuery({
@@ -125,6 +197,7 @@ export default function ProductionPOCreatePage() {
     () => (machinesQ.data ?? []).map((machine) => ({ value: machine.id, label: machineLabel(machine) || "Machine" })),
     [machinesQ.data],
   );
+
   const storageLocationQ = useStorageLocationOptionsQuery(
     { company_id: processForm.company_id || undefined },
     { enabled: Boolean(processForm.company_id) },
@@ -137,37 +210,53 @@ export default function ProductionPOCreatePage() {
     [storageLocationQ.storageLocations],
   );
 
-  const machineRequired = ["MTO", "HPS", "MTS", "INT"].includes(processForm.po_type);
+  const segmentLocationsQ = useQuery({
+    queryKey: ["production-create-segment-locations", processForm.company_id],
+    queryFn: () => listSegmentLocations({ company_id: processForm.company_id }),
+    enabled: Boolean(processForm.company_id),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+
+  const activeSegmentLocation = useMemo(
+    () => (segmentLocationsQ.data ?? []).find((row) => row.segment_code === derivedSegmentCode && row.active !== false) ?? null,
+    [derivedSegmentCode, segmentLocationsQ.data],
+  );
+
   const strokeLines = Array.isArray(strokeDetailQ.data?.lines) ? strokeDetailQ.data.lines : [];
   const strokePreviewRows = useMemo(
     () => strokeLines.map((line) => {
-      const selectedStorageLocationId = lineLocationOverrides[line.material_id]
-        || line.default_storage_location_id
-        || "";
+      const selectedStorageLocationId = lineLocationOverrides[line.material_id] || line.default_storage_location_id || "";
       const plannedQty = (Number(line.dosage_pct ?? 0) / 100) * Number(processForm.planned_qty_kg || 0);
       return {
+        key: line.id || line.material_id,
         material_id: line.material_id,
-        material_label: prodshadeLabel(line.material || {}) || line.material?.material_name || "--",
+        material_type: String(line.line_material_type || line.material?.material_type || "RM").toUpperCase() === "INT" ? "INT" : "RM",
+        material_label: materialLabel(line.material) || "--",
         dosage_pct: Number(line.dosage_pct ?? 0),
-        planned_qty: plannedQty,
+        actual_material_id: lineActualMaterialOverrides[line.material_id] || "",
+        registered_alternate_material_id: line.alternate_material_id || "",
+        registered_alternate_material_label: materialLabel(line.alternate_material) || "",
         default_storage_location_id: line.default_storage_location_id || "",
         storage_location_id: selectedStorageLocationId,
+        standard_qty: plannedQty,
       };
     }),
-    [lineLocationOverrides, processForm.planned_qty_kg, strokeLines],
+    [lineActualMaterialOverrides, lineLocationOverrides, processForm.planned_qty_kg, strokeLines],
   );
 
   useEffect(() => {
+    setLineActualMaterialOverrides({});
     setLineLocationOverrides({});
-  }, [processForm.company_id, processForm.po_type, processForm.stroke_master_id]);
+  }, [processForm.company_id, processForm.po_type, processForm.prodshade_material_id, processForm.stroke_master_id]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setDebouncedCreatePreview(
         strokePreviewRows
-          .filter((row) => row.storage_location_id && row.storage_location_id !== row.default_storage_location_id)
+          .filter((row) => row.storage_location_id || row.actual_material_id)
           .map((row) => ({
             material_id: row.material_id,
+            actual_material_id: row.actual_material_id || undefined,
             storage_location_id: row.storage_location_id,
           })),
       );
@@ -191,51 +280,127 @@ export default function ProductionPOCreatePage() {
     }),
     enabled: Boolean(
       processForm.company_id
-      && processForm.po_type !== "MTEST"
       && processForm.stroke_master_id
       && Number(processForm.planned_qty_kg || 0) > 0,
     ),
   });
+
   const availabilityByKey = useMemo(
     () => new Map((availabilityPreviewQ.data ?? []).map((row) => [`${row.material_id}::${row.storage_location_id}`, row])),
     [availabilityPreviewQ.data],
   );
+
+  const previewRowsWithAvailability = useMemo(
+    () => strokePreviewRows.map((row, index) => {
+      const previewMaterialId = row.actual_material_id || row.material_id;
+      const availability = row.storage_location_id
+        ? availabilityByKey.get(`${previewMaterialId}::${row.storage_location_id}`) ?? null
+        : null;
+      const availableQty = availability ? Number(availability.available_qty ?? 0) : null;
+      const isShort = availability ? availableQty < row.standard_qty : false;
+      return {
+        ...row,
+        line_no: index + 1,
+        available_qty: availableQty,
+        is_short: isShort,
+      };
+    }),
+    [availabilityByKey, strokePreviewRows],
+  );
+
+  const shortLineNumbers = useMemo(
+    () => previewRowsWithAvailability.filter((row) => row.is_short).map((row) => row.line_no),
+    [previewRowsWithAvailability],
+  );
+
+  const outputStorageLocation = strokeDetailQ.data?.default_storage_location
+    || activeSegmentLocation?.shopfloor_sloc
+    || null;
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
   }
 
+  function resetProcess(next = {}) {
+    setProcessForm({ ...EMPTY_PROCESS, ...next });
+    setProcessStep(1);
+    setLineActualMaterialOverrides({});
+    setLineLocationOverrides({});
+  }
+
   function updateProcess(field, value) {
     setProcessForm((current) => {
       const next = { ...current, [field]: value };
       if (field === "company_id") {
+        next.prodshade_material_id = "";
         next.stroke_master_id = "";
         next.machine_id = "";
+        next.planned_qty_kg = "";
+        next.planned_start_date = "";
+        next.mts_segment_code = "";
+      }
+      if (field === "po_type") {
+        next.prodshade_material_id = "";
+        next.stroke_master_id = "";
+        next.machine_id = "";
+        next.mts_segment_code = "";
       }
       if (field === "prodshade_material_id") {
         next.stroke_master_id = "";
       }
       return next;
     });
+    if (field !== "planned_qty_kg" && field !== "planned_start_date" && field !== "machine_id" && field !== "mts_segment_code") {
+      setProcessStep(1);
+    }
   }
 
   function updatePacking(field, value) {
     setPackingForm((current) => ({ ...current, [field]: value }));
   }
 
+  function handleStepOneNext() {
+    if (!processForm.company_id || !processForm.po_type || !processForm.prodshade_material_id) {
+      toast("Company, PO Type, and Material are required.", "error");
+      return;
+    }
+    if (mtestSkuPath) {
+      setProcessStep(3);
+      return;
+    }
+    setProcessStep(2);
+  }
+
+  function handleStepTwoNext() {
+    if (processForm.po_type !== "MTEST" && !processForm.stroke_master_id) {
+      toast("Stroke is required for this Process PO type.", "error");
+      return;
+    }
+    setProcessStep(3);
+  }
+
   async function handleCreateProcess(event) {
     event.preventDefault();
-    if (!processForm.company_id || !processForm.prodshade_material_id || !processForm.planned_qty_kg || !processForm.segment_code) {
-      toast("Company, segment, prodshade, and planned qty are required.", "error");
+
+    if (processForm.po_type === "MTEST") {
+      toast("MTEST create remains blocked here because the locked brief/frontend contract does not define the full create payload for this repo.", "error");
+      return;
+    }
+    if (!processForm.company_id || !processForm.prodshade_material_id || !processForm.planned_qty_kg || !derivedSegmentCode) {
+      toast("Company, Material, Segment, and Batch Size are required.", "error");
       return;
     }
     if (machineRequired && !processForm.machine_id) {
       toast("Machine is required for this Process PO type.", "error");
       return;
     }
-    if (processForm.po_type !== "MTEST" && !processForm.stroke_master_id) {
-      toast("Stroke is required for non-MTEST Process POs.", "error");
+    if (!processForm.stroke_master_id) {
+      toast("Stroke is required for this Process PO type.", "error");
+      return;
+    }
+    if (shortLineNumbers.length > 0) {
+      toast(`Create is blocked. Short stock on line(s): ${shortLineNumbers.join(", ")}.`, "error");
       return;
     }
 
@@ -244,23 +409,23 @@ export default function ProductionPOCreatePage() {
       const payload = {
         company_id: processForm.company_id,
         po_type: processForm.po_type,
-        segment_code: processForm.segment_code,
+        segment_code: derivedSegmentCode,
         prodshade_material_id: processForm.prodshade_material_id,
         machine_id: processForm.machine_id || undefined,
-        stroke_master_id: processForm.po_type === "MTEST" ? undefined : processForm.stroke_master_id,
+        stroke_master_id: processForm.stroke_master_id,
         planned_qty_kg: Number(processForm.planned_qty_kg),
         planned_start_date: processForm.planned_start_date || undefined,
-        notes: processForm.notes || undefined,
-        line_location_overrides: strokePreviewRows
-          .filter((row) => row.storage_location_id && row.storage_location_id !== row.default_storage_location_id)
+        line_location_overrides: previewRowsWithAvailability
+          .filter((row) => (row.storage_location_id && row.storage_location_id !== row.default_storage_location_id) || row.actual_material_id)
           .map((row) => ({
             material_id: row.material_id,
+            actual_material_id: row.actual_material_id || undefined,
             storage_location_id: row.storage_location_id,
           })),
       };
       const result = await createProcessOrder(payload);
       toast(`Process PO created${result?.po_number ? `: ${result.po_number}` : "."}`);
-      setProcessForm({ ...EMPTY_PROCESS });
+      resetProcess({ company_id: companies.length === 1 ? companies[0].id : "" });
       qc.invalidateQueries({ queryKey: ["process-orders"] });
     } catch (error) {
       toast(error.message || "Process PO create failed.", "error");
@@ -317,180 +482,347 @@ export default function ProductionPOCreatePage() {
         </div>
 
         {activeTab === 0 && (
-          <form onSubmit={handleCreateProcess} className="flex max-w-4xl flex-col gap-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
-                <ErpComboboxField
-                  value={processForm.company_id}
-                  onChange={(value) => updateProcess("company_id", value)}
-                  options={companyOptions}
-                  placeholder="-- Select company --"
-                  emptyStateLabel={companiesQ.isLoading ? "Loading companies..." : "No companies available"}
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">Production Type <span className="text-rose-500">*</span></label>
-                <ErpComboboxField
-                  value={processForm.po_type}
-                  onChange={(value) => updateProcess("po_type", value)}
-                  options={PROCESS_TYPES.map((type) => ({ value: type, label: type }))}
-                  hideBlank
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">Segment <span className="text-rose-500">*</span></label>
-                <ErpComboboxField
-                  value={processForm.segment_code}
-                  onChange={(value) => updateProcess("segment_code", value)}
-                  options={PROCESS_SEGMENTS.map((segment) => ({ value: segment, label: segment }))}
-                  placeholder="-- Select segment --"
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">Prodshade Material <span className="text-rose-500">*</span></label>
-                <ErpComboboxField
-                  value={processForm.prodshade_material_id}
-                  onChange={(value) => updateProcess("prodshade_material_id", value)}
-                  options={prodshadeOptions}
-                  placeholder="-- Select prodshade --"
-                  emptyStateLabel={prodshadesQ.isLoading ? "Loading prodshades..." : "No approved prodshades yet"}
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">
-                  Stroke
-                  {processForm.po_type !== "MTEST" ? <span className="text-rose-500"> *</span> : <span className="text-slate-400"> (hidden for MTEST in doc; existing manual-line UI is not present in this repo)</span>}
-                </label>
-                <ErpComboboxField
-                  value={processForm.stroke_master_id}
-                  onChange={(value) => updateProcess("stroke_master_id", value)}
-                  options={strokeOptions}
-                  placeholder={processForm.po_type === "MTEST" ? "-- Not required --" : "-- Select stroke --"}
-                  emptyStateLabel={strokesQ.isLoading ? "Loading strokes..." : "No approved strokes for this company + prodshade"}
-                  disabled={processForm.po_type === "MTEST"}
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">
-                  Machine
-                  {machineRequired ? <span className="text-rose-500"> *</span> : <span className="text-slate-400"> (not required for MTEST)</span>}
-                </label>
-                <ErpComboboxField
-                  value={processForm.machine_id}
-                  onChange={(value) => updateProcess("machine_id", value)}
-                  options={machineOptions}
-                  placeholder={machineRequired ? "-- Select machine --" : "-- Optional --"}
-                  emptyStateLabel={machinesQ.isLoading ? "Loading machines..." : "No active machines for this company"}
-                  disabled={!processForm.company_id || !machineRequired}
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">Planned Qty (KG) <span className="text-rose-500">*</span></label>
-                <input
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
-                  value={processForm.planned_qty_kg}
-                  onChange={(event) => updateProcess("planned_qty_kg", event.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">Planned Start Date</label>
-                <input
-                  type="date"
-                  className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                  value={processForm.planned_start_date}
-                  onChange={(event) => updateProcess("planned_start_date", event.target.value)}
-                />
-              </div>
-
-              <div className="flex flex-col gap-1 md:col-span-2">
-                <label className="text-xs font-medium text-slate-600">Notes</label>
-                <textarea
-                  rows={3}
-                  className="rounded border border-slate-300 px-2 py-1.5 text-sm resize-none"
-                  value={processForm.notes}
-                  onChange={(event) => updateProcess("notes", event.target.value)}
-                />
-              </div>
-            </div>
-
-            {processForm.po_type !== "MTEST" && processForm.company_id && processForm.prodshade_material_id && processForm.stroke_master_id && Number(processForm.planned_qty_kg || 0) > 0 && (
-              <div className="rounded-lg border border-slate-200 bg-white">
-                <div className="border-b border-slate-200 px-4 py-3">
-                  <h3 className="text-sm font-semibold text-slate-800">RM Location Preview</h3>
+          <form onSubmit={handleCreateProcess} className="flex max-w-6xl flex-col gap-4">
+            {processStep === 1 && (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 1</p>
+                  <h3 className="text-lg font-semibold text-slate-900">Company / PO Type / Material</h3>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[980px] border-collapse text-sm">
-                    <thead>
-                      <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                        <th className="border-b px-3 py-2 text-left">Formulation Material</th>
-                        <th className="border-b px-3 py-2 text-right">Dosage%</th>
-                        <th className="border-b px-3 py-2 text-right">Planned Qty</th>
-                        <th className="border-b px-3 py-2 text-left">Storage Location</th>
-                        <th className="border-b px-3 py-2 text-right">Available</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {strokePreviewRows.map((row) => {
-                        const availability = row.storage_location_id
-                          ? availabilityByKey.get(`${row.material_id}::${row.storage_location_id}`) ?? null
-                          : null;
-                        const isShort = Boolean(availability?.short);
-                        return (
-                          <tr key={row.material_id} className={isShort ? "bg-rose-50" : "border-b border-slate-100"}>
-                            <td className="border-b border-slate-100 px-3 py-2">{row.material_label || "--"}</td>
-                            <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{row.dosage_pct.toFixed(3)}</td>
-                            <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{row.planned_qty.toFixed(3)}</td>
-                            <td className="border-b border-slate-100 px-3 py-2">
-                              <ErpComboboxField
-                                value={row.storage_location_id}
-                                onChange={(value) => {
-                                  setLineLocationOverrides((current) => ({ ...current, [row.material_id]: value }));
-                                }}
-                                options={storageLocationOptions}
-                                placeholder="-- Select storage location --"
-                                emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
-                              />
-                            </td>
-                            <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
-                              {availability ? availability.available_qty.toFixed(3) : "--"}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
+                    <ErpComboboxField
+                      value={processForm.company_id}
+                      onChange={(value) => updateProcess("company_id", value)}
+                      options={companyOptions}
+                      placeholder="-- Select company --"
+                      emptyStateLabel={companiesQ.isLoading ? "Loading companies..." : "No companies available"}
+                      disabled={companies.length === 1}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-slate-600">PO Type <span className="text-rose-500">*</span></label>
+                    <ErpComboboxField
+                      value={processForm.po_type}
+                      onChange={(value) => updateProcess("po_type", value)}
+                      options={PROCESS_TYPES.map((type) => ({ value: type, label: type }))}
+                      hideBlank
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1 md:col-span-2">
+                    <label className="text-xs font-medium text-slate-600">Material <span className="text-rose-500">*</span></label>
+                    <ErpComboboxField
+                      value={processForm.prodshade_material_id}
+                      onChange={(value) => updateProcess("prodshade_material_id", value)}
+                      options={prodshadeOptions}
+                      placeholder="-- Select material --"
+                      emptyStateLabel={prodshadesQ.isLoading || materialsQ.isLoading ? "Loading materials..." : "No eligible materials"}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleStepOneNext}
+                    className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700"
+                  >
+                    Next
+                  </button>
                 </div>
               </div>
             )}
 
-            <div className="flex gap-2 pt-2">
-              <button
-                type="submit"
-                disabled={saving}
-                className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
-              >
-                {saving ? "Creating..." : "Create Process PO"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setProcessForm({ ...EMPTY_PROCESS })}
-                className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
-              >
-                Clear
-              </button>
-            </div>
+            {processStep === 2 && (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 2</p>
+                  <h3 className="text-lg font-semibold text-slate-900">Stroke Gate</h3>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="flex flex-col gap-1 md:col-span-2">
+                    <label className="text-xs font-medium text-slate-600">
+                      Stroke
+                      {processForm.po_type === "MTEST" ? <span className="text-slate-400"> (optional)</span> : <span className="text-rose-500"> *</span>}
+                    </label>
+                    <ErpComboboxField
+                      value={processForm.stroke_master_id}
+                      onChange={(value) => updateProcess("stroke_master_id", value)}
+                      options={strokeOptions}
+                      placeholder={processForm.po_type === "MTEST" ? "-- Optional stroke --" : "-- Select stroke --"}
+                      emptyStateLabel={strokesQ.isLoading ? "Loading strokes..." : "No approved strokes for this company + material"}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setProcessStep(1)}
+                    className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStepTwoNext}
+                    className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {processStep === 3 && (
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 3</p>
+                    <h3 className="text-lg font-semibold text-slate-900">Header + Material Table</h3>
+                  </div>
+                  <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">STANDARD</span>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs font-medium text-slate-500">PO Number</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">-- (generated on save)</div>
+                  </div>
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs font-medium text-slate-500">Company</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">{companyOptions.find((option) => option.value === processForm.company_id)?.label || "--"}</div>
+                  </div>
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs font-medium text-slate-500">PO Type</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">{processForm.po_type || "--"}</div>
+                  </div>
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs font-medium text-slate-500">Batch Number</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">--</div>
+                  </div>
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs font-medium text-slate-500">Stroke</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">{strokeOptions.find((option) => option.value === processForm.stroke_master_id)?.label || "--"}</div>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-slate-600">Prodshade</label>
+                    <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900">
+                      {buildOutputReferenceValue(selectedMaterial?.material_name)}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-slate-600">Description</label>
+                    <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900">
+                      {buildOutputReferenceValue(selectedMaterial?.document_name)}
+                    </div>
+                  </div>
+
+                  {processForm.po_type === "MTS" ? (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-slate-600">Segment <span className="text-rose-500">*</span></label>
+                      <ErpComboboxField
+                        value={processForm.mts_segment_code}
+                        onChange={(value) => updateProcess("mts_segment_code", value)}
+                        options={MTS_SEGMENTS.map((segment) => ({ value: segment, label: segment }))}
+                        placeholder="-- Select segment --"
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-slate-600">Segment</label>
+                      <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900">
+                        {derivedSegmentCode || "--"}
+                      </div>
+                    </div>
+                  )}
+
+                  {machineRequired && (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-slate-600">Machine <span className="text-rose-500">*</span></label>
+                      <ErpComboboxField
+                        value={processForm.machine_id}
+                        onChange={(value) => updateProcess("machine_id", value)}
+                        options={machineOptions}
+                        placeholder="-- Select machine --"
+                        emptyStateLabel={machinesQ.isLoading ? "Loading machines..." : "No active machines for this company"}
+                        disabled={!processForm.company_id}
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-slate-600">Batch Size (Planned Qty KG) <span className="text-rose-500">*</span></label>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
+                      value={processForm.planned_qty_kg}
+                      onChange={(event) => updateProcess("planned_qty_kg", event.target.value)}
+                      required
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-slate-600">Planned Start Date</label>
+                    <input
+                      type="date"
+                      className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                      value={processForm.planned_start_date}
+                      onChange={(event) => updateProcess("planned_start_date", event.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white">
+                  <div className="border-b border-slate-200 px-4 py-3">
+                    <h4 className="text-sm font-semibold text-slate-800">Output Reference</h4>
+                  </div>
+                  <div className="grid gap-4 px-4 py-4 md:grid-cols-2 xl:grid-cols-3">
+                    <div>
+                      <div className="text-xs font-medium text-slate-500">Material Code</div>
+                      <div className="mt-1 text-sm text-slate-900">{buildOutputReferenceValue(selectedMaterial?.pace_code)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-medium text-slate-500">Name</div>
+                      <div className="mt-1 text-sm text-slate-900">{buildOutputReferenceValue(selectedMaterial?.material_name)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-medium text-slate-500">Description</div>
+                      <div className="mt-1 text-sm text-slate-900">{buildOutputReferenceValue(selectedMaterial?.document_name)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-medium text-slate-500">External Code</div>
+                      <div className="mt-1 text-sm text-slate-900">{buildOutputReferenceValue(selectedMaterial?.external_code)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-medium text-slate-500">Storage Location</div>
+                      <div className="mt-1 text-sm text-slate-900">{buildOutputReferenceValue(storageLocationLabel(outputStorageLocation))}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-medium text-slate-500">Movement Type</div>
+                      <div className="mt-1 text-sm text-slate-900">P101</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white">
+                  <div className="border-b border-slate-200 px-4 py-3">
+                    <h4 className="text-sm font-semibold text-slate-800">Material Table</h4>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[1180px] border-collapse text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                          <th className="border-b px-3 py-2 text-left">#</th>
+                          <th className="border-b px-3 py-2 text-left">Material Type</th>
+                          <th className="border-b px-3 py-2 text-left">Formulation Material</th>
+                          <th className="border-b px-3 py-2 text-right">Dosage %</th>
+                          <th className="border-b px-3 py-2 text-left">Actual Material</th>
+                          <th className="border-b px-3 py-2 text-left">Storage Location</th>
+                          <th className="border-b px-3 py-2 text-right">Standard Qty</th>
+                          <th className="border-b px-3 py-2 text-left">Movement Type</th>
+                          <th className="border-b px-3 py-2 text-right">Available</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {previewRowsWithAvailability.length === 0 ? (
+                          <tr>
+                            <td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">
+                              No stroke-derived material lines.
+                            </td>
+                          </tr>
+                        ) : previewRowsWithAvailability.map((row) => {
+                          const actualMaterialOptions = row.registered_alternate_material_id
+                            ? [
+                                { value: "", label: "(same)" },
+                                { value: row.registered_alternate_material_id, label: row.registered_alternate_material_label || "Registered alternate" },
+                              ]
+                            : [{ value: "", label: "(same)" }];
+                          return (
+                            <tr key={row.key} className={row.is_short ? "bg-rose-50" : "border-b border-slate-100"}>
+                              <td className="border-b border-slate-100 px-3 py-2">{row.line_no}</td>
+                              <td className="border-b border-slate-100 px-3 py-2">{row.material_type}</td>
+                              <td className="border-b border-slate-100 px-3 py-2">{row.material_label || "--"}</td>
+                              <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{row.dosage_pct.toFixed(3)}</td>
+                              <td className="border-b border-slate-100 px-3 py-2">
+                                <ErpComboboxField
+                                  value={row.actual_material_id}
+                                  onChange={(value) => {
+                                    setLineActualMaterialOverrides((current) => ({ ...current, [row.material_id]: value }));
+                                  }}
+                                  options={actualMaterialOptions}
+                                  placeholder="(same)"
+                                  disabled={Boolean(!row.registered_alternate_material_id)}
+                                />
+                              </td>
+                              <td className="border-b border-slate-100 px-3 py-2">
+                                <ErpComboboxField
+                                  value={row.storage_location_id}
+                                  onChange={(value) => {
+                                    setLineLocationOverrides((current) => ({ ...current, [row.material_id]: value }));
+                                  }}
+                                  options={storageLocationOptions}
+                                  placeholder="-- Select storage location --"
+                                  emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                                />
+                              </td>
+                              <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{row.standard_qty.toFixed(3)}</td>
+                              <td className="border-b border-slate-100 px-3 py-2">261</td>
+                              <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
+                                {row.available_qty == null ? "--" : row.available_qty.toFixed(3)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {shortLineNumbers.length > 0 && (
+                  <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                    Create is blocked because Available is below Standard Qty on line(s): {shortLineNumbers.join(", ")}.
+                  </div>
+                )}
+
+                <div className="flex justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setProcessStep(processForm.po_type === "MTEST" && mtestSkuPath ? 1 : 2)}
+                    className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
+                  >
+                    Back
+                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => resetProcess({ company_id: companies.length === 1 ? companies[0].id : "" })}
+                      className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={saving || shortLineNumbers.length > 0}
+                      className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+                    >
+                      {saving ? "Creating..." : "Create Process PO"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </form>
         )}
 
