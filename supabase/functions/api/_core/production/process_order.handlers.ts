@@ -120,6 +120,36 @@ async function getStorageLocationMapByIds(
   return slocMap;
 }
 
+async function getMaterialGroupMemberIdsByGroupIds(
+  groupIds: string[],
+  logPrefix: string,
+  errorCode: string,
+): Promise<Map<string, string[]>> {
+  const ids = [...new Set(groupIds.filter(Boolean))];
+  const memberMap = new Map<string, string[]>();
+  if (ids.length === 0) return memberMap;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_category_group_member")
+    .select("group_id, material_id")
+    .in("group_id", ids);
+  if (error) {
+    console.error(`${logPrefix} material-group-member query failed:`, JSON.stringify(error));
+    throw new Error(errorCode);
+  }
+
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const groupId = String(row.group_id ?? "");
+    const materialId = toTrimmedString(row.material_id);
+    if (!groupId || !materialId) continue;
+    const existing = memberMap.get(groupId) ?? [];
+    existing.push(materialId);
+    memberMap.set(groupId, existing);
+  }
+  return memberMap;
+}
+
 async function fetchProcessOrder(id: string): Promise<JsonRecord | null> {
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
@@ -173,7 +203,7 @@ async function fetchStrokeAlternates(strokeMasterId: string | null): Promise<Map
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("stroke_line")
-    .select("material_id, alternate_material_id, dosage_pct")
+    .select("material_id, alternate_material_id, material_group_id, dosage_pct")
     .eq("stroke_master_id", strokeMasterId);
   if (error) {
     console.error("[process_order.fetchStrokeAlternates] query failed:", JSON.stringify(error));
@@ -183,6 +213,36 @@ async function fetchStrokeAlternates(strokeMasterId: string | null): Promise<Map
     result.set(String(row.material_id), row);
   }
   return result;
+}
+
+async function buildAllowedAlternateIdsByStrokeLines(
+  strokeLines: JsonRecord[],
+  logPrefix: string,
+  errorCode: string,
+): Promise<Map<string, string[]>> {
+  const groupMemberMap = await getMaterialGroupMemberIdsByGroupIds(
+    strokeLines.map((line) => String(line.material_group_id ?? "")),
+    logPrefix,
+    errorCode,
+  );
+
+  const allowedMap = new Map<string, string[]>();
+  for (const strokeLine of strokeLines) {
+    const formulationMaterialId = String(strokeLine.material_id ?? "");
+    if (!formulationMaterialId) continue;
+
+    const allowedIds = new Set<string>();
+    const directAlternateId = toTrimmedString(strokeLine.alternate_material_id);
+    if (directAlternateId) allowedIds.add(directAlternateId);
+
+    const groupId = String(strokeLine.material_group_id ?? "");
+    for (const memberId of groupMemberMap.get(groupId) ?? []) {
+      if (memberId && memberId !== formulationMaterialId) allowedIds.add(memberId);
+    }
+
+    allowedMap.set(formulationMaterialId, Array.from(allowedIds));
+  }
+  return allowedMap;
 }
 
 async function fetchOrderLines(orderId: string, strokeMasterId: string | null = null): Promise<JsonRecord[]> {
@@ -331,6 +391,7 @@ async function postStockMovement(params: {
   direction: "IN" | "OUT";
   postedBy: string;
   reversalOfId?: string | null;
+  batchNumber?: string | null;
 }): Promise<StockPostingResult> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
@@ -349,6 +410,7 @@ async function postStockMovement(params: {
       p_direction: params.direction,
       p_posted_by: params.postedBy,
       p_reversal_of_id: params.reversalOfId ?? null,
+      p_batch_number: params.batchNumber ?? null,
     });
   if (error || !Array.isArray(data) || data.length === 0) {
     console.error("[process_order.postStockMovement] rpc failed:", JSON.stringify(error));
@@ -873,18 +935,24 @@ export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: 
       const { data: strokeLines, error: strokeLinesErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
-        .select("material_id, alternate_material_id, dosage_pct, default_storage_location_id")
+        .select("material_id, alternate_material_id, material_group_id, dosage_pct, default_storage_location_id")
         .eq("stroke_master_id", strokeMasterId);
       if (strokeLinesErr) {
         console.error("[process_order.availabilityPreview] stroke-line query failed:", JSON.stringify(strokeLinesErr));
         throw new Error("PROD_PO_STOCK_CHECK_FAILED");
       }
 
+      const allowedAlternateMap = await buildAllowedAlternateIdsByStrokeLines(
+        (strokeLines ?? []) as JsonRecord[],
+        "[process_order.availabilityPreview]",
+        "PROD_PO_STOCK_CHECK_FAILED",
+      );
+
       for (const strokeLine of (strokeLines ?? []) as JsonRecord[]) {
         const formulationMaterialId = String(strokeLine.material_id);
         const override = overrideMap.get(formulationMaterialId) ?? null;
-        const registeredAlternateId = toTrimmedString(strokeLine.alternate_material_id) || null;
-        const effectiveMaterialId = (override?.actualMaterialId && override.actualMaterialId === registeredAlternateId)
+        const allowedAlternateIds = new Set(allowedAlternateMap.get(formulationMaterialId) ?? []);
+        const effectiveMaterialId = (override?.actualMaterialId && allowedAlternateIds.has(override.actualMaterialId))
           ? override.actualMaterialId
           : formulationMaterialId;
         const storageLocationId = override?.storageLocationId
@@ -1127,17 +1195,23 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const { data: strokeLines, error: strokeLinesErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
-        .select("material_id, alternate_material_id, dosage_pct, default_storage_location_id")
+        .select("material_id, alternate_material_id, material_group_id, dosage_pct, default_storage_location_id")
         .eq("stroke_master_id", strokeId);
       if (strokeLinesErr) {
         console.error("[process_order.createProcessOrder] stroke-line query failed:", JSON.stringify(strokeLinesErr));
         throw new Error("PROD_PO_CREATE_FAILED");
       }
 
+      const allowedAlternateMap = await buildAllowedAlternateIdsByStrokeLines(
+        (strokeLines ?? []) as JsonRecord[],
+        "[process_order.createProcessOrder]",
+        "PROD_PO_CREATE_FAILED",
+      );
+
       for (const strokeLine of (strokeLines ?? []) as JsonRecord[]) {
         const override = lineOverrideMap.get(String(strokeLine.material_id)) ?? null;
-        const registeredAlternateId = toTrimmedString(strokeLine.alternate_material_id) || null;
-        if (override?.actualMaterialId && override.actualMaterialId !== registeredAlternateId) {
+        const allowedAlternateIds = new Set(allowedAlternateMap.get(String(strokeLine.material_id)) ?? []);
+        if (override?.actualMaterialId && !allowedAlternateIds.has(override.actualMaterialId)) {
           return poErr(req, ctx, "PROD_PO_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id must match the registered alternate");
         }
       }
@@ -1147,7 +1221,10 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         for (const strokeLine of (strokeLines ?? []) as JsonRecord[]) {
           const formulationMaterialId = String(strokeLine.material_id);
           const override = lineOverrideMap.get(formulationMaterialId) ?? null;
-          const effectiveMaterialId = override?.actualMaterialId || formulationMaterialId;
+          const allowedAlternateIds = new Set(allowedAlternateMap.get(formulationMaterialId) ?? []);
+          const effectiveMaterialId = (override?.actualMaterialId && allowedAlternateIds.has(override.actualMaterialId))
+            ? override.actualMaterialId
+            : formulationMaterialId;
           const storageLocationId = override?.storageLocationId
             ?? toTrimmedString(strokeLine.default_storage_location_id)
             ?? null;
@@ -1208,7 +1285,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const { data: strokeLines, error: strokeLineErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
-        .select("material_id, alternate_material_id, dosage_pct, display_order, default_storage_location_id")
+        .select("material_id, alternate_material_id, material_group_id, dosage_pct, display_order, default_storage_location_id")
         .eq("stroke_master_id", strokeId)
         .order("display_order");
       if (strokeLineErr) {
@@ -1217,10 +1294,15 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       }
 
       if ((strokeLines ?? []).length > 0) {
+        const allowedAlternateMap = await buildAllowedAlternateIdsByStrokeLines(
+          (strokeLines ?? []) as JsonRecord[],
+          "[process_order.createProcessOrder]",
+          "PROD_PO_LINE_PREPOPULATE_FAILED",
+        );
         const lineRows = ((strokeLines ?? []) as JsonRecord[]).map((strokeLine) => {
           const override = lineOverrideMap.get(String(strokeLine.material_id)) ?? null;
-          const registeredAlternateId = toTrimmedString(strokeLine.alternate_material_id) || null;
-          const actualMaterialId = (override?.actualMaterialId && override.actualMaterialId === registeredAlternateId)
+          const allowedAlternateIds = new Set(allowedAlternateMap.get(String(strokeLine.material_id)) ?? []);
+          const actualMaterialId = (override?.actualMaterialId && allowedAlternateIds.has(override.actualMaterialId))
             ? override.actualMaterialId
             : null;
           return {
@@ -2104,6 +2186,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const today = todayIso();
     const docNumber = String(po.po_number);
     const postedBy = ctx.auth_user_id;
+    const batchNumber = toTrimmedString(po.batch_number) || null;
     const ledgerEntries: JsonRecord[] = [];
     const reservationMap = await fetchReservationRowsBySourceLineIds(lines.map((line) => String(line.id)));
 
@@ -2188,6 +2271,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       stockTypeCode: "QUALITY_INSPECTION",
       direction: "IN",
       postedBy,
+      batchNumber,
     });
     ledgerEntries.push({ movement: "P101", direction: "IN", ...fgPosting });
 
@@ -2315,6 +2399,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
 
     const now = new Date().toISOString();
     const ledgerEntries: JsonRecord[] = [];
+    const reversalBatchNumber = toTrimmedString(po.batch_number) || null;
 
     if (po.status === "VERIFIED") {
       const lines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
@@ -2349,6 +2434,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           direction: "IN",
           postedBy: ctx.auth_user_id,
           reversalOfId: toTrimmedString(line.stock_ledger_id) || null,
+          batchNumber: reversalBatchNumber,
         });
         ledgerEntries.push({ line_id: line.id, movement: "P262", direction: "IN", ...posting });
       }
@@ -2372,6 +2458,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           direction: "OUT",
           postedBy: ctx.auth_user_id,
           reversalOfId: String(po.qi_release_stock_ledger_id),
+          batchNumber: reversalBatchNumber,
         });
         ledgerEntries.push({ movement: "P322", direction: "OUT", ...p322Posting });
       }
@@ -2392,6 +2479,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           direction: "OUT",
           postedBy: ctx.auth_user_id,
           reversalOfId: String(po.fg_stock_ledger_id),
+          batchNumber: reversalBatchNumber,
         });
         ledgerEntries.push({ movement: "P102", direction: "OUT", ...p102Posting });
       }

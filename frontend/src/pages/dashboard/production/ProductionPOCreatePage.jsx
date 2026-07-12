@@ -18,7 +18,6 @@ import {
   createPackingOrder,
   createProcessOrder,
   getStrokeMaster,
-  listApprovedProdshades,
   listSegmentLocations,
   listStrokeMasters,
 } from "./prodApi.js";
@@ -116,18 +115,23 @@ export default function ProductionPOCreatePage() {
     [materialRows],
   );
 
-  const prodshadesQ = useQuery({
-    queryKey: ["production-create-prodshades"],
-    queryFn: () => listApprovedProdshades({}),
+  const approvedStrokesQ = useQuery({
+    queryKey: ["production-create-approved-strokes", processForm.company_id],
+    queryFn: () => listStrokeMasters({
+      company_id: processForm.company_id || undefined,
+      status: "APPROVED",
+    }),
+    enabled: Boolean(processForm.company_id),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
 
-  const approvedProdshades = useMemo(
-    () => (prodshadesQ.data ?? []).map((item) => ({
-      ...item,
-      material: materialById.get(item.material_id) ?? null,
+  const approvedStrokes = useMemo(
+    () => (approvedStrokesQ.data ?? []).map((stroke) => ({
+      ...stroke,
+      material_id: stroke.prodshade_material_id,
+      material: materialById.get(stroke.prodshade_material_id) ?? stroke.material ?? null,
     })),
-    [materialById, prodshadesQ.data],
+    [approvedStrokesQ.data, materialById],
   );
 
   const fgMaterialOptions = useMemo(
@@ -141,14 +145,25 @@ export default function ProductionPOCreatePage() {
   );
 
   const prodshadeOptions = useMemo(() => {
-    const approvedOptions = approvedProdshades
-      .filter((item) => {
-        if (!item.material) return true;
-        const materialType = String(item.material.material_type || "").toUpperCase();
-        if (processForm.po_type === "MTEST") return materialType === "SFG" || materialType === "INT";
-        return materialType === "SFG" || materialType === "INT";
-      })
-      .map((item) => ({ value: item.material_id, label: prodshadeLabel(item) || "Material" }));
+    const approvedRows = approvedStrokes.filter((stroke) => {
+      const strokePoType = String(stroke.po_type || "").toUpperCase();
+      const materialType = String(stroke.material?.material_type || "").toUpperCase();
+
+      if (processForm.po_type === "MTEST") {
+        return materialType === "SFG" || strokePoType === "INT";
+      }
+
+      return strokePoType === String(processForm.po_type || "").toUpperCase();
+    });
+
+    const seenApproved = new Set();
+    const approvedOptions = [];
+    approvedRows.forEach((item) => {
+      const materialId = String(item.material_id || "");
+      if (!materialId || seenApproved.has(materialId)) return;
+      seenApproved.add(materialId);
+      approvedOptions.push({ value: materialId, label: prodshadeLabel(item) || "Material" });
+    });
 
     if (processForm.po_type !== "MTEST") return approvedOptions;
 
@@ -158,7 +173,7 @@ export default function ProductionPOCreatePage() {
       if (!seen.has(option.value)) merged.push(option);
     }
     return merged;
-  }, [approvedProdshades, fgMaterialOptions, processForm.po_type]);
+  }, [approvedStrokes, fgMaterialOptions, processForm.po_type]);
 
   const selectedMaterial = materialById.get(processForm.prodshade_material_id) ?? null;
   const selectedMaterialType = String(selectedMaterial?.material_type || "").toUpperCase();
@@ -177,8 +192,16 @@ export default function ProductionPOCreatePage() {
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
   const strokeOptions = useMemo(
-    () => (strokesQ.data ?? []).map((stroke) => ({ value: stroke.id, label: strokeLabel(stroke) })),
-    [strokesQ.data],
+    () => (strokesQ.data ?? [])
+      .filter((stroke) => {
+        if (processForm.po_type === "MTEST") {
+          const strokePoType = String(stroke.po_type || "").toUpperCase();
+          return strokePoType === "MTEST" || strokePoType === "INT";
+        }
+        return String(stroke.po_type || "").toUpperCase() === String(processForm.po_type || "").toUpperCase();
+      })
+      .map((stroke) => ({ value: stroke.id, label: strokeLabel(stroke) })),
+    [processForm.po_type, strokesQ.data],
   );
 
   const strokeDetailQ = useQuery({
@@ -227,6 +250,28 @@ export default function ProductionPOCreatePage() {
     () => strokeLines.map((line) => {
       const selectedStorageLocationId = lineLocationOverrides[line.material_id] || line.default_storage_location_id || "";
       const plannedQty = (Number(line.dosage_pct ?? 0) / 100) * Number(processForm.planned_qty_kg || 0);
+      const alternateOptions = [];
+      const seenAlternateIds = new Set();
+
+      if (line.alternate_material_id) {
+        const alternateId = String(line.alternate_material_id);
+        seenAlternateIds.add(alternateId);
+        alternateOptions.push({
+          value: alternateId,
+          label: materialLabel(line.alternate_material) || "Registered alternate",
+        });
+      }
+
+      for (const member of line.material_group?.members ?? []) {
+        const memberId = String(member.material_id ?? "");
+        if (!memberId || memberId === String(line.material_id) || seenAlternateIds.has(memberId)) continue;
+        seenAlternateIds.add(memberId);
+        alternateOptions.push({
+          value: memberId,
+          label: materialLabel(member.material) || memberId,
+        });
+      }
+
       return {
         key: line.id || line.material_id,
         material_id: line.material_id,
@@ -234,8 +279,8 @@ export default function ProductionPOCreatePage() {
         material_label: materialLabel(line.material) || "--",
         dosage_pct: Number(line.dosage_pct ?? 0),
         actual_material_id: lineActualMaterialOverrides[line.material_id] || "",
-        registered_alternate_material_id: line.alternate_material_id || "",
-        registered_alternate_material_label: materialLabel(line.alternate_material) || "",
+        registered_alternate_material_options: alternateOptions,
+        material_group_label: line.material_group?.group_name || "",
         default_storage_location_id: line.default_storage_location_id || "",
         storage_location_id: selectedStorageLocationId,
         standard_qty: plannedQty,
@@ -520,7 +565,7 @@ export default function ProductionPOCreatePage() {
                       onChange={(value) => updateProcess("prodshade_material_id", value)}
                       options={prodshadeOptions}
                       placeholder="-- Select material --"
-                      emptyStateLabel={prodshadesQ.isLoading || materialsQ.isLoading ? "Loading materials..." : "No eligible materials"}
+                      emptyStateLabel={approvedStrokesQ.isLoading || materialsQ.isLoading ? "Loading materials..." : "No eligible materials"}
                     />
                   </div>
                 </div>
@@ -743,12 +788,10 @@ export default function ProductionPOCreatePage() {
                             </td>
                           </tr>
                         ) : previewRowsWithAvailability.map((row) => {
-                          const actualMaterialOptions = row.registered_alternate_material_id
-                            ? [
-                                { value: "", label: "(same)" },
-                                { value: row.registered_alternate_material_id, label: row.registered_alternate_material_label || "Registered alternate" },
-                              ]
-                            : [{ value: "", label: "(same)" }];
+                          const actualMaterialOptions = [
+                            { value: "", label: "(same)" },
+                            ...row.registered_alternate_material_options,
+                          ];
                           return (
                             <tr key={row.key} className={row.is_short ? "bg-rose-50" : "border-b border-slate-100"}>
                               <td className="border-b border-slate-100 px-3 py-2">{row.line_no}</td>
@@ -763,7 +806,7 @@ export default function ProductionPOCreatePage() {
                                   }}
                                   options={actualMaterialOptions}
                                   placeholder="(same)"
-                                  disabled={Boolean(!row.registered_alternate_material_id)}
+                                  disabled={row.registered_alternate_material_options.length === 0}
                                 />
                               </td>
                               <td className="border-b border-slate-100 px-3 py-2">

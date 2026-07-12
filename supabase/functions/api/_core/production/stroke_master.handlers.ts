@@ -83,6 +83,31 @@ async function getMaterialGroupMapByIds(ids: string[]): Promise<Map<string, Json
   return map;
 }
 
+async function getMaterialGroupMembersByGroupIds(groupIds: string[]): Promise<Map<string, JsonRecord[]>> {
+  const uniqueIds = [...new Set(groupIds.filter(Boolean))];
+  const map = new Map<string, JsonRecord[]>();
+  if (uniqueIds.length === 0) return map;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_category_group_member")
+    .select("id, group_id, material_id, is_primary")
+    .in("group_id", uniqueIds);
+  if (error) {
+    console.error("[stroke_master.getMaterialGroupMembersByGroupIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_STROKE_GROUP_BATCH_FAILED");
+  }
+
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const groupId = String(row.group_id ?? "");
+    if (!groupId) continue;
+    const existing = map.get(groupId) ?? [];
+    existing.push(row);
+    map.set(groupId, existing);
+  }
+  return map;
+}
+
 async function getStorageLocationMapByIds(ids: string[]): Promise<Map<string, JsonRecord>> {
   const uniqueIds = [...new Set(ids.filter(Boolean))];
   const map = new Map<string, JsonRecord>();
@@ -337,13 +362,16 @@ export async function getStrokeMasterHandler(
     }
     const lines = (lineRows ?? []) as JsonRecord[];
 
+    const groupIds = lines.map((l) => String(l.material_group_id ?? "")).filter(Boolean);
+    const groupMembersMap = await getMaterialGroupMembersByGroupIds(groupIds);
     const [materialMap, groupMap, slocMap, userDisplayMap] = await Promise.all([
       getMaterialMapByIds([
         String(stroke.prodshade_material_id ?? ""),
         ...lines.map((l) => String(l.material_id ?? "")),
         ...lines.map((l) => String(l.alternate_material_id ?? "")),
+        ...Array.from(groupMembersMap.values()).flat().map((member) => String(member.material_id ?? "")),
       ]),
-      getMaterialGroupMapByIds(lines.map((l) => String(l.material_group_id ?? ""))),
+      getMaterialGroupMapByIds(groupIds),
       getStorageLocationMapByIds([
         String(stroke.default_storage_location_id ?? ""),
         ...lines.map((l) => String(l.default_storage_location_id ?? "")),
@@ -362,10 +390,26 @@ export async function getStrokeMasterHandler(
         approved_by_display: userDisplayMap.get(String(stroke.approved_by ?? "")) ?? null,
         deactivated_by_display: userDisplayMap.get(String(stroke.deactivated_by ?? "")) ?? null,
         lines: lines.map((l) => ({
+          ...(() => {
+            const materialGroupId = String(l.material_group_id ?? "");
+            const materialGroup = groupMap.get(materialGroupId) ?? null;
+            const groupMembers = (groupMembersMap.get(materialGroupId) ?? []).map((member) => ({
+              ...member,
+              material: materialMap.get(String(member.material_id ?? "")) ?? null,
+            }));
+            return {
+              material_group: materialGroup
+                ? {
+                    ...materialGroup,
+                    members: groupMembers,
+                    member_count: groupMembers.length,
+                  }
+                : null,
+            };
+          })(),
           ...l,
           material: materialMap.get(String(l.material_id ?? "")) ?? null,
           alternate_material: l.alternate_material_id ? materialMap.get(String(l.alternate_material_id)) ?? null : null,
-          material_group: groupMap.get(String(l.material_group_id ?? "")) ?? null,
           default_storage_location: slocMap.get(String(l.default_storage_location_id ?? "")) ?? null,
         })),
       },
