@@ -2550,6 +2550,30 @@ After opening stock is posted on 1 July 2026:
 
 ---
 
+### 29.5 — IN05/IN06 Opening Stock Page Redesign (LOCKED — 2026-07-12, business owner override of the original Gate-19 UI)
+
+**Why this exists:** the original Gate-19 UI (single card, one Single/Bulk toggle, no company-scoping check, hardcoded BDT currency) wasted screen space and had no dedicated approval step distinct from data entry — business owner redesigned it end to end, modeled visually on the Process PO Create Page 3 dense-table pattern (`ProductionPOCreatePage.jsx`: a plain HTML `<table>` inside a `rounded-lg border border-slate-200 bg-white` card, `bg-slate-50 text-xs uppercase` header row, `border-b border-slate-100 px-3 py-2` cells — not `ErpDenseGrid`).
+
+**IN05 — Opening Stock (entry, existing page redesigned):**
+- Page 1 (unchanged): Company (resolved from `ctx.context.companyId`, not a free company picker — see company-scoping rule below), Cut-off Date.
+- Page 2 (redesigned): the dense table replaces the old bulky single/bulk cards. Single Entry / Bulk Entry toggle buttons stay (already correct), but the Bulk grid itself becomes a compact row-based table with columns, in order: **Sl No, Material Type, Material Name, Pace Code (auto), Storage Location (choose, no location-type restriction), Status (stock type), Base UOM (auto, read-only), Counted Stock, Zero Stock (checkbox), Rate (optional), Total Value, Action.** Column widths: Material Name wide; Storage Location/Status/Counted Stock comparatively narrow (matches the Process PO table's own proportions — Formulation Material wide, Dosage%/Storage Location/Movement Type narrow).
+- **No pagination on this entry page** (supersedes the 2026-07-12 earlier version of this same page which added 10-row pagination to the bulk grid — that pagination is removed; all rows show at once, scrollable within the table card).
+- Add Row, Submit For Approval, Back To List, Refresh — unchanged actions.
+- Currency: no currency master or `companies.currency_code` exists anywhere in the schema (confirmed via direct DB check, 2026-07-12) — the "BDT" symbol is a hardcoded `Intl.NumberFormat("en-BD", {currency:"BDT"})` call in the frontend only, not backed by any stored value. **Decision needed before this ships:** either (a) a minimal display-only fix — swap the hardcoded default to INR and add a client-side currency-symbol selector that only changes `Intl.NumberFormat` formatting, storing nothing — or (b) a real `currency_code` field added to `opening_stock_document` (and by extension a proper currency master elsewhere, a much bigger change). Flagged, not yet decided.
+
+**IN06 — Opening Stock Approval (new page, next available IN-series code — confirmed via direct DB check against `erp_menu.menu_master`, IN01–IN05 already taken):**
+- Page 1: Document Number only (global unique per `erp_procurement.generate_doc_number`, no company disambiguation needed) → Enter.
+- Page 2: full line detail, **paginated 25 rows/page** (unlike IN05's entry page, which has none). Every field the creator entered is editable here too (row-select, edit inline). Pagination state stays alive across page navigation — corrections on any page accumulate in local state and all save together in one batch action, not one row per save. Only after that batch-save succeeds does the **Approve** button become the action that posts the document to the stock ledger (same `postOpeningStockDocumentHandler`/P561/P563/P565 engine already built for Gate-19 — this redesign does not change the posting engine itself, only the entry/approval UX in front of it).
+
+**Company-scoping ACL rule (applies to both IN05 create/submit and IN06 approve — LOCKED):**
+- The pipeline already resolves `ctx.context.companyId` per request (`_pipeline/context.ts`, derived from the caller's active work context, already validated against their real company access at session-resolution time — this is the same mechanism every other ACL-gated handler relies on, not a new concept).
+- `createOpeningStockDocumentHandler` today takes `company_id` straight from the request body with **no cross-check** against `ctx.context.companyId` — this is the actual gap. Fix: force/validate `company_id === ctx.context.companyId` for non-admin roles (SA/GA bypass, matching the existing "SA/GA always full access" rule in §8) — reject with a clear 403 if a user tries to create for a company outside their resolved context.
+- Same check applies to IN06's Approve action: an approver whose `ctx.context.companyId` doesn't match the document's `company_id` gets blocked with a clear error message, even if they're a valid multi-company user — they must be operating **in** that company's work context at the time, not merely have access to it somewhere in their profile.
+
+**Ledger storage (confirms the existing Gate-19 posting engine, unchanged by this redesign):** on Approve/Post, each `opening_stock_line` posts through `erp_inventory.post_stock_movement()` (P561 Unrestricted / P563 QA / P565 Blocked per stock type), writing one `stock_ledger` row per line — `company_id`, `storage_location_id`, `material_id`, `stock_type_code`, `movement_type_code`, `direction = 'IN'`, `quantity`, `base_uom_code`, `value` (= quantity × `rate_per_unit`, `0` if rate left blank), `valuation_rate` (= `rate_per_unit`), `posting_date`/`document_date` (= the document's `cut_off_date`) — under one shared `stock_document.document_number` (the opening stock document's own number), with the engine's own `item_number` auto-increment distinguishing each line (§8C). `opening_stock_line.posted_stock_document_id` is written back per line as the audit trail. Nothing about this posting mechanism changes in this redesign — only the entry/approval screens in front of it.
+
+---
+
 ## Section 30 — Legacy Open PO Migration Strategy
 
 ### 30.1 Why Legacy PO Migration is Critical
