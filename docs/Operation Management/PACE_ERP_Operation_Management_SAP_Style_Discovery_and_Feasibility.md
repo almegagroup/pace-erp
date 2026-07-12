@@ -2572,6 +2572,25 @@ After opening stock is posted on 1 July 2026:
 
 **Ledger storage (confirms the existing Gate-19 posting engine, unchanged by this redesign):** on Approve/Post, each `opening_stock_line` posts through `erp_inventory.post_stock_movement()` (P561 Unrestricted / P563 QA / P565 Blocked per stock type), writing one `stock_ledger` row per line — `company_id`, `storage_location_id`, `material_id`, `stock_type_code`, `movement_type_code`, `direction = 'IN'`, `quantity`, `base_uom_code`, `value` (= quantity × `rate_per_unit`, `0` if rate left blank), `valuation_rate` (= `rate_per_unit`), `posting_date`/`document_date` (= the document's `cut_off_date`) — under one shared `stock_document.document_number` (the opening stock document's own number), with the engine's own `item_number` auto-increment distinguishing each line (§8C). `opening_stock_line.posted_stock_document_id` is written back per line as the audit trail. Nothing about this posting mechanism changes in this redesign — only the entry/approval screens in front of it.
 
+**Addendum (2026-07-12, same evening) — Batch Number for SFG/FG lines was already locked in §83.7 but never carried into this page's own spec.** §83.7's "Batch Number Persistence Mechanism" already says Opening Stock needs **manual** batch entry when the material is SFG/FG (HPS/MTO) — no live Process PO exists at go-live to derive one from. This redesign's Change 1 column list omitted it. Corrected here:
+- Add a **Batch Number** column to IN05's entry table (between Base UOM and Counted Stock), a plain text input. Visible/enabled only for rows where the selected material's `material_type` is `SFG` or `FG` — disabled/blank (`—`) for RM/PM/INT, exactly like the UOM column's existing disabled-state pattern.
+- Not database-enforced as mandatory (the page cannot cheaply distinguish an MTO/HPS Prodshade's SFG/FG from an MTS one from `material_type` alone), but the UI must label it clearly: *"Required for MTO/HPS Prodshades — leave blank if this is an MTS (IWC/Powder) item; MTS batch integration is not yet supported here."* This matches the already-standing MTS/INT/MTEST exclusion from Gate-27.19's batch-persistence wiring — do not extend batch handling to MTS in this brief.
+- Schema: `erp_procurement.opening_stock_line.batch_number TEXT NULL` (migration `20260712220000_gate19_3_opening_stock_batch_number.sql`, already applied to Dev).
+- `postOpeningStockDocumentHandler`'s `post_stock_movement()` RPC call must pass `p_batch_number: line.batch_number || null` (the parameter Gate-27.19 already added to both function overloads — also already applied to Dev as of 2026-07-12).
+- IN06's approval page shows/edits this same column, same visibility rule.
+
+**🔴 PENDING (2026-07-12, not locked) — how opening-stock-origin SFG/FG batches get an AP Reco basis.** Business owner explicitly rejected treating these as zero-variance/no-Reco (they need real Reco when dispatched later, same as live-produced batches) — but also has a different mechanism in mind than the one first proposed (a nested RM/PM Actual+AP-Approved entry table under the Opening Stock batch line, written directly into `process_order_line_reco` with no `process_order_id`). Business owner will provide the alternate idea — **do not implement any RM/PM-Reco-capture mechanism for Opening Stock until this is re-locked.** The Batch Number field itself (above) is locked and can be built now; only the "what happens to Reco for this batch" mechanism is pending.
+
+**LOCKED (2026-07-12, same evening) — IN05 Page 1 gains Material Type + conditional PO Type, gating which entry-grid opens:**
+
+Page 1 becomes: Company, Cut-off Date, **Material Type** (dropdown — the same `material_master.material_type` enum: RM, PM, INT, SFG, FG), then conditionally:
+- If Material Type = **SFG or FG** → a second new dropdown, **PO Type** (MTO, HPS, MTS, MTEST — the same enum Process PO already uses).
+  - PO Type = **MTO or HPS** → do **not** open the normal entry grid. Show a placeholder screen: *"Will open after implementation"* — this whole path is blocked on the still-PENDING RM/PM-Reco mechanism above. Do not build a fake/simplified version of it in the meantime.
+  - PO Type = **MTS or MTEST** → opens the **normal entry grid already built** (Change 1's dense table, including the Batch Number column, which is locked and usable regardless of the pending Reco question — MTS/MTEST batches don't feed the same Reco mechanism per §83.7's own MTO/HPS-only scoping anyway).
+- If Material Type = **RM, PM, or INT** → no PO Type prompt, goes straight to the normal entry grid already built (no Batch Number column shown — matches the existing RM/PM/INT-never-carries-batch rule).
+
+**Why this shape:** the business owner needs to keep moving on RM/PM/INT (and MTS/MTEST SFG/FG) opening stock right now — those must not be blocked waiting on the MTO/HPS Reco design. Scoping Material Type (and PO Type) at document-creation time, not per-line, lets one document always render one consistent grid shape instead of mixing simple and advanced rows in the same table.
+
 ---
 
 ## Section 30 — Legacy Open PO Migration Strategy

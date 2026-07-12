@@ -123,7 +123,9 @@ import {
 import {
   addOpeningStockLineHandler,
   approveOpeningStockDocumentHandler,
+  batchUpdateOpeningStockLinesHandler,
   createOpeningStockDocumentHandler,
+  getOpeningStockDocumentByNumberHandler,
   getOpeningStockDocumentHandler,
   listOpeningStockDocumentsHandler,
   postOpeningStockDocumentHandler,
@@ -383,6 +385,8 @@ export async function dispatchProcurementRoutes(
       return await createOpeningStockDocumentHandler(req, ctx);
     case "GET:/api/procurement/opening-stock":
       return await listOpeningStockDocumentsHandler(req, ctx);
+    case "GET:/api/procurement/opening-stock/by-number":
+      return await getOpeningStockDocumentByNumberHandler(req, ctx);
     case "POST:/api/procurement/physical-inventory":
       return await createPIDHandler(req, ctx);
     case "GET:/api/procurement/physical-inventory":
@@ -611,6 +615,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/opening-stock\/[^/]+\/lines$/.test(pathname) && req.method === "POST") {
     return await addOpeningStockLineHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/opening-stock\/[^/]+\/lines\/batch$/.test(pathname) && req.method === "PUT") {
+    return await batchUpdateOpeningStockLinesHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/opening-stock\/[^/]+\/lines\/[^/]+$/.test(pathname)) {

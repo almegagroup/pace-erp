@@ -873,8 +873,18 @@ export function getOpeningStockDocument(id) {
   return fetchProcurement("GET", `/api/procurement/opening-stock/${encodeURIComponent(id)}`);
 }
 
+export function getOpeningStockDocumentByNumber(documentNumber) {
+  return fetchProcurement("GET", "/api/procurement/opening-stock/by-number", undefined, {
+    document_number: documentNumber,
+  });
+}
+
 export function addOpeningStockLine(id, data) {
   return fetchProcurement("POST", `/api/procurement/opening-stock/${encodeURIComponent(id)}/lines`, data);
+}
+
+export function batchUpdateOpeningStockLines(id, data) {
+  return fetchProcurement("PUT", `/api/procurement/opening-stock/${encodeURIComponent(id)}/lines/batch`, data);
 }
 
 export function updateOpeningStockLine(id, lineId, data) {

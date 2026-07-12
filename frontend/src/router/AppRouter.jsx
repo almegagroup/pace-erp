@@ -167,6 +167,7 @@ import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocum
 import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
 import OpeningStockListPage from "../pages/dashboard/procurement/opening-stock/OpeningStockListPage.jsx";
 import OpeningStockDetailPage from "../pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx";
+import OpeningStockApprovalPage from "../pages/dashboard/procurement/opening-stock/OpeningStockApprovalPage.jsx";
 
 // Gate-27: L3 Production pages
 import PlanFeedPage from "../pages/dashboard/production/PlanFeedPage.jsx";
@@ -723,6 +724,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/opening-stock/:id"
                     element={<OpeningStockDetailPage />}
+                  />
+                  <Route
+                    path="procurement/opening-stock/approval"
+                    element={<OpeningStockApprovalPage />}
                   />
                   <Route
                     path="procurement/physical-inventory"

@@ -7,10 +7,12 @@
  * Authority: Frontend
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
+import { useMenu } from "../../../../context/useMenu.js";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, {
@@ -24,6 +26,7 @@ import {
 import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 
 const STATUS_OPTIONS = ["", "DRAFT", "SUBMITTED", "APPROVED", "POSTED"];
+const CURRENCY_OPTIONS = ["INR", "USD"];
 
 function formatDate(value) {
   if (!value) return "-";
@@ -32,10 +35,16 @@ function formatDate(value) {
 }
 
 export default function OpeningStockListPage() {
-  const [filters, setFilters] = useState({ company_id: "", status: "" });
+  const { runtimeContext } = useMenu();
+  const runtimeCompanyId = useMemo(
+    () => resolveDefaultTransactionCompanyId(runtimeContext),
+    [runtimeContext],
+  );
+  const [filters, setFilters] = useState({ company_id: runtimeCompanyId, status: "" });
   const [form, setForm] = useState({
-    company_id: "",
+    company_id: runtimeCompanyId,
     cut_off_date: "",
+    currency_code: "INR",
     notes: "",
   });
   const [saving, setSaving] = useState(false);
@@ -46,15 +55,29 @@ export default function OpeningStockListPage() {
     queryKey: ["procurement", "opening-stock-documents", filters],
     queryFn: () => listOpeningStockDocuments(filters),
   });
-  const companies = Array.isArray(companiesQuery.data)
-    ? companiesQuery.data
-    : [];
+  const companies = useMemo(
+    () => (Array.isArray(companiesQuery.data) ? companiesQuery.data : []),
+    [companiesQuery.data],
+  );
   const rows = Array.isArray(documentQuery.data?.items)
     ? documentQuery.data.items
     : Array.isArray(documentQuery.data)
     ? documentQuery.data
     : [];
   const loading = documentQuery.isLoading || companiesQuery.isLoading;
+
+  useEffect(() => {
+    setFilters((current) => (
+      current.company_id === runtimeCompanyId
+        ? current
+        : { ...current, company_id: runtimeCompanyId }
+    ));
+    setForm((current) => (
+      current.company_id === runtimeCompanyId
+        ? current
+        : { ...current, company_id: runtimeCompanyId }
+    ));
+  }, [runtimeCompanyId]);
 
   useErpScreenHotkeys({
     refresh: {
@@ -82,6 +105,7 @@ export default function OpeningStockListPage() {
       ),
     [companies],
   );
+  const runtimeCompanyLabel = companyMap.get(runtimeCompanyId) ?? runtimeCompanyId ?? "";
 
   const queryError =
     documentQuery.error?.message ||
@@ -101,10 +125,11 @@ export default function OpeningStockListPage() {
       const created = await createOpeningStockDocument({
         company_id: form.company_id,
         cut_off_date: form.cut_off_date,
+        currency_code: form.currency_code,
         notes: form.notes.trim() || null,
       });
       setNotice(`Opening stock document ${created.document_number ?? "created"} is ready in DRAFT.`);
-      setForm((current) => ({ ...current, notes: "" }));
+      setForm((current) => ({ ...current, cut_off_date: "", notes: "", currency_code: "INR" }));
       await Promise.all([documentQuery.refetch(), companiesQuery.refetch()]);
       if (created?.id) {
         openScreen("PROC_OPENING_STOCK_DETAIL", { context: { id: created.id } });
@@ -270,28 +295,30 @@ export default function OpeningStockListPage() {
 
           <ErpSectionCard eyebrow="Create" title="New opening stock document">
             <div className="grid gap-3">
-              <ErpDenseFormRow label="Company" required>
-                <select
-                  value={form.company_id}
-                  onChange={(event) => setForm((current) => ({ ...current, company_id: event.target.value }))}
-                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                >
-                  <option value="">Select company</option>
-                  {companyOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Cut-off Date" required>
-                <input
-                  type="date"
-                  value={form.cut_off_date}
-                  onChange={(event) => setForm((current) => ({ ...current, cut_off_date: event.target.value }))}
-                  className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                />
-              </ErpDenseFormRow>
+              <ErpFieldPreview label="Company" value={runtimeCompanyLabel || "Current company not resolved"} />
+              <div className="grid gap-3 md:grid-cols-2">
+                <ErpDenseFormRow label="Cut-off Date" required>
+                  <input
+                    type="date"
+                    value={form.cut_off_date}
+                    onChange={(event) => setForm((current) => ({ ...current, cut_off_date: event.target.value }))}
+                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Currency" required>
+                  <select
+                    value={form.currency_code}
+                    onChange={(event) => setForm((current) => ({ ...current, currency_code: event.target.value }))}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    {CURRENCY_OPTIONS.map((currencyCode) => (
+                      <option key={currencyCode} value={currencyCode}>
+                        {currencyCode}
+                      </option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+              </div>
               <ErpDenseFormRow label="Notes">
                 <textarea
                   value={form.notes}
@@ -300,7 +327,7 @@ export default function OpeningStockListPage() {
                 />
               </ErpDenseFormRow>
               <div className="rounded border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                One document per company + cut-off date combination.
+                One document per company + cut-off date combination. Currency is stored once at document level.
               </div>
             </div>
           </ErpSectionCard>

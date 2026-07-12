@@ -10,6 +10,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -24,6 +25,7 @@ type OpeningStockLineRow = Record<string, unknown>;
 
 const DOCUMENT_STATUSES = new Set(["DRAFT", "SUBMITTED", "APPROVED", "POSTED"]);
 const STOCK_TYPES = new Set(["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"]);
+const CURRENCY_CODES = new Set(["INR", "USD"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -142,7 +144,7 @@ async function hydrateOpeningStockDocument(documentId: string): Promise<JsonReco
   ]);
 
   const totals = lines.reduce(
-    (accumulator, line) => {
+    (accumulator: { total_lines: number; total_value: number }, line) => {
       accumulator.total_lines += 1;
       accumulator.total_value += Number(line.total_value ?? 0);
       return accumulator;
@@ -179,6 +181,30 @@ function ensureDraftDocument(document: OpeningStockDocumentRow): void {
   }
 }
 
+function ensureSubmittedDocument(document: OpeningStockDocumentRow): void {
+  if (toUpperTrimmedString(document.status) !== "SUBMITTED") {
+    throw new Error("OPENING_STOCK_DOCUMENT_NOT_SUBMITTED");
+  }
+}
+
+function isAdminBypass(ctx: ProcurementHandlerContext): boolean {
+  return ctx.context.isAdmin === true || isSuperAdmin(ctx.roleCode) || isGlobalAdmin(ctx.roleCode);
+}
+
+function assertOpeningStockCompanyScope(
+  ctx: ProcurementHandlerContext,
+  companyId: string,
+): void {
+  if (isAdminBypass(ctx)) {
+    return;
+  }
+
+  const scopedCompanyId = toTrimmedString(ctx.context.companyId);
+  if (!scopedCompanyId || scopedCompanyId !== toTrimmedString(companyId)) {
+    throw new Error("OPENING_STOCK_SCOPE_VIOLATION");
+  }
+}
+
 export async function createOpeningStockDocumentHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -188,6 +214,7 @@ export async function createOpeningStockDocumentHandler(
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
     const cutOffDate = toTrimmedString(body.cut_off_date);
+    const currencyCode = toUpperTrimmedString(body.currency_code || "INR") || "INR";
     const notes = toTrimmedString(body.notes);
 
     if (!companyId || !cutOffDate) {
@@ -199,6 +226,18 @@ export async function createOpeningStockDocumentHandler(
         "company_id and cut_off_date are required.",
       );
     }
+
+    if (!CURRENCY_CODES.has(currencyCode)) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_CURRENCY_INVALID",
+        400,
+        "currency_code must be INR or USD.",
+      );
+    }
+
+    assertOpeningStockCompanyScope(ctx, companyId);
 
     const { data: existing, error: existingError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -236,6 +275,7 @@ export async function createOpeningStockDocumentHandler(
         document_number: documentNumber,
         company_id: companyId,
         cut_off_date: cutOffDate,
+        currency_code: currencyCode,
         status: "DRAFT",
         notes: notes || null,
         created_by: ctx.auth_user_id,
@@ -256,7 +296,7 @@ export async function createOpeningStockDocumentHandler(
     return okResponse(await hydrateOpeningStockDocument(String(data.id)), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_DOCUMENT_CREATE_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : 500;
+    const status = code === "SA_REQUIRED" || code === "OPENING_STOCK_SCOPE_VIOLATION" ? 403 : 500;
     return openingStockErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -357,6 +397,60 @@ export async function getOpeningStockDocumentHandler(
         "OPENING_STOCK_DOCUMENT_ID_REQUIRED",
         400,
         "Opening stock document id is required.",
+      );
+    }
+
+    return okResponse(await hydrateOpeningStockDocument(documentId), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "OPENING_STOCK_DOCUMENT_FETCH_FAILED";
+    const status = code === "SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    return openingStockErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function getOpeningStockDocumentByNumberHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const url = new URL(req.url);
+    const documentNumber = toTrimmedString(url.searchParams.get("document_number"));
+    if (!documentNumber) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_DOCUMENT_NUMBER_REQUIRED",
+        400,
+        "document_number is required.",
+      );
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("opening_stock_document")
+      .select("id")
+      .eq("document_number", documentNumber)
+      .maybeSingle();
+
+    if (error) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_DOCUMENT_FETCH_FAILED",
+        500,
+        "Unable to fetch opening stock document.",
+      );
+    }
+
+    const documentId = toTrimmedString(data?.id);
+    if (!documentId) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_DOCUMENT_NOT_FOUND",
+        404,
+        "Opening stock document not found.",
       );
     }
 
@@ -594,6 +688,170 @@ export async function removeOpeningStockLineHandler(
   }
 }
 
+export async function batchUpdateOpeningStockLinesHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const documentId = getDocumentIdFromPath(req);
+    const body = await parseBody(req);
+    const linePatches = Array.isArray(body.lines) ? body.lines : [];
+
+    if (!documentId || linePatches.length === 0) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_BATCH_UPDATE_INVALID",
+        400,
+        "document id and at least one line are required.",
+      );
+    }
+
+    const document = await fetchOpeningStockDocument(documentId);
+    ensureSubmittedDocument(document);
+
+    const lineIds = linePatches
+      .map((line) => toTrimmedString((line as JsonRecord).id))
+      .filter(Boolean);
+
+    if (lineIds.length !== linePatches.length) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_BATCH_UPDATE_INVALID",
+        400,
+        "Each line must include id.",
+      );
+    }
+
+    const { data: existingRows, error: existingError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("opening_stock_line")
+      .select("*")
+      .eq("document_id", documentId)
+      .in("id", lineIds);
+
+    if (existingError) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_LINE_FETCH_FAILED",
+        500,
+        "Unable to load opening stock lines.",
+      );
+    }
+
+    const existingById = new Map(
+      ((existingRows ?? []) as OpeningStockLineRow[]).map((row) => [toTrimmedString(row.id), row]),
+    );
+
+    if (existingById.size !== lineIds.length) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_LINE_NOT_FOUND",
+        404,
+        "One or more opening stock lines were not found.",
+      );
+    }
+
+    const updates: JsonRecord[] = [];
+
+    for (const rawLine of linePatches) {
+      const patch = rawLine as JsonRecord;
+      const lineId = toTrimmedString(patch.id);
+      const existing = existingById.get(lineId);
+      if (!existing) {
+        return openingStockErrorResponse(
+          req,
+          ctx,
+          "OPENING_STOCK_LINE_NOT_FOUND",
+          404,
+          "One or more opening stock lines were not found.",
+        );
+      }
+
+      const stockType = toUpperTrimmedString(patch.stock_type || existing.stock_type);
+      if (!STOCK_TYPES.has(stockType)) {
+        return openingStockErrorResponse(req, ctx, "OPENING_STOCK_STOCK_TYPE_INVALID", 400, "Invalid stock_type.");
+      }
+
+      const isZeroStock = patch.is_zero_stock !== undefined
+        ? patch.is_zero_stock === true
+        : existing.is_zero_stock === true;
+      const quantitySource = patch.quantity !== undefined ? patch.quantity : existing.quantity;
+      const quantity = isZeroStock ? 0 : parsePositiveNumber(quantitySource);
+      if (quantity === null) {
+        return openingStockErrorResponse(
+          req,
+          ctx,
+          "OPENING_STOCK_LINE_QUANTITY_INVALID",
+          400,
+          "quantity must be > 0 (or 0 when is_zero_stock is true).",
+        );
+      }
+
+      const rate = parseNonNegativeNumber(
+        patch.rate_per_unit !== undefined ? patch.rate_per_unit : existing.rate_per_unit,
+      );
+      if (rate === null) {
+        return openingStockErrorResponse(req, ctx, "OPENING_STOCK_LINE_RATE_INVALID", 400, "rate_per_unit must be >= 0.");
+      }
+
+      const materialId = toTrimmedString(patch.material_id || existing.material_id);
+      const enteredUomCode = patch.entered_uom_code !== undefined
+        ? toTrimmedString(patch.entered_uom_code) || null
+        : toTrimmedString(existing.entered_uom_code) || null;
+      const enteredQuantity = patch.entered_quantity !== undefined
+        ? parseNonNegativeNumber(patch.entered_quantity)
+        : parseNonNegativeNumber(existing.entered_quantity);
+
+      updates.push({
+        id: lineId,
+        document_id: documentId,
+        line_number: existing.line_number,
+        material_id: materialId,
+        storage_location_id: toTrimmedString(patch.storage_location_id || existing.storage_location_id),
+        stock_type: stockType,
+        quantity,
+        rate_per_unit: rate,
+        entered_uom_code: enteredUomCode,
+        entered_quantity: enteredQuantity ?? quantity,
+        is_zero_stock: isZeroStock,
+        movement_type_code: deriveMovementType(stockType),
+      });
+    }
+
+    const { error: updateError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("opening_stock_line")
+      .upsert(updates, { onConflict: "id" });
+
+    if (updateError) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_LINE_BATCH_UPDATE_FAILED",
+        500,
+        "Unable to save opening stock line corrections.",
+      );
+    }
+
+    return okResponse(await hydrateOpeningStockDocument(documentId), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "OPENING_STOCK_LINE_BATCH_UPDATE_FAILED";
+    const status = code === "SA_REQUIRED"
+      ? 403
+      : code.includes("NOT_SUBMITTED")
+      ? 409
+      : code.includes("NOT_FOUND")
+      ? 404
+      : 500;
+    return openingStockErrorResponse(req, ctx, code, status, code);
+  }
+}
+
 export async function submitOpeningStockDocumentHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -659,6 +917,7 @@ export async function approveOpeningStockDocumentHandler(
     assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const document = await fetchOpeningStockDocument(documentId);
+    assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
     if (toUpperTrimmedString(document.status) !== "SUBMITTED") {
       return openingStockErrorResponse(
         req,
@@ -692,7 +951,7 @@ export async function approveOpeningStockDocumentHandler(
     return okResponse(await hydrateOpeningStockDocument(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_DOCUMENT_APPROVE_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    const status = code === "SA_REQUIRED" || code === "OPENING_STOCK_SCOPE_VIOLATION" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
     return openingStockErrorResponse(req, ctx, code, status, code);
   }
 }

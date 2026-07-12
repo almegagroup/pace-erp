@@ -4,7 +4,7 @@
 **Domain:** PROCUREMENT / INVENTORY
 **Title:** Redesign IN05 (Opening Stock entry) dense-table UI, add IN06 (Opening Stock Approval), enforce company-scoping ACL
 **Scope:** Frontend rewrite of `OpeningStockDetailPage.jsx`'s entry table + new `OpeningStockApprovalPage.jsx` + backend company-scoping check + routes/ACL/menu wiring
-**Reference doc:** feasibility Section 29.5 "IN05/IN06 Opening Stock Page Redesign" (LOCKED — 2026-07-12) — read this in full before starting, it is the single source of truth for every field, column, and rule in this brief.
+**Reference doc:** feasibility Section 29.5 "IN05/IN06 Opening Stock Page Redesign" (LOCKED — 2026-07-12), **including the same-evening Addendum at the end of that section (Batch Number for SFG/FG lines)** — read both before starting, they are the single source of truth for every field, column, and rule in this brief. If you already started before the addendum existed, add Change 3 below on top of whatever you've built — do not skip it.
 
 **Mandatory — read `CLAUDE.md` in full before starting, specifically:**
 - §8A — no raw UUIDs anywhere: Material Name/Pace Code/Storage Location must all resolve to human-readable labels, bulk-fetched.
@@ -68,9 +68,38 @@ Columns, in this exact order: **Sl No | Material Type | Material Name | Pace Cod
 
 ---
 
+## Change 3 — Batch Number for SFG/FG lines (addendum, 2026-07-12 same evening — was already locked in §83.7, just never carried into this page's own spec)
+
+**Prerequisite already done for you (2026-07-12):** Gate-27.19's `stock_ledger.batch_number` column and `post_stock_movement()`'s new `p_batch_number` parameter (both overloads) are already applied to Dev. `erp_procurement.opening_stock_line.batch_number TEXT NULL` is also already applied to Dev (migration `20260712220000_gate19_3_opening_stock_batch_number.sql`, already in the repo). You do not need to write either of these migrations — just use the columns.
+
+- Add a **Batch Number** column to IN05's entry table (between Base UOM and Counted Stock), a plain text input. Enabled only for rows where the selected material's `material_type` is `SFG` or `FG` — disabled/blank (`—`) for RM/PM/INT, same visual pattern as the disabled UOM column.
+- Not hard-validated as mandatory (this page cannot cheaply tell an MTO/HPS Prodshade's SFG/FG apart from an MTS one using `material_type` alone) — but label it clearly in the UI: *"Required for MTO/HPS Prodshades — leave blank if this is an MTS (IWC/Powder) item; MTS batch integration is not yet supported here."*
+- `addOpeningStockLineHandler`/the batch-line-add path must accept and store `batch_number` on the line.
+- `postOpeningStockDocumentHandler`'s `post_stock_movement()` RPC call must pass `p_batch_number: line.batch_number || null` for every line (harmless no-op for RM/PM/INT lines where it's null).
+- IN06's approval page shows/edits this same column, same enable/disable rule as IN05.
+- Do not extend batch handling to MTS in this brief — matches the already-standing MTS/INT/MTEST exclusion from Gate-27.19.
+- **Do not build any RM/PM/Reco-capture mechanism for these batches** — that part is explicitly PENDING (business owner rejected the first proposal, will provide an alternate design) — see feasibility doc §29.5's "🔴 PENDING" note. Batch Number is the only part of this that's locked; stop there.
+
+---
+
+## Change 4 — IN05 Page 1: Material Type + conditional PO Type gating (addendum, 2026-07-12 same evening)
+
+Page 1 gains two new fields after Company/Cut-off Date:
+- **Material Type** dropdown — `material_master.material_type` enum (`RM`, `PM`, `INT`, `SFG`, `FG`).
+- If Material Type is `SFG` or `FG`, a second dropdown appears: **PO Type** (`MTO`, `HPS`, `MTS`, `MTEST` — same enum Process PO already uses).
+
+Routing after Page 1, based on this selection:
+- Material Type = `RM`, `PM`, or `INT` → proceed straight to the normal entry grid (Change 1's dense table). **No Batch Number column** for these — matches the existing rule that RM/PM/INT never carry a batch.
+- Material Type = `SFG`/`FG` **and** PO Type = `MTS` or `MTEST` → proceed to the normal entry grid, **including the Batch Number column** from Change 3.
+- Material Type = `SFG`/`FG` **and** PO Type = `MTO` or `HPS` → **do not open the entry grid at all.** Show a simple placeholder screen/message: *"Will open after implementation"* (this path is blocked on the still-pending RM/PM-Reco design — do not attempt to build a partial or simplified version of it).
+
+This selection lives on the document header (`opening_stock_document`) — one document is always scoped to one Material Type (and PO Type, if SFG/FG). A company doing RM + PM + FG opening stock creates three separate documents, not one mixed one. Add `material_type` and `po_type` (nullable) columns to `opening_stock_document` if they don't already exist from your own Change 1 work — check before adding a duplicate.
+
+---
+
 ## Hard rules
 
-1. Do not touch the actual stock-posting RPC call (`post_stock_movement`) or its P561/P563/P565 movement-type selection — this brief is entry/approval UX and an ACL gate only.
+1. Do not touch the actual stock-posting RPC call (`post_stock_movement`) or its P561/P563/P565 movement-type selection — this brief is entry/approval UX and an ACL gate only. (Exception: Change 3 explicitly requires passing the new `p_batch_number` argument the RPC already supports — that's a new argument to an existing call, not a change to the movement-type logic itself.)
 2. Currency is resolved per Change 1: add the `opening_stock_document.currency_code` column (default `'INR'`), matching PO's existing pattern exactly — do not add a full currency master table, FX conversion, or per-line currency (Opening Stock is document-level, one currency per document).
 3. SA/GA must bypass the company-scoping check entirely — do not accidentally block them.
 4. No raw UUIDs anywhere in either page (R-01).
@@ -90,7 +119,9 @@ Columns, in this exact order: **Sl No | Material Type | Material Name | Pace Cod
 4. Confirm IN06's Page 2 pagination preserves unsaved row edits across page changes before the batch save.
 5. Confirm Approve still posts via the existing P561/P563/P565 engine unchanged.
 6. Confirm the new IN06 menu entry nests correctly under Inventory (not top-level) on first load — verify directly, don't assume.
-7. `deno check` and `eslint`/`npm run build` clean (only pre-existing shared-typing errors already documented in prior Gate-27 log entries, zero new).
+7. Confirm Batch Number is enabled only for SFG/FG rows, disabled for RM/PM/INT, and that `post_stock_movement()` actually receives the entered value (check `stock_ledger.batch_number` after posting a test SFG/FG line, not just that the UI field exists).
+8. Confirm Page 1's Material Type/PO Type routing: RM/PM/INT and SFG/FG-with-MTS/MTEST reach the real entry grid; SFG/FG-with-MTO/HPS shows the placeholder and never renders the grid.
+9. `deno check` and `eslint`/`npm run build` clean (only pre-existing shared-typing errors already documented in prior Gate-27 log entries, zero new).
 
 ## Log + commit
 

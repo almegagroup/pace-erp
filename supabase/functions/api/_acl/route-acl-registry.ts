@@ -109,6 +109,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // ── Procurement: Opening Stock ────────────────────────────────────────────
   "GET:/api/procurement/opening-stock":               { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW"  },
   "POST:/api/procurement/opening-stock":              { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "WRITE" },
+  "GET:/api/procurement/opening-stock/by-number":     { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "VIEW"  },
 
   // ── Procurement: Reports ──────────────────────────────────────────────────
   "GET:/api/procurement/planning":                    { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
@@ -172,6 +173,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "DELETE:/api/om/material/category-group/member":    { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
   "GET:/api/om/material/uom-conversions":             { skipAcl: false, resourceCode: "OM_MATERIAL_LIST",   action: "VIEW"  },
   "POST:/api/om/material/uom-conversion":             { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+  "PATCH:/api/om/material/uom-conversion":            { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
   "POST:/api/om/material/status":                     { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "EDIT"  },
   "POST:/api/om/material/extend-company":             { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
   "POST:/api/om/material/extend-plant":               { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
@@ -760,6 +762,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "WRITE" } },
   },
   {
+    pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/lines\/batch$/,
+    methods: { PUT: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "EDIT" } },
+  },
+  {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/lines\/[^/]+$/,
     methods: {
       PUT:    { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "EDIT"   },
@@ -772,11 +778,11 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/approve$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "APPROVE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "APPROVE" } },
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/post$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "APPROVE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "APPROVE" } },
   },
 
   // ── L2 Masters (parametric) ────────────────────────────────────────────────
@@ -1039,8 +1045,9 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/om\/material\/uom-conversion[s]?$/,
     methods: {
-      GET:  { skipAcl: false, resourceCode: "OM_MATERIAL_LIST",   action: "VIEW"  },
-      POST: { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+      GET:   { skipAcl: false, resourceCode: "OM_MATERIAL_LIST",   action: "VIEW"  },
+      POST:  { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+      PATCH: { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
     },
   },
   {
