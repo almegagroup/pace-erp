@@ -1245,6 +1245,10 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
       },
     }, ctx.request_id, req);
   } catch (err) {
+    console.error(
+      "[process_order.getProcessOrder] unhandled error:",
+      err instanceof Error ? (err.stack ?? err.message) : String(err),
+    );
     const code = err instanceof Error ? err.message : "PROD_PO_FETCH_FAILED";
     return poErr(req, ctx, code, 500, "Process order fetch failed");
   }
