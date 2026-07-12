@@ -379,16 +379,19 @@ export async function addOpeningStockLineHandler(
     const materialId = toTrimmedString(body.material_id);
     const storageLocationId = toTrimmedString(body.storage_location_id);
     const stockType = toUpperTrimmedString(body.stock_type);
-    const quantity = parsePositiveNumber(body.quantity);
-    const ratePerUnit = parseNonNegativeNumber(body.rate_per_unit);
+    const isZeroStock = body.is_zero_stock === true;
+    const quantity = isZeroStock ? 0 : parsePositiveNumber(body.quantity);
+    const ratePerUnit = parseNonNegativeNumber(body.rate_per_unit) ?? 0;
+    const enteredUomCode = toTrimmedString(body.entered_uom_code) || null;
+    const enteredQuantity = parseNonNegativeNumber(body.entered_quantity);
 
-    if (!documentId || !materialId || !storageLocationId || !stockType || quantity === null || ratePerUnit === null) {
+    if (!documentId || !materialId || !storageLocationId || !stockType || quantity === null) {
       return openingStockErrorResponse(
         req,
         ctx,
         "OPENING_STOCK_LINE_CREATE_INVALID",
         400,
-        "material_id, storage_location_id, stock_type, quantity, and rate_per_unit are required.",
+        "material_id, storage_location_id, stock_type, and quantity are required (quantity may be 0 only when is_zero_stock is true).",
       );
     }
 
@@ -435,6 +438,9 @@ export async function addOpeningStockLineHandler(
         stock_type: stockType,
         quantity,
         rate_per_unit: ratePerUnit,
+        is_zero_stock: isZeroStock,
+        entered_uom_code: enteredUomCode,
+        entered_quantity: enteredQuantity,
         movement_type_code: deriveMovementType(stockType),
       })
       .select("*")
@@ -477,13 +483,17 @@ export async function updateOpeningStockLineHandler(
     ensureDraftDocument(document);
 
     const patch: JsonRecord = {};
+    if (body.is_zero_stock !== undefined) {
+      patch.is_zero_stock = body.is_zero_stock === true;
+    }
     if (body.storage_location_id !== undefined) {
       patch.storage_location_id = toTrimmedString(body.storage_location_id);
     }
     if (body.quantity !== undefined) {
-      const quantity = parsePositiveNumber(body.quantity);
+      const isZeroStock = patch.is_zero_stock === true;
+      const quantity = isZeroStock ? 0 : parsePositiveNumber(body.quantity);
       if (quantity === null) {
-        return openingStockErrorResponse(req, ctx, "OPENING_STOCK_LINE_QUANTITY_INVALID", 400, "quantity must be > 0.");
+        return openingStockErrorResponse(req, ctx, "OPENING_STOCK_LINE_QUANTITY_INVALID", 400, "quantity must be > 0 (or 0 when is_zero_stock is true).");
       }
       patch.quantity = quantity;
     }
@@ -493,6 +503,12 @@ export async function updateOpeningStockLineHandler(
         return openingStockErrorResponse(req, ctx, "OPENING_STOCK_LINE_RATE_INVALID", 400, "rate_per_unit must be >= 0.");
       }
       patch.rate_per_unit = rate;
+    }
+    if (body.entered_uom_code !== undefined) {
+      patch.entered_uom_code = toTrimmedString(body.entered_uom_code) || null;
+    }
+    if (body.entered_quantity !== undefined) {
+      patch.entered_quantity = parseNonNegativeNumber(body.entered_quantity);
     }
     if (body.stock_type !== undefined) {
       const stockType = toUpperTrimmedString(body.stock_type);

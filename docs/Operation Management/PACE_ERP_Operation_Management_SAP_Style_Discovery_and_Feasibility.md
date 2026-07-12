@@ -8089,26 +8089,41 @@ Material + Batch Number + Packing PO ref + FO ref (NULL or populated) + Qty + Lo
 | PR16 | ZQA01 | QA Approval Queue | QA + Production |
 | PR17 | — | Batch Number Release | Manager |
 
-> **TX Code scope:** PR09 / PR11 / PR12 / PR15 serve **both Process PO and Packing PO** — PO Type field (PMTO/PHPS/PMTS/PTEST) drives behavior. PR10, PR16, PR17 are **Process PO only** — Packing PO has no QA Approval step and no Batch Number.
+> **TX Code scope:** PR09 / PR11 / PR12 / PR15 serve **both Process PO and Packing PO** — PO Type field (PMTO/PHPS/PMTS/PTEST) drives behavior. PR10, PR16, PR17 are **Process PO only for now** — see the 2026-07-12 correction below for the Packing PO edit deferral.
 >
-> **PR10 Edit availability:** Only when status = QA_APPROVED. QA_REJECTED → straight PRUNE, PR10 not available.
+> ~~**PR10 Edit availability:** Only when status = QA_APPROVED. QA_REJECTED → straight PRUNE, PR10 not available.~~ **Superseded 2026-07-12 — see below.**
 
-**PR10 (ZCoR2) — Edit Rules (LOCKED — 2026-07-04):**
+**PR10 (ZCoR2) — Edit Rules — SECOND CORRECTION (LOCKED — 2026-07-12, business owner override, supersedes the entire 2026-07-04/07-12(first correction) block below):**
+
+The edit window moves to **before** the QA gate instead of after it — struck-through rules retained for history, not deleted, per doc convention.
+
+~~Available at: QA_APPROVED only — closes the moment Start Batch is clicked~~
+~~RM Qty change ✅ Only this~~
+~~SLoc change ❌ Blocked — set at Standard, editable at Final/Verify~~
+
+**New rule (2026-07-12):**
 
 | Rule | Detail |
 |---|---|
-| Available at | **QA_APPROVED only** — closes the moment Start Batch is clicked (corrected 2026-07-12; struck the earlier "and BATCH_STARTED" claim, which conflicted with this same section's own status-flow summary. Once BATCH_STARTED, no PR10 — the batch is physically committed) |
-| Status after edit | **Stays QA_APPROVED** — no re-approval needed |
-| **RM Qty change** | ✅ **Only this** — recalculates every line's Standard Qty (Dosage% × new Batch Size) and auto-updates each line's reservation Required Qty to match, live |
-| **Machine assignment** | ✅ — can change machine while still QA_APPROVED |
-| **Alternate material** | ✅ **(corrected 2026-07-12, was blocked)** — editable at PR10 too, covering the case where Standard was saved without picking an alternate. Same restriction as everywhere else: only for lines whose Formulation Material has at least one registered alternate (Material Group member) — never an arbitrary/unregistered material. Reservation swap (old material CANCELLED, new material OPEN, same qty) applies exactly as it does when substituted elsewhere. |
+| Scope (this brief) | **Process PO only, MTO/HPS only.** MTS/INT and Packing PO are deferred — see below, not dropped. |
+| Available at | **STANDARD status, before QA approval** — closes the moment QA approves (transition to QA_APPROVED). For MTS/INT (no QA gate) and for Packing PO (no QA gate), the equivalent rule is "before Final" — documented now, implemented later (see Deferred). |
+| Page 1 | **PO Number only** — no Company field needed. Confirmed via direct DB check: `erp_procurement.document_number_series` has no `company_id` column at all (`doc_type`, `last_number`, `pad_width`, `starting_number` only) — `po_number` is a single global counter per doc_type, no cross-company collision possible. → Enter. Validates PO Type is MTO/HPS and status is STANDARD; if not, show a clear blocking message (do not silently proceed). |
+| Page 2 | Same Material Table shown as PR09's own Standard page, most fields read-only, these editable: |
+| **Machine** | ✅ Editable |
+| **Batch Qty (header Standard Qty)** | ✅ Editable — recalculates every RM line's Standard Qty (Dosage% × new Batch Qty) live, and updates each line's reservation Required Qty to match |
+| **Storage Location (per line)** | ✅ Editable **(reverses the earlier "blocked" rule)** |
+| **Alternate/Actual Material (per line)** | ✅ Editable, only for lines whose Formulation Material has a registered alternate (`stroke_line.alternate_material_id`) — never an arbitrary/unregistered material. Reservation swap (old material CANCELLED, new OPEN, same qty) applies exactly as it does elsewhere. |
+| **Stock/availability re-check** | ✅ **Required on save** — same hard-block severity as Standard's own rule (§83.5): if the new Batch Qty or the substituted Actual Material leaves any line short of Available stock, block save with a clear message, do not allow saving into a shortage. |
 | Stroke change | ❌ Blocked |
-| SLoc change | ❌ Blocked — set at Standard, editable at Final/Verify |
-| RM add / prune | ❌ Blocked — do this at Standard phase |
-| Planned output qty | ❌ Blocked |
+| RM add / prune | ❌ Blocked — do this at Standard (PR09) instead |
 | PO Type / Prodshade | ❌ Blocked |
+| Status after edit | Stays **STANDARD** — no side effect; QA reviews whatever values are current when PR16 is opened |
 
-> PR10 is intentionally minimal — only qty and machine. Keeping it simple avoids complexity and conflicts with Final phase entries.
+**Deferred (documented now, business owner explicit decision 2026-07-12 — mandatory future work, not dropped):**
+- **MTS/INT edit window** ("before Final") — MTS/INT are already deferred project-wide for batch mechanics (Gate-27 costing/batch session, 2026-07-12); implement PR10's MTS/INT half alongside that future session.
+- **Packing PO edit (PR10's Packing-PO half)** ("before Final", since Packing PO has no QA gate) — explicitly deferred to land together with Packing PO's own Standard→Final rebuild (already next in the locked sequencing per CLAUDE.md), not bolted onto the current legacy `updatePackingOrderLinesHandler`.
+
+**Implementation note:** do not reuse the existing `updateProcessOrderLinesHandler` (full line delete+reinsert, powers the legacy generic `ProcessOrderPage.jsx`) — that predates the Gate-27 TX-code rebuild and permits far more than PR10's narrow scope (add/remove lines, no stock re-check). Build PR10 as its own dedicated handler + page, matching the PR09/PR11/PR12 pattern.
 
 **COR6 specific decisions (LOCKED — 2026-06-11):**
 - Activity confirmation (machine time, labor time) → **deferred to Section 104**
@@ -8850,6 +8865,17 @@ Filter rules: only rows with non-zero available qty, and **only UNRESTRICTED sto
 5. PM (from the original Packing PO, checkbox-checked lines only): **P262**, proportional. Unchecked lines get no movement at all — they stay recorded as consumed.
 
 **PR20 — Partial Reversal Report:** CSN-tracker-style expandable list. Collapsed row = one reversal transaction (header, with Salvage Batch Number if tagged). Expand = full granular line-level detail (every RM/PM/SFG/SKU movement posted in that transaction, with quantities and movement types).
+
+---
+
+#### Customer Return + Pack-Type-Change Reversal — BLOCKED on Dispatch design (2026-07-12, mandatory future item, do not drop)
+
+**Why this is blocked, not designed:** while stress-testing PR19 against two worked examples (a tanker batch with a partial-qty return, a barrel batch with a partial-count return), it became clear the Return Receipt flow cannot be designed correctly without first knowing the Dispatch module's own structure — a return references *what was dispatched* (which Dispatch Instruction, which SKU/batch/qty was sent, to which customer), and per CLAUDE.md §9's Layer table, L5 — Dispatch & Returns is only ~51% designed and explicitly flagged "🔴 Partial — Formal L5 session required." Designing Return Receipt on top of an undesigned Dispatch layer risks the same doc-first-workflow miss already seen once with PR09 (chat-approved detail never written into the doc, Codex builds the wrong thing). **Business owner decision (2026-07-12): do not design Return Receipt until Dispatch (L5) itself has its formal session. Both of the following remain mandatory future work, not optional/dropped:**
+
+1. **Return Receipt + QA Usage Decision for returns.** A pre-existing, complete, never-yet-used movement-type family already exists in `erp_inventory.movement_type_master` and can be reused as-is once designed: `P651` (Customer Return Receipt, IN, →BLOCKED, ref=DISPATCH_INSTRUCTION), `P652` (P651 reversal), `P653` (Return → Unrestricted), `P654` (reversal), `P655` (Return → QA/QUALITY_INSPECTION), `P656` (reversal), `P657` (Return → Blocked/Confirm), `P658` (reversal) — analogous in shape to Inward QA's own GRN usage-decision mechanism. No page or handler exists for any of it yet (confirmed via grep — zero hits for "return.receipt"/"ReturnReceipt" anywhere in `frontend/src/pages/dashboard/production/` or `supabase/functions/api/_core/production/`).
+2. **Pack-type-change reversal for returned goods (repack, e.g. tanker → barrel).** Stress-testing PR19 surfaced a genuine open question that must be resolved in this future session: PR19's SKU-row sequence (locked above) always dissolves a returned SKU all the way down to RM/PM (steps 2+3 deliberately re-issue P261 to trace down) — meaning today there is no way to stop at the SFG layer and hand it straight to a *new* Packing PO of a different pack type without first running a brand-new Process PO (Standard→QA→Start Batch→Final→Verify) from the recovered RM. Whether that full-cycle re-production is actually correct/desired (e.g. for quality-control reasons) or whether a distinct "stop at SFG" variant of the reversal is needed for the repack case specifically is **not decided** — must be resolved when this item is designed, not assumed either way.
+
+**Sequencing:** Dispatch (L5) formal session → Return Receipt + QA Usage Decision design → Pack-type-change reversal design (likely a thin variant/extension of PR19, not a fresh mechanism). Do not attempt any of these three out of order.
 
 ---
 
@@ -13659,6 +13685,11 @@ The following topics need formal discovery and locking:
 - [ ] `process_order_line_reco` is append-not-reset on CORS (voided rows kept, `is_voided=true`) — should Scenario 3/4 deviation analysis ever look at voided attempts, or only the current non-voided attempt?
 - [ ] INT materials never reach AP/dispatch (internally consumed) — does INT get any AP Reco layer at all, or WAR-only costing with zero Reco rows? Needs an explicit yes/no, not an assumption.
 - [ ] Machine (Gate-27.6, now mandatory on `MTO`/`HPS`/`MTS`/`INT`) is currently pure traceability, no costing weight (matches 83.9 "no capacity/usage intelligence") — confirm this stays true, i.e. machine never enters any cost-allocation formula.
+
+**Added 2026-07-12 (Opening Stock kickoff) — confirms and details the already-listed "AP Monthly Rate entry workflow and UI" item:**
+- [ ] Concrete shape confirmed by business owner: a Material × Month rate table — one rate per material per calendar month (business owner named April/May/June/July as the first four months needing entry). Consumed at both dispatch time (104.4's Sales Order Costing) and Reco time (104.5's Rate Variance).
+- [ ] Direct DB check (2026-07-12): neither a WAR engine nor any running rate column exists yet — `erp_inventory.material_master` has no rate/WAR/value column, and no DB function computes a weighted-average rate anywhere. Every `stock_ledger` row just carries its own `valuation_rate`/`value`, exactly as posted by whichever caller supplied it — there is no live "current WAR" being read by anything today.
+- [ ] Direct consequence for Opening Stock (Gate-19, already live): its `rate_per_unit` field is hard-required by `post_stock_movement()`'s `p_unit_value` (see `opening_stock.handlers.ts`), but the business owner does not have real rates yet for the RM/PM being loaded now. Posting with a placeholder (e.g. `0`) is safe **today** only because nothing downstream reads/computes WAR yet — once the WAR engine from this section is actually built, whoever designs it must decide how already-posted Opening Stock rows with placeholder valuation get corrected (retroactive `stock_ledger` row edit? a dedicated valuation-adjustment posting type? something else?). Do not assume this is free — no such correction mechanism exists in the codebase today.
 
 ---
 

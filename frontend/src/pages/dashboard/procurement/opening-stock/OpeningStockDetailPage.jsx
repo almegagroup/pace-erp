@@ -37,8 +37,10 @@ import {
 
 const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 
-// Location types that are not valid for opening stock entry
-const EXCLUDED_LOCATION_TYPES = new Set(["LOGICAL", "SHOP_FLOOR"]);
+// Opening Stock has no storage location restriction — any location type is valid
+// (e.g. SHOP_FLOOR locations like S003 are used for INT materials).
+
+const BULK_PAGE_SIZE = 10;
 
 const ENTRY_MODES = Object.freeze({ SINGLE: "SINGLE", BULK: "BULK" });
 
@@ -60,6 +62,7 @@ function createBulkRow(index) {
     stock_type: "UNRESTRICTED",
     quantity: "",
     rate_per_unit: "",
+    is_zero_stock: false,
   };
 }
 
@@ -100,6 +103,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   const [entryMode, setEntryMode] = useState(ENTRY_MODES.SINGLE);
   const [singleForm, setSingleForm] = useState(createEmptySingleForm());
   const [bulkRows, setBulkRows] = useState([createBulkRow(1), createBulkRow(2), createBulkRow(3)]);
+  const [bulkPage, setBulkPage] = useState(0);
   const [editingLineId, setEditingLineId] = useState("");
   const [editForm, setEditForm] = useState(createEmptySingleForm());
   const [saving, setSaving] = useState(false);
@@ -162,11 +166,8 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     [materials],
   );
 
-  // Filter out LOGICAL and SHOP_FLOOR location types — not valid for opening stock
-  const filteredLocations = useMemo(
-    () => locations.filter((loc) => !EXCLUDED_LOCATION_TYPES.has(loc.location_type)),
-    [locations],
-  );
+  // No location-type restriction — Opening Stock accepts any storage location (incl. SHOP_FLOOR, e.g. S003 for INT).
+  const filteredLocations = locations;
 
   const locationOptions = useMemo(
     () =>
@@ -199,8 +200,20 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     setSingleForm(createEmptySingleForm());
   }
 
+  const bulkTotalPages = Math.max(1, Math.ceil(bulkRows.length / BULK_PAGE_SIZE));
+  const pagedBulkRows = useMemo(
+    () => bulkRows
+      .map((row, index) => ({ row, slNo: index + 1 }))
+      .slice(bulkPage * BULK_PAGE_SIZE, bulkPage * BULK_PAGE_SIZE + BULK_PAGE_SIZE),
+    [bulkRows, bulkPage],
+  );
+
   function appendBulkRow() {
-    setBulkRows((current) => [...current, createBulkRow(current.length + 1)]);
+    setBulkRows((current) => {
+      const next = [...current, createBulkRow(current.length + 1)];
+      setBulkPage(Math.max(0, Math.ceil(next.length / BULK_PAGE_SIZE) - 1));
+      return next;
+    });
   }
 
   function updateBulkRow(key, patch) {
@@ -241,10 +254,10 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   async function handleAddBulkLines() {
     if (!detail || detail.status !== "DRAFT") return;
     const validRows = bulkRows.filter(
-      (row) => row.material_id && row.storage_location_id && row.quantity && row.rate_per_unit !== "",
+      (row) => row.material_id && row.storage_location_id && (row.is_zero_stock || Number(row.quantity) > 0),
     );
     if (validRows.length === 0) {
-      setError("Fill at least one complete bulk row before adding.");
+      setError("Fill at least one complete bulk row (or tick Zero Stock) before adding.");
       return;
     }
     setSaving(true);
@@ -252,18 +265,25 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     setNotice("");
     try {
       await Promise.all(
-        validRows.map((row) =>
-          addOpeningStockLine(detail.id, {
+        validRows.map((row) => {
+          const material = materialMap.get(row.material_id);
+          const baseUom = material?.base_uom_code || null;
+          const quantity = row.is_zero_stock ? 0 : Number(row.quantity);
+          return addOpeningStockLine(detail.id, {
             material_id: row.material_id,
             storage_location_id: row.storage_location_id,
             stock_type: row.stock_type,
-            quantity: Number(row.quantity),
-            rate_per_unit: Number(row.rate_per_unit),
-          }),
-        ),
+            quantity,
+            rate_per_unit: row.rate_per_unit === "" ? 0 : Number(row.rate_per_unit),
+            is_zero_stock: Boolean(row.is_zero_stock),
+            entered_uom_code: baseUom,
+            entered_quantity: quantity,
+          });
+        }),
       );
       setNotice(`${validRows.length} opening stock lines added.`);
       setBulkRows([createBulkRow(1), createBulkRow(2), createBulkRow(3)]);
+      setBulkPage(0);
       await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OPENING_STOCK_LINE_CREATE_FAILED");
@@ -704,25 +724,32 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                   <div className="grid gap-3">
                     <ErpDenseGrid
                       columns={[
+                        { key: "sl_no", label: "Sl No", width: "60px", render: (entry) => entry.slNo },
                         {
                           key: "material_id",
                           label: "Material",
-                          render: (row) => (
+                          render: (entry) => (
                             <ErpComboboxField
-                              value={row.material_id}
-                              onChange={(value) => updateBulkRow(row.key, { material_id: value })}
+                              value={entry.row.material_id}
+                              onChange={(value) => updateBulkRow(entry.row.key, { material_id: value })}
                               options={materialOptions}
                               blankLabel="Select material"
                             />
                           ),
                         },
                         {
+                          key: "pace_code",
+                          label: "Pace Code",
+                          width: "110px",
+                          render: (entry) => materialMap.get(entry.row.material_id)?.pace_code || "—",
+                        },
+                        {
                           key: "storage_location_id",
                           label: "Storage Location",
-                          render: (row) => (
+                          render: (entry) => (
                             <select
-                              value={row.storage_location_id}
-                              onChange={(event) => updateBulkRow(row.key, { storage_location_id: event.target.value })}
+                              value={entry.row.storage_location_id}
+                              onChange={(event) => updateBulkRow(entry.row.key, { storage_location_id: event.target.value })}
                               className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                             >
                               <option value="">Select location</option>
@@ -736,11 +763,11 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                         },
                         {
                           key: "stock_type",
-                          label: "Stock Type",
-                          render: (row) => (
+                          label: "Status",
+                          render: (entry) => (
                             <select
-                              value={row.stock_type}
-                              onChange={(event) => updateBulkRow(row.key, { stock_type: event.target.value })}
+                              value={entry.row.stock_type}
+                              onChange={(event) => updateBulkRow(entry.row.key, { stock_type: event.target.value })}
                               className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                             >
                               {STOCK_TYPES.map((stockType) => (
@@ -752,29 +779,60 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                           ),
                         },
                         {
+                          key: "uom",
+                          label: "UOM",
+                          width: "80px",
+                          render: (entry) => (
+                            <input
+                              value={materialMap.get(entry.row.material_id)?.base_uom_code || "—"}
+                              readOnly
+                              disabled
+                              className="h-8 w-full border border-slate-200 bg-slate-100 px-2 text-sm text-slate-500 outline-none"
+                            />
+                          ),
+                        },
+                        {
                           key: "quantity",
-                          label: "Qty",
-                          render: (row) => (
+                          label: "Count Stock",
+                          render: (entry) => (
                             <input
                               type="number"
                               min="0"
                               step="any"
-                              value={row.quantity}
-                              onChange={(event) => updateBulkRow(row.key, { quantity: event.target.value })}
-                              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                              value={entry.row.is_zero_stock ? "0" : entry.row.quantity}
+                              disabled={entry.row.is_zero_stock}
+                              onChange={(event) => updateBulkRow(entry.row.key, { quantity: event.target.value })}
+                              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-500"
+                            />
+                          ),
+                        },
+                        {
+                          key: "is_zero_stock",
+                          label: "Zero Stock",
+                          width: "80px",
+                          render: (entry) => (
+                            <input
+                              type="checkbox"
+                              checked={Boolean(entry.row.is_zero_stock)}
+                              onChange={(event) => updateBulkRow(entry.row.key, {
+                                is_zero_stock: event.target.checked,
+                                quantity: event.target.checked ? "0" : entry.row.quantity,
+                              })}
+                              className="h-4 w-4"
                             />
                           ),
                         },
                         {
                           key: "rate_per_unit",
                           label: "Rate",
-                          render: (row) => (
+                          render: (entry) => (
                             <input
                               type="number"
                               min="0"
                               step="any"
-                              value={row.rate_per_unit}
-                              onChange={(event) => updateBulkRow(row.key, { rate_per_unit: event.target.value })}
+                              placeholder="Optional"
+                              value={entry.row.rate_per_unit}
+                              onChange={(event) => updateBulkRow(entry.row.key, { rate_per_unit: event.target.value })}
                               className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                             />
                           ),
@@ -782,15 +840,15 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                         {
                           key: "total",
                           label: "Total Value",
-                          render: (row) => formatCurrency(Number(row.quantity || 0) * Number(row.rate_per_unit || 0)),
+                          render: (entry) => formatCurrency(Number(entry.row.quantity || 0) * Number(entry.row.rate_per_unit || 0)),
                         },
                         {
                           key: "remove",
                           label: "Action",
-                          render: (row) => (
+                          render: (entry) => (
                             <button
                               type="button"
-                              onClick={() => removeBulkRow(row.key)}
+                              onClick={() => removeBulkRow(entry.row.key)}
                               className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700"
                             >
                               Remove
@@ -798,10 +856,33 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                           ),
                         },
                       ]}
-                      rows={bulkRows}
-                      rowKey={(row) => row.key}
-                      maxHeight="320px"
+                      rows={pagedBulkRows}
+                      rowKey={(entry) => entry.row.key}
+                      maxHeight="420px"
                     />
+                    <div className="flex items-center justify-between">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setBulkPage((page) => Math.max(0, page - 1))}
+                          disabled={bulkPage === 0}
+                          className="border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 disabled:opacity-40"
+                        >
+                          Prev
+                        </button>
+                        <span className="text-xs text-slate-500">
+                          Page {bulkPage + 1} of {bulkTotalPages} ({bulkRows.length} rows)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setBulkPage((page) => Math.min(bulkTotalPages - 1, page + 1))}
+                          disabled={bulkPage >= bulkTotalPages - 1}
+                          className="border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 disabled:opacity-40"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
                     <div className="flex gap-2">
                       <button
                         type="button"
