@@ -8811,6 +8811,48 @@ Batch: BM1966 | SKU: 6763PH94000 | Qty: 9,000 KG (1 TNK) | Cost: Y/KG
 
 ---
 
+#### PR19 — Partial Batch Reversal + PR20 — Partial Reversal Report (LOCKED — 2026-07-12, MTO/HPS scope only)
+
+**Why this exists:** CORS (PR15) only does full-batch reversal. Excess/return/salvage scenarios need to reverse a *partial* quantity of an already-VERIFIED batch, proportionally, using the already-locked Reversal Basis math (§104.7: `Reversal Ratio = Reversal Qty ÷ Actual Total Output`, applied separately to Actual and to AP Approved qty). This single mechanism **absorbs and replaces** the earlier "salvage-blend granular RM decomposition / New Row" design floated for a receiving-batch — that idea is dropped. There is no separate insertion into a receiving batch's own Material Table; everything happens through this reversal, with an optional tag identifying which batch the recovered material is intended for.
+
+**PR19 — Page 1 (Identify):**
+- Company (resolved/dropdown)
+- PO Type (MTO/HPS — MTS excluded from this whole mechanism for now)
+- Prodshade
+- Batch Number
+- → Enter
+
+**PR19 — Page 2 (pick a stock line):**
+A list of matching stock lines, single-select (radio, one row only):
+
+| Storage Location | Material Type (SFG/FG-SKU) | Prodshade Code/SKU | Description | Batch Number | Available in Pack | Available in Base UOM |
+
+Filter rules: only rows with non-zero available qty, and **only UNRESTRICTED stock** — returned FG lands in BLOCKED first, and BLOCKED→QA-release-to-Unrestricted is a separate, still-undesigned mechanism (not this page).
+
+**PR19 — Page 3 (header + reverse qty + line detail):**
+- Header: all details of the selected row.
+- **Reverse Qty** — user-entered. Hard validation: cannot exceed the Available qty shown on Page 2 for that exact batch/location/material.
+- **Salvage Batch Number** (optional) — a dropdown listing other batches of the same PO Type/Prodshade family that are currently BATCH_STARTED (QA_APPROVED + Start Batch clicked) but not yet FINAL. Selecting one tags the recovered RM/PM as intended for that specific batch (traceability only — per §83.6's "batch records which batches were mixed in" — the receiving batch does not get any new line inserted into its own Material Table; it just consumes the now-normal RM/PM stock at its own Final as usual). Leaving this blank just returns the material to general Unrestricted stock.
+- **Line-level detail, if the selected row is SFG:** the Prodshade's RM/INT table shown **read-only**, Actual/AP-Approved/Variance computed proportionally per the Reversal Ratio formula — nothing here is editable.
+- **Line-level detail, if the selected row is SKU (packed FG):** shows RM **and** PM together, with a **per-line checkbox** (default checked) — unchecking a line excludes it from reversal (it stays "consumed", never comes back to stock). This checkbox is the entire mechanism for distinguishing reusable packaging (barrel, IBC — leave checked) from single-use consumables (label, tape, seal — uncheck) — **no new `material_master` flag, purely manual every time, confirmed explicitly** (the earlier idea of a stored "reusable" flag on Material Master is dropped). The SFG row itself has this checkbox permanently inactive/unchecked — see the movement sequence below for why.
+
+**Movement sequence (LOCKED):** no new movement type codes — reuses exactly what CORS already uses (P261/P262, P101/P102), just posted for the partial reversal quantity instead of the full batch quantity.
+
+*SFG row selected (Process PO level only):*
+1. SFG: **P102** (dissolves the reverse-qty out of S003)
+2. RM/INT: **P262** (returns to each material's original 261 issue location, proportionally)
+
+*SKU row selected (both Packing PO and Process PO layers unwind in one transaction):*
+1. SKU/FG: **P102** (dissolves the reverse-qty out of F003)
+2. SFG: **P262** (reverses the *original* Packing-PO-Final P261 that had issued this SFG into packing — brings it back into existence at S003)
+3. SFG: **P261 again, immediately** (re-issues that same SFG — this is the reversal's own trace-down step into RM/INT, not the original packing consumption). Steps 2+3 together are deliberate, not a no-op: net SFG balance is unchanged, but the ledger now has two distinguishable entries — one *reversal of the original* and one *belonging to this reversal* — instead of silently skipping the SFG layer.
+4. RM/INT (derived from the original Process PO batch's own Actual RM Ratio): **P262**, proportional
+5. PM (from the original Packing PO, checkbox-checked lines only): **P262**, proportional. Unchecked lines get no movement at all — they stay recorded as consumed.
+
+**PR20 — Partial Reversal Report:** CSN-tracker-style expandable list. Collapsed row = one reversal transaction (header, with Salvage Batch Number if tagged). Expand = full granular line-level detail (every RM/PM/SFG/SKU movement posted in that transaction, with quantities and movement types).
+
+---
+
 ### 83.8 — FIFO and Expiry Tracking
 
 | Item | Decision |
