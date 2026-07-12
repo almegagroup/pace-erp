@@ -99,6 +99,11 @@ function getStatusTone(status) {
   }
 }
 
+function formatLocationLabel(location) {
+  if (!location) return "--";
+  return `${location.location_code ?? location.location_name ?? "Storage Location"} (${location.location_type ?? "STORE"})`;
+}
+
 export default function OpeningStockDetailPage({ documentId: documentIdProp = "" }) {
   const params = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
@@ -198,7 +203,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     () =>
       locations.map((location) => ({
         value: location.id,
-        label: `${location.location_code ?? location.location_name ?? location.id} (${location.location_type ?? "STORE"})`,
+        label: formatLocationLabel(location),
       })),
     [locations],
   );
@@ -480,13 +485,11 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                     {
                       key: "storage_location_id",
                       label: "Storage Location",
-                      render: (row) => {
-                        const location = locationMap.get(row.storage_location_id);
-                        return location
-                          ? `${location.location_code ?? location.location_name ?? location.id}`
-                          : row.storage_location_id;
-                      },
+                    render: (row) => {
+                      const location = locationMap.get(row.storage_location_id);
+                      return location ? formatLocationLabel(location) : "--";
                     },
+                  },
                     { key: "stock_type", label: "Stock Type", width: "170px" },
                     { key: "quantity", label: "Qty", width: "100px" },
                     { key: "rate_per_unit", label: "Rate", width: "100px" },

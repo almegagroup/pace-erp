@@ -37,6 +37,23 @@ const CURRENCY_LOCALE_MAP = Object.freeze({
 });
 const BATCH_NUMBER_HELP_TEXT = "Required for MTO/HPS Prodshades - leave blank if this is an MTS (IWC/Powder) item; MTS batch integration is not yet supported here.";
 
+function createNewEditableLine(lineNumber) {
+  return {
+    row_key: `new-${lineNumber}-${Date.now()}`,
+    id: "",
+    line_number: Number(lineNumber ?? 0),
+    material_id: "",
+    storage_location_id: "",
+    stock_type: "UNRESTRICTED",
+    quantity: "",
+    rate_per_unit: "0",
+    is_zero_stock: false,
+    entered_uom_code: "",
+    entered_quantity: "",
+    batch_number: "",
+  };
+}
+
 function formatCurrency(value, currencyCode = "INR") {
   const numericValue = Number(value ?? 0);
   const normalizedCurrency = String(currencyCode || "INR").toUpperCase();
@@ -53,8 +70,14 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString("en-GB");
 }
 
+function formatLocationLabel(location) {
+  if (!location) return "Unresolved storage location";
+  return `${location.location_code ?? location.location_name ?? "Storage Location"} (${location.location_type ?? "STORE"})`;
+}
+
 function mapLineForEditing(line) {
   return {
+    row_key: String(line.id),
     id: String(line.id),
     line_number: Number(line.line_number ?? 0),
     material_id: String(line.material_id ?? ""),
@@ -71,6 +94,7 @@ function mapLineForEditing(line) {
 
 function serializeEditableLine(line) {
   return JSON.stringify({
+    row_key: line.row_key,
     material_id: line.material_id,
     storage_location_id: line.storage_location_id,
     stock_type: line.stock_type,
@@ -138,7 +162,7 @@ export default function OpeningStockApprovalPage() {
     if (!detail) return;
     const nextLines = Array.isArray(detail.lines) ? detail.lines.map(mapLineForEditing) : [];
     setEditableLines(nextLines);
-    setSavedSnapshot(new Map(nextLines.map((line) => [line.id, serializeEditableLine(line)])));
+    setSavedSnapshot(new Map(nextLines.map((line) => [line.row_key, serializeEditableLine(line)])));
     setCurrentPage(0);
   }, [detail]);
 
@@ -155,12 +179,23 @@ export default function OpeningStockApprovalPage() {
     [materials],
   );
   const locationOptions = useMemo(
-    () =>
-      locations.map((location) => ({
+    () => {
+      const baseOptions = locations.map((location) => ({
         value: location.id,
-        label: `${location.location_code ?? location.location_name ?? location.id} (${location.location_type ?? "STORE"})`,
-      })),
-    [locations],
+        label: formatLocationLabel(location),
+      }));
+      const existingValues = new Set(baseOptions.map((option) => option.value));
+      for (const line of editableLines) {
+        if (!line.storage_location_id || existingValues.has(line.storage_location_id)) continue;
+        baseOptions.push({
+          value: line.storage_location_id,
+          label: "Unresolved storage location",
+        });
+        existingValues.add(line.storage_location_id);
+      }
+      return baseOptions;
+    },
+    [editableLines, locations],
   );
   const companyMap = useMemo(
     () =>
@@ -176,8 +211,8 @@ export default function OpeningStockApprovalPage() {
   const editedLineIds = useMemo(
     () =>
       editableLines
-        .filter((line) => serializeEditableLine(line) !== savedSnapshot.get(line.id))
-        .map((line) => line.id),
+        .filter((line) => serializeEditableLine(line) !== savedSnapshot.get(line.row_key))
+        .map((line) => line.row_key),
     [editableLines, savedSnapshot],
   );
 
@@ -222,7 +257,7 @@ export default function OpeningStockApprovalPage() {
   function updateLine(lineId, patch) {
     setEditableLines((current) =>
       current.map((line) => {
-        if (line.id !== lineId) return line;
+        if (line.row_key !== lineId) return line;
         const nextLine = { ...line, ...patch };
         if (patch.is_zero_stock === true) {
           nextLine.quantity = "0";
@@ -239,6 +274,16 @@ export default function OpeningStockApprovalPage() {
         return nextLine;
       }),
     );
+  }
+
+  function handleAddRow() {
+    setEditableLines((current) => {
+      const next = [...current, createNewEditableLine(current.length + 1)];
+      setCurrentPage(Math.floor((next.length - 1) / PAGE_SIZE));
+      return next;
+    });
+    setError("");
+    setNotice("");
   }
 
   function handleSearch() {
@@ -264,9 +309,9 @@ export default function OpeningStockApprovalPage() {
     setNotice("");
     try {
       const lines = editableLines
-        .filter((line) => editedLineSet.has(line.id))
+        .filter((line) => editedLineSet.has(line.row_key))
         .map((line) => ({
-          id: line.id,
+          id: line.id || null,
           material_id: line.material_id,
           storage_location_id: line.storage_location_id,
           stock_type: line.stock_type,
@@ -416,15 +461,15 @@ export default function OpeningStockApprovalPage() {
                       <tbody>
                         {pagedLines.map((line) => {
                           const material = materialMap.get(line.material_id);
-                          const dirty = editedLineSet.has(line.id);
+                          const dirty = editedLineSet.has(line.row_key);
                           return (
-                            <tr key={line.id} className={`align-top even:bg-slate-50/40 ${dirty ? "bg-amber-50/50" : ""}`}>
+                            <tr key={line.row_key} className={`align-top even:bg-slate-50/40 ${dirty ? "bg-amber-50/50" : ""}`}>
                               <td className="border-b border-slate-100 px-3 py-2">{line.line_number}</td>
                               <td className="border-b border-slate-100 px-3 py-2">{material?.material_type ?? "—"}</td>
                               <td className="border-b border-slate-100 px-3 py-2 min-w-[260px]">
                                 <ErpComboboxField
                                   value={line.material_id}
-                                  onChange={(value) => updateLine(line.id, { material_id: value })}
+                                  onChange={(value) => updateLine(line.row_key, { material_id: value })}
                                   options={materialOptions}
                                   blankLabel="Select material"
                                 />
@@ -433,7 +478,7 @@ export default function OpeningStockApprovalPage() {
                               <td className="border-b border-slate-100 px-3 py-2 min-w-[240px]">
                                 <select
                                   value={line.storage_location_id}
-                                  onChange={(event) => updateLine(line.id, { storage_location_id: event.target.value })}
+                                  onChange={(event) => updateLine(line.row_key, { storage_location_id: event.target.value })}
                                   className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                                 >
                                   <option value="">Select location</option>
@@ -447,7 +492,7 @@ export default function OpeningStockApprovalPage() {
                               <td className="border-b border-slate-100 px-3 py-2 min-w-[170px]">
                                 <select
                                   value={line.stock_type}
-                                  onChange={(event) => updateLine(line.id, { stock_type: event.target.value })}
+                                  onChange={(event) => updateLine(line.row_key, { stock_type: event.target.value })}
                                   className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                                 >
                                   {STOCK_TYPES.map((stockType) => (
@@ -463,7 +508,7 @@ export default function OpeningStockApprovalPage() {
                                   <input
                                     type="text"
                                     value={line.batch_number}
-                                    onChange={(event) => updateLine(line.id, { batch_number: event.target.value.toUpperCase() })}
+                                    onChange={(event) => updateLine(line.row_key, { batch_number: event.target.value.toUpperCase() })}
                                     className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                                   />
                                 ) : (
@@ -477,7 +522,7 @@ export default function OpeningStockApprovalPage() {
                                   step="any"
                                   value={line.is_zero_stock ? "0" : line.quantity}
                                   disabled={line.is_zero_stock}
-                                  onChange={(event) => updateLine(line.id, { quantity: event.target.value, entered_quantity: event.target.value })}
+                                  onChange={(event) => updateLine(line.row_key, { quantity: event.target.value, entered_quantity: event.target.value })}
                                   className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-500"
                                 />
                               </td>
@@ -485,7 +530,7 @@ export default function OpeningStockApprovalPage() {
                                 <input
                                   type="checkbox"
                                   checked={Boolean(line.is_zero_stock)}
-                                  onChange={(event) => updateLine(line.id, { is_zero_stock: event.target.checked })}
+                                  onChange={(event) => updateLine(line.row_key, { is_zero_stock: event.target.checked })}
                                   className="h-4 w-4"
                                 />
                               </td>
@@ -495,7 +540,7 @@ export default function OpeningStockApprovalPage() {
                                   min="0"
                                   step="any"
                                   value={line.rate_per_unit}
-                                  onChange={(event) => updateLine(line.id, { rate_per_unit: event.target.value })}
+                                  onChange={(event) => updateLine(line.row_key, { rate_per_unit: event.target.value })}
                                   className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                                 />
                               </td>
@@ -518,6 +563,13 @@ export default function OpeningStockApprovalPage() {
                     Unsaved edits persist across page changes until Save Corrections.
                   </div>
                   <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleAddRow}
+                      className="border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700"
+                    >
+                      Add Row
+                    </button>
                     <button
                       type="button"
                       onClick={() => setCurrentPage((page) => Math.max(0, page - 1))}

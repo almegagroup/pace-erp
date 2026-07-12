@@ -830,38 +830,33 @@ export async function batchUpdateOpeningStockLinesHandler(
       .map((line) => toTrimmedString((line as JsonRecord).id))
       .filter(Boolean);
 
-    if (lineIds.length !== linePatches.length) {
-      return openingStockErrorResponse(
-        req,
-        ctx,
-        "OPENING_STOCK_BATCH_UPDATE_INVALID",
-        400,
-        "Each line must include id.",
-      );
-    }
+    let existingRows: OpeningStockLineRow[] = [];
+    if (lineIds.length > 0) {
+      const { data, error: existingError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("opening_stock_line")
+        .select("*")
+        .eq("document_id", documentId)
+        .in("id", lineIds);
 
-    const { data: existingRows, error: existingError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("opening_stock_line")
-      .select("*")
-      .eq("document_id", documentId)
-      .in("id", lineIds);
+      if (existingError) {
+        return openingStockErrorResponse(
+          req,
+          ctx,
+          "OPENING_STOCK_LINE_FETCH_FAILED",
+          500,
+          "Unable to load opening stock lines.",
+        );
+      }
 
-    if (existingError) {
-      return openingStockErrorResponse(
-        req,
-        ctx,
-        "OPENING_STOCK_LINE_FETCH_FAILED",
-        500,
-        "Unable to load opening stock lines.",
-      );
+      existingRows = (data ?? []) as OpeningStockLineRow[];
     }
 
     const existingById = new Map(
-      ((existingRows ?? []) as OpeningStockLineRow[]).map((row) => [toTrimmedString(row.id), row]),
+      existingRows.map((row) => [toTrimmedString(row.id), row]),
     );
     const materialTypesById = await fetchMaterialTypesByIds(
-      ((existingRows ?? []) as OpeningStockLineRow[]).map((row) => toTrimmedString(row.material_id)),
+      linePatches.map((line) => toTrimmedString((line as JsonRecord).material_id)),
     );
 
     if (existingById.size !== lineIds.length) {
@@ -875,12 +870,37 @@ export async function batchUpdateOpeningStockLinesHandler(
     }
 
     const updates: JsonRecord[] = [];
+    const inserts: JsonRecord[] = [];
+    let nextLineNumber = 0;
+
+    if (linePatches.some((line) => !toTrimmedString((line as JsonRecord).id))) {
+      const { data: lastLine, error: lastLineError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("opening_stock_line")
+        .select("line_number")
+        .eq("document_id", documentId)
+        .order("line_number", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lastLineError) {
+        return openingStockErrorResponse(
+          req,
+          ctx,
+          "OPENING_STOCK_LINE_NUMBER_FAILED",
+          500,
+          "Unable to derive next line number.",
+        );
+      }
+
+      nextLineNumber = Number(lastLine?.line_number ?? 0);
+    }
 
     for (const rawLine of linePatches) {
       const patch = rawLine as JsonRecord;
       const lineId = toTrimmedString(patch.id);
-      const existing = existingById.get(lineId);
-      if (!existing) {
+      const existing = lineId ? existingById.get(lineId) : null;
+      if (lineId && !existing) {
         return openingStockErrorResponse(
           req,
           ctx,
@@ -890,15 +910,15 @@ export async function batchUpdateOpeningStockLinesHandler(
         );
       }
 
-      const stockType = toUpperTrimmedString(patch.stock_type || existing.stock_type);
+      const stockType = toUpperTrimmedString(patch.stock_type || existing?.stock_type);
       if (!STOCK_TYPES.has(stockType)) {
         return openingStockErrorResponse(req, ctx, "OPENING_STOCK_STOCK_TYPE_INVALID", 400, "Invalid stock_type.");
       }
 
       const isZeroStock = patch.is_zero_stock !== undefined
         ? patch.is_zero_stock === true
-        : existing.is_zero_stock === true;
-      const quantitySource = patch.quantity !== undefined ? patch.quantity : existing.quantity;
+        : existing?.is_zero_stock === true;
+      const quantitySource = patch.quantity !== undefined ? patch.quantity : existing?.quantity;
       const quantity = isZeroStock ? 0 : parsePositiveNumber(quantitySource);
       if (quantity === null) {
         return openingStockErrorResponse(
@@ -911,35 +931,44 @@ export async function batchUpdateOpeningStockLinesHandler(
       }
 
       const rate = parseNonNegativeNumber(
-        patch.rate_per_unit !== undefined ? patch.rate_per_unit : existing.rate_per_unit,
+        patch.rate_per_unit !== undefined ? patch.rate_per_unit : existing?.rate_per_unit,
       );
       if (rate === null) {
         return openingStockErrorResponse(req, ctx, "OPENING_STOCK_LINE_RATE_INVALID", 400, "rate_per_unit must be >= 0.");
       }
 
-      const materialId = toTrimmedString(patch.material_id || existing.material_id);
+      const materialId = toTrimmedString(patch.material_id || existing?.material_id);
+      const storageLocationId = toTrimmedString(patch.storage_location_id || existing?.storage_location_id);
+      if (!materialId || !storageLocationId) {
+        return openingStockErrorResponse(
+          req,
+          ctx,
+          "OPENING_STOCK_BATCH_UPDATE_INVALID",
+          400,
+          "material_id and storage_location_id are required for every saved line.",
+        );
+      }
+
       const materialType = materialTypesById.get(materialId) ?? await fetchMaterialType(materialId);
       ensureDocumentMaterialScope(document, materialType);
       const enteredUomCode = patch.entered_uom_code !== undefined
         ? toTrimmedString(patch.entered_uom_code) || null
-        : toTrimmedString(existing.entered_uom_code) || null;
+        : toTrimmedString(existing?.entered_uom_code) || null;
       const enteredQuantity = patch.entered_quantity !== undefined
         ? parseNonNegativeNumber(patch.entered_quantity)
-        : parseNonNegativeNumber(existing.entered_quantity);
+        : parseNonNegativeNumber(existing?.entered_quantity);
       const batchNumber = materialType === "SFG" || materialType === "FG"
         ? (
           patch.batch_number !== undefined
             ? toTrimmedString(patch.batch_number) || null
-            : toTrimmedString(existing.batch_number) || null
+            : toTrimmedString(existing?.batch_number) || null
         )
         : null;
 
-      updates.push({
-        id: lineId,
+      const normalizedLine = {
         document_id: documentId,
-        line_number: existing.line_number,
         material_id: materialId,
-        storage_location_id: toTrimmedString(patch.storage_location_id || existing.storage_location_id),
+        storage_location_id: storageLocationId,
         stock_type: stockType,
         quantity,
         rate_per_unit: rate,
@@ -948,22 +977,55 @@ export async function batchUpdateOpeningStockLinesHandler(
         batch_number: batchNumber,
         is_zero_stock: isZeroStock,
         movement_type_code: deriveMovementType(stockType),
-      });
+      };
+
+      if (lineId && existing) {
+        updates.push({
+          id: lineId,
+          line_number: existing.line_number,
+          ...normalizedLine,
+        });
+      } else {
+        nextLineNumber += 1;
+        inserts.push({
+          line_number: nextLineNumber,
+          ...normalizedLine,
+        });
+      }
     }
 
-    const { error: updateError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("opening_stock_line")
-      .upsert(updates, { onConflict: "id" });
+    if (updates.length > 0) {
+      const { error: updateError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("opening_stock_line")
+        .upsert(updates, { onConflict: "id" });
 
-    if (updateError) {
-      return openingStockErrorResponse(
-        req,
-        ctx,
-        "OPENING_STOCK_LINE_BATCH_UPDATE_FAILED",
-        500,
-        "Unable to save opening stock line corrections.",
-      );
+      if (updateError) {
+        return openingStockErrorResponse(
+          req,
+          ctx,
+          "OPENING_STOCK_LINE_BATCH_UPDATE_FAILED",
+          500,
+          "Unable to save opening stock line corrections.",
+        );
+      }
+    }
+
+    if (inserts.length > 0) {
+      const { error: insertError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("opening_stock_line")
+        .insert(inserts);
+
+      if (insertError) {
+        return openingStockErrorResponse(
+          req,
+          ctx,
+          "OPENING_STOCK_LINE_CREATE_FAILED",
+          500,
+          "Unable to add new opening stock lines during correction.",
+        );
+      }
     }
 
     return okResponse(await hydrateOpeningStockDocument(documentId), ctx.request_id, req);
