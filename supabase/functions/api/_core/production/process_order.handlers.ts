@@ -580,6 +580,7 @@ async function applyFinalOrVerifyLineUpdates(params: {
       const plannedQty = Number(existingLine.planned_qty ?? 0);
       const approval = computeApprovalValues(req, ctx, plannedQty, actualQty, bodyLine);
       if (approval instanceof Response) return { response: approval };
+      const nextRequiredQty = actualQty;
 
       let nextActualMaterialId = toTrimmedString(bodyLine.actual_material_id) || null;
       const currentActualMaterialId = toTrimmedString(existingLine.actual_material_id) || null;
@@ -650,7 +651,7 @@ async function applyFinalOrVerifyLineUpdates(params: {
               company_id: po.company_id,
               material_id: swapMaterialId,
               storage_location_id: nextStorageLocationId ?? reservation.storage_location_id ?? currentStorageLocationId ?? null,
-              required_qty: reservation.required_qty,
+              required_qty: nextRequiredQty,
               uom_code: reservation.uom_code ?? existingLine.uom_code ?? "KG",
               required_by_date: plannedStartDate,
               issued_qty: 0,
@@ -668,6 +669,35 @@ async function applyFinalOrVerifyLineUpdates(params: {
           }
           existingReservationMap.set(String(existingLine.id), (insertedReservation ?? {}) as JsonRecord);
         }
+      }
+
+      const activeReservation = existingReservationMap.get(String(existingLine.id)) ?? null;
+      if (activeReservation && RESERVATION_OPEN_STATUSES.includes(String(activeReservation.status ?? ""))) {
+        const issuedQty = Number(activeReservation.issued_qty ?? 0);
+        const reservationStatus = issuedQty <= EPSILON
+          ? "OPEN"
+          : issuedQty >= nextRequiredQty - EPSILON
+          ? "FULLY_ISSUED"
+          : "PARTIAL";
+        const { error: reservationQtyErr } = await serviceRoleClient
+          .schema("erp_production")
+          .from("reservation_document")
+          .update({
+            required_qty: nextRequiredQty,
+            status: reservationStatus,
+            last_updated_by: ctx.auth_user_id,
+            last_updated_at: now,
+          })
+          .eq("id", activeReservation.id as string);
+        if (reservationQtyErr) {
+          console.error("[process_order.applyFinalOrVerifyLineUpdates] reservation qty update failed:", JSON.stringify(reservationQtyErr));
+          throw new Error("PROD_PO_LINE_UPDATE_FAILED");
+        }
+        existingReservationMap.set(String(existingLine.id), {
+          ...activeReservation,
+          required_qty: nextRequiredQty,
+          status: reservationStatus,
+        });
       }
 
       const { error: lineUpdateErr } = await serviceRoleClient
@@ -740,7 +770,7 @@ async function applyFinalOrVerifyLineUpdates(params: {
         company_id: po.company_id,
         material_id: materialId,
         storage_location_id: toTrimmedString(insertedLineRecord.issue_sloc_id) || null,
-        required_qty: 0,
+        required_qty: actualQty,
         uom_code: toTrimmedString(insertedLineRecord.uom_code) || "KG",
         required_by_date: plannedStartDate,
         issued_qty: 0,
@@ -891,12 +921,100 @@ async function computeAvailabilityRows(
   });
 }
 
+async function computePhysicalAvailabilityRows(
+  companyId: string,
+  needed: Map<string, AvailabilityNeed>,
+): Promise<AvailabilityRow[]> {
+  const needs = Array.from(needed.values()).filter((entry) => entry.materialId && entry.storageLocationId && entry.qty > 0);
+  if (needs.length === 0) return [];
+
+  const materialIds = [...new Set(needs.map((entry) => entry.materialId))];
+  const locationIds = [...new Set(needs.map((entry) => entry.storageLocationId))];
+
+  const { data: ledgerRows, error: ledgerErr } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_ledger")
+    .select("material_id, storage_location_id, direction, quantity")
+    .eq("company_id", companyId)
+    .eq("stock_type_code", "UNRESTRICTED")
+    .in("material_id", materialIds)
+    .in("storage_location_id", locationIds);
+  if (ledgerErr) {
+    console.error("[process_order.computePhysicalAvailabilityRows] ledger query failed:", JSON.stringify(ledgerErr));
+    throw new Error("PROD_PO_STOCK_CHECK_FAILED");
+  }
+
+  const available = new Map<string, number>();
+  for (const row of (ledgerRows ?? []) as JsonRecord[]) {
+    const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
+    const qty = Number(row.quantity ?? 0);
+    available.set(key, (available.get(key) ?? 0) + (String(row.direction) === "IN" ? qty : -qty));
+  }
+
+  const { data: reservationRows, error: reservationErr } = await serviceRoleClient
+    .schema("erp_production")
+    .from("reservation_document")
+    .select("material_id, storage_location_id, balance_qty")
+    .eq("company_id", companyId)
+    .in("material_id", materialIds)
+    .in("storage_location_id", locationIds)
+    .in("status", RESERVATION_OPEN_STATUSES);
+  if (reservationErr) {
+    console.error("[process_order.computePhysicalAvailabilityRows] reservation query failed:", JSON.stringify(reservationErr));
+    throw new Error("PROD_PO_STOCK_CHECK_FAILED");
+  }
+
+  for (const row of (reservationRows ?? []) as JsonRecord[]) {
+    const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
+    const qty = Number(row.balance_qty ?? 0);
+    available.set(key, (available.get(key) ?? 0) - qty);
+  }
+
+  return Array.from(needed.entries()).map(([, entry]) => {
+    const key = buildAvailabilityKey(entry.materialId, entry.storageLocationId);
+    const availableQty = Math.max(0, available.get(key) ?? 0);
+    return {
+      material_id: entry.materialId,
+      storage_location_id: entry.storageLocationId,
+      needed_qty: entry.qty,
+      available_qty: availableQty,
+      short: availableQty < entry.qty - EPSILON,
+    };
+  });
+}
+
 async function checkStockAvailability(
   companyId: string,
   needed: Map<string, AvailabilityNeed>,
 ): Promise<AvailabilityRow[]> {
   const rows = await computeAvailabilityRows(companyId, needed);
   return rows.filter((row) => row.short);
+}
+
+function buildLineAvailabilityNeeds(lines: JsonRecord[]): Map<string, AvailabilityNeed> {
+  const needed = new Map<string, AvailabilityNeed>();
+  for (const line of lines) {
+    const qty = Number(line.actual_qty ?? line.planned_qty ?? 0);
+    if (qty <= 0) continue;
+    const storageLocationId = toTrimmedString(line.issue_sloc_id);
+    if (!storageLocationId) continue;
+    const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
+    if (!materialId) continue;
+    const key = buildAvailabilityKey(materialId, storageLocationId);
+    const current = needed.get(key);
+    needed.set(key, {
+      materialId,
+      storageLocationId,
+      qty: (current?.qty ?? 0) + qty,
+    });
+  }
+  return needed;
+}
+
+function formatShortageDetail(shortages: AvailabilityRow[]): string {
+  return shortages
+    .map((row) => `${row.material_id.slice(0, 8)} @ ${row.storage_location_id.slice(0, 8)} (need ${row.needed_qty.toFixed(3)}, have ${row.available_qty.toFixed(3)})`)
+    .join("; ");
 }
 
 export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -2366,45 +2484,66 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
     if (applyResult.response) return applyResult.response;
 
     const allLines = applyResult.lines ?? [];
-    const intNeeded = new Map<string, number>();
-    for (const line of allLines) {
-      const material = line.material as JsonRecord | null;
-      if (material?.material_type === "INT") {
-        const materialId = String(line.material_id);
-        const qty = Number(line.actual_qty ?? line.planned_qty ?? 0);
-        intNeeded.set(materialId, (intNeeded.get(materialId) ?? 0) + qty);
-      }
-    }
+    const stockNeeds = buildLineAvailabilityNeeds(allLines);
+    const physicalRows = await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds);
+    const shortRows = physicalRows.filter((row) => row.short);
 
-    if (intNeeded.size > 0) {
-      const { data: verifiedIntPOs, error: intErr } = await serviceRoleClient
+    if (shortRows.length > 0) {
+      const materialTypeById = new Map<string, string>();
+      for (const line of allLines) {
+        const effectiveMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
+        const effectiveMaterial = (toTrimmedString(line.actual_material_id)
+          ? line.actual_material
+          : line.material) as JsonRecord | null;
+        if (effectiveMaterialId && effectiveMaterial?.material_type) {
+          materialTypeById.set(effectiveMaterialId, String(effectiveMaterial.material_type));
+        }
+      }
+
+      const nonIntShortages = shortRows.filter((row) => materialTypeById.get(row.material_id) !== "INT");
+      if (nonIntShortages.length > 0) {
+        return poErr(
+          req,
+          ctx,
+          "PROD_PO_INSUFFICIENT_STOCK",
+          422,
+          `Insufficient UNRESTRICTED stock for ${nonIntShortages.length} material(s): ${formatShortageDetail(nonIntShortages)}`,
+        );
+      }
+
+      const intNeeded = new Map<string, number>();
+      for (const row of shortRows) {
+        intNeeded.set(row.material_id, (intNeeded.get(row.material_id) ?? 0) + (row.needed_qty - row.available_qty));
+      }
+
+      const { data: declaredIntPOs, error: intErr } = await serviceRoleClient
         .schema("erp_production")
         .from("process_order")
         .select("material_id, actual_qty")
         .eq("company_id", String(po.company_id))
         .eq("po_type", "INT")
-        .eq("status", "VERIFIED")
+        .in("status", ["FINAL", "VERIFIED"])
         .in("material_id", Array.from(intNeeded.keys()));
       if (intErr) {
-        console.error("[process_order.finalize] verified-int query failed:", JSON.stringify(intErr));
+        console.error("[process_order.finalize] declared-int query failed:", JSON.stringify(intErr));
         throw new Error("PROD_PO_FINALIZE_FAILED");
       }
 
-      const verifiedQty = new Map<string, number>();
-      for (const intPo of (verifiedIntPOs ?? []) as JsonRecord[]) {
+      const declaredQty = new Map<string, number>();
+      for (const intPo of (declaredIntPOs ?? []) as JsonRecord[]) {
         const materialId = String(intPo.material_id);
-        verifiedQty.set(materialId, (verifiedQty.get(materialId) ?? 0) + Number(intPo.actual_qty ?? 0));
+        declaredQty.set(materialId, (declaredQty.get(materialId) ?? 0) + Number(intPo.actual_qty ?? 0));
       }
 
       const unmet: string[] = [];
       for (const [materialId, neededQty] of intNeeded.entries()) {
-        if ((verifiedQty.get(materialId) ?? 0) < neededQty - EPSILON) {
+        if ((declaredQty.get(materialId) ?? 0) < neededQty - EPSILON) {
           unmet.push(materialId.slice(0, 8));
         }
       }
 
       if (unmet.length > 0) {
-        return poErr(req, ctx, "PROD_PO_INT_NOT_VERIFIED", 422, `INT material(s) not yet VERIFIED: ${unmet.join(", ")}. Complete INT Process Orders first.`);
+        return poErr(req, ctx, "PROD_PO_INT_NOT_VERIFIED", 422, `INT material(s) short in stock and output not yet declared: ${unmet.join(", ")}. Finalize or verify the INT Process Orders first.`);
       }
     }
 
@@ -2458,6 +2597,18 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     if (applyResult.response) return applyResult.response;
 
     const lines = applyResult.lines ?? await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
+    const stockNeeds = buildLineAvailabilityNeeds(lines);
+    const shortRows = (await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds)).filter((row) => row.short);
+    if (shortRows.length > 0) {
+      return poErr(
+        req,
+        ctx,
+        "PROD_PO_INSUFFICIENT_STOCK",
+        422,
+        `Insufficient UNRESTRICTED stock for ${shortRows.length} material(s): ${formatShortageDetail(shortRows)}`,
+      );
+    }
+
     const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
     if (!shopfloorSlocId) {
       return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
