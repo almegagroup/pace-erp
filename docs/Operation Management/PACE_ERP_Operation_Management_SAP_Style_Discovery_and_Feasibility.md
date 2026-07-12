@@ -8784,6 +8784,33 @@ Batch: BM1966 | SKU: 6763PH94000 | Qty: 9,000 KG (1 TNK) | Cost: Y/KG
 
 ---
 
+#### Batch Number Persistence Mechanism (LOCKED — 2026-07-12)
+
+**Why this exists:** everything above in §83.7 describes batch numbers conceptually, but a direct DB check found the stock posting engine has no way to actually carry one. `erp_inventory.stock_ledger.batch_id` (UUID) exists but has no FK, no writer anywhere in the codebase, and 0 of 21 live rows populated — dead weight. `erp_inventory.post_stock_movement()` (both overloads) has no batch parameter at all in its signature. This section locks the fix, scoped to **MTO/HPS only** for now (MTS/INT/MTEST batch-persistence deferred to their own future session, matching the MTS-not-yet-batch-manageable note elsewhere in this doc).
+
+**Schema:**
+- `erp_inventory.stock_ledger`: drop the dead `batch_id` (UUID) column, add `batch_number TEXT NULL` — nullable, since RM/PM/INT movements never carry one (RM/PM use GRN-lot tracking, a separate mechanism; INT has no batch per §83.5).
+- `erp_production.packing_order`: add `batch_number TEXT NULL`. This is a denormalized copy of the linked Process PO's `batch_number` — **populated only at the moment the Packing PO's own Final step actually issues SFG (P261) from that batch**, not at Packing PO creation time and not eagerly propagated when the Process PO's Start Batch fires. (Admix/HPS create the Packing PO at Standard, before any batch exists yet — the column stays NULL until Final actually consumes a batch.)
+
+**Function:** `post_stock_movement()` (both overloads — with and without `p_plant_id`) gets one new parameter, appended last, with a default: `p_batch_number TEXT DEFAULT NULL`. This is fully backward-compatible by construction — every existing caller (GRN, RTV, STO, Sales Order, Opening Stock, PI, and every other call site not listed below) needs zero code changes; omitting the argument resolves to `NULL` exactly as today. Only the specific call sites below need to start passing it explicitly. Matches the same non-breaking extension pattern already used for `item_number` in Section 105.
+
+**Who passes `p_batch_number` (MTO/HPS scope only):**
+
+| Posting call site | Movement | Batch source |
+|---|---|---|
+| Process PO Verify | P101 (SFG receipt) | `process_order.batch_number` (system-generated) |
+| Process PO CORS | P262, P322, P102 | same batch being reversed |
+| Packing PO Final | P261 (SFG issue) + P101 (FG receipt) | `process_order.batch_number`, carried via the link — this is also the moment `packing_order.batch_number` itself gets set |
+| Packing PO reversal | P262, P102 | same batch |
+| Opening Stock (P561/P563/P565) | — | **manual entry** when the material is SFG/FG (HPS/MTO) — no live Process PO exists at go-live to derive one from; RM/PM opening stock is unaffected, no batch |
+| PID surplus/deficit (P703/P704) | — | **not manual** — when counting a location that already has recorded SFG/FG stock, the existing `batch_number` already on `stock_ledger` is what's being counted/adjusted, shown to the counter rather than typed fresh. Manual entry only applies to the edge case of an unexpected/unrecorded batch found as a surplus. |
+
+**Explicitly not in scope:** RM/PM issue (P261 on the input side), INT (P101), and anything under MTS — none of these carry `batch_number`, no change to their call sites.
+
+**Batch-number origin is untracked and irrelevant downstream:** whether a `stock_ledger.batch_number` value came from manual Opening Stock entry or system-generated Production, there is no origin flag anywhere — every batch is treated identically by every later process (PID, dispatch, Reco). This is a deliberate simplicity choice, not an oversight.
+
+---
+
 ### 83.8 — FIFO and Expiry Tracking
 
 | Item | Decision |
