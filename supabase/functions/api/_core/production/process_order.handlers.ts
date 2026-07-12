@@ -310,7 +310,7 @@ async function fetchReservationRowsBySourceLineIds(sourceLineIds: string[]): Pro
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("reservation_document")
-    .select("id, source_line_id, material_id, required_qty, issued_qty, status, storage_location_id, uom_code")
+    .select("id, source_line_id, material_id, required_qty, issued_qty, balance_qty, status, storage_location_id, uom_code")
     .in("source_line_id", ids)
     .in("status", RESERVATION_ACTIVE_STATUSES);
   if (error) {
@@ -439,6 +439,43 @@ function getIssueStorageLocationId(line: JsonRecord): string | null {
 
 function buildAvailabilityKey(materialId: string, storageLocationId: string): string {
   return `${materialId}::${storageLocationId}`;
+}
+
+function getReservationBalanceQty(reservation: JsonRecord | null): number {
+  if (!reservation) return 0;
+  const explicitBalance = parseNonNegativeNumber(reservation.balance_qty);
+  if (explicitBalance !== null) return explicitBalance;
+  const requiredQty = parseNonNegativeNumber(reservation.required_qty) ?? 0;
+  const issuedQty = parseNonNegativeNumber(reservation.issued_qty) ?? 0;
+  return Math.max(0, requiredQty - issuedQty);
+}
+
+function buildReservationCreditMap(reservationRows: Iterable<JsonRecord>): Map<string, number> {
+  const creditMap = new Map<string, number>();
+  for (const reservation of reservationRows) {
+    const materialId = toTrimmedString(reservation.material_id);
+    const storageLocationId = toTrimmedString(reservation.storage_location_id);
+    const balanceQty = getReservationBalanceQty(reservation);
+    if (!materialId || !storageLocationId || balanceQty <= 0) continue;
+    const key = buildAvailabilityKey(materialId, storageLocationId);
+    creditMap.set(key, (creditMap.get(key) ?? 0) + balanceQty);
+  }
+  return creditMap;
+}
+
+function applyReservationCreditsToAvailabilityRows(
+  rows: AvailabilityRow[],
+  reservationCreditMap: Map<string, number>,
+): AvailabilityRow[] {
+  return rows.map((row) => {
+    const key = buildAvailabilityKey(row.material_id, row.storage_location_id);
+    const creditedAvailableQty = row.available_qty + (reservationCreditMap.get(key) ?? 0);
+    return {
+      ...row,
+      available_qty: creditedAvailableQty,
+      short: creditedAvailableQty < row.needed_qty - EPSILON,
+    };
+  });
 }
 
 interface LineOverride {
@@ -886,10 +923,14 @@ export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: 
 
     const needed = new Map<string, AvailabilityNeed>();
 
+    let reservationCreditMap = new Map<string, number>();
+
     if (processOrderId) {
       const po = await fetchProcessOrder(processOrderId);
       if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Process order not found");
       const lines = await fetchOrderLines(processOrderId, toTrimmedString(po.stroke_master_id) || null);
+      const reservationMap = await fetchReservationRowsBySourceLineIds(lines.map((line) => String(line.id)));
+      reservationCreditMap = buildReservationCreditMap(reservationMap.values());
       const lineOverrides = new Map<string, JsonRecord>();
       const additionalOverrides: JsonRecord[] = [];
 
@@ -970,7 +1011,10 @@ export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: 
       }
     }
 
-    const rows = await computeAvailabilityRows(companyId, needed);
+    const rows = applyReservationCreditsToAvailabilityRows(
+      await computeAvailabilityRows(companyId, needed),
+      reservationCreditMap,
+    );
     return okResponse({ data: rows }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PO_STOCK_CHECK_FAILED";
@@ -983,6 +1027,7 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
     assertProdReadRole(ctx);
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const poNumber = toTrimmedString(url.searchParams.get("po_number") ?? "");
     const status = toUpperTrimmedString(url.searchParams.get("status") ?? "");
     const poType = toUpperTrimmedString(url.searchParams.get("po_type") ?? "");
     const poTypeIn = toTrimmedString(url.searchParams.get("po_type_in") ?? "");
@@ -1005,6 +1050,7 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
       .order("created_at", { ascending: false });
 
     if (companyId) query = query.eq("company_id", companyId);
+    if (poNumber) query = query.eq("po_number", poNumber);
     if (status) query = query.eq("status", status);
     if (poTypeList.length > 0) query = query.in("po_type", poTypeList);
     else if (poType) query = query.eq("po_type", poType);
@@ -1823,15 +1869,24 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
 
     const po = await fetchProcessOrder(id);
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
-    if (!["QA_APPROVED", "BATCH_STARTED"].includes(String(po.status))) {
-      return poErr(req, ctx, "PROD_PO_EDIT_STATUS_INVALID", 422, "Edit allowed only at QA_APPROVED or BATCH_STARTED");
+    if (!["MTO", "HPS"].includes(String(po.po_type ?? "").toUpperCase())) {
+      return poErr(req, ctx, "PROD_PO_EDIT_TYPE_INVALID", 422, "PR10 edit is available only for MTO or HPS Process POs");
+    }
+    if (String(po.status ?? "").toUpperCase() !== "STANDARD") {
+      return poErr(req, ctx, "PROD_PO_EDIT_STATUS_INVALID", 422, "PR10 edit is available only at STANDARD status");
     }
 
     const body = await parseBody(req);
     const machineId = Object.prototype.hasOwnProperty.call(body, "machine_id")
       ? (toTrimmedString(body.machine_id) || null)
       : undefined;
+    const nextPlannedQty = Object.prototype.hasOwnProperty.call(body, "planned_qty") || Object.prototype.hasOwnProperty.call(body, "planned_qty_kg")
+      ? parsePositiveNumber(body.planned_qty ?? body.planned_qty_kg)
+      : null;
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    const existingLines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
+    const existingReservationMap = await fetchReservationRowsBySourceLineIds(existingLines.map((line) => String(line.id)));
+    const strokeAlternates = await fetchStrokeAlternates(toTrimmedString(po.stroke_master_id) || null);
     const now = new Date().toISOString();
 
     if (machineId !== undefined && machineId) {
@@ -1841,59 +1896,223 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
       }
     }
 
-    if (machineId !== undefined) {
+    if ((Object.prototype.hasOwnProperty.call(body, "planned_qty") || Object.prototype.hasOwnProperty.call(body, "planned_qty_kg")) && nextPlannedQty === null) {
+      return poErr(req, ctx, "PROD_PO_INVALID", 400, "planned_qty must be a positive number");
+    }
+
+    const linePatchMap = new Map<string, JsonRecord>();
+    for (const line of lines) {
+      const lineId = toTrimmedString(line.id);
+      if (lineId) linePatchMap.set(lineId, line);
+    }
+
+    const targetPlannedQty = nextPlannedQty ?? Number(po.planned_qty ?? 0);
+    const finalLineStates: Array<{
+      line: JsonRecord;
+      nextActualMaterialId: string | null;
+      nextStorageLocationId: string | null;
+      nextPlannedQty: number;
+    }> = [];
+    for (const line of existingLines) {
+      const bodyLine = linePatchMap.get(String(line.id)) ?? null;
+      const currentActualMaterialId = toTrimmedString(line.actual_material_id) || null;
+      let nextActualMaterialId = Object.prototype.hasOwnProperty.call(bodyLine ?? {}, "actual_material_id")
+        ? (toTrimmedString(bodyLine?.actual_material_id) || null)
+        : currentActualMaterialId;
+      const registeredAlternateId = toTrimmedString(
+        strokeAlternates.get(String(line.material_id))?.alternate_material_id,
+      ) || null;
+      if (!nextActualMaterialId || nextActualMaterialId === String(line.material_id)) {
+        nextActualMaterialId = null;
+      }
+      if (nextActualMaterialId && nextActualMaterialId !== registeredAlternateId) {
+        return poErr(req, ctx, "PROD_PO_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id must match the registered alternate");
+      }
+
+      const nextStorageLocationId = Object.prototype.hasOwnProperty.call(bodyLine ?? {}, "storage_location_id")
+        ? (toTrimmedString(bodyLine?.storage_location_id) || null)
+        : (toTrimmedString(line.issue_sloc_id) || null);
+      const recalculatedPlannedQty = Number(line.dosage_pct ?? 0) > 0
+        ? Number((((Number(line.dosage_pct ?? 0) / 100) * targetPlannedQty)).toFixed(4))
+        : Number(line.planned_qty ?? 0);
+
+      finalLineStates.push({
+        line,
+        nextActualMaterialId,
+        nextStorageLocationId,
+        nextPlannedQty: recalculatedPlannedQty,
+      });
+    }
+
+    const needed = new Map<string, AvailabilityNeed>();
+    for (const lineState of finalLineStates) {
+      const effectiveMaterialId = lineState.nextActualMaterialId || String(lineState.line.material_id);
+      const storageLocationId = lineState.nextStorageLocationId;
+      if (!effectiveMaterialId || !storageLocationId || lineState.nextPlannedQty <= 0) continue;
+      const key = buildAvailabilityKey(effectiveMaterialId, storageLocationId);
+      const current = needed.get(key);
+      needed.set(key, {
+        materialId: effectiveMaterialId,
+        storageLocationId,
+        qty: (current?.qty ?? 0) + lineState.nextPlannedQty,
+      });
+    }
+
+    const short = applyReservationCreditsToAvailabilityRows(
+      await computeAvailabilityRows(String(po.company_id), needed),
+      buildReservationCreditMap(existingReservationMap.values()),
+    ).filter((row) => row.short);
+    if (short.length > 0) {
+      const detail = short
+        .map((row) => `${row.material_id.slice(0, 8)} @ ${row.storage_location_id.slice(0, 8)} (need ${row.needed_qty.toFixed(3)}, have ${row.available_qty.toFixed(3)})`)
+        .join("; ");
+      return poErr(req, ctx, "PROD_PO_INSUFFICIENT_STOCK", 422, `Insufficient UNRESTRICTED stock for ${short.length} material(s): ${detail}`);
+    }
+
+    const poPatch: Record<string, unknown> = {
+      last_updated_at: now,
+      last_updated_by: ctx.auth_user_id,
+    };
+    if (machineId !== undefined) poPatch.machine_id = machineId;
+    if (nextPlannedQty !== null && !qtysEffectivelyMatch(Number(po.planned_qty ?? 0), nextPlannedQty)) {
+      poPatch.planned_qty = nextPlannedQty;
+    }
+
+    const shouldUpdatePo = Object.keys(poPatch).length > 2 || machineId !== undefined;
+    if (shouldUpdatePo) {
       const { error: machineErr } = await serviceRoleClient
         .schema("erp_production")
         .from("process_order")
-        .update({
-          machine_id: machineId,
-          last_updated_at: now,
-          last_updated_by: ctx.auth_user_id,
-        })
+        .update(poPatch)
         .eq("id", id);
       if (machineErr) {
-        console.error("[process_order.editProcessOrder] machine update failed:", JSON.stringify(machineErr));
+        console.error("[process_order.editProcessOrder] process-order update failed:", JSON.stringify(machineErr));
         throw new Error("PROD_PO_LINE_UPDATE_FAILED");
       }
     }
 
-    await Promise.all(lines.map(async (line) => {
-      const lineId = toTrimmedString(line.id);
-      const plannedQty = parsePositiveNumber(line.planned_qty);
-      if (!lineId || plannedQty === null) return;
+    for (const lineState of finalLineStates) {
+      const line = lineState.line;
+      const reservation = existingReservationMap.get(String(line.id)) ?? null;
+      const currentStorageLocationId = toTrimmedString(line.issue_sloc_id) || null;
+      const currentActualMaterialId = toTrimmedString(line.actual_material_id) || null;
+      const nextActualMaterialId = lineState.nextActualMaterialId;
+      const nextStorageLocationId = lineState.nextStorageLocationId;
 
-      const [{ error: lineErr }, { error: reservationErr }] = await Promise.all([
-        serviceRoleClient
-          .schema("erp_production")
-          .from("process_order_line")
-          .update({ planned_qty: plannedQty })
-          .eq("id", lineId)
-          .eq("process_order_id", id),
-        serviceRoleClient
+      if (nextStorageLocationId && nextStorageLocationId !== currentStorageLocationId) {
+        if (reservation && RESERVATION_OPEN_STATUSES.includes(String(reservation.status ?? ""))) {
+          const { error: reservationLocationErr } = await serviceRoleClient
+            .schema("erp_production")
+            .from("reservation_document")
+            .update({
+              storage_location_id: nextStorageLocationId,
+              last_updated_by: ctx.auth_user_id,
+              last_updated_at: now,
+            })
+            .eq("id", reservation.id as string);
+          if (reservationLocationErr) {
+            console.error("[process_order.editProcessOrder] reservation location update failed:", JSON.stringify(reservationLocationErr));
+            throw new Error("PROD_PO_LINE_UPDATE_FAILED");
+          }
+          existingReservationMap.set(String(line.id), {
+            ...reservation,
+            storage_location_id: nextStorageLocationId,
+          });
+        }
+      }
+
+      if (nextActualMaterialId !== currentActualMaterialId) {
+        if (reservation && RESERVATION_OPEN_STATUSES.includes(String(reservation.status ?? ""))) {
+          const { error: cancelReservationErr } = await serviceRoleClient
+            .schema("erp_production")
+            .from("reservation_document")
+            .update({
+              status: "CANCELLED",
+              last_updated_by: ctx.auth_user_id,
+              last_updated_at: now,
+            })
+            .eq("id", reservation.id as string);
+          if (cancelReservationErr) {
+            console.error("[process_order.editProcessOrder] reservation cancel failed:", JSON.stringify(cancelReservationErr));
+            throw new Error("PROD_PO_LINE_UPDATE_FAILED");
+          }
+
+          const swapMaterialId = nextActualMaterialId || String(line.material_id);
+          const { data: insertedReservation, error: insertReservationErr } = await serviceRoleClient
+            .schema("erp_production")
+            .from("reservation_document")
+            .insert({
+              source_type: "PROCESS_PO",
+              source_id: id,
+              source_line_id: line.id,
+              company_id: po.company_id,
+              material_id: swapMaterialId,
+              storage_location_id: nextStorageLocationId ?? reservation.storage_location_id ?? currentStorageLocationId ?? null,
+              required_qty: lineState.nextPlannedQty,
+              uom_code: reservation.uom_code ?? line.uom_code ?? "KG",
+              required_by_date: toTrimmedString(po.planned_start_date) || null,
+              issued_qty: 0,
+              status: "OPEN",
+              created_by: ctx.auth_user_id,
+              created_at: now,
+              last_updated_by: ctx.auth_user_id,
+              last_updated_at: now,
+            })
+            .select("id, source_line_id, material_id, required_qty, issued_qty, balance_qty, status, storage_location_id, uom_code")
+            .single();
+          if (insertReservationErr) {
+            console.error("[process_order.editProcessOrder] reservation insert failed:", JSON.stringify(insertReservationErr));
+            throw new Error("PROD_PO_LINE_UPDATE_FAILED");
+          }
+          existingReservationMap.set(String(line.id), (insertedReservation ?? {}) as JsonRecord);
+        }
+      } else if (reservation && RESERVATION_ACTIVE_STATUSES.includes(String(reservation.status ?? ""))) {
+        const { error: reservationQtyErr } = await serviceRoleClient
           .schema("erp_production")
           .from("reservation_document")
           .update({
-            required_qty: plannedQty,
+            required_qty: lineState.nextPlannedQty,
             last_updated_at: now,
             last_updated_by: ctx.auth_user_id,
           })
-          .eq("source_line_id", lineId),
-      ]);
+          .eq("id", reservation.id as string);
+        if (reservationQtyErr) {
+          console.error("[process_order.editProcessOrder] reservation qty update failed:", JSON.stringify(reservationQtyErr));
+          throw new Error("PROD_PO_LINE_UPDATE_FAILED");
+        }
+      }
 
+      const { error: lineErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("process_order_line")
+        .update({
+          planned_qty: lineState.nextPlannedQty,
+          actual_material_id: nextActualMaterialId,
+          issue_sloc_id: nextStorageLocationId ?? currentStorageLocationId,
+        })
+        .eq("id", line.id as string)
+        .eq("process_order_id", id);
       if (lineErr) {
         console.error("[process_order.editProcessOrder] line update failed:", JSON.stringify(lineErr));
         throw new Error("PROD_PO_LINE_UPDATE_FAILED");
       }
-      if (reservationErr) {
-        console.error("[process_order.editProcessOrder] reservation update failed:", JSON.stringify(reservationErr));
-        throw new Error("PROD_PO_LINE_UPDATE_FAILED");
-      }
-    }));
+    }
 
     return okResponse({ id }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PO_LINE_UPDATE_FAILED";
-    return poErr(req, ctx, code, 500, "Edit failed");
+    const status = [
+      "PROD_PO_EDIT_STATUS_INVALID",
+      "PROD_PO_EDIT_TYPE_INVALID",
+      "PROD_PO_MACHINE_INVALID",
+      "PROD_PO_INSUFFICIENT_STOCK",
+      "PROD_PO_SUBSTITUTE_NOT_REGISTERED",
+    ].includes(code)
+      ? 422
+      : code === "PROD_PO_INVALID"
+      ? 400
+      : 500;
+    return poErr(req, ctx, code, status, "Edit failed");
   }
 }
 
