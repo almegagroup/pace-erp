@@ -2620,3 +2620,26 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Notes / open items:** `updatePackingOrderLinesHandler` and its frontend API wrapper are now dead code for `PackingOrderPage.jsx` after the locked rebuild removed pre-Final manual line editing; left in place and logged rather than silently deleted. `supabase db push` was not used for the new nullable migration because Dev has three remote-only Claude-applied migration versions missing locally; the equivalent DDL was applied directly to Dev for verification and the migration file is present locally for source control/prod travel.
 
 **Verification:** `frontend` build passed; file-scoped ESLint passed for all touched frontend files; backend import smoke passed for touched production handlers/routes/ACL registry. `deno check` still reports the documented shared baseline plus an older `pack_config.handlers.ts` count typing issue pulled through route imports, with no touched-file-local import/syntax failure.
+
+---
+
+## 2026-07-13 11:42 IST — Gate-27.24 Packing PO reservation engine
+
+**Scope implemented:** Backend-only Packing PO reservation engine from `CODEX-GATE27.24-PACKING-PO-RESERVATION-ENGINE-TASK-BRIEF.md`, dependent on verified Gate-27.22/27.23.
+
+**Changes:**
+- Added the already-applied Gate-27.24 batch-number migration file to source control: `supabase/migrations/20260713110000_gate27_24_reservation_batch_number.sql`.
+- Added Packing PO-local reservation status constants matching Process PO: `OPEN`, `PARTIAL`, `FULLY_ISSUED`, `CANCELLED`.
+- Added a Packing PO-local availability helper that keeps SFG and PM paths separate: SFG availability is keyed by `(material_id, storage_location_id, batch_number)` and PM availability is keyed by `(material_id, storage_location_id)`.
+- `createPackingOrderHandler()` now hard-blocks before any insert on SFG batch shortage or PM shortage, then creates `PACKING_PO` reservation rows after line insert: one SFG row with explicit `batch_number`, and one PM row per PM line with `batch_number` omitted/null.
+- `finalizePackingOrderHandler()` now releases SFG/PM reservations to `FULLY_ISSUED` after successful stock posting and line ledger update.
+- `reversePackingOrderHandler()` now cancels only open/partial Packing PO reservations before stock-reversal/status update, leaving already-issued history rows untouched.
+- `correctPackingOrderHandler()` now checks SFG positive quantity deltas against the same batch-aware availability logic before posting COR6 correction movements.
+
+**Dev DB verification:** Native Supabase MCP tools were not surfaced in the Codex session, so the approved Supabase Management API fallback was used against Dev `ytapuwiqicmvpanmzelb`. Confirmed live SQL access; confirmed `reservation_document.batch_number` exists and is nullable; confirmed `reservation_number` has a sequence default even though it is `NOT NULL`; confirmed `source_type` allows `PACKING_PO`; confirmed status constraint allows the required vocabulary; confirmed existing reservation rows are PROCESS_PO-only and batch-null; confirmed the source index is `(source_type, source_id)` and adjusted release updates to include `source_id`; confirmed stock ledger has batch-number-capable production rows for batch-specific SFG availability.
+
+**Notes / open limits:** Packing PO has no locked required-by/planned date field, so new reservation inserts leave `required_by_date` to its nullable default rather than inventing one. Live end-to-end route verification was not run because Dev currently has zero `packing_order` rows and this session had no authenticated app/API fixture; direct DB inserts were avoided because they would bypass the handler logic being verified.
+
+**Files:** `supabase/migrations/20260713110000_gate27_24_reservation_batch_number.sql`, `supabase/functions/api/_core/production/packing_order.handlers.ts`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** Backend import smoke passed for `packing_order.handlers.ts`. `deno check supabase/functions/api/_core/production/packing_order.handlers.ts` still reports only the already-documented shared typing baseline in `_pipeline/context.ts`, `_shared/canonical_access.ts`, and `_shared/serviceRoleClient.ts`, with no touched-file-local import/syntax failure.

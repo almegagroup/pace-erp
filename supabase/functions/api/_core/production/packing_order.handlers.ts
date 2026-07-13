@@ -27,8 +27,36 @@ import { generateGlobalDocNumber } from "./production.utils.ts";
 type JsonRecord = Record<string, unknown>;
 
 const VALID_PACK_PO_TYPES = new Set(["PMTO","PHPS","PMTS","PTEST"]);
+const RESERVATION_OPEN_STATUSES = ["OPEN", "PARTIAL"];
+const PACK_SHORTAGE_ERROR_CODES = new Set([
+  "PROD_PACK_SFG_BATCH_SHORTAGE",
+  "PROD_PACK_PM_SHORTAGE",
+  "PROD_PACK_SFG_BATCH_REQUIRED",
+  "PROD_PACK_RESERVATION_SLOC_REQUIRED",
+]);
+
+type PackingSfgNeed = {
+  materialId: string;
+  storageLocationId: string;
+  batchNumber: string;
+  qty: number;
+};
+
+type PackingPmNeed = {
+  materialId: string;
+  storageLocationId: string;
+  qty: number;
+};
 
 function todayIso(): string { return new Date().toISOString().slice(0, 10); }
+
+function buildAvailabilityKey(materialId: string, storageLocationId: string): string {
+  return `${materialId}::${storageLocationId}`;
+}
+
+function buildBatchAvailabilityKey(materialId: string, storageLocationId: string, batchNumber: string): string {
+  return `${materialId}::${storageLocationId}::${batchNumber}`;
+}
 
 function packErr(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
@@ -91,6 +119,151 @@ async function getStorageLocationMapByIds(ids: string[]): Promise<Map<string, Js
   if (error) throw new Error("PROD_PACK_SLOC_LOOKUP_FAILED");
   for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
   return map;
+}
+
+async function assertPackingSfgBatchAvailability(companyId: string, need: PackingSfgNeed): Promise<void> {
+  if (!need.materialId || !need.storageLocationId || need.qty <= 0) return;
+  if (!need.batchNumber) throw new Error("PROD_PACK_SFG_BATCH_REQUIRED");
+
+  const rows = await computePackingAvailability(companyId, need, []);
+  const row = rows.sfg.get(buildBatchAvailabilityKey(need.materialId, need.storageLocationId, need.batchNumber));
+  if (row && row.short > 0) throw new Error("PROD_PACK_SFG_BATCH_SHORTAGE");
+}
+
+async function assertPackingCreateAvailability(companyId: string, sfgNeed: PackingSfgNeed, pmNeeds: PackingPmNeed[]): Promise<void> {
+  if (!sfgNeed.batchNumber) throw new Error("PROD_PACK_SFG_BATCH_REQUIRED");
+  if (!sfgNeed.storageLocationId || pmNeeds.some((need) => !need.storageLocationId)) {
+    throw new Error("PROD_PACK_RESERVATION_SLOC_REQUIRED");
+  }
+
+  const rows = await computePackingAvailability(companyId, sfgNeed, pmNeeds);
+  const sfgRow = rows.sfg.get(buildBatchAvailabilityKey(sfgNeed.materialId, sfgNeed.storageLocationId, sfgNeed.batchNumber));
+  if (sfgRow && sfgRow.short > 0) throw new Error("PROD_PACK_SFG_BATCH_SHORTAGE");
+
+  for (const row of rows.pm.values()) {
+    if (row.short > 0) throw new Error("PROD_PACK_PM_SHORTAGE");
+  }
+}
+
+async function computePackingAvailability(
+  companyId: string,
+  sfgNeed: PackingSfgNeed | null,
+  pmNeeds: PackingPmNeed[],
+): Promise<{
+  sfg: Map<string, { needed_qty: number; available_qty: number; short: number }>;
+  pm: Map<string, { needed_qty: number; available_qty: number; short: number }>;
+}> {
+  const cleanPmNeeds = pmNeeds.filter((need) => need.materialId && need.storageLocationId && need.qty > 0);
+  const cleanSfgNeed = sfgNeed && sfgNeed.materialId && sfgNeed.storageLocationId && sfgNeed.batchNumber && sfgNeed.qty > 0
+    ? sfgNeed
+    : null;
+  if (!cleanSfgNeed && cleanPmNeeds.length === 0) {
+    return { sfg: new Map(), pm: new Map() };
+  }
+
+  const materialIds = [...new Set([
+    ...(cleanSfgNeed ? [cleanSfgNeed.materialId] : []),
+    ...cleanPmNeeds.map((need) => need.materialId),
+  ])];
+  const locationIds = [...new Set([
+    ...(cleanSfgNeed ? [cleanSfgNeed.storageLocationId] : []),
+    ...cleanPmNeeds.map((need) => need.storageLocationId),
+  ])];
+
+  const [ledgerResult, reservationResult] = await Promise.all([
+    serviceRoleClient
+      .schema("erp_inventory")
+      .from("stock_ledger")
+      .select("material_id, storage_location_id, batch_number, direction, quantity")
+      .eq("company_id", companyId)
+      .eq("stock_type_code", "UNRESTRICTED")
+      .in("material_id", materialIds)
+      .in("storage_location_id", locationIds),
+    serviceRoleClient
+      .schema("erp_production")
+      .from("reservation_document")
+      .select("material_id, storage_location_id, batch_number, balance_qty")
+      .eq("company_id", companyId)
+      .in("material_id", materialIds)
+      .in("storage_location_id", locationIds)
+      .in("status", RESERVATION_OPEN_STATUSES),
+  ]);
+  if (ledgerResult.error) {
+    console.error("[packing_order.computePackingAvailability] ledger query failed:", JSON.stringify(ledgerResult.error));
+    throw new Error("PROD_PACK_STOCK_CHECK_FAILED");
+  }
+  if (reservationResult.error) {
+    console.error("[packing_order.computePackingAvailability] reservation query failed:", JSON.stringify(reservationResult.error));
+    throw new Error("PROD_PACK_STOCK_CHECK_FAILED");
+  }
+
+  const sfgAvailable = new Map<string, number>();
+  const pmAvailable = new Map<string, number>();
+  const sfgKey = cleanSfgNeed
+    ? buildBatchAvailabilityKey(cleanSfgNeed.materialId, cleanSfgNeed.storageLocationId, cleanSfgNeed.batchNumber)
+    : "";
+
+  for (const row of (ledgerResult.data ?? []) as JsonRecord[]) {
+    const qty = Number(row.quantity ?? 0);
+    const signedQty = String(row.direction) === "IN" ? qty : -qty;
+    const genericKey = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
+    pmAvailable.set(genericKey, (pmAvailable.get(genericKey) ?? 0) + signedQty);
+
+    if (cleanSfgNeed) {
+      const rowBatch = toTrimmedString(row.batch_number);
+      const rowSfgKey = buildBatchAvailabilityKey(String(row.material_id), String(row.storage_location_id), rowBatch);
+      if (rowSfgKey === sfgKey) {
+        sfgAvailable.set(rowSfgKey, (sfgAvailable.get(rowSfgKey) ?? 0) + signedQty);
+      }
+    }
+  }
+
+  for (const row of (reservationResult.data ?? []) as JsonRecord[]) {
+    const qty = Number(row.balance_qty ?? 0);
+    const genericKey = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
+    pmAvailable.set(genericKey, (pmAvailable.get(genericKey) ?? 0) - qty);
+
+    if (cleanSfgNeed) {
+      const rowBatch = toTrimmedString(row.batch_number);
+      const rowSfgKey = buildBatchAvailabilityKey(String(row.material_id), String(row.storage_location_id), rowBatch);
+      if (rowSfgKey === sfgKey) {
+        sfgAvailable.set(rowSfgKey, (sfgAvailable.get(rowSfgKey) ?? 0) - qty);
+      }
+    }
+  }
+
+  const sfgRows = new Map<string, { needed_qty: number; available_qty: number; short: number }>();
+  if (cleanSfgNeed) {
+    const availableQty = sfgAvailable.get(sfgKey) ?? 0;
+    sfgRows.set(sfgKey, {
+      needed_qty: cleanSfgNeed.qty,
+      available_qty: availableQty,
+      short: Math.max(0, cleanSfgNeed.qty - availableQty),
+    });
+  }
+
+  const pmTotals = new Map<string, PackingPmNeed>();
+  for (const need of cleanPmNeeds) {
+    const key = buildAvailabilityKey(need.materialId, need.storageLocationId);
+    const existing = pmTotals.get(key);
+    pmTotals.set(key, {
+      materialId: need.materialId,
+      storageLocationId: need.storageLocationId,
+      qty: (existing?.qty ?? 0) + need.qty,
+    });
+  }
+
+  const pmRows = new Map<string, { needed_qty: number; available_qty: number; short: number }>();
+  for (const [key, need] of pmTotals.entries()) {
+    const availableQty = pmAvailable.get(key) ?? 0;
+    pmRows.set(key, {
+      needed_qty: need.qty,
+      available_qty: availableQty,
+      short: Math.max(0, need.qty - availableQty),
+    });
+  }
+
+  return { sfg: sfgRows, pm: pmRows };
 }
 
 async function postStockMovement(params: {
@@ -405,6 +578,20 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       .maybeSingle();
     const bomRequired = (packCodeRow as JsonRecord | null)?.bom_required !== false;
 
+    const batchNumber = toTrimmedString((procOrder as JsonRecord).batch_number);
+    const sfgTotalQty = bomRequired ? (Number(sfgBomLine.qty ?? 0) * (numPacks ?? 1)) : plannedQtyKg;
+    const pmReservationNeeds = pmBomLines.map((line) => ({
+      materialId: String(line.material_id ?? ""),
+      storageLocationId: toTrimmedString(line.storage_location_id),
+      qty: bomRequired ? (Number(line.qty ?? 0) * (numPacks ?? 1)) : 0,
+    }));
+    await assertPackingCreateAvailability(companyId, {
+      materialId: String(sfgBomLine.material_id ?? ""),
+      storageLocationId: toTrimmedString(sfgBomLine.storage_location_id),
+      batchNumber,
+      qty: sfgTotalQty,
+    }, pmReservationNeeds);
+
     const poNumber = await generateGlobalDocNumber("PACK_PO");
     const now = new Date().toISOString();
 
@@ -433,7 +620,6 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     if (insertErr) throw new Error("PROD_PACK_CREATE_FAILED");
     const packPoId = (packPo as JsonRecord).id as string;
 
-    const batchNumber = (procOrder as JsonRecord).batch_number as string | null;
     const lineRows = [
       {
         packing_order_id: packPoId,
@@ -441,7 +627,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         material_id: sfgBomLine.material_id,
         batch_number: batchNumber,
         qty_per_pack: bomRequired ? parsePositiveNumber(sfgBomLine.qty) : fillQtyPerPack,
-        total_qty: bomRequired ? (Number(sfgBomLine.qty ?? 0) * (numPacks ?? 1)) : plannedQtyKg,
+        total_qty: sfgTotalQty,
         actual_qty: null,
         issue_sloc_id: sfgBomLine.storage_location_id ?? null,
         display_order: 0,
@@ -469,13 +655,73 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         display_order: 10 + idx,
       })),
     ];
-    const { error: lineErr } = await serviceRoleClient.schema("erp_production").from("packing_order_line").insert(lineRows);
+    const { data: insertedLines, error: lineErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("packing_order_line")
+      .insert(lineRows)
+      .select("id, line_type, material_id, batch_number, total_qty, issue_sloc_id, display_order");
     if (lineErr) throw new Error("PROD_PACK_LINES_CREATE_FAILED");
+
+    const insertedLineRows = (insertedLines ?? []) as JsonRecord[];
+    const sfgInsertedLine = insertedLineRows.find((line) => String(line.line_type) === "SFG");
+    const pmInsertedLines = insertedLineRows.filter((line) => String(line.line_type) === "PM");
+    if (!sfgInsertedLine) throw new Error("PROD_PACK_RESERVATION_CREATE_FAILED");
+
+    const pmBomLineByOrder = new Map(pmBomLines.map((line, idx) => [String(10 + idx), line]));
+    const reservationRows: JsonRecord[] = [
+      {
+        source_type: "PACKING_PO",
+        source_id: packPoId,
+        source_line_id: sfgInsertedLine.id,
+        company_id: companyId,
+        material_id: sfgInsertedLine.material_id,
+        storage_location_id: toTrimmedString(sfgInsertedLine.issue_sloc_id) || null,
+        required_qty: Number(sfgInsertedLine.total_qty ?? 0),
+        uom_code: toTrimmedString(sfgBomLine.uom_code) || "KG",
+        issued_qty: 0,
+        status: "OPEN",
+        batch_number: batchNumber,
+        created_by: ctx.auth_user_id,
+        created_at: now,
+        last_updated_by: ctx.auth_user_id,
+        last_updated_at: now,
+      },
+      ...pmInsertedLines.map((line) => {
+        const sourceBomLine = pmBomLineByOrder.get(String(line.display_order ?? ""));
+        return {
+          source_type: "PACKING_PO",
+          source_id: packPoId,
+          source_line_id: line.id,
+          company_id: companyId,
+          material_id: line.material_id,
+          storage_location_id: toTrimmedString(line.issue_sloc_id) || null,
+          required_qty: Number(line.total_qty ?? 0),
+          uom_code: toTrimmedString(sourceBomLine?.uom_code) || "KG",
+          issued_qty: 0,
+          status: "OPEN",
+          created_by: ctx.auth_user_id,
+          created_at: now,
+          last_updated_by: ctx.auth_user_id,
+          last_updated_at: now,
+        };
+      }),
+    ];
+    const reservationResults = await Promise.all(reservationRows.map((row) =>
+      serviceRoleClient
+        .schema("erp_production")
+        .from("reservation_document")
+        .insert(row)
+    ));
+    const reservationError = reservationResults.find((result) => result.error)?.error;
+    if (reservationError) {
+      console.error("[packing_order.createPackingOrder] reservation insert failed:", JSON.stringify(reservationError));
+      throw new Error("PROD_PACK_RESERVATION_CREATE_FAILED");
+    }
 
     return createdOkResponse({ id: packPoId, po_number: poNumber }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CREATE_FAILED";
-    return packErr(req, ctx, code, 500, `Packing order create failed: ${err instanceof Error ? err.message : ""}`);
+    return packErr(req, ctx, code, PACK_SHORTAGE_ERROR_CODES.has(code) ? 422 : 500, `Packing order create failed: ${err instanceof Error ? err.message : ""}`);
   }
 }
 
@@ -657,6 +903,24 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       await serviceRoleClient.schema("erp_production").from("packing_order_line")
         .update({ stock_ledger_id: posting.stock_ledger_id })
         .eq("id", line.id as string);
+      if (lineType !== "FG") {
+        const { error: reservationErr } = await serviceRoleClient
+          .schema("erp_production")
+          .from("reservation_document")
+          .update({
+            issued_qty: Number(line.total_qty ?? 0),
+            status: "FULLY_ISSUED",
+            last_updated_at: new Date().toISOString(),
+            last_updated_by: ctx.auth_user_id,
+          })
+          .eq("source_type", "PACKING_PO")
+          .eq("source_id", id)
+          .eq("source_line_id", line.id as string);
+        if (reservationErr) {
+          console.error("[packing_order.finalizePackingOrder] reservation release failed:", JSON.stringify(reservationErr));
+          throw new Error("PROD_PACK_RESERVATION_RELEASE_FAILED");
+        }
+      }
       return { line_id: line.id, movement_type_code: movementTypeCode, stock_ledger_id: posting.stock_ledger_id };
     });
     await Promise.all(postings);
@@ -686,6 +950,23 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
     const poData = po as JsonRecord;
     if (poData.status === "REVERSED") {
       return packErr(req, ctx, "PROD_PACK_ALREADY_REVERSED", 409, "Already reversed");
+    }
+
+    const reverseNow = new Date().toISOString();
+    const { error: cancelReservationErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("reservation_document")
+      .update({
+        status: "CANCELLED",
+        last_updated_at: reverseNow,
+        last_updated_by: ctx.auth_user_id,
+      })
+      .eq("source_type", "PACKING_PO")
+      .eq("source_id", id)
+      .in("status", RESERVATION_OPEN_STATUSES);
+    if (cancelReservationErr) {
+      console.error("[packing_order.reversePackingOrder] reservation cancel failed:", JSON.stringify(cancelReservationErr));
+      throw new Error("PROD_PACK_RESERVATION_CANCEL_FAILED");
     }
 
     if (poData.status === "FINAL") {
@@ -744,14 +1025,13 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
       }));
     }
 
-    const now = new Date().toISOString();
     await serviceRoleClient.schema("erp_production").from("packing_order")
       .update({
         status: "REVERSED",
         plan_feed_id: null,
         reversed_by: ctx.auth_user_id,
-        reversed_at: now,
-        last_updated_at: now,
+        reversed_at: reverseNow,
+        last_updated_at: reverseNow,
         last_updated_by: ctx.auth_user_id,
       })
       .eq("id", id);
@@ -805,6 +1085,32 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       "PROD_PACK_CORRECTION_FAILED",
       "id, base_uom_code",
     );
+    const sfgIncreaseNeeds = new Map<string, PackingSfgNeed>();
+    for (const correction of corrections) {
+      const line = lineMap.get(toTrimmedString(correction.id));
+      if (!line || String(line.line_type ?? "") !== "SFG") continue;
+      const newActual = parsePositiveNumber(correction.actual_qty);
+      if (!newActual) continue;
+      const oldActual = Number(line.actual_qty ?? line.total_qty ?? 0);
+      const delta = newActual - oldActual;
+      if (delta <= 0) continue;
+      const slocId = toTrimmedString(line.issue_sloc_id);
+      if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
+      const batchNumber = toTrimmedString(line.batch_number);
+      if (!batchNumber) throw new Error("PROD_PACK_SFG_BATCH_REQUIRED");
+      const key = buildBatchAvailabilityKey(String(line.material_id), slocId, batchNumber);
+      const existing = sfgIncreaseNeeds.get(key);
+      sfgIncreaseNeeds.set(key, {
+        materialId: String(line.material_id),
+        storageLocationId: slocId,
+        batchNumber,
+        qty: (existing?.qty ?? 0) + delta,
+      });
+    }
+    await Promise.all([...sfgIncreaseNeeds.values()].map((need) =>
+      assertPackingSfgBatchAvailability(String(poData.company_id), need)
+    ));
+
     const today = todayIso();
     const postings = await Promise.all(corrections.map(async (correction) => {
       const line = lineMap.get(toTrimmedString(correction.id));
@@ -852,6 +1158,6 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     return okResponse({ id, corrections: postings.filter(Boolean) }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CORRECTION_FAILED";
-    return packErr(req, ctx, code, 500, "Packing order correction failed");
+    return packErr(req, ctx, code, PACK_SHORTAGE_ERROR_CODES.has(code) ? 422 : 500, "Packing order correction failed");
   }
 }
