@@ -98,6 +98,7 @@ export default function ChangePackBomApprovalPage() {
         uom_code: l.uom_code ?? "",
         has_alternate: Boolean(l.has_alternate),
         material_group_id: l.material_group_id ?? "",
+        is_primary_container: Boolean(l.is_primary_container),
         marked_remove: l.action === "REMOVE",
       })));
     } catch {
@@ -153,6 +154,7 @@ export default function ChangePackBomApprovalPage() {
           uom_code: l.uom_code || "KG",
           has_alternate: l.has_alternate,
           material_group_id: l.has_alternate ? (l.material_group_id || null) : null,
+          is_primary_container: Boolean(l.is_primary_container),
         })),
       });
       toast("Change request approved — Pack BOM updated.");

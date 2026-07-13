@@ -120,6 +120,8 @@ export const updatePackingOrderLines = (id, body) => fetchProd("PATCH", `/api/pr
 export const linkFo = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/link-fo`, body);
 export const finalizePackingOrder = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/finalize`, body);
 export const reversePackingOrder = (id) => fetchProd("POST", `/api/production/packing-orders/${id}/reverse`);
+export const correctPackingOrder = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/correct`, body);
+export const getFgStockBreakdown = (p) => fetchProd("GET", "/api/production/fg-stock-breakdown", undefined, p);
 
 // ── Stroke Change Requests (PR03/PR04) ────────────────────────────────────────
 export const listStrokeChangeRequests = (p) => fetchProd("GET", "/api/production/stroke-change-requests", undefined, p);
@@ -130,6 +132,7 @@ export const rejectStrokeChangeRequest = (id, body) => fetchProd("POST", `/api/p
 
 // ── Pack BOMs (PR05/PR06/PR07/PR08) ──────────────────────────────────────────
 export const listPackBoms = (p) => fetchProd("GET", "/api/production/pack-boms", undefined, p);
+export const listPackBomEligibleSkus = (p) => fetchProd("GET", "/api/production/pack-boms/eligible-skus", undefined, p);
 export const getPackBom = (id) => fetchProd("GET", `/api/production/pack-boms/${id}`);
 export const createPackBom = (body) => fetchProd("POST", "/api/production/pack-boms", body);
 export const approvePackBom = (id, body) => fetchProd("POST", `/api/production/pack-boms/${id}/approve`, body ?? {});

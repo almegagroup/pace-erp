@@ -2570,3 +2570,23 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Files:** `supabase/functions/api/_core/production/stroke_master.handlers.ts`, `supabase/functions/api/_core/production/process_order.handlers.ts`, `supabase/functions/api/_core/om/machine.handlers.ts`, `supabase/functions/api/_core/om/shared.ts`, `supabase/functions/api/_acl/route-acl-registry.ts` (Codex), `frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx` (Codex + Claude fixes).
 
 **Note for future new-menu-resource setup (any future PR-code addition):** inserting into `acl.menu_master` + `acl.capability_menu_actions` alone is **not sufficient** if the target ACL version(s) were already captured — `capture_acl_version_source()` will silently no-op. Must also manually insert into `acl.version_capability_menu_actions` (and equivalent `version_*` tables for role-based grants/overrides if used) for each affected `acl_version_id`, then run `generate_acl_snapshot()` + `erp_menu.generate_menu_snapshot()` per user. This same gap likely affects PR17 (`PROD_BATCH_RELEASE`) — but that one already showed 36 ALLOW rows in `precomputed_acl_view`/presumably already worked, meaning it either predates its own ACL version's capture, or someone already applied this same version-table fix for it previously (not traced further — out of scope here, noted as a pattern to watch for, not confirmed broken).
+## 2026-07-13 10:55 IST — Gate-27.22 Pack BOM rebuild + Gate-27.23 Packing PO Final stock posting
+
+**Scope implemented:** Gate-27.22 first, then Gate-27.23 after local verification of the Gate-27.22 code path. No migration was applied in this pass.
+
+**Gate-27.22 changes:**
+- Added `20260713093000_gate27_22_pack_bom_full_rebuild.sql` for company-scoped Pack BOMs, line storage/movement/primary-container fields, `pack_code_master.outer_uom_code`, locked pack-code seed values, and SFG line support.
+- Rebuilt Pack BOM backend around eligible SKUs, company scope, server-synthesized OUTPUT/SFG/PM rows, F-location validation, stroke-default SFG location, conversion sync, and PR07/PR08 primary-container propagation.
+- Rebuilt PR05/PR06 frontend flow and added primary-container UI support in shared Pack BOM line tables.
+
+**Gate-27.23 changes:**
+- Added `20260713103000_gate27_23_packing_po_final_stock_posting.sql` to allow Packing PO `FG` lines.
+- Rebuilt Packing PO create to require an ACTIVE company-scoped Pack BOM and source SFG/FG/PM lines from it.
+- Rebuilt Final posting to post SFG P261 OUT, PM P261 OUT, and FG P101 IN with the Packing PO document number and parent batch number.
+- Rebuilt CORS reversal to reverse SFG/PM with P262 and FG with P102, following the existing Process PO reversal document-number convention.
+- Added minimal COR6-style correction endpoint because no Process PO COR6 sibling endpoint exists to mirror.
+- Added FG stock breakdown endpoint/page as read-only report plumbing.
+
+**Verification:** `npm.cmd run build` passed. Local backend import smoke with dummy Supabase env passed for touched production handlers/routes. `deno check` still reports the known shared typing baseline, not touched-file-local syntax/import failures.
+
+**Notes / open items:** Native Supabase MCP tools were unavailable in this session, so there was no live DB verification or migration application. FG stock breakdown page code/route/screen registry is present, but live menu/ACL snapshot seeding was not performed in this local-only commit pass.

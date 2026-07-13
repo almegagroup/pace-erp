@@ -73,6 +73,8 @@ import {
   linkFoHandler,
   finalizePackingOrderHandler,
   reversePackingOrderHandler,
+  correctPackingOrderHandler,
+  fgStockBreakdownHandler,
 } from "../_core/production/packing_order.handlers.ts";
 import {
   listStrokeChangeRequestsHandler,
@@ -82,6 +84,7 @@ import {
   rejectStrokeChangeRequestHandler,
 } from "../_core/production/stroke_change_request.handlers.ts";
 import {
+  listPackBomEligibleSkusHandler,
   listPackBomsHandler,
   getPackBomHandler,
   createPackBomHandler,
@@ -177,6 +180,8 @@ export async function dispatchProductionRoutes(
       return await listPackingOrdersHandler(req, ctx);
     case "POST:/api/production/packing-orders":
       return await createPackingOrderHandler(req, ctx);
+    case "GET:/api/production/fg-stock-breakdown":
+      return await fgStockBreakdownHandler(req, ctx);
 
     // SFG QA Result Recording
     case "GET:/api/production/sfg-qa-documents":
@@ -189,6 +194,8 @@ export async function dispatchProductionRoutes(
       return await createStrokeChangeRequestHandler(req, ctx);
 
     // Pack BOMs (PR05/PR06)
+    case "GET:/api/production/pack-boms/eligible-skus":
+      return await listPackBomEligibleSkusHandler(req, ctx);
     case "GET:/api/production/pack-boms":
       return await listPackBomsHandler(req, ctx);
     case "POST:/api/production/pack-boms":
@@ -310,6 +317,9 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/packing-orders\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
     return await reversePackingOrderHandler(req, ctx);
+  }
+  if (/^\/api\/production\/packing-orders\/[^/]+\/correct$/.test(pathname) && req.method === "POST") {
+    return await correctPackingOrderHandler(req, ctx);
   }
 
   // Stroke Change Requests /:id actions (PR03/PR04)

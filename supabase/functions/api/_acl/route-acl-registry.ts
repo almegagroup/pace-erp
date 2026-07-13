@@ -276,9 +276,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/production/process-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
   "GET:/api/production/packing-orders":              { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   "POST:/api/production/packing-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+  "GET:/api/production/fg-stock-breakdown":           { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   "GET:/api/production/sfg-qa-documents":            { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "VIEW" },
   "GET:/api/production/stroke-change-requests":      { skipAcl: false, resourceCode: "PROD_CHANGE_BOM_ITEM_APPROVAL", action: "VIEW" },
   "POST:/api/production/stroke-change-requests":     { skipAcl: false, resourceCode: "PROD_CHANGE_BOM_ITEM", action: "WRITE" },
+  "GET:/api/production/pack-boms/eligible-skus":     { skipAcl: false, resourceCode: "PROD_PACK_BOM_CREATE", action: "VIEW" },
   "GET:/api/production/pack-boms":                   { skipAcl: false, resourceCode: "PROD_PACK_BOM_CREATE", action: "VIEW" },
   "POST:/api/production/pack-boms":                  { skipAcl: false, resourceCode: "PROD_PACK_BOM_CREATE", action: "WRITE" },
   "GET:/api/production/pack-bom-change-requests":    { skipAcl: false, resourceCode: "PROD_CHANGE_PACK_BOM_APPROVAL", action: "VIEW" },
@@ -999,6 +1001,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/production\/packing-orders\/[^/]+\/reverse$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_REVERSAL", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/packing-orders\/[^/]+\/correct$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PACKING_PO_FINAL", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/production\/stroke-change-requests\/[^/]+$/,

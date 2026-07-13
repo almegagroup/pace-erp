@@ -697,4 +697,12 @@ export const OPERATION_SCREENS = Object.freeze({
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
+
+  PROD_FG_STOCK_BREAKDOWN: {
+    screen_code: "PROD_FG_STOCK_BREAKDOWN",
+    route: "/dashboard/production/fg-stock-breakdown",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
 });

@@ -84,6 +84,8 @@ export default function ChangePackBomPage() {
             uom_code: l.uom_code ?? "",
             has_alternate: Boolean(l.material_group_id),
             material_group_id: l.material_group_id ?? "",
+            old_is_primary_container: Boolean(l.is_primary_container),
+            is_primary_container: Boolean(l.is_primary_container),
             marked_remove: false,
           })),
       );
@@ -147,6 +149,7 @@ export default function ChangePackBomPage() {
             uom_code: c.uom_code || "KG",
             has_alternate: c.has_alternate,
             material_group_id: c.has_alternate ? (c.material_group_id || null) : null,
+            is_primary_container: Boolean(c.is_primary_container),
           });
         }
         continue;
@@ -159,6 +162,7 @@ export default function ChangePackBomPage() {
         c.material_id !== c.old_material_id ||
         Number(c.qty) !== Number(c.old_qty) ||
         Boolean(c.has_alternate) !== Boolean(c.old_has_alternate) ||
+        Boolean(c.is_primary_container) !== Boolean(c.old_is_primary_container) ||
         (c.has_alternate && c.material_group_id !== c.old_group_id);
       if (changed) {
         payload.push({
@@ -169,6 +173,7 @@ export default function ChangePackBomPage() {
           uom_code: c.uom_code || "KG",
           has_alternate: c.has_alternate,
           material_group_id: c.has_alternate ? (c.material_group_id || null) : null,
+          is_primary_container: Boolean(c.is_primary_container),
         });
       }
     }

@@ -372,7 +372,7 @@ export function ChangeBomLinesTable({ lines, setLines, materialsByType, groups, 
 // from the selected PM material's base_uom_code (locked spec: not editable).
 export function PackBomLinesTable({ lines, setLines, materials, groups, onCreateGroup, onAddMember, disabled }) {
   function addLine() {
-    setLines((l) => [...l, { _key: Math.random().toString(36).slice(2), material_id: "", qty: "", uom_code: "", has_alternate: false, material_group_id: "" }]);
+    setLines((l) => [...l, { _key: Math.random().toString(36).slice(2), material_id: "", qty: "", uom_code: "", has_alternate: false, material_group_id: "", is_primary_container: false }]);
   }
   function removeLine(key) { setLines((l) => l.filter((row) => row._key !== key)); }
   function updateLine(key, patch) {
@@ -400,6 +400,7 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
             <th className={`${th} text-right`}>Qty</th>
             <th className={th}>UOM</th>
             <th className={th}>Alternate?</th>
+            <th className={th}>Primary Container?</th>
             <th className={`${th} min-w-[150px]`}>Group</th>
             <th className={`${th} min-w-[180px]`}>Members</th>
             {!disabled && <th className={th}></th>}
@@ -436,6 +437,14 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
                     checked={line.has_alternate}
                     disabled={disabled}
                     onChange={(e) => updateLine(line._key, { has_alternate: e.target.checked, material_group_id: e.target.checked ? line.material_group_id : "" })}
+                  />
+                </td>
+                <td className={td}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(line.is_primary_container)}
+                    disabled={disabled}
+                    onChange={(e) => updateLine(line._key, { is_primary_container: e.target.checked })}
                   />
                 </td>
                 <td className={td}>
@@ -512,7 +521,7 @@ export function PackBomChangeLinesTable({ lines, setLines, materials, groups, on
     setLines((l) => [...l, {
       _key: `new-${Math.random().toString(36).slice(2)}`,
       action: "ADD", bom_line_id: null, old_material_id: "",
-      material_id: "", qty: "", uom_code: "", has_alternate: false, material_group_id: "", marked_remove: false,
+      material_id: "", qty: "", uom_code: "", has_alternate: false, material_group_id: "", is_primary_container: false, marked_remove: false,
     }]);
   }
   function updateMaterial(key, materialId) {
@@ -539,6 +548,7 @@ export function PackBomChangeLinesTable({ lines, setLines, materials, groups, on
             <th className={`${th} text-right`}>Qty</th>
             <th className={th}>UOM</th>
             <th className={th}>Alternate?</th>
+            <th className={th}>Primary Container?</th>
             <th className={`${th} min-w-[150px]`}>Group</th>
             <th className={`${th} min-w-[160px]`}>Members</th>
             {editable && <th className={th}></th>}
@@ -590,6 +600,14 @@ export function PackBomChangeLinesTable({ lines, setLines, materials, groups, on
                     checked={line.has_alternate}
                     disabled={!rowEditable}
                     onChange={(e) => updateLine(line._key, { has_alternate: e.target.checked, material_group_id: e.target.checked ? line.material_group_id : "" })}
+                  />
+                </td>
+                <td className={td}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(line.is_primary_container)}
+                    disabled={!rowEditable}
+                    onChange={(e) => updateLine(line._key, { is_primary_container: e.target.checked })}
                   />
                 </td>
                 <td className={td}>

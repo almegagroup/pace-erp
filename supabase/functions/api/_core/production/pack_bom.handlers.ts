@@ -18,11 +18,18 @@ import {
   assertManagerOrSARole,
   parseBody,
   toTrimmedString,
+  toUpperTrimmedString,
   parsePositiveNumber,
   getIdFromPath,
 } from "./production.shared.ts";
 
 type JsonRecord = Record<string, unknown>;
+
+const BOM_OPEN_STATUSES = ["DRAFT", "ACTIVE"];
+const PACK_PO_TYPES = new Set(["MTO", "HPS", "MTS", "MTEST"]);
+const PM_LINE_TYPE = "INPUT";
+const OUTPUT_LINE_TYPE = "OUTPUT";
+const SFG_LINE_TYPE = "SFG";
 
 function bomError(
   req: Request,
@@ -84,7 +91,282 @@ async function getGroupMapByIds(ids: string[]): Promise<Map<string, JsonRecord>>
   return map;
 }
 
+async function getCompanyMapByIds(ids: string[]): Promise<Map<string, JsonRecord>> {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (uniqueIds.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("companies")
+    .select("id, company_code, company_name")
+    .in("id", uniqueIds);
+  if (error) {
+    console.error("[pack_bom.getCompanyMapByIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BOM_COMPANY_BATCH_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  return map;
+}
+
+async function getStorageLocationMapByIds(ids: string[]): Promise<Map<string, JsonRecord>> {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (uniqueIds.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_master")
+    .select("id, code, name")
+    .in("id", uniqueIds);
+  if (error) {
+    console.error("[pack_bom.getStorageLocationMapByIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BOM_SLOC_BATCH_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  return map;
+}
+
+async function getPackCodeByCode(packCode: string): Promise<JsonRecord | null> {
+  if (!packCode) return null;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("pack_code_master")
+    .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, outer_uom_code, active")
+    .eq("pack_code", packCode)
+    .maybeSingle();
+  if (error) {
+    console.error("[pack_bom.getPackCodeByCode] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BOM_PACK_CODE_LOOKUP_FAILED");
+  }
+  return (data as JsonRecord | null) ?? null;
+}
+
+async function resolveProdshadeForSku(sku: JsonRecord, companyId: string): Promise<JsonRecord | null> {
+  const shadeCode = toTrimmedString(sku.shade_code);
+  const packCode = toTrimmedString(sku.pack_code);
+  if (!shadeCode || !packCode || !companyId) return null;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("prodshade_pack_config")
+    .select(`
+      id, company_id, material_id, pack_code_id, fill_qty, active,
+      pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, bom_required, outer_uom_code)
+    `)
+    .eq("company_id", companyId)
+    .eq("active", true);
+  if (error) {
+    console.error("[pack_bom.resolveProdshadeForSku] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BOM_PRODSHADE_LOOKUP_FAILED");
+  }
+  const rows = (data ?? []) as JsonRecord[];
+  const prodshadeMap = await getMaterialMapByIds(
+    rows.map((row) => String(row.material_id ?? "")),
+    "[pack_bom.resolveProdshadeForSku]",
+    "PROD_BOM_PRODSHADE_LOOKUP_FAILED",
+    "id, pace_code, external_code, material_name, document_name, shade_code, base_uom_code",
+  );
+  const match = rows.find((row) => {
+    const pack = (row.pack_code ?? {}) as JsonRecord;
+    const prod = prodshadeMap.get(String(row.material_id ?? "")) ?? {};
+    return toTrimmedString(pack.pack_code) === packCode && toTrimmedString(prod.shade_code) === shadeCode;
+  }) ?? null;
+  if (!match) return null;
+  return { ...match, prodshade: prodshadeMap.get(String(match.material_id ?? "")) ?? null };
+}
+
+async function resolveApprovedStroke(prodshadeMaterialId: string, companyId: string, poType: string): Promise<JsonRecord | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("stroke_master")
+    .select("id, company_id, prodshade_material_id, stroke_number, default_storage_location_id, status")
+    .eq("company_id", companyId)
+    .eq("prodshade_material_id", prodshadeMaterialId)
+    .eq("po_type", poType)
+    .eq("status", "APPROVED")
+    .order("stroke_number", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("[pack_bom.resolveApprovedStroke] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BOM_STROKE_LOOKUP_FAILED");
+  }
+  return (data as JsonRecord | null) ?? null;
+}
+
+async function getMaterialPlantExtensions(materialId: string, companyId?: string): Promise<JsonRecord[]> {
+  let query = serviceRoleClient
+    .schema("erp_master")
+    .from("material_plant_ext")
+    .select("id, material_id, company_id, default_storage_location_id, status")
+    .eq("material_id", materialId)
+    .eq("status", "ACTIVE");
+  if (companyId) query = query.eq("company_id", companyId);
+  const { data, error } = await query;
+  if (error) {
+    console.error("[pack_bom.getMaterialPlantExtensions] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BOM_MPE_LOOKUP_FAILED");
+  }
+  const rows = (data ?? []) as JsonRecord[];
+  const slocMap = await getStorageLocationMapByIds(rows.map((row) => String(row.default_storage_location_id ?? "")));
+  return rows.map((row) => ({
+    ...row,
+    default_storage_location: slocMap.get(String(row.default_storage_location_id ?? "")) ?? null,
+  }));
+}
+
+function normalizeLine(line: JsonRecord, idx: number): JsonRecord {
+  return {
+    material_id: toTrimmedString(line.material_id),
+    qty: parsePositiveNumber(line.qty),
+    uom_code: toTrimmedString(line.uom_code),
+    has_alternate: line.has_alternate === true || line.has_alternate === "true",
+    material_group_id: toTrimmedString(line.material_group_id),
+    is_primary_container: line.is_primary_container === true || line.is_primary_container === "true",
+    display_order: Number.isFinite(Number(line.display_order)) ? Number(line.display_order) : idx,
+  };
+}
+
+async function syncPackBomConversions(packBomId: string, createdBy: string): Promise<void> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("pack_bom")
+    .select(`
+      id, sku_material_id, company_id,
+      lines:pack_bom_line(id, line_type, material_id, qty, uom_code, is_primary_container)
+    `)
+    .eq("id", packBomId)
+    .maybeSingle();
+  if (error || !data) {
+    console.error("[pack_bom.syncPackBomConversions] BOM query failed:", JSON.stringify(error));
+    throw new Error("PROD_BOM_CONVERSION_SYNC_FAILED");
+  }
+  const bom = data as JsonRecord;
+  const lines = (bom.lines ?? []) as JsonRecord[];
+  const skuMap = await getMaterialMapByIds(
+    [String(bom.sku_material_id ?? "")],
+    "[pack_bom.syncPackBomConversions]",
+    "PROD_BOM_CONVERSION_SYNC_FAILED",
+    "id, pack_code",
+  );
+  const sku = skuMap.get(String(bom.sku_material_id ?? "")) ?? {};
+  const packCode = await getPackCodeByCode(toTrimmedString(sku.pack_code));
+  if (!packCode) throw new Error("PROD_BOM_PACK_CODE_NOT_FOUND");
+
+  const sfgLine = lines.find((line) => toTrimmedString(line.line_type) === SFG_LINE_TYPE);
+  const sfgQty = parsePositiveNumber(sfgLine?.qty);
+  if (Boolean(packCode.bom_required) && !sfgQty) {
+    throw new Error("PROD_BOM_SFG_QTY_REQUIRED");
+  }
+
+  const rows: JsonRecord[] = [];
+  if (Boolean(packCode.bom_required) && sfgQty) {
+    rows.push({
+      material_id: bom.sku_material_id,
+      from_uom_code: toTrimmedString(packCode.outer_uom_code) || "KG",
+      to_uom_code: "KG",
+      conversion_factor: sfgQty,
+      variable_conversion: false,
+      active: true,
+      created_by: createdBy,
+    });
+    for (const pmLine of lines.filter((line) => Boolean(line.is_primary_container))) {
+      const pmQty = parsePositiveNumber(pmLine.qty);
+      const pmUom = toTrimmedString(pmLine.uom_code);
+      if (!pmQty || !pmUom) continue;
+      rows.push({
+        material_id: bom.sku_material_id,
+        from_uom_code: pmUom,
+        to_uom_code: "KG",
+        conversion_factor: sfgQty / pmQty,
+        variable_conversion: false,
+        active: true,
+        created_by: createdBy,
+      });
+    }
+  } else if (!Boolean(packCode.bom_required)) {
+    rows.push({
+      material_id: bom.sku_material_id,
+      from_uom_code: toTrimmedString(packCode.outer_uom_code) || "KG",
+      to_uom_code: "KG",
+      conversion_factor: 1,
+      variable_conversion: true,
+      active: true,
+      created_by: createdBy,
+    });
+  }
+
+  if (rows.length === 0) return;
+  const { error: upsertErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_uom_conversion")
+    .upsert(rows, { onConflict: "material_id,from_uom_code,to_uom_code" });
+  if (upsertErr) {
+    console.error("[pack_bom.syncPackBomConversions] upsert failed:", JSON.stringify(upsertErr));
+    throw new Error("PROD_BOM_CONVERSION_SYNC_FAILED");
+  }
+}
+
 // ── PACK BOM ──────────────────────────────────────────────────────────────────
+
+// GET /api/production/pack-boms/eligible-skus?company_id&po_type
+export async function listPackBomEligibleSkusHandler(
+  req: Request,
+  ctx: ProdHandlerContext,
+): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id")) || toTrimmedString(ctx.context.companyId);
+    const poType = toUpperTrimmedString(url.searchParams.get("po_type"));
+    if (!companyId || !PACK_PO_TYPES.has(poType)) {
+      return bomError(req, ctx, "PROD_BOM_ELIGIBLE_INVALID", 400, "company_id and valid po_type required");
+    }
+
+    const { data: plantRows, error: plantErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_plant_ext")
+      .select("material_id, company_id, status")
+      .eq("company_id", companyId)
+      .eq("status", "ACTIVE");
+    if (plantErr) throw new Error("PROD_BOM_ELIGIBLE_LOOKUP_FAILED");
+
+    const skuIds = [...new Set(((plantRows ?? []) as JsonRecord[]).map((row) => String(row.material_id ?? "")).filter(Boolean))];
+    if (skuIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const { data: skuRows, error: skuErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, shade_code, pack_code, status")
+      .in("id", skuIds)
+      .eq("material_type", "FG")
+      .eq("status", "ACTIVE");
+    if (skuErr) throw new Error("PROD_BOM_ELIGIBLE_SKU_FAILED");
+
+    const output: JsonRecord[] = [];
+    for (const sku of (skuRows ?? []) as JsonRecord[]) {
+      const prodshadeConfig = await resolveProdshadeForSku(sku, companyId);
+      const prodshade = (prodshadeConfig?.prodshade ?? null) as JsonRecord | null;
+      if (!prodshade) continue;
+      const stroke = await resolveApprovedStroke(String(prodshade.id), companyId, poType);
+      if (!stroke) continue;
+      const packCode = await getPackCodeByCode(toTrimmedString(sku.pack_code));
+      if (!packCode) continue;
+      output.push({
+        ...sku,
+        company_id: companyId,
+        po_type: poType,
+        prodshade_material_id: prodshade.id,
+        prodshade,
+        pack_code_row: packCode,
+        stroke_master: stroke,
+      });
+    }
+
+    return okResponse({ data: output }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_BOM_ELIGIBLE_FAILED";
+    return bomError(req, ctx, code, 500, "Eligible SKU list failed");
+  }
+}
 
 // GET /api/production/pack-boms
 export async function listPackBomsHandler(
@@ -96,17 +378,19 @@ export async function listPackBomsHandler(
     const url = new URL(req.url);
     const status = toTrimmedString(url.searchParams.get("status") ?? "");
     const skuMaterialId = toTrimmedString(url.searchParams.get("sku_material_id") ?? "");
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
 
     let query = serviceRoleClient
       .schema("erp_production")
       .from("pack_bom")
       .select(`
-        id, sku_material_id, status, created_by, created_at, approved_by, approved_at
+        id, company_id, sku_material_id, status, created_by, created_at, approved_by, approved_at
       `)
       .order("created_at", { ascending: false });
 
     if (status) query = query.eq("status", status);
     if (skuMaterialId) query = query.eq("sku_material_id", skuMaterialId);
+    if (companyId) query = query.eq("company_id", companyId);
 
     const { data, error } = await query;
     if (error) {
@@ -121,12 +405,16 @@ export async function listPackBomsHandler(
       "PROD_BOM_LIST_FAILED",
       "id, pace_code, material_name, material_type, pack_code, shade_code",
     );
-    const userDisplayMap = await resolveUserDisplayNames(rows.flatMap((r) => [
-      String(r.created_by ?? ""), String(r.approved_by ?? ""),
-    ]));
+    const [companyMap, userDisplayMap] = await Promise.all([
+      getCompanyMapByIds(rows.map((row) => String(row.company_id ?? ""))),
+      resolveUserDisplayNames(rows.flatMap((r) => [
+        String(r.created_by ?? ""), String(r.approved_by ?? ""),
+      ])),
+    ]);
     return okResponse({
       data: rows.map((row) => ({
         ...row,
+        company: companyMap.get(String(row.company_id ?? "")) ?? null,
         sku: skuMap.get(String(row.sku_material_id ?? "")) ?? null,
         created_by_display: userDisplayMap.get(String(row.created_by ?? "")) ?? null,
         approved_by_display: userDisplayMap.get(String(row.approved_by ?? "")) ?? null,
@@ -152,9 +440,10 @@ export async function getPackBomHandler(
       .schema("erp_production")
       .from("pack_bom")
       .select(`
-        id, sku_material_id, status, created_by, created_at, approved_by, approved_at, reject_reason,
+        id, company_id, sku_material_id, status, created_by, created_at, approved_by, approved_at, reject_reason,
         lines:pack_bom_line(
-          id, pack_bom_id, line_type, material_id, qty, uom_code, has_alternate, material_group_id, display_order
+          id, pack_bom_id, line_type, material_id, qty, uom_code, has_alternate, material_group_id,
+          storage_location_id, movement_type_code, is_primary_container, display_order
         )
       `)
       .eq("id", id)
@@ -168,7 +457,8 @@ export async function getPackBomHandler(
 
     const bom = data as JsonRecord;
     const lines = ((bom.lines ?? []) as JsonRecord[]);
-    const [skuMap, lineMaterialMap, groupMap, userDisplayMap] = await Promise.all([
+    const [companyMap, skuMap, lineMaterialMap, groupMap, slocMap, userDisplayMap] = await Promise.all([
+      getCompanyMapByIds([String(bom.company_id ?? "")]),
       getMaterialMapByIds(
         [String(bom.sku_material_id ?? "")],
         "[pack_bom.getPackBom]",
@@ -182,12 +472,14 @@ export async function getPackBomHandler(
         "id, pace_code, material_name, base_uom_code",
       ),
       getGroupMapByIds(lines.map((line) => String(line.material_group_id ?? ""))),
+      getStorageLocationMapByIds(lines.map((line) => String(line.storage_location_id ?? ""))),
       resolveUserDisplayNames([String(bom.created_by ?? ""), String(bom.approved_by ?? "")]),
     ]);
 
     return okResponse({
       data: {
         ...bom,
+        company: companyMap.get(String(bom.company_id ?? "")) ?? null,
         sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null,
         created_by_display: userDisplayMap.get(String(bom.created_by ?? "")) ?? null,
         approved_by_display: userDisplayMap.get(String(bom.approved_by ?? "")) ?? null,
@@ -195,6 +487,7 @@ export async function getPackBomHandler(
           ...line,
           material: lineMaterialMap.get(String(line.material_id ?? "")) ?? null,
           material_group: groupMap.get(String(line.material_group_id ?? "")) ?? null,
+          storage_location: slocMap.get(String(line.storage_location_id ?? "")) ?? null,
         })),
       },
     }, ctx.request_id, req);
@@ -212,18 +505,24 @@ export async function createPackBomHandler(
   try {
     assertManagerOrSARole(ctx);
     const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id) || toTrimmedString(ctx.context.companyId);
+    const poType = toUpperTrimmedString(body.po_type);
     const skuMaterialId = toTrimmedString(body.sku_material_id);
-    const lines = Array.isArray(body.lines) ? body.lines : [];
+    const outputStorageLocationId = toTrimmedString(body.output_storage_location_id);
+    const sfgQty = parsePositiveNumber(body.sfg_qty);
+    const pmLines = (Array.isArray(body.pm_lines) ? body.pm_lines : Array.isArray(body.lines) ? body.lines : [])
+      .map((line, idx) => normalizeLine(line as JsonRecord, idx))
+      .filter((line) => toTrimmedString(line.material_id));
 
-    if (!skuMaterialId) {
-      return bomError(req, ctx, "PROD_BOM_INVALID", 400, "sku_material_id required");
+    if (!companyId || !skuMaterialId || !PACK_PO_TYPES.has(poType)) {
+      return bomError(req, ctx, "PROD_BOM_INVALID", 400, "company_id, po_type, sku_material_id required");
     }
 
     // Validate SKU exists and is type FG
     const { data: sku, error: skuErr } = await serviceRoleClient
       .schema("erp_master")
       .from("material_master")
-      .select("id, material_type, pack_code")
+      .select("id, pace_code, external_code, material_name, material_type, base_uom_code, pack_code, shade_code")
       .eq("id", skuMaterialId)
       .maybeSingle();
 
@@ -233,29 +532,48 @@ export async function createPackBomHandler(
       return bomError(req, ctx, "PROD_BOM_NOT_FG", 422, "Pack BOM can only be created for FG materials");
     }
 
-    // Check no existing DRAFT or ACTIVE BOM for this SKU
+    const plantExtensions = await getMaterialPlantExtensions(skuMaterialId, companyId);
+    const fLocationExts = plantExtensions.filter((ext) => {
+      const sloc = (ext.default_storage_location ?? {}) as JsonRecord;
+      return toTrimmedString(sloc.code).startsWith("F");
+    });
+    if (!outputStorageLocationId || !fLocationExts.some((ext) => toTrimmedString(ext.default_storage_location_id) === outputStorageLocationId)) {
+      return bomError(req, ctx, "PROD_BOM_OUTPUT_SLOC_INVALID", 422, "Output storage location must be an F-location extended to the selected SKU and company");
+    }
+
+    const prodshadeConfig = await resolveProdshadeForSku(sku as JsonRecord, companyId);
+    const prodshade = (prodshadeConfig?.prodshade ?? null) as JsonRecord | null;
+    if (!prodshade) {
+      return bomError(req, ctx, "PROD_BOM_PRODSHADE_NOT_FOUND", 422, "FG SKU prodshade link not found");
+    }
+    const stroke = await resolveApprovedStroke(String(prodshade.id), companyId, poType);
+    if (!stroke) {
+      return bomError(req, ctx, "PROD_BOM_STROKE_NOT_FOUND", 422, "Approved stroke not found for company, PO type and prodshade");
+    }
+    const sfgStorageLocationId = toTrimmedString(stroke.default_storage_location_id);
+    if (!sfgStorageLocationId) {
+      return bomError(req, ctx, "PROD_BOM_SFG_SLOC_REQUIRED", 422, "Stroke default storage location is required");
+    }
+
+    // Check no existing DRAFT or ACTIVE BOM for this company + SKU
     const { count: existingCount } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom")
       .select("id", { count: "exact", head: true })
+      .eq("company_id", companyId)
       .eq("sku_material_id", skuMaterialId)
-      .in("status", ["DRAFT", "ACTIVE"]) as { count?: number };
+      .in("status", BOM_OPEN_STATUSES) as { count?: number };
 
     if ((existingCount ?? 0) > 0) {
-      return bomError(req, ctx, "PROD_BOM_ALREADY_EXISTS", 409, "A DRAFT or ACTIVE Pack BOM already exists for this SKU");
+      return bomError(req, ctx, "PROD_BOM_ALREADY_EXISTS", 409, "A DRAFT or ACTIVE Pack BOM already exists for this company and SKU");
     }
 
-    // Determine if BOM required based on pack_code_master
     const packCode = toTrimmedString((sku as JsonRecord).pack_code);
-    let bomRequired = true;
-    if (packCode) {
-      const { data: pcm } = await serviceRoleClient
-        .schema("erp_production")
-        .from("pack_code_master")
-        .select("bom_required")
-        .eq("pack_code", packCode)
-        .maybeSingle();
-      if (pcm) bomRequired = Boolean((pcm as JsonRecord).bom_required);
+    const packCodeRow = await getPackCodeByCode(packCode);
+    if (!packCodeRow) return bomError(req, ctx, "PROD_BOM_PACK_CODE_NOT_FOUND", 422, "Pack code not found for selected SKU");
+    const bomRequired = Boolean(packCodeRow.bom_required);
+    if (bomRequired && !sfgQty) {
+      return bomError(req, ctx, "PROD_BOM_SFG_QTY_REQUIRED", 422, "SFG input qty must be positive when BOM is required");
     }
 
     // Auto-approve if bom_required = false (599, 000, 001)
@@ -263,6 +581,7 @@ export async function createPackBomHandler(
     const now = new Date().toISOString();
 
     const insertRow: JsonRecord = {
+      company_id: companyId,
       sku_material_id: skuMaterialId,
       status: initialStatus,
       created_by: ctx.auth_user_id,
@@ -282,25 +601,57 @@ export async function createPackBomHandler(
     if (bomErr) throw new Error("PROD_BOM_CREATE_FAILED");
     const bomId = (bom as JsonRecord).id as string;
 
-    // Insert lines
-    if (lines.length > 0) {
-      const lineRows = lines.map((l: JsonRecord, idx: number) => ({
+    const lineRows = [
+      {
         pack_bom_id: bomId,
-        line_type: toTrimmedString(l.line_type) || "INPUT",
-        material_id: toTrimmedString(l.material_id) || null,
-        qty: parsePositiveNumber(l.qty) ?? 0,
-        uom_code: toTrimmedString(l.uom_code) || null,
-        has_alternate: l.has_alternate === true || l.has_alternate === "true",
-        material_group_id: toTrimmedString(l.material_group_id) || null,
-        display_order: idx,
-      }));
+        line_type: OUTPUT_LINE_TYPE,
+        material_id: skuMaterialId,
+        qty: bomRequired ? 1 : null,
+        uom_code: toTrimmedString(packCodeRow.outer_uom_code) || "KG",
+        storage_location_id: outputStorageLocationId,
+        movement_type_code: "P101",
+        has_alternate: false,
+        material_group_id: null,
+        is_primary_container: false,
+        display_order: 0,
+      },
+      {
+        pack_bom_id: bomId,
+        line_type: SFG_LINE_TYPE,
+        material_id: String(prodshade.id),
+        qty: bomRequired ? sfgQty : null,
+        uom_code: "KG",
+        storage_location_id: sfgStorageLocationId,
+        movement_type_code: "P261",
+        has_alternate: false,
+        material_group_id: null,
+        is_primary_container: false,
+        display_order: 1,
+      },
+      ...pmLines.map((line, idx) => ({
+        pack_bom_id: bomId,
+        line_type: PM_LINE_TYPE,
+        material_id: toTrimmedString(line.material_id),
+        qty: bomRequired ? parsePositiveNumber(line.qty) : null,
+        uom_code: toTrimmedString(line.uom_code) || null,
+        storage_location_id: null,
+        movement_type_code: "P261",
+        has_alternate: Boolean(line.has_alternate),
+        material_group_id: toTrimmedString(line.material_group_id) || null,
+        is_primary_container: Boolean(line.is_primary_container),
+        display_order: idx + 2,
+      })),
+    ];
 
-      const { error: lErr } = await serviceRoleClient
-        .schema("erp_production")
-        .from("pack_bom_line")
-        .insert(lineRows);
+    const { error: lErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("pack_bom_line")
+      .insert(lineRows);
 
-      if (lErr) throw new Error("PROD_BOM_LINES_INSERT_FAILED");
+    if (lErr) throw new Error("PROD_BOM_LINES_INSERT_FAILED");
+
+    if (!bomRequired) {
+      await syncPackBomConversions(bomId, ctx.auth_user_id);
     }
 
     return createdOkResponse(
@@ -352,10 +703,13 @@ export async function approvePackBomHandler(
         pack_bom_id: id,
         line_type: toTrimmedString(l.line_type) || "INPUT",
         material_id: toTrimmedString(l.material_id) || null,
-        qty: parsePositiveNumber(l.qty) ?? 0,
+        qty: l.qty == null || l.qty === "" ? null : (parsePositiveNumber(l.qty) ?? 0),
         uom_code: toTrimmedString(l.uom_code) || null,
+        storage_location_id: toTrimmedString(l.storage_location_id) || null,
+        movement_type_code: toTrimmedString(l.movement_type_code) || null,
         has_alternate: l.has_alternate === true || l.has_alternate === "true",
         material_group_id: toTrimmedString(l.material_group_id) || null,
+        is_primary_container: l.is_primary_container === true || l.is_primary_container === "true",
         display_order: idx,
       }));
 
@@ -375,6 +729,7 @@ export async function approvePackBomHandler(
       .eq("id", id);
 
     if (updateErr) throw new Error("PROD_BOM_APPROVE_FAILED");
+    await syncPackBomConversions(id, ctx.auth_user_id);
 
     return okResponse({ id, status: "ACTIVE" }, ctx.request_id, req);
   } catch (err) {
@@ -494,6 +849,7 @@ export async function createPackBomChangeRequestHandler(
       uom_code: toTrimmedString(c.uom_code) || null,
       has_alternate: c.has_alternate === true || c.has_alternate === "true",
       material_group_id: toTrimmedString(c.material_group_id) || null,
+      is_primary_container: c.is_primary_container === true || c.is_primary_container === "true",
       display_order: idx,
     }));
 
@@ -528,7 +884,7 @@ export async function listPackBomChangeRequestsHandler(
       .select(`
         id, pack_bom_id, status, created_by, created_at, approved_by, approved_at, reject_reason,
         bom:pack_bom!pack_bom_id(
-          id, sku_material_id, status
+          id, company_id, sku_material_id, status
         )
       `)
       .order("created_at", { ascending: false });
@@ -549,15 +905,22 @@ export async function listPackBomChangeRequestsHandler(
       "PROD_BCR_LIST_FAILED",
       "id, pace_code, material_name, pack_code",
     );
-    const userDisplayMap = await resolveUserDisplayNames(rows.flatMap((r) => [
-      String(r.created_by ?? ""), String(r.approved_by ?? ""),
-    ]));
+    const [companyMap, userDisplayMap] = await Promise.all([
+      getCompanyMapByIds(rows.map((row) => String(((row.bom as JsonRecord | null)?.company_id) ?? ""))),
+      resolveUserDisplayNames(rows.flatMap((r) => [
+        String(r.created_by ?? ""), String(r.approved_by ?? ""),
+      ])),
+    ]);
     return okResponse({
       data: rows.map((row) => {
         const bom = ((row.bom ?? null) as JsonRecord | null);
         return {
           ...row,
-          bom: bom ? { ...bom, sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null } : null,
+          bom: bom ? {
+            ...bom,
+            company: companyMap.get(String(bom.company_id ?? "")) ?? null,
+            sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null,
+          } : null,
           created_by_display: userDisplayMap.get(String(row.created_by ?? "")) ?? null,
           approved_by_display: userDisplayMap.get(String(row.approved_by ?? "")) ?? null,
         };
@@ -599,13 +962,13 @@ export async function getPackBomChangeRequestHandler(
 
     const [bomRes, lineRes, changeLineRes] = await Promise.all([
       serviceRoleClient.schema("erp_production").from("pack_bom")
-        .select("id, sku_material_id, status")
+        .select("id, company_id, sku_material_id, status")
         .eq("id", packBomId).maybeSingle(),
       serviceRoleClient.schema("erp_production").from("pack_bom_line")
-        .select("id, line_type, material_id, qty, uom_code, has_alternate, material_group_id, display_order")
+        .select("id, line_type, material_id, qty, uom_code, has_alternate, material_group_id, is_primary_container, display_order")
         .eq("pack_bom_id", packBomId).order("display_order"),
       serviceRoleClient.schema("erp_production").from("pack_bom_change_request_line")
-        .select("id, change_request_id, action, bom_line_id, material_id, qty, uom_code, has_alternate, material_group_id, display_order")
+        .select("id, change_request_id, action, bom_line_id, material_id, qty, uom_code, has_alternate, material_group_id, is_primary_container, display_order")
         .eq("change_request_id", id).order("display_order"),
     ]);
 
@@ -627,7 +990,8 @@ export async function getPackBomChangeRequestHandler(
     const changeLines = (changeLineRes.data ?? []) as JsonRecord[];
     const bomLineMap = new Map(bomLines.map((l) => [String(l.id), l]));
 
-    const [skuMap, materialMap, groupMap, userDisplayMap] = await Promise.all([
+    const [companyMap, skuMap, materialMap, groupMap, userDisplayMap] = await Promise.all([
+      getCompanyMapByIds([String(bom?.company_id ?? "")]),
       getMaterialMapByIds(
         [String(bom?.sku_material_id ?? "")],
         "[pack_bom.getPackBomChangeRequest]",
@@ -655,7 +1019,11 @@ export async function getPackBomChangeRequestHandler(
         ...row,
         created_by_display: userDisplayMap.get(String(row.created_by ?? "")) ?? null,
         approved_by_display: userDisplayMap.get(String(row.approved_by ?? "")) ?? null,
-        bom: bom ? { ...bom, sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null } : null,
+        bom: bom ? {
+          ...bom,
+          company: companyMap.get(String(bom.company_id ?? "")) ?? null,
+          sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null,
+        } : null,
         change_lines: changeLines.map((line) => {
           const currentLine = bomLineMap.get(String(line.bom_line_id ?? ""));
           return {
@@ -667,6 +1035,7 @@ export async function getPackBomChangeRequestHandler(
             old_qty: currentLine ? currentLine.qty ?? null : null,
             old_uom_code: currentLine ? currentLine.uom_code ?? null : null,
             old_has_alternate: currentLine ? Boolean(currentLine.material_group_id) : false,
+            old_is_primary_container: currentLine ? Boolean(currentLine.is_primary_container) : false,
             old_group_id: currentLine ? currentLine.material_group_id ?? null : null,
             old_group: currentLine ? groupMap.get(String(currentLine.material_group_id ?? "")) ?? null : null,
           };
@@ -715,7 +1084,7 @@ export async function approvePackBomChangeRequestHandler(
       const { data: dbLines } = await serviceRoleClient
         .schema("erp_production")
         .from("pack_bom_change_request_line")
-        .select("action, bom_line_id, material_id, qty, uom_code, has_alternate, material_group_id, display_order")
+        .select("action, bom_line_id, material_id, qty, uom_code, has_alternate, material_group_id, is_primary_container, display_order")
         .eq("change_request_id", id)
         .order("display_order");
       changesToApply = (dbLines ?? []) as JsonRecord[];
@@ -744,6 +1113,7 @@ export async function approvePackBomChangeRequestHandler(
       if (change.uom_code != null) update.uom_code = toTrimmedString(change.uom_code) || null;
       if (change.has_alternate != null) update.has_alternate = change.has_alternate === true || change.has_alternate === "true";
       if (change.material_group_id != null) update.material_group_id = toTrimmedString(change.material_group_id) || null;
+      if (change.is_primary_container != null) update.is_primary_container = change.is_primary_container === true || change.is_primary_container === "true";
       if (Object.keys(update).length > 0) {
         editByBomLineId.set(bomLineId, update);
       }
@@ -762,6 +1132,7 @@ export async function approvePackBomChangeRequestHandler(
             uom_code: toTrimmedString(change.uom_code) || null,
             has_alternate: change.has_alternate === true || change.has_alternate === "true",
             material_group_id: toTrimmedString(change.material_group_id) || null,
+            is_primary_container: change.is_primary_container === true || change.is_primary_container === "true",
             display_order: Number(change.display_order) || 999,
           })
       ),
@@ -785,6 +1156,7 @@ export async function approvePackBomChangeRequestHandler(
       .eq("id", id);
 
     if (updateErr) throw new Error("PROD_BCR_APPROVE_FAILED");
+    await syncPackBomConversions(packBomId, ctx.auth_user_id);
 
     return okResponse({ id, status: "APPROVED" }, ctx.request_id, req);
   } catch (err) {

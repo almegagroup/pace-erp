@@ -1587,7 +1587,23 @@ export async function listMaterialPlantExtensionsHandler(
       .eq("material_id", materialId)
       .order("created_at", { ascending: true });
     if (error) throw new Error("OM_MATERIAL_PLANT_EXT_LIST_FAILED");
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    const slocIds = [...new Set(rows.map((row) => String(row.default_storage_location_id ?? "")).filter(Boolean))];
+    const { data: slocRows, error: slocError } = slocIds.length
+      ? await serviceRoleClient
+          .schema("erp_inventory")
+          .from("storage_location_master")
+          .select("id, code, name")
+          .in("id", slocIds)
+      : { data: [], error: null };
+    if (slocError) throw new Error("OM_MATERIAL_PLANT_EXT_LIST_FAILED");
+    const slocMap = new Map((slocRows ?? []).map((row: Record<string, unknown>) => [String(row.id), row]));
+    return okResponse({
+      data: rows.map((row) => ({
+        ...row,
+        default_storage_location: slocMap.get(String(row.default_storage_location_id ?? "")) ?? null,
+      })),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_MATERIAL_PLANT_EXT_LIST_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
