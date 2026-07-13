@@ -69,6 +69,7 @@ import {
   listPackingOrdersHandler,
   getPackingOrderHandler,
   availabilityPreviewPackingOrderHandler,
+  listPackingSfgBatchOptionsHandler,
   createPackingOrderHandler,
   updatePackingOrderLinesHandler,
   linkFoHandler,
@@ -181,6 +182,8 @@ export async function dispatchProductionRoutes(
       return await listPackingOrdersHandler(req, ctx);
     case "GET:/api/production/packing-orders/availability-preview":
       return await availabilityPreviewPackingOrderHandler(req, ctx);
+    case "GET:/api/production/packing-orders/sfg-batches":
+      return await listPackingSfgBatchOptionsHandler(req, ctx);
     case "POST:/api/production/packing-orders":
       return await createPackingOrderHandler(req, ctx);
     case "GET:/api/production/fg-stock-breakdown":

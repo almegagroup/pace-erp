@@ -2737,3 +2737,23 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Files:** `supabase/migrations/20260713172000_reload_postgrest_after_packing_po_direct_create.sql`, `supabase/functions/api/_core/production/packing_order.handlers.ts`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
 
 **Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
+
+---
+
+## 2026-07-13 18:08 IST - Packing PO SFG batch selection and machine source
+
+**Scope implemented:** Fixed the direct Packing PO gap where a STANDARD Packing PO could be created without selecting the SFG batch to consume, leaving the SFG P261 reservation/posting batchless and the machine unresolved.
+
+**Changes:**
+- Added `GET /api/production/packing-orders/sfg-batches` using existing `PROD_ORDER_LIST:VIEW` ACL to return batch-specific SFG availability for a selected company/material/storage location.
+- The batch list resolves source Process PO and machine labels from `batch_number_instance.source_process_order_id -> process_order.machine_id -> machine_master`.
+- Updated Packing PO Page 2 so the SFG row requires a Batch / Source PO selection and shows source PO, machine, available quantity, and shortage for the selected batch.
+- Updated create payload and backend create handling so `sfg_batch_number` is mandatory, SFG availability is checked by `(company_id, material_id, storage_location_id, batch_number)`, and the selected batch/source/machine are stored on `packing_order`, `packing_order_line`, and the SFG `reservation_document`.
+- Updated Final posting to hard-block any legacy/null-batch SFG line before P261 posting, preventing batchless SFG consumption.
+- Updated Packing PO detail drawer to show the resolved machine and SFG batch, plus per-line batch values.
+
+**Dev DB verification / data correction:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. Confirmed PO `940003` was `STANDARD`, had no stock ledger postings yet, but its header/SFG line/SFG reservation had no batch/source/machine. Confirmed available SFG batch `EV02602` at `S003` from Process PO `ASCPROC2627-0001`, machine `MXR-001 - 10KL MIXER -1`, available quantity `20120`. Backfilled only `940003` header, SFG line, and SFG reservation to `EV02602`; post-check confirmed batch and machine were resolved while stock ledger remained untouched.
+
+**Files:** `supabase/functions/api/_core/production/packing_order.handlers.ts`, `supabase/functions/api/_routes/production.routes.ts`, `supabase/functions/api/_acl/route-acl-registry.ts`, `frontend/src/pages/dashboard/production/prodApi.js`, `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts`, `production.routes.ts`, and `route-acl-registry.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.

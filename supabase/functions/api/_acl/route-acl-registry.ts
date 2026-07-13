@@ -276,6 +276,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/production/process-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
     "GET:/api/production/packing-orders":              { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
     "GET:/api/production/packing-orders/availability-preview": { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
+    "GET:/api/production/packing-orders/sfg-batches":  { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
     "POST:/api/production/packing-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
   "GET:/api/production/fg-stock-breakdown":           { skipAcl: false, resourceCode: "PROD_FG_STOCK_BREAKDOWN", action: "VIEW" },
   "GET:/api/production/sfg-qa-documents":            { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "VIEW" },

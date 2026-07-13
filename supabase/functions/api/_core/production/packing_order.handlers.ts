@@ -34,6 +34,7 @@ const PACK_SHORTAGE_ERROR_CODES = new Set([
   "PROD_PACK_STOCK_SHORTAGE",
   "PROD_PACK_SFG_BATCH_REQUIRED",
   "PROD_PACK_RESERVATION_SLOC_REQUIRED",
+  "PROD_PACK_SFG_BATCH_LOOKUP_FAILED",
 ]);
 
 type PackingSfgNeed = {
@@ -55,6 +56,17 @@ type PackingAvailabilityPreviewRow = {
   needed_qty: number;
   available_qty: number;
   short: number;
+};
+
+type PackingSfgBatchOption = {
+  batch_number: string;
+  ledger_qty: number;
+  reserved_qty: number;
+  available_qty: number;
+  process_order_id: string | null;
+  source_po_number: string | null;
+  source_po_status: string | null;
+  machine: JsonRecord | null;
 };
 
 function numberOrNull(value: unknown): number | null {
@@ -169,6 +181,20 @@ async function getStorageLocationMapByIds(ids: string[]): Promise<Map<string, Js
   return map;
 }
 
+async function getMachineMapByIds(ids: string[]): Promise<Map<string, JsonRecord>> {
+  const machineIds = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (machineIds.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_master")
+    .select("id, machine_code, machine_name")
+    .in("id", machineIds);
+  if (error) throw new Error("PROD_PACK_MACHINE_LOOKUP_FAILED");
+  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  return map;
+}
+
 async function assertPackingSfgBatchAvailability(companyId: string, need: PackingSfgNeed): Promise<void> {
   if (!need.materialId || !need.storageLocationId || need.qty <= 0) return;
   if (!need.batchNumber) throw new Error("PROD_PACK_SFG_BATCH_REQUIRED");
@@ -191,6 +217,126 @@ async function assertPackingCreateAvailability(companyId: string, sfgNeed: Packi
   for (const row of rows.pm.values()) {
     if (row.short > 0) throw new Error("PROD_PACK_PM_SHORTAGE");
   }
+}
+
+async function resolvePackingSfgBatchOptions(
+  companyId: string,
+  materialId: string,
+  storageLocationId: string,
+): Promise<PackingSfgBatchOption[]> {
+  if (!companyId || !materialId || !storageLocationId) return [];
+
+  const [ledgerResult, reservationResult] = await Promise.all([
+    serviceRoleClient
+      .schema("erp_inventory")
+      .from("stock_ledger")
+      .select("material_id, storage_location_id, batch_number, direction, quantity")
+      .eq("company_id", companyId)
+      .eq("stock_type_code", "UNRESTRICTED")
+      .eq("material_id", materialId)
+      .eq("storage_location_id", storageLocationId),
+    serviceRoleClient
+      .schema("erp_production")
+      .from("reservation_document")
+      .select("material_id, storage_location_id, batch_number, balance_qty")
+      .eq("company_id", companyId)
+      .eq("material_id", materialId)
+      .eq("storage_location_id", storageLocationId)
+      .in("status", RESERVATION_OPEN_STATUSES),
+  ]);
+  if (ledgerResult.error) {
+    console.error("[packing_order.resolvePackingSfgBatchOptions] ledger query failed:", JSON.stringify(ledgerResult.error));
+    throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
+  }
+  if (reservationResult.error) {
+    console.error("[packing_order.resolvePackingSfgBatchOptions] reservation query failed:", JSON.stringify(reservationResult.error));
+    throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
+  }
+
+  const ledgerByBatch = new Map<string, number>();
+  for (const row of (ledgerResult.data ?? []) as JsonRecord[]) {
+    const batchNumber = toTrimmedString(row.batch_number);
+    if (!batchNumber) continue;
+    const qty = Number(row.quantity ?? 0);
+    const signedQty = String(row.direction) === "IN" ? qty : -qty;
+    ledgerByBatch.set(batchNumber, (ledgerByBatch.get(batchNumber) ?? 0) + signedQty);
+  }
+
+  const reservedByBatch = new Map<string, number>();
+  for (const row of (reservationResult.data ?? []) as JsonRecord[]) {
+    const batchNumber = toTrimmedString(row.batch_number);
+    if (!batchNumber) continue;
+    reservedByBatch.set(batchNumber, (reservedByBatch.get(batchNumber) ?? 0) + Number(row.balance_qty ?? 0));
+  }
+
+  const batchNumbers = [...ledgerByBatch.keys()];
+  if (batchNumbers.length === 0) return [];
+
+  const { data: batchRows, error: batchErr } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .select("batch_number, source_process_order_id")
+    .eq("company_id", companyId)
+    .eq("prodshade_material_id", materialId)
+    .in("batch_number", batchNumbers);
+  if (batchErr) {
+    console.error("[packing_order.resolvePackingSfgBatchOptions] batch instance query failed:", JSON.stringify(batchErr));
+    throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
+  }
+
+  const processOrderIds = [...new Set(((batchRows ?? []) as JsonRecord[])
+    .map((row) => toTrimmedString(row.source_process_order_id))
+    .filter(Boolean))];
+  const { data: processRows, error: processErr } = processOrderIds.length
+    ? await serviceRoleClient
+        .schema("erp_production")
+        .from("process_order")
+        .select("id, po_number, batch_number, status, machine_id")
+        .in("id", processOrderIds)
+    : { data: [], error: null };
+  if (processErr) {
+    console.error("[packing_order.resolvePackingSfgBatchOptions] process order query failed:", JSON.stringify(processErr));
+    throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
+  }
+
+  const machineIds = [...new Set(((processRows ?? []) as JsonRecord[])
+    .map((row) => toTrimmedString(row.machine_id))
+    .filter(Boolean))];
+  const { data: machineRows, error: machineErr } = machineIds.length
+    ? await serviceRoleClient
+        .schema("erp_master")
+        .from("machine_master")
+        .select("id, machine_code, machine_name")
+        .in("id", machineIds)
+    : { data: [], error: null };
+  if (machineErr) {
+    console.error("[packing_order.resolvePackingSfgBatchOptions] machine query failed:", JSON.stringify(machineErr));
+    throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
+  }
+
+  const batchMap = new Map(((batchRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.batch_number), row]));
+  const processMap = new Map(((processRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const machineMap = new Map(((machineRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+
+  return batchNumbers.map((batchNumber) => {
+    const batch = batchMap.get(batchNumber);
+    const processOrderId = toTrimmedString(batch?.source_process_order_id) || null;
+    const processOrder = processOrderId ? processMap.get(processOrderId) ?? null : null;
+    const machineId = toTrimmedString(processOrder?.machine_id);
+    const ledgerQty = ledgerByBatch.get(batchNumber) ?? 0;
+    const reservedQty = reservedByBatch.get(batchNumber) ?? 0;
+    return {
+      batch_number: batchNumber,
+      ledger_qty: ledgerQty,
+      reserved_qty: reservedQty,
+      available_qty: ledgerQty - reservedQty,
+      process_order_id: processOrderId,
+      source_po_number: processOrder ? toTrimmedString(processOrder.po_number) || null : null,
+      source_po_status: processOrder ? toTrimmedString(processOrder.status) || null : null,
+      machine: machineId ? machineMap.get(machineId) ?? null : null,
+    };
+  }).filter((row) => row.available_qty > 0)
+    .sort((a, b) => b.available_qty - a.available_qty || a.batch_number.localeCompare(b.batch_number));
 }
 
 async function computePackingAvailability(
@@ -457,6 +603,26 @@ export async function availabilityPreviewPackingOrderHandler(req: Request, ctx: 
   }
 }
 
+// GET /api/production/packing-orders/sfg-batches?company_id=&material_id=&storage_location_id=
+export async function listPackingSfgBatchOptionsHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const materialId = toTrimmedString(url.searchParams.get("material_id") ?? "");
+    const storageLocationId = toTrimmedString(url.searchParams.get("storage_location_id") ?? "");
+    if (!companyId || !materialId || !storageLocationId) {
+      return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id, material_id and storage_location_id required");
+    }
+
+    const options = await resolvePackingSfgBatchOptions(companyId, materialId, storageLocationId);
+    return okResponse({ data: options }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PACK_SFG_BATCH_LOOKUP_FAILED";
+    return packErr(req, ctx, code, 500, "SFG batch lookup failed");
+  }
+}
+
 // GET /api/production/packing-orders?company_id=&process_order_id=&status=&page=&per_page=
 export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
@@ -557,7 +723,7 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
 
     const poRow = po as JsonRecord;
     const lineRows = (lines ?? []) as JsonRecord[];
-    const [poMaterialMap, lineMaterialMap, slocMap] = await Promise.all([
+    const [poMaterialMap, lineMaterialMap, slocMap, machineMap] = await Promise.all([
       getMaterialMapByIds(
         [String(poRow.material_id ?? "")],
         "[packing_order.getPackingOrder]",
@@ -571,12 +737,14 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
         "id, pace_code, material_name, base_uom_code",
       ),
       getStorageLocationMapByIds(lineRows.map((line) => String(line.issue_sloc_id ?? ""))),
+      getMachineMapByIds([String(poRow.machine_id ?? "")]),
     ]);
 
     return okResponse({
       data: {
         ...poRow,
         material: poMaterialMap.get(String(poRow.material_id ?? "")) ?? null,
+        machine: machineMap.get(String(poRow.machine_id ?? "")) ?? null,
         lines: lineRows.map((line) => ({
           ...line,
           material: lineMaterialMap.get(String(line.material_id ?? "")) ?? null,
@@ -601,9 +769,10 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     const sourcePoType = toUpperTrimmedString(body.source_po_type || mapPackingTypeToSourceType(toTrimmedString(body.po_type)));
     const normalizedSourcePoType = sourcePoType === "MTEST" ? "ZTEST" : sourcePoType;
     const poType = toUpperTrimmedString(body.po_type) || mapSourceTypeToPackingType(normalizedSourcePoType);
-    const processOrderId = toTrimmedString(body.process_order_id) || null;
+    let processOrderId = toTrimmedString(body.process_order_id) || null;
     const materialId = toTrimmedString(body.material_id);
     const sfgMaterialId = toTrimmedString(body.sfg_material_id);
+    const sfgBatchNumber = toTrimmedString(body.sfg_batch_number);
     const skuQty = numberOrNull(body.sku_qty ?? body.num_packs);
     const fgConversionQty = numberOrNull(body.fg_conversion_qty) ?? 1;
     const sfgConversionQty = numberOrNull(body.sfg_conversion_qty);
@@ -617,6 +786,9 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     }
     if (!skuQty || !sfgMaterialId || !sfgConversionQty || !fgStorageLocationId || !sfgStorageLocationId) {
       return packErr(req, ctx, "PROD_PACK_QTY_CONVERSION_REQUIRED", 400, "sku_qty, sfg material, conversion and storage locations required");
+    }
+    if (!sfgBatchNumber) {
+      return packErr(req, ctx, "PROD_PACK_SFG_BATCH_REQUIRED", 422, "SFG batch number is required for Packing PO");
     }
 
     const { data: sku, error: skuErr } = await serviceRoleClient
@@ -683,18 +855,26 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       }
     }
 
-    const issueNeeds: PackingPmNeed[] = [
-      { materialId: sfgMaterialId, storageLocationId: sfgStorageLocationId, qty: sfgTotalQty },
-      ...normalizedPmLines.map((line) => ({
+    const sfgBatchOptions = await resolvePackingSfgBatchOptions(companyId, sfgMaterialId, sfgStorageLocationId);
+    const selectedSfgBatch = sfgBatchOptions.find((batch) => batch.batch_number === sfgBatchNumber) ?? null;
+    if (!selectedSfgBatch) {
+      return packErr(req, ctx, "PROD_PACK_SFG_BATCH_REQUIRED", 422, "Selected SFG batch is not available at this storage location");
+    }
+    if (selectedSfgBatch.available_qty < sfgTotalQty) {
+      return packErr(req, ctx, "PROD_PACK_SFG_BATCH_SHORTAGE", 422, "Selected SFG batch does not have enough available stock");
+    }
+    processOrderId = processOrderId || selectedSfgBatch.process_order_id;
+
+    const pmNeeds: PackingPmNeed[] = normalizedPmLines.map((line) => ({
         materialId: line.materialId,
         storageLocationId: line.storageLocationId,
         qty: skuQty * Number(line.dosageQty ?? 0),
-      })),
-    ];
-    const availabilityRows = await computePackingAvailability(companyId, null, issueNeeds);
-    for (const row of availabilityRows.pm.values()) {
-      if (row.short > 0) throw new Error("PROD_PACK_STOCK_SHORTAGE");
-    }
+      }));
+    await assertPackingCreateAvailability(
+      companyId,
+      { materialId: sfgMaterialId, storageLocationId: sfgStorageLocationId, batchNumber: sfgBatchNumber, qty: sfgTotalQty },
+      pmNeeds,
+    );
 
     const poNumber = await generateGlobalDocNumber("PACK_PO");
     const now = new Date().toISOString();
@@ -707,6 +887,8 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         po_type: poType,
         source_po_type: normalizedSourcePoType,
         process_order_id: processOrderId,
+        machine_id: toTrimmedString(selectedSfgBatch.machine?.id) || null,
+        batch_number: sfgBatchNumber,
         material_id: materialId,
         pack_code_id: packCodeId,
         fill_qty_per_pack: sfgConversionQty,
@@ -747,7 +929,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         packing_order_id: packPoId,
         line_type: "SFG",
         material_id: sfgMaterialId,
-        batch_number: null,
+        batch_number: sfgBatchNumber,
         qty_per_pack: sfgConversionQty,
         total_qty: sfgTotalQty,
         actual_qty: null,
@@ -796,7 +978,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         uom_code: toTrimmedString(line.uom_code) || "KG",
         issued_qty: 0,
         status: "OPEN",
-        batch_number: null,
+        batch_number: String(line.line_type) === "SFG" ? sfgBatchNumber : null,
         created_by: ctx.auth_user_id,
         created_at: now,
         last_updated_by: ctx.auth_user_id,
@@ -968,6 +1150,10 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
 
     const defaultPmSlocId = (segConfig as JsonRecord | null)?.pm_sloc_id as string | null;
     const lineRows = (stockLines ?? []) as JsonRecord[];
+    const missingSfgBatch = lineRows.some((line) => String(line.line_type ?? "") === "SFG" && !toTrimmedString(line.batch_number));
+    if (missingSfgBatch) {
+      return packErr(req, ctx, "PROD_PACK_SFG_BATCH_REQUIRED", 422, "SFG batch number is required before final posting");
+    }
     const materialMap = await getMaterialMapByIds(
       lineRows.map((line) => String(line.material_id ?? "")),
       "[packing_order.finalizePackingOrder]",

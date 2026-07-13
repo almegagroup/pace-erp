@@ -19,6 +19,7 @@ import {
   finalizePackingOrder,
   getPackBom,
   getPackingOrder,
+  listPackingSfgBatches,
   listPackBoms,
   listPackingOrders,
   reversePackingOrder,
@@ -44,6 +45,8 @@ const ERRORS = {
   PROD_PACK_PM_LINE_INVALID: "Every PM line needs material, dosage and storage location.",
   PROD_PACK_PM_ONLY: "Only PM materials are allowed in PM lines.",
   PROD_PACK_STOCK_SHORTAGE: "Stock is short for one or more SFG/PM lines.",
+  PROD_PACK_SFG_BATCH_REQUIRED: "Select an available SFG batch before creating/final posting.",
+  PROD_PACK_SFG_BATCH_SHORTAGE: "Selected SFG batch does not have enough available stock.",
   PROD_PACK_STATUS_INVALID: "Action not valid for current status.",
   PROD_PACKING_PO_FINAL: "Packing PO final permission is missing.",
 };
@@ -67,6 +70,10 @@ function slocLabel(location) {
   return [location?.code || location?.location_code, location?.name || location?.location_name]
     .filter(Boolean)
     .join(" - ");
+}
+
+function machineLabel(machine) {
+  return [machine?.machine_code, machine?.machine_name].filter(Boolean).join(" - ");
 }
 
 function qty(value) {
@@ -110,6 +117,7 @@ export default function PackingOrderPage() {
     sku_qty: "",
     fg_conversion_qty: "1",
     sfg_conversion_qty: "",
+    sfg_batch_number: "",
     fg_storage_location_id: "",
     sfg_material_id: "",
     sfg_storage_location_id: "",
@@ -137,6 +145,7 @@ export default function PackingOrderPage() {
       sku_qty: "",
       fg_conversion_qty: "1",
       sfg_conversion_qty: "",
+      sfg_batch_number: "",
       fg_storage_location_id: "",
       sfg_material_id: "",
       sfg_storage_location_id: "",
@@ -211,9 +220,6 @@ export default function PackingOrderPage() {
     standard_qty: skuQty * asNumber(line.dosage_per_sku),
   }));
   const availabilityNeeds = [
-    ...(form.sfg_material_id && form.sfg_storage_location_id && sfgStandardQty > 0
-      ? [{ material_id: form.sfg_material_id, storage_location_id: form.sfg_storage_location_id, qty: sfgStandardQty }]
-      : []),
     ...pmPreviewLines
       .filter((line) => line.material_id && line.storage_location_id && line.standard_qty > 0)
       .map((line) => ({ material_id: line.material_id, storage_location_id: line.storage_location_id, qty: line.standard_qty })),
@@ -228,16 +234,25 @@ export default function PackingOrderPage() {
     select: (data) => data?.data ?? data ?? [],
   });
   const availabilityByKey = new Map((availabilityPreviewQ.data ?? []).map((row) => [`${row.material_id}::${row.storage_location_id}`, row]));
-  const sfgAvailability = form.sfg_material_id && form.sfg_storage_location_id
-    ? availabilityByKey.get(`${form.sfg_material_id}::${form.sfg_storage_location_id}`) ?? null
-    : null;
+  const sfgBatchesQ = useQuery({
+    queryKey: ["packing-sfg-batches", effectiveCompanyId, form.sfg_material_id, form.sfg_storage_location_id],
+    queryFn: () => listPackingSfgBatches({
+      company_id: effectiveCompanyId,
+      material_id: form.sfg_material_id,
+      storage_location_id: form.sfg_storage_location_id,
+    }),
+    enabled: createOpen && createStep === 2 && Boolean(effectiveCompanyId && form.sfg_material_id && form.sfg_storage_location_id),
+    select: (data) => data?.data ?? data ?? [],
+  });
+  const selectedSfgBatch = (sfgBatchesQ.data ?? []).find((batch) => batch.batch_number === form.sfg_batch_number) ?? null;
+  const sfgShortage = selectedSfgBatch ? Math.max(0, sfgStandardQty - Number(selectedSfgBatch.available_qty ?? 0)) : 0;
   const pmShortLines = pmPreviewLines.filter((line) => {
     const row = line.material_id && line.storage_location_id
       ? availabilityByKey.get(`${line.material_id}::${line.storage_location_id}`)
       : null;
     return row && Number(row.short ?? 0) > 0;
   });
-  const hasShortage = Boolean((sfgAvailability && Number(sfgAvailability.short ?? 0) > 0) || pmShortLines.length > 0);
+  const hasShortage = Boolean(sfgShortage > 0 || pmShortLines.length > 0);
 
   function applyBomDefaults() {
     const packCode = String(selectedSku?.pack_code ?? "");
@@ -327,7 +342,11 @@ export default function PackingOrderPage() {
       toast("Enter PO Qty, conversion and FG/SFG storage locations.", "error");
       return;
     }
-    if (availabilityPreviewQ.isFetching) {
+    if (!form.sfg_batch_number) {
+      toast("Select SFG batch number before creating Packing PO.", "error");
+      return;
+    }
+    if (availabilityPreviewQ.isFetching || sfgBatchesQ.isFetching) {
       toast("Stock check is still loading. Try again in a moment.", "error");
       return;
     }
@@ -345,6 +364,8 @@ export default function PackingOrderPage() {
         sku_qty: skuQty,
         fg_conversion_qty: fgConversionQty,
         sfg_conversion_qty: sfgConversionQty,
+        sfg_batch_number: form.sfg_batch_number,
+        process_order_id: selectedSfgBatch?.process_order_id || null,
         fg_storage_location_id: form.fg_storage_location_id,
         sfg_material_id: form.sfg_material_id,
         sfg_storage_location_id: form.sfg_storage_location_id,
@@ -461,7 +482,15 @@ export default function PackingOrderPage() {
                 <TransactionCompanySelector
                   runtimeContext={runtimeContext}
                   value={effectiveCompanyId}
-                  onChange={(value) => setForm((current) => ({ ...current, company_id: value, sku_material_id: "" }))}
+                  onChange={(value) => setForm((current) => ({
+                    ...current,
+                    company_id: value,
+                    sku_material_id: "",
+                    sfg_batch_number: "",
+                    sfg_material_id: "",
+                    sfg_storage_location_id: "",
+                    pm_lines: [],
+                  }))}
                   label="Company"
                 />
                 <label className="text-xs text-slate-500">
@@ -482,7 +511,16 @@ export default function PackingOrderPage() {
                   FG SKU *
                   <ErpComboboxField
                     value={form.sku_material_id}
-                    onChange={(value) => setForm((current) => ({ ...current, sku_material_id: value, sku_qty: "", sfg_conversion_qty: "", pm_lines: [] }))}
+                    onChange={(value) => setForm((current) => ({
+                      ...current,
+                      sku_material_id: value,
+                      sku_qty: "",
+                      sfg_conversion_qty: "",
+                      sfg_batch_number: "",
+                      sfg_material_id: "",
+                      sfg_storage_location_id: "",
+                      pm_lines: [],
+                    }))}
                     options={(activeBomsQ.data ?? []).map((bom) => ({ value: bom.sku_material_id, label: materialLabel(bom.sku) }))}
                     placeholder={activeBomsQ.isFetching ? "Loading ACTIVE Pack BOM SKUs..." : "-- Select FG SKU --"}
                     emptyStateLabel="No ACTIVE Pack BOM SKU found"
@@ -499,7 +537,7 @@ export default function PackingOrderPage() {
                 <div><p className="text-xs text-slate-400">Company</p><p className="font-semibold">{companyLabel(activeBom?.company)}</p></div>
                 <div><p className="text-xs text-slate-400">SKU</p><p className="font-semibold">{materialLabel(selectedSku)}</p></div>
                 <div><p className="text-xs text-slate-400">Description</p><p>{selectedSku?.document_name || selectedSku?.material_name || "-"}</p></div>
-                <div><p className="text-xs text-slate-400">Machine</p><p>--</p></div>
+                <div><p className="text-xs text-slate-400">Machine</p><p>{machineLabel(selectedSfgBatch?.machine) || "--"}</p></div>
                 <div><p className="text-xs text-slate-400">Type</p><p>{form.source_po_type} / {packingPoType}</p></div>
               </div>
 
@@ -525,12 +563,13 @@ export default function PackingOrderPage() {
               </ErpSectionCard>
 
               <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto">
-                <table className="w-full text-sm border-collapse min-w-[900px]">
+                <table className="w-full text-sm border-collapse min-w-[1100px]">
                   <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                     <tr>
                       <th className="text-left py-2 px-3 border-b">Line</th>
                       <th className="text-left py-2 px-3 border-b">Material</th>
                       <th className="text-left py-2 px-3 border-b">Storage Location</th>
+                      <th className="text-left py-2 px-3 border-b">Batch / Source PO</th>
                       <th className="text-right py-2 px-3 border-b">Standard Qty</th>
                       <th className="text-right py-2 px-3 border-b">Available</th>
                       <th className="text-right py-2 px-3 border-b">Shortage</th>
@@ -544,6 +583,7 @@ export default function PackingOrderPage() {
                       <td className="py-2 px-3 min-w-[240px]">
                         <ErpComboboxField value={form.fg_storage_location_id} onChange={(value) => setForm((current) => ({ ...current, fg_storage_location_id: value }))} options={fgLocationOptions} placeholder="-- Select F-location --" />
                       </td>
+                      <td className="py-2 px-3 text-slate-400">--</td>
                       <td className="py-2 px-3 text-right font-mono">{qty(skuQty)}</td>
                       <td className="py-2 px-3 text-right text-slate-400">--</td>
                       <td className="py-2 px-3 text-right text-slate-400">--</td>
@@ -553,12 +593,29 @@ export default function PackingOrderPage() {
                       <td className="py-2 px-3 font-semibold">SFG</td>
                       <td className="py-2 px-3">{materialLabel(lineMaterialFromBom(sfgLine))}</td>
                       <td className="py-2 px-3 min-w-[240px]">
-                        <ErpComboboxField value={form.sfg_storage_location_id} onChange={(value) => setForm((current) => ({ ...current, sfg_storage_location_id: value }))} options={storageOptions} placeholder="-- Select SFG location --" />
+                        <ErpComboboxField
+                          value={form.sfg_storage_location_id}
+                          onChange={(value) => setForm((current) => ({ ...current, sfg_storage_location_id: value, sfg_batch_number: "" }))}
+                          options={storageOptions}
+                          placeholder="-- Select SFG location --"
+                        />
+                      </td>
+                      <td className="py-2 px-3 min-w-[260px]">
+                        <ErpComboboxField
+                          value={form.sfg_batch_number}
+                          onChange={(value) => setForm((current) => ({ ...current, sfg_batch_number: value }))}
+                          options={(sfgBatchesQ.data ?? []).map((batch) => ({
+                            value: batch.batch_number,
+                            label: `${batch.batch_number} | ${batch.source_po_number || "--"} | ${machineLabel(batch.machine) || "--"} | Avl ${qty(batch.available_qty)}`,
+                          }))}
+                          placeholder={sfgBatchesQ.isFetching ? "Loading SFG batches..." : "-- Select SFG batch --"}
+                          emptyStateLabel="No available SFG batch found"
+                        />
                       </td>
                       <td className="py-2 px-3 text-right font-mono">{qty(sfgStandardQty)} KG</td>
-                      <td className="py-2 px-3 text-right font-mono">{sfgAvailability ? qty(sfgAvailability.available_qty) : availabilityPreviewQ.isFetching ? "..." : "--"}</td>
-                      <td className={`py-2 px-3 text-right font-mono ${sfgAvailability && Number(sfgAvailability.short ?? 0) > 0 ? "text-rose-600 font-semibold" : ""}`}>
-                        {sfgAvailability ? qty(sfgAvailability.short) : availabilityPreviewQ.isFetching ? "..." : "--"}
+                      <td className="py-2 px-3 text-right font-mono">{selectedSfgBatch ? qty(selectedSfgBatch.available_qty) : sfgBatchesQ.isFetching ? "..." : "--"}</td>
+                      <td className={`py-2 px-3 text-right font-mono ${sfgShortage > 0 ? "text-rose-600 font-semibold" : ""}`}>
+                        {selectedSfgBatch ? qty(sfgShortage) : sfgBatchesQ.isFetching ? "..." : "--"}
                       </td>
                       <td className="py-2 px-3 font-mono">P261</td>
                     </tr>
@@ -641,14 +698,14 @@ export default function PackingOrderPage() {
 
               {hasShortage ? (
                 <div className="border border-rose-200 bg-rose-50 text-rose-700 px-3 py-2 rounded text-sm">
-                  Stock shortage exists for the selected storage location. Change SLoc or receive stock before creating this Packing PO.
+                  Stock shortage exists for the selected SFG batch or PM storage location. Change batch/SLoc or receive stock before creating this Packing PO.
                 </div>
               ) : null}
 
               <div className="flex justify-between">
                 <button type="button" className="px-4 py-2 border rounded text-sm" onClick={() => setCreateStep(1)}>Back</button>
-                <button type="button" className="px-5 py-2 bg-sky-600 text-white rounded text-sm disabled:opacity-50" disabled={saving || availabilityPreviewQ.isFetching || hasShortage} onClick={handleCreate}>
-                  {saving ? "Creating..." : availabilityPreviewQ.isFetching ? "Checking Stock..." : "Create Packing PO"}
+                <button type="button" className="px-5 py-2 bg-sky-600 text-white rounded text-sm disabled:opacity-50" disabled={saving || availabilityPreviewQ.isFetching || sfgBatchesQ.isFetching || hasShortage} onClick={handleCreate}>
+                  {saving ? "Creating..." : (availabilityPreviewQ.isFetching || sfgBatchesQ.isFetching) ? "Checking Stock..." : "Create Packing PO"}
                 </button>
               </div>
             </>
@@ -666,7 +723,8 @@ export default function PackingOrderPage() {
               <div><p className="text-xs text-slate-400">Status</p><StatusBadge status={order.status} /></div>
               <div><p className="text-xs text-slate-400">Type</p><p>{order.source_po_type || "-"} / {order.po_type}</p></div>
               <div><p className="text-xs text-slate-400">SKU</p><p>{materialLabel(order.material)}</p></div>
-              <div><p className="text-xs text-slate-400">Machine</p><p>--</p></div>
+              <div><p className="text-xs text-slate-400">Machine</p><p>{machineLabel(order.machine) || "--"}</p></div>
+              <div><p className="text-xs text-slate-400">SFG Batch</p><p className="font-mono">{order.batch_number || "-"}</p></div>
               <div><p className="text-xs text-slate-400">SKU Qty</p><p className="font-mono">{qty(order.sku_qty ?? order.num_packs)}</p></div>
               <div><p className="text-xs text-slate-400">FG/SFG Conv</p><p className="font-mono">{qty(order.fg_conversion_qty)} / {qty(order.sfg_conversion_qty)}</p></div>
               <div><p className="text-xs text-slate-400">SFG Qty</p><p className="font-mono">{qty(order.planned_qty_kg)}</p></div>
@@ -679,6 +737,7 @@ export default function PackingOrderPage() {
                     <th className="text-left py-2 px-3 border-b">Type</th>
                     <th className="text-left py-2 px-3 border-b">Material</th>
                     <th className="text-left py-2 px-3 border-b">Storage Location</th>
+                    <th className="text-left py-2 px-3 border-b">Batch</th>
                     <th className="text-right py-2 px-3 border-b">Qty / SKU</th>
                     <th className="text-right py-2 px-3 border-b">Total Qty</th>
                     <th className="text-left py-2 px-3 border-b">Movement</th>
@@ -690,6 +749,7 @@ export default function PackingOrderPage() {
                       <td className="py-2 px-3 font-semibold">{line.line_type}</td>
                       <td className="py-2 px-3">{materialLabel(line.material)}</td>
                       <td className="py-2 px-3">{slocLabel(line.storage_location)}</td>
+                      <td className="py-2 px-3 font-mono">{line.batch_number || "--"}</td>
                       <td className="py-2 px-3 text-right font-mono">{qty(line.qty_per_pack)}</td>
                       <td className="py-2 px-3 text-right font-mono">{qty(line.total_qty)}</td>
                       <td className="py-2 px-3 font-mono">{line.movement_type_code || (line.line_type === "FG" ? "P101" : "P261")}</td>
