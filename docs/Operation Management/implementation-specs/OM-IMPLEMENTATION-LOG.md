@@ -2719,3 +2719,21 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Files:** `supabase/functions/api/_core/production/packing_order.handlers.ts`, `supabase/functions/api/_routes/production.routes.ts`, `supabase/functions/api/_acl/route-acl-registry.ts`, `frontend/src/pages/dashboard/production/prodApi.js`, `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
 
 **Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts`, `production.routes.ts`, and `route-acl-registry.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
+
+---
+
+## 2026-07-13 17:33 IST - Packing PO create 500 schema-cache cleanup
+
+**Scope implemented:** Fixed the follow-up Packing PO create 500 after stock shortages were cleared.
+
+**Changes:**
+- Added `supabase/migrations/20260713172000_reload_postgrest_after_packing_po_direct_create.sql` to reload PostgREST schema cache after the Packing PO direct-create column migration.
+- Directly issued the same Dev schema reload.
+- Updated `createPackingOrderHandler()` so line-insert and reservation-insert failures log the actual backend error.
+- Added cleanup on create failure so a newly-created Packing PO header is deleted if line insertion or reservation insertion fails, avoiding line-less ghost Packing POs.
+
+**Dev DB verification / cleanup:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. Confirmed the failed 500 attempts had created `packing_order` headers `940001` and `940002` with zero `packing_order_line` rows, proving the failure happened after header insert and before/at line insert. Pushed the reload migration, directly reloaded PostgREST schema cache, and deleted only those two line-less failed headers using a guarded `DELETE` that required no child lines.
+
+**Files:** `supabase/migrations/20260713172000_reload_postgrest_after_packing_po_direct_create.sql`, `supabase/functions/api/_core/production/packing_order.handlers.ts`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.

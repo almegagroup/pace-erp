@@ -337,6 +337,18 @@ async function postStockMovement(params: {
   return data[0] as { stock_document_id: string; stock_ledger_id: string };
 }
 
+async function cleanupPackingOrderAfterCreateFailure(packPoId: string, label: string): Promise<void> {
+  if (!packPoId) return;
+  const { error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("packing_order")
+    .delete()
+    .eq("id", packPoId);
+  if (error) {
+    console.error(`[packing_order.createPackingOrder] cleanup failed after ${label}:`, JSON.stringify(error));
+  }
+}
+
 // GET /api/production/fg-stock-breakdown?material_id=&company_id=
 export async function fgStockBreakdownHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
@@ -765,7 +777,11 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       .from("packing_order_line")
       .insert(lineRows)
       .select("id, line_type, material_id, batch_number, total_qty, issue_sloc_id, display_order, uom_code");
-    if (lineErr) throw new Error("PROD_PACK_LINES_CREATE_FAILED");
+    if (lineErr) {
+      console.error("[packing_order.createPackingOrder] line insert failed:", JSON.stringify(lineErr));
+      await cleanupPackingOrderAfterCreateFailure(packPoId, "line insert failure");
+      throw new Error("PROD_PACK_LINES_CREATE_FAILED");
+    }
 
     const reservationRows: JsonRecord[] = ((insertedLines ?? []) as JsonRecord[])
       .filter((line) => String(line.line_type) !== "FG")
@@ -795,6 +811,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     const reservationError = reservationResults.find((result) => result.error)?.error;
     if (reservationError) {
       console.error("[packing_order.createPackingOrder] reservation insert failed:", JSON.stringify(reservationError));
+      await cleanupPackingOrderAfterCreateFailure(packPoId, "reservation insert failure");
       throw new Error("PROD_PACK_RESERVATION_CREATE_FAILED");
     }
 
