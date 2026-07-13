@@ -309,3 +309,10 @@ This file is Codex's own work log for the Claude+Codex workflow, used to record 
 - Files touched: `supabase/functions/api/_core/production/pack_bom.handlers.ts`, `frontend/src/pages/dashboard/production/PackBomCreatePage.jsx`, `docs/Codex-Log.md`, and `docs/Operation Management/implementation-specs/OM-IMPLEMENTATION-LOG.md`.
 - Dev DB verification: Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb` because native MCP tools were not surfaced. Confirmed CMP003 has 10 active FG SKU company mappings and one active company F-location: `F003 - CONSTRUCTION LIQUID FG STORE`.
 - Verification: `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `pack_bom.handlers.ts` with dummy Supabase env after rerunning outside the sandbox due the known Windows EPERM sandbox issue. No ambiguity was guessed through.
+
+### 2026-07-13 15:41 IST
+- Task: Applied the PR05 follow-up usability correction so already-created Pack BOM SKUs no longer remain visible in the Pack BOM Create SKU dropdown.
+- Changes: Updated `supabase/functions/api/_core/production/pack_bom.handlers.ts` so `listPackBomEligibleSkusHandler()` excludes SKUs that already have a `DRAFT` or `ACTIVE` Pack BOM for the selected company, matching the existing create-time duplicate guard earlier in the user flow.
+- Files touched: `supabase/functions/api/_core/production/pack_bom.handlers.ts`, `docs/Codex-Log.md`, and `docs/Operation Management/implementation-specs/OM-IMPLEMENTATION-LOG.md`.
+- Dev DB verification: Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. Confirmed CMP003 has 10 mapped FG SKUs, 6 existing open/active Pack BOMs, and therefore 4 remaining SKUs expected in the create dropdown after the exclusion.
+- Verification: `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `pack_bom.handlers.ts` with dummy Supabase env after rerunning outside the sandbox due the known Windows EPERM sandbox issue.

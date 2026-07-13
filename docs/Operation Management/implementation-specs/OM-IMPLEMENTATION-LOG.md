@@ -2660,3 +2660,19 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Files:** `supabase/functions/api/_core/production/pack_bom.handlers.ts`, `frontend/src/pages/dashboard/production/PackBomCreatePage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
 
 **Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `pack_bom.handlers.ts` with dummy Supabase env. No ambiguity was guessed through.
+
+---
+
+## 2026-07-13 15:41 IST — PR05 duplicate-created SKU dropdown exclusion
+
+**Scope implemented:** Follow-up usability correction for Pack BOM Create: once a company already has a `DRAFT` or `ACTIVE` Pack BOM for an FG SKU, that SKU is removed from the create dropdown.
+
+**Changes:**
+- Updated `listPackBomEligibleSkusHandler()` in `pack_bom.handlers.ts` to read existing company Pack BOMs in `DRAFT`/`ACTIVE` statuses and exclude those `sku_material_id` values before fetching eligible FG SKU labels.
+- Kept the existing create-time duplicate guard unchanged; this pass only moves the same rule earlier into the dropdown for clearer UX.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. Confirmed CMP003 has 10 mapped FG SKUs, 6 existing open/active Pack BOMs, and 4 remaining dropdown candidates: `6766SN86000`, `6766SN86599`, `6763HG32000`, `6763HG32599`.
+
+**Files:** `supabase/functions/api/_core/production/pack_bom.handlers.ts`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `pack_bom.handlers.ts` with dummy Supabase env.

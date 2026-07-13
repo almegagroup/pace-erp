@@ -349,11 +349,25 @@ export async function listPackBomEligibleSkusHandler(
     const skuIds = [...new Set(((companyRows ?? []) as JsonRecord[]).map((row) => String(row.material_id ?? "")).filter(Boolean))];
     if (skuIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
+    const { data: existingBoms, error: existingErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("pack_bom")
+      .select("sku_material_id")
+      .eq("company_id", companyId)
+      .in("status", BOM_OPEN_STATUSES);
+    if (existingErr) throw new Error("PROD_BOM_ELIGIBLE_LOOKUP_FAILED");
+
+    const existingSkuIds = new Set(((existingBoms ?? []) as JsonRecord[])
+      .map((row) => toTrimmedString(row.sku_material_id))
+      .filter(Boolean));
+    const availableSkuIds = skuIds.filter((id) => !existingSkuIds.has(id));
+    if (availableSkuIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
     const { data: skuRows, error: skuErr } = await serviceRoleClient
       .schema("erp_master")
       .from("material_master")
       .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, shade_code, pack_code, status")
-      .in("id", skuIds)
+      .in("id", availableSkuIds)
       .eq("material_type", "FG")
       .eq("status", "ACTIVE");
     if (skuErr) throw new Error("PROD_BOM_ELIGIBLE_SKU_FAILED");
