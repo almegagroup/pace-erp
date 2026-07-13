@@ -112,7 +112,7 @@ async function getStorageLocationMapByIds(storageLocationIds: string[]): Promise
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
     .from("storage_location_master")
-    .select("id, location_code, location_name")
+    .select("id, code, name")
     .in("id", ids);
   if (error) {
     logDbError("getStorageLocationMapByIds", error);
@@ -200,7 +200,7 @@ function sumDecidedQty(decisionLines: JsonRecord[]): number {
 async function listMandatoryMctConfigs(companyId: string, materialCategory: string): Promise<JsonRecord[]> {
   if (!companyId || !materialCategory) return [];
   const { data, error } = await serviceRoleClient
-    .schema("erp_procurement")
+    .schema("erp_master")
     .from("qa_category_test_config")
     .select(`
       id,

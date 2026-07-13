@@ -131,6 +131,7 @@ export default function SfgResultRecordingPage() {
     { key: "po_number", label: "PO Number", width: "140px" },
     { key: "batch_number", label: "Batch Number", width: "150px" },
     { key: "prodshade", label: "Prodshade" },
+    { key: "category", label: "Category", width: "180px" },
     { key: "stroke", label: "Stroke", width: "120px" },
     { key: "verified_at", label: "Verified Date", width: "150px" },
     { key: "status", label: "Recording Status", width: "150px" },
@@ -279,6 +280,7 @@ export default function SfgResultRecordingPage() {
                             <td className="px-2 py-1.5 font-mono font-semibold text-sky-700">{row.po_number || "--"}</td>
                             <td className="px-2 py-1.5 font-mono text-slate-600">{row.batch_number || "--"}</td>
                             <td className="px-2 py-1.5">{material.material_name || material.pace_code || "--"}</td>
+                            <td className="px-2 py-1.5">{material.material_category || "--"}</td>
                             <td className="px-2 py-1.5">{row.stroke_number || "--"}</td>
                             <td className="px-2 py-1.5">{row.verified_at ? String(row.verified_at).slice(0, 10) : "--"}</td>
                             <td className="px-2 py-1.5">
@@ -375,8 +377,8 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
   );
 
   const loading = detailQuery.isLoading;
-  const storageLocationLabel = detail?.storage_location?.location_name
-    || detail?.storage_location?.location_code
+  const storageLocationLabel = detail?.storage_location?.name
+    || detail?.storage_location?.code
     || detail?.storage_location_id
     || "--";
 
