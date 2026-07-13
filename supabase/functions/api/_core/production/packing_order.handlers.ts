@@ -31,6 +31,7 @@ const RESERVATION_OPEN_STATUSES = ["OPEN", "PARTIAL"];
 const PACK_SHORTAGE_ERROR_CODES = new Set([
   "PROD_PACK_SFG_BATCH_SHORTAGE",
   "PROD_PACK_PM_SHORTAGE",
+  "PROD_PACK_STOCK_SHORTAGE",
   "PROD_PACK_SFG_BATCH_REQUIRED",
   "PROD_PACK_RESERVATION_SLOC_REQUIRED",
 ]);
@@ -47,6 +48,30 @@ type PackingPmNeed = {
   storageLocationId: string;
   qty: number;
 };
+
+function numberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function mapPackingTypeToSourceType(poType: string): string {
+  const normalized = toUpperTrimmedString(poType);
+  if (normalized === "PMTO") return "MTO";
+  if (normalized === "PHPS") return "HPS";
+  if (normalized === "PMTS") return "MTS";
+  if (normalized === "PTEST") return "ZTEST";
+  return "";
+}
+
+function mapSourceTypeToPackingType(sourceType: string): string {
+  const normalized = toUpperTrimmedString(sourceType);
+  if (normalized === "MTO") return "PMTO";
+  if (normalized === "HPS") return "PHPS";
+  if (normalized === "MTS") return "PMTS";
+  if (normalized === "ZTEST" || normalized === "MTEST") return "PTEST";
+  return "";
+}
 
 function todayIso(): string { return new Date().toISOString().slice(0, 10); }
 
@@ -382,8 +407,8 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
     let query = serviceRoleClient
       .schema("erp_production").from("packing_order")
       .select(`
-        id, company_id, po_number, po_type, process_order_id, material_id,
-        pack_code_id, fill_qty_per_pack, num_packs, planned_qty_kg, actual_qty_kg,
+        id, company_id, po_number, po_type, source_po_type, process_order_id, material_id,
+        pack_code_id, fill_qty_per_pack, num_packs, sku_qty, fg_conversion_qty, sfg_conversion_qty, planned_qty_kg, actual_qty_kg,
         status, plan_feed_id, segment_code, created_by, created_at,
         finalized_at, last_updated_at,
         pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type),
@@ -440,7 +465,7 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
       .schema("erp_production").from("packing_order")
       .select(`
         *,
-        pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type, billing_uom),
+        pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type, billing_uom, outer_uom_code),
         process_order:process_order!process_order_id(id, po_number, batch_number, status, segment_code)
       `)
       .eq("id", id).maybeSingle();
@@ -455,7 +480,7 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
       .schema("erp_production").from("packing_order_line")
       .select(`
         id, line_type, material_id, batch_number, qty_per_pack, total_qty,
-        actual_qty, issue_sloc_id, display_order
+        actual_qty, issue_sloc_id, uom_code, movement_type_code, has_alternate, material_group_id, display_order
       `)
       .eq("packing_order_id", id)
       .order("line_type")
@@ -501,96 +526,110 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
 }
 
 // POST /api/production/packing-orders
-// Creates at STANDARD. Auto-adds SFG line from linked Process Order batch.
+// Creates at STANDARD directly from Company + Type + FG SKU. Packing PO has no QA/Verify step.
 export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
     const body = await parseBody(req);
 
     const companyId = toTrimmedString(body.company_id);
-    const poType = toUpperTrimmedString(body.po_type);
-    const processOrderId = toTrimmedString(body.process_order_id);
+    const sourcePoType = toUpperTrimmedString(body.source_po_type || mapPackingTypeToSourceType(toTrimmedString(body.po_type)));
+    const normalizedSourcePoType = sourcePoType === "MTEST" ? "ZTEST" : sourcePoType;
+    const poType = toUpperTrimmedString(body.po_type) || mapSourceTypeToPackingType(normalizedSourcePoType);
+    const processOrderId = toTrimmedString(body.process_order_id) || null;
     const materialId = toTrimmedString(body.material_id);
-    const packCodeId = toTrimmedString(body.pack_code_id);
-    const fillQtyPerPack = parsePositiveNumber(body.fill_qty_per_pack);
-    const numPacks = parsePositiveInt(body.num_packs);
+    const sfgMaterialId = toTrimmedString(body.sfg_material_id);
+    const skuQty = numberOrNull(body.sku_qty ?? body.num_packs);
+    const fgConversionQty = numberOrNull(body.fg_conversion_qty) ?? 1;
+    const sfgConversionQty = numberOrNull(body.sfg_conversion_qty);
+    const fgStorageLocationId = toTrimmedString(body.fg_storage_location_id);
+    const sfgStorageLocationId = toTrimmedString(body.sfg_storage_location_id);
     const planFeedId = toTrimmedString(body.plan_feed_id) || null;
+    const pmLines = Array.isArray(body.pm_lines) ? body.pm_lines as JsonRecord[] : [];
 
-    if (!companyId || !VALID_PACK_PO_TYPES.has(poType) || !processOrderId || !materialId || !packCodeId) {
-      return packErr(req, ctx, "PROD_PACK_INVALID", 400,
-        "company_id, po_type, process_order_id, material_id, pack_code_id required");
+    if (!companyId || !VALID_PACK_PO_TYPES.has(poType) || !["MTO", "HPS", "MTS", "ZTEST"].includes(normalizedSourcePoType) || !materialId) {
+      return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id, source_po_type, po_type and material_id required");
+    }
+    if (!skuQty || !sfgMaterialId || !sfgConversionQty || !fgStorageLocationId || !sfgStorageLocationId) {
+      return packErr(req, ctx, "PROD_PACK_QTY_CONVERSION_REQUIRED", 400, "sku_qty, sfg material, conversion and storage locations required");
     }
 
-    // Verify process order exists and is BATCH_STARTED or later
-    const { data: procOrder } = await serviceRoleClient
-      .schema("erp_production").from("process_order")
-      .select("id, status, batch_number, segment_code, material_id, company_id")
-      .eq("id", processOrderId).maybeSingle();
-
-    if (!procOrder) return packErr(req, ctx, "PROD_PACK_PROC_ORDER_NOT_FOUND", 404, "Process order not found");
-    const procStatus = (procOrder as JsonRecord).status as string;
-    if (!["BATCH_STARTED","FINAL","VERIFIED"].includes(procStatus)) {
-      return packErr(req, ctx, "PROD_PACK_PROC_ORDER_NOT_READY", 422,
-        "Process order must be BATCH_STARTED or later to create Packing Order");
+    const { data: sku, error: skuErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .select("id, material_type, pack_code, base_uom_code")
+      .eq("id", materialId)
+      .maybeSingle();
+    if (skuErr) throw new Error("PROD_PACK_SKU_LOOKUP_FAILED");
+    if (!sku || String((sku as JsonRecord).material_type) !== "FG") {
+      return packErr(req, ctx, "PROD_PACK_SKU_INVALID", 422, "Packing PO material must be an FG SKU");
     }
 
-    // Calculate planned qty
-    const plannedQtyKg = fillQtyPerPack && numPacks
-      ? fillQtyPerPack * numPacks
-      : parsePositiveNumber(body.planned_qty_kg) ?? null;
-    if (!plannedQtyKg) {
-      return packErr(req, ctx, "PROD_PACK_PLANNED_QTY_REQUIRED", 400, "planned_qty_kg or fill_qty_per_pack and num_packs required");
-    }
+    const { data: packCodeRow, error: packCodeErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("pack_code_master")
+      .select("id, pack_code, outer_uom_code")
+      .eq("pack_code", toTrimmedString((sku as JsonRecord).pack_code))
+      .maybeSingle();
+    if (packCodeErr) throw new Error("PROD_PACK_CODE_LOOKUP_FAILED");
+    if (!packCodeRow) return packErr(req, ctx, "PROD_PACK_CODE_NOT_FOUND", 422, "FG SKU pack code is not configured");
+    const packCodeId = String((packCodeRow as JsonRecord).id ?? "");
 
-    const { data: bom, error: bomErr } = await serviceRoleClient
+    const { data: activeBom, error: bomErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom")
-      .select(`
-        id, company_id, sku_material_id, status,
-        lines:pack_bom_line(
-          id, line_type, material_id, qty, uom_code, storage_location_id, movement_type_code, is_primary_container, display_order
-        )
-      `)
+      .select("id")
       .eq("company_id", companyId)
       .eq("sku_material_id", materialId)
       .eq("status", "ACTIVE")
       .maybeSingle();
-    if (bomErr) {
-      console.error("[packing_order.createPackingOrder] BOM query failed:", JSON.stringify(bomErr));
-      throw new Error("PROD_PACK_BOM_LOOKUP_FAILED");
-    }
-    if (!bom) {
+    if (bomErr) throw new Error("PROD_PACK_BOM_LOOKUP_FAILED");
+    if (!activeBom) {
       return packErr(req, ctx, "PROD_PACK_NO_ACTIVE_BOM", 422, "Active Pack BOM is required before creating a Packing PO");
     }
-    const bomLines = ((bom as JsonRecord).lines ?? []) as JsonRecord[];
-    const outputLine = bomLines.find((line) => String(line.line_type) === "OUTPUT");
-    const sfgBomLine = bomLines.find((line) => String(line.line_type) === "SFG");
-    const pmBomLines = bomLines.filter((line) => String(line.line_type) === "INPUT");
-    if (!outputLine || !sfgBomLine) {
-      return packErr(req, ctx, "PROD_PACK_BOM_INCOMPLETE", 422, "Pack BOM must have OUTPUT and SFG lines");
+
+    const sfgTotalQty = (skuQty / fgConversionQty) * sfgConversionQty;
+    const normalizedPmLines = pmLines.map((line, idx) => {
+      const pmMaterialId = toTrimmedString(line.material_id);
+      const dosageQty = numberOrNull(line.dosage_per_sku ?? line.qty_per_pack ?? line.qty);
+      const storageLocationId = toTrimmedString(line.storage_location_id ?? line.issue_sloc_id);
+      return {
+        materialId: pmMaterialId,
+        dosageQty,
+        storageLocationId,
+        hasAlternate: line.has_alternate === true || line.has_alternate === "true",
+        materialGroupId: toTrimmedString(line.material_group_id) || null,
+        displayOrder: 10 + idx,
+      };
+    }).filter((line) => line.materialId);
+    if (normalizedPmLines.some((line) => !line.dosageQty || !line.storageLocationId)) {
+      return packErr(req, ctx, "PROD_PACK_PM_LINE_INVALID", 400, "Every PM line requires material, dosage and storage location");
     }
 
-    const { data: packCodeRow } = await serviceRoleClient
-      .schema("erp_production")
-      .from("pack_code_master")
-      .select("id, bom_required")
-      .eq("id", packCodeId)
-      .maybeSingle();
-    const bomRequired = (packCodeRow as JsonRecord | null)?.bom_required !== false;
+    const materialMap = await getMaterialMapByIds(
+      [sfgMaterialId, materialId, ...normalizedPmLines.map((line) => line.materialId)],
+      "[packing_order.createPackingOrder]",
+      "PROD_PACK_MATERIAL_LOOKUP_FAILED",
+      "id, material_type, base_uom_code",
+    );
+    for (const line of normalizedPmLines) {
+      if (String(materialMap.get(line.materialId)?.material_type ?? "") !== "PM") {
+        return packErr(req, ctx, "PROD_PACK_PM_ONLY", 422, "Packing PM lines can only use PM materials");
+      }
+    }
 
-    const batchNumber = toTrimmedString((procOrder as JsonRecord).batch_number);
-    const sfgTotalQty = bomRequired ? (Number(sfgBomLine.qty ?? 0) * (numPacks ?? 1)) : plannedQtyKg;
-    const pmReservationNeeds = pmBomLines.map((line) => ({
-      materialId: String(line.material_id ?? ""),
-      storageLocationId: toTrimmedString(line.storage_location_id),
-      qty: bomRequired ? (Number(line.qty ?? 0) * (numPacks ?? 1)) : 0,
-    }));
-    await assertPackingCreateAvailability(companyId, {
-      materialId: String(sfgBomLine.material_id ?? ""),
-      storageLocationId: toTrimmedString(sfgBomLine.storage_location_id),
-      batchNumber,
-      qty: sfgTotalQty,
-    }, pmReservationNeeds);
+    const issueNeeds: PackingPmNeed[] = [
+      { materialId: sfgMaterialId, storageLocationId: sfgStorageLocationId, qty: sfgTotalQty },
+      ...normalizedPmLines.map((line) => ({
+        materialId: line.materialId,
+        storageLocationId: line.storageLocationId,
+        qty: skuQty * Number(line.dosageQty ?? 0),
+      })),
+    ];
+    const availabilityRows = await computePackingAvailability(companyId, null, issueNeeds);
+    for (const row of availabilityRows.pm.values()) {
+      if (row.short > 0) throw new Error("PROD_PACK_STOCK_SHORTAGE");
+    }
 
     const poNumber = await generateGlobalDocNumber("PACK_PO");
     const now = new Date().toISOString();
@@ -601,15 +640,20 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         company_id: companyId,
         po_number: poNumber,
         po_type: poType,
+        source_po_type: normalizedSourcePoType,
         process_order_id: processOrderId,
         material_id: materialId,
         pack_code_id: packCodeId,
-        fill_qty_per_pack: fillQtyPerPack,
-        num_packs: numPacks,
-        planned_qty_kg: plannedQtyKg,
+        fill_qty_per_pack: sfgConversionQty,
+        num_packs: Math.round(skuQty),
+        sku_qty: skuQty,
+        fg_conversion_qty: fgConversionQty,
+        sfg_conversion_qty: sfgConversionQty,
+        planned_qty_kg: sfgTotalQty,
+        total_qty_kg: sfgTotalQty,
         status: "STANDARD",
         plan_feed_id: planFeedId,
-        segment_code: (procOrder as JsonRecord).segment_code,
+        segment_code: normalizedSourcePoType,
         created_by: ctx.auth_user_id,
         created_at: now,
         last_updated_at: now,
@@ -620,92 +664,75 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     if (insertErr) throw new Error("PROD_PACK_CREATE_FAILED");
     const packPoId = (packPo as JsonRecord).id as string;
 
-    const lineRows = [
-      {
-        packing_order_id: packPoId,
-        line_type: "SFG",
-        material_id: sfgBomLine.material_id,
-        batch_number: batchNumber,
-        qty_per_pack: bomRequired ? parsePositiveNumber(sfgBomLine.qty) : fillQtyPerPack,
-        total_qty: sfgTotalQty,
-        actual_qty: null,
-        issue_sloc_id: sfgBomLine.storage_location_id ?? null,
-        display_order: 0,
-      },
+    const lineRows: JsonRecord[] = [
       {
         packing_order_id: packPoId,
         line_type: "FG",
-        material_id: outputLine.material_id,
-        batch_number: batchNumber,
-        qty_per_pack: bomRequired ? parsePositiveNumber(outputLine.qty) : 1,
-        total_qty: plannedQtyKg,
+        material_id: materialId,
+        batch_number: null,
+        qty_per_pack: fgConversionQty,
+        total_qty: skuQty,
         actual_qty: null,
-        issue_sloc_id: outputLine.storage_location_id ?? null,
+        issue_sloc_id: fgStorageLocationId,
+        uom_code: toTrimmedString((packCodeRow as JsonRecord).outer_uom_code) || toTrimmedString((sku as JsonRecord).base_uom_code) || "KG",
+        movement_type_code: "P101",
         display_order: 1,
       },
-      ...pmBomLines.map((line, idx) => ({
+      {
+        packing_order_id: packPoId,
+        line_type: "SFG",
+        material_id: sfgMaterialId,
+        batch_number: null,
+        qty_per_pack: sfgConversionQty,
+        total_qty: sfgTotalQty,
+        actual_qty: null,
+        issue_sloc_id: sfgStorageLocationId,
+        uom_code: toTrimmedString(materialMap.get(sfgMaterialId)?.base_uom_code) || "KG",
+        movement_type_code: "P261",
+        display_order: 2,
+      },
+      ...normalizedPmLines.map((line) => ({
         packing_order_id: packPoId,
         line_type: "PM",
-        material_id: line.material_id,
-        batch_number: batchNumber,
-        qty_per_pack: parsePositiveNumber(line.qty),
-        total_qty: bomRequired ? (Number(line.qty ?? 0) * (numPacks ?? 1)) : 0,
+        material_id: line.materialId,
+        batch_number: null,
+        qty_per_pack: line.dosageQty,
+        total_qty: skuQty * Number(line.dosageQty ?? 0),
         actual_qty: null,
-        issue_sloc_id: line.storage_location_id ?? null,
-        display_order: 10 + idx,
+        issue_sloc_id: line.storageLocationId,
+        uom_code: toTrimmedString(materialMap.get(line.materialId)?.base_uom_code) || "KG",
+        movement_type_code: "P261",
+        has_alternate: line.hasAlternate,
+        material_group_id: line.hasAlternate ? line.materialGroupId : null,
+        display_order: line.displayOrder,
       })),
     ];
     const { data: insertedLines, error: lineErr } = await serviceRoleClient
       .schema("erp_production")
       .from("packing_order_line")
       .insert(lineRows)
-      .select("id, line_type, material_id, batch_number, total_qty, issue_sloc_id, display_order");
+      .select("id, line_type, material_id, batch_number, total_qty, issue_sloc_id, display_order, uom_code");
     if (lineErr) throw new Error("PROD_PACK_LINES_CREATE_FAILED");
 
-    const insertedLineRows = (insertedLines ?? []) as JsonRecord[];
-    const sfgInsertedLine = insertedLineRows.find((line) => String(line.line_type) === "SFG");
-    const pmInsertedLines = insertedLineRows.filter((line) => String(line.line_type) === "PM");
-    if (!sfgInsertedLine) throw new Error("PROD_PACK_RESERVATION_CREATE_FAILED");
-
-    const pmBomLineByOrder = new Map(pmBomLines.map((line, idx) => [String(10 + idx), line]));
-    const reservationRows: JsonRecord[] = [
-      {
+    const reservationRows: JsonRecord[] = ((insertedLines ?? []) as JsonRecord[])
+      .filter((line) => String(line.line_type) !== "FG")
+      .map((line) => ({
         source_type: "PACKING_PO",
         source_id: packPoId,
-        source_line_id: sfgInsertedLine.id,
+        source_line_id: line.id,
         company_id: companyId,
-        material_id: sfgInsertedLine.material_id,
-        storage_location_id: toTrimmedString(sfgInsertedLine.issue_sloc_id) || null,
-        required_qty: Number(sfgInsertedLine.total_qty ?? 0),
-        uom_code: toTrimmedString(sfgBomLine.uom_code) || "KG",
+        material_id: line.material_id,
+        storage_location_id: toTrimmedString(line.issue_sloc_id) || null,
+        required_qty: Number(line.total_qty ?? 0),
+        uom_code: toTrimmedString(line.uom_code) || "KG",
         issued_qty: 0,
         status: "OPEN",
-        batch_number: batchNumber,
+        batch_number: null,
         created_by: ctx.auth_user_id,
         created_at: now,
         last_updated_by: ctx.auth_user_id,
         last_updated_at: now,
-      },
-      ...pmInsertedLines.map((line) => {
-        const sourceBomLine = pmBomLineByOrder.get(String(line.display_order ?? ""));
-        return {
-          source_type: "PACKING_PO",
-          source_id: packPoId,
-          source_line_id: line.id,
-          company_id: companyId,
-          material_id: line.material_id,
-          storage_location_id: toTrimmedString(line.issue_sloc_id) || null,
-          required_qty: Number(line.total_qty ?? 0),
-          uom_code: toTrimmedString(sourceBomLine?.uom_code) || "KG",
-          issued_qty: 0,
-          status: "OPEN",
-          created_by: ctx.auth_user_id,
-          created_at: now,
-          last_updated_by: ctx.auth_user_id,
-          last_updated_at: now,
-        };
-      }),
-    ];
+      }));
     const reservationResults = await Promise.all(reservationRows.map((row) =>
       serviceRoleClient
         .schema("erp_production")
@@ -718,7 +745,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       throw new Error("PROD_PACK_RESERVATION_CREATE_FAILED");
     }
 
-    return createdOkResponse({ id: packPoId, po_number: poNumber }, ctx.request_id, req);
+    return createdOkResponse({ id: packPoId, po_number: poNumber, status: "STANDARD" }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CREATE_FAILED";
     return packErr(req, ctx, code, PACK_SHORTAGE_ERROR_CODES.has(code) ? 422 : 500, `Packing order create failed: ${err instanceof Error ? err.message : ""}`);
@@ -834,10 +861,7 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     }
 
     const body = await parseBody(req);
-    const actualQtyKg = parsePositiveNumber(body.actual_qty_kg);
-    if (!actualQtyKg) {
-      return packErr(req, ctx, "PROD_PACK_ACTUAL_QTY_REQUIRED", 400, "actual_qty_kg required");
-    }
+    const requestedActualQtyKg = parsePositiveNumber(body.actual_qty_kg);
 
     // Update actual_qty on each line
     const lineUpdates = Array.isArray(body.lines) ? body.lines : [];
@@ -853,7 +877,7 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     const { data: stockLines, error: lineErr } = await serviceRoleClient
       .schema("erp_production").from("packing_order_line")
       .select(`
-        id, line_type, material_id, batch_number, actual_qty, total_qty, issue_sloc_id
+        id, line_type, material_id, batch_number, actual_qty, total_qty, issue_sloc_id, uom_code, movement_type_code
       `)
       .eq("packing_order_id", id);
     if (lineErr) {
@@ -889,19 +913,19 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
       const mat = materialMap.get(String(line.material_id ?? "")) ?? null;
       const baseUom = (mat?.base_uom_code ?? "KG") as string;
-      const movementTypeCode = lineType === "FG" ? "P101" : "P261";
+      const movementTypeCode = toTrimmedString(line.movement_type_code) || (lineType === "FG" ? "P101" : "P261");
       const direction = lineType === "FG" ? "IN" : "OUT";
       const posting = await postStockMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode, companyId: poData.company_id,
         storageLocationId: slocId, materialId: line.material_id,
-        quantity: qty, baseUomCode: baseUom, unitValue: 0,
+        quantity: qty, baseUomCode: toTrimmedString(line.uom_code) || baseUom, unitValue: 0,
         stockTypeCode: "UNRESTRICTED", direction: direction as "IN" | "OUT", postedBy: ctx.auth_user_id,
         batchNumber: (line.batch_number as string | null) ?? null,
       });
 
       await serviceRoleClient.schema("erp_production").from("packing_order_line")
-        .update({ stock_ledger_id: posting.stock_ledger_id })
+        .update({ stock_ledger_id: posting.stock_ledger_id, actual_qty: qty })
         .eq("id", line.id as string);
       if (lineType !== "FG") {
         const { error: reservationErr } = await serviceRoleClient
@@ -926,6 +950,7 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     await Promise.all(postings);
 
     const now = new Date().toISOString();
+    const actualQtyKg = requestedActualQtyKg ?? Number(poData.planned_qty_kg ?? poData.total_qty_kg ?? 0);
     await serviceRoleClient.schema("erp_production").from("packing_order")
       .update({ status: "FINAL", actual_qty_kg: actualQtyKg, total_qty_kg: actualQtyKg, finalized_at: now, finalized_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id })
       .eq("id", id);

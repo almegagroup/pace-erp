@@ -3,6 +3,7 @@ export const PROCESS_TO_PACKING_PO_TYPE = {
   HPS: "PHPS",
   MTS: "PMTS",
   MTEST: "PTEST",
+  ZTEST: "PTEST",
 };
 
 export function packingPoTypeForProcessType(poType) {

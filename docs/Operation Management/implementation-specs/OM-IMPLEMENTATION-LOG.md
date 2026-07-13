@@ -2676,3 +2676,27 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Files:** `supabase/functions/api/_core/production/pack_bom.handlers.ts`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
 
 **Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `pack_bom.handlers.ts` with dummy Supabase env.
+
+---
+
+## 2026-07-13 16:38 IST - Packing PO direct create redesign
+
+**Scope implemented:** Reworked Packing PO create/final flow to the newly agreed direct design. Packing PO has no approval or verify step in this flow; it goes from direct create to Final posting.
+
+**Changes:**
+- Added `supabase/migrations/20260713163000_gate27_packing_po_direct_create_redesign.sql` for direct Packing PO support: `packing_order.process_order_id` nullable, source PO type, SKU quantity, FG/SFG conversion, optional machine, and line-level UOM/movement/alternate/group fields.
+- Applied the same DDL directly to Dev after announcing the target tables and intended schema change.
+- Rebuilt `createPackingOrderHandler()` so it accepts Company + source PO type (`MTO/HPS/MTS/ZTEST`) + SKU + SKU quantity + FG/SFG conversion + FG/SFG storage + PM lines.
+- Packing PO type is derived as `MTO -> PMTO`, `HPS -> PHPS`, `MTS -> PMTS`, `ZTEST -> PTEST`.
+- Create now requires an ACTIVE company Pack BOM for the selected SKU, validates SFG and PM stock by company/material/storage location before inserting, creates FG `P101`, SFG `P261`, and PM `P261` lines, and raises Packing PO reservations for SFG/PM.
+- Final posting now uses saved line movement/UOM values and no longer requires a separate manually-entered actual quantity.
+- Rebuilt `PackingOrderPage.jsx` into the two-page flow: Page 1 Company/Type/SKU; Page 2 SKU header, blank machine display, PO SKU quantity, FG/SFG conversion and storage rows, PM-only material rows with dosage-based standard quantity, storage dropdown, Has Alternate, and group/member controls.
+- Added `ZTEST -> PTEST` to the shared production type label map.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. Confirmed the new `packing_order` columns exist and `process_order_id` is nullable; confirmed the new `packing_order_line` columns exist.
+
+**Files:** `supabase/migrations/20260713163000_gate27_packing_po_direct_create_redesign.sql`, `supabase/functions/api/_core/production/packing_order.handlers.ts`, `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `frontend/src/pages/dashboard/production/productionTypeLabels.js`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Notes / open limits:** Packing PO approval and Packing PO verify were intentionally not added. Machine remains blank on create as agreed; future Process PO consumption/linking can populate it for MTO/HPS/ZTEST, but that linking mechanism was not invented in this pass. The SKU dropdown is sourced from ACTIVE Pack BOMs because Packing PO creation requires the approved packing structure.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts` with dummy Supabase env after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
