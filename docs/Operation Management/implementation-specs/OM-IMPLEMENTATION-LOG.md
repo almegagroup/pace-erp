@@ -2772,3 +2772,22 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Files:** `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
 
 **Verification:** `npm.cmd run build` in `frontend/` passed.
+
+---
+
+## 2026-07-13 18:42 IST - Packing PO Final-time SFG batch selection
+
+**Scope implemented:** Corrected Packing PO SFG batch timing: Packing PO create produces a STANDARD order first, and Final is where the user chooses which same-prodshade SFG batch to consume.
+
+**Changes:**
+- `createPackingOrderHandler()` no longer requires `sfg_batch_number` at STANDARD create. PM stock validation remains at create; SFG batch validation moves to Final.
+- `resolvePackingSfgBatchOptions()` now returns only unrestricted positive-available SFG batches for the selected company/material/SLoc and resolves source Process PO, stroke number, machine, and prodshade labels.
+- The SFG batch option query excludes the current Packing PO's own reservation from available-stock subtraction, so an already-reserved STANDARD PO does not falsely appear short at Final.
+- `finalizePackingOrderHandler()` now requires/accepts `sfg_batch_number`, validates selected batch unrestricted availability against required SFG qty, stores selected batch/source Process PO/machine on the Packing PO header, SFG line, and SFG reservation, then posts stock.
+- `PackingOrderPage.jsx` no longer shows the SFG batch selector during create. The STANDARD detail drawer now shows a Final SFG batch table with Prodshade/SFG, Stroke, Batch, Source Process PO, Machine, SLoc, Available Qty, Required Qty, and OK/Short status. Final is disabled until a valid non-short batch is selected.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. For `940003`, the final picker preview returned `EV02602`, `SFG-00004 - 1B60SS67`, stroke `1`, source Process PO `ASCPROC2627-0001`, machine `MXR-001 - 10KL MIXER -1`, unrestricted available `10060`, required `10000`, status `OK`, confirming same-prodshade filtering and own-reservation add-back.
+
+**Files:** `supabase/functions/api/_core/production/packing_order.handlers.ts`, `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts` and `production.routes.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.

@@ -66,6 +66,8 @@ type PackingSfgBatchOption = {
   process_order_id: string | null;
   source_po_number: string | null;
   source_po_status: string | null;
+  prodshade: JsonRecord | null;
+  stroke_number: string | null;
   machine: JsonRecord | null;
 };
 
@@ -223,6 +225,7 @@ async function resolvePackingSfgBatchOptions(
   companyId: string,
   materialId: string,
   storageLocationId: string,
+  excludeSourceId: string | null = null,
 ): Promise<PackingSfgBatchOption[]> {
   if (!companyId || !materialId || !storageLocationId) return [];
 
@@ -238,7 +241,7 @@ async function resolvePackingSfgBatchOptions(
     serviceRoleClient
       .schema("erp_production")
       .from("reservation_document")
-      .select("material_id, storage_location_id, batch_number, balance_qty")
+      .select("material_id, storage_location_id, batch_number, balance_qty, source_id")
       .eq("company_id", companyId)
       .eq("material_id", materialId)
       .eq("storage_location_id", storageLocationId)
@@ -264,6 +267,7 @@ async function resolvePackingSfgBatchOptions(
 
   const reservedByBatch = new Map<string, number>();
   for (const row of (reservationResult.data ?? []) as JsonRecord[]) {
+    if (excludeSourceId && String(row.source_id ?? "") === excludeSourceId) continue;
     const batchNumber = toTrimmedString(row.batch_number);
     if (!batchNumber) continue;
     reservedByBatch.set(batchNumber, (reservedByBatch.get(batchNumber) ?? 0) + Number(row.balance_qty ?? 0));
@@ -277,7 +281,6 @@ async function resolvePackingSfgBatchOptions(
     .from("batch_number_instance")
     .select("batch_number, source_process_order_id")
     .eq("company_id", companyId)
-    .eq("prodshade_material_id", materialId)
     .in("batch_number", batchNumbers);
   if (batchErr) {
     console.error("[packing_order.resolvePackingSfgBatchOptions] batch instance query failed:", JSON.stringify(batchErr));
@@ -291,7 +294,8 @@ async function resolvePackingSfgBatchOptions(
     ? await serviceRoleClient
         .schema("erp_production")
         .from("process_order")
-        .select("id, po_number, batch_number, status, machine_id")
+        .select("id, po_number, batch_number, status, machine_id, material_id, stroke_master_id")
+        .eq("material_id", materialId)
         .in("id", processOrderIds)
     : { data: [], error: null };
   if (processErr) {
@@ -302,27 +306,64 @@ async function resolvePackingSfgBatchOptions(
   const machineIds = [...new Set(((processRows ?? []) as JsonRecord[])
     .map((row) => toTrimmedString(row.machine_id))
     .filter(Boolean))];
-  const { data: machineRows, error: machineErr } = machineIds.length
-    ? await serviceRoleClient
-        .schema("erp_master")
-        .from("machine_master")
-        .select("id, machine_code, machine_name")
-        .in("id", machineIds)
-    : { data: [], error: null };
+  const prodshadeIds = [...new Set(((processRows ?? []) as JsonRecord[])
+    .map((row) => toTrimmedString(row.material_id))
+    .filter(Boolean))];
+  const strokeIds = [...new Set(((processRows ?? []) as JsonRecord[])
+    .map((row) => toTrimmedString(row.stroke_master_id))
+    .filter(Boolean))];
+  const [machineLookup, prodshadeLookup, strokeLookup] = await Promise.all([
+    machineIds.length
+      ? serviceRoleClient
+          .schema("erp_master")
+          .from("machine_master")
+          .select("id, machine_code, machine_name")
+          .in("id", machineIds)
+      : Promise.resolve({ data: [], error: null }),
+    prodshadeIds.length
+      ? serviceRoleClient
+          .schema("erp_master")
+          .from("material_master")
+          .select("id, pace_code, material_name, document_name, shade_code")
+          .in("id", prodshadeIds)
+      : Promise.resolve({ data: [], error: null }),
+    strokeIds.length
+      ? serviceRoleClient
+          .schema("erp_production")
+          .from("stroke_master")
+          .select("id, stroke_number")
+          .in("id", strokeIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  const { data: machineRows, error: machineErr } = machineLookup;
   if (machineErr) {
     console.error("[packing_order.resolvePackingSfgBatchOptions] machine query failed:", JSON.stringify(machineErr));
+    throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
+  }
+  const { data: prodshadeRows, error: prodshadeErr } = prodshadeLookup;
+  if (prodshadeErr) {
+    console.error("[packing_order.resolvePackingSfgBatchOptions] prodshade query failed:", JSON.stringify(prodshadeErr));
+    throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
+  }
+  const { data: strokeRows, error: strokeErr } = strokeLookup;
+  if (strokeErr) {
+    console.error("[packing_order.resolvePackingSfgBatchOptions] stroke query failed:", JSON.stringify(strokeErr));
     throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
   }
 
   const batchMap = new Map(((batchRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.batch_number), row]));
   const processMap = new Map(((processRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
   const machineMap = new Map(((machineRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const prodshadeMap = new Map(((prodshadeRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const strokeMap = new Map(((strokeRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
   return batchNumbers.map((batchNumber) => {
     const batch = batchMap.get(batchNumber);
     const processOrderId = toTrimmedString(batch?.source_process_order_id) || null;
     const processOrder = processOrderId ? processMap.get(processOrderId) ?? null : null;
     const machineId = toTrimmedString(processOrder?.machine_id);
+    const prodshadeId = toTrimmedString(processOrder?.material_id);
+    const strokeId = toTrimmedString(processOrder?.stroke_master_id);
     const ledgerQty = ledgerByBatch.get(batchNumber) ?? 0;
     const reservedQty = reservedByBatch.get(batchNumber) ?? 0;
     return {
@@ -333,9 +374,11 @@ async function resolvePackingSfgBatchOptions(
       process_order_id: processOrderId,
       source_po_number: processOrder ? toTrimmedString(processOrder.po_number) || null : null,
       source_po_status: processOrder ? toTrimmedString(processOrder.status) || null : null,
+      prodshade: prodshadeId ? prodshadeMap.get(prodshadeId) ?? null : null,
+      stroke_number: strokeId ? toTrimmedString(strokeMap.get(strokeId)?.stroke_number) || null : null,
       machine: machineId ? machineMap.get(machineId) ?? null : null,
     };
-  }).filter((row) => row.available_qty > 0)
+  }).filter((row) => row.available_qty > 0 && row.process_order_id)
     .sort((a, b) => b.available_qty - a.available_qty || a.batch_number.localeCompare(b.batch_number));
 }
 
@@ -611,11 +654,12 @@ export async function listPackingSfgBatchOptionsHandler(req: Request, ctx: ProdH
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
     const materialId = toTrimmedString(url.searchParams.get("material_id") ?? "");
     const storageLocationId = toTrimmedString(url.searchParams.get("storage_location_id") ?? "");
+    const excludeSourceId = toTrimmedString(url.searchParams.get("exclude_source_id") ?? "") || null;
     if (!companyId || !materialId || !storageLocationId) {
       return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id, material_id and storage_location_id required");
     }
 
-    const options = await resolvePackingSfgBatchOptions(companyId, materialId, storageLocationId);
+    const options = await resolvePackingSfgBatchOptions(companyId, materialId, storageLocationId, excludeSourceId);
     return okResponse({ data: options }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_SFG_BATCH_LOOKUP_FAILED";
@@ -787,9 +831,6 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     if (!skuQty || !sfgMaterialId || !sfgConversionQty || !fgStorageLocationId || !sfgStorageLocationId) {
       return packErr(req, ctx, "PROD_PACK_QTY_CONVERSION_REQUIRED", 400, "sku_qty, sfg material, conversion and storage locations required");
     }
-    if (!sfgBatchNumber) {
-      return packErr(req, ctx, "PROD_PACK_SFG_BATCH_REQUIRED", 422, "SFG batch number is required for Packing PO");
-    }
 
     const { data: sku, error: skuErr } = await serviceRoleClient
       .schema("erp_master")
@@ -855,26 +896,28 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       }
     }
 
-    const sfgBatchOptions = await resolvePackingSfgBatchOptions(companyId, sfgMaterialId, sfgStorageLocationId);
-    const selectedSfgBatch = sfgBatchOptions.find((batch) => batch.batch_number === sfgBatchNumber) ?? null;
-    if (!selectedSfgBatch) {
-      return packErr(req, ctx, "PROD_PACK_SFG_BATCH_REQUIRED", 422, "Selected SFG batch is not available at this storage location");
-    }
-    if (selectedSfgBatch.available_qty < sfgTotalQty) {
-      return packErr(req, ctx, "PROD_PACK_SFG_BATCH_SHORTAGE", 422, "Selected SFG batch does not have enough available stock");
-    }
-    processOrderId = processOrderId || selectedSfgBatch.process_order_id;
-
     const pmNeeds: PackingPmNeed[] = normalizedPmLines.map((line) => ({
         materialId: line.materialId,
         storageLocationId: line.storageLocationId,
         qty: skuQty * Number(line.dosageQty ?? 0),
       }));
-    await assertPackingCreateAvailability(
-      companyId,
-      { materialId: sfgMaterialId, storageLocationId: sfgStorageLocationId, batchNumber: sfgBatchNumber, qty: sfgTotalQty },
-      pmNeeds,
-    );
+    const selectedSfgBatch = sfgBatchNumber
+      ? (await resolvePackingSfgBatchOptions(companyId, sfgMaterialId, sfgStorageLocationId))
+        .find((batch) => batch.batch_number === sfgBatchNumber) ?? null
+      : null;
+    if (sfgBatchNumber && !selectedSfgBatch) {
+      return packErr(req, ctx, "PROD_PACK_SFG_BATCH_REQUIRED", 422, "Selected SFG batch is not available at this storage location");
+    }
+    if (selectedSfgBatch && selectedSfgBatch.available_qty < sfgTotalQty) {
+      return packErr(req, ctx, "PROD_PACK_SFG_BATCH_SHORTAGE", 422, "Selected SFG batch does not have enough available stock");
+    }
+    if (selectedSfgBatch) {
+      processOrderId = processOrderId || selectedSfgBatch.process_order_id;
+    }
+    const availabilityRows = await computePackingAvailability(companyId, null, pmNeeds);
+    for (const row of availabilityRows.pm.values()) {
+      if (row.short > 0) throw new Error("PROD_PACK_PM_SHORTAGE");
+    }
 
     const poNumber = await generateGlobalDocNumber("PACK_PO");
     const now = new Date().toISOString();
@@ -887,8 +930,8 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         po_type: poType,
         source_po_type: normalizedSourcePoType,
         process_order_id: processOrderId,
-        machine_id: toTrimmedString(selectedSfgBatch.machine?.id) || null,
-        batch_number: sfgBatchNumber,
+        machine_id: toTrimmedString(selectedSfgBatch?.machine?.id) || null,
+        batch_number: sfgBatchNumber || null,
         material_id: materialId,
         pack_code_id: packCodeId,
         fill_qty_per_pack: sfgConversionQty,
@@ -929,7 +972,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         packing_order_id: packPoId,
         line_type: "SFG",
         material_id: sfgMaterialId,
-        batch_number: sfgBatchNumber,
+        batch_number: sfgBatchNumber || null,
         qty_per_pack: sfgConversionQty,
         total_qty: sfgTotalQty,
         actual_qty: null,
@@ -978,7 +1021,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         uom_code: toTrimmedString(line.uom_code) || "KG",
         issued_qty: 0,
         status: "OPEN",
-        batch_number: String(line.line_type) === "SFG" ? sfgBatchNumber : null,
+        batch_number: String(line.line_type) === "SFG" && sfgBatchNumber ? sfgBatchNumber : null,
         created_by: ctx.auth_user_id,
         created_at: now,
         last_updated_by: ctx.auth_user_id,
@@ -1114,6 +1157,7 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
 
     const body = await parseBody(req);
     const requestedActualQtyKg = parsePositiveNumber(body.actual_qty_kg);
+    const requestedSfgBatchNumber = toTrimmedString(body.sfg_batch_number);
 
     // Update actual_qty on each line
     const lineUpdates = Array.isArray(body.lines) ? body.lines : [];
@@ -1150,9 +1194,68 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
 
     const defaultPmSlocId = (segConfig as JsonRecord | null)?.pm_sloc_id as string | null;
     const lineRows = (stockLines ?? []) as JsonRecord[];
-    const missingSfgBatch = lineRows.some((line) => String(line.line_type ?? "") === "SFG" && !toTrimmedString(line.batch_number));
-    if (missingSfgBatch) {
+    const sfgLine = lineRows.find((line) => String(line.line_type ?? "") === "SFG") ?? null;
+    const effectiveSfgBatchNumber = requestedSfgBatchNumber || toTrimmedString(sfgLine?.batch_number);
+    if (sfgLine && !effectiveSfgBatchNumber) {
       return packErr(req, ctx, "PROD_PACK_SFG_BATCH_REQUIRED", 422, "SFG batch number is required before final posting");
+    }
+    if (sfgLine && effectiveSfgBatchNumber) {
+      const sfgQty = Number(sfgLine.actual_qty ?? sfgLine.total_qty ?? 0);
+      const sfgStorageLocationId = toTrimmedString(sfgLine.issue_sloc_id);
+      const sfgMaterialId = toTrimmedString(sfgLine.material_id);
+      const sfgBatchOptions = await resolvePackingSfgBatchOptions(
+        String(poData.company_id ?? ""),
+        sfgMaterialId,
+        sfgStorageLocationId,
+        id,
+      );
+      const selectedSfgBatch = sfgBatchOptions.find((batch) => batch.batch_number === effectiveSfgBatchNumber) ?? null;
+      if (!selectedSfgBatch) {
+        return packErr(req, ctx, "PROD_PACK_SFG_BATCH_REQUIRED", 422, "Selected SFG batch is not available at this storage location");
+      }
+      if (selectedSfgBatch.available_qty < sfgQty) {
+        return packErr(req, ctx, "PROD_PACK_SFG_BATCH_SHORTAGE", 422, "Selected SFG batch does not have enough unrestricted stock");
+      }
+
+      const now = new Date().toISOString();
+      const [poBatchUpdate, sfgLineBatchUpdate, reservationBatchUpdate] = await Promise.all([
+        serviceRoleClient
+          .schema("erp_production")
+          .from("packing_order")
+          .update({
+            batch_number: effectiveSfgBatchNumber,
+            process_order_id: selectedSfgBatch.process_order_id,
+            machine_id: toTrimmedString(selectedSfgBatch.machine?.id) || null,
+            last_updated_at: now,
+            last_updated_by: ctx.auth_user_id,
+          })
+          .eq("id", id),
+        serviceRoleClient
+          .schema("erp_production")
+          .from("packing_order_line")
+          .update({ batch_number: effectiveSfgBatchNumber })
+          .eq("id", String(sfgLine.id ?? "")),
+        serviceRoleClient
+          .schema("erp_production")
+          .from("reservation_document")
+          .update({
+            batch_number: effectiveSfgBatchNumber,
+            last_updated_at: now,
+            last_updated_by: ctx.auth_user_id,
+          })
+          .eq("source_type", "PACKING_PO")
+          .eq("source_id", id)
+          .eq("source_line_id", String(sfgLine.id ?? "")),
+      ]);
+      const batchUpdateError = poBatchUpdate.error || sfgLineBatchUpdate.error || reservationBatchUpdate.error;
+      if (batchUpdateError) {
+        console.error("[packing_order.finalizePackingOrder] SFG batch link update failed:", JSON.stringify(batchUpdateError));
+        throw new Error("PROD_PACK_SFG_BATCH_LINK_FAILED");
+      }
+      sfgLine.batch_number = effectiveSfgBatchNumber;
+      poData.batch_number = effectiveSfgBatchNumber;
+      poData.process_order_id = selectedSfgBatch.process_order_id;
+      poData.machine_id = toTrimmedString(selectedSfgBatch.machine?.id) || null;
     }
     const materialMap = await getMaterialMapByIds(
       lineRows.map((line) => String(line.material_id ?? "")),
