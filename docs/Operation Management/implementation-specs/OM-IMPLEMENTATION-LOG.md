@@ -2757,3 +2757,18 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Files:** `supabase/functions/api/_core/production/packing_order.handlers.ts`, `supabase/functions/api/_routes/production.routes.ts`, `supabase/functions/api/_acl/route-acl-registry.ts`, `frontend/src/pages/dashboard/production/prodApi.js`, `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
 
 **Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts`, `production.routes.ts`, and `route-acl-registry.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
+
+---
+
+## 2026-07-13 18:18 IST - Packing PO STANDARD recovery action
+
+**Scope implemented:** Fixed the usability gap where a user could create a STANDARD Packing PO and then close/back out of the drawer without an obvious path to Final.
+
+**Changes:**
+- Successful Packing PO create now clears the list status filter so the newly-created STANDARD row remains visible.
+- Packing PO list now includes an explicit Action column.
+- STANDARD rows show `Open / Final`, which opens the detail drawer containing `Final & Post Stock`; non-STANDARD rows show `Open`.
+
+**Files:** `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed.

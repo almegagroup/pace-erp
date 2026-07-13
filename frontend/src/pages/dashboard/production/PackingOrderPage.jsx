@@ -382,6 +382,7 @@ export default function PackingOrderPage() {
       toast(`Packing PO created: ${result?.po_number ?? ""}`);
       setDetailId(result?.id ?? null);
       setCreateOpen(false);
+      setStatusFilter("");
       resetCreate();
       qc.invalidateQueries({ queryKey: ["pack-orders"] });
     } catch (error) {
@@ -455,6 +456,7 @@ export default function PackingOrderPage() {
                   <th className="text-right py-2 px-3 border-b">SKU Qty</th>
                   <th className="text-right py-2 px-3 border-b">SFG Qty</th>
                   <th className="text-left py-2 px-3 border-b">Status</th>
+                  <th className="text-right py-2 px-3 border-b">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -466,6 +468,19 @@ export default function PackingOrderPage() {
                     <td className="py-2 px-3 text-right font-mono">{qty(row.sku_qty ?? row.num_packs)}</td>
                     <td className="py-2 px-3 text-right font-mono">{qty(row.planned_qty_kg)}</td>
                     <td className="py-2 px-3"><StatusBadge status={row.status} /></td>
+                    <td className="py-2 px-3 text-right">
+                      <button
+                        type="button"
+                        className={`px-3 py-1 rounded text-xs font-semibold ${
+                          row.status === "STANDARD"
+                            ? "bg-emerald-600 text-white"
+                            : "border border-slate-300 text-slate-600"
+                        }`}
+                        onClick={() => setDetailId(row.id)}
+                      >
+                        {row.status === "STANDARD" ? "Open / Final" : "Open"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
