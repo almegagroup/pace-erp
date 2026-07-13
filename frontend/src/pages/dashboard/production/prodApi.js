@@ -115,6 +115,7 @@ export const submitSfgQaDecision = (id, body) => fetchProd("POST", `/api/product
 // ── Packing Orders ────────────────────────────────────────────────────────────
 export const listPackingOrders = (p) => fetchProd("GET", "/api/production/packing-orders", undefined, p);
 export const getPackingOrder = (id) => fetchProd("GET", `/api/production/packing-orders/${id}`);
+export const availabilityPreviewPackingOrder = (p) => fetchProd("GET", "/api/production/packing-orders/availability-preview", undefined, p);
 export const createPackingOrder = (body) => fetchProd("POST", "/api/production/packing-orders", body);
 export const updatePackingOrderLines = (id, body) => fetchProd("PATCH", `/api/production/packing-orders/${id}/lines`, body);
 export const linkFo = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/link-fo`, body);

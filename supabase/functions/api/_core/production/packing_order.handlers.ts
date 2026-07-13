@@ -49,6 +49,14 @@ type PackingPmNeed = {
   qty: number;
 };
 
+type PackingAvailabilityPreviewRow = {
+  material_id: string;
+  storage_location_id: string;
+  needed_qty: number;
+  available_qty: number;
+  short: number;
+};
+
 function numberOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
@@ -85,6 +93,21 @@ function buildBatchAvailabilityKey(materialId: string, storageLocationId: string
 
 function packErr(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
+}
+
+function parsePackingAvailabilityNeeds(raw: string): PackingPmNeed[] {
+  let parsed: unknown = [];
+  try {
+    parsed = JSON.parse(raw || "[]");
+  } catch {
+    throw new Error("PROD_PACK_INVALID");
+  }
+  if (!Array.isArray(parsed)) throw new Error("PROD_PACK_INVALID");
+  return (parsed as JsonRecord[]).map((entry) => ({
+    materialId: toTrimmedString(entry.material_id),
+    storageLocationId: toTrimmedString(entry.storage_location_id),
+    qty: Number(entry.qty ?? 0),
+  })).filter((entry) => entry.materialId && entry.storageLocationId && Number.isFinite(entry.qty) && entry.qty > 0);
 }
 
 function createdOkResponse(data: unknown, requestId: string, req?: Request): Response {
@@ -389,6 +412,36 @@ export async function fgStockBreakdownHandler(req: Request, ctx: ProdHandlerCont
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_FG_STOCK_BREAKDOWN_FAILED";
     return packErr(req, ctx, code, 500, "FG stock breakdown failed");
+  }
+}
+
+// GET /api/production/packing-orders/availability-preview?company_id=&needs=[]
+export async function availabilityPreviewPackingOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    if (!companyId) return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id required");
+
+    const needs = parsePackingAvailabilityNeeds(url.searchParams.get("needs") ?? "[]");
+    if (needs.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const availability = await computePackingAvailability(companyId, null, needs);
+    const rows: PackingAvailabilityPreviewRow[] = needs.map((need) => {
+      const key = buildAvailabilityKey(need.materialId, need.storageLocationId);
+      const row = availability.pm.get(key);
+      return {
+        material_id: need.materialId,
+        storage_location_id: need.storageLocationId,
+        needed_qty: row?.needed_qty ?? need.qty,
+        available_qty: row?.available_qty ?? 0,
+        short: row?.short ?? need.qty,
+      };
+    });
+    return okResponse({ data: rows }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PACK_STOCK_CHECK_FAILED";
+    return packErr(req, ctx, code, code === "PROD_PACK_INVALID" ? 400 : 500, "Packing availability preview failed");
   }
 }
 

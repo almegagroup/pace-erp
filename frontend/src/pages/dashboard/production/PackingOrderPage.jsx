@@ -14,6 +14,7 @@ import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/t
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import { useMenu } from "../../../context/useMenu.js";
 import {
+  availabilityPreviewPackingOrder,
   createPackingOrder,
   finalizePackingOrder,
   getPackBom,
@@ -209,6 +210,34 @@ export default function PackingOrderPage() {
     ...line,
     standard_qty: skuQty * asNumber(line.dosage_per_sku),
   }));
+  const availabilityNeeds = [
+    ...(form.sfg_material_id && form.sfg_storage_location_id && sfgStandardQty > 0
+      ? [{ material_id: form.sfg_material_id, storage_location_id: form.sfg_storage_location_id, qty: sfgStandardQty }]
+      : []),
+    ...pmPreviewLines
+      .filter((line) => line.material_id && line.storage_location_id && line.standard_qty > 0)
+      .map((line) => ({ material_id: line.material_id, storage_location_id: line.storage_location_id, qty: line.standard_qty })),
+  ];
+  const availabilityPreviewQ = useQuery({
+    queryKey: ["packing-create-availability-preview", effectiveCompanyId, availabilityNeeds],
+    queryFn: () => availabilityPreviewPackingOrder({
+      company_id: effectiveCompanyId,
+      needs: JSON.stringify(availabilityNeeds),
+    }),
+    enabled: createOpen && createStep === 2 && Boolean(effectiveCompanyId) && availabilityNeeds.length > 0,
+    select: (data) => data?.data ?? data ?? [],
+  });
+  const availabilityByKey = new Map((availabilityPreviewQ.data ?? []).map((row) => [`${row.material_id}::${row.storage_location_id}`, row]));
+  const sfgAvailability = form.sfg_material_id && form.sfg_storage_location_id
+    ? availabilityByKey.get(`${form.sfg_material_id}::${form.sfg_storage_location_id}`) ?? null
+    : null;
+  const pmShortLines = pmPreviewLines.filter((line) => {
+    const row = line.material_id && line.storage_location_id
+      ? availabilityByKey.get(`${line.material_id}::${line.storage_location_id}`)
+      : null;
+    return row && Number(row.short ?? 0) > 0;
+  });
+  const hasShortage = Boolean((sfgAvailability && Number(sfgAvailability.short ?? 0) > 0) || pmShortLines.length > 0);
 
   function applyBomDefaults() {
     const packCode = String(selectedSku?.pack_code ?? "");
@@ -296,6 +325,14 @@ export default function PackingOrderPage() {
   async function handleCreate() {
     if (!skuQty || !sfgConversionQty || !form.fg_storage_location_id || !form.sfg_material_id || !form.sfg_storage_location_id) {
       toast("Enter PO Qty, conversion and FG/SFG storage locations.", "error");
+      return;
+    }
+    if (availabilityPreviewQ.isFetching) {
+      toast("Stock check is still loading. Try again in a moment.", "error");
+      return;
+    }
+    if (hasShortage) {
+      toast("Stock shortage exists. Fix storage location or stock before create.", "error");
       return;
     }
     setSaving(true);
@@ -495,6 +532,8 @@ export default function PackingOrderPage() {
                       <th className="text-left py-2 px-3 border-b">Material</th>
                       <th className="text-left py-2 px-3 border-b">Storage Location</th>
                       <th className="text-right py-2 px-3 border-b">Standard Qty</th>
+                      <th className="text-right py-2 px-3 border-b">Available</th>
+                      <th className="text-right py-2 px-3 border-b">Shortage</th>
                       <th className="text-left py-2 px-3 border-b">Movement</th>
                     </tr>
                   </thead>
@@ -506,6 +545,8 @@ export default function PackingOrderPage() {
                         <ErpComboboxField value={form.fg_storage_location_id} onChange={(value) => setForm((current) => ({ ...current, fg_storage_location_id: value }))} options={fgLocationOptions} placeholder="-- Select F-location --" />
                       </td>
                       <td className="py-2 px-3 text-right font-mono">{qty(skuQty)}</td>
+                      <td className="py-2 px-3 text-right text-slate-400">--</td>
+                      <td className="py-2 px-3 text-right text-slate-400">--</td>
                       <td className="py-2 px-3 font-mono">P101</td>
                     </tr>
                     <tr className="border-b border-slate-100">
@@ -515,6 +556,10 @@ export default function PackingOrderPage() {
                         <ErpComboboxField value={form.sfg_storage_location_id} onChange={(value) => setForm((current) => ({ ...current, sfg_storage_location_id: value }))} options={storageOptions} placeholder="-- Select SFG location --" />
                       </td>
                       <td className="py-2 px-3 text-right font-mono">{qty(sfgStandardQty)} KG</td>
+                      <td className="py-2 px-3 text-right font-mono">{sfgAvailability ? qty(sfgAvailability.available_qty) : availabilityPreviewQ.isFetching ? "..." : "--"}</td>
+                      <td className={`py-2 px-3 text-right font-mono ${sfgAvailability && Number(sfgAvailability.short ?? 0) > 0 ? "text-rose-600 font-semibold" : ""}`}>
+                        {sfgAvailability ? qty(sfgAvailability.short) : availabilityPreviewQ.isFetching ? "..." : "--"}
+                      </td>
                       <td className="py-2 px-3 font-mono">P261</td>
                     </tr>
                   </tbody>
@@ -531,6 +576,8 @@ export default function PackingOrderPage() {
                         <th className="text-right py-2 px-3 border-b">Dosage / SKU</th>
                         <th className="text-right py-2 px-3 border-b">Standard Qty</th>
                         <th className="text-left py-2 px-3 border-b">Storage Location</th>
+                        <th className="text-right py-2 px-3 border-b">Available</th>
+                        <th className="text-right py-2 px-3 border-b">Shortage</th>
                         <th className="text-left py-2 px-3 border-b">Alternate?</th>
                         <th className="text-left py-2 px-3 border-b">Group</th>
                         <th className="text-left py-2 px-3 border-b">Members</th>
@@ -540,6 +587,10 @@ export default function PackingOrderPage() {
                     <tbody>
                       {pmPreviewLines.map((line, index) => {
                         const selectedGroup = (groupsQ.data ?? []).find((group) => group.id === line.material_group_id);
+                        const availability = line.material_id && line.storage_location_id
+                          ? availabilityByKey.get(`${line.material_id}::${line.storage_location_id}`) ?? null
+                          : null;
+                        const isShort = availability && Number(availability.short ?? 0) > 0;
                         return (
                           <tr key={index} className="border-b border-slate-100">
                             <td className="py-2 px-3 font-semibold">PM</td>
@@ -552,6 +603,10 @@ export default function PackingOrderPage() {
                             <td className="py-2 px-3 text-right font-mono">{qty(line.standard_qty)}</td>
                             <td className="py-2 px-3 min-w-[220px]">
                               <ErpComboboxField value={line.storage_location_id} onChange={(value) => updatePmLine(index, { storage_location_id: value })} options={storageOptions} placeholder="-- Select --" />
+                            </td>
+                            <td className="py-2 px-3 text-right font-mono">{availability ? qty(availability.available_qty) : availabilityPreviewQ.isFetching ? "..." : "--"}</td>
+                            <td className={`py-2 px-3 text-right font-mono ${isShort ? "text-rose-600 font-semibold" : ""}`}>
+                              {availability ? qty(availability.short) : availabilityPreviewQ.isFetching ? "..." : "--"}
                             </td>
                             <td className="py-2 px-3">
                               <input type="checkbox" checked={Boolean(line.has_alternate)} onChange={(event) => updatePmLine(index, { has_alternate: event.target.checked, material_group_id: event.target.checked ? line.material_group_id : "" })} />
@@ -584,10 +639,16 @@ export default function PackingOrderPage() {
                 <button type="button" className="text-sky-600 text-xs underline mt-2" onClick={addPmLine}>+ Add PM line</button>
               </ErpSectionCard>
 
+              {hasShortage ? (
+                <div className="border border-rose-200 bg-rose-50 text-rose-700 px-3 py-2 rounded text-sm">
+                  Stock shortage exists for the selected storage location. Change SLoc or receive stock before creating this Packing PO.
+                </div>
+              ) : null}
+
               <div className="flex justify-between">
                 <button type="button" className="px-4 py-2 border rounded text-sm" onClick={() => setCreateStep(1)}>Back</button>
-                <button type="button" className="px-5 py-2 bg-sky-600 text-white rounded text-sm disabled:opacity-50" disabled={saving} onClick={handleCreate}>
-                  {saving ? "Creating..." : "Create Packing PO"}
+                <button type="button" className="px-5 py-2 bg-sky-600 text-white rounded text-sm disabled:opacity-50" disabled={saving || availabilityPreviewQ.isFetching || hasShortage} onClick={handleCreate}>
+                  {saving ? "Creating..." : availabilityPreviewQ.isFetching ? "Checking Stock..." : "Create Packing PO"}
                 </button>
               </div>
             </>

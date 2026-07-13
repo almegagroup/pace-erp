@@ -2700,3 +2700,22 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Notes / open limits:** Packing PO approval and Packing PO verify were intentionally not added. Machine remains blank on create as agreed; future Process PO consumption/linking can populate it for MTO/HPS/ZTEST, but that linking mechanism was not invented in this pass. The SKU dropdown is sourced from ACTIVE Pack BOMs because Packing PO creation requires the approved packing structure.
 
 **Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts` with dummy Supabase env after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
+
+---
+
+## 2026-07-13 17:10 IST - Packing PO create stock-shortage preview
+
+**Scope implemented:** Fixed the Packing PO create 422 root cause visibility so the page shows stock shortage before submit.
+
+**Changes:**
+- Added `GET /api/production/packing-orders/availability-preview`, reusing the existing Packing PO availability engine.
+- Wired the new route through production routes and ACL as `PROD_ORDER_LIST:VIEW`.
+- Added `availabilityPreviewPackingOrder()` to production frontend API helpers.
+- Updated `PackingOrderPage.jsx` Page 2 to show Available and Shortage columns for SFG/PM lines.
+- Create is disabled while stock check is loading or when any selected SFG/PM storage location is short.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb` for read-only root-cause checks. For the failing screen data, `SFG-00004` at `S003` had sufficient ledger stock, `PM-00004` at `P003` had sufficient ledger stock, but `PM-00020` and `PM-00013` at `P003` had zero ledger stock against requirements of 44 and 22 respectively. `PM-00013` had stock at `P004`, confirming the 422 was a real selected-SLoc shortage rather than a backend crash.
+
+**Files:** `supabase/functions/api/_core/production/packing_order.handlers.ts`, `supabase/functions/api/_routes/production.routes.ts`, `supabase/functions/api/_acl/route-acl-registry.ts`, `frontend/src/pages/dashboard/production/prodApi.js`, `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts`, `production.routes.ts`, and `route-acl-registry.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
