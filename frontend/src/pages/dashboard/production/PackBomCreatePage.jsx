@@ -18,8 +18,8 @@ import {
   addMaterialCategoryMember,
   createMaterialCategoryGroup,
   listMaterialCategoryGroups,
-  listMaterialPlantExtensions,
   listMaterials,
+  listStorageLocations,
 } from "../om/omApi.js";
 import { PackBomLinesTable, GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 
@@ -27,7 +27,7 @@ const PO_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
 
 const ERRORS = {
   PROD_BOM_INVALID: "Company, PO type and FG SKU are required.",
-  PROD_BOM_OUTPUT_SLOC_INVALID: "Select a valid F-location for this SKU/company.",
+  PROD_BOM_OUTPUT_SLOC_INVALID: "Select a valid F-location for this company.",
   PROD_BOM_SFG_QTY_REQUIRED: "SFG input qty is required for this pack code.",
   PROD_BOM_ALREADY_EXISTS: "A DRAFT or ACTIVE Pack BOM already exists for this company and SKU.",
   PROD_BOM_SCOPE_VIOLATION: "You do not have access to create a Pack BOM for this company.",
@@ -98,21 +98,19 @@ export default function PackBomCreatePage() {
     queryFn: () => listMaterialCategoryGroups(),
     select: (d) => d?.data ?? [],
   });
-  const plantExtQ = useQuery({
-    queryKey: ["material-plant-extensions", skuMaterialId],
-    queryFn: () => listMaterialPlantExtensions(skuMaterialId),
-    enabled: Boolean(skuMaterialId),
+  const storageLocationsQ = useQuery({
+    queryKey: ["om-storage-locations", effectiveCompanyId, "active"],
+    queryFn: () => listStorageLocations({ company_id: effectiveCompanyId, is_active: true }),
+    enabled: Boolean(effectiveCompanyId),
   });
 
   const eligibleSkus = eligibleQ.data ?? [];
   const selectedSku = eligibleSkus.find((sku) => sku.id === skuMaterialId) ?? null;
   const packCode = selectedSku?.pack_code_row ?? {};
   const bomRequired = packCode?.bom_required !== false;
-  const outputLocations = (plantExtQ.data?.data ?? plantExtQ.data ?? [])
-    .filter((ext) => ext.company_id === effectiveCompanyId)
-    .map((ext) => ({ id: ext.default_storage_location_id, location: ext.default_storage_location }))
-    .filter((item) => item.id && String(item.location?.code ?? "").startsWith("F"));
-  const outputLocationOptions = outputLocations.map((item) => ({ value: item.id, label: slocLabel(item.location) }));
+  const outputLocations = (storageLocationsQ.data?.data ?? storageLocationsQ.data ?? [])
+    .filter((location) => String(location?.code ?? "").startsWith("F"));
+  const outputLocationOptions = outputLocations.map((location) => ({ value: location.id, label: slocLabel(location) }));
   const autoOutputStorageLocationId = outputStorageLocationId || (outputLocationOptions.length === 1 ? outputLocationOptions[0].value : "");
   const sfgLineLocation = selectedSku?.stroke_master?.default_storage_location ?? null;
 

@@ -2643,3 +2643,20 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Files:** `supabase/migrations/20260713110000_gate27_24_reservation_batch_number.sql`, `supabase/functions/api/_core/production/packing_order.handlers.ts`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
 
 **Verification:** Backend import smoke passed for `packing_order.handlers.ts`. `deno check supabase/functions/api/_core/production/packing_order.handlers.ts` still reports only the already-documented shared typing baseline in `_pipeline/context.ts`, `_shared/canonical_access.ts`, and `_shared/serviceRoleClient.ts`, with no touched-file-local import/syntax failure.
+---
+
+## 2026-07-13 15:26 IST — PR05 Pack BOM SKU + F-location correction
+
+**Scope implemented:** Follow-up correction for Pack BOM Create before Packing PO creation: FG SKU dropdown must use company-mapped SKUs, and OUTPUT SLoc must be selected from the selected company's active F-locations, not from SKU plant extension rows.
+
+**Changes:**
+- Updated Pack BOM eligible-SKU backend lookup to use `erp_master.material_company_ext` for the selected company instead of `material_plant_ext`.
+- Updated prodshade pack-config resolution to treat `erp_production.prodshade_pack_config` as global in the current schema, removing the invalid `company_id` select/filter.
+- Updated Pack BOM create validation so `output_storage_location_id` must be an active `F*` storage location mapped to the selected company through `erp_inventory.storage_location_plant_map`.
+- Updated `PackBomCreatePage.jsx` so Page 2 OUTPUT F-location dropdown uses the existing `listStorageLocations({ company_id, is_active: true })` API and filters to F-location codes.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. Confirmed CMP003 has 10 active FG SKU mappings and one active company F-location: `F003 - CONSTRUCTION LIQUID FG STORE`.
+
+**Files:** `supabase/functions/api/_core/production/pack_bom.handlers.ts`, `frontend/src/pages/dashboard/production/PackBomCreatePage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `pack_bom.handlers.ts` with dummy Supabase env. No ambiguity was guessed through.

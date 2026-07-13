@@ -141,18 +141,17 @@ async function getPackCodeByCode(packCode: string): Promise<JsonRecord | null> {
   return (data as JsonRecord | null) ?? null;
 }
 
-async function resolveProdshadeForSku(sku: JsonRecord, companyId: string): Promise<JsonRecord | null> {
+async function resolveProdshadeForSku(sku: JsonRecord): Promise<JsonRecord | null> {
   const shadeCode = toTrimmedString(sku.shade_code);
   const packCode = toTrimmedString(sku.pack_code);
-  if (!shadeCode || !packCode || !companyId) return null;
+  if (!shadeCode || !packCode) return null;
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("prodshade_pack_config")
     .select(`
-      id, company_id, material_id, pack_code_id, fill_qty, active,
+      id, material_id, pack_code_id, fill_qty, active,
       pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, bom_required, outer_uom_code)
     `)
-    .eq("company_id", companyId)
     .eq("active", true);
   if (error) {
     console.error("[pack_bom.resolveProdshadeForSku] query failed:", JSON.stringify(error));
@@ -172,6 +171,38 @@ async function resolveProdshadeForSku(sku: JsonRecord, companyId: string): Promi
   }) ?? null;
   if (!match) return null;
   return { ...match, prodshade: prodshadeMap.get(String(match.material_id ?? "")) ?? null };
+}
+
+async function getCompanyFStorageLocations(companyId: string): Promise<JsonRecord[]> {
+  const normalizedCompanyId = toTrimmedString(companyId);
+  if (!normalizedCompanyId) return [];
+  const { data: maps, error: mapError } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_plant_map")
+    .select("storage_location_id")
+    .eq("company_id", normalizedCompanyId)
+    .eq("active", true);
+  if (mapError) {
+    console.error("[pack_bom.getCompanyFStorageLocations] map query failed:", JSON.stringify(mapError));
+    throw new Error("PROD_BOM_SLOC_LOOKUP_FAILED");
+  }
+
+  const locationIds = [...new Set(((maps ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
+  if (locationIds.length === 0) return [];
+
+  const { data: locations, error: locationError } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_master")
+    .select("id, code, name, active")
+    .in("id", locationIds)
+    .eq("active", true);
+  if (locationError) {
+    console.error("[pack_bom.getCompanyFStorageLocations] location query failed:", JSON.stringify(locationError));
+    throw new Error("PROD_BOM_SLOC_LOOKUP_FAILED");
+  }
+
+  return ((locations ?? []) as JsonRecord[])
+    .filter((location) => toTrimmedString(location.code).startsWith("F"));
 }
 
 async function resolveApprovedStroke(prodshadeMaterialId: string, companyId: string, poType: string): Promise<JsonRecord | null> {
@@ -197,27 +228,6 @@ async function resolveApprovedStroke(prodshadeMaterialId: string, companyId: str
     ...stroke,
     default_storage_location: slocMap.get(String(stroke.default_storage_location_id ?? "")) ?? null,
   };
-}
-
-async function getMaterialPlantExtensions(materialId: string, companyId?: string): Promise<JsonRecord[]> {
-  let query = serviceRoleClient
-    .schema("erp_master")
-    .from("material_plant_ext")
-    .select("id, material_id, company_id, default_storage_location_id, status")
-    .eq("material_id", materialId)
-    .eq("status", "ACTIVE");
-  if (companyId) query = query.eq("company_id", companyId);
-  const { data, error } = await query;
-  if (error) {
-    console.error("[pack_bom.getMaterialPlantExtensions] query failed:", JSON.stringify(error));
-    throw new Error("PROD_BOM_MPE_LOOKUP_FAILED");
-  }
-  const rows = (data ?? []) as JsonRecord[];
-  const slocMap = await getStorageLocationMapByIds(rows.map((row) => String(row.default_storage_location_id ?? "")));
-  return rows.map((row) => ({
-    ...row,
-    default_storage_location: slocMap.get(String(row.default_storage_location_id ?? "")) ?? null,
-  }));
 }
 
 function normalizeLine(line: JsonRecord, idx: number): JsonRecord {
@@ -328,15 +338,15 @@ export async function listPackBomEligibleSkusHandler(
       return bomError(req, ctx, "PROD_BOM_ELIGIBLE_INVALID", 400, "company_id and valid po_type required");
     }
 
-    const { data: plantRows, error: plantErr } = await serviceRoleClient
+    const { data: companyRows, error: companyErr } = await serviceRoleClient
       .schema("erp_master")
-      .from("material_plant_ext")
+      .from("material_company_ext")
       .select("material_id, company_id, status")
       .eq("company_id", companyId)
       .eq("status", "ACTIVE");
-    if (plantErr) throw new Error("PROD_BOM_ELIGIBLE_LOOKUP_FAILED");
+    if (companyErr) throw new Error("PROD_BOM_ELIGIBLE_LOOKUP_FAILED");
 
-    const skuIds = [...new Set(((plantRows ?? []) as JsonRecord[]).map((row) => String(row.material_id ?? "")).filter(Boolean))];
+    const skuIds = [...new Set(((companyRows ?? []) as JsonRecord[]).map((row) => String(row.material_id ?? "")).filter(Boolean))];
     if (skuIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
     const { data: skuRows, error: skuErr } = await serviceRoleClient
@@ -350,7 +360,7 @@ export async function listPackBomEligibleSkusHandler(
 
     const output: JsonRecord[] = [];
     for (const sku of (skuRows ?? []) as JsonRecord[]) {
-      const prodshadeConfig = await resolveProdshadeForSku(sku, companyId);
+      const prodshadeConfig = await resolveProdshadeForSku(sku);
       const prodshade = (prodshadeConfig?.prodshade ?? null) as JsonRecord | null;
       if (!prodshade) continue;
       const stroke = await resolveApprovedStroke(String(prodshade.id), companyId, poType);
@@ -558,16 +568,12 @@ export async function createPackBomHandler(
       return bomError(req, ctx, "PROD_BOM_NOT_FG", 422, "Pack BOM can only be created for FG materials");
     }
 
-    const plantExtensions = await getMaterialPlantExtensions(skuMaterialId, companyId);
-    const fLocationExts = plantExtensions.filter((ext) => {
-      const sloc = (ext.default_storage_location ?? {}) as JsonRecord;
-      return toTrimmedString(sloc.code).startsWith("F");
-    });
-    if (!outputStorageLocationId || !fLocationExts.some((ext) => toTrimmedString(ext.default_storage_location_id) === outputStorageLocationId)) {
-      return bomError(req, ctx, "PROD_BOM_OUTPUT_SLOC_INVALID", 422, "Output storage location must be an F-location extended to the selected SKU and company");
+    const companyFLocations = await getCompanyFStorageLocations(companyId);
+    if (!outputStorageLocationId || !companyFLocations.some((location) => toTrimmedString(location.id) === outputStorageLocationId)) {
+      return bomError(req, ctx, "PROD_BOM_OUTPUT_SLOC_INVALID", 422, "Output storage location must be an active F-location for the selected company");
     }
 
-    const prodshadeConfig = await resolveProdshadeForSku(sku as JsonRecord, companyId);
+    const prodshadeConfig = await resolveProdshadeForSku(sku as JsonRecord);
     const prodshade = (prodshadeConfig?.prodshade ?? null) as JsonRecord | null;
     if (!prodshade) {
       return bomError(req, ctx, "PROD_BOM_PRODSHADE_NOT_FOUND", 422, "FG SKU prodshade link not found");
