@@ -53,18 +53,6 @@ function computePassFail(resultValue, lsl, usl) {
   return belowLsl || aboveUsl ? "FAIL" : "PASS";
 }
 
-function newDecisionRow(defaultDecision) {
-  return {
-    key:
-      typeof crypto?.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `split-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    quantity: "",
-    usage_decision: defaultDecision || "RELEASE",
-    remarks: "",
-  };
-}
-
 export default function SfgResultRecordingPage() {
   const { runtimeContext, shellProfile } = useMenu();
   const isMulti = runtimeContext?.workspaceMode === "MULTI";
@@ -105,14 +93,6 @@ export default function SfgResultRecordingPage() {
     },
   });
 
-  useEffect(() => {
-    setPage(1);
-  }, [search, statusFilter, dateFrom, dateTo]);
-
-  useEffect(() => {
-    setError(queueQuery.error?.message || "");
-  }, [queueQuery.error]);
-
   const filteredRows = useMemo(() => {
     const needle = normalizeSearch(search);
     if (!needle) return rows;
@@ -135,6 +115,7 @@ export default function SfgResultRecordingPage() {
   const total = filteredRows.length;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const safePage = Math.min(page, totalPages);
+  const currentError = error || queueQuery.error?.message || "";
   const pageRows = useMemo(
     () => filteredRows.slice((safePage - 1) * LIMIT, safePage * LIMIT),
     [filteredRows, safePage],
@@ -169,7 +150,7 @@ export default function SfgResultRecordingPage() {
         },
       ]}
       notices={[
-        ...(error ? [{ key: "sfg-qa-queue-error", tone: "error", message: error }] : []),
+        ...(currentError ? [{ key: "sfg-qa-queue-error", tone: "error", message: currentError }] : []),
       ]}
       filterSection={{
         eyebrow: "Queue Filters",
@@ -181,7 +162,10 @@ export default function SfgResultRecordingPage() {
                 Company
                 <select
                   value={selectedCompanyId}
-                  onChange={(event) => setSelectedCompanyId(event.target.value)}
+                  onChange={(event) => {
+                    setSelectedCompanyId(event.target.value);
+                    setPage(1);
+                  }}
                   className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
                 >
                   <option value="">Select company...</option>
@@ -196,7 +180,10 @@ export default function SfgResultRecordingPage() {
             <QuickFilterInput
               label="Search"
               value={search}
-              onChange={setSearch}
+              onChange={(value) => {
+                setSearch(value);
+                setPage(1);
+              }}
               primaryFocus
               placeholder="Search PO, batch, prodshade or stroke"
               className="w-64"
@@ -205,7 +192,10 @@ export default function SfgResultRecordingPage() {
               Status
               <select
                 value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
+                onChange={(event) => {
+                  setStatusFilter(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="ALL">ALL</option>
@@ -219,7 +209,10 @@ export default function SfgResultRecordingPage() {
               <input
                 type="date"
                 value={dateFrom}
-                onChange={(event) => setDateFrom(event.target.value)}
+                onChange={(event) => {
+                  setDateFrom(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </label>
@@ -228,7 +221,10 @@ export default function SfgResultRecordingPage() {
               <input
                 type="date"
                 value={dateTo}
-                onChange={(event) => setDateTo(event.target.value)}
+                onChange={(event) => {
+                  setDateTo(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </label>
@@ -333,7 +329,6 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
   const [notice, setNotice] = useState("");
   const [resultDrafts, setResultDrafts] = useState({});
   const [limitDrafts, setLimitDrafts] = useState({});
-  const [decisionRows, setDecisionRows] = useState([]);
   const [addMethodForm, setAddMethodForm] = useState({ group: "", mode: "existing", methodId: "", methodName: "", lsl: "", usl: "" });
 
   const detailQuery = useQuery({
@@ -386,11 +381,9 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
     || "--";
 
   const testLines = Array.isArray(detail?.test_lines) ? detail.test_lines : [];
-  const decisionLines = Array.isArray(detail?.decision_lines) ? detail.decision_lines : [];
   const totalQty = Number(detail?.total_qty ?? row.total_qty ?? 0);
-  const remainingQty = Number(detail?.remaining_qty ?? row.remaining_qty ?? totalQty);
   const publicStatus = String(detail?.public_status ?? row.public_status ?? "").toUpperCase();
-  const isMutable = remainingQty > 0.000001 && ["PENDING", "IN_PROGRESS"].includes(publicStatus);
+  const isMutable = ["PENDING", "IN_PROGRESS"].includes(publicStatus);
 
   const mctConfigs = useMemo(() => categoryConfigs.filter((c) => c.qa_test_method?.test_group === "MCT"), [categoryConfigs]);
   const ctConfigs = useMemo(() => categoryConfigs.filter((c) => c.qa_test_method?.test_group === "CT"), [categoryConfigs]);
@@ -409,14 +402,7 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
   const failedMctMethods = mctConfigs.filter(
     (cfg) => computePassFail(currentResultValue(cfg.test_method_id), cfg.lsl, cfg.usl) === "FAIL",
   );
-  const anyMctFail = failedMctMethods.length > 0;
   const allMctFilled = mctConfigs.every((cfg) => String(currentResultValue(cfg.test_method_id)).trim() !== "");
-
-  useEffect(() => {
-    if (decisionRows.length === 0 && isMutable) {
-      setDecisionRows([newDecisionRow(anyMctFail ? "BLOCK" : "RELEASE")]);
-    }
-  }, [anyMctFail, decisionRows.length, isMutable]);
 
   function toast(msg, tone = "success") {
     if (tone === "error") setError(msg);
@@ -541,37 +527,20 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
     }
   }
 
-  function updateDecisionRow(key, patch) {
-    setDecisionRows((current) => current.map((r) => (r.key === key ? { ...r, ...patch } : r)));
-  }
-
-  function addSplitRow() {
-    setDecisionRows((current) => [...current, newDecisionRow(anyMctFail ? "BLOCK" : "RELEASE")]);
-  }
-
-  function removeSplitRow(key) {
-    setDecisionRows((current) => (current.length === 1 ? current : current.filter((r) => r.key !== key)));
-  }
-
-  const allocatedQty = decisionRows.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
-  const decisionSubmitDisabled =
+  const resultSubmitDisabled =
     !isMutable ||
     saving ||
-    !allMctFilled ||
-    decisionRows.length === 0 ||
-    !(allocatedQty > 0) ||
-    allocatedQty - remainingQty > 0.000001 ||
-    decisionRows.some((r) => !(Number(r.quantity) > 0) || !String(r.usage_decision || "").trim());
+    !allMctFilled;
 
   async function handleSubmitDecision() {
-    if (decisionSubmitDisabled) return;
+    if (resultSubmitDisabled) return;
 
     if (failedMctMethods.length > 0) {
       const names = failedMctMethods.map((cfg) => cfg.qa_test_method?.method_name).filter(Boolean).join(", ");
       const proceedDespiteFailure = await openActionConfirm({
-        eyebrow: "SFG QA Decision",
+        eyebrow: "SFG Result Recording",
         title: `${failedMctMethods.length} mandatory test${failedMctMethods.length === 1 ? "" : "s"} failed`,
-        message: `Failed: ${names}. Choose "Change Result" to go back and correct the value(s), or "Continue Anyway" to proceed with the decision as entered.`,
+        message: `Failed: ${names}. Choose "Change Result" to go back and correct the value(s), or "Continue Anyway" to submit the result recording as entered.`,
         confirmLabel: "Continue Anyway",
         cancelLabel: "Change Result",
       });
@@ -579,9 +548,9 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
     }
 
     const confirmed = await openActionConfirm({
-      eyebrow: "SFG QA Decision",
-      title: "Submit result decision?",
-      message: "This records the QA decision for the verified batch. It does not post a second stock movement.",
+      eyebrow: "SFG Result Recording",
+      title: "Submit result recording?",
+      message: "This records the SFG QA test result for the verified batch. It does not post a second stock movement.",
       confirmLabel: "Submit",
     });
     if (!confirmed) return;
@@ -589,18 +558,11 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
     setSaving(true);
     setError("");
     try {
-      await submitSfgQaDecision(row.id, {
-        decision_lines: decisionRows.map((r) => ({
-          quantity: Number(r.quantity),
-          usage_decision: r.usage_decision,
-          remarks: r.remarks || undefined,
-        })),
-      });
-      setDecisionRows([]);
+      await submitSfgQaDecision(row.id, {});
       await refreshDetail();
-      toast("SFG QA decision recorded.");
+      toast("SFG QA result recorded.");
     } catch (submitError) {
-      toast(submitError instanceof Error ? submitError.message : "SFG_QA_DECISION_FAILED", "error");
+      toast(submitError instanceof Error ? submitError.message : "SFG_QA_RESULT_FAILED", "error");
     } finally {
       setSaving(false);
     }
@@ -618,7 +580,7 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
       event.preventDefault();
       if (canSaveMethodNow) {
         void handleAddMethod(addMethodForm.group);
-      } else if (!decisionSubmitDisabled) {
+      } else if (!resultSubmitDisabled) {
         void handleSubmitDecision();
       }
     }
@@ -627,7 +589,7 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
   useEffect(() => {
     window.addEventListener("keydown", handleExpandedPanelKeyDown);
     return () => window.removeEventListener("keydown", handleExpandedPanelKeyDown);
-  }, [handleExpandedPanelKeyDown]);
+  }, []);
 
   function renderMethodGroup(group, configs, methodPool) {
     const isAddingThisGroup = addMethodForm.group === group;
@@ -821,13 +783,11 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
             <ErpDenseFormRow label="Total Qty">
               <div className="h-8 flex items-center px-1 text-[12px] text-slate-700">{totalQty} {row.uom_code || ""}</div>
             </ErpDenseFormRow>
-            <ErpDenseFormRow label="Decided Qty">
-              <div className="h-8 flex items-center px-1 text-[12px] text-slate-700">{Number(detail?.decided_qty ?? row.decided_qty ?? 0)}</div>
+            <ErpDenseFormRow label="Recording Status">
+              <div className="h-8 flex items-center px-1 text-[12px] text-slate-700">{publicStatus || "--"}</div>
             </ErpDenseFormRow>
-            <ErpDenseFormRow label="Remaining Qty">
-              <div className={`h-8 flex items-center px-1 text-[12px] font-semibold ${remainingQty > 0 ? "text-amber-700" : "text-emerald-700"}`}>
-                {remainingQty}
-              </div>
+            <ErpDenseFormRow label="Verified Batch">
+              <div className="h-8 flex items-center px-1 text-[12px] text-slate-700">{row.batch_number || "--"}</div>
             </ErpDenseFormRow>
           </div>
 
@@ -846,105 +806,21 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
 
           {isMutable ? (
             <div className="grid gap-2 rounded border border-slate-200 bg-slate-50 p-2">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Usage Decision</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Result Recording</p>
               {!allMctFilled ? (
-                <p className="text-[11px] font-medium text-amber-700">All mandatory MCT results must be filled before a decision can be submitted.</p>
+                <p className="text-[11px] font-medium text-amber-700">All mandatory MCT results must be filled before result recording can be submitted.</p>
               ) : null}
-              {decisionRows.map((r) => {
-                const showForReprocess = canManage;
-                return (
-                  <div key={r.key} className="grid items-end gap-2 lg:grid-cols-[120px_180px_1fr_auto]">
-                    <label className="grid gap-0.5 text-[10px] font-medium text-slate-600">
-                      Quantity
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.0001"
-                        value={r.quantity}
-                        onChange={(event) => updateDecisionRow(r.key, { quantity: event.target.value })}
-                        className="h-8 border border-slate-300 bg-white px-1.5 text-[12px]"
-                      />
-                    </label>
-                    <label className="grid gap-0.5 text-[10px] font-medium text-slate-600">
-                      Decision
-                      <select
-                        value={r.usage_decision}
-                        onChange={(event) => updateDecisionRow(r.key, { usage_decision: event.target.value })}
-                        className="h-8 border border-slate-300 bg-white px-1.5 text-[12px]"
-                      >
-                        {["RELEASE", "BLOCK", "REJECT", "SCRAP", ...(showForReprocess ? ["FOR_REPROCESS"] : [])].map((entry) => (
-                          <option key={entry} value={entry}>
-                            {entry}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="grid gap-0.5 text-[10px] font-medium text-slate-600">
-                      Remarks
-                      <input
-                        value={r.remarks}
-                        onChange={(event) => updateDecisionRow(r.key, { remarks: event.target.value })}
-                        className="h-8 border border-slate-300 bg-white px-1.5 text-[12px]"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      disabled={decisionRows.length === 1}
-                      onClick={() => removeSplitRow(r.key)}
-                      className="h-8 border border-slate-300 bg-white px-2 text-[11px] disabled:opacity-50"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                );
-              })}
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex gap-2">
-                  <button type="button" onClick={addSplitRow} className="h-8 border border-slate-300 bg-white px-2 text-[12px] font-semibold">
-                    + Add Split
-                  </button>
-                  <button
-                    type="button"
-                    disabled={decisionSubmitDisabled}
-                    onClick={() => void handleSubmitDecision()}
-                    className="h-8 border border-sky-300 bg-sky-50 px-3 text-[12px] font-semibold text-sky-900 disabled:opacity-50"
-                  >
-                    Submit Decision
-                  </button>
-                  <span className="text-[10px] uppercase tracking-[0.08em] text-slate-400">Ctrl+S</span>
-                </div>
-                <span className="text-[11px] text-slate-500">
-                  Allocating {allocatedQty || 0} of {remainingQty} remaining
-                </span>
+                <button
+                  type="button"
+                  disabled={resultSubmitDisabled}
+                  onClick={() => void handleSubmitDecision()}
+                  className="h-8 border border-sky-300 bg-sky-50 px-3 text-[12px] font-semibold text-sky-900 disabled:opacity-50"
+                >
+                  Submit Result
+                </button>
+                <span className="text-[10px] uppercase tracking-[0.08em] text-slate-400">Ctrl+S</span>
               </div>
-            </div>
-          ) : null}
-
-          {decisionLines.length > 0 ? (
-            <div className="grid gap-1">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Posted Decisions</p>
-              <table className="w-full text-[12px]">
-                <thead>
-                  <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-slate-500">
-                    <th className="py-1">Decision</th>
-                    <th className="py-1">Qty</th>
-                    <th className="py-1">Movement</th>
-                    <th className="py-1">Status</th>
-                    <th className="py-1">Remarks</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {decisionLines.map((line) => (
-                    <tr key={line.id} className="border-t border-slate-100">
-                      <td className="py-1 pr-2 font-medium">{line.usage_decision}</td>
-                      <td className="py-1 pr-2">{line.decision_qty}</td>
-                      <td className="py-1 pr-2 font-mono">{line.movement_type_code}</td>
-                      <td className="py-1 pr-2">{line.posting_status}</td>
-                      <td className="py-1 pr-2 text-slate-500">{line.remarks || "--"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           ) : null}
         </>

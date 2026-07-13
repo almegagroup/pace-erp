@@ -10,7 +10,6 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
-  assertManagerOrSARole,
   assertProdReadRole,
   parseBody,
   toTrimmedString,
@@ -20,11 +19,6 @@ import {
 
 type JsonRecord = Record<string, unknown>;
 type QaDocumentRow = Record<string, unknown>;
-type QaDecisionLineInput = {
-  quantity: number;
-  usage_decision: string;
-  remarks?: string;
-};
 
 class ApiError extends Error {
   status: number;
@@ -40,13 +34,6 @@ const QA_PUBLIC_STATUS_MAP: Record<string, string> = {
   PENDING: "PENDING",
   IN_PROGRESS: "IN_PROGRESS",
   DECIDED: "DECISION_MADE",
-};
-const QA_DECISION_MOVEMENT_MAP: Record<string, { dbDecision: string; movementType: string }> = {
-  RELEASE: { dbDecision: "RELEASE", movementType: "P321" },
-  BLOCK: { dbDecision: "BLOCK", movementType: "P344" },
-  REJECT: { dbDecision: "REJECT", movementType: "P344" },
-  SCRAP: { dbDecision: "SCRAP", movementType: "P553" },
-  FOR_REPROCESS: { dbDecision: "FOR_REPROCESS", movementType: "FOR_REPROCESS" },
 };
 const ELIGIBLE_PO_TYPES = ["MTO", "HPS", "MTS"];
 const QTY_EPSILON = 0.000001;
@@ -210,6 +197,35 @@ function sumDecidedQty(decisionLines: JsonRecord[]): number {
   return roundQty(decisionLines.reduce((sum, line) => sum + (Number(line.decision_qty) || 0), 0));
 }
 
+async function listMandatoryMctConfigs(companyId: string, materialCategory: string): Promise<JsonRecord[]> {
+  if (!companyId || !materialCategory) return [];
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("qa_category_test_config")
+    .select(`
+      id,
+      company_id,
+      material_category,
+      test_method_id,
+      lsl,
+      usl,
+      qa_test_method:test_method_id (
+        id,
+        test_group,
+        method_name
+      )
+    `)
+    .eq("company_id", companyId)
+    .eq("material_category", materialCategory);
+  if (error) {
+    logDbError("listMandatoryMctConfigs", error);
+    throw new ApiError(500, error.message || "Unable to resolve mandatory MCT methods");
+  }
+  return ((data ?? []) as JsonRecord[]).filter((row) =>
+    toUpperTrimmedString((row.qa_test_method as JsonRecord | null)?.test_group) === "MCT"
+  );
+}
+
 async function fetchProcessOrdersByIds(processOrderIds: string[]): Promise<Map<string, JsonRecord>> {
   const ids = [...new Set(processOrderIds.filter(Boolean))];
   const map = new Map<string, JsonRecord>();
@@ -267,7 +283,11 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: ProdHandlerCont
   const storageLocationMap = await getStorageLocationMapByIds(storageLocationId ? [storageLocationId] : []);
 
   const totalQty = roundQty(Number(qaDocument.qa_stock_qty) || 0);
-  const decidedQty = sumDecidedQty(decisionLines);
+  const decidedQty = decisionLines.length > 0
+    ? sumDecidedQty(decisionLines)
+    : toUpperTrimmedString(qaDocument.status) === "DECIDED"
+    ? totalQty
+    : 0;
   const material = materialMap.get(String(processOrder.material_id ?? "")) ?? null;
   const storageLocation = storageLocationId ? storageLocationMap.get(storageLocationId) ?? null : null;
 
@@ -305,31 +325,6 @@ async function getNextTestLineNumber(qaDocumentId: string): Promise<number> {
     throw new ApiError(500, error.message || "Unable to determine SFG QA test line number");
   }
   return (Number(data?.line_number) || 0) + 1;
-}
-
-async function getNextDecisionLineNumber(qaDocumentId: string): Promise<number> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_production")
-    .from("sfg_qa_decision_line")
-    .select("decision_line_number")
-    .eq("qa_document_id", qaDocumentId)
-    .order("decision_line_number", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) {
-    logDbError("getNextDecisionLineNumber", error);
-    throw new ApiError(500, error.message || "Unable to determine SFG QA decision line number");
-  }
-  return (Number(data?.decision_line_number) || 0) + 1;
-}
-
-function parseDecisionLines(body: JsonRecord): QaDecisionLineInput[] {
-  const lines = Array.isArray(body.decision_lines) ? body.decision_lines : [];
-  return lines.map((line) => ({
-    quantity: Number((line as JsonRecord).quantity),
-    usage_decision: toUpperTrimmedString((line as JsonRecord).usage_decision),
-    remarks: toTrimmedString((line as JsonRecord).remarks) || undefined,
-  }));
 }
 
 async function ensureQaDocumentsForProcessOrders(
@@ -460,7 +455,11 @@ export async function listSfgQaDocumentsHandler(req: Request, ctx: ProdHandlerCo
         const processOrder = processOrderMap.get(String(qaDoc.process_order_id));
         if (!processOrder) return null;
         const totalQty = roundQty(Number(qaDoc.qa_stock_qty) || 0);
-        const decidedQty = decidedByDoc.get(String(qaDoc.id)) ?? 0;
+        const decidedQty = decidedByDoc.has(String(qaDoc.id))
+          ? decidedByDoc.get(String(qaDoc.id)) ?? 0
+          : toUpperTrimmedString(qaDoc.status) === "DECIDED"
+          ? totalQty
+          : 0;
         return {
           ...qaDoc,
           id: qaDoc.id,
@@ -687,7 +686,7 @@ export async function submitSfgQaDecisionHandler(req: Request, ctx: ProdHandlerC
     const qaDocument = await fetchQaDocument(qaDocumentId);
     assertQaCompanyScope(ctx, qaDocument);
     if (!QA_DOC_MUTABLE_STATUSES.has(toUpperTrimmedString(qaDocument.status))) {
-      throw new ApiError(400, "SFG QA document is not eligible for decision");
+      throw new ApiError(400, "SFG QA document is not eligible for result recording");
     }
 
     const existingDecisionLines = await fetchDecisionLines(qaDocumentId);
@@ -695,79 +694,47 @@ export async function submitSfgQaDecisionHandler(req: Request, ctx: ProdHandlerC
     const alreadyDecidedQty = sumDecidedQty(existingDecisionLines);
     const remainingBeforeSubmit = roundQty(totalQty - alreadyDecidedQty);
     if (remainingBeforeSubmit <= QTY_EPSILON) {
-      throw new ApiError(409, "SFG QA document has already been fully decided");
+      throw new ApiError(409, "SFG QA document has already been fully recorded");
     }
 
-    const body = await parseBody(req);
-    const decisionLines = parseDecisionLines(body);
-    if (decisionLines.length === 0) {
-      throw new ApiError(400, "decision_lines is required");
-    }
-
-    const sumQty = roundQty(
-      decisionLines.reduce((sum, line) => sum + (Number.isFinite(line.quantity) ? line.quantity : 0), 0),
-    );
-    if (sumQty <= QTY_EPSILON) {
-      throw new ApiError(400, "Sum of decision line quantities must be greater than zero");
-    }
-    if (sumQty - remainingBeforeSubmit > QTY_EPSILON) {
-      throw new ApiError(
-        400,
-        `Sum of decision line quantities (${sumQty}) exceeds remaining undecided quantity (${remainingBeforeSubmit})`,
-      );
-    }
-
+    await parseBody(req);
     const processOrderMap = await fetchProcessOrdersByIds([String(qaDocument.process_order_id)]);
     const processOrder = processOrderMap.get(String(qaDocument.process_order_id));
     if (!processOrder) {
       throw new ApiError(500, "Linked Process PO not found");
     }
-
-    const storageLocationId = await resolveOutputStorageLocationId(toTrimmedString(processOrder.stroke_master_id) || null);
-    let nextLineNumber = await getNextDecisionLineNumber(qaDocumentId);
-    const createdDecisionLines: JsonRecord[] = [];
-
-    for (const decisionLine of decisionLines) {
-      const config = QA_DECISION_MOVEMENT_MAP[decisionLine.usage_decision];
-      if (!config) {
-        throw new ApiError(400, `Invalid usage_decision: ${decisionLine.usage_decision}`);
-      }
-      if (!Number.isFinite(decisionLine.quantity) || decisionLine.quantity <= 0) {
-        throw new ApiError(400, "decision_lines.quantity must be greater than zero");
-      }
-      if (decisionLine.usage_decision === "FOR_REPROCESS") {
-        assertManagerOrSARole(ctx);
-      }
-
-      const { data: insertedDecision, error: insertError } = await serviceRoleClient
-        .schema("erp_production")
-        .from("sfg_qa_decision_line")
-        .insert({
-          qa_document_id: qaDocumentId,
-          decision_line_number: nextLineNumber,
-          usage_decision: config.dbDecision,
-          decision_qty: decisionLine.quantity,
-          movement_type_code: config.movementType,
-          posting_status: "POSTED",
-          storage_location_id: storageLocationId,
-          stock_document_id: null,
-          stock_ledger_id: null,
-          decided_by: ctx.auth_user_id,
-          decided_at: new Date().toISOString(),
-          remarks: decisionLine.remarks ?? null,
-        })
-        .select("*")
-        .single();
-      if (insertError || !insertedDecision) {
-        logDbError("submitSfgQaDecisionHandler decision-line insert", insertError);
-        throw new ApiError(500, insertError?.message || "Unable to create SFG QA decision line");
-      }
-      createdDecisionLines.push(insertedDecision);
-      nextLineNumber += 1;
+    const materialCategory = toTrimmedString(processOrder.material_id)
+      ? toUpperTrimmedString((await getMaterialMapByIds([String(processOrder.material_id)])).get(String(processOrder.material_id))?.material_category)
+      : "";
+    const mandatoryMctConfigs = await listMandatoryMctConfigs(String(processOrder.company_id ?? qaDocument.company_id ?? ""), materialCategory);
+    const { data: testLines, error: testLinesError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("sfg_qa_test_line")
+      .select("test_method_id, test_result")
+      .eq("qa_document_id", qaDocumentId);
+    if (testLinesError) {
+      logDbError("submitSfgQaDecisionHandler test-lines", testLinesError);
+      throw new ApiError(500, testLinesError.message || "Unable to validate SFG QA test results");
+    }
+    const testResultByMethod = new Map<string, string>();
+    for (const line of (testLines ?? []) as JsonRecord[]) {
+      const methodId = toTrimmedString(line.test_method_id);
+      if (!methodId) continue;
+      testResultByMethod.set(methodId, toTrimmedString(line.test_result));
+    }
+    const missingMandatoryMethods = mandatoryMctConfigs.filter((config) => {
+      const methodId = toTrimmedString(config.test_method_id);
+      return !methodId || !testResultByMethod.get(methodId);
+    });
+    if (missingMandatoryMethods.length > 0) {
+      const methodNames = missingMandatoryMethods
+        .map((config) => toTrimmedString((config.qa_test_method as JsonRecord | null)?.method_name))
+        .filter(Boolean)
+        .join(", ");
+      throw new ApiError(400, `Mandatory MCT result missing for: ${methodNames}`);
     }
 
-    const remainingAfterSubmit = roundQty(remainingBeforeSubmit - sumQty);
-    const nextStatus = remainingAfterSubmit <= QTY_EPSILON ? "DECIDED" : "IN_PROGRESS";
+    const nextStatus = "DECIDED";
     const { data: updatedQaDocument, error: updateError } = await serviceRoleClient
       .schema("erp_production")
       .from("sfg_qa_document")
@@ -789,17 +756,17 @@ export async function submitSfgQaDecisionHandler(req: Request, ctx: ProdHandlerC
         qa_document: {
           ...updatedQaDocument,
           total_qty: totalQty,
-          decided_qty: roundQty(alreadyDecidedQty + sumQty),
-          remaining_qty: remainingAfterSubmit,
+          decided_qty: totalQty,
+          remaining_qty: 0,
           public_status: mapQaStatusForResponse(nextStatus),
         },
-        decision_lines: createdDecisionLines,
+        decision_lines: existingDecisionLines,
       },
       ctx.request_id,
       req,
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to submit SFG QA decision";
+    const message = error instanceof Error ? error.message : "Unable to submit SFG QA result";
     const status = error instanceof ApiError ? error.status : 500;
     return sfgQaErrorResponse(req, ctx, "SFG_QA_DECISION_FAILED", status, message);
   }
