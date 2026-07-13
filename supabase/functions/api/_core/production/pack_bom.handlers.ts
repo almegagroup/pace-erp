@@ -11,6 +11,7 @@
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
+import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -189,7 +190,13 @@ async function resolveApprovedStroke(prodshadeMaterialId: string, companyId: str
     console.error("[pack_bom.resolveApprovedStroke] query failed:", JSON.stringify(error));
     throw new Error("PROD_BOM_STROKE_LOOKUP_FAILED");
   }
-  return (data as JsonRecord | null) ?? null;
+  const stroke = (data as JsonRecord | null) ?? null;
+  if (!stroke) return null;
+  const slocMap = await getStorageLocationMapByIds([String(stroke.default_storage_location_id ?? "")]);
+  return {
+    ...stroke,
+    default_storage_location: slocMap.get(String(stroke.default_storage_location_id ?? "")) ?? null,
+  };
 }
 
 async function getMaterialPlantExtensions(materialId: string, companyId?: string): Promise<JsonRecord[]> {
@@ -287,7 +294,7 @@ async function syncPackBomConversions(packBomId: string, createdBy: string): Pro
       material_id: bom.sku_material_id,
       from_uom_code: toTrimmedString(packCode.outer_uom_code) || "KG",
       to_uom_code: "KG",
-      conversion_factor: 1,
+      conversion_factor: null,
       variable_conversion: true,
       active: true,
       created_by: createdBy,
@@ -497,6 +504,24 @@ export async function getPackBomHandler(
   }
 }
 
+function isAdminBypass(ctx: ProdHandlerContext): boolean {
+  return ctx.context.isAdmin === true || isSuperAdmin(ctx.roleCode) || isGlobalAdmin(ctx.roleCode);
+}
+
+async function assertPackBomCompanyScope(ctx: ProdHandlerContext, companyId: string): Promise<void> {
+  if (isAdminBypass(ctx)) return;
+  const normalizedCompanyId = toTrimmedString(companyId);
+  if (!normalizedCompanyId) throw new Error("PROD_BOM_SCOPE_VIOLATION");
+  const { data, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id)
+    .eq("company_id", normalizedCompanyId)
+    .maybeSingle();
+  if (error || !data) throw new Error("PROD_BOM_SCOPE_VIOLATION");
+}
+
 // POST /api/production/pack-boms
 export async function createPackBomHandler(
   req: Request,
@@ -517,6 +542,7 @@ export async function createPackBomHandler(
     if (!companyId || !skuMaterialId || !PACK_PO_TYPES.has(poType)) {
       return bomError(req, ctx, "PROD_BOM_INVALID", 400, "company_id, po_type, sku_material_id required");
     }
+    await assertPackBomCompanyScope(ctx, companyId);
 
     // Validate SKU exists and is type FG
     const { data: sku, error: skuErr } = await serviceRoleClient

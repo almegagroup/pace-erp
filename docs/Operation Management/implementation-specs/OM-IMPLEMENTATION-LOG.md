@@ -2590,3 +2590,33 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Verification:** `npm.cmd run build` passed. Local backend import smoke with dummy Supabase env passed for touched production handlers/routes. `deno check` still reports the known shared typing baseline, not touched-file-local syntax/import failures.
 
 **Notes / open items:** Native Supabase MCP tools were unavailable in this session, so there was no live DB verification or migration application. FG stock breakdown page code/route/screen registry is present, but live menu/ACL snapshot seeding was not performed in this local-only commit pass.
+
+---
+
+## 2026-07-13 11:12 IST — Gate-27.22/27.23 verification-findings fix pass
+
+**Scope implemented:** Follow-up fixes from the new "Verification findings" sections at the top of Gate-27.22 and Gate-27.23 briefs, based on Claude's Dev verification of commit `003d48a`.
+
+**Gate-27.22 fixes:**
+- Changed BOM-not-required Pack BOM conversion sync from `conversion_factor: 1` to `conversion_factor: null` with `variable_conversion=true`.
+- Added a small migration to make `erp_master.material_uom_conversion.conversion_factor` nullable, because live Dev schema still had it `NOT NULL`.
+- Added `createPackBomHandler` company-membership validation against `erp_map.user_companies`, with admin bypass matching the existing Opening Stock pattern.
+- Resolved `stroke_master.default_storage_location_id` into `stroke_master.default_storage_location` for eligible-SKU responses, so the PR05 SFG/INPUT row can display the Stroke default SLoc.
+- Replaced PR05's hand-built company picker with `TransactionCompanySelector`.
+- Moved the Process Type -> Packing PO Type label map into shared frontend module `productionTypeLabels.js` and reused it from Pack BOM / Packing Order frontend code.
+
+**Gate-27.23 fixes:**
+- Fixed `createPackingOrderHandler` FG line `total_qty` for flexible-fill pack codes so it always stores KG (`plannedQtyKg`), never pack count.
+- Rebuilt `PackingOrderPage.jsx` to remove raw UUID create inputs and the old manual Edit Lines drawer; the new create flow selects Company -> Process PO -> FG SKU, previews ACTIVE Pack BOM-derived SFG/PM/FG lines, and submits only the locked header payload.
+- Detail view now shows resolved material labels, storage-location labels, and per-line batch number; Final button copy now states it posts SFG issue, PM issue, and FG receipt.
+- Added COR6-style correction drawer for FINAL Packing POs using the existing `/correct` endpoint.
+- Added route/screen wiring for `/dashboard/production/packing-orders`.
+- Registered `PROD_PACKING_PO_FINAL` and `PROD_FG_STOCK_BREAKDOWN` in Dev menu/ACL data and regenerated snapshots; updated FG stock breakdown route ACL to use its own resource.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb` because native MCP tools were not surfaced in the Codex session. Confirmed live SQL access with `current_database()`. Confirmed `material_uom_conversion.conversion_factor` changed to nullable after targeted DDL; confirmed `erp_map.user_companies` columns exist; confirmed approved Stroke default storage locations resolve to storage location code/name; confirmed `packing_order_line_line_type_check` includes `FG`; confirmed new menu/ACL resources and regenerated snapshots (`PROD_PACKING_PO_FINAL`: 108 ACL allow rows / 36 menu snapshot rows, `PROD_FG_STOCK_BREAKDOWN`: 36 / 36).
+
+**Files:** `supabase/migrations/20260713120000_gate27_22_pack_bom_variable_conversion_nullable.sql`, `pack_bom.handlers.ts`, `packing_order.handlers.ts`, `route-acl-registry.ts`, `PackBomCreatePage.jsx`, `PackingOrderPage.jsx`, `productionTypeLabels.js`, `AppRouter.jsx`, `operationScreens.js`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Notes / open items:** `updatePackingOrderLinesHandler` and its frontend API wrapper are now dead code for `PackingOrderPage.jsx` after the locked rebuild removed pre-Final manual line editing; left in place and logged rather than silently deleted. `supabase db push` was not used for the new nullable migration because Dev has three remote-only Claude-applied migration versions missing locally; the equivalent DDL was applied directly to Dev for verification and the migration file is present locally for source control/prod travel.
+
+**Verification:** `frontend` build passed; file-scoped ESLint passed for all touched frontend files; backend import smoke passed for touched production handlers/routes/ACL registry. `deno check` still reports the documented shared baseline plus an older `pack_config.handlers.ts` count typing issue pulled through route imports, with no touched-file-local import/syntax failure.

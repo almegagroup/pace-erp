@@ -79,6 +79,20 @@ async function getCompanyMapByIds(ids: string[]): Promise<Map<string, JsonRecord
   return map;
 }
 
+async function getStorageLocationMapByIds(ids: string[]): Promise<Map<string, JsonRecord>> {
+  const slocIds = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (slocIds.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_master")
+    .select("id, code, name")
+    .in("id", slocIds);
+  if (error) throw new Error("PROD_PACK_SLOC_LOOKUP_FAILED");
+  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  return map;
+}
+
 async function postStockMovement(params: {
   documentNumber: string; documentDate: string; postingDate: string;
   movementTypeCode: string; companyId: unknown; storageLocationId: unknown;
@@ -280,18 +294,21 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
 
     const poRow = po as JsonRecord;
     const lineRows = (lines ?? []) as JsonRecord[];
-    const poMaterialMap = await getMaterialMapByIds(
-      [String(poRow.material_id ?? "")],
-      "[packing_order.getPackingOrder]",
-      "PROD_PACK_FETCH_FAILED",
-      "id, pace_code, material_name, shade_code",
-    );
-    const lineMaterialMap = await getMaterialMapByIds(
-      lineRows.map((line) => String(line.material_id ?? "")),
-      "[packing_order.getPackingOrder]",
-      "PROD_PACK_FETCH_FAILED",
-      "id, pace_code, material_name, base_uom_code",
-    );
+    const [poMaterialMap, lineMaterialMap, slocMap] = await Promise.all([
+      getMaterialMapByIds(
+        [String(poRow.material_id ?? "")],
+        "[packing_order.getPackingOrder]",
+        "PROD_PACK_FETCH_FAILED",
+        "id, pace_code, material_name, shade_code",
+      ),
+      getMaterialMapByIds(
+        lineRows.map((line) => String(line.material_id ?? "")),
+        "[packing_order.getPackingOrder]",
+        "PROD_PACK_FETCH_FAILED",
+        "id, pace_code, material_name, base_uom_code",
+      ),
+      getStorageLocationMapByIds(lineRows.map((line) => String(line.issue_sloc_id ?? ""))),
+    ]);
 
     return okResponse({
       data: {
@@ -300,6 +317,7 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
         lines: lineRows.map((line) => ({
           ...line,
           material: lineMaterialMap.get(String(line.material_id ?? "")) ?? null,
+          storage_location: slocMap.get(String(line.issue_sloc_id ?? "")) ?? null,
         })),
       },
     }, ctx.request_id, req);
@@ -434,7 +452,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         material_id: outputLine.material_id,
         batch_number: batchNumber,
         qty_per_pack: bomRequired ? parsePositiveNumber(outputLine.qty) : 1,
-        total_qty: bomRequired ? plannedQtyKg : (numPacks ?? plannedQtyKg),
+        total_qty: plannedQtyKg,
         actual_qty: null,
         issue_sloc_id: outputLine.storage_location_id ?? null,
         display_order: 1,

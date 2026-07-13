@@ -9,8 +9,11 @@ import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { createPackBom, listPackBomEligibleSkus } from "./prodApi.js";
+import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
 import {
   addMaterialCategoryMember,
   createMaterialCategoryGroup,
@@ -21,13 +24,13 @@ import {
 import { PackBomLinesTable, GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 
 const PO_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
-const PACKING_LABEL = { MTO: "PMTO", HPS: "PHPS", MTS: "PMTS", MTEST: "PTEST" };
 
 const ERRORS = {
   PROD_BOM_INVALID: "Company, PO type and FG SKU are required.",
   PROD_BOM_OUTPUT_SLOC_INVALID: "Select a valid F-location for this SKU/company.",
   PROD_BOM_SFG_QTY_REQUIRED: "SFG input qty is required for this pack code.",
   PROD_BOM_ALREADY_EXISTS: "A DRAFT or ACTIVE Pack BOM already exists for this company and SKU.",
+  PROD_BOM_SCOPE_VIOLATION: "You do not have access to create a Pack BOM for this company.",
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
 };
 function friendly(code) { return ERRORS[code] ?? code; }
@@ -46,9 +49,7 @@ function slocLabel(location) { return [location?.code, location?.name].filter(Bo
 
 export default function PackBomCreatePage() {
   const qc = useQueryClient();
-  const companiesQ = useCompaniesForOmQuery();
-  const companies = companiesQ.data?.data ?? companiesQ.data ?? [];
-  const singleCompanyId = companies.length === 1 ? companies[0].id : "";
+  const { runtimeContext } = useMenu();
 
   const [step, setStep] = useState(1);
   const [companyId, setCompanyId] = useState("");
@@ -64,8 +65,11 @@ export default function PackBomCreatePage() {
   const [memberModal, setMemberModal] = useState(null);
   const [memberMaterialId, setMemberMaterialId] = useState("");
 
-  const effectiveCompanyId = companyId || singleCompanyId;
-  const selectedCompany = companies.find((company) => company.id === effectiveCompanyId) ?? null;
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
+  const selectedCompany = (runtimeContext?.availableCompanies ?? [])
+    .find((company) => company.id === effectiveCompanyId || company.company_id === effectiveCompanyId)
+    ?? runtimeContext?.currentCompany
+    ?? null;
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -192,18 +196,14 @@ export default function PackBomCreatePage() {
         {step === 1 ? (
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <label className="text-xs text-slate-500">
-                Company *
-                <select
-                  className="mt-1 h-9 w-full border border-slate-300 rounded px-2 text-sm"
+              <div className="text-xs text-slate-500">
+                <TransactionCompanySelector
+                  runtimeContext={runtimeContext}
                   value={effectiveCompanyId}
-                  onChange={(event) => { setCompanyId(event.target.value); resetDownstream(); }}
-                  disabled={companies.length <= 1}
-                >
-                  <option value="">-- Select --</option>
-                  {companies.map((company) => <option key={company.id} value={company.id}>{companyLabel(company)}</option>)}
-                </select>
-              </label>
+                  onChange={(value) => { setCompanyId(value); resetDownstream(); }}
+                  label="Company"
+                />
+              </div>
               <label className="text-xs text-slate-500">
                 Type *
                 <select
@@ -211,7 +211,7 @@ export default function PackBomCreatePage() {
                   value={poType}
                   onChange={(event) => { setPoType(event.target.value); resetDownstream(); }}
                 >
-                  {PO_TYPES.map((type) => <option key={type} value={type}>{type} / {PACKING_LABEL[type]}</option>)}
+                  {PO_TYPES.map((type) => <option key={type} value={type}>{type} / {packingPoTypeForProcessType(type)}</option>)}
                 </select>
               </label>
               <label className="text-xs text-slate-500 md:col-span-1">
@@ -235,7 +235,7 @@ export default function PackBomCreatePage() {
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
               <div><p className="text-xs text-slate-400">Company</p><p className="font-semibold">{companyLabel(selectedCompany)}</p></div>
-              <div><p className="text-xs text-slate-400">Type</p><p className="font-semibold">{poType} / {PACKING_LABEL[poType]}</p></div>
+              <div><p className="text-xs text-slate-400">Type</p><p className="font-semibold">{poType} / {packingPoTypeForProcessType(poType)}</p></div>
               <div><p className="text-xs text-slate-400">FG SKU</p><p className="font-semibold">{skuLabel(selectedSku)}</p></div>
               <div><p className="text-xs text-slate-400">Base UOM / BOM</p><p className="font-semibold">KG / {bomRequired ? "Required" : "Not Required"}</p></div>
             </div>

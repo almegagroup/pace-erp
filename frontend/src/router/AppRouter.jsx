@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import ScrollToTop from "./ScrollToTop.jsx";
 import { MenuProvider } from "../context/MenuProvider.jsx";
@@ -189,6 +189,7 @@ import ReversalPage from "../pages/dashboard/production/ReversalPage.jsx";
 import ProductionQAQueuePage from "../pages/dashboard/production/QAQueuePage.jsx";
 import BatchNumberReleasePage from "../pages/dashboard/production/BatchNumberReleasePage.jsx";
 import SfgResultRecordingPage from "../pages/dashboard/production/SfgResultRecordingPage.jsx";
+import PackingOrderPage from "../pages/dashboard/production/PackingOrderPage.jsx";
 import FgStockBreakdownPage from "../pages/dashboard/production/FgStockBreakdownPage.jsx";
 
 export default function AppRouter() {
@@ -759,6 +760,7 @@ export default function AppRouter() {
                   <Route path="production/qa-queue" element={<ProductionQAQueuePage />} />
                   <Route path="production/sfg-result-recording" element={<SfgResultRecordingPage />} />
                   <Route path="production/batch-release" element={<BatchNumberReleasePage />} />
+                  <Route path="production/packing-orders" element={<PackingOrderPage />} />
                   <Route path="production/fg-stock-breakdown" element={<FgStockBreakdownPage />} />
                 </Route>
               </Route>
