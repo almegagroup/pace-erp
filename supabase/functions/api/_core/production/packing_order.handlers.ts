@@ -1163,6 +1163,8 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         issue_sloc_id: toTrimmedString(outputLine.storage_location_id),
         uom_code: toTrimmedString((sku as JsonRecord).base_uom_code) || "KG",
         movement_type_code: toTrimmedString(outputLine.movement_type_code) || "P101",
+        has_alternate: false,
+        material_group_id: null,
         display_order: 1,
       },
       {
@@ -1176,6 +1178,8 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         issue_sloc_id: toTrimmedString(sfgBomLine.storage_location_id),
         uom_code: "KG",
         movement_type_code: toTrimmedString(sfgBomLine.movement_type_code) || "P261",
+        has_alternate: false,
+        material_group_id: null,
         display_order: 2,
       },
       ...normalizedPmLines.map((line) => ({
