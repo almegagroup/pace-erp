@@ -32,6 +32,7 @@ export function FgStockBreakdownTable({ batches }) {
             <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Batch Number</th>
             <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Batch Qty</th>
             <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Packing PO</th>
+            <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Type</th>
             <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Packs</th>
             <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Fill Qty</th>
             <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Receipt Qty</th>
@@ -43,13 +44,14 @@ export function FgStockBreakdownTable({ batches }) {
               <tr className="border-t bg-slate-50/70">
                 <td className="py-2 px-3 font-mono font-semibold">{batch.batch_number}</td>
                 <td className="py-2 px-3 text-right font-mono font-semibold">{Number(batch.quantity ?? 0).toFixed(3)}</td>
-                <td className="py-2 px-3" colSpan={4}></td>
+                <td className="py-2 px-3" colSpan={5}></td>
               </tr>
               {(batch.packing_orders ?? []).map((po, index) => (
                 <tr key={`${batch.batch_number}-${po.po_number}-${index}`} className="border-t border-slate-100">
                   <td className="py-2 px-3"></td>
                   <td className="py-2 px-3"></td>
                   <td className="py-2 px-3 font-mono">{po.po_number}</td>
+                  <td className="py-2 px-3">{[po.source_po_type, po.po_type].filter(Boolean).join(" / ") || "-"}</td>
                   <td className="py-2 px-3 text-right font-mono">{po.num_packs ?? "-"}</td>
                   <td className="py-2 px-3 text-right font-mono">{po.fill_qty_per_pack ?? "-"}</td>
                   <td className="py-2 px-3 text-right font-mono">{Number(po.quantity ?? 0).toFixed(3)}</td>

@@ -107,7 +107,9 @@ export async function listCanonicalCompanyIds(
     throw new Error("COMPANY_RESOLUTION_FAILED");
   }
 
-  const candidateCompanyIds = [...new Set((data ?? []).map((row) => row.company_id).filter(Boolean))];
+  const candidateCompanyIds = [...new Set(
+    (data as Array<{ company_id: string }> ?? []).map((row) => row.company_id).filter(Boolean),
+  )];
 
   if (candidateCompanyIds.length === 0) {
     return [];
@@ -125,7 +127,7 @@ export async function listCanonicalCompanyIds(
     throw new Error("COMPANY_RESOLUTION_FAILED");
   }
 
-  const allowedIds = new Set((activeCompanies ?? []).map((row) => row.id));
+  const allowedIds = new Set((activeCompanies as Array<{ id: string }> ?? []).map((row) => row.id));
 
   return candidateCompanyIds.filter((companyId) => allowedIds.has(companyId));
 }
@@ -146,7 +148,7 @@ export async function resolveDefaultWorkCompanyId(
     throw new Error("WORK_COMPANY_RESOLUTION_FAILED");
   }
 
-  const candidateCompanyIds = data
+  const candidateCompanyIds = (data as Array<{ company_id: string }>)
     .map((row) => row.company_id)
     .filter(Boolean);
 
@@ -166,8 +168,8 @@ export async function resolveDefaultWorkCompanyId(
     throw new Error("WORK_COMPANY_RESOLUTION_FAILED");
   }
 
-  const allowedIds = new Set((activeCompanies ?? []).map((row) => row.id));
-  const resolved = data.find((row) => row.company_id && allowedIds.has(row.company_id));
+  const allowedIds = new Set((activeCompanies as Array<{ id: string }> ?? []).map((row) => row.id));
+  const resolved = (data as Array<{ company_id: string }>).find((row) => row.company_id && allowedIds.has(row.company_id));
 
   return resolved?.company_id ?? null;
 }

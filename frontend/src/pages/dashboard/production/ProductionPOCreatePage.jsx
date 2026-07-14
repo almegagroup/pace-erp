@@ -14,17 +14,23 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useCompaniesForOmQuery, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import {
+  availabilityPreviewPackingOrder,
   availabilityPreviewProcessOrder,
   createPackingOrder,
   createProcessOrder,
+  getPackBom,
   getStrokeMaster,
+  listPackBoms,
+  listPackCodes,
   listSegmentLocations,
   listStrokeMasters,
 } from "./prodApi.js";
-import { listMachines } from "../om/omApi.js";
+import { listMachines, listStorageLocations } from "../om/omApi.js";
+import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
 const MTS_SEGMENTS = ["IWC", "POWDER"];
+const PACKING_SOURCE_TYPES = ["MTO", "HPS", "MTS", "ZTEST"];
 const TABS = ["Process PO", "Packing PO"];
 
 const EMPTY_PROCESS = {
@@ -40,11 +46,32 @@ const EMPTY_PROCESS = {
 
 const EMPTY_PACKING = {
   company_id: "",
-  process_order_id: "",
-  pack_code_config_id: "",
-  planned_qty_kg: "",
-  fo_id: "",
+  source_po_type: "MTO",
+  material_id: "",
+  num_packs: "",
+  fill_qty_per_pack: "",
+  pm_lines: [],
 };
+
+const PACKING_ERRORS = {
+  PROD_PACK_INVALID: "Company, PO Type and FG SKU are required.",
+  PROD_PACK_SKU_INVALID: "Selected material must be an FG SKU.",
+  PROD_PACK_CODE_NOT_FOUND: "FG SKU pack code is not configured.",
+  PROD_PACK_NO_ACTIVE_BOM: "Active Pack BOM is required before creating a Packing PO.",
+  PROD_PACK_BOM_INCOMPLETE: "Pack BOM must have OUTPUT and SFG lines.",
+  PROD_PACK_BOM_SLOC_MISSING: "Pack BOM OUTPUT/SFG storage locations are not set.",
+  PROD_PACK_FILL_QTY_REQUIRED: "Fill Qty Per Pack is required for this pack code.",
+  PROD_PACK_QTY_INVALID: "Could not derive a valid planned quantity from the Pack BOM.",
+  PROD_PACK_PM_SLOC_REQUIRED: "Select an issue storage location for every PM line.",
+  PROD_PACK_PM_SLOC_INVALID: "PM storage location must be active and mapped to the selected company.",
+  PROD_PACK_PM_SHORTAGE: "Stock is short for one or more PM lines.",
+  PROD_PACK_SCOPE_VIOLATION: "You do not have access to this company.",
+};
+
+function packingFriendly(error) {
+  const code = error?.code || error?.message || "";
+  return PACKING_ERRORS[code] ?? error?.message ?? "Packing PO create failed.";
+}
 
 function companyLabel(company) {
   return [company.company_code, company.company_name].filter(Boolean).join(" - ");
@@ -61,6 +88,15 @@ function prodshadeLabel(item) {
 
 function materialLabel(material) {
   return [material?.pace_code || material?.external_code, material?.material_name].filter(Boolean).join(" - ");
+}
+
+function slocLabel(location) {
+  return [location?.code || location?.location_code, location?.name || location?.location_name].filter(Boolean).join(" - ");
+}
+
+function qtyFmt(value) {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 3 }) : "-";
 }
 
 function strokeLabel(stroke) {
@@ -95,6 +131,7 @@ export default function ProductionPOCreatePage() {
   const [saving, setSaving] = useState(false);
   const [processStep, setProcessStep] = useState(1);
   const [processForm, setProcessForm] = useState({ ...EMPTY_PROCESS });
+  const [packingStep, setPackingStep] = useState(1);
   const [packingForm, setPackingForm] = useState({ ...EMPTY_PACKING });
   const [lineActualMaterialOverrides, setLineActualMaterialOverrides] = useState({});
   const [lineLocationOverrides, setLineLocationOverrides] = useState({});
@@ -250,6 +287,115 @@ export default function ProductionPOCreatePage() {
     () => (segmentLocationsQ.data ?? []).find((row) => row.segment_code === derivedSegmentCode && row.active !== false) ?? null,
     [derivedSegmentCode, segmentLocationsQ.data],
   );
+
+  // ── Packing PO tab ──────────────────────────────────────────────────────
+  const effectivePackingCompanyId = packingForm.company_id || (companies.length === 1 ? companies[0].id : "");
+  const packingPoType = packingPoTypeForProcessType(packingForm.source_po_type);
+
+  useEffect(() => {
+    if (companies.length === 1 && !packingForm.company_id) {
+      setPackingForm((current) => ({ ...current, company_id: companies[0].id }));
+    }
+  }, [companies, packingForm.company_id]);
+
+  const packingActiveBomsQ = useQuery({
+    queryKey: ["packing-create-active-boms", effectivePackingCompanyId],
+    queryFn: () => listPackBoms({ company_id: effectivePackingCompanyId, status: "ACTIVE" }),
+    enabled: Boolean(effectivePackingCompanyId),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const packingSkuOptions = useMemo(
+    () => (packingActiveBomsQ.data ?? []).map((bom) => ({ value: bom.sku_material_id, label: materialLabel(bom.sku) || "SKU" })),
+    [packingActiveBomsQ.data],
+  );
+  const selectedPackingBomRow = useMemo(
+    () => (packingActiveBomsQ.data ?? []).find((bom) => bom.sku_material_id === packingForm.material_id) ?? null,
+    [packingActiveBomsQ.data, packingForm.material_id],
+  );
+  const packingBomDetailQ = useQuery({
+    queryKey: ["packing-create-bom-detail", selectedPackingBomRow?.id],
+    queryFn: () => getPackBom(selectedPackingBomRow.id),
+    enabled: Boolean(selectedPackingBomRow?.id),
+  });
+  const packingBom = packingBomDetailQ.data ?? null;
+  const packingSku = packingBom?.sku ?? selectedPackingBomRow?.sku ?? null;
+  const packingBomLines = packingBom?.lines ?? [];
+  const packingOutputLine = packingBomLines.find((line) => line.line_type === "OUTPUT") ?? null;
+  const packingSfgLine = packingBomLines.find((line) => line.line_type === "SFG") ?? null;
+  const packingPmBomLines = packingBomLines.filter((line) => line.line_type === "INPUT");
+
+  const packCodesQ = useQuery({
+    queryKey: ["packing-create-pack-codes"],
+    queryFn: () => listPackCodes(),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const packingBomRequired = useMemo(() => {
+    const packCode = (packCodesQ.data ?? []).find((pc) => pc.pack_code === packingSku?.pack_code);
+    return packCode ? packCode.bom_required !== false : true;
+  }, [packCodesQ.data, packingSku?.pack_code]);
+
+  const packingStorageQ = useQuery({
+    queryKey: ["packing-create-storage-locations", effectivePackingCompanyId],
+    queryFn: () => listStorageLocations({ company_id: effectivePackingCompanyId, is_active: true }),
+    enabled: Boolean(effectivePackingCompanyId),
+    select: (data) => data?.data ?? data ?? [],
+  });
+  const packingStorageOptions = useMemo(
+    () => (packingStorageQ.data ?? []).map((location) => ({ value: location.id, label: slocLabel(location) || "Storage Location" })),
+    [packingStorageQ.data],
+  );
+
+  const packingNumPacks = Number(packingForm.num_packs || 0);
+  const packingFillQtyPerPack = Number(packingForm.fill_qty_per_pack || 0);
+  const packingSfgQtyPerPack = packingBomRequired ? Number(packingSfgLine?.qty || 0) : packingFillQtyPerPack;
+  const packingPlannedQtyKg = packingSfgQtyPerPack * packingNumPacks;
+
+  const packingPmPreviewLines = useMemo(
+    () => packingPmBomLines.map((line) => {
+      const override = packingForm.pm_lines.find((pm) => pm.material_id === line.material_id);
+      return {
+        material_id: line.material_id,
+        material_label: materialLabel(line.material) || "--",
+        dosage_per_pack: Number(line.qty ?? 0),
+        standard_qty: Number(line.qty ?? 0) * packingNumPacks,
+        storage_location_id: override?.storage_location_id || "",
+        has_alternate: Boolean(line.has_alternate),
+        group_label: line.material_group?.group_name || "",
+      };
+    }),
+    [packingForm.pm_lines, packingNumPacks, packingPmBomLines],
+  );
+
+  const packingAvailabilityNeeds = useMemo(
+    () => packingPmPreviewLines
+      .filter((line) => line.material_id && line.storage_location_id && line.standard_qty > 0)
+      .map((line) => ({ material_id: line.material_id, storage_location_id: line.storage_location_id, qty: line.standard_qty })),
+    [packingPmPreviewLines],
+  );
+  const packingAvailabilityPreviewQ = useQuery({
+    queryKey: ["packing-create-availability-preview", effectivePackingCompanyId, packingAvailabilityNeeds],
+    queryFn: () => availabilityPreviewPackingOrder({
+      company_id: effectivePackingCompanyId,
+      needs: JSON.stringify(packingAvailabilityNeeds),
+    }),
+    enabled: packingStep === 2 && Boolean(effectivePackingCompanyId) && packingAvailabilityNeeds.length > 0,
+    select: (data) => data?.data ?? data ?? [],
+  });
+  const packingAvailabilityByKey = useMemo(
+    () => new Map((packingAvailabilityPreviewQ.data ?? []).map((row) => [`${row.material_id}::${row.storage_location_id}`, row])),
+    [packingAvailabilityPreviewQ.data],
+  );
+  const packingPmRowsWithAvailability = useMemo(
+    () => packingPmPreviewLines.map((line) => {
+      const row = line.material_id && line.storage_location_id
+        ? packingAvailabilityByKey.get(`${line.material_id}::${line.storage_location_id}`) ?? null
+        : null;
+      return { ...line, available_qty: row ? Number(row.available_qty ?? 0) : null, short: row ? Number(row.short ?? 0) : 0 };
+    }),
+    [packingAvailabilityByKey, packingPmPreviewLines],
+  );
+  const packingHasShortage = packingPmRowsWithAvailability.some((line) => line.short > 0);
+  const packingMissingPmSloc = packingPmPreviewLines.some((line) => !line.storage_location_id);
 
   const strokeLines = Array.isArray(strokeDetailQ.data?.lines) ? strokeDetailQ.data.lines : [];
   const strokePreviewRows = useMemo(
@@ -408,7 +554,46 @@ export default function ProductionPOCreatePage() {
   }
 
   function updatePacking(field, value) {
-    setPackingForm((current) => ({ ...current, [field]: value }));
+    setPackingForm((current) => {
+      const next = { ...current, [field]: value };
+      if (field === "company_id" || field === "source_po_type") {
+        next.material_id = "";
+        next.num_packs = "";
+        next.fill_qty_per_pack = "";
+        next.pm_lines = [];
+        setPackingStep(1);
+      }
+      if (field === "material_id") {
+        next.num_packs = "";
+        next.fill_qty_per_pack = "";
+        next.pm_lines = [];
+      }
+      return next;
+    });
+  }
+
+  function updatePackingPmLine(materialId, storageLocationId) {
+    setPackingForm((current) => {
+      const rest = current.pm_lines.filter((line) => line.material_id !== materialId);
+      return { ...current, pm_lines: [...rest, { material_id: materialId, storage_location_id: storageLocationId }] };
+    });
+  }
+
+  function resetPacking() {
+    setPackingForm({ ...EMPTY_PACKING, company_id: companies.length === 1 ? companies[0].id : "" });
+    setPackingStep(1);
+  }
+
+  function handlePackingStepOneNext() {
+    if (!effectivePackingCompanyId || !packingForm.source_po_type || !packingForm.material_id) {
+      toast("Company, PO Type and FG SKU are required.", "error");
+      return;
+    }
+    if (!packingBom) {
+      toast("Active Pack BOM not loaded for this SKU.", "error");
+      return;
+    }
+    setPackingStep(2);
   }
 
   function handleStepOneNext() {
@@ -487,25 +672,45 @@ export default function ProductionPOCreatePage() {
 
   async function handleCreatePacking(event) {
     event.preventDefault();
-    if (!packingForm.company_id || !packingForm.process_order_id || !packingForm.pack_code_config_id || !packingForm.planned_qty_kg) {
-      toast("Packing PO fields are still ID-based here and all required values must be filled.", "error");
+    if (!packingNumPacks) {
+      toast("Num Packs is required.", "error");
+      return;
+    }
+    if (!packingBomRequired && !packingFillQtyPerPack) {
+      toast("Fill Qty Per Pack is required for this pack code.", "error");
+      return;
+    }
+    if (packingMissingPmSloc) {
+      toast("Select a storage location for every PM line.", "error");
+      return;
+    }
+    if (packingAvailabilityPreviewQ.isFetching) {
+      toast("Stock check is still loading. Try again in a moment.", "error");
+      return;
+    }
+    if (packingHasShortage) {
+      toast("PM stock shortage exists. Change storage location or receive stock before create.", "error");
       return;
     }
     setSaving(true);
     try {
       const payload = {
-        company_id: packingForm.company_id,
-        process_order_id: packingForm.process_order_id,
-        pack_code_config_id: packingForm.pack_code_config_id,
-        planned_qty_kg: Number(packingForm.planned_qty_kg),
-        fo_id: packingForm.fo_id || undefined,
+        company_id: effectivePackingCompanyId,
+        source_po_type: packingForm.source_po_type,
+        po_type: packingPoType,
+        material_id: packingForm.material_id,
+        num_packs: packingNumPacks,
+        fill_qty_per_pack: packingBomRequired ? undefined : packingFillQtyPerPack,
+        pm_lines: packingPmPreviewLines
+          .filter((line) => line.material_id && line.storage_location_id)
+          .map((line) => ({ material_id: line.material_id, storage_location_id: line.storage_location_id })),
       };
       const result = await createPackingOrder(payload);
       toast(`Packing PO created${result?.po_number ? `: ${result.po_number}` : "."}`);
-      setPackingForm({ ...EMPTY_PACKING });
-      qc.invalidateQueries({ queryKey: ["packing-orders"] });
+      resetPacking();
+      qc.invalidateQueries({ queryKey: ["pack-orders"] });
     } catch (error) {
-      toast(error.message || "Packing PO create failed.", "error");
+      toast(packingFriendly(error), "error");
     } finally {
       setSaving(false);
     }
@@ -876,73 +1081,245 @@ export default function ProductionPOCreatePage() {
         )}
 
         {activeTab === 1 && (
-          <form onSubmit={handleCreatePacking} className="flex max-w-2xl flex-col gap-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">Company ID <span className="text-rose-500">*</span></label>
-                <input
-                  className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                  value={packingForm.company_id}
-                  onChange={(event) => updatePacking("company_id", event.target.value)}
-                  required
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">Process Order ID <span className="text-rose-500">*</span></label>
-                <input
-                  className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                  value={packingForm.process_order_id}
-                  onChange={(event) => updatePacking("process_order_id", event.target.value)}
-                  required
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">Pack Code Config ID <span className="text-rose-500">*</span></label>
-                <input
-                  className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                  value={packingForm.pack_code_config_id}
-                  onChange={(event) => updatePacking("pack_code_config_id", event.target.value)}
-                  required
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">Planned Qty (KG) <span className="text-rose-500">*</span></label>
-                <input
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
-                  value={packingForm.planned_qty_kg}
-                  onChange={(event) => updatePacking("planned_qty_kg", event.target.value)}
-                  required
-                />
-              </div>
-              <div className="flex flex-col gap-1 md:col-span-2">
-                <label className="text-xs font-medium text-slate-600">FO ID</label>
-                <input
-                  className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                  value={packingForm.fo_id}
-                  onChange={(event) => updatePacking("fo_id", event.target.value)}
-                />
-              </div>
-            </div>
+          <form onSubmit={handleCreatePacking} className="flex max-w-6xl flex-col gap-4">
+            {packingStep === 1 && (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 1</p>
+                  <h3 className="text-lg font-semibold text-slate-900">Company / PO Type / FG SKU</h3>
+                </div>
 
-            <div className="flex gap-2 pt-2">
-              <button
-                type="submit"
-                disabled={saving}
-                className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
-              >
-                {saving ? "Creating..." : "Create Packing PO"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setPackingForm({ ...EMPTY_PACKING })}
-                className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
-              >
-                Clear
-              </button>
-            </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
+                    <ErpComboboxField
+                      value={effectivePackingCompanyId}
+                      onChange={(value) => updatePacking("company_id", value)}
+                      options={companyOptions}
+                      placeholder="-- Select company --"
+                      emptyStateLabel={companiesQ.isLoading ? "Loading companies..." : "No companies available"}
+                      disabled={companies.length === 1}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-slate-600">PO Type <span className="text-rose-500">*</span></label>
+                    <ErpComboboxField
+                      value={packingForm.source_po_type}
+                      onChange={(value) => updatePacking("source_po_type", value)}
+                      options={PACKING_SOURCE_TYPES.map((type) => ({ value: type, label: type }))}
+                      hideBlank
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1 md:col-span-2">
+                    <label className="text-xs font-medium text-slate-600">FG SKU <span className="text-rose-500">*</span></label>
+                    <ErpComboboxField
+                      value={packingForm.material_id}
+                      onChange={(value) => updatePacking("material_id", value)}
+                      options={packingSkuOptions}
+                      placeholder={packingActiveBomsQ.isFetching ? "Loading ACTIVE Pack BOM SKUs..." : "-- Select FG SKU --"}
+                      emptyStateLabel="No ACTIVE Pack BOM SKU found for this company"
+                    />
+                  </div>
+
+                  <div className="text-sm">
+                    <p className="text-xs text-slate-400">Packing PO Type</p>
+                    <p className="font-semibold">{packingPoType || "--"}</p>
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handlePackingStepOneNext}
+                    className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {packingStep === 2 && (
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 2</p>
+                    <h3 className="text-lg font-semibold text-slate-900">Header + Lines (from Pack BOM)</h3>
+                  </div>
+                  <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">STANDARD</span>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5 text-sm">
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs font-medium text-slate-500">Company</div>
+                    <div className="mt-1 font-medium text-slate-900">{companyOptions.find((option) => option.value === effectivePackingCompanyId)?.label || "--"}</div>
+                  </div>
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs font-medium text-slate-500">SKU</div>
+                    <div className="mt-1 font-medium text-slate-900">{materialLabel(packingSku) || "--"}</div>
+                  </div>
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs font-medium text-slate-500">Type</div>
+                    <div className="mt-1 font-medium text-slate-900">{packingForm.source_po_type} / {packingPoType}</div>
+                  </div>
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs font-medium text-slate-500">PO Number</div>
+                    <div className="mt-1 font-medium text-slate-900">-- (generated on save)</div>
+                  </div>
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs font-medium text-slate-500">SFG Batch</div>
+                    <div className="mt-1 font-medium text-slate-900">Chosen at Final</div>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-slate-600">Num Packs <span className="text-rose-500">*</span></label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
+                      value={packingForm.num_packs}
+                      onChange={(event) => setPackingForm((current) => ({ ...current, num_packs: event.target.value }))}
+                      required
+                    />
+                  </div>
+                  {!packingBomRequired && (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-slate-600">Fill Qty Per Pack (KG) <span className="text-rose-500">*</span></label>
+                      <input
+                        type="number"
+                        min="0.001"
+                        step="0.001"
+                        className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
+                        value={packingForm.fill_qty_per_pack}
+                        onChange={(event) => setPackingForm((current) => ({ ...current, fill_qty_per_pack: event.target.value }))}
+                        required
+                      />
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs text-slate-400">Planned SFG Qty</p>
+                    <p className="font-mono font-semibold">{qtyFmt(packingPlannedQtyKg)} KG</p>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto">
+                  <table className="w-full min-w-[900px] border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                        <th className="border-b px-3 py-2 text-left">Line</th>
+                        <th className="border-b px-3 py-2 text-left">Material</th>
+                        <th className="border-b px-3 py-2 text-left">Storage Location</th>
+                        <th className="border-b px-3 py-2 text-right">Qty</th>
+                        <th className="border-b px-3 py-2 text-left">Movement</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b border-slate-100">
+                        <td className="px-3 py-2 font-semibold">FG</td>
+                        <td className="px-3 py-2">{materialLabel(packingSku) || "--"}</td>
+                        <td className="px-3 py-2">{slocLabel(packingOutputLine?.storage_location) || "--"}</td>
+                        <td className="px-3 py-2 text-right font-mono">{qtyFmt(packingNumPacks)}</td>
+                        <td className="px-3 py-2 font-mono">P101</td>
+                      </tr>
+                      <tr className="border-b border-slate-100">
+                        <td className="px-3 py-2 font-semibold">SFG</td>
+                        <td className="px-3 py-2">{materialLabel(packingSfgLine?.material) || "--"}</td>
+                        <td className="px-3 py-2">{slocLabel(packingSfgLine?.storage_location) || "--"}</td>
+                        <td className="px-3 py-2 text-right font-mono">{qtyFmt(packingPlannedQtyKg)} KG</td>
+                        <td className="px-3 py-2 font-mono">P261</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white">
+                  <div className="border-b border-slate-200 px-4 py-3">
+                    <h4 className="text-sm font-semibold text-slate-800">PM Lines (from Pack BOM)</h4>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[1050px] border-collapse text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                          <th className="border-b px-3 py-2 text-left">Material</th>
+                          <th className="border-b px-3 py-2 text-right">Dosage / Pack</th>
+                          <th className="border-b px-3 py-2 text-right">Standard Qty</th>
+                          <th className="border-b px-3 py-2 text-left">Storage Location <span className="text-rose-500">*</span></th>
+                          <th className="border-b px-3 py-2 text-right">Available</th>
+                          <th className="border-b px-3 py-2 text-right">Shortage</th>
+                          <th className="border-b px-3 py-2 text-left">Alternate?</th>
+                          <th className="border-b px-3 py-2 text-left">Group</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {packingPmRowsWithAvailability.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">
+                              No PM lines on this Pack BOM.
+                            </td>
+                          </tr>
+                        ) : packingPmRowsWithAvailability.map((line) => (
+                          <tr key={line.material_id} className={line.short > 0 ? "bg-rose-50" : "border-b border-slate-100"}>
+                            <td className="px-3 py-2">{line.material_label}</td>
+                            <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.dosage_per_pack)}</td>
+                            <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.standard_qty)}</td>
+                            <td className="px-3 py-2 min-w-[220px]">
+                              <ErpComboboxField
+                                value={line.storage_location_id}
+                                onChange={(value) => updatePackingPmLine(line.material_id, value)}
+                                options={packingStorageOptions}
+                                placeholder="-- Select --"
+                                emptyStateLabel={packingStorageQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                              />
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">{line.available_qty == null ? "--" : qtyFmt(line.available_qty)}</td>
+                            <td className={`px-3 py-2 text-right font-mono ${line.short > 0 ? "text-rose-600 font-semibold" : ""}`}>{line.short > 0 ? qtyFmt(line.short) : "--"}</td>
+                            <td className="px-3 py-2">{line.has_alternate ? "Yes" : "No"}</td>
+                            <td className="px-3 py-2 text-xs text-slate-500">{line.group_label || "--"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {packingHasShortage ? (
+                  <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                    PM stock shortage exists. Change storage location or receive stock before creating this Packing PO.
+                  </div>
+                ) : null}
+
+                <div className="flex justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setPackingStep(1)}
+                    className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
+                  >
+                    Back
+                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={resetPacking}
+                      className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={saving || packingAvailabilityPreviewQ.isFetching || packingHasShortage}
+                      className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+                    >
+                      {saving ? "Creating..." : packingAvailabilityPreviewQ.isFetching ? "Checking Stock..." : "Create Packing PO"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </form>
         )}
       </ErpSectionCard>

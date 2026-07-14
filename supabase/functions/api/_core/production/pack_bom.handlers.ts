@@ -831,7 +831,75 @@ export async function rejectPackBomHandler(
 
 // ── PACK BOM CHANGE REQUESTS ───────────────────────────────────────────────
 
+// ADD/REMOVE/EDIT each target a distinct bom_line_id (ADD creates a new row
+// nothing else in this batch references), so each is independent — but dedupe
+// EDITs by bom_line_id first (keep last, matching the original sequential
+// last-write-wins) in case the same line appears twice, then batch REMOVE as
+// one delete and run ADD/EDIT writes in parallel. Shared by both the
+// bom_required=false auto-apply path and PR08's own approve path.
+async function applyPackBomLineChanges(packBomId: string, changesToApply: JsonRecord[]): Promise<void> {
+  const adds = changesToApply.filter((change) => toTrimmedString(change.action) === "ADD");
+  const removeIds = [...new Set(
+    changesToApply
+      .filter((change) => toTrimmedString(change.action) === "REMOVE")
+      .map((change) => toTrimmedString(change.bom_line_id))
+      .filter(Boolean),
+  )];
+  const editByBomLineId = new Map<string, JsonRecord>();
+  for (const change of changesToApply) {
+    if (toTrimmedString(change.action) !== "EDIT") continue;
+    const bomLineId = toTrimmedString(change.bom_line_id);
+    if (!bomLineId) continue;
+    const update: JsonRecord = {};
+    if (change.material_id != null) update.material_id = toTrimmedString(change.material_id) || null;
+    if (change.qty != null) update.qty = parsePositiveNumber(change.qty) ?? 0;
+    if (change.uom_code != null) update.uom_code = toTrimmedString(change.uom_code) || null;
+    if (change.has_alternate != null) update.has_alternate = change.has_alternate === true || change.has_alternate === "true";
+    if (change.material_group_id != null) update.material_group_id = toTrimmedString(change.material_group_id) || null;
+    if (change.is_primary_container != null) update.is_primary_container = change.is_primary_container === true || change.is_primary_container === "true";
+    if (Object.keys(update).length > 0) {
+      editByBomLineId.set(bomLineId, update);
+    }
+  }
+
+  await Promise.all([
+    ...adds.map((change) =>
+      serviceRoleClient
+        .schema("erp_production")
+        .from("pack_bom_line")
+        .insert({
+          pack_bom_id: packBomId,
+          line_type: "INPUT",
+          material_id: toTrimmedString(change.material_id) || null,
+          qty: parsePositiveNumber(change.qty) ?? 0,
+          uom_code: toTrimmedString(change.uom_code) || null,
+          has_alternate: change.has_alternate === true || change.has_alternate === "true",
+          material_group_id: toTrimmedString(change.material_group_id) || null,
+          is_primary_container: change.is_primary_container === true || change.is_primary_container === "true",
+          display_order: Number(change.display_order) || 999,
+        })
+    ),
+    removeIds.length > 0
+      ? serviceRoleClient.schema("erp_production").from("pack_bom_line").delete().in("id", removeIds)
+      : Promise.resolve(),
+    ...[...editByBomLineId.entries()].map(([bomLineId, update]) =>
+      serviceRoleClient
+        .schema("erp_production")
+        .from("pack_bom_line")
+        .update(update)
+        .eq("id", bomLineId)
+    ),
+  ]);
+}
+
 // POST /api/production/pack-boms/:id/change-request
+// Non-fixed pack codes (599/000/001, bom_required=false) never need PR08
+// approval for changes either — same "auto-ACTIVE" logic as create (§83.15,
+// "599 / 000 / 001 post-ACTIVE edits: Procurement can edit directly"). The
+// change request row is still written (append-only audit trail, same
+// principle used elsewhere in this codebase — e.g. PR19), but it's inserted
+// already APPROVED and the line changes are applied immediately, instead of
+// sitting in DRAFT waiting for PR08.
 export async function createPackBomChangeRequestHandler(
   req: Request,
   ctx: ProdHandlerContext,
@@ -852,7 +920,7 @@ export async function createPackBomChangeRequestHandler(
     const { data: bom, error: bomFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom")
-      .select("id, status")
+      .select("id, status, sku_material_id")
       .eq("id", id)
       .maybeSingle();
 
@@ -874,18 +942,35 @@ export async function createPackBomChangeRequestHandler(
       return bomError(req, ctx, "PROD_BCR_ALREADY_PENDING", 409, "A pending change request already exists for this BOM");
     }
 
-    // Insert change request
+    // bom_required drives whether this change needs PR08 approval at all
+    const skuMap = await getMaterialMapByIds(
+      [String((bom as JsonRecord).sku_material_id ?? "")],
+      "[pack_bom.createPackBomChangeRequest]",
+      "PROD_BCR_CREATE_FAILED",
+      "id, pack_code",
+    );
+    const sku = skuMap.get(String((bom as JsonRecord).sku_material_id ?? "")) ?? {};
+    const packCode = await getPackCodeByCode(toTrimmedString(sku.pack_code));
+    const bomRequired = Boolean(packCode?.bom_required);
+    const now = new Date().toISOString();
+
+    // Insert change request — auto-approved immediately for bom_required=false
     const { data: cr, error: crErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom_change_request")
-      .insert({ pack_bom_id: id, status: "DRAFT", created_by: ctx.auth_user_id })
+      .insert({
+        pack_bom_id: id,
+        status: bomRequired ? "DRAFT" : "APPROVED",
+        created_by: ctx.auth_user_id,
+        ...(bomRequired ? {} : { approved_by: ctx.auth_user_id, approved_at: now }),
+      })
       .select("id")
       .single();
 
     if (crErr) throw new Error("PROD_BCR_CREATE_FAILED");
     const crId = (cr as JsonRecord).id as string;
 
-    // Insert change lines
+    // Insert change lines (audit trail either way)
     const lineRows = changes.map((c: JsonRecord, idx: number) => ({
       change_request_id: crId,
       action: toTrimmedString(c.action) || "EDIT",
@@ -906,7 +991,13 @@ export async function createPackBomChangeRequestHandler(
 
     if (lErr) throw new Error("PROD_BCR_LINES_INSERT_FAILED");
 
-    return createdOkResponse({ id: crId }, ctx.request_id, req);
+    if (!bomRequired) {
+      await applyPackBomLineChanges(id, changes);
+      await syncPackBomConversions(id, ctx.auth_user_id);
+      return createdOkResponse({ id: crId, status: "APPROVED", auto_approved: true }, ctx.request_id, req);
+    }
+
+    return createdOkResponse({ id: crId, status: "DRAFT", auto_approved: false }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BCR_CREATE_FAILED";
     return bomError(req, ctx, code, 500, "Pack BOM change request create failed");
@@ -1136,63 +1227,7 @@ export async function approvePackBomChangeRequestHandler(
       changesToApply = (dbLines ?? []) as JsonRecord[];
     }
 
-    // ADD/REMOVE/EDIT each target a distinct bom_line_id (ADD creates a new
-    // row nothing else in this batch references), so each is independent —
-    // but dedupe EDITs by bom_line_id first (keep last, matching the original
-    // sequential last-write-wins) in case the same line appears twice, then
-    // batch REMOVE as one delete and run ADD/EDIT writes in parallel.
-    const adds = changesToApply.filter((change) => toTrimmedString(change.action) === "ADD");
-    const removeIds = [...new Set(
-      changesToApply
-        .filter((change) => toTrimmedString(change.action) === "REMOVE")
-        .map((change) => toTrimmedString(change.bom_line_id))
-        .filter(Boolean),
-    )];
-    const editByBomLineId = new Map<string, JsonRecord>();
-    for (const change of changesToApply) {
-      if (toTrimmedString(change.action) !== "EDIT") continue;
-      const bomLineId = toTrimmedString(change.bom_line_id);
-      if (!bomLineId) continue;
-      const update: JsonRecord = {};
-      if (change.material_id != null) update.material_id = toTrimmedString(change.material_id) || null;
-      if (change.qty != null) update.qty = parsePositiveNumber(change.qty) ?? 0;
-      if (change.uom_code != null) update.uom_code = toTrimmedString(change.uom_code) || null;
-      if (change.has_alternate != null) update.has_alternate = change.has_alternate === true || change.has_alternate === "true";
-      if (change.material_group_id != null) update.material_group_id = toTrimmedString(change.material_group_id) || null;
-      if (change.is_primary_container != null) update.is_primary_container = change.is_primary_container === true || change.is_primary_container === "true";
-      if (Object.keys(update).length > 0) {
-        editByBomLineId.set(bomLineId, update);
-      }
-    }
-
-    await Promise.all([
-      ...adds.map((change) =>
-        serviceRoleClient
-          .schema("erp_production")
-          .from("pack_bom_line")
-          .insert({
-            pack_bom_id: packBomId,
-            line_type: "INPUT",
-            material_id: toTrimmedString(change.material_id) || null,
-            qty: parsePositiveNumber(change.qty) ?? 0,
-            uom_code: toTrimmedString(change.uom_code) || null,
-            has_alternate: change.has_alternate === true || change.has_alternate === "true",
-            material_group_id: toTrimmedString(change.material_group_id) || null,
-            is_primary_container: change.is_primary_container === true || change.is_primary_container === "true",
-            display_order: Number(change.display_order) || 999,
-          })
-      ),
-      removeIds.length > 0
-        ? serviceRoleClient.schema("erp_production").from("pack_bom_line").delete().in("id", removeIds)
-        : Promise.resolve(),
-      ...[...editByBomLineId.entries()].map(([bomLineId, update]) =>
-        serviceRoleClient
-          .schema("erp_production")
-          .from("pack_bom_line")
-          .update(update)
-          .eq("id", bomLineId)
-      ),
-    ]);
+    await applyPackBomLineChanges(packBomId, changesToApply);
 
     const now = new Date().toISOString();
     const { error: updateErr } = await serviceRoleClient

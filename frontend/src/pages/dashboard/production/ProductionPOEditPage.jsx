@@ -13,8 +13,18 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
-import { availabilityPreviewProcessOrder, editProcessOrder, getProcessOrder, listProcessOrders } from "./prodApi.js";
+import {
+  availabilityPreviewProcessOrder,
+  editProcessOrder,
+  getPackingOrder,
+  getProcessOrder,
+  listPackingOrders,
+  listProcessOrders,
+  updatePackingOrderLines,
+} from "./prodApi.js";
 import { listMachines } from "../om/omApi.js";
+
+const EDIT_TABS = ["Process PO", "Packing PO"];
 
 function prodshadeLabel(item) {
   const prodCode = item?.pace_code || item?.material?.pace_code || null;
@@ -102,7 +112,247 @@ function makeDraftRow(line) {
   };
 }
 
-export default function ProductionPOEditPage() {
+function materialLabelSimple(material) {
+  return [material?.pace_code || material?.external_code, material?.material_name].filter(Boolean).join(" - ");
+}
+
+function slocLabel(location) {
+  return [location?.code || location?.location_code, location?.name || location?.location_name].filter(Boolean).join(" - ");
+}
+
+function packingBlockMessage(po) {
+  if (!po) return "";
+  if (String(po.status || "").toUpperCase() !== "STANDARD") {
+    return "Packing PO PM lines are editable only at STANDARD status.";
+  }
+  return "";
+}
+
+function PackingPoEditTab() {
+  const qc = useQueryClient();
+  const [poNumberInput, setPoNumberInput] = useState("");
+  const [submittedPoNumber, setSubmittedPoNumber] = useState("");
+  const [notice, setNotice] = useState({ msg: "", tone: "success" });
+  const [saving, setSaving] = useState(false);
+  const [pmOverrides, setPmOverrides] = useState({});
+
+  const detailQ = useQuery({
+    queryKey: ["packing-edit-lookup", submittedPoNumber],
+    enabled: Boolean(submittedPoNumber),
+    queryFn: async () => {
+      const result = await listPackingOrders({ po_number: submittedPoNumber, per_page: 10 });
+      const options = Array.isArray(result) ? result : result?.data ?? [];
+      const match = options.find((order) => String(order.po_number || "").toUpperCase() === submittedPoNumber.toUpperCase()) ?? null;
+      if (!match?.id) return null;
+      return await getPackingOrder(match.id);
+    },
+  });
+
+  const po = detailQ.data ?? null;
+  const blockMessage = useMemo(() => packingBlockMessage(po), [po]);
+  const pmLines = (po?.lines ?? []).filter((line) => line.line_type === "PM");
+
+  const storageLocationQ = useStorageLocationOptionsQuery(
+    { company_id: po?.company_id || undefined },
+    { enabled: Boolean(po?.company_id && !blockMessage) },
+  );
+  const storageLocationOptions = useMemo(
+    () => (storageLocationQ.storageLocations ?? []).map((location) => ({
+      value: location.id,
+      label: slocLabel(location) || "Storage Location",
+    })),
+    [storageLocationQ.storageLocations],
+  );
+
+  useEffect(() => {
+    setPmOverrides({});
+  }, [po?.id]);
+
+  function toast(msg, tone = "success") {
+    setNotice({ msg, tone });
+    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+  }
+
+  function resetLookup() {
+    setSubmittedPoNumber("");
+    setPoNumberInput("");
+    setPmOverrides({});
+  }
+
+  function handleLookupSubmit(event) {
+    event.preventDefault();
+    const normalized = String(poNumberInput || "").trim();
+    if (!normalized) {
+      toast("PO Number is required.", "error");
+      return;
+    }
+    setSubmittedPoNumber(normalized);
+  }
+
+  const lookupMessage = useMemo(() => {
+    if (detailQ.error) return detailQ.error.message || "Packing PO lookup failed.";
+    if (!submittedPoNumber || detailQ.isFetching) return "";
+    if (!po) return "Packing PO not found.";
+    return blockMessage;
+  }, [blockMessage, detailQ.error, detailQ.isFetching, po, submittedPoNumber]);
+
+  async function handleSave() {
+    if (!po || blockMessage) return;
+    if (pmLines.some((line) => !(pmOverrides[line.id] ?? line.issue_sloc_id))) {
+      toast("Select a storage location for every PM line.", "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      await updatePackingOrderLines(po.id, {
+        pm_lines: pmLines.map((line) => ({
+          material_id: line.material_id,
+          qty_per_pack: line.qty_per_pack,
+          total_qty: line.total_qty,
+          issue_sloc_id: pmOverrides[line.id] ?? line.issue_sloc_id,
+        })),
+      });
+      toast("Packing PO PM lines updated.");
+      qc.invalidateQueries({ queryKey: ["pack-orders"] });
+      qc.invalidateQueries({ queryKey: ["packing-edit-lookup", submittedPoNumber] });
+      detailQ.refetch();
+    } catch (error) {
+      toast(error.message || "Update failed.", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const showEditPage = Boolean(po && !blockMessage);
+
+  return (
+    <div className="flex flex-col gap-4">
+      {notice.msg ? (
+        <div className={`rounded px-3 py-2 text-sm ${notice.tone === "error" ? "border border-rose-200 bg-rose-50 text-rose-700" : "border border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
+          {notice.msg}
+        </div>
+      ) : null}
+
+      {!showEditPage ? (
+        <ErpSectionCard title="Page 1 - Identify Packing PO">
+          <form onSubmit={handleLookupSubmit} className="flex max-w-xl flex-col gap-4">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-600">PO Number <span className="text-rose-500">*</span></label>
+              <input
+                className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                value={poNumberInput}
+                onChange={(event) => setPoNumberInput(event.target.value)}
+                placeholder="Enter Packing PO number"
+                autoComplete="off"
+              />
+            </div>
+
+            {lookupMessage ? (
+              <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {lookupMessage}
+              </div>
+            ) : null}
+
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={detailQ.isFetching}
+                className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+              >
+                {detailQ.isFetching ? "Loading..." : "Next"}
+              </button>
+            </div>
+          </form>
+        </ErpSectionCard>
+      ) : (
+        <ErpSectionCard title="Page 2 - Edit Packing PO">
+          <div className="flex flex-col gap-4">
+            <div className="flex justify-between gap-4">
+              <div className="grid flex-1 gap-3 md:grid-cols-4 text-sm">
+                <div>
+                  <span className="block text-xs text-slate-400">PO Number</span>
+                  <p className="font-mono font-semibold text-sky-700">{po.po_number || "--"}</p>
+                </div>
+                <div>
+                  <span className="block text-xs text-slate-400">Type</span>
+                  <p>{po.source_po_type || "--"} / {po.po_type || "--"}</p>
+                </div>
+                <div>
+                  <span className="block text-xs text-slate-400">FG SKU</span>
+                  <p>{materialLabelSimple(po.material) || "--"}</p>
+                </div>
+                <div>
+                  <span className="block text-xs text-slate-400">Num Packs</span>
+                  <p className="font-mono">{po.num_packs ?? "--"}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={resetLookup}
+                className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
+              >
+                Back
+              </button>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white">
+              <div className="border-b border-slate-200 px-4 py-3">
+                <h4 className="text-sm font-semibold text-slate-800">PM Lines - Storage Location</h4>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[800px] border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                      <th className="border-b px-3 py-2 text-left">Material</th>
+                      <th className="border-b px-3 py-2 text-right">Total Qty</th>
+                      <th className="border-b px-3 py-2 text-left">Storage Location</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pmLines.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="px-3 py-6 text-center text-sm text-slate-400">
+                          No PM lines on this Packing PO.
+                        </td>
+                      </tr>
+                    ) : pmLines.map((line) => (
+                      <tr key={line.id} className="border-b border-slate-100">
+                        <td className="px-3 py-2">{materialLabelSimple(line.material) || "--"}</td>
+                        <td className="px-3 py-2 text-right font-mono">{Number(line.total_qty ?? 0).toFixed(3)}</td>
+                        <td className="px-3 py-2 min-w-[220px]">
+                          <ErpComboboxField
+                            value={pmOverrides[line.id] ?? line.issue_sloc_id ?? ""}
+                            onChange={(value) => setPmOverrides((current) => ({ ...current, [line.id]: value }))}
+                            options={storageLocationOptions}
+                            placeholder="-- Select storage location --"
+                            emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving}
+                className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+              >
+                {saving ? "Saving..." : "Save PR10 Edit"}
+              </button>
+            </div>
+          </div>
+        </ErpSectionCard>
+      )}
+    </div>
+  );
+}
+
+function ProcessPoEditTab() {
   const qc = useQueryClient();
   const [poNumberInput, setPoNumberInput] = useState("");
   const [submittedPoNumber, setSubmittedPoNumber] = useState("");
@@ -298,11 +548,12 @@ export default function ProductionPOEditPage() {
   const showEditPage = Boolean(po && !blockMessage);
 
   return (
-    <ErpScreenScaffold
-      title="Production PO Edit - PR10"
-      subtitle="Pre-QA edit window for STANDARD MTO/HPS Process POs"
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
-    >
+    <div className="flex flex-col gap-4">
+      {notice.msg ? (
+        <div className={`rounded px-3 py-2 text-sm ${notice.tone === "error" ? "border border-rose-200 bg-rose-50 text-rose-700" : "border border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
+          {notice.msg}
+        </div>
+      ) : null}
       {!showEditPage ? (
         <ErpSectionCard title="Page 1 - Identify Process PO">
           <form onSubmit={handleLookupSubmit} className="flex max-w-xl flex-col gap-4">
@@ -471,6 +722,33 @@ export default function ProductionPOEditPage() {
           </div>
         </ErpSectionCard>
       )}
+    </div>
+  );
+}
+
+export default function ProductionPOEditPage() {
+  const [activeTab, setActiveTab] = useState(0);
+  return (
+    <ErpScreenScaffold
+      title="Production PO Edit - PR10"
+      subtitle="Pre-QA edit window for STANDARD MTO/HPS Process POs and Packing POs"
+    >
+      <ErpSectionCard>
+        <div className="mb-4 flex gap-0 border-b border-slate-200">
+          {EDIT_TABS.map((tab, index) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(index)}
+              className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === index ? "border-sky-600 text-sky-700" : "border-transparent text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+        {activeTab === 0 ? <ProcessPoEditTab /> : <PackingPoEditTab />}
+      </ErpSectionCard>
     </ErpScreenScaffold>
   );
 }

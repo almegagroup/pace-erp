@@ -204,7 +204,7 @@ async function resolveContextForCompany(
     };
   };
 
-  const availableWorkContexts = (workContextRows ?? [])
+  const availableWorkContexts = (workContextRows as Array<{ work_context: unknown }> ?? [])
     .map((row) => flattenWorkContext(row.work_context))
     .filter((
       row,

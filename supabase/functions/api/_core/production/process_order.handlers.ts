@@ -1627,7 +1627,9 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     }
 
     if (poType === "MTEST") {
-      const batchNumber = await generateBatchNumber(companyId, "MTEST", null);
+      // MTEST is not batch-managed (locked 2026-07-14) — no batch series entry,
+      // no batch_number_instance row; its Packing PO (PTEST) draws SFG
+      // generically, so nothing downstream ever needs this batch identity.
       const lines = await fetchOrderLines(poId, null);
       const postedBy = ctx.auth_user_id;
       const today = todayIso();
@@ -1695,7 +1697,6 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         .from("process_order")
         .update({
           status: "VERIFIED",
-          batch_number: batchNumber,
           actual_qty: plannedQty,
           fg_stock_ledger_id: fgPosting.stock_ledger_id,
           verified_at: verifiedAt,
@@ -1709,21 +1710,11 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         throw new Error("PROD_PO_CREATE_FAILED");
       }
 
-      await upsertBatchNumberInstanceForProcessOrder({
-        companyId,
-        poType: "MTEST",
-        prodshadeMaterialId: null,
-        batchNumber,
-        processOrderId: poId,
-        authUserId: ctx.auth_user_id,
-        status: "ACTIVE",
-      });
-
       return createdOkResponse({
         id: poId,
         po_number: poNumber,
         status: "VERIFIED",
-        batch_number: batchNumber,
+        batch_number: null,
         ledger_entries: [...ledgerEntries, { movement: "P101", direction: "IN", ...fgPosting }],
       }, ctx.request_id, req);
     }

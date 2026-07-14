@@ -38,6 +38,10 @@ if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
  * BASE SERVICE ROLE CLIENT
  * -------------------------------------------------- */
 
+// createClient()'s real PostgrestQueryBuilder is thenable at runtime, but its
+// generic type declaration doesn't structurally expose `.then` the way
+// DbQueryBuilder's PromiseLike intersection expects (TS2322) — cast through
+// unknown rather than loosening the DbClient contract every caller relies on.
 export const serviceRoleClient: DbClient = createClient(
   SUPABASE_URL,
   SERVICE_ROLE_KEY,
@@ -45,7 +49,7 @@ export const serviceRoleClient: DbClient = createClient(
     auth: { persistSession: false },
     global: { fetch },
   }
-);
+) as unknown as DbClient;
 
 /* --------------------------------------------------
  * SERVICE ROLE ASSERTION
@@ -97,5 +101,5 @@ export function getServiceRoleClientWithContext(ctx: ContextResolution): DbClien
       auth: { persistSession: false },
       global: { headers, fetch },
     }
-  );
+  ) as unknown as DbClient;
 }

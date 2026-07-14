@@ -10,6 +10,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -35,6 +36,7 @@ const PACK_SHORTAGE_ERROR_CODES = new Set([
   "PROD_PACK_SFG_BATCH_REQUIRED",
   "PROD_PACK_RESERVATION_SLOC_REQUIRED",
   "PROD_PACK_SFG_BATCH_LOOKUP_FAILED",
+  "PROD_PACK_SCOPE_VIOLATION",
 ]);
 
 type PackingSfgNeed = {
@@ -195,6 +197,52 @@ async function getMachineMapByIds(ids: string[]): Promise<Map<string, JsonRecord
   if (error) throw new Error("PROD_PACK_MACHINE_LOOKUP_FAILED");
   for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
   return map;
+}
+
+// PMTS (MTS/IWC-Powder) and PTEST (MTEST/AP-test-batch) Packing POs draw SFG
+// generically (material+location only) — business does not batch-manage these
+// FG lines, so no batch is ever selected/required at Final and the FG/SFG
+// lines' batch_number columns stay null (locked 2026-07-14).
+function isBatchBlindPackingType(poType: string): boolean {
+  return poType === "PMTS" || poType === "PTEST";
+}
+
+function isAdminBypass(ctx: ProdHandlerContext): boolean {
+  return ctx.context.isAdmin === true || isSuperAdmin(ctx.roleCode) || isGlobalAdmin(ctx.roleCode);
+}
+
+async function assertPackingCompanyScope(ctx: ProdHandlerContext, companyId: string): Promise<void> {
+  if (isAdminBypass(ctx)) return;
+  const normalizedCompanyId = toTrimmedString(companyId);
+  if (!normalizedCompanyId) throw new Error("PROD_PACK_SCOPE_VIOLATION");
+  const { data, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id)
+    .eq("company_id", normalizedCompanyId)
+    .maybeSingle();
+  if (error || !data) throw new Error("PROD_PACK_SCOPE_VIOLATION");
+}
+
+// Any active storage location mapped to this company — used to validate the
+// user-picked PM issue location (dropdown, same pattern as Process PO's own
+// RM/PM line location picker). Not F-filtered like Pack BOM's OUTPUT lookup —
+// PM can issue from any of the company's active locations.
+async function getCompanyStorageLocationIds(companyId: string): Promise<Set<string>> {
+  const normalizedCompanyId = toTrimmedString(companyId);
+  if (!normalizedCompanyId) return new Set();
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_plant_map")
+    .select("storage_location_id")
+    .eq("company_id", normalizedCompanyId)
+    .eq("active", true);
+  if (error) {
+    console.error("[packing_order.getCompanyStorageLocationIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_PACK_SLOC_LOOKUP_FAILED");
+  }
+  return new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean));
 }
 
 async function assertPackingSfgBatchAvailability(companyId: string, need: PackingSfgNeed): Promise<void> {
@@ -575,7 +623,7 @@ export async function fgStockBreakdownHandler(req: Request, ctx: ProdHandlerCont
       ? await serviceRoleClient
           .schema("erp_production")
           .from("packing_order")
-          .select("id, po_number, num_packs, fill_qty_per_pack, actual_qty_kg, process_order_id")
+          .select("id, po_number, po_type, source_po_type, num_packs, fill_qty_per_pack, actual_qty_kg, process_order_id")
           .in("po_number", poNumbers)
       : { data: [], error: null };
     if (poErr) throw new Error("PROD_FG_STOCK_BREAKDOWN_FAILED");
@@ -594,6 +642,8 @@ export async function fgStockBreakdownHandler(req: Request, ctx: ProdHandlerCont
       if (!batchMap.has(batchNumber)) batchMap.set(batchNumber, []);
       batchMap.get(batchNumber)?.push({
         po_number: po.po_number,
+        po_type: po.po_type,
+        source_po_type: po.source_po_type,
         num_packs: po.num_packs,
         fill_qty_per_pack: po.fill_qty_per_pack,
         quantity: ledger.quantity,
@@ -673,6 +723,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
     assertProdReadRole(ctx);
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const poNumber = toTrimmedString(url.searchParams.get("po_number") ?? "");
     const processOrderId = toTrimmedString(url.searchParams.get("process_order_id") ?? "");
     const planFeedId = toTrimmedString(url.searchParams.get("plan_feed_id") ?? "");
     const status = toUpperTrimmedString(url.searchParams.get("status") ?? "");
@@ -692,6 +743,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
       .order("created_at", { ascending: false });
 
     if (companyId) query = query.eq("company_id", companyId);
+    if (poNumber) query = query.eq("po_number", poNumber);
     if (processOrderId) query = query.eq("process_order_id", processOrderId);
     if (planFeedId) query = query.eq("plan_feed_id", planFeedId);
     if (status) query = query.eq("status", status);
@@ -803,7 +855,14 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
 }
 
 // POST /api/production/packing-orders
-// Creates at STANDARD directly from Company + Type + FG SKU. Packing PO has no QA/Verify step.
+// Creates at STANDARD from Company + Type + FG SKU + num_packs. FG/SFG lines
+// (material, qty, storage location) are fully derived from the SKU's ACTIVE
+// Pack BOM — never re-entered. PM lines take material+qty from Pack BOM too;
+// only the PM issue storage location is user-picked per line (dropdown of the
+// company's active locations, same pattern as Process PO's RM/PM lines) since
+// Pack BOM never stores a PM storage location (§83.15) and the segment-based
+// default table has no data in Dev. SFG batch is NOT chosen here — that
+// happens at Final (see finalizePackingOrderHandler) per locked design.
 export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
@@ -813,24 +872,16 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     const sourcePoType = toUpperTrimmedString(body.source_po_type || mapPackingTypeToSourceType(toTrimmedString(body.po_type)));
     const normalizedSourcePoType = sourcePoType === "MTEST" ? "ZTEST" : sourcePoType;
     const poType = toUpperTrimmedString(body.po_type) || mapSourceTypeToPackingType(normalizedSourcePoType);
-    let processOrderId = toTrimmedString(body.process_order_id) || null;
     const materialId = toTrimmedString(body.material_id);
-    const sfgMaterialId = toTrimmedString(body.sfg_material_id);
-    const sfgBatchNumber = toTrimmedString(body.sfg_batch_number);
-    const skuQty = numberOrNull(body.sku_qty ?? body.num_packs);
-    const fgConversionQty = numberOrNull(body.fg_conversion_qty) ?? 1;
-    const sfgConversionQty = numberOrNull(body.sfg_conversion_qty);
-    const fgStorageLocationId = toTrimmedString(body.fg_storage_location_id);
-    const sfgStorageLocationId = toTrimmedString(body.sfg_storage_location_id);
+    const numPacks = parsePositiveInt(body.num_packs);
+    const fillQtyPerPack = numberOrNull(body.fill_qty_per_pack);
     const planFeedId = toTrimmedString(body.plan_feed_id) || null;
-    const pmLines = Array.isArray(body.pm_lines) ? body.pm_lines as JsonRecord[] : [];
+    const pmLocationInputs = Array.isArray(body.pm_lines) ? body.pm_lines as JsonRecord[] : [];
 
-    if (!companyId || !VALID_PACK_PO_TYPES.has(poType) || !["MTO", "HPS", "MTS", "ZTEST"].includes(normalizedSourcePoType) || !materialId) {
-      return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id, source_po_type, po_type and material_id required");
+    if (!companyId || !VALID_PACK_PO_TYPES.has(poType) || !["MTO", "HPS", "MTS", "ZTEST"].includes(normalizedSourcePoType) || !materialId || !numPacks) {
+      return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id, po_type, material_id and num_packs required");
     }
-    if (!skuQty || !sfgMaterialId || !sfgConversionQty || !fgStorageLocationId || !sfgStorageLocationId) {
-      return packErr(req, ctx, "PROD_PACK_QTY_CONVERSION_REQUIRED", 400, "sku_qty, sfg material, conversion and storage locations required");
-    }
+    await assertPackingCompanyScope(ctx, companyId);
 
     const { data: sku, error: skuErr } = await serviceRoleClient
       .schema("erp_master")
@@ -846,77 +897,105 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     const { data: packCodeRow, error: packCodeErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_code_master")
-      .select("id, pack_code, outer_uom_code")
+      .select("id, pack_code, bom_required, outer_uom_code")
       .eq("pack_code", toTrimmedString((sku as JsonRecord).pack_code))
       .maybeSingle();
     if (packCodeErr) throw new Error("PROD_PACK_CODE_LOOKUP_FAILED");
     if (!packCodeRow) return packErr(req, ctx, "PROD_PACK_CODE_NOT_FOUND", 422, "FG SKU pack code is not configured");
     const packCodeId = String((packCodeRow as JsonRecord).id ?? "");
+    const bomRequired = (packCodeRow as JsonRecord).bom_required !== false;
 
-    const { data: activeBom, error: bomErr } = await serviceRoleClient
+    if (!bomRequired && !fillQtyPerPack) {
+      return packErr(req, ctx, "PROD_PACK_FILL_QTY_REQUIRED", 400, "fill_qty_per_pack is required for this pack code");
+    }
+
+    const { data: bom, error: bomErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom")
-      .select("id")
+      .select(`
+        id, company_id, sku_material_id, status,
+        lines:pack_bom_line(
+          id, line_type, material_id, qty, uom_code, storage_location_id, movement_type_code,
+          has_alternate, material_group_id, display_order
+        )
+      `)
       .eq("company_id", companyId)
       .eq("sku_material_id", materialId)
       .eq("status", "ACTIVE")
       .maybeSingle();
     if (bomErr) throw new Error("PROD_PACK_BOM_LOOKUP_FAILED");
-    if (!activeBom) {
+    if (!bom) {
       return packErr(req, ctx, "PROD_PACK_NO_ACTIVE_BOM", 422, "Active Pack BOM is required before creating a Packing PO");
     }
+    const bomLines = ((bom as JsonRecord).lines ?? []) as JsonRecord[];
+    const outputLine = bomLines.find((line) => String(line.line_type) === "OUTPUT");
+    const sfgBomLine = bomLines.find((line) => String(line.line_type) === "SFG");
+    const pmBomLines = bomLines.filter((line) => String(line.line_type) === "INPUT");
+    if (!outputLine || !sfgBomLine) {
+      return packErr(req, ctx, "PROD_PACK_BOM_INCOMPLETE", 422, "Pack BOM must have OUTPUT and SFG lines");
+    }
+    if (!toTrimmedString(outputLine.storage_location_id) || !toTrimmedString(sfgBomLine.storage_location_id)) {
+      return packErr(req, ctx, "PROD_PACK_BOM_SLOC_MISSING", 422, "Pack BOM OUTPUT/SFG storage locations are not set");
+    }
 
-    const sfgTotalQty = (skuQty / fgConversionQty) * sfgConversionQty;
-    const normalizedPmLines = pmLines.map((line, idx) => {
-      const pmMaterialId = toTrimmedString(line.material_id);
-      const dosageQty = numberOrNull(line.dosage_per_sku ?? line.qty_per_pack ?? line.qty);
-      const storageLocationId = toTrimmedString(line.storage_location_id ?? line.issue_sloc_id);
-      return {
-        materialId: pmMaterialId,
-        dosageQty,
-        storageLocationId,
-        hasAlternate: line.has_alternate === true || line.has_alternate === "true",
-        materialGroupId: toTrimmedString(line.material_group_id) || null,
-        displayOrder: 10 + idx,
-      };
-    }).filter((line) => line.materialId);
-    if (normalizedPmLines.some((line) => !line.dosageQty || !line.storageLocationId)) {
-      return packErr(req, ctx, "PROD_PACK_PM_LINE_INVALID", 400, "Every PM line requires material, dosage and storage location");
+    const sfgQtyPerPack = bomRequired ? (parsePositiveNumber(sfgBomLine.qty) ?? 0) : (fillQtyPerPack ?? 0);
+    const plannedQtyKg = sfgQtyPerPack * numPacks;
+    if (!plannedQtyKg) {
+      return packErr(req, ctx, "PROD_PACK_QTY_INVALID", 400, "Could not derive a valid planned quantity from the Pack BOM");
+    }
+
+    // PM lines: material/qty/alternate/group come from the Pack BOM (never
+    // re-entered); only the issue storage location is user-picked per line
+    // (Pack BOM never stores one — §83.15 — and the segment-default table has
+    // no Dev data). BOM-not-required pack types (599/000/001) carry no PM
+    // lines from the BOM by design, matching the already-locked "PM optional/
+    // zero" rule for those pack codes.
+    const pmLocationByMaterialId = new Map(
+      pmLocationInputs
+        .map((line) => [toTrimmedString(line.material_id), toTrimmedString(line.storage_location_id)] as const)
+        .filter(([materialIdKey, slocId]) => materialIdKey && slocId),
+    );
+    const normalizedPmLines = bomRequired
+      ? pmBomLines.map((line, idx) => ({
+          materialId: String(line.material_id ?? ""),
+          qty: (parsePositiveNumber(line.qty) ?? 0) * numPacks,
+          uomCode: toTrimmedString(line.uom_code),
+          storageLocationId: pmLocationByMaterialId.get(String(line.material_id ?? "")) ?? null,
+          hasAlternate: Boolean(line.has_alternate),
+          materialGroupId: toTrimmedString(line.material_group_id) || null,
+          displayOrder: Number(line.display_order ?? idx) + 10,
+        })).filter((line) => line.materialId && line.qty > 0)
+      : [];
+    if (normalizedPmLines.some((line) => !line.storageLocationId)) {
+      return packErr(req, ctx, "PROD_PACK_PM_SLOC_REQUIRED", 400, "Select an issue storage location for every PM line");
+    }
+
+    if (normalizedPmLines.length > 0) {
+      const companyLocationIds = await getCompanyStorageLocationIds(companyId);
+      if (normalizedPmLines.some((line) => !companyLocationIds.has(String(line.storageLocationId)))) {
+        return packErr(req, ctx, "PROD_PACK_PM_SLOC_INVALID", 422, "PM storage location must be active and mapped to the selected company");
+      }
     }
 
     const materialMap = await getMaterialMapByIds(
-      [sfgMaterialId, materialId, ...normalizedPmLines.map((line) => line.materialId)],
+      [String(sfgBomLine.material_id ?? ""), materialId, ...normalizedPmLines.map((line) => line.materialId)],
       "[packing_order.createPackingOrder]",
       "PROD_PACK_MATERIAL_LOOKUP_FAILED",
       "id, material_type, base_uom_code",
     );
-    for (const line of normalizedPmLines) {
-      if (String(materialMap.get(line.materialId)?.material_type ?? "") !== "PM") {
-        return packErr(req, ctx, "PROD_PACK_PM_ONLY", 422, "Packing PM lines can only use PM materials");
-      }
-    }
 
+    // SFG availability is intentionally NOT checked here — the batch (and
+    // therefore which stock to check against) is chosen at Final, not Create.
     const pmNeeds: PackingPmNeed[] = normalizedPmLines.map((line) => ({
-        materialId: line.materialId,
-        storageLocationId: line.storageLocationId,
-        qty: skuQty * Number(line.dosageQty ?? 0),
-      }));
-    const selectedSfgBatch = sfgBatchNumber
-      ? (await resolvePackingSfgBatchOptions(companyId, sfgMaterialId, sfgStorageLocationId))
-        .find((batch) => batch.batch_number === sfgBatchNumber) ?? null
-      : null;
-    if (sfgBatchNumber && !selectedSfgBatch) {
-      return packErr(req, ctx, "PROD_PACK_SFG_BATCH_REQUIRED", 422, "Selected SFG batch is not available at this storage location");
-    }
-    if (selectedSfgBatch && selectedSfgBatch.available_qty < sfgTotalQty) {
-      return packErr(req, ctx, "PROD_PACK_SFG_BATCH_SHORTAGE", 422, "Selected SFG batch does not have enough available stock");
-    }
-    if (selectedSfgBatch) {
-      processOrderId = processOrderId || selectedSfgBatch.process_order_id;
-    }
-    const availabilityRows = await computePackingAvailability(companyId, null, pmNeeds);
-    for (const row of availabilityRows.pm.values()) {
-      if (row.short > 0) throw new Error("PROD_PACK_PM_SHORTAGE");
+      materialId: line.materialId,
+      storageLocationId: String(line.storageLocationId),
+      qty: line.qty,
+    }));
+    if (pmNeeds.length > 0) {
+      const availabilityRows = await computePackingAvailability(companyId, null, pmNeeds);
+      for (const row of availabilityRows.pm.values()) {
+        if (row.short > 0) throw new Error("PROD_PACK_PM_SHORTAGE");
+      }
     }
 
     const poNumber = await generateGlobalDocNumber("PACK_PO");
@@ -929,18 +1008,18 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         po_number: poNumber,
         po_type: poType,
         source_po_type: normalizedSourcePoType,
-        process_order_id: processOrderId,
-        machine_id: toTrimmedString(selectedSfgBatch?.machine?.id) || null,
-        batch_number: sfgBatchNumber || null,
+        process_order_id: null,
+        machine_id: null,
+        batch_number: null,
         material_id: materialId,
         pack_code_id: packCodeId,
-        fill_qty_per_pack: sfgConversionQty,
-        num_packs: Math.round(skuQty),
-        sku_qty: skuQty,
-        fg_conversion_qty: fgConversionQty,
-        sfg_conversion_qty: sfgConversionQty,
-        planned_qty_kg: sfgTotalQty,
-        total_qty_kg: sfgTotalQty,
+        fill_qty_per_pack: sfgQtyPerPack,
+        num_packs: numPacks,
+        sku_qty: numPacks,
+        fg_conversion_qty: 1,
+        sfg_conversion_qty: sfgQtyPerPack,
+        planned_qty_kg: plannedQtyKg,
+        total_qty_kg: plannedQtyKg,
         status: "STANDARD",
         plan_feed_id: planFeedId,
         segment_code: normalizedSourcePoType,
@@ -960,25 +1039,25 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         line_type: "FG",
         material_id: materialId,
         batch_number: null,
-        qty_per_pack: fgConversionQty,
-        total_qty: skuQty,
+        qty_per_pack: bomRequired ? (parsePositiveNumber(outputLine.qty) ?? 1) : 1,
+        total_qty: numPacks,
         actual_qty: null,
-        issue_sloc_id: fgStorageLocationId,
-        uom_code: toTrimmedString((packCodeRow as JsonRecord).outer_uom_code) || toTrimmedString((sku as JsonRecord).base_uom_code) || "KG",
-        movement_type_code: "P101",
+        issue_sloc_id: toTrimmedString(outputLine.storage_location_id),
+        uom_code: toTrimmedString(outputLine.uom_code) || toTrimmedString((packCodeRow as JsonRecord).outer_uom_code) || toTrimmedString((sku as JsonRecord).base_uom_code) || "KG",
+        movement_type_code: toTrimmedString(outputLine.movement_type_code) || "P101",
         display_order: 1,
       },
       {
         packing_order_id: packPoId,
         line_type: "SFG",
-        material_id: sfgMaterialId,
-        batch_number: sfgBatchNumber || null,
-        qty_per_pack: sfgConversionQty,
-        total_qty: sfgTotalQty,
+        material_id: sfgBomLine.material_id,
+        batch_number: null, // chosen at Final
+        qty_per_pack: sfgQtyPerPack,
+        total_qty: plannedQtyKg,
         actual_qty: null,
-        issue_sloc_id: sfgStorageLocationId,
-        uom_code: toTrimmedString(materialMap.get(sfgMaterialId)?.base_uom_code) || "KG",
-        movement_type_code: "P261",
+        issue_sloc_id: toTrimmedString(sfgBomLine.storage_location_id),
+        uom_code: "KG",
+        movement_type_code: toTrimmedString(sfgBomLine.movement_type_code) || "P261",
         display_order: 2,
       },
       ...normalizedPmLines.map((line) => ({
@@ -986,11 +1065,11 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         line_type: "PM",
         material_id: line.materialId,
         batch_number: null,
-        qty_per_pack: line.dosageQty,
-        total_qty: skuQty * Number(line.dosageQty ?? 0),
+        qty_per_pack: line.qty / numPacks,
+        total_qty: line.qty,
         actual_qty: null,
         issue_sloc_id: line.storageLocationId,
-        uom_code: toTrimmedString(materialMap.get(line.materialId)?.base_uom_code) || "KG",
+        uom_code: line.uomCode || toTrimmedString(materialMap.get(line.materialId)?.base_uom_code) || "KG",
         movement_type_code: "P261",
         has_alternate: line.hasAlternate,
         material_group_id: line.hasAlternate ? line.materialGroupId : null,
@@ -1008,6 +1087,9 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       throw new Error("PROD_PACK_LINES_CREATE_FAILED");
     }
 
+    // SFG and PM reservations both open at Create (§83.5-addendum). SFG's
+    // batch_number stays NULL until Final assigns one — see
+    // finalizePackingOrderHandler, which upgrades this same reservation row.
     const reservationRows: JsonRecord[] = ((insertedLines ?? []) as JsonRecord[])
       .filter((line) => String(line.line_type) !== "FG")
       .map((line) => ({
@@ -1021,7 +1103,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         uom_code: toTrimmedString(line.uom_code) || "KG",
         issued_qty: 0,
         status: "OPEN",
-        batch_number: String(line.line_type) === "SFG" && sfgBatchNumber ? sfgBatchNumber : null,
+        batch_number: null,
         created_by: ctx.auth_user_id,
         created_at: now,
         last_updated_by: ctx.auth_user_id,
@@ -1195,11 +1277,15 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     const defaultPmSlocId = (segConfig as JsonRecord | null)?.pm_sloc_id as string | null;
     const lineRows = (stockLines ?? []) as JsonRecord[];
     const sfgLine = lineRows.find((line) => String(line.line_type ?? "") === "SFG") ?? null;
-    const effectiveSfgBatchNumber = requestedSfgBatchNumber || toTrimmedString(sfgLine?.batch_number);
-    if (sfgLine && !effectiveSfgBatchNumber) {
+    const fgLine = lineRows.find((line) => String(line.line_type ?? "") === "FG") ?? null;
+    const batchBlind = isBatchBlindPackingType(String(poData.po_type ?? ""));
+    const effectiveSfgBatchNumber = batchBlind
+      ? ""
+      : (requestedSfgBatchNumber || toTrimmedString(sfgLine?.batch_number));
+    if (!batchBlind && sfgLine && !effectiveSfgBatchNumber) {
       return packErr(req, ctx, "PROD_PACK_SFG_BATCH_REQUIRED", 422, "SFG batch number is required before final posting");
     }
-    if (sfgLine && effectiveSfgBatchNumber) {
+    if (!batchBlind && sfgLine && effectiveSfgBatchNumber) {
       const sfgQty = Number(sfgLine.actual_qty ?? sfgLine.total_qty ?? 0);
       const sfgStorageLocationId = toTrimmedString(sfgLine.issue_sloc_id);
       const sfgMaterialId = toTrimmedString(sfgLine.material_id);
@@ -1218,7 +1304,7 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       }
 
       const now = new Date().toISOString();
-      const [poBatchUpdate, sfgLineBatchUpdate, reservationBatchUpdate] = await Promise.all([
+      const updates = [
         serviceRoleClient
           .schema("erp_production")
           .from("packing_order")
@@ -1246,13 +1332,27 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
           .eq("source_type", "PACKING_PO")
           .eq("source_id", id)
           .eq("source_line_id", String(sfgLine.id ?? "")),
-      ]);
-      const batchUpdateError = poBatchUpdate.error || sfgLineBatchUpdate.error || reservationBatchUpdate.error;
+      ];
+      // FG (SKU) receipt carries the same batch identity as its parent Process
+      // PO batch (§83.7 FG batch/lot identity) — without this, FG stock and the
+      // FG Stock Breakdown report can never trace back to the producing batch.
+      if (fgLine) {
+        updates.push(
+          serviceRoleClient
+            .schema("erp_production")
+            .from("packing_order_line")
+            .update({ batch_number: effectiveSfgBatchNumber })
+            .eq("id", String(fgLine.id ?? "")),
+        );
+      }
+      const [poBatchUpdate, sfgLineBatchUpdate, reservationBatchUpdate, fgLineBatchUpdate] = await Promise.all(updates);
+      const batchUpdateError = poBatchUpdate.error || sfgLineBatchUpdate.error || reservationBatchUpdate.error || fgLineBatchUpdate?.error;
       if (batchUpdateError) {
         console.error("[packing_order.finalizePackingOrder] SFG batch link update failed:", JSON.stringify(batchUpdateError));
         throw new Error("PROD_PACK_SFG_BATCH_LINK_FAILED");
       }
       sfgLine.batch_number = effectiveSfgBatchNumber;
+      if (fgLine) fgLine.batch_number = effectiveSfgBatchNumber;
       poData.batch_number = effectiveSfgBatchNumber;
       poData.process_order_id = selectedSfgBatch.process_order_id;
       poData.machine_id = toTrimmedString(selectedSfgBatch.machine?.id) || null;
@@ -1469,10 +1569,11 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       "PROD_PACK_CORRECTION_FAILED",
       "id, base_uom_code",
     );
+    const batchBlind = isBatchBlindPackingType(String(poData.po_type ?? ""));
     const sfgIncreaseNeeds = new Map<string, PackingSfgNeed>();
     for (const correction of corrections) {
       const line = lineMap.get(toTrimmedString(correction.id));
-      if (!line || String(line.line_type ?? "") !== "SFG") continue;
+      if (!line || String(line.line_type ?? "") !== "SFG" || batchBlind) continue;
       const newActual = parsePositiveNumber(correction.actual_qty);
       if (!newActual) continue;
       const oldActual = Number(line.actual_qty ?? line.total_qty ?? 0);

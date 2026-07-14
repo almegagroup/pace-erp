@@ -698,14 +698,6 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  PROD_PACKING_PO_FINAL: {
-    screen_code: "PROD_PACKING_PO_FINAL",
-    route: "/dashboard/production/packing-orders",
-    universe: "ACL",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
   PROD_FG_STOCK_BREAKDOWN: {
     screen_code: "PROD_FG_STOCK_BREAKDOWN",
     route: "/dashboard/production/fg-stock-breakdown",
