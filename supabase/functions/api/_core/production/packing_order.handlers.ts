@@ -988,51 +988,91 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       return packErr(req, ctx, "PROD_PACK_QTY_INVALID", 400, "Could not derive a valid planned quantity from the Pack BOM");
     }
 
-    // PM lines: material/qty/alternate/group come from the Pack BOM (never
-    // re-entered); only the issue storage location is user-picked per line
-    // (Pack BOM never stores one — §83.15 — and the segment-default table has
-    // no Dev data). BOM-not-required pack types (599/000/001) carry no PM
-    // lines from the BOM by design, matching the already-locked "PM optional/
-    // zero" rule for those pack codes.
-    const pmLocationByMaterialId = new Map(
-      pmLocationInputs
-        .map((line) => [toTrimmedString(line.material_id), toTrimmedString(line.storage_location_id)] as const)
-        .filter(([materialIdKey, slocId]) => materialIdKey && slocId),
-    );
-    const pmActualMaterialByMaterialId = new Map(
-      pmLocationInputs
-        .map((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)] as const)
-        .filter(([materialIdKey, actualId]) => materialIdKey && actualId),
-    );
-    const allowedAlternateMap = bomRequired ? await buildAllowedAlternateIdsByPackBomLines(pmBomLines) : new Map<string, string[]>();
-    for (const line of pmBomLines) {
-      const formulationMaterialId = String(line.material_id ?? "");
-      const requestedActualId = pmActualMaterialByMaterialId.get(formulationMaterialId);
-      if (!requestedActualId) continue;
-      const allowedIds = allowedAlternateMap.get(formulationMaterialId) ?? [];
-      if (!allowedIds.includes(requestedActualId)) {
-        return packErr(req, ctx, "PROD_PACK_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id must match a registered Pack BOM alternate group member");
+    // PM lines source differs by pack type:
+    // - Fixed Pack BOM (bomRequired=true): material/dosage/alternate/group come
+    //   from the Pack BOM, never re-entered — only the issue storage location
+    //   (and an optional validated substitute) is user-picked per line, since
+    //   Pack BOM never stores a location (§83.15) and the segment-default
+    //   table has no Dev data.
+    // - 599/000/001 (bomRequired=false): these pack codes carry NO PM lines on
+    //   the Pack BOM at all (OUTPUT+SFG only, PM "optional/zero" per §83.15) —
+    //   there is nothing to derive from. The user adds PM lines fresh at
+    //   Standard, exactly like Process PO's own RM/PM manual-entry pattern:
+    //   material, dosage-per-pack, storage location, and alternate/group are
+    //   all caller-supplied every time.
+    type NormalizedPmLine = {
+      materialId: string; actualMaterialId: string | null; effectiveMaterialId: string;
+      qty: number; uomCode: string; storageLocationId: string | null;
+      hasAlternate: boolean; materialGroupId: string | null; displayOrder: number;
+    };
+    let normalizedPmLines: NormalizedPmLine[];
+    if (bomRequired) {
+      const pmLocationByMaterialId = new Map(
+        pmLocationInputs
+          .map((line) => [toTrimmedString(line.material_id), toTrimmedString(line.storage_location_id)] as const)
+          .filter(([materialIdKey, slocId]) => materialIdKey && slocId),
+      );
+      const pmActualMaterialByMaterialId = new Map(
+        pmLocationInputs
+          .map((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)] as const)
+          .filter(([materialIdKey, actualId]) => materialIdKey && actualId),
+      );
+      const allowedAlternateMap = await buildAllowedAlternateIdsByPackBomLines(pmBomLines);
+      for (const line of pmBomLines) {
+        const formulationMaterialId = String(line.material_id ?? "");
+        const requestedActualId = pmActualMaterialByMaterialId.get(formulationMaterialId);
+        if (!requestedActualId) continue;
+        const allowedIds = allowedAlternateMap.get(formulationMaterialId) ?? [];
+        if (!allowedIds.includes(requestedActualId)) {
+          return packErr(req, ctx, "PROD_PACK_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id must match a registered Pack BOM alternate group member");
+        }
+      }
+      normalizedPmLines = pmBomLines.map((line, idx) => {
+        const formulationMaterialId = String(line.material_id ?? "");
+        const requestedActualId = pmActualMaterialByMaterialId.get(formulationMaterialId) || null;
+        const allowedIds = allowedAlternateMap.get(formulationMaterialId) ?? [];
+        const actualMaterialId = requestedActualId && allowedIds.includes(requestedActualId) ? requestedActualId : null;
+        return {
+          materialId: formulationMaterialId,
+          actualMaterialId,
+          effectiveMaterialId: actualMaterialId || formulationMaterialId,
+          qty: (parsePositiveNumber(line.qty) ?? 0) * numPacks,
+          uomCode: toTrimmedString(line.uom_code),
+          storageLocationId: pmLocationByMaterialId.get(formulationMaterialId) ?? null,
+          hasAlternate: Boolean(line.has_alternate),
+          materialGroupId: toTrimmedString(line.material_group_id) || null,
+          displayOrder: Number(line.display_order ?? idx) + 10,
+        };
+      }).filter((line) => line.materialId && line.qty > 0);
+    } else {
+      normalizedPmLines = pmLocationInputs.map((line, idx) => {
+        const matId = toTrimmedString(line.material_id);
+        const dosagePerPack = parsePositiveNumber(line.dosage_per_pack ?? line.dosage_per_sku) ?? 0;
+        const hasAlternate = Boolean(line.has_alternate);
+        return {
+          materialId: matId,
+          actualMaterialId: null,
+          effectiveMaterialId: matId,
+          qty: dosagePerPack * numPacks,
+          uomCode: toTrimmedString(line.uom_code),
+          storageLocationId: toTrimmedString(line.storage_location_id) || null,
+          hasAlternate,
+          materialGroupId: hasAlternate ? (toTrimmedString(line.material_group_id) || null) : null,
+          displayOrder: idx + 10,
+        };
+      }).filter((line) => line.materialId && line.qty > 0);
+      if (normalizedPmLines.length > 0) {
+        const pmMaterialTypeMap = await getMaterialMapByIds(
+          normalizedPmLines.map((line) => line.materialId),
+          "[packing_order.createPackingOrder]",
+          "PROD_PACK_MATERIAL_LOOKUP_FAILED",
+          "id, material_type",
+        );
+        if (normalizedPmLines.some((line) => String(pmMaterialTypeMap.get(line.materialId)?.material_type) !== "PM")) {
+          return packErr(req, ctx, "PROD_PACK_PM_ONLY", 422, "Only PM materials are allowed in PM lines");
+        }
       }
     }
-    const normalizedPmLines = bomRequired
-      ? pmBomLines.map((line, idx) => {
-          const formulationMaterialId = String(line.material_id ?? "");
-          const requestedActualId = pmActualMaterialByMaterialId.get(formulationMaterialId) || null;
-          const allowedIds = allowedAlternateMap.get(formulationMaterialId) ?? [];
-          const actualMaterialId = requestedActualId && allowedIds.includes(requestedActualId) ? requestedActualId : null;
-          return {
-            materialId: formulationMaterialId,
-            actualMaterialId,
-            effectiveMaterialId: actualMaterialId || formulationMaterialId,
-            qty: (parsePositiveNumber(line.qty) ?? 0) * numPacks,
-            uomCode: toTrimmedString(line.uom_code),
-            storageLocationId: pmLocationByMaterialId.get(formulationMaterialId) ?? null,
-            hasAlternate: Boolean(line.has_alternate),
-            materialGroupId: toTrimmedString(line.material_group_id) || null,
-            displayOrder: Number(line.display_order ?? idx) + 10,
-          };
-        }).filter((line) => line.materialId && line.qty > 0)
-      : [];
     if (normalizedPmLines.some((line) => !line.storageLocationId)) {
       return packErr(req, ctx, "PROD_PACK_PM_SLOC_REQUIRED", 400, "Select an issue storage location for every PM line");
     }

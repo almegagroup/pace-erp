@@ -25,8 +25,16 @@ import {
   listSegmentLocations,
   listStrokeMasters,
 } from "./prodApi.js";
-import { listMachines, listMaterialCategoryGroups, listStorageLocations } from "../om/omApi.js";
+import {
+  addMaterialCategoryMember,
+  createMaterialCategoryGroup,
+  listMachines,
+  listMaterialCategoryGroups,
+  listMaterials,
+  listStorageLocations,
+} from "../om/omApi.js";
 import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
+import { GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
 const MTS_SEGMENTS = ["IWC", "POWDER"];
@@ -65,6 +73,7 @@ const PACKING_ERRORS = {
   PROD_PACK_PM_SLOC_REQUIRED: "Select an issue storage location for every PM line.",
   PROD_PACK_PM_SLOC_INVALID: "PM storage location must be active and mapped to the selected company.",
   PROD_PACK_SUBSTITUTE_NOT_REGISTERED: "Actual material must match a registered Pack BOM alternate group member.",
+  PROD_PACK_PM_ONLY: "Only PM materials are allowed in PM lines.",
   PROD_PACK_PM_SHORTAGE: "Stock is short for one or more PM lines.",
   PROD_PACK_SCOPE_VIOLATION: "You do not have access to this company.",
 };
@@ -134,6 +143,13 @@ export default function ProductionPOCreatePage() {
   const [processForm, setProcessForm] = useState({ ...EMPTY_PROCESS });
   const [packingStep, setPackingStep] = useState(1);
   const [packingForm, setPackingForm] = useState({ ...EMPTY_PACKING });
+  // Only used for bomRequired=false (599/000/001) — these pack codes carry no
+  // PM lines on the Pack BOM at all, so the user adds them fresh here.
+  const [packingManualPmLines, setPackingManualPmLines] = useState([]);
+  const [packingGroupModal, setPackingGroupModal] = useState(null);
+  const [packingGroupForm, setPackingGroupForm] = useState({ group_name: "", description: "" });
+  const [packingMemberModal, setPackingMemberModal] = useState(null);
+  const [packingMemberMaterialId, setPackingMemberMaterialId] = useState("");
   const [lineActualMaterialOverrides, setLineActualMaterialOverrides] = useState({});
   const [lineLocationOverrides, setLineLocationOverrides] = useState({});
   const [debouncedCreatePreview, setDebouncedCreatePreview] = useState([]);
@@ -364,7 +380,10 @@ export default function ProductionPOCreatePage() {
   const packingSfgQtyPerPack = packingBomRequired ? Number(packingSfgLine?.qty || 0) : packingFillQtyPerPack;
   const packingPlannedQtyKg = packingSfgQtyPerPack * packingNumPacks;
 
-  const packingPmPreviewLines = useMemo(
+  // Fixed Pack BOM types (bomRequired=true): PM material/dosage/alternate/group
+  // come from the Pack BOM, only storage location (and an optional validated
+  // substitute) is user-picked per line.
+  const packingBomPmPreviewLines = useMemo(
     () => packingPmBomLines.map((line) => {
       const override = packingForm.pm_lines.find((pm) => pm.material_id === line.material_id);
       const group = packingGroupById.get(line.material_group_id) ?? null;
@@ -372,6 +391,7 @@ export default function ProductionPOCreatePage() {
         .filter((member) => String(member.material_id) !== String(line.material_id))
         .map((member) => ({ value: member.material_id, label: materialLabel(member.material) || "Registered alternate" }));
       return {
+        key: line.material_id,
         material_id: line.material_id,
         material_label: materialLabel(line.material) || "--",
         dosage_per_pack: Number(line.qty ?? 0),
@@ -387,11 +407,48 @@ export default function ProductionPOCreatePage() {
     [packingForm.pm_lines, packingGroupById, packingNumPacks, packingPmBomLines],
   );
 
+  // 599/000/001 (bomRequired=false): Pack BOM carries no PM lines at all for
+  // these pack codes (§83.15 "PM optional/zero") — the user adds fresh lines
+  // here, exactly like Process PO's own manual RM/PM entry pattern.
+  const packingPmMaterialsQ = useQuery({
+    queryKey: ["packing-create-pm-materials"],
+    queryFn: () => listMaterials({ material_type: "PM", limit: 500 }),
+    select: (data) => data?.data ?? [],
+  });
+  const packingPmMaterialOptions = useMemo(
+    () => (packingPmMaterialsQ.data ?? []).map((material) => ({ value: material.id, label: materialLabel(material) || "PM Material" })),
+    [packingPmMaterialsQ.data],
+  );
+  const packingManualPmPreviewLines = useMemo(
+    () => packingManualPmLines.map((line, index) => {
+      const group = packingGroupById.get(line.material_group_id) ?? null;
+      const material = (packingPmMaterialsQ.data ?? []).find((m) => m.id === line.material_id) ?? null;
+      const dosagePerPack = Number(line.dosage_per_pack || 0);
+      return {
+        key: index,
+        index,
+        material_id: line.material_id,
+        material_label: materialLabel(material) || "",
+        dosage_per_pack: dosagePerPack,
+        standard_qty: dosagePerPack * packingNumPacks,
+        storage_location_id: line.storage_location_id || "",
+        actual_material_id: "",
+        effective_material_id: line.material_id,
+        has_alternate: Boolean(line.has_alternate),
+        material_group_id: line.material_group_id || "",
+        group_label: group?.group_name || "",
+      };
+    }),
+    [packingGroupById, packingManualPmLines, packingNumPacks, packingPmMaterialsQ.data],
+  );
+
+  const packingEffectivePmLines = packingBomRequired ? packingBomPmPreviewLines : packingManualPmPreviewLines;
+
   const packingAvailabilityNeeds = useMemo(
-    () => packingPmPreviewLines
+    () => packingEffectivePmLines
       .filter((line) => line.effective_material_id && line.storage_location_id && line.standard_qty > 0)
       .map((line) => ({ material_id: line.effective_material_id, storage_location_id: line.storage_location_id, qty: line.standard_qty })),
-    [packingPmPreviewLines],
+    [packingEffectivePmLines],
   );
   const packingAvailabilityPreviewQ = useQuery({
     queryKey: ["packing-create-availability-preview", effectivePackingCompanyId, packingAvailabilityNeeds],
@@ -407,16 +464,17 @@ export default function ProductionPOCreatePage() {
     [packingAvailabilityPreviewQ.data],
   );
   const packingPmRowsWithAvailability = useMemo(
-    () => packingPmPreviewLines.map((line) => {
+    () => packingEffectivePmLines.map((line) => {
       const row = line.effective_material_id && line.storage_location_id
         ? packingAvailabilityByKey.get(`${line.effective_material_id}::${line.storage_location_id}`) ?? null
         : null;
       return { ...line, available_qty: row ? Number(row.available_qty ?? 0) : null, short: row ? Number(row.short ?? 0) : 0 };
     }),
-    [packingAvailabilityByKey, packingPmPreviewLines],
+    [packingAvailabilityByKey, packingEffectivePmLines],
   );
   const packingHasShortage = packingPmRowsWithAvailability.some((line) => line.short > 0);
-  const packingMissingPmSloc = packingPmPreviewLines.some((line) => !line.storage_location_id);
+  const packingMissingPmSloc = packingEffectivePmLines.some((line) => !line.storage_location_id);
+  const packingMissingManualMaterial = !packingBomRequired && packingManualPmLines.some((line) => !line.material_id);
 
   const strokeLines = Array.isArray(strokeDetailQ.data?.lines) ? strokeDetailQ.data.lines : [];
   const strokePreviewRows = useMemo(
@@ -583,14 +641,69 @@ export default function ProductionPOCreatePage() {
         next.fill_qty_per_pack = "";
         next.pm_lines = [];
         setPackingStep(1);
+        setPackingManualPmLines([]);
       }
       if (field === "material_id") {
         next.num_packs = "";
         next.fill_qty_per_pack = "";
         next.pm_lines = [];
+        setPackingManualPmLines([]);
       }
       return next;
     });
+  }
+
+  function addPackingManualPmLine() {
+    setPackingManualPmLines((current) => [
+      ...current,
+      { material_id: "", dosage_per_pack: "", storage_location_id: "", has_alternate: false, material_group_id: "" },
+    ]);
+  }
+
+  function updatePackingManualPmLine(index, patch) {
+    setPackingManualPmLines((current) => current.map((line, idx) => (idx === index ? { ...line, ...patch } : line)));
+  }
+
+  function removePackingManualPmLine(index) {
+    setPackingManualPmLines((current) => current.filter((_, idx) => idx !== index));
+  }
+
+  function openPackingCreateGroupModal(onCreated) {
+    setPackingGroupForm({ group_name: "", description: "" });
+    setPackingGroupModal({ onCreated });
+  }
+
+  async function handlePackingCreateGroup() {
+    if (!packingGroupForm.group_name.trim()) {
+      toast("Group name required.", "error");
+      return;
+    }
+    try {
+      const res = await createMaterialCategoryGroup(packingGroupForm);
+      const newGroup = res?.data ?? res;
+      await qc.invalidateQueries({ queryKey: ["packing-create-material-groups"] });
+      packingGroupModal?.onCreated?.(newGroup.id);
+      setPackingGroupModal(null);
+      toast("Material group created.");
+    } catch (error) {
+      toast(packingFriendly(error), "error");
+    }
+  }
+
+  async function handlePackingAddMember() {
+    if (!packingMemberMaterialId) {
+      toast("Select a material first.", "error");
+      return;
+    }
+    try {
+      await addMaterialCategoryMember({ group_id: packingMemberModal, material_id: packingMemberMaterialId });
+      await qc.invalidateQueries({ queryKey: ["packing-create-material-groups"] });
+      setPackingMemberModal(null);
+      setPackingMemberMaterialId("");
+      toast("Member added.");
+    } catch (error) {
+      toast(packingFriendly(error), "error");
+    }
   }
 
   function updatePackingPmLine(materialId, patch) {
@@ -604,6 +717,7 @@ export default function ProductionPOCreatePage() {
   function resetPacking() {
     setPackingForm({ ...EMPTY_PACKING, company_id: companies.length === 1 ? companies[0].id : "" });
     setPackingStep(1);
+    setPackingManualPmLines([]);
   }
 
   function handlePackingStepOneNext() {
@@ -702,6 +816,10 @@ export default function ProductionPOCreatePage() {
       toast("Fill Qty Per Pack is required for this pack code.", "error");
       return;
     }
+    if (packingMissingManualMaterial) {
+      toast("Select a material for every PM line.", "error");
+      return;
+    }
     if (packingMissingPmSloc) {
       toast("Select a storage location for every PM line.", "error");
       return;
@@ -723,13 +841,23 @@ export default function ProductionPOCreatePage() {
         material_id: packingForm.material_id,
         num_packs: packingNumPacks,
         fill_qty_per_pack: packingBomRequired ? undefined : packingFillQtyPerPack,
-        pm_lines: packingPmPreviewLines
-          .filter((line) => line.material_id && line.storage_location_id)
-          .map((line) => ({
-            material_id: line.material_id,
-            actual_material_id: line.actual_material_id || undefined,
-            storage_location_id: line.storage_location_id,
-          })),
+        pm_lines: packingBomRequired
+          ? packingBomPmPreviewLines
+              .filter((line) => line.material_id && line.storage_location_id)
+              .map((line) => ({
+                material_id: line.material_id,
+                actual_material_id: line.actual_material_id || undefined,
+                storage_location_id: line.storage_location_id,
+              }))
+          : packingManualPmPreviewLines
+              .filter((line) => line.material_id && line.storage_location_id)
+              .map((line) => ({
+                material_id: line.material_id,
+                dosage_per_pack: line.dosage_per_pack,
+                storage_location_id: line.storage_location_id,
+                has_alternate: line.has_alternate,
+                material_group_id: line.has_alternate ? (line.material_group_id || undefined) : undefined,
+              })),
       };
       const result = await createPackingOrder(payload);
       toast(`Packing PO created${result?.po_number ? `: ${result.po_number}` : "."}`);
@@ -1263,66 +1391,169 @@ export default function ProductionPOCreatePage() {
                   </table>
                 </div>
 
-                <div className="rounded-lg border border-slate-200 bg-white">
-                  <div className="border-b border-slate-200 px-4 py-3">
-                    <h4 className="text-sm font-semibold text-slate-800">PM Lines (from Pack BOM)</h4>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[1050px] border-collapse text-sm">
-                      <thead>
-                        <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                          <th className="border-b px-3 py-2 text-left">Formulation Material</th>
-                          <th className="border-b px-3 py-2 text-right">Dosage / Pack</th>
-                          <th className="border-b px-3 py-2 text-right">Standard Qty</th>
-                          <th className="border-b px-3 py-2 text-left">Actual Material</th>
-                          <th className="border-b px-3 py-2 text-left">Storage Location <span className="text-rose-500">*</span></th>
-                          <th className="border-b px-3 py-2 text-right">Available</th>
-                          <th className="border-b px-3 py-2 text-right">Shortage</th>
-                          <th className="border-b px-3 py-2 text-left">Group</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {packingPmRowsWithAvailability.length === 0 ? (
-                          <tr>
-                            <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">
-                              No PM lines on this Pack BOM.
-                            </td>
+                {packingBomRequired ? (
+                  <div className="rounded-lg border border-slate-200 bg-white">
+                    <div className="border-b border-slate-200 px-4 py-3">
+                      <h4 className="text-sm font-semibold text-slate-800">PM Lines (from Pack BOM)</h4>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[1050px] border-collapse text-sm">
+                        <thead>
+                          <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                            <th className="border-b px-3 py-2 text-left">Formulation Material</th>
+                            <th className="border-b px-3 py-2 text-right">Dosage / Pack</th>
+                            <th className="border-b px-3 py-2 text-right">Standard Qty</th>
+                            <th className="border-b px-3 py-2 text-left">Actual Material</th>
+                            <th className="border-b px-3 py-2 text-left">Storage Location <span className="text-rose-500">*</span></th>
+                            <th className="border-b px-3 py-2 text-right">Available</th>
+                            <th className="border-b px-3 py-2 text-right">Shortage</th>
+                            <th className="border-b px-3 py-2 text-left">Group</th>
                           </tr>
-                        ) : packingPmRowsWithAvailability.map((line) => {
-                          const actualMaterialOptions = [{ value: "", label: "(same)" }, ...line.alternate_options];
-                          return (
-                            <tr key={line.material_id} className={line.short > 0 ? "bg-rose-50" : "border-b border-slate-100"}>
-                              <td className="px-3 py-2">{line.material_label}</td>
-                              <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.dosage_per_pack)}</td>
-                              <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.standard_qty)}</td>
-                              <td className="px-3 py-2 min-w-[200px]">
-                                <ErpComboboxField
-                                  value={line.actual_material_id}
-                                  onChange={(value) => updatePackingPmLine(line.material_id, { actual_material_id: value })}
-                                  options={actualMaterialOptions}
-                                  placeholder="(same)"
-                                  disabled={!line.has_alternate || line.alternate_options.length === 0}
-                                />
+                        </thead>
+                        <tbody>
+                          {packingPmRowsWithAvailability.length === 0 ? (
+                            <tr>
+                              <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">
+                                No PM lines on this Pack BOM.
                               </td>
-                              <td className="px-3 py-2 min-w-[220px]">
-                                <ErpComboboxField
-                                  value={line.storage_location_id}
-                                  onChange={(value) => updatePackingPmLine(line.material_id, { storage_location_id: value })}
-                                  options={packingStorageOptions}
-                                  placeholder="-- Select --"
-                                  emptyStateLabel={packingStorageQ.isLoading ? "Loading storage locations..." : "No storage locations"}
-                                />
-                              </td>
-                              <td className="px-3 py-2 text-right font-mono">{line.available_qty == null ? "--" : qtyFmt(line.available_qty)}</td>
-                              <td className={`px-3 py-2 text-right font-mono ${line.short > 0 ? "text-rose-600 font-semibold" : ""}`}>{line.short > 0 ? qtyFmt(line.short) : "--"}</td>
-                              <td className="px-3 py-2 text-xs text-slate-500">{line.group_label || "--"}</td>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                          ) : packingPmRowsWithAvailability.map((line) => {
+                            const actualMaterialOptions = [{ value: "", label: "(same)" }, ...line.alternate_options];
+                            return (
+                              <tr key={line.material_id} className={line.short > 0 ? "bg-rose-50" : "border-b border-slate-100"}>
+                                <td className="px-3 py-2">{line.material_label}</td>
+                                <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.dosage_per_pack)}</td>
+                                <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.standard_qty)}</td>
+                                <td className="px-3 py-2 min-w-[200px]">
+                                  <ErpComboboxField
+                                    value={line.actual_material_id}
+                                    onChange={(value) => updatePackingPmLine(line.material_id, { actual_material_id: value })}
+                                    options={actualMaterialOptions}
+                                    placeholder="(same)"
+                                    disabled={!line.has_alternate || line.alternate_options.length === 0}
+                                  />
+                                </td>
+                                <td className="px-3 py-2 min-w-[220px]">
+                                  <ErpComboboxField
+                                    value={line.storage_location_id}
+                                    onChange={(value) => updatePackingPmLine(line.material_id, { storage_location_id: value })}
+                                    options={packingStorageOptions}
+                                    placeholder="-- Select --"
+                                    emptyStateLabel={packingStorageQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                                  />
+                                </td>
+                                <td className="px-3 py-2 text-right font-mono">{line.available_qty == null ? "--" : qtyFmt(line.available_qty)}</td>
+                                <td className={`px-3 py-2 text-right font-mono ${line.short > 0 ? "text-rose-600 font-semibold" : ""}`}>{line.short > 0 ? qtyFmt(line.short) : "--"}</td>
+                                <td className="px-3 py-2 text-xs text-slate-500">{line.group_label || "--"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="rounded-lg border border-slate-200 bg-white">
+                    <div className="border-b border-slate-200 px-4 py-3">
+                      <h4 className="text-sm font-semibold text-slate-800">PM Lines (add manually — no Fixed Pack BOM for this pack code)</h4>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[1150px] border-collapse text-sm">
+                        <thead>
+                          <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                            <th className="border-b px-3 py-2 text-left">Material <span className="text-rose-500">*</span></th>
+                            <th className="border-b px-3 py-2 text-right">Dosage / Pack</th>
+                            <th className="border-b px-3 py-2 text-right">Standard Qty</th>
+                            <th className="border-b px-3 py-2 text-left">Storage Location <span className="text-rose-500">*</span></th>
+                            <th className="border-b px-3 py-2 text-right">Available</th>
+                            <th className="border-b px-3 py-2 text-right">Shortage</th>
+                            <th className="border-b px-3 py-2 text-left">Alternate?</th>
+                            <th className="border-b px-3 py-2 text-left">Group</th>
+                            <th className="border-b px-3 py-2 text-left"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {packingPmRowsWithAvailability.length === 0 ? (
+                            <tr>
+                              <td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">
+                                No PM lines added yet.
+                              </td>
+                            </tr>
+                          ) : packingPmRowsWithAvailability.map((line) => {
+                            const selectedGroup = packingGroupById.get(line.material_group_id) ?? null;
+                            return (
+                              <tr key={line.index} className={line.short > 0 ? "bg-rose-50" : "border-b border-slate-100"}>
+                                <td className="px-3 py-2 min-w-[200px]">
+                                  <ErpComboboxField
+                                    value={line.material_id}
+                                    onChange={(value) => updatePackingManualPmLine(line.index, { material_id: value })}
+                                    options={packingPmMaterialOptions}
+                                    placeholder="-- Select PM --"
+                                    emptyStateLabel={packingPmMaterialsQ.isLoading ? "Loading PM materials..." : "No PM materials"}
+                                  />
+                                </td>
+                                <td className="px-3 py-2 text-right">
+                                  <input
+                                    className="h-8 w-24 rounded border border-slate-300 px-2 text-right font-mono text-sm"
+                                    type="number"
+                                    min="0.001"
+                                    step="0.001"
+                                    value={packingManualPmLines[line.index]?.dosage_per_pack ?? ""}
+                                    onChange={(event) => updatePackingManualPmLine(line.index, { dosage_per_pack: event.target.value })}
+                                  />
+                                </td>
+                                <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.standard_qty)}</td>
+                                <td className="px-3 py-2 min-w-[220px]">
+                                  <ErpComboboxField
+                                    value={line.storage_location_id}
+                                    onChange={(value) => updatePackingManualPmLine(line.index, { storage_location_id: value })}
+                                    options={packingStorageOptions}
+                                    placeholder="-- Select --"
+                                    emptyStateLabel={packingStorageQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                                  />
+                                </td>
+                                <td className="px-3 py-2 text-right font-mono">{line.available_qty == null ? "--" : qtyFmt(line.available_qty)}</td>
+                                <td className={`px-3 py-2 text-right font-mono ${line.short > 0 ? "text-rose-600 font-semibold" : ""}`}>{line.short > 0 ? qtyFmt(line.short) : "--"}</td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={line.has_alternate}
+                                    onChange={(event) => updatePackingManualPmLine(line.index, { has_alternate: event.target.checked, material_group_id: event.target.checked ? line.material_group_id : "" })}
+                                  />
+                                </td>
+                                <td className="px-3 py-2 min-w-[180px]">
+                                  {line.has_alternate ? (
+                                    <div className="flex gap-1">
+                                      <ErpComboboxField
+                                        value={line.material_group_id}
+                                        onChange={(value) => updatePackingManualPmLine(line.index, { material_group_id: value })}
+                                        options={(packingGroupsQ.data ?? []).map((group) => ({ value: group.id, label: `${group.group_code} - ${group.group_name}` }))}
+                                        placeholder="-- Group --"
+                                      />
+                                      <button type="button" className="text-sky-600 text-xs underline" onClick={() => openPackingCreateGroupModal((id) => updatePackingManualPmLine(line.index, { material_group_id: id }))}>+ New</button>
+                                    </div>
+                                  ) : <span className="text-slate-400">--</span>}
+                                  {line.has_alternate && selectedGroup ? (
+                                    <div className="mt-1 text-xs text-slate-500">
+                                      {(selectedGroup.members ?? []).length ? `${selectedGroup.members.length} members` : "none"}
+                                      <button type="button" className="ml-1 text-sky-600 underline" onClick={() => setPackingMemberModal(selectedGroup.id)}>+ Add</button>
+                                    </div>
+                                  ) : null}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <button type="button" className="text-rose-500 text-xs underline" onClick={() => removePackingManualPmLine(line.index)}>Remove</button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="px-4 py-3">
+                      <button type="button" className="text-sky-600 text-xs underline" onClick={addPackingManualPmLine}>+ Add PM line</button>
+                    </div>
+                  </div>
+                )}
 
                 {packingHasShortage ? (
                   <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
@@ -1360,6 +1591,16 @@ export default function ProductionPOCreatePage() {
           </form>
         )}
       </ErpSectionCard>
+
+      <GroupCreateModal open={Boolean(packingGroupModal)} groupForm={packingGroupForm} setGroupForm={setPackingGroupForm} onCancel={() => setPackingGroupModal(null)} onCreate={handlePackingCreateGroup} />
+      <MemberAddModal
+        open={Boolean(packingMemberModal)}
+        memberMaterialId={packingMemberMaterialId}
+        setMemberMaterialId={setPackingMemberMaterialId}
+        materialOptions={packingPmMaterialOptions}
+        onCancel={() => setPackingMemberModal(null)}
+        onAdd={handlePackingAddMember}
+      />
     </ErpScreenScaffold>
   );
 }
