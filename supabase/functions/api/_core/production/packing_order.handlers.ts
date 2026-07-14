@@ -207,6 +207,49 @@ function isBatchBlindPackingType(poType: string): boolean {
   return poType === "PMTS" || poType === "PTEST";
 }
 
+async function getMaterialGroupMemberIdsByGroupIds(groupIds: string[]): Promise<Map<string, string[]>> {
+  const ids = [...new Set(groupIds.filter(Boolean))];
+  const memberMap = new Map<string, string[]>();
+  if (ids.length === 0) return memberMap;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_category_group_member")
+    .select("group_id, material_id")
+    .in("group_id", ids);
+  if (error) {
+    console.error("[packing_order.getMaterialGroupMemberIdsByGroupIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_PACK_GROUP_LOOKUP_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const groupId = String(row.group_id ?? "");
+    const materialId = toTrimmedString(row.material_id);
+    if (!groupId || !materialId) continue;
+    const existing = memberMap.get(groupId) ?? [];
+    existing.push(materialId);
+    memberMap.set(groupId, existing);
+  }
+  return memberMap;
+}
+
+// Pack BOM PM lines only ever carry a material_group_id (no direct
+// alternate_material_id column like stroke_line has), so the allowed set is
+// group-membership only — same end result as Process PO's own alternate
+// resolution, just a narrower source.
+async function buildAllowedAlternateIdsByPackBomLines(pmBomLines: JsonRecord[]): Promise<Map<string, string[]>> {
+  const groupMemberMap = await getMaterialGroupMemberIdsByGroupIds(
+    pmBomLines.map((line) => String(line.material_group_id ?? "")),
+  );
+  const allowedMap = new Map<string, string[]>();
+  for (const line of pmBomLines) {
+    const formulationMaterialId = String(line.material_id ?? "");
+    if (!formulationMaterialId) continue;
+    const groupId = String(line.material_group_id ?? "");
+    const allowedIds = (groupMemberMap.get(groupId) ?? []).filter((id) => id && id !== formulationMaterialId);
+    allowedMap.set(formulationMaterialId, allowedIds);
+  }
+  return allowedMap;
+}
+
 function isAdminBypass(ctx: ProdHandlerContext): boolean {
   return ctx.context.isAdmin === true || isSuperAdmin(ctx.roleCode) || isGlobalAdmin(ctx.roleCode);
 }
@@ -806,7 +849,7 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
     const { data: lines, error: lineErr } = await serviceRoleClient
       .schema("erp_production").from("packing_order_line")
       .select(`
-        id, line_type, material_id, batch_number, qty_per_pack, total_qty,
+        id, line_type, material_id, actual_material_id, batch_number, qty_per_pack, total_qty,
         actual_qty, issue_sloc_id, uom_code, movement_type_code, has_alternate, material_group_id, display_order
       `)
       .eq("packing_order_id", id)
@@ -827,7 +870,7 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
         "id, pace_code, material_name, shade_code",
       ),
       getMaterialMapByIds(
-        lineRows.map((line) => String(line.material_id ?? "")),
+        [...lineRows.map((line) => String(line.material_id ?? "")), ...lineRows.map((line) => String(line.actual_material_id ?? ""))],
         "[packing_order.getPackingOrder]",
         "PROD_PACK_FETCH_FAILED",
         "id, pace_code, material_name, base_uom_code",
@@ -844,6 +887,7 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
         lines: lineRows.map((line) => ({
           ...line,
           material: lineMaterialMap.get(String(line.material_id ?? "")) ?? null,
+          actual_material: lineMaterialMap.get(String(line.actual_material_id ?? "")) ?? null,
           storage_location: slocMap.get(String(line.issue_sloc_id ?? "")) ?? null,
         })),
       },
@@ -955,16 +999,39 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         .map((line) => [toTrimmedString(line.material_id), toTrimmedString(line.storage_location_id)] as const)
         .filter(([materialIdKey, slocId]) => materialIdKey && slocId),
     );
+    const pmActualMaterialByMaterialId = new Map(
+      pmLocationInputs
+        .map((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)] as const)
+        .filter(([materialIdKey, actualId]) => materialIdKey && actualId),
+    );
+    const allowedAlternateMap = bomRequired ? await buildAllowedAlternateIdsByPackBomLines(pmBomLines) : new Map<string, string[]>();
+    for (const line of pmBomLines) {
+      const formulationMaterialId = String(line.material_id ?? "");
+      const requestedActualId = pmActualMaterialByMaterialId.get(formulationMaterialId);
+      if (!requestedActualId) continue;
+      const allowedIds = allowedAlternateMap.get(formulationMaterialId) ?? [];
+      if (!allowedIds.includes(requestedActualId)) {
+        return packErr(req, ctx, "PROD_PACK_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id must match a registered Pack BOM alternate group member");
+      }
+    }
     const normalizedPmLines = bomRequired
-      ? pmBomLines.map((line, idx) => ({
-          materialId: String(line.material_id ?? ""),
-          qty: (parsePositiveNumber(line.qty) ?? 0) * numPacks,
-          uomCode: toTrimmedString(line.uom_code),
-          storageLocationId: pmLocationByMaterialId.get(String(line.material_id ?? "")) ?? null,
-          hasAlternate: Boolean(line.has_alternate),
-          materialGroupId: toTrimmedString(line.material_group_id) || null,
-          displayOrder: Number(line.display_order ?? idx) + 10,
-        })).filter((line) => line.materialId && line.qty > 0)
+      ? pmBomLines.map((line, idx) => {
+          const formulationMaterialId = String(line.material_id ?? "");
+          const requestedActualId = pmActualMaterialByMaterialId.get(formulationMaterialId) || null;
+          const allowedIds = allowedAlternateMap.get(formulationMaterialId) ?? [];
+          const actualMaterialId = requestedActualId && allowedIds.includes(requestedActualId) ? requestedActualId : null;
+          return {
+            materialId: formulationMaterialId,
+            actualMaterialId,
+            effectiveMaterialId: actualMaterialId || formulationMaterialId,
+            qty: (parsePositiveNumber(line.qty) ?? 0) * numPacks,
+            uomCode: toTrimmedString(line.uom_code),
+            storageLocationId: pmLocationByMaterialId.get(formulationMaterialId) ?? null,
+            hasAlternate: Boolean(line.has_alternate),
+            materialGroupId: toTrimmedString(line.material_group_id) || null,
+            displayOrder: Number(line.display_order ?? idx) + 10,
+          };
+        }).filter((line) => line.materialId && line.qty > 0)
       : [];
     if (normalizedPmLines.some((line) => !line.storageLocationId)) {
       return packErr(req, ctx, "PROD_PACK_PM_SLOC_REQUIRED", 400, "Select an issue storage location for every PM line");
@@ -978,7 +1045,12 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     }
 
     const materialMap = await getMaterialMapByIds(
-      [String(sfgBomLine.material_id ?? ""), materialId, ...normalizedPmLines.map((line) => line.materialId)],
+      [
+        String(sfgBomLine.material_id ?? ""),
+        materialId,
+        ...normalizedPmLines.map((line) => line.materialId),
+        ...normalizedPmLines.map((line) => line.effectiveMaterialId),
+      ],
       "[packing_order.createPackingOrder]",
       "PROD_PACK_MATERIAL_LOOKUP_FAILED",
       "id, material_type, base_uom_code",
@@ -986,8 +1058,10 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
 
     // SFG availability is intentionally NOT checked here — the batch (and
     // therefore which stock to check against) is chosen at Final, not Create.
+    // PM availability is checked against the effective (actual/substitute if
+    // given, else formulation) material — that's what will really be drawn.
     const pmNeeds: PackingPmNeed[] = normalizedPmLines.map((line) => ({
-      materialId: line.materialId,
+      materialId: line.effectiveMaterialId,
       storageLocationId: String(line.storageLocationId),
       qty: line.qty,
     }));
@@ -1035,15 +1109,19 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
 
     const lineRows: JsonRecord[] = [
       {
+        // FG stock always posts in KG (base UOM, locked design) — total_qty
+        // must match plannedQtyKg, never numPacks (a raw pack count would post
+        // e.g. "2" instead of "460 KG" to stock_ledger). num_packs is already
+        // tracked at the header for "how many containers" purposes.
         packing_order_id: packPoId,
         line_type: "FG",
         material_id: materialId,
         batch_number: null,
-        qty_per_pack: bomRequired ? (parsePositiveNumber(outputLine.qty) ?? 1) : 1,
-        total_qty: numPacks,
+        qty_per_pack: sfgQtyPerPack,
+        total_qty: plannedQtyKg,
         actual_qty: null,
         issue_sloc_id: toTrimmedString(outputLine.storage_location_id),
-        uom_code: toTrimmedString(outputLine.uom_code) || toTrimmedString((packCodeRow as JsonRecord).outer_uom_code) || toTrimmedString((sku as JsonRecord).base_uom_code) || "KG",
+        uom_code: toTrimmedString((sku as JsonRecord).base_uom_code) || "KG",
         movement_type_code: toTrimmedString(outputLine.movement_type_code) || "P101",
         display_order: 1,
       },
@@ -1063,13 +1141,18 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       ...normalizedPmLines.map((line) => ({
         packing_order_id: packPoId,
         line_type: "PM",
+        // material_id always stays the Pack BOM formulation material;
+        // actual_material_id (nullable) carries the validated substitute —
+        // same split as process_order_line, so stock draws against the
+        // effective material while costing/Reco can still see the original.
         material_id: line.materialId,
+        actual_material_id: line.actualMaterialId,
         batch_number: null,
         qty_per_pack: line.qty / numPacks,
         total_qty: line.qty,
         actual_qty: null,
         issue_sloc_id: line.storageLocationId,
-        uom_code: line.uomCode || toTrimmedString(materialMap.get(line.materialId)?.base_uom_code) || "KG",
+        uom_code: line.uomCode || toTrimmedString(materialMap.get(line.effectiveMaterialId)?.base_uom_code) || "KG",
         movement_type_code: "P261",
         has_alternate: line.hasAlternate,
         material_group_id: line.hasAlternate ? line.materialGroupId : null,
@@ -1080,7 +1163,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       .schema("erp_production")
       .from("packing_order_line")
       .insert(lineRows)
-      .select("id, line_type, material_id, batch_number, total_qty, issue_sloc_id, display_order, uom_code");
+      .select("id, line_type, material_id, actual_material_id, batch_number, total_qty, issue_sloc_id, display_order, uom_code");
     if (lineErr) {
       console.error("[packing_order.createPackingOrder] line insert failed:", JSON.stringify(lineErr));
       await cleanupPackingOrderAfterCreateFailure(packPoId, "line insert failure");
@@ -1097,7 +1180,9 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         source_id: packPoId,
         source_line_id: line.id,
         company_id: companyId,
-        material_id: line.material_id,
+        // Reserve against the effective (actual/substitute if set) material —
+        // that's what will really be drawn from stock, matching pmNeeds above.
+        material_id: toTrimmedString(line.actual_material_id) || line.material_id,
         storage_location_id: toTrimmedString(line.issue_sloc_id) || null,
         required_qty: Number(line.total_qty ?? 0),
         uom_code: toTrimmedString(line.uom_code) || "KG",
@@ -1255,7 +1340,7 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     const { data: stockLines, error: lineErr } = await serviceRoleClient
       .schema("erp_production").from("packing_order_line")
       .select(`
-        id, line_type, material_id, batch_number, actual_qty, total_qty, issue_sloc_id, uom_code, movement_type_code
+        id, line_type, material_id, actual_material_id, batch_number, actual_qty, total_qty, issue_sloc_id, uom_code, movement_type_code
       `)
       .eq("packing_order_id", id);
     if (lineErr) {
@@ -1358,7 +1443,7 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       poData.machine_id = toTrimmedString(selectedSfgBatch.machine?.id) || null;
     }
     const materialMap = await getMaterialMapByIds(
-      lineRows.map((line) => String(line.material_id ?? "")),
+      lineRows.map((line) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "")),
       "[packing_order.finalizePackingOrder]",
       "PROD_PACK_FINALIZE_FAILED",
       "id, base_uom_code",
@@ -1370,14 +1455,17 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       if (qty <= 0) return null;
       const slocId = (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string | null;
       if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
-      const mat = materialMap.get(String(line.material_id ?? "")) ?? null;
+      // Post against the effective (actual/substitute if set) material — the
+      // formulation material_id column is preserved on the line for costing.
+      const effectiveMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
+      const mat = materialMap.get(effectiveMaterialId) ?? null;
       const baseUom = (mat?.base_uom_code ?? "KG") as string;
       const movementTypeCode = toTrimmedString(line.movement_type_code) || (lineType === "FG" ? "P101" : "P261");
       const direction = lineType === "FG" ? "IN" : "OUT";
       const posting = await postStockMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode, companyId: poData.company_id,
-        storageLocationId: slocId, materialId: line.material_id,
+        storageLocationId: slocId, materialId: effectiveMaterialId,
         quantity: qty, baseUomCode: toTrimmedString(line.uom_code) || baseUom, unitValue: 0,
         stockTypeCode: "UNRESTRICTED", direction: direction as "IN" | "OUT", postedBy: ctx.auth_user_id,
         batchNumber: (line.batch_number as string | null) ?? null,
@@ -1457,7 +1545,7 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
       const { data: stockLines, error: lineErr } = await serviceRoleClient
         .schema("erp_production").from("packing_order_line")
         .select(`
-          id, line_type, material_id, batch_number, actual_qty, total_qty, issue_sloc_id, stock_ledger_id
+          id, line_type, material_id, actual_material_id, batch_number, actual_qty, total_qty, issue_sloc_id, stock_ledger_id
         `)
         .eq("packing_order_id", id);
       if (lineErr) {
@@ -1477,7 +1565,7 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
       const revDocNum = `${poData.po_number as string}-REV`;
       const lineRows = (stockLines ?? []) as JsonRecord[];
       const materialMap = await getMaterialMapByIds(
-        lineRows.map((line) => String(line.material_id ?? "")),
+        lineRows.map((line) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "")),
         "[packing_order.reversePackingOrder]",
         "PROD_PACK_REVERSE_FAILED",
         "id, base_uom_code",
@@ -1490,7 +1578,8 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
         if (qty <= 0) return null;
         const slocId = (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string | null;
         if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
-        const mat = materialMap.get(String(line.material_id ?? "")) ?? null;
+        const effectiveMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
+        const mat = materialMap.get(effectiveMaterialId) ?? null;
         const baseUom = (mat?.base_uom_code ?? "KG") as string;
         const movementTypeCode = lineType === "FG" ? "P102" : "P262";
         const direction = lineType === "FG" ? "OUT" : "IN";
@@ -1498,7 +1587,7 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
         await postStockMovement({
           documentNumber: revDocNum, documentDate: today, postingDate: today,
           movementTypeCode, companyId: poData.company_id,
-          storageLocationId: slocId, materialId: line.material_id,
+          storageLocationId: slocId, materialId: effectiveMaterialId,
           quantity: qty, baseUomCode: baseUom, unitValue: 0,
           stockTypeCode: "UNRESTRICTED", direction: direction as "IN" | "OUT",
           postedBy: ctx.auth_user_id,
@@ -1550,7 +1639,7 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     const lineIds = corrections.map((line) => toTrimmedString(line.id)).filter(Boolean);
     const { data: dbLines, error: lineErr } = await serviceRoleClient
       .schema("erp_production").from("packing_order_line")
-      .select("id, line_type, material_id, batch_number, actual_qty, total_qty, issue_sloc_id, stock_ledger_id")
+      .select("id, line_type, material_id, actual_material_id, batch_number, actual_qty, total_qty, issue_sloc_id, stock_ledger_id")
       .eq("packing_order_id", id)
       .in("id", lineIds);
     if (lineErr) throw new Error("PROD_PACK_CORRECTION_FAILED");
@@ -1564,7 +1653,7 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       .maybeSingle();
     const defaultPmSlocId = (segConfig as JsonRecord | null)?.pm_sloc_id as string | null;
     const materialMap = await getMaterialMapByIds(
-      [...lineMap.values()].map((line) => String(line.material_id ?? "")),
+      [...lineMap.values()].map((line) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "")),
       "[packing_order.correctPackingOrder]",
       "PROD_PACK_CORRECTION_FAILED",
       "id, base_uom_code",
@@ -1608,7 +1697,8 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       const lineType = String(line.line_type ?? "");
       const slocId = (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string | null;
       if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
-      const material = materialMap.get(String(line.material_id ?? "")) ?? {};
+      const effectiveMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
+      const material = materialMap.get(effectiveMaterialId) ?? {};
       const baseUom = (material.base_uom_code ?? "KG") as string;
       const isIncrease = delta > 0;
       const movementTypeCode = lineType === "FG"
@@ -1624,7 +1714,7 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
         movementTypeCode,
         companyId: poData.company_id,
         storageLocationId: slocId,
-        materialId: line.material_id,
+        materialId: effectiveMaterialId,
         quantity: Math.abs(delta),
         baseUomCode: baseUom,
         unitValue: 0,
