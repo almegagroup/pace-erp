@@ -721,6 +721,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       const materialMap = await getMaterialMapByIds([selectedMaterialId], "id, base_uom_code");
       const sfgBaseUom = String(materialMap.get(selectedMaterialId)?.base_uom_code ?? "KG");
       const fgDocId = (await resolveStockDocumentIdsByLedgerIds([toTrimmedString(poData.fg_stock_ledger_id)])).get(toTrimmedString(poData.fg_stock_ledger_id)) ?? null;
+      if (!fgDocId) throw new Error("PR19_REVERSAL_SOURCE_NOT_FOUND");
 
       // DEPENDENT: all postings share this brand-new document_number — see
       // finalizePackingOrderHandler's own comment for why this must be
