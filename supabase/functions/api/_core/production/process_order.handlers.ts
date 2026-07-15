@@ -449,6 +449,32 @@ async function postStockMovement(params: {
   return data[0] as StockPostingResult;
 }
 
+// post_stock_movement()'s p_reversal_of_id references stock_document.id (FK
+// stock_document_reversal_document_id_fkey), NOT stock_ledger.id — but every
+// *_stock_ledger_id column on process_order/process_order_line stores the
+// RPC's own stock_ledger_id return value. Passing that raw value as
+// p_reversal_of_id violates the FK. Resolve first.
+async function resolveStockDocumentIdsByLedgerIds(ledgerIds: string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(ledgerIds.filter(Boolean))];
+  const map = new Map<string, string>();
+  if (ids.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_ledger")
+    .select("id, stock_document_id")
+    .in("id", ids);
+  if (error) {
+    console.error("[process_order.resolveStockDocumentIdsByLedgerIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_PO_LEDGER_LOOKUP_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const ledgerId = String(row.id ?? "");
+    const docId = toTrimmedString(row.stock_document_id);
+    if (ledgerId && docId) map.set(ledgerId, docId);
+  }
+  return map;
+}
+
 async function fetchProductionMaterialBaseUom(materialId: string): Promise<string> {
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
@@ -2862,6 +2888,12 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       const lines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
       const today = todayIso();
       const revDocNum = `${po.po_number}-REV`;
+      const reversalSourceLedgerIds = [
+        ...lines.map((line) => toTrimmedString(line.stock_ledger_id)),
+        toTrimmedString(po.qi_release_stock_ledger_id),
+        toTrimmedString(po.fg_stock_ledger_id),
+      ];
+      const stockDocumentIdByLedgerId = await resolveStockDocumentIdsByLedgerIds(reversalSourceLedgerIds);
 
       // DEPENDENT: each P262 reversal must follow the original issue lines one by one.
       for (const line of lines) {
@@ -2875,6 +2907,8 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           ? line.actual_material
           : line.material) as JsonRecord | null;
         const baseUom = String(movementMaterial?.base_uom_code ?? "KG");
+        const lineReversalOfId = stockDocumentIdByLedgerId.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+        if (!lineReversalOfId) throw new Error("PROD_PO_REVERSAL_SOURCE_NOT_FOUND");
 
         const posting = await postStockMovement({
           documentNumber: revDocNum,
@@ -2890,7 +2924,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           stockTypeCode: "UNRESTRICTED",
           direction: "IN",
           postedBy: ctx.auth_user_id,
-          reversalOfId: toTrimmedString(line.stock_ledger_id) || null,
+          reversalOfId: lineReversalOfId,
           batchNumber: reversalBatchNumber,
         });
         ledgerEntries.push({ line_id: line.id, movement: "P262", direction: "IN", ...posting });
@@ -2900,6 +2934,8 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
 
       if (po.qi_release_stock_ledger_id && shopfloorSlocId) {
+        const qiReversalOfId = stockDocumentIdByLedgerId.get(toTrimmedString(po.qi_release_stock_ledger_id)) ?? null;
+        if (!qiReversalOfId) throw new Error("PROD_PO_REVERSAL_SOURCE_NOT_FOUND");
         const p322Posting = await postStockMovement({
           documentNumber: revDocNum,
           documentDate: today,
@@ -2914,13 +2950,15 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           stockTypeCode: "UNRESTRICTED",
           direction: "OUT",
           postedBy: ctx.auth_user_id,
-          reversalOfId: String(po.qi_release_stock_ledger_id),
+          reversalOfId: qiReversalOfId,
           batchNumber: reversalBatchNumber,
         });
         ledgerEntries.push({ movement: "P322", direction: "OUT", ...p322Posting });
       }
 
       if (po.fg_stock_ledger_id && shopfloorSlocId) {
+        const fgReversalOfId = stockDocumentIdByLedgerId.get(toTrimmedString(po.fg_stock_ledger_id)) ?? null;
+        if (!fgReversalOfId) throw new Error("PROD_PO_REVERSAL_SOURCE_NOT_FOUND");
         const p102Posting = await postStockMovement({
           documentNumber: revDocNum,
           documentDate: today,
@@ -2935,7 +2973,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           stockTypeCode: po.qi_release_stock_ledger_id ? "QUALITY_INSPECTION" : "UNRESTRICTED",
           direction: "OUT",
           postedBy: ctx.auth_user_id,
-          reversalOfId: String(po.fg_stock_ledger_id),
+          reversalOfId: fgReversalOfId,
           batchNumber: reversalBatchNumber,
         });
         ledgerEntries.push({ movement: "P102", direction: "OUT", ...p102Posting });

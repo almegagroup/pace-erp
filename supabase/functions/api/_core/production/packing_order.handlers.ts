@@ -617,6 +617,32 @@ async function postStockMovement(params: {
   return data[0] as { stock_document_id: string; stock_ledger_id: string };
 }
 
+// post_stock_movement()'s p_reversal_of_id references stock_document.id (FK
+// stock_document_reversal_document_id_fkey), NOT stock_ledger.id — but every
+// *_stock_ledger_id column on process_order/process_order_line/
+// packing_order_line stores the RPC's own stock_ledger_id return value.
+// Passing that raw value as p_reversal_of_id violates the FK. Resolve first.
+async function resolveStockDocumentIdsByLedgerIds(ledgerIds: string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(ledgerIds.filter(Boolean))];
+  const map = new Map<string, string>();
+  if (ids.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_ledger")
+    .select("id, stock_document_id")
+    .in("id", ids);
+  if (error) {
+    console.error("[packing_order.resolveStockDocumentIdsByLedgerIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_PACK_LEDGER_LOOKUP_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const ledgerId = String(row.id ?? "");
+    const docId = toTrimmedString(row.stock_document_id);
+    if (ledgerId && docId) map.set(ledgerId, docId);
+  }
+  return map;
+}
+
 async function cleanupPackingOrderAfterCreateFailure(packPoId: string, label: string): Promise<void> {
   if (!packPoId) return;
   const { error } = await serviceRoleClient
@@ -1619,6 +1645,9 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
         "PROD_PACK_REVERSE_FAILED",
         "id, base_uom_code",
       );
+      const stockDocumentIdByLedgerId = await resolveStockDocumentIdsByLedgerIds(
+        lineRows.map((line) => toTrimmedString(line.stock_ledger_id)),
+      );
 
       // DEPENDENT: same reasoning as finalizePackingOrderHandler — revDocNum is
       // a brand-new document_number (first reversal for this PO), so
@@ -1636,6 +1665,8 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
         const baseUom = (mat?.base_uom_code ?? "KG") as string;
         const movementTypeCode = lineType === "FG" ? "P102" : "P262";
         const direction = lineType === "FG" ? "OUT" : "IN";
+        const reversalOfId = stockDocumentIdByLedgerId.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+        if (!reversalOfId) throw new Error("PROD_PACK_REVERSAL_SOURCE_NOT_FOUND");
 
         await postStockMovement({
           documentNumber: revDocNum, documentDate: today, postingDate: today,
@@ -1644,7 +1675,7 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
           quantity: qty, baseUomCode: baseUom, unitValue: 0,
           stockTypeCode: "UNRESTRICTED", direction: direction as "IN" | "OUT",
           postedBy: ctx.auth_user_id,
-          reversalOfId: (line.stock_ledger_id as string | null) ?? null,
+          reversalOfId,
           batchNumber: (line.batch_number as string | null) ?? null,
         });
       }
@@ -1737,6 +1768,10 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       assertPackingSfgBatchAvailability(String(poData.company_id), need)
     ));
 
+    const stockDocumentIdByLedgerId = await resolveStockDocumentIdsByLedgerIds(
+      [...lineMap.values()].map((line) => toTrimmedString(line.stock_ledger_id)),
+    );
+
     const today = todayIso();
     const postings = await Promise.all(corrections.map(async (correction) => {
       const line = lineMap.get(toTrimmedString(correction.id));
@@ -1759,6 +1794,11 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       const direction = lineType === "FG"
         ? (isIncrease ? "IN" : "OUT")
         : (isIncrease ? "OUT" : "IN");
+      let reversalOfId: string | null = null;
+      if (!isIncrease) {
+        reversalOfId = stockDocumentIdByLedgerId.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+        if (!reversalOfId) throw new Error("PROD_PACK_REVERSAL_SOURCE_NOT_FOUND");
+      }
       const posting = await postStockMovement({
         documentNumber: poData.po_number as string,
         documentDate: today,
@@ -1773,7 +1813,7 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
         stockTypeCode: "UNRESTRICTED",
         direction: direction as "IN" | "OUT",
         postedBy: ctx.auth_user_id,
-        reversalOfId: !isIncrease ? (line.stock_ledger_id as string | null) ?? null : null,
+        reversalOfId,
         batchNumber: (line.batch_number as string | null) ?? null,
       });
       await serviceRoleClient.schema("erp_production").from("packing_order_line")
