@@ -286,6 +286,13 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/pack-boms":                   { skipAcl: false, resourceCode: "PROD_PACK_BOM_CREATE", action: "VIEW" },
   "POST:/api/production/pack-boms":                  { skipAcl: false, resourceCode: "PROD_PACK_BOM_CREATE", action: "WRITE" },
   "GET:/api/production/pack-bom-change-requests":    { skipAcl: false, resourceCode: "PROD_CHANGE_PACK_BOM_APPROVAL", action: "VIEW" },
+  "GET:/api/production/partial-reversals/prodshades":     { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "VIEW" },
+  "GET:/api/production/partial-reversals/resolve-batch":  { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "VIEW" },
+  "GET:/api/production/partial-reversals/stock-lines":    { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "VIEW" },
+  "GET:/api/production/partial-reversals/salvage-batches": { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "VIEW" },
+  "GET:/api/production/partial-reversals/detail":         { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "VIEW" },
+  "POST:/api/production/partial-reversals":               { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "WRITE" },
+  "GET:/api/production/partial-reversals":                { skipAcl: false, resourceCode: "PROD_PARTIAL_REVERSAL_REPORT", action: "VIEW" },
 
   // ── Admin: All routes — SA/GA only, ACL enforced in stepAcl (skipAcl here) ─
   "GET:/api/admin/system-health":                          { skipAcl: true },
@@ -1007,6 +1014,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/production\/packing-orders\/[^/]+\/correct$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PACKING_PO_FINAL", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/production\/partial-reversals\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROD_PARTIAL_REVERSAL_REPORT", action: "VIEW" } },
   },
   {
     pattern: /^\/api\/production\/stroke-change-requests\/[^/]+$/,

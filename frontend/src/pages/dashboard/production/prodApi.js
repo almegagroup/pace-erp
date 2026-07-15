@@ -144,3 +144,13 @@ export const listPackBomChangeRequests = (p) => fetchProd("GET", "/api/productio
 export const getPackBomChangeRequest = (id) => fetchProd("GET", `/api/production/pack-bom-change-requests/${id}`);
 export const approvePackBomChangeRequest = (id, body) => fetchProd("POST", `/api/production/pack-bom-change-requests/${id}/approve`, body ?? {});
 export const rejectPackBomChangeRequest = (id, body) => fetchProd("POST", `/api/production/pack-bom-change-requests/${id}/reject`, body);
+
+// ── Partial Batch Reversal (PR19) + Partial Reversal Report (PR20) ──────────
+export const listPartialReversalProdshades = (p) => fetchProd("GET", "/api/production/partial-reversals/prodshades", undefined, p);
+export const resolvePartialReversalBatch = (p) => fetchProd("GET", "/api/production/partial-reversals/resolve-batch", undefined, p);
+export const listPartialReversalStockLines = (p) => fetchProd("GET", "/api/production/partial-reversals/stock-lines", undefined, p);
+export const listSalvageBatchOptions = (p) => fetchProd("GET", "/api/production/partial-reversals/salvage-batches", undefined, p);
+export const getPartialReversalDetail = (p) => fetchProd("GET", "/api/production/partial-reversals/detail", undefined, p);
+export const createPartialBatchReversal = (body) => fetchProd("POST", "/api/production/partial-reversals", body);
+export const listPartialBatchReversals = (p) => fetchProd("GET", "/api/production/partial-reversals", undefined, p);
+export const getPartialBatchReversal = (id) => fetchProd("GET", `/api/production/partial-reversals/${id}`);

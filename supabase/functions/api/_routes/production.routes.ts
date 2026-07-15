@@ -105,6 +105,16 @@ import {
   updateSfgQaTestLineHandler,
   submitSfgQaDecisionHandler,
 } from "../_core/production/sfg_qa.handlers.ts";
+import {
+  listPartialReversalProdshadesHandler,
+  resolvePartialReversalBatchHandler,
+  listPartialReversalStockLinesHandler,
+  listSalvageBatchOptionsHandler,
+  getPartialReversalDetailHandler,
+  createPartialBatchReversalHandler,
+  listPartialBatchReversalsHandler,
+  getPartialBatchReversalHandler,
+} from "../_core/production/partial_reversal.handlers.ts";
 
 export async function dispatchProductionRoutes(
   routeKey: string,
@@ -210,6 +220,22 @@ export async function dispatchProductionRoutes(
     // Pack BOM Change Requests (PR07/PR08)
     case "GET:/api/production/pack-bom-change-requests":
       return await listPackBomChangeRequestsHandler(req, ctx);
+
+    // Partial Batch Reversal (PR19) + Partial Reversal Report (PR20)
+    case "GET:/api/production/partial-reversals/prodshades":
+      return await listPartialReversalProdshadesHandler(req, ctx);
+    case "GET:/api/production/partial-reversals/resolve-batch":
+      return await resolvePartialReversalBatchHandler(req, ctx);
+    case "GET:/api/production/partial-reversals/stock-lines":
+      return await listPartialReversalStockLinesHandler(req, ctx);
+    case "GET:/api/production/partial-reversals/salvage-batches":
+      return await listSalvageBatchOptionsHandler(req, ctx);
+    case "GET:/api/production/partial-reversals/detail":
+      return await getPartialReversalDetailHandler(req, ctx);
+    case "POST:/api/production/partial-reversals":
+      return await createPartialBatchReversalHandler(req, ctx);
+    case "GET:/api/production/partial-reversals":
+      return await listPartialBatchReversalsHandler(req, ctx);
   }
 
   // ── PARAMETERIZED ROUTES ───────────────────────────────────────────────────
@@ -351,6 +377,11 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/pack-boms\/[^/]+\/change-request$/.test(pathname) && req.method === "POST") {
     return await createPackBomChangeRequestHandler(req, ctx);
+  }
+
+  // Partial Batch Reversal /:id (PR20 expand)
+  if (/^\/api\/production\/partial-reversals\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getPartialBatchReversalHandler(req, ctx);
   }
 
   // Pack BOM Change Requests /:id actions (PR07/PR08)

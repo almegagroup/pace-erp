@@ -705,4 +705,20 @@ export const OPERATION_SCREENS = Object.freeze({
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
+
+  PROD_PARTIAL_BATCH_REVERSAL: {
+    screen_code: "PROD_PARTIAL_BATCH_REVERSAL",
+    route: "/dashboard/production/partial-batch-reversal",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_PARTIAL_REVERSAL_REPORT: {
+    screen_code: "PROD_PARTIAL_REVERSAL_REPORT",
+    route: "/dashboard/production/partial-reversal-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
 });

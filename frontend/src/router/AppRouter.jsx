@@ -190,6 +190,8 @@ import ProductionQAQueuePage from "../pages/dashboard/production/QAQueuePage.jsx
 import BatchNumberReleasePage from "../pages/dashboard/production/BatchNumberReleasePage.jsx";
 import SfgResultRecordingPage from "../pages/dashboard/production/SfgResultRecordingPage.jsx";
 import FgStockBreakdownPage from "../pages/dashboard/production/FgStockBreakdownPage.jsx";
+import PartialBatchReversalPage from "../pages/dashboard/production/PartialBatchReversalPage.jsx";
+import PartialReversalReportPage from "../pages/dashboard/production/PartialReversalReportPage.jsx";
 
 export default function AppRouter() {
   return (
@@ -760,6 +762,8 @@ export default function AppRouter() {
                   <Route path="production/sfg-result-recording" element={<SfgResultRecordingPage />} />
                   <Route path="production/batch-release" element={<BatchNumberReleasePage />} />
                   <Route path="production/fg-stock-breakdown" element={<FgStockBreakdownPage />} />
+                  <Route path="production/partial-batch-reversal" element={<PartialBatchReversalPage />} />
+                  <Route path="production/partial-reversal-report" element={<PartialReversalReportPage />} />
                 </Route>
               </Route>
 
