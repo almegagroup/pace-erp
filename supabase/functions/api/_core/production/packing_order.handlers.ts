@@ -1493,10 +1493,17 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       "id, base_uom_code",
     );
 
-    const postings = lineRows.map(async (line) => {
+    // DEPENDENT: all lines share the same brand-new document_number (this PO's
+    // po_number, never posted before). post_stock_movement()'s item_number
+    // assignment locks existing stock_document rows FOR UPDATE to serialize
+    // concurrent callers — but on the very first insert for a document_number
+    // there's nothing to lock yet, so parallel calls race and all compute the
+    // same item_number, hitting the (document_number, item_number) unique
+    // constraint. Must post one at a time.
+    for (const line of lineRows) {
       const lineType = String(line.line_type ?? "");
       const qty = Number(line.actual_qty ?? line.total_qty ?? 0);
-      if (qty <= 0) return null;
+      if (qty <= 0) continue;
       const slocId = (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string | null;
       if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
       // Post against the effective (actual/substitute if set) material — the
@@ -1536,9 +1543,7 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
           throw new Error("PROD_PACK_RESERVATION_RELEASE_FAILED");
         }
       }
-      return { line_id: line.id, movement_type_code: movementTypeCode, stock_ledger_id: posting.stock_ledger_id };
-    });
-    await Promise.all(postings);
+    }
 
     const now = new Date().toISOString();
     const actualQtyKg = requestedActualQtyKg ?? Number(poData.planned_qty_kg ?? poData.total_qty_kg ?? 0);
@@ -1615,11 +1620,15 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
         "id, base_uom_code",
       );
 
-      await Promise.all(lineRows.map(async (line) => {
-        if (!line.stock_ledger_id) return null;
+      // DEPENDENT: same reasoning as finalizePackingOrderHandler — revDocNum is
+      // a brand-new document_number (first reversal for this PO), so
+      // post_stock_movement()'s FOR UPDATE item_number lock has nothing to
+      // lock yet and concurrent calls would race. Post sequentially.
+      for (const line of lineRows) {
+        if (!line.stock_ledger_id) continue;
         const lineType = String(line.line_type ?? "");
         const qty = Number(line.actual_qty ?? line.total_qty ?? 0);
-        if (qty <= 0) return null;
+        if (qty <= 0) continue;
         const slocId = (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string | null;
         if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
         const effectiveMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
@@ -1638,8 +1647,7 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
           reversalOfId: (line.stock_ledger_id as string | null) ?? null,
           batchNumber: (line.batch_number as string | null) ?? null,
         });
-        return null;
-      }));
+      }
     }
 
     await serviceRoleClient.schema("erp_production").from("packing_order")
