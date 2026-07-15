@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useCompaniesForOmQuery, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { availabilityPreviewProcessOrder, finalizeProcessOrder, getProcessOrder, listProcessOrders } from "./prodApi.js";
 import {
   correctPackingOrder,
@@ -185,7 +186,13 @@ function PackingPoFinalTab() {
         return;
       }
     }
-    if (!window.confirm("Finalize Packing PO? This posts SFG/PM issue and FG receipt.")) return;
+    const confirmed = await openActionConfirm({
+      eyebrow: "Packing PO",
+      title: "Finalize Packing PO?",
+      message: "This posts SFG/PM issue and FG receipt.",
+      confirmLabel: "Finalize",
+    });
+    if (!confirmed) return;
     setSaving(true);
     try {
       await finalizePackingOrder(po.id, isBatchBlind ? {} : { sfg_batch_number: effectiveSfgBatchNumber });
@@ -209,7 +216,13 @@ function PackingPoFinalTab() {
       toast("Enter a new actual qty for at least one line.", "error");
       return;
     }
-    if (!window.confirm("Post correction? This will post a delta stock movement for each changed line.")) return;
+    const confirmed = await openActionConfirm({
+      eyebrow: "Packing PO",
+      title: "Post correction?",
+      message: "This will post a delta stock movement for each changed line.",
+      confirmLabel: "Post Correction",
+    });
+    if (!confirmed) return;
     setSaving(true);
     try {
       await correctPackingOrder(po.id, { lines });

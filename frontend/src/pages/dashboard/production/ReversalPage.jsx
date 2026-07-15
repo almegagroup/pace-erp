@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { getPackingOrder, getProcessOrder, listPackingOrders, listProcessOrders, reversePackingOrder, reverseProcessOrder } from "./prodApi.js";
 
 const REVERSAL_TABS = ["Process PO", "Packing PO"];
@@ -67,7 +68,13 @@ function PackingReversalTab() {
 
   async function handleReverse() {
     if (!po) return;
-    if (!window.confirm("Reverse this Packing PO? This will cancel open reservations and reverse any posted stock.")) return;
+    const confirmed = await openActionConfirm({
+      eyebrow: "Packing PO",
+      title: "Reverse this Packing PO?",
+      message: "This will cancel open reservations and reverse any posted stock.",
+      confirmLabel: "Reverse",
+    });
+    if (!confirmed) return;
     setSaving(true);
     try {
       await reversePackingOrder(po.id);
