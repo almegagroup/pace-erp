@@ -14022,9 +14022,11 @@ not a QA-specific patch.
 
 ---
 
-## Section 106 — SAP Material Document Architecture + Document Numbering Foundation (DESIGN — 2026-07-17, pending final lock)
+## Section 106 — SAP Material Document Architecture + Document Numbering Foundation (LOCKED — 2026-07-17)
 
-> **Status:** Design proposal, written doc-first per Constitution §5.12. Supersedes the
+> **Status:** LOCKED (business owner approved 2026-07-17, "exact SAP equivalent, 25-year
+> horizon"). Implementation is **staged** (§106.8); **Phase 1 is DONE + verified live** —
+> see §106.10. Supersedes the
 > one specific decision in **Section 105** that "the business document number stays the
 > document header identity … never a separately-generated material-document number."
 > Section 105's header+line (MKPF/MSEG) *structure* stays fully valid and unchanged —
@@ -14210,7 +14212,32 @@ Costing, Reco, and the MB52-style report all stand on this numbering foundation.
   confirm with business owner before implementation (106.2 note).
 - Whether Systems A and B are fully retired into C in one migration or phased — implementation
   detail, decide at brief-writing time.
-- Exact Material-Document series banding vs. a single global MatDoc series — implementation
-  detail (SAP uses per-plant/per-transaction ranges; we likely want one company-scoped
-  year-reset MatDoc series, decided at brief time).
+- Exact Material-Document series banding vs. a single global MatDoc series — **decided:** one
+  **company-scoped, year-reset** MATDOC series (§106.10), not per-plant/per-transaction.
+
+### 106.10 — Implementation progress
+
+**Phase 1 — Material Document numbering foundation — ✅ DONE + verified live (2026-07-17):**
+- MATDOC series created in `erp_inventory.number_series_master` for all 4 companies:
+  company-scoped, `financial_year_reset = true`, `fy_start_month = 4` (April–March),
+  `include_fy_in_number = false` (year kept separate, MJAHR-style), 8-digit padding. (MCP
+  data config — must be re-run on prod at deploy, per §8A; company UUIDs differ.)
+- New generator `erp_inventory.generate_material_doc_number(p_company_id)` returns
+  `(doc_number text, doc_year text)` — the two-part MBLNR/MJAHR key. Reuses the existing
+  atomic, FY-aware `number_series_counter` engine. Migration:
+  `supabase/migrations/20260717120000_gate27_106_material_document_number_generator.sql`.
+- Verified: 3 calls (CMP003) → `00000001/2/3`, FY `2026-27`; independent per-company
+  counter (CMP005 started at 1); test counters reset to 0 afterward (no real MatDoc issued).
+- **Non-breaking:** `post_stock_movement()` and every caller are untouched — this phase only
+  adds the numbering source everything else will call.
+
+**Phase 2 — Engine cutover (NOT started):** add `document_year` + `reversal_document_year`
+to `stock_document`; make `post_stock_movement()` stamp a MatDoc number+year per posting
+event and move the business number into `reference_document_number/type/id`; migrate every
+stock-posting caller (Process PO, Packing PO, GRN, QA, RTV, STO, PID, Opening Stock,
+Sales/Dispatch, PR19) to generate one MatDoc per event; data-migrate the 189 existing rows;
+verify every flow posts with zero errors. This is the coordinated, high-blast-radius step —
+own brief, per-module verification.
+
+**Phase 3 — Reco restructure (NOT started):** per §106.6.
 

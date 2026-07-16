@@ -548,6 +548,19 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
 
 ## 8. Document Number Series — SAP-Style Range Design (LOCKED 2026-07-07)
 
+> **⚠️ 2026-07-17 — বড় evolution চলছে (feasibility doc Section 106, LOCKED):** পুরো numbering
+> foundation SAP Material Document (MBLNR+MJAHR) model-এ যাচ্ছে — business number আর material
+> movement আলাদা layer হবে, আর reset-policy দুই ভাগ: **Year-scoped** (Material Document,
+> Accounting/FI, Costing/Reco, Invoice, Debit/Credit Note, + business-decision হিসেবে PO/SO/STO)
+> বনাম **Continuous** (Process/Packing PO, GRN, Gate, QA, RTV, OS ইত্যাদি)। Year-scoping engine
+> `erp_inventory.number_series_master` (System C) আগে থেকেই বানানো ছিল, এখন কাজে লাগানো হচ্ছে।
+> **Phase 1 (Material Document numbering: `generate_material_doc_number()` + MATDOC series, 4
+> company, FY April-start) ✅ DONE + verified।** Phase 2 (post_stock_movement cutover + সব caller
+> migration) ও Phase 3 (Reco restructure) এখনো বাকি — এগুলো core §8C engine change, নিজের brief
+> লাগবে, Return/§83.6 design এর আগে করতে হবে। নিচের §8 table টা এখনো valid (continuous business
+> ranges), কিন্তু Material Document layer এর উপর নতুন করে বসছে। Phase 2 শুরু করার আগে Section 106
+> পুরোটা পড়ো।
+
 `erp_procurement.document_number_series` তে প্রতিটা doc type এর আলাদা number range — SAP এর মতো range দেখেই doc type বোঝা যায়। **Prefix নেই।**
 
 | doc_type | Range start | Range |
