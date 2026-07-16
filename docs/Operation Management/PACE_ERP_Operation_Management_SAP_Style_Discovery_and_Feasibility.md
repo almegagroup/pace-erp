@@ -14020,3 +14020,197 @@ not a QA-specific patch.
 - Verified live: two calls under one test document number correctly received
   `item_number` 1 and 2; the test posting was reversed afterward (net effect zero).
 
+---
+
+## Section 106 — SAP Material Document Architecture + Document Numbering Foundation (DESIGN — 2026-07-17, pending final lock)
+
+> **Status:** Design proposal, written doc-first per Constitution §5.12. Supersedes the
+> one specific decision in **Section 105** that "the business document number stays the
+> document header identity … never a separately-generated material-document number."
+> Section 105's header+line (MKPF/MSEG) *structure* stays fully valid and unchanged —
+> only the **source of the header number** changes (see 106.3). Everything else in §105
+> (item_number mechanics, `UNIQUE(document_number, item_number)`, multi-call safety) is
+> retained.
+
+### 106.1 — Why this exists (three converging drivers)
+
+Discovered during the 2026-07-16/17 Return + FG-costing design discussion (Admix Tanker→Barrel
+worked example). Three independent problems all trace to the same root — we collapsed SAP's
+multi-document model into a single business-number-as-stock-document model:
+
+1. **Event ambiguity (proven, live).** Packing PO `940005`'s `document_number` holds **6
+   items spanning 3 different posting events** (a first Final attempt at 06:09, its reversal
+   at 06:14, the real Final at 06:35) — all under one `document_number`, distinguishable only
+   by timestamp. There is no clean "one document = one atomic posting event" grouping the way
+   SAP's MBLNR gives. After go-live, with thousands of corrections/reversals/returns, this
+   becomes unauditable.
+2. **Range exhaustion.** Business-doc bands in `document_number_series` are narrow
+   (`PROC_PO` 930001–939999, `PACK_PO` 940001–949999 = only 9,999 each). At real
+   Packing-PO volume these exhaust within a few years and spill into the neighbouring
+   doc-type's range, breaking the "range identifies doc type" convention.
+3. **Return / Reco distinguishability.** A customer return that re-credits stock against an
+   existing batch cannot be told apart from the original production in the Reco/Costing layer,
+   because `process_order_line_reco` carries no movement type, no document number, no
+   transaction-type marker, and no reference — see §106.6.
+
+Business owner directive (2026-07-16/17): build the **exact SAP equivalent**, not a cheap
+copy, targeting a **25-year** operating horizon — but keep our own deliberate business
+touches layered on top of the full SAP model, not as substitutions for it.
+
+### 106.2 — The three SAP document layers (target model)
+
+| Layer | SAP name / key | What it is | Reset policy |
+|---|---|---|---|
+| **L1 — Logistics/Operational** | Purchase Order (EBELN), Sales Order (VBELN), Production Order (AUFNR), Delivery | The "work/order/movement-trigger" documents | **Continuous** in SAP |
+| **L2 — Material Document** | MKPF (header) + MSEG (item), key **MBLNR + MJAHR** | One per goods-movement *event*; header + line items | **Year-scoped** (resets each FY) |
+| **L3 — Accounting / Costing** | FI doc (BELNR + GJAHR), CO doc, Billing | The financial/recognition books | **Year-scoped** (resets each FY) |
+
+**Our reset policy (SAP base + explicit business additions).** We keep every SAP year-scoped
+document year-scoped, and *additionally* year-scope three L1 documents that SAP leaves
+continuous — a deliberate Indian-practice business decision (FY-prefixed PO/SO/STO aids
+vendor communication, filing, and GST reconciliation), documented here as a conscious
+deviation, not an accident:
+
+| Reset = **Year-scoped (number + FY, composite identity)** | Reset = **Continuous (never resets, wide range)** |
+|---|---|
+| Material Document (L2) — SAP standard | Process PO, Packing PO (Production Orders = AUFNR) |
+| Accounting / FI Document (L3) — SAP standard | GRN, Gate Entry, Gate Exit |
+| Costing / Reco Document (L3) — SAP standard | CSN, RTV, QA, Opening Stock |
+| Sales Invoice, Dispatch Invoice — SAP standard | Delivery / Dispatch Challan (challan only, not the invoice) |
+| Debit Note, Credit Note — SAP standard | STO's *movement* documents (the STO order header itself is year-scoped, see below) |
+| **Purchase Order** — ➕ our business decision | Physical Inventory (PID) count + difference postings |
+| **Stock Transfer Order (STO)** — ➕ our business decision | all other operational/logistics documents |
+| **Sales Order** — ➕ our business decision | |
+
+> **Locked by me (schema authority, per memory `feedback_no_db_schema_confirmation`):**
+> Process PO and Packing PO are **Production Orders (AUFNR-equivalent) → continuous**, not
+> year-scoped. They are not Purchase/Sales/Transfer orders. If the business owner wants them
+> FY-scoped too, that is a one-line change to the policy table — flag before implementation.
+
+### 106.3 — What changes about the document number itself
+
+**Today:** `stock_document.document_number` = the caller's **business** number (`940005`,
+`grn_number`, `qa_number`, `ASCPROC…`). Reference columns exist but sit NULL.
+
+**Target (SAP MBLNR model):**
+- `stock_document` gets a **dedicated Material Document number** from its own year-scoped
+  series, plus a **`document_year`** (FY) column. Composite identity becomes
+  **(material_doc_number, document_year)** — mirrors MBLNR + MJAHR.
+- The **business** number (po_number / grn_number / return number / …) moves into the
+  already-existing **`reference_document_number` + `reference_document_type` + `reference_document_id`**
+  columns. Nothing about the business document is lost — it becomes the *reference*, exactly
+  as SAP stores EBELN/AUFNR on MSEG.
+- **One posting EVENT = one Material Document** (header) with N items (§105's `item_number`
+  unchanged). A **reversal, a correction, a return** each become **their own new Material
+  Document**, never more items piled onto the original — resolving the `940005` ambiguity.
+- Reversal linkage: existing `reversal_document_id` (→ `stock_document.id`) is retained; a
+  companion **`reversal_document_year`** is added so the pointer is a valid composite
+  reference under year-scoping (SAP's SMBLN + SJAHR).
+
+### 106.4 — Numbering engine: reuse what already exists (do NOT build new)
+
+Three numbering systems exist today; the audit (2026-07-17) found the SAP-correct engine is
+**already built but unused**:
+
+| System | Mechanism | Scope | Status |
+|---|---|---|---|
+| **A** | `erp_procurement.document_number_series` + `generate_doc_number(doc_type)` | global continuous, no FY | ✅ in use (GRN, QA, Process/Packing PO, RTV, OS…) |
+| **B** | `erp_procurement.company_doc_number_series` + `generate_company_doc_number(company, doc_type)` | company + **FY-scoped**, prefix | ✅ in use (PO, STO) |
+| **C** | `erp_inventory.number_series_master` + `number_series_counter` + `generate_doc_number(company, section, doc_type)` | **fully configurable**: `financial_year_reset`, `include_fy_in_number`, `fy_start_month`, prefix/suffix/separator/padding | ⚠️ **built, schema-complete, but table is empty / never wired** |
+
+**Decision:** promote **System C** to the single canonical numbering engine. It already has
+every switch SAP needs (per-series FY-reset on/off, FY-in-number on/off, configurable FY
+start month for April–March). The Material Document series, the Reco/Costing series, and the
+financial-document series all become rows in `number_series_master` with
+`financial_year_reset = true`. Continuous series become rows with
+`financial_year_reset = false` and a wide range. Systems A and B are progressively folded
+into C (B's PO/STO config maps 1:1 onto C's prefix + FY fields), so we end with **one**
+numbering engine instead of three divergent ones.
+
+FY basis: **April–March** (business owner confirmed 2026-07-17) → `fy_start_month = 4`.
+
+### 106.5 — What we already have vs what must change (audit, 2026-07-17)
+
+**✅ Already correct — no change:**
+- Header+line structure (`stock_document` + `item_number`, §105) — this is the MKPF/MSEG split.
+- `reference_document_type/id/number` columns — exist (just need to start being populated).
+- `reversal_document_id` link.
+- `stock_ledger`, movement-type master, the posting engine skeleton.
+- PO / STO FY-numbering (System B) — matches our policy already.
+- The year-scoping engine itself (System C) — built, just idle.
+
+**🟡 Small changes:**
+- Move **Sales Order** from continuous (System A) into the FY-scoped engine.
+- Widen the narrow continuous bands (PROC_PO/PACK_PO 9,999 → wide range) as they migrate to System C.
+
+**🔴 Real work (three items):**
+1. **Add the Material Document layer** — new year-scoped series in System C; add `document_year`
+   (+ `reversal_document_year`) to `stock_document`; `post_stock_movement()` generates the
+   MatDoc number/year internally and writes the business number into `reference_*`. One
+   posting event = one MatDoc.
+2. **Move business numbers to reference** — every caller that today passes its business number
+   as `documentNumber` instead passes it as `referenceDocumentNumber` (+ type). Mechanical,
+   but touches every stock-posting handler (Process PO, Packing PO, GRN, QA, RTV, STO, PID,
+   Opening Stock, Sales/Dispatch, PR19).
+3. **Restructure the Reco/Costing table** — see §106.6.
+
+**Bottom line:** this is **not** a ground-up rebuild. The stock-engine skeleton and even the
+year-scoping engine already exist; the effort is mostly *wiring what exists correctly* plus
+one new numbered layer and one table restructure.
+
+### 106.6 — Reco / Costing layer restructure (`process_order_line_reco`)
+
+Today the Reco table (Section 83.4 lock) is a flat costing record with `po_number`,
+`batch_number`, `line_material_type`, `actual_qty`, `ap_approved_qty`, `variance_qty`,
+`is_voided` — but **no document number, no movement type, no transaction-type marker, no
+reference**. So a return/reversal Reco entry cannot be distinguished from the original
+production entry, and SUM()-based costing would silently mix them.
+
+Restructure (adds, no destructive change):
+- **`reco_document_number` + `reco_document_year`** — its own year-scoped Costing-document
+  identity (L3), from System C.
+- **`source_txn_type`** — `PRODUCTION` | `RETURN` | `PARTIAL_REVERSAL` | `COR6_CORRECTION` —
+  which event produced this row.
+- **`reference_document_number` + `reference_document_type`** — the triggering business doc
+  (Process PO / Return Receipt / PR19 reversal doc).
+- Return/reversal rows carry **credit (negative) actual/ap/variance** so net costing =
+  SUM() naturally reconciles production − returns, and reporting can split by
+  `source_txn_type` / reference.
+
+This directly serves the Return-costing worked example (§83.6) and the §104.7 cross-PO
+derivation formula, and is the reason the Reco layer must exist separately from
+`stock_ledger` (which has no Approved/AP-Approved concept).
+
+### 106.7 — 25-year range sizing
+
+- **Year-scoped series** (Material Document, Reco, Financial, PO/SO/STO): never exhaust — they
+  reset every FY. A 7–8 digit within-year counter (≥ 9,999,999/FY) covers even ~10k
+  movements/day. `include_fy_in_number = true` so the printed number carries the FY (e.g.
+  `26-27`), and (number + FY) is the composite key.
+- **Continuous series** (Production Orders, GRN, Gate, RTV, QA, OS…): sized for the full
+  horizon — 25 yr × ~10k/day ≈ 91M, so a **10-digit** range per doc type with generous
+  non-overlapping bands. This is the SAP EBELN/AUFNR sizing philosophy and directly fixes the
+  9,999-band exhaustion.
+
+### 106.8 — Sequencing (locked ordering, not yet built)
+
+This is a **core §8C engine change touching every module** — it must be its own dedicated
+design-freeze + Codex brief, **not** bolted onto the Return/PR19 work. The in-progress
+Return + pack-type-change design (§83.6) is **paused behind this**, because Return, FG
+Costing, Reco, and the MB52-style report all stand on this numbering foundation. Order:
+1. Finalize this Section 106 → lock → update CLAUDE.md §8 / §8C / §8-numbering.
+2. Implement Material Document layer + System-C promotion + reference-column migration (Dev
+   first — only 189 `stock_document` rows and 30 business docs exist, so data migration is
+   trivial and the cost is near-zero **now**, before 1 July go-live).
+3. Reco restructure.
+4. **Then** resume Return / pack-type-change design on top of the new foundation.
+
+### 106.9 — Open items
+- Process PO / Packing PO reset policy: locked here as **continuous** (Production Orders);
+  confirm with business owner before implementation (106.2 note).
+- Whether Systems A and B are fully retired into C in one migration or phased — implementation
+  detail, decide at brief-writing time.
+- Exact Material-Document series banding vs. a single global MatDoc series — implementation
+  detail (SAP uses per-plant/per-transaction ranges; we likely want one company-scoped
+  year-reset MatDoc series, decided at brief time).
+
