@@ -10,6 +10,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -745,6 +746,9 @@ export async function createAndPostGRNFromLineHandler(
         .delete().eq("id", String(grn.id));
     }
 
+    // §106: Material Document for this GRN receipt; grn_number becomes the reference.
+    const grnMatDoc = await generateMaterialDocNumber(String(gateEntry.company_id));
+
     // Post stock movement
     const postingResp = await serviceRoleClient.schema("erp_inventory")
       .rpc("post_stock_movement", {
@@ -762,6 +766,11 @@ export async function createAndPostGRNFromLineHandler(
         p_direction: "IN",
         p_posted_by: ctx.auth_user_id,
         p_reversal_of_id: null,
+        p_material_doc_number: grnMatDoc.docNumber,
+        p_material_doc_year: grnMatDoc.docYear,
+        p_reference_document_number: grnNumber,
+        p_reference_document_type: "GRN",
+        p_reference_document_id: grn.id ?? null,
       });
 
     if (postingResp.error || !Array.isArray(postingResp.data) || postingResp.data.length === 0) {
@@ -1054,9 +1063,12 @@ export async function reverseGRNHandler(
         ? Number(((parseNullableNumber(grn.grn_rate) ?? 0) / grnPerPackQty).toFixed(6))
         : (parseNullableNumber(grn.grn_rate) ?? 0);
 
+      // §106: the reversal is its own Material Document (no more "-REV" suffix hack);
+      // grn_number is the reference, and reversal_of_id links back to the original posting.
+      const revMatDoc = await generateMaterialDocNumber(String(grn.company_id));
       const reversalResp = await serviceRoleClient.schema("erp_inventory")
         .rpc("post_stock_movement", {
-          p_document_number: `${grn.grn_number}-REV`,
+          p_document_number: grn.grn_number,
           p_document_date: todayIsoDate(),
           p_posting_date: todayIsoDate(),
           p_movement_type_code: "P102",
@@ -1070,6 +1082,11 @@ export async function reverseGRNHandler(
           p_direction: "OUT",
           p_posted_by: ctx.auth_user_id,
           p_reversal_of_id: grn.stock_document_id,
+          p_material_doc_number: revMatDoc.docNumber,
+          p_material_doc_year: revMatDoc.docYear,
+          p_reference_document_number: grn.grn_number,
+          p_reference_document_type: "GRN",
+          p_reference_document_id: grn.id ?? null,
         });
       if (reversalResp.error) {
         return procurementErrorResponse(req, ctx, "GRN_REVERSE_RPC_FAILED", 500, "Stock reversal failed.");
@@ -1102,6 +1119,10 @@ export async function reverseGRNHandler(
         return procurementErrorResponse(req, ctx, "GRN_LINE_FETCH_FAILED", 500, "Unable to fetch GRN lines.");
       }
 
+      // §106: one Material Document for the whole (multi-line) reversal event; grn_number
+      // is the reference. Generated once, shared by every line's reversal item.
+      const revLoopMatDoc = await generateMaterialDocNumber(String(grn.company_id));
+
       // DEPENDENT: each reversal mutates stock, PO, GE, and CSN state that later line checks must see in committed order.
       for (const line of (lines ?? []) as GrnLineRow[]) {
         const material = await fetchMaterial(String(line.material_id));
@@ -1110,7 +1131,7 @@ export async function reverseGRNHandler(
 
         const reversalResp = await serviceRoleClient.schema("erp_inventory")
           .rpc("post_stock_movement", {
-            p_document_number: `${grn.grn_number}-REV`,
+            p_document_number: grn.grn_number,
             p_document_date: todayIsoDate(),
             p_posting_date: todayIsoDate(),
             p_movement_type_code: "P102",
@@ -1124,6 +1145,11 @@ export async function reverseGRNHandler(
             p_direction: "OUT",
             p_posted_by: ctx.auth_user_id,
             p_reversal_of_id: line.stock_document_id,
+            p_material_doc_number: revLoopMatDoc.docNumber,
+            p_material_doc_year: revLoopMatDoc.docYear,
+            p_reference_document_number: grn.grn_number,
+            p_reference_document_type: "GRN",
+            p_reference_document_id: grn.id ?? null,
           });
         if (reversalResp.error) {
           return procurementErrorResponse(req, ctx, "GRN_REVERSE_RPC_FAILED", 500, "Stock reversal failed.");

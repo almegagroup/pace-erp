@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -1194,6 +1195,10 @@ export async function postOpeningStockDocumentHandler(
       );
     }
 
+    // §106: one Material Document (MBLNR+MJAHR) per posting event; the OS business number
+    // becomes the reference. Generated once, shared by every line's ledger item.
+    const matDoc = await generateMaterialDocNumber(String(document.company_id));
+
     // DEPENDENT: each line posts opening stock and writes back its posting reference, so stock ledger order must remain stable.
     for (const line of lines) {
       if (line.posted_stock_document_id) {
@@ -1219,6 +1224,11 @@ export async function postOpeningStockDocumentHandler(
           p_posted_by: ctx.auth_user_id,
           p_reversal_of_id: null,
           p_batch_number: toTrimmedString(line.batch_number) || null,
+          p_material_doc_number: matDoc.docNumber,
+          p_material_doc_year: matDoc.docYear,
+          p_reference_document_number: document.document_number,
+          p_reference_document_type: "OS",
+          p_reference_document_id: document.id ?? null,
         });
 
       if (rpcResult.error || !Array.isArray(rpcResult.data) || rpcResult.data.length === 0) {
