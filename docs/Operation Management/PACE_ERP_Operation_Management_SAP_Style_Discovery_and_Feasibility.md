@@ -13908,7 +13908,11 @@ changing any snapshot arithmetic** (zero risk to existing balances). On **IN**, 
 3. Process PO Verify: RM/INT issue at snapshot rate; SFG receipt at `(Σ RM value ÷ output qty) + conversion`.
 4. Packing PO Final: SFG + PM issue at snapshot rate; FG receipt at `(SFG value + Σ PM value) ÷ output qty`.
 5. Reversals (CORS / PR19) at the same rates, so value unwinds symmetrically.
-6. SA config page for the conversion table.
+6. SA config page for the conversion table (`valid_from` rows; `valid_to` shown as derived).
+7. **§104.9 — Opening genealogy:** `PR22` Old Process PO + `PR23` Old Packing PO pages/handlers;
+   `'OPENING'` added to the `source_txn_type` CHECK; the no-stock-movement guard; the
+   Opening-Stock reconciliation validation; PR19 relaxed to accept `reversalOfId = NULL` for
+   opening-origin lines.
 
 **Go-live criticality (business owner raised 2026-07-17):** this is a **1 July go-live blocker**,
 unlike the FI/Accounting document layer (§104 Phase-3, genuinely additive and safe to defer).
@@ -13935,16 +13939,32 @@ AND batch_number=…`, reads RM/INT from `process_order_line_reco WHERE process_
 returns each RM by reversing that line's original P261 `stock_document`. An opening batch has none
 of those, so today PR19 simply reports `PR19_BATCH_NOT_FOUND` (it fails safe, but blindly).
 
-**Decision — synthetic "Opening Process PO" (LOCKED).** For every opening MTO/HPS SFG/FG batch,
-Opening Stock creates a Process PO shaped exactly like a produced one, so **every downstream
-consumer works unchanged, with no special-casing**:
+**Decision — synthetic "Old" orders (LOCKED).** Each opening MTO/HPS batch gets order documents
+shaped exactly like produced ones, so **every downstream consumer works unchanged, with no
+special-casing**.
+
+**⚠️ Correction (2026-07-17, caught by the business owner):** an earlier draft of this section said
+only a *Process PO* is created. That is **wrong for FG**. PR19's SKU-row reversal reads
+`packing_order` (for `actual_qty_kg`, the PM ratio denominator) **and** `packing_order_line`
+(FG/SFG/PM lines) **in addition to** the Process PO (for the batch-wide RM ratio). So:
+
+| Opening batch type | Documents needed |
+|---|---|
+| **SFG** (bulk in S003) | Old **Process PO** only |
+| **FG** (packed, in F003) | Old **Process PO** (RM → SFG genealogy) **+** Old **Packing PO** (SFG + PM → FG) |
+
+For an opening FG batch the SFG never existed in our system (it was already packed pre-go-live), so
+*both* orders are pure paper — no SFG movement, no PM movement. Only the FG's own P561 opening
+posting is a real stock event.
 
 | Object | What is written |
 |---|---|
-| `process_order` | `status = 'VERIFIED'`, `po_type = MTO/HPS`, `batch_number` = the entered batch, `actual_qty` = opening qty |
+| `process_order` | `status = 'VERIFIED'`, `po_type = MTO/HPS`, `batch_number` = the entered batch, `actual_qty` = the batch's output qty |
 | `process_order_line` | the RM/INT breakup lines |
 | `process_order_line_reco` | costing rows with **`source_txn_type = 'OPENING'`** (new enum value — added to the §106.6 CHECK constraint) |
-| **RM/PM stock movements** | ⛔ **NONE** — see the guard below |
+| `packing_order` (FG only) | `status = 'FINAL'`, linked to the Process PO batch, `actual_qty_kg`, `num_packs`, `fill_qty_per_pack` |
+| `packing_order_line` (FG only) | FG + SFG + PM lines |
+| **RM / PM / SFG stock movements** | ⛔ **NONE** — see the guard below |
 | SFG/FG receipt | the Opening Stock P561 posting itself |
 
 **⭐ The critical guard (business owner: *"RM PM er opening stock theke add or deduct jeno na hoy
@@ -13989,6 +14009,69 @@ reading an `OPENING` reco row must treat it as standard-derived unless it was ed
 
 **Scope note:** MTO/HPS only. MTS/INT/MTEST opening batches are out of scope here (MTS/INT batch
 handling is already deferred per §83.7's "MTO/HPS-scoped only" lock).
+
+---
+
+#### 104.9.1 — Pages: PR22 "Old Process PO" + PR23 "Old Packing PO" (LOCKED — 2026-07-17)
+
+**Precedent (already in the system — this is not a new idea).** The project already solved this
+exact go-live problem for procurement and uses an "Old / Legacy" page family:
+
+| TX | Menu code | Title | Route |
+|---|---|---|---|
+| `PO14` | `PROC_PO_CREATE_OPENING` | **Old Purchase Order** | `/dashboard/procurement/purchase-orders/create-opening` |
+| `PO16` | `PROC_STO_CREATE_OPENING` | **Legacy Stock Transfer Order** | `/dashboard/procurement/stos/create-opening` |
+
+The production equivalents follow the same naming and shape. `PR00`–`PR21` are taken (PR21 = FG
+Stock Breakdown), so the next free codes are used:
+
+| TX | Menu code | Title | Route | Purpose |
+|---|---|---|---|---|
+| **PR22** | `PROD_OLD_PROCESS_PO` | **Old Process PO** | `/dashboard/production/old-process-po` | Genealogy for an opening **SFG** batch, and for the parent batch of an opening **FG** |
+| **PR23** | `PROD_OLD_PACKING_PO` | **Old Packing PO** | `/dashboard/production/old-packing-po` | Genealogy for an opening **FG** batch (PM lines + SFG link) |
+
+**PR22 — Old Process PO**
+
+| Section | Fields |
+|---|---|
+| Header | Company, PO Type (**MTO / HPS only**), Prodshade, **Batch Number**, Stroke, Machine, Actual Output Qty |
+| RM/INT lines | **Auto-derived** from the Stroke (`dosage% × output qty`), then **editable**: Actual Qty, Approved (Yes/No/Partial), AP Approved Qty, Variance Qty |
+| On Save | `process_order` (status **VERIFIED**) + `process_order_line` + `process_order_line_reco` (`source_txn_type='OPENING'`) |
+| Stock effect | ⛔ **none** — `post_stock_movement()` is never called; `stock_ledger_id` stays NULL |
+
+**PR23 — Old Packing PO**
+
+| Section | Fields |
+|---|---|
+| Header | Company, Packing PO Type, **parent Old Process PO batch** (dropdown of PR22 batches), SKU, Pack Code, Num Packs, Fill Qty/Pack, Actual Qty KG |
+| PM lines | **Auto-derived** from the Pack BOM, then **editable** |
+| On Save | `packing_order` (status **FINAL**) + `packing_order_line` (FG + SFG + PM) |
+| Stock effect | ⛔ **none** |
+
+**Where the real stock comes from.** Not from these pages. The physical balance and its value are
+posted by the existing **Opening Stock page (`IN05`)**, which writes the SFG/FG `P561` **with the
+batch number** and the `rate_per_unit`. PR22/PR23 only attach the paper genealogy on top.
+
+**Linkage = `batch_number`.** PR19/Reco/Return find a batch by `batch_number`, so the Opening Stock
+line's batch number and the PR22 batch number must be identical. There is no FK between them — the
+batch number *is* the join.
+
+**Orphan risk + required mitigation (LOCKED).** Because the stock (IN05) and the genealogy
+(PR22/PR23) are entered on separate pages, a batch can end up with stock but no genealogy (page
+skipped, or a batch-number typo) — and it would then be un-salvageable and un-recostable, exactly
+the failure this whole section exists to prevent. PO14/PO16 have no such safety, but here it
+matters because costing depends on it. Therefore **PR22/PR23 must validate against Opening Stock on
+save**: the batch number must already exist as a posted opening SFG/FG line for that company, and
+the quantity must reconcile. Save is **blocked** otherwise.
+
+**Sequence:** Opening Stock (IN05) first → then PR22 (→ PR23 for FG).
+
+**ACL — decided, confirm before implementation.** Locked as **SA-only**, matching the rest of the
+go-live data-load family (`IN05` Opening Stock, `PO14` Old Purchase Order, `PO16` Legacy STO), since
+this is a one-time migration exercise rather than day-to-day production work. If the business owner
+would rather have the production/costing team (`CAP_PROD_OPERATOR`) enter the RM breakup — which is
+production knowledge, not SA knowledge — this is a one-line capability change; flag it before
+building.
 
 ---
 
