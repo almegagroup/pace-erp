@@ -13846,6 +13846,26 @@ Prodshade-er conversion cost alada hote pare."* So:
   Powder; and individual Powder Prodshades)
 - **Resolution rule: Prodshade-specific first, else segment default** (specific beats general).
 
+**Rate changes over time — `valid_from` dating (LOCKED 2026-07-17).** Business owner: the company
+periodically raises/lowers the conversion cost, and *"se janei na koto diner jonno valid"* — the
+user does not know in advance how long a rate will last, so they must not be asked for an end date.
+
+| Rule | Detail |
+|---|---|
+| **Only `valid_from` is stored** | The config row carries `valid_from date` and the rate. There is **no `valid_to` column.** |
+| **`valid_to` is derived, never stored** | For display it is computed as *(next row's `valid_from` − 1 day)*; the newest row shows "current". This is exactly the behaviour the business owner asked for (*"ager tar valid_to ta automatic next valid_from date -1 hoye jabe"*) but with **no auto-update machinery** — because nothing is stored, **gaps and overlaps are mathematically impossible**. Storing `valid_to` would require an update-the-previous-row step that can fail and leave a gap or an overlap. |
+| **Changing a rate** | Insert a **new row with a new `valid_from`**. Old rows are **never edited or deleted** — full rate history is preserved (same "nothing is ever truly deleted" principle as batch numbers and Prune). |
+| **Resolution is by `posting_date`** | `WHERE valid_from <= posting_date ORDER BY valid_from DESC LIMIT 1`. A **back-dated posting automatically picks the rate that was valid then** (e.g. entering a 20-Jul batch in August gets July's rate). Late-added historical rates also slot in correctly with no fix-up. |
+| **No rate ⇒ hard block** | If no rate is valid for the posting date, the posting **fails** rather than posting at zero/wrong cost — that history could never be corrected afterwards (see go-live note below). |
+| **Rate used is stored on the batch** | The resolved rate is recorded on the Process PO so the costing of any batch is auditable without re-deriving it. |
+
+**What a rate change does NOT do (LOCKED):** it does **not** retroactively revalue stock already
+produced. Batches posted before the change keep their original value — that is correct accounting
+(they really were made at the old cost), and the snapshot's moving average blends old and new stock
+naturally as new batches arrive. Deliberate revaluation of existing inventory (SAP's MR21 price
+change) is a **separate, explicit mechanism and is not being built now**; if Accounts ever needs a
+mid-period restatement, that is its own design.
+
 **What already exists (verified live 2026-07-17) vs what is actually missing:**
 
 | Needed | Status |
@@ -13881,8 +13901,9 @@ changing any snapshot arithmetic** (zero risk to existing balances). On **IN**, 
 *does* drive the weighted average — which is exactly how the SFG/FG receipt cost gets set.
 
 **Implementation scope (small — not a costing engine build):**
-1. `erp_production.conversion_cost_config` — company + segment + nullable prodshade → rate/KG
-   (partial unique indexes so there is exactly one default per segment and one override per Prodshade).
+1. `erp_production.conversion_cost_config` — company + segment + nullable prodshade + `valid_from`
+   → rate/KG (no `valid_to`; partial unique indexes so there is exactly one row per
+   segment-default/Prodshade-override **per `valid_from`**).
 2. Resolver helper (Prodshade override → segment default).
 3. Process PO Verify: RM/INT issue at snapshot rate; SFG receipt at `(Σ RM value ÷ output qty) + conversion`.
 4. Packing PO Final: SFG + PM issue at snapshot rate; FG receipt at `(SFG value + Σ PM value) ÷ output qty`.
@@ -13896,6 +13917,78 @@ weighted average is path-dependent and cannot be reconstructed retroactively. De
 throwaway so nothing is lost yet, but from the moment real production movements start flowing with
 zeros, that history is permanently uncostable. Sequence: live verification → Return (§83.6) →
 **this** → (post-go-live) FI document layer.
+
+---
+
+### 104.9 — Opening Stock Genealogy for MTO/HPS Batches ("Opening Process PO") (LOCKED — 2026-07-17)
+
+**The problem.** At go-live the SFG sitting in S003 and the FG sitting in F003 were produced
+*before* the system existed. Their rate can be entered (Opening Stock's `rate_per_unit` already
+works — 59/59 opening rows are valued), but they have **no Process PO, no `process_order_line`, no
+reco rows and no P261 history**. Business owner ruled that a breakup is nonetheless **required**:
+*"break up lagbe, karon oder dispatch, oder salvage jekono kichu hote pare, takhon to amader costing
+reco te lagbe"* — scope is **MTO/HPS only**.
+
+**Why "just store a breakup" is not enough.** PR19, the Reco layer and the future Return flow are
+all built *on top of `process_order`*: PR19 finds a batch via `process_order WHERE status='VERIFIED'
+AND batch_number=…`, reads RM/INT from `process_order_line_reco WHERE process_order_id=…`, and
+returns each RM by reversing that line's original P261 `stock_document`. An opening batch has none
+of those, so today PR19 simply reports `PR19_BATCH_NOT_FOUND` (it fails safe, but blindly).
+
+**Decision — synthetic "Opening Process PO" (LOCKED).** For every opening MTO/HPS SFG/FG batch,
+Opening Stock creates a Process PO shaped exactly like a produced one, so **every downstream
+consumer works unchanged, with no special-casing**:
+
+| Object | What is written |
+|---|---|
+| `process_order` | `status = 'VERIFIED'`, `po_type = MTO/HPS`, `batch_number` = the entered batch, `actual_qty` = opening qty |
+| `process_order_line` | the RM/INT breakup lines |
+| `process_order_line_reco` | costing rows with **`source_txn_type = 'OPENING'`** (new enum value — added to the §106.6 CHECK constraint) |
+| **RM/PM stock movements** | ⛔ **NONE** — see the guard below |
+| SFG/FG receipt | the Opening Stock P561 posting itself |
+
+**⭐ The critical guard (business owner: *"RM PM er opening stock theke add or deduct jeno na hoy
+seta dekhte hobe"*).** The synthetic PO's RM/PM lines must **never call
+`post_stock_movement()`** — they exist only in `process_order_line` / `process_order_line_reco` as a
+*genealogy and costing record*, never as a stock record. `stock_ledger_id` stays NULL on those
+lines, and RM/PM opening balances are untouched. That RM was consumed **outside** this system; it
+must not be issued from, or added to, our stock.
+
+**Movement types (no new codes — §83.4 rule holds):**
+
+| Event | Movement | Stock effect |
+|---|---|---|
+| RM / PM opening | `P561` IN | balance up |
+| **SFG opening** (with batch_number) | `P561` IN | balance up |
+| **FG opening** (with batch + pack info) | `P561` IN | balance up |
+| **Synthetic PO's RM/PM lines** | **none** | ⛔ nothing moves |
+| Salvage — SFG dissolved | `P102` OUT | SFG down |
+| Salvage — RM/PM recovered | `P262` IN | RM/PM **up** |
+| Then consumed by the new Process PO | `P261` OUT | RM/PM down |
+
+**Why recovering RM into stock is not phantom stock.** Business owner's own rule closes this:
+*"amader reversal er rules holo, RM in then natun PO te RM out"* — PR19 brings the RM back in
+(physically true: dissolving the batch really does return material), and the replacement Process PO
+immediately consumes it out again. Net effect is correct; the SFG's value leaves and the RM's value
+enters, balancing.
+
+**The one concession — `reversalOfId` may be NULL for opening-origin batches (LOCKED).** PR19
+normally points each RM return at the original P261's `stock_document`. An opening batch has no
+original P261, so for these the reversal pointer is NULL. `post_stock_movement()` already accepts
+`p_reversal_of_id = NULL`; PR19 must be relaxed to tolerate it **only** for opening-origin lines
+(it currently throws `PR19_REVERSAL_SOURCE_NOT_FOUND`).
+
+**Breakup data source — auto-derive, editable (LOCKED).** Every MTO/HPS Prodshade has a Stroke
+(with dosage %) and a Pack BOM, so the breakup can be **derived with zero data entry**:
+RM = `dosage% × batch qty`; PM = Pack BOM × pack count. It is then **editable**, because the
+business owner requires real deviations to be captured (*"setao dhora porbe, amra sei vabei
+banabo"*) — so `approved_status` / `ap_approved_qty` / `variance_qty` populate exactly as they do
+for a produced batch. **Honest caveat:** where the user does *not* override, the figure is the
+Stroke **standard**, not the true historical actual (which exists nowhere in this system) — anyone
+reading an `OPENING` reco row must treat it as standard-derived unless it was edited.
+
+**Scope note:** MTO/HPS only. MTS/INT/MTEST opening batches are out of scope here (MTS/INT batch
+handling is already deferred per §83.7's "MTO/HPS-scoped only" lock).
 
 ---
 
