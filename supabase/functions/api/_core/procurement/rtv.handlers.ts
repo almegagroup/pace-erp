@@ -10,6 +10,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -505,6 +506,12 @@ export async function postRTVHandler(
 
     let totalDispatchQty = 0;
     let totalLineValue = 0;
+
+    // §106: one Material Document (MBLNR+MJAHR) for this whole RTV posting event; rtv_number
+    // becomes the reference. Shared by every line and by all three sub-postings
+    // (direct-path P344 out/in + the P122 vendor return).
+    const rtvMatDoc = await generateMaterialDocNumber(String(rtv.company_id));
+
     // DEPENDENT: each RTV line consumes blocked/unrestricted stock and updates posting state that subsequent lines must read in order.
     for (const line of lines) {
       const companyId = String(rtv.company_id);
@@ -553,6 +560,11 @@ export async function postRTVHandler(
             p_direction: "OUT",
             p_posted_by: ctx.auth_user_id,
             p_reversal_of_id: null,
+            p_material_doc_number: rtvMatDoc.docNumber,
+            p_material_doc_year: rtvMatDoc.docYear,
+            p_reference_document_number: rtv.rtv_number,
+            p_reference_document_type: "RTV",
+            p_reference_document_id: rtv.id ?? null,
           });
 
         if (blockOut.error || !Array.isArray(blockOut.data) || blockOut.data.length === 0) {
@@ -576,6 +588,11 @@ export async function postRTVHandler(
             p_direction: "IN",
             p_posted_by: ctx.auth_user_id,
             p_reversal_of_id: null,
+            p_material_doc_number: rtvMatDoc.docNumber,
+            p_material_doc_year: rtvMatDoc.docYear,
+            p_reference_document_number: rtv.rtv_number,
+            p_reference_document_type: "RTV",
+            p_reference_document_id: rtv.id ?? null,
           });
 
         if (blockIn.error || !Array.isArray(blockIn.data) || blockIn.data.length === 0) {
@@ -605,6 +622,11 @@ export async function postRTVHandler(
           p_direction: "OUT",
           p_posted_by: ctx.auth_user_id,
           p_reversal_of_id: null,
+          p_material_doc_number: rtvMatDoc.docNumber,
+          p_material_doc_year: rtvMatDoc.docYear,
+          p_reference_document_number: rtv.rtv_number,
+          p_reference_document_type: "RTV",
+          p_reference_document_id: rtv.id ?? null,
         });
 
       if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {

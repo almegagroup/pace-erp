@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -1848,6 +1849,10 @@ export async function dispatchSTOHandler(
     const dispatchedLineResults: Array<{ line: StoLineRow; stockDocumentId: string }> = [];
     let totalDispatchQty = 0;
 
+    // §106: one Material Document (MBLNR+MJAHR) for the whole dispatch event; the STO
+    // business number becomes the reference. Shared by every line's ledger item.
+    const stoMatDoc = await generateMaterialDocNumber(String(sto.sending_company_id));
+
     // DEPENDENT: each STO dispatch line posts stock and updates dispatch totals that the following lines must observe in sequence.
     for (const line of lines) {
       const snapshot = await getSnapshotForLine(String(sto.sending_company_id), line);
@@ -1888,6 +1893,11 @@ export async function dispatchSTOHandler(
           p_direction: "OUT",
           p_posted_by: ctx.auth_user_id,
           p_reversal_of_id: null,
+          p_material_doc_number: stoMatDoc.docNumber,
+          p_material_doc_year: stoMatDoc.docYear,
+          p_reference_document_number: sto.sto_number,
+          p_reference_document_type: "STO",
+          p_reference_document_id: sto.id ?? null,
         });
 
       if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {

@@ -10,6 +10,8 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -279,6 +281,10 @@ async function postStockMovement(args: {
   stockTypeCode: string;
   direction: "IN" | "OUT";
   postedBy: string;
+  // §106: Material Document identity for the posting event (MBLNR+MJAHR). The QA
+  // business number (documentNumber) is carried as the reference.
+  matDoc?: MaterialDocumentRef;
+  referenceDocumentId?: string | null;
 }): Promise<{ stock_document_id: string; stock_ledger_id: string }> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
@@ -297,6 +303,11 @@ async function postStockMovement(args: {
       p_direction: args.direction,
       p_posted_by: args.postedBy,
       p_reversal_of_id: null,
+      p_material_doc_number: args.matDoc?.docNumber ?? null,
+      p_material_doc_year: args.matDoc?.docYear ?? null,
+      p_reference_document_number: args.matDoc ? args.documentNumber : null,
+      p_reference_document_type: args.matDoc ? "QA" : null,
+      p_reference_document_id: args.referenceDocumentId ?? null,
     });
 
   if (error || !Array.isArray(data) || data.length === 0) {
@@ -719,6 +730,10 @@ export async function submitUsageDecisionHandler(
     const createdDecisionLines: JsonRecord[] = [];
     let hasReject = false;
 
+    // §106: one Material Document (MBLNR+MJAHR) for this whole usage-decision event; the
+    // qa_number becomes the reference. Every OUT/IN pair below is an item under it.
+    const qaMatDoc = await generateMaterialDocNumber(companyId);
+
     // DEPENDENT: each usage decision posts stock movements whose sequence must stay ordered to avoid ledger/state drift.
     for (const decisionLine of decisionLines) {
       const config = QA_DECISION_MOVEMENT_MAP[decisionLine.usage_decision];
@@ -732,9 +747,9 @@ export async function submitUsageDecisionHandler(
         assertQAManagerRole(ctx);
       }
 
-      // post_stock_movement() now auto-assigns item_number (SAP MKPF/MSEG style) per
-      // document_number, so every call under the same qa_number gets its own item —
-      // no client-side suffixing needed anymore.
+      // post_stock_movement() auto-assigns item_number (SAP MKPF/MSEG style) per
+      // (document_number, document_year), so every call under the same Material Document
+      // gets its own item — no client-side suffixing needed.
       const outPosting = await postStockMovement({
         documentNumber: String(qaDocument.qa_number),
         movementTypeCode: config.movementType,
@@ -747,6 +762,8 @@ export async function submitUsageDecisionHandler(
         stockTypeCode: "QUALITY_INSPECTION",
         direction: "OUT",
         postedBy: ctx.auth_user_id,
+        matDoc: qaMatDoc,
+        referenceDocumentId: qaDocumentId,
       });
 
       let finalPosting = outPosting;
@@ -763,6 +780,8 @@ export async function submitUsageDecisionHandler(
           stockTypeCode: config.targetStockType,
           direction: "IN",
           postedBy: ctx.auth_user_id,
+          matDoc: qaMatDoc,
+          referenceDocumentId: qaDocumentId,
         });
       }
 
