@@ -2877,14 +2877,33 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     });
     ledgerEntries.push({ movement: "P101", direction: "IN", ...fgPosting });
 
-    // NOTE (2026-07-18): a separate, pre-existing stock-integrity bug lives here — this P321
-    // "release" only posts the IN leg to UNRESTRICTED and never drains QUALITY_INSPECTION, so
-    // each verified batch leaves its full qty phantom-stuck in QI (double-counted). Fixing it
-    // requires changing BOTH this Verify path (add a P321 OUT-of-QI leg) AND the CORS reverse
-    // path in lockstep (the reverse currently drains QI, which would break once QI is empty).
-    // Deliberately NOT bundled into this §104 valuation change to keep each shippable/verifiable
-    // — tracked as its own task. The valuation below is correct for the UNRESTRICTED balance
-    // that actually flows downstream.
+    // §104 BUGFIX (2026-07-18): the QI→Unrestricted release used to post ONLY the IN leg to
+    // UNRESTRICTED and never drained QUALITY_INSPECTION, so every verified batch left its full
+    // qty phantom-stuck in QI (double-counted). The release is a transfer and needs BOTH legs
+    // (the pattern Inward QA already uses): P321 OUT of QI, then P321 IN to Unrestricted. Net
+    // QI = 0. On OUT unit_value is ignored for the snapshot (QI drains at its own rate); the IN
+    // below folds the SFG cost into Unrestricted. The CORS reverse path adds the mirror leg
+    // (P321 IN-QI restore) so it stays balanced.
+    const qiOutPosting = await postStockMovement({
+      documentNumber: docNumber,
+      documentDate: today,
+      postingDate: today,
+      movementTypeCode: "P321",
+      companyId: po.company_id,
+      storageLocationId: shopfloorSlocId,
+      materialId: po.material_id,
+      quantity: verifiedQty,
+      baseUomCode: fgUom,
+      unitValue: sfgCostPerKg,
+      stockTypeCode: "QUALITY_INSPECTION",
+      direction: "OUT",
+      postedBy,
+      batchNumber,
+      matDoc: verifyMatDoc,
+      referenceDocumentId: String(po.id),
+    });
+    ledgerEntries.push({ movement: "P321", direction: "OUT", ...qiOutPosting });
+
     const qiReleasePosting = await postStockMovement({
       documentNumber: docNumber,
       documentDate: today,
@@ -3101,6 +3120,35 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           referenceDocumentId: String(po.id),
         });
         ledgerEntries.push({ movement: "P322", direction: "OUT", ...p322Posting });
+      }
+
+      // §104 BUGFIX mirror (2026-07-18): Verify now drains QI (P321 OUT-QI) so a verified
+      // batch sits entirely in UNRESTRICTED with QI = 0. To keep the reverse balanced, restore
+      // the batch into QI before the P102 OUT-of-QI below, so the P102 has stock to consume and
+      // QI nets back to 0 (P321-IN-QI here + P102-OUT-QI cancel). Round-trip leg → no
+      // reversalOfId. Guarded on qi_release_stock_ledger_id: only batches that went through the
+      // (new) QI-drained release need this; older MTEST/INT-style receipts that never used QI
+      // skip it and their P102 still comes straight from UNRESTRICTED (see stockTypeCode below).
+      if (po.qi_release_stock_ledger_id && po.fg_stock_ledger_id && shopfloorSlocId) {
+        const qiRestore = await postStockMovement({
+          documentNumber: revDocNum,
+          documentDate: today,
+          postingDate: today,
+          movementTypeCode: "P321",
+          companyId: po.company_id,
+          storageLocationId: shopfloorSlocId,
+          materialId: po.material_id,
+          quantity: Number(po.actual_qty ?? 0),
+          baseUomCode: fgUom,
+          unitValue: 0,
+          stockTypeCode: "QUALITY_INSPECTION",
+          direction: "IN",
+          postedBy: ctx.auth_user_id,
+          batchNumber: reversalBatchNumber,
+          matDoc: revMatDoc,
+          referenceDocumentId: String(po.id),
+        });
+        ledgerEntries.push({ movement: "P321", direction: "IN", ...qiRestore });
       }
 
       if (po.fg_stock_ledger_id && shopfloorSlocId) {
