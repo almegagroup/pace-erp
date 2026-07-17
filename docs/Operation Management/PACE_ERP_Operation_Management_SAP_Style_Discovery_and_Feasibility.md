@@ -14231,13 +14231,47 @@ Costing, Reco, and the MB52-style report all stand on this numbering foundation.
 - **Non-breaking:** `post_stock_movement()` and every caller are untouched — this phase only
   adds the numbering source everything else will call.
 
-**Phase 2 — Engine cutover (NOT started):** add `document_year` + `reversal_document_year`
-to `stock_document`; make `post_stock_movement()` stamp a MatDoc number+year per posting
-event and move the business number into `reference_document_number/type/id`; migrate every
-stock-posting caller (Process PO, Packing PO, GRN, QA, RTV, STO, PID, Opening Stock,
-Sales/Dispatch, PR19) to generate one MatDoc per event; data-migrate the 189 existing rows;
-verify every flow posts with zero errors. This is the coordinated, high-blast-radius step —
-own brief, per-module verification.
+**Phase 2 — Engine cutover — ✅ CODE COMPLETE (2026-07-17), pending live verification:**
+
+- *Step A (schema, non-breaking):* `document_year` (NOT NULL DEFAULT `''`) +
+  `reversal_document_year` added to `stock_document`; item uniqueness widened to
+  `(document_number, document_year, item_number)`. All 189 existing rows verified at
+  `document_year=''` — behaviour identical to §105. Migration
+  `20260717123000_gate27_106_phase2a_stock_document_year_columns.sql`.
+- *Step B (engine, backward-compatible):* `post_stock_movement()` (main overload; the dead
+  plant overload is untouched — zero callers) gained five OPTIONAL params:
+  `p_material_doc_number`, `p_material_doc_year`, `p_reference_document_number/type/id`.
+  New-style callers get MBLNR+MJAHR identity with the business number in
+  `reference_document_*`; callers that pass no MatDoc behave exactly as §105.
+  `item_number` is now scoped per `(document_number, document_year)`. The old 15-arg
+  overload was DROPped first (CREATE OR REPLACE cannot change arity; leaving both would
+  make calls ambiguous). Migration `20260717124500_gate27_106_phase2b_post_stock_movement_matdoc.sql`.
+  **Verified live**: old-style call → `document_year=''`, reference NULL; new-style call →
+  MatDoc number + `2026-27` + business number in reference. All test postings were then
+  fully cleaned up.
+- *Step C (caller migration) — all 11 modules done:* Opening Stock, GRN, STO, Inward QA,
+  RTV, Sales Order, Physical Inventory, PTO, Process PO, Packing PO, PR19. Each mints one
+  MatDoc per posting event via the new shared helper
+  `supabase/functions/api/_shared/materialDocument.ts` (`generateMaterialDocNumber`).
+  `deno check`: zero new errors on every file (pre-existing counts unchanged).
+
+**Findings worth keeping from Phase 2:**
+- `stock_ledger` is genuinely append-only — it carries `stock_ledger_no_delete` /
+  `stock_ledger_no_update` (`ON ... DO INSTEAD NOTHING`) rewrite rules, so DELETE/UPDATE
+  silently no-op. This is SAP-correct (material documents are immutable) and means every
+  correction must be a new reversing posting, never an edit.
+- The `"-REV"` document-number suffix hack (GRN reverse, Process PO CORS, Packing PO
+  reverse) is now **gone** — a reversal is its own Material Document, linked by
+  `reversal_document_id` (+ `reversal_document_year`) and by reference.
+- `correctPackingOrderHandler` posted corrections via `Promise.all`. That was only safe
+  because it reused the PO's already-existing `document_number`. Under a brand-new MatDoc
+  the first insert has nothing for the `FOR UPDATE` item_number lock to lock, so parallel
+  calls would race — converted to a sequential loop (§8B DEPENDENT).
+
+**Still open on Phase 2:** live end-to-end verification per module (needs real postings
+through the deployed app — Claude cannot log in), and the optional back-migration of the
+189 legacy `document_year=''` rows (they remain valid and readable as-is; no functional
+need to convert them).
 
 **Phase 3 — Reco restructure (NOT started):** per §106.6.
 

@@ -554,12 +554,20 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
 > Accounting/FI, Costing/Reco, Invoice, Debit/Credit Note, + business-decision হিসেবে PO/SO/STO)
 > বনাম **Continuous** (Process/Packing PO, GRN, Gate, QA, RTV, OS ইত্যাদি)। Year-scoping engine
 > `erp_inventory.number_series_master` (System C) আগে থেকেই বানানো ছিল, এখন কাজে লাগানো হচ্ছে।
-> **Phase 1 (Material Document numbering: `generate_material_doc_number()` + MATDOC series, 4
-> company, FY April-start) ✅ DONE + verified।** Phase 2 (post_stock_movement cutover + সব caller
-> migration) ও Phase 3 (Reco restructure) এখনো বাকি — এগুলো core §8C engine change, নিজের brief
-> লাগবে, Return/§83.6 design এর আগে করতে হবে। নিচের §8 table টা এখনো valid (continuous business
-> ranges), কিন্তু Material Document layer এর উপর নতুন করে বসছে। Phase 2 শুরু করার আগে Section 106
-> পুরোটা পড়ো।
+> **Phase 1 ✅ DONE** (`generate_material_doc_number()` + MATDOC series, 4 company, FY April-start)।
+> **Phase 2 ✅ CODE COMPLETE (2026-07-17)** — Step A (stock_document এ `document_year` +
+> `reversal_document_year` + year-aware unique key), Step B (`post_stock_movement()` এ ৫টা optional
+> MatDoc/reference param — backward-compatible, live verified), Step C (**১১টা module-ই** migrate:
+> Opening Stock, GRN, STO, Inward QA, RTV, Sales Order, PID, PTO, Process PO, Packing PO, PR19 —
+> প্রত্যেকে event প্রতি একটা MatDoc, business number reference-এ; `-REV` suffix hack বাদ)। Shared
+> helper: `_shared/materialDocument.ts`। **বাকি:** per-module live verification (deployed app-এ
+> real posting লাগবে) + **Phase 3 (Reco restructure, §106.6)** — এটাই Return/§83.6 design এর আগে
+> শেষ করতে হবে। নিচের §8 table এখনো valid (continuous business ranges), Material Document layer
+> তার উপরে বসেছে। কাজ শুরুর আগে Section 106 পুরোটা পড়ো।
+>
+> ⚠️ **`stock_ledger` append-only** — `stock_ledger_no_delete`/`stock_ledger_no_update`
+> (`ON ... DO INSTEAD NOTHING`) rule আছে, DELETE/UPDATE চুপচাপ no-op করে। কোনো correction কখনো
+> edit নয়, সবসময় নতুন reversing posting।
 
 `erp_procurement.document_number_series` তে প্রতিটা doc type এর আলাদা number range — SAP এর মতো range দেখেই doc type বোঝা যায়। **Prefix নেই।**
 
