@@ -13803,8 +13803,99 @@ The following topics need formal discovery and locking:
 
 **Added 2026-07-12 (Opening Stock kickoff) — confirms and details the already-listed "AP Monthly Rate entry workflow and UI" item:**
 - [ ] Concrete shape confirmed by business owner: a Material × Month rate table — one rate per material per calendar month (business owner named April/May/June/July as the first four months needing entry). Consumed at both dispatch time (104.4's Sales Order Costing) and Reco time (104.5's Rate Variance).
-- [ ] Direct DB check (2026-07-12): neither a WAR engine nor any running rate column exists yet — `erp_inventory.material_master` has no rate/WAR/value column, and no DB function computes a weighted-average rate anywhere. Every `stock_ledger` row just carries its own `valuation_rate`/`value`, exactly as posted by whichever caller supplied it — there is no live "current WAR" being read by anything today.
+- [ ] ~~Direct DB check (2026-07-12): neither a WAR engine nor any running rate column exists yet … no DB function computes a weighted-average rate anywhere … there is no live "current WAR" being read by anything today.~~
+      **⛔ THIS CLAIM IS WRONG — corrected 2026-07-17 (verified in code + live data).** A weighted-average
+      engine **does** exist and **is** running: `erp_inventory.post_stock_movement()` maintains
+      `stock_snapshot.valuation_rate` per (company, storage_location, material, stock_type) —
+      on IN it recomputes `value/qty` (true weighted average), on OUT it consumes at the existing
+      rate and leaves the rate unchanged (correct moving-average behaviour). Live proof on Dev
+      CMP003: TIPA 85% = ₹180.000000, **Tartaric Acid = ₹74.617315** (a blended fraction — only
+      possible if averaging is actually happening), Citric Acid = ₹27, DYN R 80 = ₹15.
+      The claim was probably about `material_master` (which indeed has no price column, only
+      `valuation_class`/`valuation_method`) and got over-generalised. **This mattered:** it made
+      §104 look like "build a costing engine from scratch" when the engine is already built and
+      correct — the real gap is far narrower (see §104.8).
 - [ ] Direct consequence for Opening Stock (Gate-19, already live): its `rate_per_unit` field is hard-required by `post_stock_movement()`'s `p_unit_value` (see `opening_stock.handlers.ts`), but the business owner does not have real rates yet for the RM/PM being loaded now. Posting with a placeholder (e.g. `0`) is safe **today** only because nothing downstream reads/computes WAR yet — once the WAR engine from this section is actually built, whoever designs it must decide how already-posted Opening Stock rows with placeholder valuation get corrected (retroactive `stock_ledger` row edit? a dedicated valuation-adjustment posting type? something else?). Do not assume this is free — no such correction mechanism exists in the codebase today.
+
+---
+
+### 104.8 — PACE Internal Cost Build-Up: RMC + PMC + Conversion (LOCKED — 2026-07-17)
+
+Business owner's actual costing model, stated verbatim: *"RMC, then per KG cost. PMC — suppose
+230 KG pack, so PMC ÷ 230 = per-KG cost. Then conversion cost, some ₹1.95/KG some ₹2.50/KG.
+Total per-KG cost, then × pack size = FG cost."* Everything normalises to **per KG**, then
+multiplies by pack size.
+
+**The two-stage build-up (LOCKED):**
+
+| Stage | Posting | Value per KG |
+|---|---|---|
+| Process PO **Verify** | SFG receipt (P101) | **RMC/KG + Conversion/KG** |
+| Packing PO **Final** | FG receipt (P101) | **SFG rate + PMC/KG** (PMC/KG = Σ PM value ÷ fill qty) |
+| — | FG cost per pack | Total/KG × `fill_qty_per_pack` |
+
+Conversion sits at the **SFG stage**, not at packing (business owner: *"SFG-er jonno RMC + per-kg
+conversion cost"*). Consequence — and the reason for the choice: bulk SFG sitting in S003 is then
+valued at its true cost, not at RM-only.
+
+**Conversion-rate config key (LOCKED):** **Segment-level default with a Prodshade-level override.**
+Business owner: *"[segment-level], but MTS-er abar IWC-er conversion cost r Powder-er different
+Prodshade-er conversion cost alada hote pare."* So:
+- `(company, segment_code, prodshade_material_id = NULL)` → the segment default (e.g. ADMIX = ₹1.95/KG)
+- `(company, segment_code, prodshade_material_id = X)` → override for that Prodshade (MTS: IWC vs
+  Powder; and individual Powder Prodshades)
+- **Resolution rule: Prodshade-specific first, else segment default** (specific beats general).
+
+**What already exists (verified live 2026-07-17) vs what is actually missing:**
+
+| Needed | Status |
+|---|---|
+| Weighted-average valuation engine | ✅ built + running (`post_stock_movement` → `stock_snapshot.valuation_rate`) — see the §104.6 correction |
+| RM rates | ✅ live (Opening Stock P561 + GRN both post real `unit_value`; 59/59 opening rows valued) |
+| PM rates | ✅ live (Barrel ₹10, Label ₹9.89) |
+| RM consumption per batch | ✅ `process_order_line_reco` |
+| Pack size | ✅ `packing_order.fill_qty_per_pack` |
+| **Conversion rate/KG** | ❌ **no config table exists** (`cost_center_master` has code/name only — no rate; no activity/routing/overhead table anywhere) |
+| **Roll-up wiring** | ❌ production handlers pass `unit_value: 0` — all 91 P261 postings have value 0 |
+
+**Worked example — real Dev data, batch `EV02602` / Packing PO `940005` (22 barrels, 5,060 KG, fill 230):**
+
+| Step | Computation | Result |
+|---|---|---|
+| RMC/KG | ₹1,00,605 ÷ 10,060 KG | ₹10.0005 |
+| PMC/pack | Barrel ₹10 + Label ₹9.89 | ₹19.89 |
+| PMC/KG | ₹19.89 ÷ 230 | ₹0.0865 |
+| Conversion/KG | (config, illustrative) | ₹1.95 |
+| **SFG value/KG** | 10.0005 + 1.95 | **₹11.9505** |
+| **FG value/KG** | 11.9505 + 0.0865 | **₹12.0370** |
+| **FG cost / barrel** | 12.0370 × 230 | **₹2,768.51** |
+
+All 12 RM lines of that batch resolve to a real rate (0 lines missing a rate), so the chain is
+computable today the moment the wiring passes rates instead of zeros.
+
+**Engine mechanic that makes this safe (verified in the function body):** on **OUT**,
+`post_stock_movement()` reduces the snapshot by `qty × existing snapshot rate` and **ignores**
+`p_unit_value` for the snapshot — `p_unit_value` only sets the recorded `stock_document.value` /
+`stock_ledger.value`. So passing the real rate on RM/PM issues **fixes the ledger record without
+changing any snapshot arithmetic** (zero risk to existing balances). On **IN**, `p_unit_value`
+*does* drive the weighted average — which is exactly how the SFG/FG receipt cost gets set.
+
+**Implementation scope (small — not a costing engine build):**
+1. `erp_production.conversion_cost_config` — company + segment + nullable prodshade → rate/KG
+   (partial unique indexes so there is exactly one default per segment and one override per Prodshade).
+2. Resolver helper (Prodshade override → segment default).
+3. Process PO Verify: RM/INT issue at snapshot rate; SFG receipt at `(Σ RM value ÷ output qty) + conversion`.
+4. Packing PO Final: SFG + PM issue at snapshot rate; FG receipt at `(SFG value + Σ PM value) ÷ output qty`.
+5. Reversals (CORS / PR19) at the same rates, so value unwinds symmetrically.
+6. SA config page for the conversion table.
+
+**Go-live criticality (business owner raised 2026-07-17):** this is a **1 July go-live blocker**,
+unlike the FI/Accounting document layer (§104 Phase-3, genuinely additive and safe to defer).
+Reason: a movement posted today with `value = 0` can **never** be given correct accounting later —
+weighted average is path-dependent and cannot be reconstructed retroactively. Dev data is all
+throwaway so nothing is lost yet, but from the moment real production movements start flowing with
+zeros, that history is permanently uncostable. Sequence: live verification → Return (§83.6) →
+**this** → (post-go-live) FI document layer.
 
 ---
 
