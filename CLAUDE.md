@@ -560,10 +560,16 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
 > MatDoc/reference param — backward-compatible, live verified), Step C (**১১টা module-ই** migrate:
 > Opening Stock, GRN, STO, Inward QA, RTV, Sales Order, PID, PTO, Process PO, Packing PO, PR19 —
 > প্রত্যেকে event প্রতি একটা MatDoc, business number reference-এ; `-REV` suffix hack বাদ)। Shared
-> helper: `_shared/materialDocument.ts`। **বাকি:** per-module live verification (deployed app-এ
-> real posting লাগবে) + **Phase 3 (Reco restructure, §106.6)** — এটাই Return/§83.6 design এর আগে
-> শেষ করতে হবে। নিচের §8 table এখনো valid (continuous business ranges), Material Document layer
-> তার উপরে বসেছে। কাজ শুরুর আগে Section 106 পুরোটা পড়ো।
+> helper: `_shared/materialDocument.ts`। **Phase 3 ✅ CODE COMPLETE (2026-07-17)** —
+> `process_order_line_reco` এ `reco_document_number`+`reco_document_year`+`source_txn_type`
+> (PRODUCTION/RETURN/PARTIAL_REVERSAL/COR6_CORRECTION)+reference; FY logic generic হলো
+> (`generate_year_scoped_doc_number(company, doc_type)`, MATDOC সেটাকে delegate করে); RECO series
+> (৪ company, April-FY); Verify → PRODUCTION rows, **PR19 → negative PARTIAL_REVERSAL credit rows**
+> (আগে Stock reverse হতো কিন্তু Costing layer পুরো consumption APL কে bill করেই যেত)। Net costing
+> live verified: 10,060.5 − 10% = 9,054.45। **বাকি:** live end-to-end verification (deployed app-এ
+> real posting), আর `RETURN`/`COR6_CORRECTION` writer এখনো নেই (RETURN আসবে §83.6 Return design এ)।
+> **এখন §83.6 Return design এর blocker সরে গেছে।** নিচের §8 table এখনো valid (continuous business
+> ranges), Material Document layer তার উপরে বসেছে। কাজ শুরুর আগে Section 106 পুরোটা পড়ো।
 >
 > ⚠️ **`stock_ledger` append-only** — `stock_ledger_no_delete`/`stock_ledger_no_update`
 > (`ON ... DO INSTEAD NOTHING`) rule আছে, DELETE/UPDATE চুপচাপ no-op করে। কোনো correction কখনো

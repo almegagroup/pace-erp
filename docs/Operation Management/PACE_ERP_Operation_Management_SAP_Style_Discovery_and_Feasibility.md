@@ -14273,5 +14273,42 @@ through the deployed app — Claude cannot log in), and the optional back-migrat
 189 legacy `document_year=''` rows (they remain valid and readable as-is; no functional
 need to convert them).
 
-**Phase 3 — Reco restructure (NOT started):** per §106.6.
+**Phase 3 — Reco restructure — ✅ CODE COMPLETE (2026-07-17), pending live verification:**
+
+- *Schema* (`process_order_line_reco`): `reco_document_number` + `reco_document_year` (the L3
+  costing-document identity, BELNR+GJAHR equivalent), `source_txn_type`
+  (`PRODUCTION|RETURN|PARTIAL_REVERSAL|COR6_CORRECTION`, CHECK-constrained, DEFAULT
+  `'PRODUCTION'`), `reference_document_number` + `reference_document_type`, plus indexes on
+  source_txn_type / reco document / reference. All 86 existing rows verified backfilled to
+  `PRODUCTION` (0 null). Migration `20260717140000_gate27_106_phase3_reco_restructure.sql`.
+- *Numbering generalised:* `erp_inventory.generate_year_scoped_doc_number(company, doc_type)`
+  now holds the FY logic for **all** year-scoped types; `generate_material_doc_number()` was
+  rewritten to delegate to it, so the fiscal-year calculation exists in exactly one place and
+  cannot drift between MATDOC / RECO / future FI/Invoice types. New year-scoped `RECO` series
+  (April-FY, 8-digit) for all 4 companies (MCP data config — re-run on prod at deploy).
+  Migration `20260717141000_gate27_106_phase3_generic_year_scoped_doc_number.sql`.
+  Helper: `generateRecoDocNumber()` in `_shared/materialDocument.ts`.
+- *Writers:* Process PO **Verify** stamps its reco rows with a Reco document,
+  `source_txn_type='PRODUCTION'` and the `PROC_PO` reference. **PR19** now also writes
+  **NEGATIVE (credit)** RM/INT reco rows tagged `PARTIAL_REVERSAL` under their own Reco
+  document, referencing the `PARTIAL_REV` business number — previously PR19 unwound the Stock
+  layer but left the Costing layer still billing the full original consumption to APL.
+
+**Correctness fix found while building Phase 3 (important):** `buildRmIntPreview()` reads
+RM/INT from `process_order_line_reco` and MUST filter `source_txn_type='PRODUCTION'`. Without
+it, once credit rows exist, a *second* reversal on the same batch would read the *first*
+reversal's own negative rows back as if they were original consumption and compute a wrong,
+already-netted proportional base. Filter added.
+
+**Verified live:** both generators produce correct per-company FY `2026-27` counters (MATDOC
+delegation intact — its 11 callers unaffected — and RECO new), counters reset afterwards; the
+net-costing rule was simulated against real batch `EV02602`: production Actual 10,060.5 −
+10% credit 1,006.05 = net 9,054.45, with AP (10,000.5 → 9,000.45) and Variance (60 → 54)
+netting correctly and `source_txn_type` cleanly isolating each side. `deno check` clean.
+
+**Still open on Phase 3:** live end-to-end verification (a real Verify + a real PR19 through
+the deployed app). Also note the two other `source_txn_type` values — `RETURN` and
+`COR6_CORRECTION` — are defined in the CHECK constraint but have **no writer yet**: `RETURN`
+lands with the §83.6 Return design (the very thing this phase unblocks), and
+`COR6_CORRECTION` should be wired when Process PO's COR6 correction path is revisited.
 
