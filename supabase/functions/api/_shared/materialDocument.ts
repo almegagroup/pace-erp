@@ -45,3 +45,28 @@ export async function generateMaterialDocNumber(companyId: string): Promise<Mate
   }
   return { docNumber, docYear };
 }
+
+/**
+ * §106 Phase 3 — mint one year-scoped **Reco/Costing** document identity (SAP CO doc =
+ * BELNR + GJAHR). Call ONCE per costing event; every process_order_line_reco row written
+ * by that event shares the number, with source_txn_type saying which event produced it.
+ * Same FY-aware, race-safe engine as the Material Document generator.
+ */
+export async function generateRecoDocNumber(companyId: string): Promise<MaterialDocumentRef> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .rpc("generate_year_scoped_doc_number", { p_company_id: companyId, p_document_type: "RECO" });
+
+  if (error || !Array.isArray(data) || data.length === 0) {
+    console.error("[materialDocument.generateRecoDocNumber] rpc failed:", JSON.stringify(error));
+    throw new Error("RECO_DOC_GENERATION_FAILED");
+  }
+
+  const row = data[0] as { doc_number?: unknown; doc_year?: unknown };
+  const docNumber = String(row.doc_number ?? "").trim();
+  const docYear = String(row.doc_year ?? "").trim();
+  if (!docNumber || !docYear) {
+    throw new Error("RECO_DOC_GENERATION_FAILED");
+  }
+  return { docNumber, docYear };
+}

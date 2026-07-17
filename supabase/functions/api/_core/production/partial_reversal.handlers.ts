@@ -25,7 +25,7 @@ import {
 } from "./production.shared.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
-import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -482,6 +482,11 @@ type RmIntPreviewLine = {
 // server-side from process_order_line_reco (the immutable Verify-time record),
 // never trusted from the client. RM/INT belong to the whole batch (Process PO
 // layer), so the ratio denominator is always the Process PO's own actual_qty.
+//
+// §106 Phase 3: MUST filter source_txn_type='PRODUCTION'. The reco table now also holds
+// negative PARTIAL_REVERSAL/RETURN credit rows for the same process_order_id; without this
+// filter a second reversal would read the first reversal's own credit rows back as if they
+// were original consumption and compute a wrong (netted) proportional base.
 async function buildRmIntPreview(processOrderId: string, ratio: number): Promise<RmIntPreviewLine[]> {
   const { data: recoRows, error: recoErr } = await serviceRoleClient
     .schema("erp_production")
@@ -489,6 +494,7 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
     .select("process_order_line_id, material_id, line_material_type, actual_qty, ap_approved_qty, variance_qty")
     .eq("process_order_id", processOrderId)
     .eq("is_voided", false)
+    .eq("source_txn_type", "PRODUCTION")
     .in("line_material_type", ["RM", "INT"]);
   if (recoErr) {
     console.error("[partial_reversal.buildRmIntPreview] query failed:", JSON.stringify(recoErr));
@@ -711,11 +717,18 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
     let selectedStorageLocationId = "";
     let actualTotalOutput = 0;
     let reversalRatio = 0;
+    // §106 Phase 3: the RM/INT (batch-wide) ratio used for the Reco credit rows. For an
+    // SFG row this equals reversalRatio; for a SKU row reversalRatio is the PM ratio
+    // (per Packing PO) while RM/INT must credit against the whole batch — so track it
+    // separately rather than reusing reversalRatio.
+    let reversalRatioForReco = 0;
     const docNumber = await generateGlobalDocNumber("PARTIAL_REV");
     // §106: one Material Document (MBLNR+MJAHR) for this whole partial-reversal event —
     // every movement below (P102/P262/P261) is an item under it; the PARTIAL_REV business
     // number is the reference.
     const matDoc = await generateMaterialDocNumber(companyId);
+    // §106 Phase 3: one Reco/Costing document for this reversal's credit rows.
+    const recoDoc = await generateRecoDocNumber(companyId);
 
     if (rowType === "SFG") {
       // Re-verify availability server-side — never trust Page 2's number alone.
@@ -732,6 +745,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       selectedStorageLocationId = sfgSlocId;
       actualTotalOutput = processOrderActualQty;
       reversalRatio = reverseQty / processOrderActualQty;
+      reversalRatioForReco = reversalRatio; // SFG row: RM ratio == the row's own ratio
 
       const materialMap = await getMaterialMapByIds([selectedMaterialId], "id, base_uom_code");
       const sfgBaseUom = String(materialMap.get(selectedMaterialId)?.base_uom_code ?? "KG");
@@ -842,6 +856,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       const ratioRm = sfgEquivalentQty / processOrderActualQty;
       const ratioPm = reverseQty / packingActualQty;
       reversalRatio = ratioPm;
+      reversalRatioForReco = ratioRm; // SKU row: RM/INT credit against the whole batch
 
       const { data: sfgLine, error: sfgLineErr } = await serviceRoleClient
         .schema("erp_production")
@@ -1060,6 +1075,50 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       if (linesErr) {
         console.error("[partial_reversal.createPartialBatchReversalHandler] line insert failed:", JSON.stringify(linesErr));
         throw new Error("PR19_AUDIT_WRITE_FAILED");
+      }
+    }
+
+    // §106 Phase 3 (§106.6) — Reco/Costing credit rows. The Stock layer was unwound above;
+    // the Costing layer must be unwound too, or SUM()-based AP reco would still bill the
+    // full original consumption. Written as NEGATIVE (credit) RM/INT rows tagged
+    // source_txn_type='PARTIAL_REVERSAL', under their own Reco document, referencing this
+    // PARTIAL_REV business number. Net costing = SUM() then reconciles production − reversals.
+    // Mirrors the original PRODUCTION rows' denormalised header (COID-style flat table).
+    const recoReversalLines = await buildRmIntPreview(processOrderId, reversalRatioForReco);
+    const recoCreditRows = recoReversalLines
+      .filter((line) => line.proportional_actual_qty > 0)
+      .map((line) => ({
+        company_id: companyId,
+        po_number: String(poData.po_number ?? ""),
+        batch_number: String(poData.batch_number ?? ""),
+        po_type: String(poData.po_type ?? ""),
+        prodshade_material_id: String(poData.material_id ?? ""),
+        machine_id: poData.machine_id ?? null,
+        process_order_id: processOrderId,
+        process_order_line_id: line.process_order_line_id,
+        material_id: line.material_id,
+        line_material_type: line.line_material_type,
+        actual_qty: -line.proportional_actual_qty,
+        ap_approved_qty: -line.proportional_ap_approved_qty,
+        variance_qty: -line.proportional_variance_qty,
+        is_voided: false,
+        reco_document_number: recoDoc.docNumber,
+        reco_document_year: recoDoc.docYear,
+        source_txn_type: "PARTIAL_REVERSAL",
+        reference_document_number: docNumber,
+        reference_document_type: "PARTIAL_REV",
+        last_updated_at: new Date().toISOString(),
+        last_updated_by: postedBy,
+      }));
+
+    if (recoCreditRows.length > 0) {
+      const { error: recoErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("process_order_line_reco")
+        .insert(recoCreditRows);
+      if (recoErr) {
+        console.error("[partial_reversal.createPartialBatchReversalHandler] reco credit insert failed:", JSON.stringify(recoErr));
+        throw new Error("PR19_RECO_WRITE_FAILED");
       }
     }
 

@@ -11,7 +11,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
-import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
@@ -2814,6 +2814,9 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     ledgerEntries.push({ movement: "P321", direction: "IN", ...qiReleasePosting });
 
     const strokeNumber = toTrimmedString((po.stroke as JsonRecord | null)?.stroke_number) || null;
+    // §106 Phase 3: one Reco/Costing document (BELNR+GJAHR equivalent) for this Verify
+    // costing event; every line row below shares it, tagged source_txn_type='PRODUCTION'.
+    const recoDoc = await generateRecoDocNumber(String(po.company_id));
     const recoRows = lines.map((line) => ({
       company_id: po.company_id,
       po_number: po.po_number,
@@ -2839,6 +2842,12 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       variance_qty: Number(line.variance_qty ?? 0),
       is_formulation_line: line.is_formulation_line !== false,
       is_voided: false,
+      // §106 Phase 3: this Verify is the costing event that produced these rows.
+      reco_document_number: recoDoc.docNumber,
+      reco_document_year: recoDoc.docYear,
+      source_txn_type: "PRODUCTION",
+      reference_document_number: String(po.po_number),
+      reference_document_type: "PROC_PO",
       last_updated_at: new Date().toISOString(),
       last_updated_by: ctx.auth_user_id,
     }));
