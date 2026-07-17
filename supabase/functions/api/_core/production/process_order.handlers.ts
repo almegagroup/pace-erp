@@ -460,6 +460,60 @@ async function postStockMovement(params: {
   return data[0] as StockPostingResult;
 }
 
+// §104: current UNRESTRICTED valuation rate for a set of (material, storage_location)
+// pairs, so RM/INT issues can post at their real cost (not 0) and roll up into the SFG
+// cost. Batched read (one query), keyed `${materialId}|${slocId}`; 0 when not yet valued.
+async function fetchUnrestrictedRates(
+  companyId: string,
+  keys: Array<{ materialId: string; slocId: string }>,
+): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  const pairs = keys.filter((k) => k.materialId && k.slocId);
+  if (pairs.length === 0) return map;
+  const materialIds = [...new Set(pairs.map((p) => p.materialId))];
+  const slocIds = [...new Set(pairs.map((p) => p.slocId))];
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_snapshot")
+    .select("material_id, storage_location_id, valuation_rate")
+    .eq("company_id", companyId)
+    .eq("stock_type_code", "UNRESTRICTED")
+    .is("batch_id", null)
+    .in("material_id", materialIds)
+    .in("storage_location_id", slocIds);
+  if (error) {
+    console.error("[process_order.fetchUnrestrictedRates] query failed:", JSON.stringify(error));
+    throw new Error("PROD_PO_RATE_LOOKUP_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) {
+    map.set(`${String(row.material_id)}|${String(row.storage_location_id)}`, Number(row.valuation_rate ?? 0));
+  }
+  return map;
+}
+
+// §104.8: resolve the per-KG conversion rate for (company, segment, prodshade, posting date).
+// Returns null when none is configured for that date — caller HARD-BLOCKS the posting.
+async function resolveConversionRate(
+  companyId: string,
+  segmentCode: string,
+  prodshadeMaterialId: string,
+  postingDate: string,
+): Promise<number | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .rpc("resolve_conversion_rate", {
+      p_company_id: companyId,
+      p_segment_code: segmentCode,
+      p_prodshade_material_id: prodshadeMaterialId,
+      p_posting_date: postingDate,
+    });
+  if (error) {
+    console.error("[process_order.resolveConversionRate] rpc failed:", JSON.stringify(error));
+    throw new Error("PROD_PO_CONVERSION_RESOLVE_FAILED");
+  }
+  return data === null || data === undefined ? null : Number(data);
+}
+
 // post_stock_movement()'s p_reversal_of_id references stock_document.id (FK
 // stock_document_reversal_document_id_fkey), NOT stock_ledger.id — but every
 // *_stock_ledger_id column on process_order/process_order_line stores the
@@ -2704,6 +2758,27 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     // Process PO number is the reference.
     const verifyMatDoc = await generateMaterialDocNumber(String(po.company_id));
 
+    // §104.8: valuation inputs, resolved once up front.
+    // (a) each RM/INT's current UNRESTRICTED rate (issues post at cost, roll up into RMC).
+    const rateMap = await fetchUnrestrictedRates(
+      String(po.company_id),
+      lines
+        .filter((line) => Number(line.actual_qty ?? line.planned_qty ?? 0) > 0)
+        .map((line) => ({
+          materialId: toTrimmedString(line.actual_material_id) || String(line.material_id),
+          slocId: getIssueStorageLocationId(line) ?? "",
+        })),
+    );
+    // (b) conversion rate/KG — HARD-BLOCK if not configured for this segment/prodshade/date.
+    const conversionRate = await resolveConversionRate(
+      String(po.company_id), String(po.segment_code ?? ""), String(po.material_id), today,
+    );
+    if (conversionRate === null) {
+      return poErr(req, ctx, "PROD_PO_CONVERSION_RATE_MISSING", 422,
+        "Conversion cost rate is not configured for this segment/prodshade as of the posting date. Set it in the Conversion Cost config before verifying (Section 104.8).");
+    }
+    let totalRmValue = 0;
+
     for (const line of lines) {
       const actualQty = Number(line.actual_qty ?? line.planned_qty ?? 0);
       if (actualQty <= 0) continue;
@@ -2719,6 +2794,11 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         : line.material) as JsonRecord | null;
       const baseUom = String(movementMaterial?.base_uom_code ?? line.uom_code ?? "KG");
 
+      // §104.8: issue at the material's current cost (not 0) and accumulate the RM value
+      // that rolls up into the SFG cost/KG below.
+      const rmRate = rateMap.get(`${movementMaterialId}|${slocId}`) ?? 0;
+      totalRmValue += actualQty * rmRate;
+
       // DEPENDENT: each P261 issue and its reservation issue update must stay in posting order.
       const posting = await postStockMovement({
         documentNumber: docNumber,
@@ -2730,7 +2810,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         materialId: movementMaterialId,
         quantity: actualQty,
         baseUomCode: baseUom,
-        unitValue: 0,
+        unitValue: rmRate,
         stockTypeCode: "UNRESTRICTED",
         direction: "OUT",
         postedBy,
@@ -2772,7 +2852,11 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       ledgerEntries.push({ line_id: line.id, movement: "P261", direction: "OUT", ...posting });
     }
 
+    // §104.8: SFG cost/KG = RMC/KG + Conversion/KG. This is the value the SFG enters stock at.
+    const sfgCostPerKg = verifiedQty > 0 ? (totalRmValue / verifiedQty) + conversionRate : conversionRate;
+
     const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
+    // Receipt into QUALITY_INSPECTION at the computed SFG cost (weighted-avg on IN).
     const fgPosting = await postStockMovement({
       documentNumber: docNumber,
       documentDate: today,
@@ -2783,7 +2867,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       materialId: po.material_id,
       quantity: verifiedQty,
       baseUomCode: fgUom,
-      unitValue: 0,
+      unitValue: sfgCostPerKg,
       stockTypeCode: "QUALITY_INSPECTION",
       direction: "IN",
       postedBy,
@@ -2793,6 +2877,14 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     });
     ledgerEntries.push({ movement: "P101", direction: "IN", ...fgPosting });
 
+    // NOTE (2026-07-18): a separate, pre-existing stock-integrity bug lives here — this P321
+    // "release" only posts the IN leg to UNRESTRICTED and never drains QUALITY_INSPECTION, so
+    // each verified batch leaves its full qty phantom-stuck in QI (double-counted). Fixing it
+    // requires changing BOTH this Verify path (add a P321 OUT-of-QI leg) AND the CORS reverse
+    // path in lockstep (the reverse currently drains QI, which would break once QI is empty).
+    // Deliberately NOT bundled into this §104 valuation change to keep each shippable/verifiable
+    // — tracked as its own task. The valuation below is correct for the UNRESTRICTED balance
+    // that actually flows downstream.
     const qiReleasePosting = await postStockMovement({
       documentNumber: docNumber,
       documentDate: today,
@@ -2803,7 +2895,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       materialId: po.material_id,
       quantity: verifiedQty,
       baseUomCode: fgUom,
-      unitValue: 0,
+      unitValue: sfgCostPerKg,
       stockTypeCode: "UNRESTRICTED",
       direction: "IN",
       postedBy,
