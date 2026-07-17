@@ -10,6 +10,8 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
@@ -600,6 +602,10 @@ async function postStockMovement(params: {
   materialId: unknown; quantity: number; baseUomCode: string; unitValue: number;
   stockTypeCode: string; direction: "IN" | "OUT"; postedBy: string; reversalOfId?: string | null;
   batchNumber?: string | null;
+  // §106: Material Document identity (MBLNR+MJAHR) for the posting event; the Packing PO
+  // number (documentNumber) is carried as the reference.
+  matDoc?: MaterialDocumentRef;
+  referenceDocumentId?: string | null;
 }): Promise<{ stock_document_id: string; stock_ledger_id: string }> {
   const { data, error } = await serviceRoleClient.schema("erp_inventory").rpc("post_stock_movement", {
     p_document_number: params.documentNumber, p_document_date: params.documentDate,
@@ -610,6 +616,11 @@ async function postStockMovement(params: {
     p_stock_type_code: params.stockTypeCode, p_direction: params.direction,
     p_posted_by: params.postedBy, p_reversal_of_id: params.reversalOfId ?? null,
     p_batch_number: params.batchNumber ?? null,
+    p_material_doc_number: params.matDoc?.docNumber ?? null,
+    p_material_doc_year: params.matDoc?.docYear ?? null,
+    p_reference_document_number: params.matDoc ? params.documentNumber : null,
+    p_reference_document_type: params.matDoc ? "PACK_PO" : null,
+    p_reference_document_id: params.referenceDocumentId ?? null,
   });
   if (error || !Array.isArray(data) || data.length === 0) {
     throw new Error(`PROD_PACK_STOCK_POST_FAILED: ${params.movementTypeCode}`);
@@ -1519,13 +1530,16 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       "id, base_uom_code",
     );
 
-    // DEPENDENT: all lines share the same brand-new document_number (this PO's
-    // po_number, never posted before). post_stock_movement()'s item_number
-    // assignment locks existing stock_document rows FOR UPDATE to serialize
-    // concurrent callers — but on the very first insert for a document_number
-    // there's nothing to lock yet, so parallel calls race and all compute the
-    // same item_number, hitting the (document_number, item_number) unique
-    // constraint. Must post one at a time.
+    // §106: one Material Document for the whole Final event — the SFG issue, every PM
+    // issue and the FG receipt are items under it; the Packing PO number is the reference.
+    const finalMatDoc = await generateMaterialDocNumber(String(poData.company_id));
+
+    // DEPENDENT: all lines share the same brand-new Material Document number (never
+    // posted before). post_stock_movement()'s item_number assignment locks existing
+    // stock_document rows FOR UPDATE to serialize concurrent callers — but on the very
+    // first insert for a document_number there's nothing to lock yet, so parallel calls
+    // race and all compute the same item_number, hitting the
+    // (document_number, document_year, item_number) unique constraint. Must post one at a time.
     for (const line of lineRows) {
       const lineType = String(line.line_type ?? "");
       const qty = Number(line.actual_qty ?? line.total_qty ?? 0);
@@ -1546,6 +1560,8 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
         quantity: qty, baseUomCode: toTrimmedString(line.uom_code) || baseUom, unitValue: 0,
         stockTypeCode: "UNRESTRICTED", direction: direction as "IN" | "OUT", postedBy: ctx.auth_user_id,
         batchNumber: (line.batch_number as string | null) ?? null,
+        matDoc: finalMatDoc,
+        referenceDocumentId: String(poData.id),
       });
 
       await serviceRoleClient.schema("erp_production").from("packing_order_line")
@@ -1637,7 +1653,11 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
 
       const defaultPmSlocId = (segConfig as JsonRecord | null)?.pm_sloc_id as string | null;
       const today = todayIso();
-      const revDocNum = `${poData.po_number as string}-REV`;
+      // §106: the reversal is its own Material Document event (no more "-REV" suffix hack);
+      // the Packing PO number is the reference and reversal_of_id links each item back to
+      // the original posting.
+      const revMatDoc = await generateMaterialDocNumber(String(poData.company_id));
+      const revDocNum = String(poData.po_number);
       const lineRows = (stockLines ?? []) as JsonRecord[];
       const materialMap = await getMaterialMapByIds(
         lineRows.map((line) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "")),
@@ -1677,6 +1697,8 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
           postedBy: ctx.auth_user_id,
           reversalOfId,
           batchNumber: (line.batch_number as string | null) ?? null,
+          matDoc: revMatDoc,
+          referenceDocumentId: String(poData.id),
         });
       }
     }
@@ -1773,14 +1795,24 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     );
 
     const today = todayIso();
-    const postings = await Promise.all(corrections.map(async (correction) => {
+    // §106: this COR6 correction is its own Material Document event; the Packing PO number
+    // is the reference.
+    const correctionMatDoc = await generateMaterialDocNumber(String(poData.company_id));
+
+    // DEPENDENT: these postings previously ran in parallel safely because they reused the
+    // PO's already-existing document_number (so post_stock_movement()'s FOR UPDATE
+    // item_number lock had rows to lock). Under §106 they share a BRAND-NEW Material
+    // Document number, where the first insert has nothing to lock — parallel calls would
+    // race and collide on (document_number, document_year, item_number). Must be sequential.
+    const postings: Array<JsonRecord | null> = [];
+    for (const correction of corrections) {
       const line = lineMap.get(toTrimmedString(correction.id));
       if (!line) throw new Error("PROD_PACK_LINE_NOT_FOUND");
       const newActual = parsePositiveNumber(correction.actual_qty);
       if (!newActual) throw new Error("PROD_PACK_CORRECTION_INVALID");
       const oldActual = Number(line.actual_qty ?? line.total_qty ?? 0);
       const delta = newActual - oldActual;
-      if (delta === 0) return null;
+      if (delta === 0) { postings.push(null); continue; }
       const lineType = String(line.line_type ?? "");
       const slocId = (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string | null;
       if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
@@ -1815,12 +1847,14 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
         postedBy: ctx.auth_user_id,
         reversalOfId,
         batchNumber: (line.batch_number as string | null) ?? null,
+        matDoc: correctionMatDoc,
+        referenceDocumentId: String(poData.id),
       });
       await serviceRoleClient.schema("erp_production").from("packing_order_line")
         .update({ actual_qty: newActual })
         .eq("id", line.id as string);
-      return { line_id: line.id, movement_type_code: movementTypeCode, stock_ledger_id: posting.stock_ledger_id };
-    }));
+      postings.push({ line_id: line.id, movement_type_code: movementTypeCode, stock_ledger_id: posting.stock_ledger_id });
+    }
 
     return okResponse({ id, corrections: postings.filter(Boolean) }, ctx.request_id, req);
   } catch (err) {

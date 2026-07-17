@@ -25,6 +25,8 @@ import {
 } from "./production.shared.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -124,6 +126,10 @@ async function postStockMovement(params: {
   materialId: unknown; quantity: number; baseUomCode: string; unitValue: number;
   stockTypeCode: string; direction: "IN" | "OUT"; postedBy: string; reversalOfId?: string | null;
   batchNumber?: string | null;
+  // §106: Material Document identity (MBLNR+MJAHR) for this reversal event; the
+  // PARTIAL_REV business number (documentNumber) is carried as the reference.
+  matDoc?: MaterialDocumentRef;
+  referenceDocumentId?: string | null;
 }): Promise<{ stock_document_id: string; stock_ledger_id: string }> {
   const { data, error } = await serviceRoleClient.schema("erp_inventory").rpc("post_stock_movement", {
     p_document_number: params.documentNumber, p_document_date: params.documentDate,
@@ -134,6 +140,11 @@ async function postStockMovement(params: {
     p_stock_type_code: params.stockTypeCode, p_direction: params.direction,
     p_posted_by: params.postedBy, p_reversal_of_id: params.reversalOfId ?? null,
     p_batch_number: params.batchNumber ?? null,
+    p_material_doc_number: params.matDoc?.docNumber ?? null,
+    p_material_doc_year: params.matDoc?.docYear ?? null,
+    p_reference_document_number: params.matDoc ? params.documentNumber : null,
+    p_reference_document_type: params.matDoc ? "PARTIAL_REV" : null,
+    p_reference_document_id: params.referenceDocumentId ?? null,
   });
   if (error || !Array.isArray(data) || data.length === 0) {
     console.error("[partial_reversal.postStockMovement] rpc failed:", JSON.stringify(error));
@@ -701,6 +712,10 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
     let actualTotalOutput = 0;
     let reversalRatio = 0;
     const docNumber = await generateGlobalDocNumber("PARTIAL_REV");
+    // §106: one Material Document (MBLNR+MJAHR) for this whole partial-reversal event —
+    // every movement below (P102/P262/P261) is an item under it; the PARTIAL_REV business
+    // number is the reference.
+    const matDoc = await generateMaterialDocNumber(companyId);
 
     if (rowType === "SFG") {
       // Re-verify availability server-side — never trust Page 2's number alone.
@@ -734,6 +749,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         materialId: selectedMaterialId, quantity: reverseQty, baseUomCode: sfgBaseUom, unitValue: 0,
         stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy, reversalOfId: fgDocId,
         batchNumber: String(poData.batch_number ?? ""),
+        matDoc, referenceDocumentId: processOrderId,
       });
       lineInserts.push({
         line_type: "SFG", material_id: selectedMaterialId, formulation_material_id: null, included: true,
@@ -773,6 +789,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
           materialId: effectiveMaterialId, quantity: rmLine.proportional_actual_qty, baseUomCode: baseUom, unitValue: 0,
           stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId,
           batchNumber: null,
+          matDoc, referenceDocumentId: processOrderId,
         });
         lineInserts.push({
           line_type: rmLine.line_material_type, material_id: effectiveMaterialId, formulation_material_id: rmLine.material_id,
@@ -862,6 +879,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         materialId: selectedMaterialId, quantity: reverseQty, baseUomCode: fgBaseUom, unitValue: 0,
         stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy, reversalOfId: fgDocId,
         batchNumber: String(poData.batch_number ?? ""),
+        matDoc, referenceDocumentId: processOrderId,
       });
       lineInserts.push({
         line_type: "SKU", material_id: selectedMaterialId, formulation_material_id: null, included: true,
@@ -877,6 +895,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         materialId: sfgMaterialId, quantity: sfgEquivalentQty, baseUomCode: sfgBaseUom, unitValue: 0,
         stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId: sfgDocId,
         batchNumber: String(poData.batch_number ?? ""),
+        matDoc, referenceDocumentId: processOrderId,
       });
       lineInserts.push({
         line_type: "SFG", material_id: sfgMaterialId, formulation_material_id: null, included: true,
@@ -894,6 +913,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         materialId: sfgMaterialId, quantity: sfgEquivalentQty, baseUomCode: sfgBaseUom, unitValue: 0,
         stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy, reversalOfId: null,
         batchNumber: String(poData.batch_number ?? ""),
+        matDoc, referenceDocumentId: processOrderId,
       });
       lineInserts.push({
         line_type: "SFG", material_id: sfgMaterialId, formulation_material_id: null, included: true,
@@ -933,6 +953,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
           materialId: effectiveMaterialId, quantity: rmLine.proportional_actual_qty, baseUomCode: baseUom, unitValue: 0,
           stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId,
           batchNumber: null,
+          matDoc, referenceDocumentId: processOrderId,
         });
         lineInserts.push({
           line_type: rmLine.line_material_type, material_id: effectiveMaterialId, formulation_material_id: rmLine.material_id,
@@ -990,6 +1011,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
           materialId: effectiveMaterialId, quantity: proportionalQty, baseUomCode: baseUom, unitValue: 0,
           stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId,
           batchNumber: null,
+          matDoc, referenceDocumentId: processOrderId,
         });
         lineInserts.push({
           line_type: "PM", material_id: effectiveMaterialId, formulation_material_id: String(pmLine.material_id ?? ""),

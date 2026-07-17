@@ -11,6 +11,8 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
@@ -422,6 +424,10 @@ async function postStockMovement(params: {
   postedBy: string;
   reversalOfId?: string | null;
   batchNumber?: string | null;
+  // §106: Material Document identity (MBLNR+MJAHR) for the posting event; the Process PO
+  // number (documentNumber) is carried as the reference.
+  matDoc?: MaterialDocumentRef;
+  referenceDocumentId?: string | null;
 }): Promise<StockPostingResult> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
@@ -441,6 +447,11 @@ async function postStockMovement(params: {
       p_posted_by: params.postedBy,
       p_reversal_of_id: params.reversalOfId ?? null,
       p_batch_number: params.batchNumber ?? null,
+      p_material_doc_number: params.matDoc?.docNumber ?? null,
+      p_material_doc_year: params.matDoc?.docYear ?? null,
+      p_reference_document_number: params.matDoc ? params.documentNumber : null,
+      p_reference_document_type: params.matDoc ? "PROC_PO" : null,
+      p_reference_document_id: params.referenceDocumentId ?? null,
     });
   if (error || !Array.isArray(data) || data.length === 0) {
     console.error("[process_order.postStockMovement] rpc failed:", JSON.stringify(error));
@@ -1661,6 +1672,10 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const today = todayIso();
       const ledgerEntries: JsonRecord[] = [];
 
+      // §106: MTEST is a single-action event — one Material Document covers its RM issues
+      // and its FG receipt; the Process PO number is the reference.
+      const mtestMatDoc = await generateMaterialDocNumber(companyId);
+
       for (const line of lines) {
         const issueQty = Number(line.planned_qty ?? 0);
         if (issueQty <= 0) continue;
@@ -1683,6 +1698,8 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
           stockTypeCode: "UNRESTRICTED",
           direction: "OUT",
           postedBy,
+          matDoc: mtestMatDoc,
+          referenceDocumentId: poId,
         });
 
         const { error: lineUpdateErr } = await serviceRoleClient
@@ -1715,6 +1732,8 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         stockTypeCode: "UNRESTRICTED",
         direction: "IN",
         postedBy,
+        matDoc: mtestMatDoc,
+        referenceDocumentId: poId,
       });
 
       const verifiedAt = new Date().toISOString();
@@ -2386,6 +2405,10 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
     const reservationMap = await fetchReservationRowsBySourceLineIds(lines.map((line) => String(line.id)));
     const ledgerEntries: JsonRecord[] = [];
 
+    // §106: one Material Document for this INT completion event (RM issues + output receipt);
+    // the Process PO number is the reference.
+    const intMatDoc = await generateMaterialDocNumber(String(po.company_id));
+
     for (const line of lines) {
       const actualQty = lineOverrideMap.has(String(line.id))
         ? Number(lineOverrideMap.get(String(line.id)) ?? 0)
@@ -2426,6 +2449,8 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
         stockTypeCode: "UNRESTRICTED",
         direction: "OUT",
         postedBy,
+        matDoc: intMatDoc,
+        referenceDocumentId: String(po.id),
       });
 
       const { error: lineLedgerErr } = await serviceRoleClient
@@ -2474,6 +2499,8 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
       stockTypeCode: "UNRESTRICTED",
       direction: "IN",
       postedBy,
+      matDoc: intMatDoc,
+      referenceDocumentId: String(po.id),
     });
 
     const now = new Date().toISOString();
@@ -2672,6 +2699,11 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const ledgerEntries: JsonRecord[] = [];
     const reservationMap = await fetchReservationRowsBySourceLineIds(lines.map((line) => String(line.id)));
 
+    // §106: one Material Document for the whole Verify event — every RM/INT issue (P261),
+    // the SFG receipt (P101) and the QI auto-release (P321) are items under it; the
+    // Process PO number is the reference.
+    const verifyMatDoc = await generateMaterialDocNumber(String(po.company_id));
+
     for (const line of lines) {
       const actualQty = Number(line.actual_qty ?? line.planned_qty ?? 0);
       if (actualQty <= 0) continue;
@@ -2702,6 +2734,8 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         stockTypeCode: "UNRESTRICTED",
         direction: "OUT",
         postedBy,
+        matDoc: verifyMatDoc,
+        referenceDocumentId: String(po.id),
       });
 
       const { error: lineUpdateErr } = await serviceRoleClient
@@ -2754,6 +2788,8 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       direction: "IN",
       postedBy,
       batchNumber,
+      matDoc: verifyMatDoc,
+      referenceDocumentId: String(po.id),
     });
     ledgerEntries.push({ movement: "P101", direction: "IN", ...fgPosting });
 
@@ -2772,6 +2808,8 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       direction: "IN",
       postedBy,
       batchNumber,
+      matDoc: verifyMatDoc,
+      referenceDocumentId: String(po.id),
     });
     ledgerEntries.push({ movement: "P321", direction: "IN", ...qiReleasePosting });
 
@@ -2887,7 +2925,11 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
     if (po.status === "VERIFIED") {
       const lines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
       const today = todayIso();
-      const revDocNum = `${po.po_number}-REV`;
+      // §106: the CORS reversal is its own Material Document event (no more "-REV" suffix
+      // hack) — all three reversal movements (P262 / P322 / P102) are items under it, and
+      // the Process PO number is the reference.
+      const revMatDoc = await generateMaterialDocNumber(String(po.company_id));
+      const revDocNum = String(po.po_number);
       const reversalSourceLedgerIds = [
         ...lines.map((line) => toTrimmedString(line.stock_ledger_id)),
         toTrimmedString(po.qi_release_stock_ledger_id),
@@ -2926,6 +2968,8 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           postedBy: ctx.auth_user_id,
           reversalOfId: lineReversalOfId,
           batchNumber: reversalBatchNumber,
+          matDoc: revMatDoc,
+          referenceDocumentId: String(po.id),
         });
         ledgerEntries.push({ line_id: line.id, movement: "P262", direction: "IN", ...posting });
       }
@@ -2952,6 +2996,8 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           postedBy: ctx.auth_user_id,
           reversalOfId: qiReversalOfId,
           batchNumber: reversalBatchNumber,
+          matDoc: revMatDoc,
+          referenceDocumentId: String(po.id),
         });
         ledgerEntries.push({ movement: "P322", direction: "OUT", ...p322Posting });
       }
@@ -2975,6 +3021,8 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           postedBy: ctx.auth_user_id,
           reversalOfId: fgReversalOfId,
           batchNumber: reversalBatchNumber,
+          matDoc: revMatDoc,
+          referenceDocumentId: String(po.id),
         });
         ledgerEntries.push({ movement: "P102", direction: "OUT", ...p102Posting });
       }
