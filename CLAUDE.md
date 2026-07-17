@@ -577,28 +577,39 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
 
 `erp_procurement.document_number_series` তে প্রতিটা doc type এর আলাদা number range — SAP এর মতো range দেখেই doc type বোঝা যায়। **Prefix নেই।**
 
-| doc_type | Range start | Range |
-|----------|------------|-------|
-| GE | 100001 | 1xxxxx |
-| GEX | 150001 | 15xxxx |
-| GXO | 160001 | 16xxxx |
-| GRN | 200001 | 2xxxxx |
-| CSN | 300001 | 3xxxxx |
-| IV | 400001 | 4xxxxx |
-| LC | 450001 | 45xxxx |
-| QA | 500001 | 5xxxxx |
-| OS | 600001 | 6xxxxx |
-| PI | 650001 | 65xxxx |
-| PT | 700001 | 7xxxxx |
-| RTV | 800001 | 8xxxxx |
-| DN | 810001 | 81xxxx |
-| EXR | 820001 | 82xxxx |
-| SO | 900001 | 9xxxxx |
-| DC | 910001 | 91xxxx |
-| SALES_INVOICE | 920001 | 92xxxx |
-| SFG_QA | 950001 | 95xxxx |
-| PROC_PO | 930001 | 93xxxx |
-| PACK_PO | 940001 | 94xxxx |
+> **⚠️ 2026-07-17 — Range widening DONE (§106.7):** পুরনো 6-digit band গুলোতে মাত্র ৯,৯৯৯টা number
+> ছিল (যেমন PROC_PO 930001–939999) — কয়েক বছরেই ফুরিয়ে পাশের doc type এর range এ ঢুকে যেত।
+> এখন সব **10-digit**, প্রতিটায় **~১০ কোটি** capacity (২৫ বছরে ১০ হাজার/দিন হলেও ~৯.১ কোটি, ধরে যায়)।
+> **Leading digit ইচ্ছে করে একই রাখা হয়েছে** — `93xxxxxxxx` এখনো মানে Process PO, তাই "range দেখে
+> type চেনা" convention অক্ষত। পুরনো 6-digit number গুলো (930001…) historical data হিসেবে থাকবে,
+> collision নেই (width আলাদা)। `pad_width` = 10। **এটা pure data config — prod এ deploy এর আগে
+> একই MCP UPDATE চালাতে হবে** (`starting_number` = নতুন base, `last_number` = 0, `pad_width` = 10)।
+> ⚠️ `last_number` অবশ্যই 0 করতে হবে — `generate_doc_number()` শুধু `last_number = 0` হলেই
+> `starting_number` এ লাফ দেয়, নাহলে পুরনো `last_number + 1` করেই যায়।
+
+| doc_type | Range start | Band |
+|----------|------------|------|
+| GE | 1000000001 | 10xxxxxxxx |
+| GEX | 1500000001 | 15xxxxxxxx |
+| GXO | 1600000001 | 16xxxxxxxx |
+| GRN | 2000000001 | 20xxxxxxxx |
+| CSN | 3000000001 | 30xxxxxxxx |
+| IV | 4000000001 | 40xxxxxxxx |
+| LC | 4500000001 | 45xxxxxxxx |
+| QA | 5000000001 | 50xxxxxxxx |
+| OS | 6000000001 | 60xxxxxxxx |
+| PI | 6500000001 | 65xxxxxxxx |
+| PT | 7000000001 | 70xxxxxxxx |
+| RTV | 8000000001 | 80xxxxxxxx |
+| DN | 8100000001 | 81xxxxxxxx |
+| EXR | 8200000001 | 82xxxxxxxx |
+| SO | 9000000001 | 90xxxxxxxx |
+| DC | 9100000001 | 91xxxxxxxx |
+| SALES_INVOICE | 9200000001 | 92xxxxxxxx |
+| PROC_PO | 9300000001 | 93xxxxxxxx |
+| PACK_PO | 9400000001 | 94xxxxxxxx |
+| SFG_QA | 9500000001 | 95xxxxxxxx |
+| PARTIAL_REV | 9600000001 | 96xxxxxxxx |
 
 > ⚠️ Prod deploy এর আগে prod DB তেও same MCP SQL চালাতে হবে (starting_number set)।
 > Schema/code change নেই — pure data config।

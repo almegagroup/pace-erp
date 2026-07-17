@@ -14183,7 +14183,7 @@ This directly serves the Return-costing worked example (§83.6) and the §104.7 
 derivation formula, and is the reason the Reco layer must exist separately from
 `stock_ledger` (which has no Approved/AP-Approved concept).
 
-### 106.7 — 25-year range sizing
+### 106.7 — 25-year range sizing — ✅ DONE (2026-07-17)
 
 - **Year-scoped series** (Material Document, Reco, Financial, PO/SO/STO): never exhaust — they
   reset every FY. A 7–8 digit within-year counter (≥ 9,999,999/FY) covers even ~10k
@@ -14193,6 +14193,20 @@ derivation formula, and is the reason the Reco layer must exist separately from
   horizon — 25 yr × ~10k/day ≈ 91M, so a **10-digit** range per doc type with generous
   non-overlapping bands. This is the SAP EBELN/AUFNR sizing philosophy and directly fixes the
   9,999-band exhaustion.
+
+**Implemented 2026-07-17 (MCP data config on Dev — must be re-run on prod at deploy):** all
+21 `document_number_series` rows widened from 6-digit to **10-digit**, `pad_width = 10`, each
+band ~100M capacity. **Leading digits deliberately preserved** so the "range identifies doc
+type" convention survives unchanged (`93xxxxxxxx` is still Process PO — see the CLAUDE.md §8
+table for the full mapping). Old 6-digit numbers already issued remain as historical data;
+no collision is possible (different width).
+
+⚠️ **Non-obvious mechanic:** `generate_doc_number()` only honours `starting_number` when
+`last_number = 0` (`SET last_number = CASE WHEN last_number = 0 THEN starting_number ELSE
+last_number + 1 END`). Changing `starting_number` alone on an in-use series does nothing —
+`last_number` must be reset to 0 in the same statement, which is what the widening did.
+Verified live: PROC_PO's next two numbers came out `9300000001` / `9300000002`, GRN's
+`2000000001`; test counters were reset afterwards.
 
 ### 106.8 — Sequencing (locked ordering, not yet built)
 
