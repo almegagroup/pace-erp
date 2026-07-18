@@ -193,7 +193,11 @@ async function fetchLiveRuntimeSnapshot() {
       erpUiMode: "blocking",
       erpUiLabel: "Refreshing workspace shell",
     }),
-    fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+    // ?refresh=1 bypasses the server-side menu snapshot cache. This call is the
+    // deliberate "give me the live shell" path, so it must not be served stale.
+    // Ordinary page navigation hits /api/me/menu without it and gets the cached
+    // copy (the snapshot rebuild costs ~7.3s, so it must not run per screen).
+    fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu?refresh=1`, {
       credentials: "include",
       erpUiMode: "blocking",
       erpUiLabel: "Refreshing workspace shell",
