@@ -650,6 +650,47 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
 
 ---
 
+## 8-PERF. Performance — মাপা তথ্য ও বাকি কাজ (2026-07-18)
+
+**পটভূমি:** business owner Tally Cloud-এর সাথে তুলনা করে slowness নিয়ে প্রশ্ন তোলেন।
+DB Mumbai (`ap-south-1`), Prod API Singapore (paid), Dev API Oregon (free tier)। **Region বদলানো
+সম্ভব নয়** — তাই একমাত্র lever হলো round trip সংখ্যা কমানো।
+
+**ধাপ ০ (শেষ) — যা মেপে পাওয়া গেছে:**
+- সব pipeline lookup **indexed**, query sub-ms → **DB ধীর নয়**, পুরো খরচ network round trip
+- TLS keep-alive ঠিক আছে (singleton client + global fetch pooling) — প্রতি query-তে নতুন handshake হয় না
+- Pipeline প্রতি request-এ **~৭-৯টা serial DB query** চালায় handler শুরুর আগেই
+- Instrumentation বসানো হয়েছে: `PIPELINE_STEP_TIMING` log **+ `Server-Timing` response header**
+  (DevTools → Network → Timing-এ session/context/acl/total দেখা যায়)
+
+**⚠️ মাপার নিয়ম:** DevTools-এ **"Preserve log" বন্ধ** রেখে, log clear করে, একটা page refresh করে
+মাপতে হবে। Preserve log চালু থাকলে তালিকা ঘণ্টার পর ঘণ্টার পুঞ্জীভূত হয় আর duplicate-এর ভুল
+সিদ্ধান্তে পৌঁছানো যায় (এই session-এ একবার হয়েছিল)।
+
+**✅ যা ঠিক হয়েছে (live যাচাই করা):**
+1. `UserDashboardHome` — `useEffect`+`setState` দিয়ে approval-inbox আনত, `focus` ও
+   `visibilitychange` দুটোতেই re-fire করত → **৬ → ২ call** (commit `a4df6ea`)
+2. `admin.companies`/`om.companies` আলাদা queryKey-তে একই endpoint; CSNTracker-এ raw `fetch()`
+   duplicate; `tracker`/`counts`-এ `enabled` guard অনুপস্থিত → **double-fetch বন্ধ** (commit `83195e6`)
+
+**🔴 সবচেয়ে বড় বাকি কাজ — `/api/me/menu` একাই ~৭.৩ সেকেন্ড:**
+`menu.handler.ts` (line ~102-115) **প্রতিবার menu পড়ার আগে snapshot নতুন করে বানায়** —
+`rebuildAdminSessionMenuSnapshot` / `rebuildGlobalAclMenuSnapshot` / `rebuildAclSessionMenuSnapshot`,
+কোনো cache/staleness check ছাড়াই। `rebuildAclSessionMenuSnapshot` (`acl_runtime.ts:151`) নিজে
+ACL version lookup + `precomputed_acl_view` lookup + **সবসময় `rebuild_acl_menu_snapshot` RPC** চালায়।
+Frontend দিকেও `/api/me/menu` **৪ জায়গা** থেকে raw `fetch()`-এ আসে (`AuthBootstrap:289`,
+`MenuShell:196/524/646` — শেষ দুটো একই `useEffect`-এর আলাদা শাখা), কোনো React Query cache নেই।
+**⚠️ সাবধানতা:** এটা menu/permission correctness path — rebuild বাদ দেওয়ার আগে "কখন snapshot বাসি"
+(ACL version বদল, company/work-context switch, menu registry বদল) নির্ভুল ঠিক করতে হবে, নাহলে user
+ভুল menu দেখবে। আলাদা, মনোযোগী session-এ করা উচিত; marathon session-এর শেষে নয়।
+
+**বাকি (অগ্রাধিকার ক্রমে):** `menu` (উপরে) → `companies` এখনো ৩ বার → `me` ৩ বার
+(`me` + `me?session_mode=passive` ×২) → PR09-এ ৫টা আলাদা `materials` call (প্রতিটা limit=500,
+duplicate নয় কিন্তু একসাথে আনা যায় কিনা দেখার মতো) → সবশেষে pipeline-এর ~৮ round trip এক RPC-তে
+collapse (auth path, তাই সবচেয়ে ঝুঁকিপূর্ণ, flag দিয়ে পুরনো path পাশে রেখে করতে হবে)।
+
+---
+
 ## 8A. PACE ERP Mandatory Development Rules (সব Gate, সব Screen)
 
 এই rules ভাঙা যাবে না। প্রতিটা Gate VERIFIED হওয়ার আগে এই rules against চেক করতে হবে।
