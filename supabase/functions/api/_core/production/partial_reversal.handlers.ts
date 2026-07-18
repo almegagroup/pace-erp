@@ -156,23 +156,30 @@ async function postStockMovement(params: {
 // post_stock_movement()'s p_reversal_of_id references stock_document.id, not
 // stock_ledger.id — see the same fix applied in process_order.handlers.ts /
 // packing_order.handlers.ts.
-async function resolveStockDocumentIdsByLedgerIds(ledgerIds: string[]): Promise<Map<string, string>> {
+//
+// §104.8: also returns each original leg's own posted valuation_rate. Every P262 IN reversal
+// leg must restore its material at the original issue rate — post_stock_movement() recomputes
+// the weighted average from p_unit_value on IN, so restoring at 0 would dilute the material's
+// rate toward zero. The P102/P261 OUT legs are snapshot-harmless (OUT consumes at the current
+// rate) but carry the original rate too for ledger value symmetry.
+type StockLedgerRef = { docId: string; rate: number };
+async function resolveStockLedgerRefsByLedgerIds(ledgerIds: string[]): Promise<Map<string, StockLedgerRef>> {
   const ids = [...new Set(ledgerIds.filter(Boolean))];
-  const map = new Map<string, string>();
+  const map = new Map<string, StockLedgerRef>();
   if (ids.length === 0) return map;
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
     .from("stock_ledger")
-    .select("id, stock_document_id")
+    .select("id, stock_document_id, valuation_rate")
     .in("id", ids);
   if (error) {
-    console.error("[partial_reversal.resolveStockDocumentIdsByLedgerIds] query failed:", JSON.stringify(error));
+    console.error("[partial_reversal.resolveStockLedgerRefsByLedgerIds] query failed:", JSON.stringify(error));
     throw new Error("PR19_LEDGER_LOOKUP_FAILED");
   }
   for (const row of (data ?? []) as JsonRecord[]) {
     const ledgerId = String(row.id ?? "");
     const docId = toTrimmedString(row.stock_document_id);
-    if (ledgerId && docId) map.set(ledgerId, docId);
+    if (ledgerId && docId) map.set(ledgerId, { docId, rate: Number(row.valuation_rate ?? 0) });
   }
   return map;
 }
@@ -749,19 +756,20 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
 
       const materialMap = await getMaterialMapByIds([selectedMaterialId], "id, base_uom_code");
       const sfgBaseUom = String(materialMap.get(selectedMaterialId)?.base_uom_code ?? "KG");
-      const fgDocId = (await resolveStockDocumentIdsByLedgerIds([toTrimmedString(poData.fg_stock_ledger_id)])).get(toTrimmedString(poData.fg_stock_ledger_id)) ?? null;
-      if (!fgDocId) throw new Error("PR19_REVERSAL_SOURCE_NOT_FOUND");
+      const fgRef = (await resolveStockLedgerRefsByLedgerIds([toTrimmedString(poData.fg_stock_ledger_id)])).get(toTrimmedString(poData.fg_stock_ledger_id)) ?? null;
+      if (!fgRef) throw new Error("PR19_REVERSAL_SOURCE_NOT_FOUND");
 
       // DEPENDENT: all postings share this brand-new document_number — see
       // finalizePackingOrderHandler's own comment for why this must be
       // sequential (post_stock_movement()'s item_number lock has nothing to
       // lock on the first-ever posting for a document_number).
-      // Step 1: SFG P102 — dissolve reverse_qty out of S003.
+      // Step 1: SFG P102 — dissolve reverse_qty out of S003. OUT: snapshot consumes at the
+      // current rate; carry the SFG's own booked rate (§104.8) for ledger value symmetry.
       const step1 = await postStockMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode: "P102", companyId, storageLocationId: sfgSlocId,
-        materialId: selectedMaterialId, quantity: reverseQty, baseUomCode: sfgBaseUom, unitValue: 0,
-        stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy, reversalOfId: fgDocId,
+        materialId: selectedMaterialId, quantity: reverseQty, baseUomCode: sfgBaseUom, unitValue: fgRef.rate,
+        stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy, reversalOfId: fgRef.docId,
         batchNumber: String(poData.batch_number ?? ""),
         matDoc, referenceDocumentId: processOrderId,
       });
@@ -782,7 +790,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       if (polErr) throw new Error("PR19_CREATE_FAILED");
       const polMap = new Map(((polRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
       const rmMaterialMap = await getMaterialMapByIds(rmIntLines.map((l) => l.material_id), "id, base_uom_code");
-      const rmDocIdMap = await resolveStockDocumentIdsByLedgerIds(
+      const rmRefMap = await resolveStockLedgerRefsByLedgerIds(
         [...polMap.values()].map((row) => toTrimmedString(row.stock_ledger_id)),
       );
 
@@ -794,14 +802,16 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         if (!slocId) throw new Error("PR19_LINE_SLOC_REQUIRED");
         const effectiveMaterialId = toTrimmedString(pol?.actual_material_id) || rmLine.material_id;
         const baseUom = String(rmMaterialMap.get(effectiveMaterialId)?.base_uom_code ?? "KG");
-        const reversalOfId = rmDocIdMap.get(toTrimmedString(pol?.stock_ledger_id)) ?? null;
-        if (!reversalOfId) throw new Error("PR19_REVERSAL_SOURCE_NOT_FOUND");
+        const rmRef = rmRefMap.get(toTrimmedString(pol?.stock_ledger_id)) ?? null;
+        if (!rmRef) throw new Error("PR19_REVERSAL_SOURCE_NOT_FOUND");
 
+        // §104.8: restore RM/INT at the original issue rate (an IN reversal at 0 would
+        // dilute the material's weighted average toward zero).
         const posting = await postStockMovement({
           documentNumber: docNumber, documentDate: today, postingDate: today,
           movementTypeCode: "P262", companyId, storageLocationId: slocId,
-          materialId: effectiveMaterialId, quantity: rmLine.proportional_actual_qty, baseUomCode: baseUom, unitValue: 0,
-          stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId,
+          materialId: effectiveMaterialId, quantity: rmLine.proportional_actual_qty, baseUomCode: baseUom, unitValue: rmRef.rate,
+          stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId: rmRef.docId,
           batchNumber: null,
           matDoc, referenceDocumentId: processOrderId,
         });
@@ -877,22 +887,23 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       const sfgMaterialId = toTrimmedString(sfgLineData?.material_id) || String(poData.material_id ?? "");
       const sfgBaseUom = String(materialMap.get(sfgMaterialId)?.base_uom_code ?? "KG");
 
-      const [fgDocIdMap, sfgDocIdMap] = await Promise.all([
-        resolveStockDocumentIdsByLedgerIds([toTrimmedString(fgLineData?.stock_ledger_id)]),
-        resolveStockDocumentIdsByLedgerIds([toTrimmedString(sfgLineData?.stock_ledger_id)]),
+      const [fgRefMap, sfgRefMap] = await Promise.all([
+        resolveStockLedgerRefsByLedgerIds([toTrimmedString(fgLineData?.stock_ledger_id)]),
+        resolveStockLedgerRefsByLedgerIds([toTrimmedString(sfgLineData?.stock_ledger_id)]),
       ]);
-      const fgDocId = fgDocIdMap.get(toTrimmedString(fgLineData?.stock_ledger_id)) ?? null;
-      const sfgDocId = sfgDocIdMap.get(toTrimmedString(sfgLineData?.stock_ledger_id)) ?? null;
-      if (!fgDocId || !sfgDocId) throw new Error("PR19_REVERSAL_SOURCE_NOT_FOUND");
+      const fgRef = fgRefMap.get(toTrimmedString(fgLineData?.stock_ledger_id)) ?? null;
+      const sfgRef = sfgRefMap.get(toTrimmedString(sfgLineData?.stock_ledger_id)) ?? null;
+      if (!fgRef || !sfgRef) throw new Error("PR19_REVERSAL_SOURCE_NOT_FOUND");
 
       // DEPENDENT: see the SFG-row branch above for why this must stay
       // sequential — same brand-new-document_number item_number race.
-      // Step 1: SKU/FG P102 — dissolve reverse_qty out of F003.
+      // Step 1: SKU/FG P102 — dissolve reverse_qty out of F003. OUT: snapshot consumes at the
+      // current rate; carry the FG's own booked rate (§104.8) for ledger value symmetry.
       const step1 = await postStockMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode: "P102", companyId, storageLocationId: fgSlocId,
-        materialId: selectedMaterialId, quantity: reverseQty, baseUomCode: fgBaseUom, unitValue: 0,
-        stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy, reversalOfId: fgDocId,
+        materialId: selectedMaterialId, quantity: reverseQty, baseUomCode: fgBaseUom, unitValue: fgRef.rate,
+        stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy, reversalOfId: fgRef.docId,
         batchNumber: String(poData.batch_number ?? ""),
         matDoc, referenceDocumentId: processOrderId,
       });
@@ -902,13 +913,14 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         storage_location_id: fgSlocId, stock_ledger_id: step1.stock_ledger_id, display_order: 1,
       });
 
-      // Step 2: SFG P262 — reverses the original Packing-PO-Final P261,
-      // brings the SFG back into existence at S003.
+      // Step 2: SFG P262 — reverses the original Packing-PO-Final P261, brings the SFG back
+      // into existence at S003. IN: restore at the SFG's own booked rate (§104.8) so the
+      // weighted average is not diluted toward zero.
       const step2 = await postStockMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode: "P262", companyId, storageLocationId: sfgLineSlocId,
-        materialId: sfgMaterialId, quantity: sfgEquivalentQty, baseUomCode: sfgBaseUom, unitValue: 0,
-        stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId: sfgDocId,
+        materialId: sfgMaterialId, quantity: sfgEquivalentQty, baseUomCode: sfgBaseUom, unitValue: sfgRef.rate,
+        stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId: sfgRef.docId,
         batchNumber: String(poData.batch_number ?? ""),
         matDoc, referenceDocumentId: processOrderId,
       });
@@ -922,10 +934,11 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       // trace-down step into RM/INT, NOT the original packing consumption.
       // No reversalOfId: it's a fresh issue, net SFG balance across steps
       // 2+3 is unchanged but the ledger keeps two distinguishable entries.
+      // Same SFG rate as Step 2 so the +q/-q pair nets to zero value as well as zero qty.
       const step3 = await postStockMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode: "P261", companyId, storageLocationId: sfgLineSlocId,
-        materialId: sfgMaterialId, quantity: sfgEquivalentQty, baseUomCode: sfgBaseUom, unitValue: 0,
+        materialId: sfgMaterialId, quantity: sfgEquivalentQty, baseUomCode: sfgBaseUom, unitValue: sfgRef.rate,
         stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy, reversalOfId: null,
         batchNumber: String(poData.batch_number ?? ""),
         matDoc, referenceDocumentId: processOrderId,
@@ -947,7 +960,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       if (polErr) throw new Error("PR19_CREATE_FAILED");
       const polMap = new Map(((polRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
       const rmMaterialMap = await getMaterialMapByIds(rmIntLines.map((l) => l.material_id), "id, base_uom_code");
-      const rmDocIdMap = await resolveStockDocumentIdsByLedgerIds(
+      const rmRefMap = await resolveStockLedgerRefsByLedgerIds(
         [...polMap.values()].map((row) => toTrimmedString(row.stock_ledger_id)),
       );
 
@@ -959,14 +972,15 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         if (!slocId) throw new Error("PR19_LINE_SLOC_REQUIRED");
         const effectiveMaterialId = toTrimmedString(pol?.actual_material_id) || rmLine.material_id;
         const baseUom = String(rmMaterialMap.get(effectiveMaterialId)?.base_uom_code ?? "KG");
-        const reversalOfId = rmDocIdMap.get(toTrimmedString(pol?.stock_ledger_id)) ?? null;
-        if (!reversalOfId) throw new Error("PR19_REVERSAL_SOURCE_NOT_FOUND");
+        const rmRef = rmRefMap.get(toTrimmedString(pol?.stock_ledger_id)) ?? null;
+        if (!rmRef) throw new Error("PR19_REVERSAL_SOURCE_NOT_FOUND");
 
+        // §104.8: restore RM/INT at the original issue rate (IN reversal at 0 dilutes the WAC).
         const posting = await postStockMovement({
           documentNumber: docNumber, documentDate: today, postingDate: today,
           movementTypeCode: "P262", companyId, storageLocationId: slocId,
-          materialId: effectiveMaterialId, quantity: rmLine.proportional_actual_qty, baseUomCode: baseUom, unitValue: 0,
-          stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId,
+          materialId: effectiveMaterialId, quantity: rmLine.proportional_actual_qty, baseUomCode: baseUom, unitValue: rmRef.rate,
+          stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId: rmRef.docId,
           batchNumber: null,
           matDoc, referenceDocumentId: processOrderId,
         });
@@ -988,7 +1002,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         .eq("packing_order_id", packingOrderId as string)
         .eq("line_type", "PM");
       if (pmErr) throw new Error("PR19_CREATE_FAILED");
-      const pmDocIdMap = await resolveStockDocumentIdsByLedgerIds(
+      const pmRefMap = await resolveStockLedgerRefsByLedgerIds(
         ((pmLines ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.stock_ledger_id)),
       );
       const pmMaterialIds = ((pmLines ?? []) as JsonRecord[]).flatMap((row) => [
@@ -1017,14 +1031,15 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         const slocId = toTrimmedString(pmLine.issue_sloc_id);
         if (!slocId) throw new Error("PR19_LINE_SLOC_REQUIRED");
         const baseUom = String(pmMaterialMap.get(effectiveMaterialId)?.base_uom_code ?? "KG");
-        const reversalOfId = pmDocIdMap.get(toTrimmedString(pmLine.stock_ledger_id)) ?? null;
-        if (!reversalOfId) throw new Error("PR19_REVERSAL_SOURCE_NOT_FOUND");
+        const pmRef = pmRefMap.get(toTrimmedString(pmLine.stock_ledger_id)) ?? null;
+        if (!pmRef) throw new Error("PR19_REVERSAL_SOURCE_NOT_FOUND");
 
+        // §104.8: restore PM at the original issue rate (IN reversal at 0 dilutes the WAC).
         const posting = await postStockMovement({
           documentNumber: docNumber, documentDate: today, postingDate: today,
           movementTypeCode: "P262", companyId, storageLocationId: slocId,
-          materialId: effectiveMaterialId, quantity: proportionalQty, baseUomCode: baseUom, unitValue: 0,
-          stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId,
+          materialId: effectiveMaterialId, quantity: proportionalQty, baseUomCode: baseUom, unitValue: pmRef.rate,
+          stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId: pmRef.docId,
           batchNumber: null,
           matDoc, referenceDocumentId: processOrderId,
         });

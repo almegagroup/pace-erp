@@ -519,23 +519,30 @@ async function resolveConversionRate(
 // *_stock_ledger_id column on process_order/process_order_line stores the
 // RPC's own stock_ledger_id return value. Passing that raw value as
 // p_reversal_of_id violates the FK. Resolve first.
-async function resolveStockDocumentIdsByLedgerIds(ledgerIds: string[]): Promise<Map<string, string>> {
+//
+// §104.8: also returns each original leg's own posted valuation_rate. A CORS reversal
+// must restore/remove the EXACT value the original leg posted at — post_stock_movement()
+// does nothing special for p_reversal_of_id valuation-wise: an IN reversal (P262 RM/PM
+// restore, P321 QI restore) recomputes the weighted average from p_unit_value, so posting
+// it at 0 would dilute the material's rate toward zero. Reverse at the original rate.
+type StockLedgerRef = { docId: string; rate: number };
+async function resolveStockLedgerRefsByLedgerIds(ledgerIds: string[]): Promise<Map<string, StockLedgerRef>> {
   const ids = [...new Set(ledgerIds.filter(Boolean))];
-  const map = new Map<string, string>();
+  const map = new Map<string, StockLedgerRef>();
   if (ids.length === 0) return map;
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
     .from("stock_ledger")
-    .select("id, stock_document_id")
+    .select("id, stock_document_id, valuation_rate")
     .in("id", ids);
   if (error) {
-    console.error("[process_order.resolveStockDocumentIdsByLedgerIds] query failed:", JSON.stringify(error));
+    console.error("[process_order.resolveStockLedgerRefsByLedgerIds] query failed:", JSON.stringify(error));
     throw new Error("PROD_PO_LEDGER_LOOKUP_FAILED");
   }
   for (const row of (data ?? []) as JsonRecord[]) {
     const ledgerId = String(row.id ?? "");
     const docId = toTrimmedString(row.stock_document_id);
-    if (ledgerId && docId) map.set(ledgerId, docId);
+    if (ledgerId && docId) map.set(ledgerId, { docId, rate: Number(row.valuation_rate ?? 0) });
   }
   return map;
 }
@@ -3055,7 +3062,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
         toTrimmedString(po.qi_release_stock_ledger_id),
         toTrimmedString(po.fg_stock_ledger_id),
       ];
-      const stockDocumentIdByLedgerId = await resolveStockDocumentIdsByLedgerIds(reversalSourceLedgerIds);
+      const stockLedgerRefById = await resolveStockLedgerRefsByLedgerIds(reversalSourceLedgerIds);
 
       // DEPENDENT: each P262 reversal must follow the original issue lines one by one.
       for (const line of lines) {
@@ -3069,8 +3076,8 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           ? line.actual_material
           : line.material) as JsonRecord | null;
         const baseUom = String(movementMaterial?.base_uom_code ?? "KG");
-        const lineReversalOfId = stockDocumentIdByLedgerId.get(toTrimmedString(line.stock_ledger_id)) ?? null;
-        if (!lineReversalOfId) throw new Error("PROD_PO_REVERSAL_SOURCE_NOT_FOUND");
+        const lineRef = stockLedgerRefById.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+        if (!lineRef) throw new Error("PROD_PO_REVERSAL_SOURCE_NOT_FOUND");
 
         const posting = await postStockMovement({
           documentNumber: revDocNum,
@@ -3082,11 +3089,13 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           materialId: movementMaterialId,
           quantity: actualQty,
           baseUomCode: baseUom,
-          unitValue: 0,
+          // §104.8: restore RM/PM at the original issue rate (an IN reversal at 0 would
+          // dilute the material's weighted average toward zero).
+          unitValue: lineRef.rate,
           stockTypeCode: "UNRESTRICTED",
           direction: "IN",
           postedBy: ctx.auth_user_id,
-          reversalOfId: lineReversalOfId,
+          reversalOfId: lineRef.docId,
           batchNumber: reversalBatchNumber,
           matDoc: revMatDoc,
           referenceDocumentId: String(po.id),
@@ -3097,9 +3106,13 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
 
+      const qiReleaseRef = stockLedgerRefById.get(toTrimmedString(po.qi_release_stock_ledger_id)) ?? null;
+      const fgReceiptRef = stockLedgerRefById.get(toTrimmedString(po.fg_stock_ledger_id)) ?? null;
+      // §104.8: the SFG's own booked rate (RMC + Conversion), from its original P101/P321 legs.
+      const sfgRate = fgReceiptRef?.rate ?? qiReleaseRef?.rate ?? 0;
+
       if (po.qi_release_stock_ledger_id && shopfloorSlocId) {
-        const qiReversalOfId = stockDocumentIdByLedgerId.get(toTrimmedString(po.qi_release_stock_ledger_id)) ?? null;
-        if (!qiReversalOfId) throw new Error("PROD_PO_REVERSAL_SOURCE_NOT_FOUND");
+        if (!qiReleaseRef) throw new Error("PROD_PO_REVERSAL_SOURCE_NOT_FOUND");
         const p322Posting = await postStockMovement({
           documentNumber: revDocNum,
           documentDate: today,
@@ -3110,11 +3123,13 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           materialId: po.material_id,
           quantity: Number(po.actual_qty ?? 0),
           baseUomCode: fgUom,
-          unitValue: 0,
+          // OUT of UNRESTRICTED: snapshot consumes at the current rate (unit_value ignored),
+          // but carry the SFG rate for ledger value symmetry with the original P321 release.
+          unitValue: sfgRate,
           stockTypeCode: "UNRESTRICTED",
           direction: "OUT",
           postedBy: ctx.auth_user_id,
-          reversalOfId: qiReversalOfId,
+          reversalOfId: qiReleaseRef.docId,
           batchNumber: reversalBatchNumber,
           matDoc: revMatDoc,
           referenceDocumentId: String(po.id),
@@ -3140,7 +3155,10 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           materialId: po.material_id,
           quantity: Number(po.actual_qty ?? 0),
           baseUomCode: fgUom,
-          unitValue: 0,
+          // IN to QUALITY_INSPECTION: restore at the SFG's booked rate so the temporarily
+          // re-inflated QI carries value (an IN at 0 would dilute QI toward zero); it nets
+          // back to 0 with the P102 OUT-of-QI below.
+          unitValue: sfgRate,
           stockTypeCode: "QUALITY_INSPECTION",
           direction: "IN",
           postedBy: ctx.auth_user_id,
@@ -3152,8 +3170,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       }
 
       if (po.fg_stock_ledger_id && shopfloorSlocId) {
-        const fgReversalOfId = stockDocumentIdByLedgerId.get(toTrimmedString(po.fg_stock_ledger_id)) ?? null;
-        if (!fgReversalOfId) throw new Error("PROD_PO_REVERSAL_SOURCE_NOT_FOUND");
+        if (!fgReceiptRef) throw new Error("PROD_PO_REVERSAL_SOURCE_NOT_FOUND");
         const p102Posting = await postStockMovement({
           documentNumber: revDocNum,
           documentDate: today,
@@ -3164,11 +3181,13 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           materialId: po.material_id,
           quantity: Number(po.actual_qty ?? 0),
           baseUomCode: fgUom,
-          unitValue: 0,
+          // OUT: snapshot consumes at the current rate (unit_value ignored); carry the SFG
+          // rate for ledger value symmetry with the original P101 receipt.
+          unitValue: sfgRate,
           stockTypeCode: po.qi_release_stock_ledger_id ? "QUALITY_INSPECTION" : "UNRESTRICTED",
           direction: "OUT",
           postedBy: ctx.auth_user_id,
-          reversalOfId: fgReversalOfId,
+          reversalOfId: fgReceiptRef.docId,
           batchNumber: reversalBatchNumber,
           matDoc: revMatDoc,
           referenceDocumentId: String(po.id),

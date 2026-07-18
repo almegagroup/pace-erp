@@ -633,23 +633,62 @@ async function postStockMovement(params: {
 // *_stock_ledger_id column on process_order/process_order_line/
 // packing_order_line stores the RPC's own stock_ledger_id return value.
 // Passing that raw value as p_reversal_of_id violates the FK. Resolve first.
-async function resolveStockDocumentIdsByLedgerIds(ledgerIds: string[]): Promise<Map<string, string>> {
+//
+// §104.8: also returns each original leg's own posted valuation_rate. A reversal
+// must restore/remove the EXACT value the original leg posted at — post_stock_movement()
+// does nothing special for p_reversal_of_id valuation-wise: an IN reversal (P262/P102-in)
+// recomputes the weighted average from p_unit_value, so posting a reversal at 0 would
+// dilute the material's rate toward zero. Reverse at the original rate instead.
+type StockLedgerRef = { docId: string; rate: number };
+async function resolveStockLedgerRefsByLedgerIds(ledgerIds: string[]): Promise<Map<string, StockLedgerRef>> {
   const ids = [...new Set(ledgerIds.filter(Boolean))];
-  const map = new Map<string, string>();
+  const map = new Map<string, StockLedgerRef>();
   if (ids.length === 0) return map;
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
     .from("stock_ledger")
-    .select("id, stock_document_id")
+    .select("id, stock_document_id, valuation_rate")
     .in("id", ids);
   if (error) {
-    console.error("[packing_order.resolveStockDocumentIdsByLedgerIds] query failed:", JSON.stringify(error));
+    console.error("[packing_order.resolveStockLedgerRefsByLedgerIds] query failed:", JSON.stringify(error));
     throw new Error("PROD_PACK_LEDGER_LOOKUP_FAILED");
   }
   for (const row of (data ?? []) as JsonRecord[]) {
     const ledgerId = String(row.id ?? "");
     const docId = toTrimmedString(row.stock_document_id);
-    if (ledgerId && docId) map.set(ledgerId, docId);
+    if (ledgerId && docId) map.set(ledgerId, { docId, rate: Number(row.valuation_rate ?? 0) });
+  }
+  return map;
+}
+
+// §104: current UNRESTRICTED valuation rate for (material, storage_location) pairs, so the
+// SFG and PM issues post at their real cost (not 0) and roll up into the FG cost. Batched
+// read; keyed `${materialId}|${slocId}`; 0 when not yet valued. (Moving-average costing: the
+// snapshot rate is the blended current rate, which is the correct issue cost — not batch-split.)
+async function fetchUnrestrictedRates(
+  companyId: string,
+  keys: Array<{ materialId: string; slocId: string }>,
+): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  const pairs = keys.filter((k) => k.materialId && k.slocId);
+  if (pairs.length === 0) return map;
+  const materialIds = [...new Set(pairs.map((p) => p.materialId))];
+  const slocIds = [...new Set(pairs.map((p) => p.slocId))];
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_snapshot")
+    .select("material_id, storage_location_id, valuation_rate")
+    .eq("company_id", companyId)
+    .eq("stock_type_code", "UNRESTRICTED")
+    .is("batch_id", null)
+    .in("material_id", materialIds)
+    .in("storage_location_id", slocIds);
+  if (error) {
+    console.error("[packing_order.fetchUnrestrictedRates] query failed:", JSON.stringify(error));
+    throw new Error("PROD_PACK_RATE_LOOKUP_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) {
+    map.set(`${String(row.material_id)}|${String(row.storage_location_id)}`, Number(row.valuation_rate ?? 0));
   }
   return map;
 }
@@ -1534,6 +1573,27 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     // issue and the FG receipt are items under it; the Packing PO number is the reference.
     const finalMatDoc = await generateMaterialDocNumber(String(poData.company_id));
 
+    // §104.8: FG value/KG = (SFG value + Σ PM value) ÷ FG qty. Resolve every input (SFG + PM)
+    // line's current UNRESTRICTED rate up front, sum the input value, and derive the FG cost.
+    // The SFG rate is the SFG cost set by Process PO Verify (RMC + Conversion); PM rates come
+    // from GRN/opening stock. Helper to compute a line's effective (material, sloc) key:
+    const lineKey = (line: JsonRecord): { materialId: string; slocId: string } => ({
+      materialId: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
+      slocId: String((line.issue_sloc_id || (String(line.line_type ?? "") === "PM" ? defaultPmSlocId : null)) ?? ""),
+    });
+    const inputLines = lineRows.filter(
+      (line) => String(line.line_type ?? "") !== "FG" && Number(line.actual_qty ?? line.total_qty ?? 0) > 0,
+    );
+    const rateMap = await fetchUnrestrictedRates(String(poData.company_id), inputLines.map(lineKey));
+    let totalInputValue = 0;
+    for (const line of inputLines) {
+      const k = lineKey(line);
+      totalInputValue += Number(line.actual_qty ?? line.total_qty ?? 0) * (rateMap.get(`${k.materialId}|${k.slocId}`) ?? 0);
+    }
+    const fgLineForCost = lineRows.find((line) => String(line.line_type ?? "") === "FG");
+    const fgQtyForCost = Number(fgLineForCost?.actual_qty ?? fgLineForCost?.total_qty ?? 0);
+    const fgCostPerKg = fgQtyForCost > 0 ? totalInputValue / fgQtyForCost : 0;
+
     // DEPENDENT: all lines share the same brand-new Material Document number (never
     // posted before). post_stock_movement()'s item_number assignment locks existing
     // stock_document rows FOR UPDATE to serialize concurrent callers — but on the very
@@ -1553,11 +1613,14 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       const baseUom = (mat?.base_uom_code ?? "KG") as string;
       const movementTypeCode = toTrimmedString(line.movement_type_code) || (lineType === "FG" ? "P101" : "P261");
       const direction = lineType === "FG" ? "IN" : "OUT";
+      // §104.8: FG (receipt) enters at the rolled-up FG cost; SFG/PM (issues) leave at their
+      // own current rate — which is what feeds totalInputValue above.
+      const unitValue = lineType === "FG" ? fgCostPerKg : (rateMap.get(`${effectiveMaterialId}|${slocId}`) ?? 0);
       const posting = await postStockMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode, companyId: poData.company_id,
         storageLocationId: slocId, materialId: effectiveMaterialId,
-        quantity: qty, baseUomCode: toTrimmedString(line.uom_code) || baseUom, unitValue: 0,
+        quantity: qty, baseUomCode: toTrimmedString(line.uom_code) || baseUom, unitValue,
         stockTypeCode: "UNRESTRICTED", direction: direction as "IN" | "OUT", postedBy: ctx.auth_user_id,
         batchNumber: (line.batch_number as string | null) ?? null,
         matDoc: finalMatDoc,
@@ -1665,7 +1728,7 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
         "PROD_PACK_REVERSE_FAILED",
         "id, base_uom_code",
       );
-      const stockDocumentIdByLedgerId = await resolveStockDocumentIdsByLedgerIds(
+      const ledgerRefByLedgerId = await resolveStockLedgerRefsByLedgerIds(
         lineRows.map((line) => toTrimmedString(line.stock_ledger_id)),
       );
 
@@ -1685,17 +1748,19 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
         const baseUom = (mat?.base_uom_code ?? "KG") as string;
         const movementTypeCode = lineType === "FG" ? "P102" : "P262";
         const direction = lineType === "FG" ? "OUT" : "IN";
-        const reversalOfId = stockDocumentIdByLedgerId.get(toTrimmedString(line.stock_ledger_id)) ?? null;
-        if (!reversalOfId) throw new Error("PROD_PACK_REVERSAL_SOURCE_NOT_FOUND");
+        const ledgerRef = ledgerRefByLedgerId.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+        if (!ledgerRef) throw new Error("PROD_PACK_REVERSAL_SOURCE_NOT_FOUND");
 
         await postStockMovement({
           documentNumber: revDocNum, documentDate: today, postingDate: today,
           movementTypeCode, companyId: poData.company_id,
           storageLocationId: slocId, materialId: effectiveMaterialId,
-          quantity: qty, baseUomCode: baseUom, unitValue: 0,
+          // §104.8: reverse at the original leg's own rate for exact value symmetry
+          // (an IN reversal at 0 would dilute the restored material's weighted average).
+          quantity: qty, baseUomCode: baseUom, unitValue: ledgerRef.rate,
           stockTypeCode: "UNRESTRICTED", direction: direction as "IN" | "OUT",
           postedBy: ctx.auth_user_id,
-          reversalOfId,
+          reversalOfId: ledgerRef.docId,
           batchNumber: (line.batch_number as string | null) ?? null,
           matDoc: revMatDoc,
           referenceDocumentId: String(poData.id),
@@ -1790,7 +1855,7 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       assertPackingSfgBatchAvailability(String(poData.company_id), need)
     ));
 
-    const stockDocumentIdByLedgerId = await resolveStockDocumentIdsByLedgerIds(
+    const ledgerRefByLedgerId = await resolveStockLedgerRefsByLedgerIds(
       [...lineMap.values()].map((line) => toTrimmedString(line.stock_ledger_id)),
     );
 
@@ -1826,9 +1891,15 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       const direction = lineType === "FG"
         ? (isIncrease ? "IN" : "OUT")
         : (isIncrease ? "OUT" : "IN");
+      // §104.8: every COR6 correction leg posts at the ORIGINAL line's own rate — a decrease
+      // reverses the exact value it removed (an IN reversal at 0 would dilute the material's
+      // weighted average), and an increase adds/issues at the same per-KG cost the batch was
+      // booked at (FG increase = same batch cost; SFG/PM increase records the original issue
+      // rate, harmless to the snapshot which consumes OUT at the current rate regardless).
+      const ledgerRef = ledgerRefByLedgerId.get(toTrimmedString(line.stock_ledger_id)) ?? null;
       let reversalOfId: string | null = null;
       if (!isIncrease) {
-        reversalOfId = stockDocumentIdByLedgerId.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+        reversalOfId = ledgerRef?.docId ?? null;
         if (!reversalOfId) throw new Error("PROD_PACK_REVERSAL_SOURCE_NOT_FOUND");
       }
       const posting = await postStockMovement({
@@ -1841,7 +1912,7 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
         materialId: effectiveMaterialId,
         quantity: Math.abs(delta),
         baseUomCode: baseUom,
-        unitValue: 0,
+        unitValue: ledgerRef?.rate ?? 0,
         stockTypeCode: "UNRESTRICTED",
         direction: direction as "IN" | "OUT",
         postedBy: ctx.auth_user_id,
