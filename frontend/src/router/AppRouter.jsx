@@ -192,6 +192,8 @@ import SfgResultRecordingPage from "../pages/dashboard/production/SfgResultRecor
 import FgStockBreakdownPage from "../pages/dashboard/production/FgStockBreakdownPage.jsx";
 import PartialBatchReversalPage from "../pages/dashboard/production/PartialBatchReversalPage.jsx";
 import ConversionCostPage from "../pages/dashboard/production/ConversionCostPage.jsx";
+import OldProcessPoPage from "../pages/dashboard/production/OldProcessPoPage.jsx";
+import OldPackingPoPage from "../pages/dashboard/production/OldPackingPoPage.jsx";
 import PartialReversalReportPage from "../pages/dashboard/production/PartialReversalReportPage.jsx";
 
 export default function AppRouter() {
@@ -766,6 +768,8 @@ export default function AppRouter() {
                   <Route path="production/partial-batch-reversal" element={<PartialBatchReversalPage />} />
                   <Route path="production/partial-reversal-report" element={<PartialReversalReportPage />} />
                   <Route path="production/conversion-cost" element={<ConversionCostPage />} />
+                  <Route path="production/old-process-po" element={<OldProcessPoPage />} />
+                  <Route path="production/old-packing-po" element={<OldPackingPoPage />} />
                 </Route>
               </Route>
 

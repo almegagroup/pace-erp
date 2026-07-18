@@ -729,4 +729,20 @@ export const OPERATION_SCREENS = Object.freeze({
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
+
+  PROD_OLD_PROCESS_PO: {
+    screen_code: "PROD_OLD_PROCESS_PO",
+    route: "/dashboard/production/old-process-po",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_OLD_PACKING_PO: {
+    screen_code: "PROD_OLD_PACKING_PO",
+    route: "/dashboard/production/old-packing-po",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
 });

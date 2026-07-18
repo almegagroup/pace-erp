@@ -64,9 +64,14 @@ export const releaseBatchNumber = (id, body) => fetchProd("POST", `/api/producti
 export const listSegmentLocations = (p) => fetchProd("GET", "/api/production/segment-locations", undefined, p);
 export const upsertSegmentLocation = (body) => fetchProd("POST", "/api/production/segment-locations", body);
 
-// ── Conversion Cost Config (SA — §104.8) ──────────────────────────────────────
+// ── Conversion Cost Config (Accounts ACL — §104.8) ────────────────────────────
 export const listConversionRates = (p) => fetchProd("GET", "/api/production/conversion-rates", undefined, p);
 export const createConversionRate = (body) => fetchProd("POST", "/api/production/conversion-rates", body);
+
+// ── Opening Genealogy (§104.9) — PR22 Old Process PO / PR23 Old Packing PO ────
+export const createOldProcessPo = (body) => fetchProd("POST", "/api/production/old-process-po", body);
+export const listOldProcessPoBatches = (p) => fetchProd("GET", "/api/production/old-process-po/batches", undefined, p);
+export const createOldPackingPo = (body) => fetchProd("POST", "/api/production/old-packing-po", body);
 
 // ── Stroke Masters ────────────────────────────────────────────────────────────
 export const listStrokeMasters = (p) => fetchProd("GET", "/api/production/stroke-masters", undefined, p);
