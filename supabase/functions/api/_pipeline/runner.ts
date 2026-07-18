@@ -506,6 +506,18 @@ export async function runPipeline(
 
 sessionResult = await stepSession(req, requestId);
 
+// PERF (Step 0): the pipeline's DB steps are pure network cost — every query is an
+// indexed sub-ms lookup, but each one is a Singapore->Mumbai (prod) / Oregon->Mumbai (dev)
+// round trip. Log per-step elapsed so we can see the real split before optimising.
+// Logging only — no behaviour change.
+log({
+  level: "OBSERVABILITY",
+  request_id: requestId,
+  gate_id: "10.5",
+  event: "PIPELINE_STEP_TIMING",
+  meta: { step: "SESSION", ms: Math.round(performance.now() - tSession0) },
+});
+
 if (!sessionResult) {
   return errorResponse(
   "SESSION_RESOLUTION_FAILED",
@@ -632,6 +644,15 @@ contextResult = await stepContext(req, {
   workspaceMode: activeSession.workspaceMode ?? null,
 });
 
+// PERF (Step 0) — see the SESSION timing note above.
+log({
+  level: "OBSERVABILITY",
+  request_id: requestId,
+  gate_id: "10.5",
+  event: "PIPELINE_STEP_TIMING",
+  meta: { step: "CONTEXT", ms: Math.round(performance.now() - tContext0) },
+});
+
     if (contextResult.status === "UNRESOLVED") {
       return errorResponse(
         "CONTEXT_UNRESOLVED",
@@ -710,6 +731,15 @@ const tAcl0 = performance.now();
         action: aclRouteMeta.action,
       },
     });
+    // PERF (Step 0) — see the SESSION timing note above.
+    log({
+      level: "OBSERVABILITY",
+      request_id: requestId,
+      gate_id: "10.5",
+      event: "PIPELINE_STEP_TIMING",
+      meta: { step: "ACL", ms: Math.round(performance.now() - tAcl0) },
+    });
+
     if (acl.decision === "DENY") {
       return errorResponse(
         acl.reason,
