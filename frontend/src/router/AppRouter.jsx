@@ -70,6 +70,7 @@ import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
 import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
 import SAProductionBatchSeriesPage from "../admin/sa/screens/SAProductionBatchSeriesPage.jsx";
 import SAProductionSegmentLocationPage from "../admin/sa/screens/SAProductionSegmentLocationPage.jsx";
+import SAProductionConversionRatePage from "../admin/sa/screens/SAProductionConversionRatePage.jsx";
 import SAPackCodeMasterPage from "../admin/sa/screens/SAPackCodeMasterPage.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
@@ -346,6 +347,10 @@ export default function AppRouter() {
                     <Route
                       path="production/segment-locations"
                       element={<SAProductionSegmentLocationPage />}
+                    />
+                    <Route
+                      path="production/conversion-rates"
+                      element={<SAProductionConversionRatePage />}
                     />
 
                   </Route>

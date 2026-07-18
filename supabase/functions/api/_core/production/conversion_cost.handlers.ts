@@ -1,0 +1,196 @@
+/*
+ * File-ID: 27.104-5
+ * File-Path: supabase/functions/api/_core/production/conversion_cost.handlers.ts
+ * Gate: 27.104
+ * Domain: PRODUCTION / COSTING
+ * Purpose: SA config for the per-KG conversion-cost table (§104.8). Append-only, valid_from
+ *          dated — a rate change inserts a new row; old rows are never edited/deleted, so the
+ *          full rate history is preserved and back-dated postings pick the rate valid then.
+ *          The resolver (erp_production.resolve_conversion_rate) is used by Process PO Verify.
+ * Authority: Backend
+ */
+
+import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { okResponse, errorResponse } from "../response.ts";
+import type { ProdHandlerContext } from "./production.shared.ts";
+import {
+  assertSARole,
+  assertProdReadRole,
+  parseBody,
+  toTrimmedString,
+  toUpperTrimmedString,
+} from "./production.shared.ts";
+
+type JsonRecord = Record<string, unknown>;
+
+// Segment codes the config recognises — must match VALID_SEGMENTS in process_order.handlers.ts /
+// segment_location.handlers.ts. INT is included for completeness; conversion is only actually
+// resolved for MTO/HPS/MTS output today, but the table can hold any segment default.
+const VALID_SEGMENTS = new Set(["ADMIX", "HPS", "IWC", "POWDER", "INT"]);
+
+function convError(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
+  return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
+}
+
+function createdOkResponse(data: unknown, requestId: string, req?: Request): Response {
+  const response = okResponse(data, requestId, req);
+  return new Response(response.body, { status: 201, headers: response.headers });
+}
+
+async function getCompanyMapByIds(companyIds: string[]): Promise<Map<string, JsonRecord>> {
+  const ids = [...new Set(companyIds.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (ids.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master").from("companies")
+    .select("id, company_code, company_name")
+    .in("id", ids);
+  if (error) {
+    console.error("[conversion_cost.getCompanyMap] query failed:", JSON.stringify(error));
+    throw new Error("PROD_CONV_RATE_LIST_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  return map;
+}
+
+async function getMaterialMapByIds(materialIds: string[]): Promise<Map<string, JsonRecord>> {
+  const ids = [...new Set(materialIds.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (ids.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master").from("material_master")
+    .select("id, pace_code, material_name, shade_code")
+    .in("id", ids);
+  if (error) {
+    console.error("[conversion_cost.getMaterialMap] query failed:", JSON.stringify(error));
+    throw new Error("PROD_CONV_RATE_LIST_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  return map;
+}
+
+// GET /api/production/conversion-rates?company_id=&segment_code=
+// Lists every rate row (full history) with company/prodshade display names and a DERIVED
+// valid_to (next row's valid_from − 1 day within the same company+segment+prodshade key; the
+// newest row shows null = "current"). valid_to is never stored — see §104.8.
+export async function listConversionRatesHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const segmentCode = toUpperTrimmedString(url.searchParams.get("segment_code") ?? "");
+
+    let query = serviceRoleClient
+      .schema("erp_production").from("conversion_cost_config")
+      .select("id, company_id, segment_code, prodshade_material_id, valid_from, conversion_rate_per_kg, created_at, created_by")
+      .order("company_id").order("segment_code")
+      .order("prodshade_material_id", { nullsFirst: true })
+      .order("valid_from", { ascending: true });
+    if (companyId) query = query.eq("company_id", companyId);
+    if (segmentCode) query = query.eq("segment_code", segmentCode);
+
+    const { data, error } = await query;
+    if (error) {
+      console.error("[conversion_cost.list] query failed:", JSON.stringify(error));
+      throw new Error("PROD_CONV_RATE_LIST_FAILED");
+    }
+    const rows = (data ?? []) as JsonRecord[];
+
+    const [companyMap, materialMap] = await Promise.all([
+      getCompanyMapByIds(rows.map((r) => String(r.company_id ?? ""))),
+      getMaterialMapByIds(rows.map((r) => String(r.prodshade_material_id ?? ""))),
+    ]);
+
+    // Derive valid_to: the previous row (sorted by valid_from ASC) in the same key group gets
+    // this row's valid_from − 1 day. Rows are already ordered by company/segment/prodshade/valid_from.
+    const keyOf = (r: JsonRecord) =>
+      `${String(r.company_id ?? "")}|${String(r.segment_code ?? "")}|${String(r.prodshade_material_id ?? "")}`;
+    const validToById = new Map<string, string | null>();
+    for (let i = 0; i < rows.length; i++) {
+      const next = rows[i + 1];
+      if (next && keyOf(next) === keyOf(rows[i])) {
+        const d = new Date(`${String(next.valid_from)}T00:00:00Z`);
+        d.setUTCDate(d.getUTCDate() - 1);
+        validToById.set(String(rows[i].id), d.toISOString().slice(0, 10));
+      } else {
+        validToById.set(String(rows[i].id), null); // newest in group = current
+      }
+    }
+
+    return okResponse({
+      data: rows.map((row) => {
+        const company = companyMap.get(String(row.company_id ?? "")) ?? null;
+        const prodshade = row.prodshade_material_id ? (materialMap.get(String(row.prodshade_material_id)) ?? null) : null;
+        return {
+          ...row,
+          valid_to: validToById.get(String(row.id)) ?? null,
+          is_current: validToById.get(String(row.id)) === null,
+          company_code: company ? String((company as JsonRecord).company_code ?? "") : null,
+          company_name: company ? String((company as JsonRecord).company_name ?? "") : null,
+          prodshade: prodshade
+            ? {
+                pace_code: String((prodshade as JsonRecord).pace_code ?? ""),
+                material_name: String((prodshade as JsonRecord).material_name ?? ""),
+                shade_code: String((prodshade as JsonRecord).shade_code ?? ""),
+              }
+            : null,
+        };
+      }),
+    }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_CONV_RATE_LIST_FAILED";
+    return convError(req, ctx, code, 500, "Conversion rate list failed");
+  }
+}
+
+// POST /api/production/conversion-rates
+// SA-only. Append-only: inserts a new (company, segment, nullable prodshade, valid_from) row.
+// prodshade_material_id NULL = the segment default; a value = a Prodshade-specific override.
+export async function createConversionRateHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertSARole(ctx);
+    const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id);
+    const segmentCode = toUpperTrimmedString(body.segment_code);
+    const prodshadeMaterialId = toTrimmedString(body.prodshade_material_id) || null;
+    const validFrom = toTrimmedString(body.valid_from);
+    const rateRaw = body.conversion_rate_per_kg;
+    const rate = Number(rateRaw);
+
+    if (!companyId || !VALID_SEGMENTS.has(segmentCode) || !validFrom) {
+      return convError(req, ctx, "PROD_CONV_RATE_INVALID", 400, "company_id, segment_code, valid_from required");
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(validFrom)) {
+      return convError(req, ctx, "PROD_CONV_RATE_DATE_INVALID", 400, "valid_from must be YYYY-MM-DD");
+    }
+    if (rateRaw === undefined || rateRaw === null || rateRaw === "" || !Number.isFinite(rate) || rate < 0) {
+      return convError(req, ctx, "PROD_CONV_RATE_VALUE_INVALID", 400, "conversion_rate_per_kg must be a number ≥ 0");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_production").from("conversion_cost_config")
+      .insert({
+        company_id: companyId,
+        segment_code: segmentCode,
+        prodshade_material_id: prodshadeMaterialId,
+        valid_from: validFrom,
+        conversion_rate_per_kg: rate,
+        created_by: ctx.auth_user_id,
+      })
+      .select("id").single();
+
+    if (error) {
+      if (error.code === "23505") {
+        return convError(req, ctx, "PROD_CONV_RATE_EXISTS", 409,
+          "A rate for this company/segment/prodshade already has that valid_from date. Pick a different date.");
+      }
+      console.error("[conversion_cost.create] insert failed:", JSON.stringify(error));
+      throw new Error("PROD_CONV_RATE_CREATE_FAILED");
+    }
+    return createdOkResponse({ id: (data as JsonRecord).id }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_CONV_RATE_CREATE_FAILED";
+    const status = code === "PROD_SA_REQUIRED" ? 403 : 500;
+    return convError(req, ctx, code, status, "Conversion rate create failed");
+  }
+}

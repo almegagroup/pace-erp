@@ -42,6 +42,10 @@ import {
   upsertSegmentLocationHandler,
 } from "../_core/production/segment_location.handlers.ts";
 import {
+  listConversionRatesHandler,
+  createConversionRateHandler,
+} from "../_core/production/conversion_cost.handlers.ts";
+import {
   listPlanFeedHandler,
   getPlanFeedHandler,
   createPlanFeedHandler,
@@ -164,6 +168,12 @@ export async function dispatchProductionRoutes(
       return await listSegmentLocationsHandler(req, ctx);
     case "POST:/api/production/segment-locations":
       return await upsertSegmentLocationHandler(req, ctx);
+
+    // Conversion Cost Config (SA — §104.8, per-KG conversion rate, valid_from dated)
+    case "GET:/api/production/conversion-rates":
+      return await listConversionRatesHandler(req, ctx);
+    case "POST:/api/production/conversion-rates":
+      return await createConversionRateHandler(req, ctx);
 
     // Stroke Masters
     case "GET:/api/production/stroke-masters":

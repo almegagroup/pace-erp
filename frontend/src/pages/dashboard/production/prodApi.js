@@ -64,6 +64,10 @@ export const releaseBatchNumber = (id, body) => fetchProd("POST", `/api/producti
 export const listSegmentLocations = (p) => fetchProd("GET", "/api/production/segment-locations", undefined, p);
 export const upsertSegmentLocation = (body) => fetchProd("POST", "/api/production/segment-locations", body);
 
+// ── Conversion Cost Config (SA — §104.8) ──────────────────────────────────────
+export const listConversionRates = (p) => fetchProd("GET", "/api/production/conversion-rates", undefined, p);
+export const createConversionRate = (body) => fetchProd("POST", "/api/production/conversion-rates", body);
+
 // ── Stroke Masters ────────────────────────────────────────────────────────────
 export const listStrokeMasters = (p) => fetchProd("GET", "/api/production/stroke-masters", undefined, p);
 export const getStrokeMaster = (id) => fetchProd("GET", `/api/production/stroke-masters/${id}`);
