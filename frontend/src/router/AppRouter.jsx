@@ -70,7 +70,6 @@ import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
 import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
 import SAProductionBatchSeriesPage from "../admin/sa/screens/SAProductionBatchSeriesPage.jsx";
 import SAProductionSegmentLocationPage from "../admin/sa/screens/SAProductionSegmentLocationPage.jsx";
-import SAProductionConversionRatePage from "../admin/sa/screens/SAProductionConversionRatePage.jsx";
 import SAPackCodeMasterPage from "../admin/sa/screens/SAPackCodeMasterPage.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
@@ -192,6 +191,7 @@ import BatchNumberReleasePage from "../pages/dashboard/production/BatchNumberRel
 import SfgResultRecordingPage from "../pages/dashboard/production/SfgResultRecordingPage.jsx";
 import FgStockBreakdownPage from "../pages/dashboard/production/FgStockBreakdownPage.jsx";
 import PartialBatchReversalPage from "../pages/dashboard/production/PartialBatchReversalPage.jsx";
+import ConversionCostPage from "../pages/dashboard/production/ConversionCostPage.jsx";
 import PartialReversalReportPage from "../pages/dashboard/production/PartialReversalReportPage.jsx";
 
 export default function AppRouter() {
@@ -347,10 +347,6 @@ export default function AppRouter() {
                     <Route
                       path="production/segment-locations"
                       element={<SAProductionSegmentLocationPage />}
-                    />
-                    <Route
-                      path="production/conversion-rates"
-                      element={<SAProductionConversionRatePage />}
                     />
 
                   </Route>
@@ -769,6 +765,7 @@ export default function AppRouter() {
                   <Route path="production/fg-stock-breakdown" element={<FgStockBreakdownPage />} />
                   <Route path="production/partial-batch-reversal" element={<PartialBatchReversalPage />} />
                   <Route path="production/partial-reversal-report" element={<PartialReversalReportPage />} />
+                  <Route path="production/conversion-cost" element={<ConversionCostPage />} />
                 </Route>
               </Route>
 

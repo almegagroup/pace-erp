@@ -13846,6 +13846,27 @@ Prodshade-er conversion cost alada hote pare."* So:
   Powder; and individual Powder Prodshades)
 - **Resolution rule: Prodshade-specific first, else segment default** (specific beats general).
 
+**Page ownership — Accounts ACL, NOT SA (CORRECTED 2026-07-18, business owner override).** The
+conversion-rate config page was first built as an SA screen (§104-5, tx OM11). Business owner
+corrected it: *"SA-r pokkhe jana somvob noy kokhon ki rate asche"* — SA cannot know when a rate
+changes; setting the rate is an **Accounts function**. So the page moves out of the SA universe into
+the **ACL universe under the Accounts menu** (`GRP_ACL_ACCOUNTS`, tx_code **AC04**, resource
+`ACC_CONVERSION_COST`). Consequences for the page (all LOCKED 2026-07-18):
+- **Company** comes from the user's **work company**, resolved automatically — a multi-company user
+  gets a dropdown, a single-company user is auto-selected (standard ACL company-scoping, not a raw
+  all-companies SA list).
+- **Prodshade options are sourced from that company's Batch Number Series** (the real production
+  Prodshades), not the full material master. Rationale (business owner): *"batch series theke prodshade
+  ber korbe … MTS-er different product-e different conversion rate hote pare"* — a company-level
+  (segment-default) rate is enough for MTO/HPS/MTEST, but **MTS must be settable per Prodshade**
+  because different MTS products carry different conversion rates. The (company, segment, prodshade)
+  key already supports this; the page just exposes the per-Prodshade override with Prodshades drawn
+  from the company's MTS batch series.
+- No approval workflow — Accounts enters the dated row directly (append-only, as above).
+- **PR22/PR23 (Old Process/Packing PO, §104.9) follow the same principle — NOT SA-only.** They belong
+  to the **Production ACL** menu (`GRP_ACL_PRODUCTION`, alongside every other PR page), tx_code
+  `PR22`/`PR23`. (Supersedes §104.9.1's earlier "ACL locked SA-only" line.)
+
 **Rate changes over time — `valid_from` dating (LOCKED 2026-07-17).** Business owner: the company
 periodically raises/lowers the conversion cost, and *"se janei na koto diner jonno valid"* — the
 user does not know in advance how long a rate will last, so they must not be asked for an end date.

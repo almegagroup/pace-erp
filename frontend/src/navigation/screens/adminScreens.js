@@ -332,14 +332,6 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  SA_PROD_CONVERSION_RATE: {
-    screen_code: "SA_PROD_CONVERSION_RATE",
-    route: "/sa/production/conversion-rates",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
   GA_HOME: {
     screen_code: "GA_HOME",
     route: "/ga/home",

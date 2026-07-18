@@ -721,4 +721,12 @@ export const OPERATION_SCREENS = Object.freeze({
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
+
+  ACC_CONVERSION_COST: {
+    screen_code: "ACC_CONVERSION_COST",
+    route: "/dashboard/production/conversion-cost",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
 });

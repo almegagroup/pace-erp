@@ -1,21 +1,26 @@
 /*
- * File-ID: 27.SA-02
- * File-Path: frontend/src/admin/sa/screens/SAProductionConversionRatePage.jsx
- * Gate: 27.104 | Domain: PRODUCTION / COSTING
- * Purpose: SA-only — configure the per-KG conversion cost (§104.8). Key = company + segment
- *          + optional Prodshade override, dated by valid_from. Append-only: a rate change is a
- *          NEW row with a new valid_from; old rows are never edited/deleted (full history).
- *          valid_to is derived (next row's valid_from − 1), never stored. Process PO Verify
- *          resolves the rate by posting date and HARD-BLOCKS when none is configured.
+ * File-ID: 27.FE-AC04
+ * File-Path: frontend/src/pages/dashboard/production/ConversionCostPage.jsx
+ * Gate: 27.104 | Domain: PRODUCTION / COSTING (Accounts ACL)
+ * Purpose: AC04 Conversion Cost Config (§104.8). ACCOUNTS-owned (not SA — SA can't know when a
+ *          rate changes). Per-KG conversion cost keyed by company + segment + optional Prodshade
+ *          override, dated by valid_from. Append-only: a rate change is a NEW dated row; old rows
+ *          are kept (full history). valid_to is derived (next row's valid_from − 1), never stored.
+ *          Company comes from the user's work company (dropdown if multi). Prodshade options are
+ *          sourced from that company's Batch Number Series (real production Prodshades) — MTS needs
+ *          per-Prodshade rates (different MTS products → different rates); MTO/HPS/MTEST use the
+ *          company-level segment default. Process PO Verify resolves by posting date, hard-blocking
+ *          when no rate is configured.
+ * Authority: Frontend
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { listConversionRates, createConversionRate } from "../../../pages/dashboard/production/prodApi.js";
-import { listCompaniesForOm, listMaterials } from "../../../pages/dashboard/om/omApi.js";
+import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { listConversionRates, createConversionRate, listBatchSeries } from "./prodApi.js";
 
 const SEGMENTS = [
   { value: "ADMIX",  label: "ADMIX — Admix" },
@@ -30,46 +35,69 @@ const ERRORS = {
   PROD_CONV_RATE_DATE_INVALID:  "Valid-from must be a valid date.",
   PROD_CONV_RATE_VALUE_INVALID: "Rate must be a number ≥ 0.",
   PROD_CONV_RATE_EXISTS:        "A rate for this company/segment/prodshade already has that valid-from date. Pick a different date.",
-  PROD_SA_REQUIRED:             "Super Admin access required.",
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 
-const today = () => new Date().toISOString().slice(0, 10);
-const EMPTY_FORM = { company_id: "", segment_code: "ADMIX", scope: "DEFAULT", prodshade_material_id: "", valid_from: today(), conversion_rate_per_kg: "" };
+function companyLabel(c) {
+  return [c?.company_code, c?.company_name].filter(Boolean).join(" — ");
+}
 
-export default function SAProductionConversionRatePage() {
+const todayIso = () => new Date().toISOString().slice(0, 10);
+const emptyForm = () => ({ segment_code: "ADMIX", scope: "DEFAULT", prodshade_material_id: "", valid_from: todayIso(), conversion_rate_per_kg: "" });
+
+export default function ConversionCostPage() {
   const qc = useQueryClient();
-  const [companyFilter, setCompanyFilter] = useState("");
+  const [companyId, setCompanyId] = useState("");
   const [segmentFilter, setSegmentFilter] = useState("");
   const [saving, setSaving]     = useState(false);
   const [notice, setNotice]     = useState({ msg: "", tone: "success" });
   const [createOpen, setCreateOpen] = useState(false);
-  const [form, setForm]         = useState({ ...EMPTY_FORM });
+  const [form, setForm]         = useState(emptyForm());
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 4000);
   }
 
-  const companiesQ = useQuery({ queryKey: ["om-companies"], queryFn: () => listCompaniesForOm() });
-  const sfgMaterialsQ = useQuery({ queryKey: ["om-materials", "SFG"], queryFn: () => listMaterials({ material_type: "SFG", limit: 500 }), select: (d) => d?.data ?? [] });
-  const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 500 }), select: (d) => d?.data ?? [] });
+  const companiesQ = useCompaniesForOmQuery();
+  const companies = useMemo(() => companiesQ.data ?? [], [companiesQ.data]);
+  const companyOptions = companies.map((c) => ({ value: c.id, label: companyLabel(c) }));
 
-  const companies = companiesQ.data ?? [];
-  const prodshadeMaterials = [...(sfgMaterialsQ.data ?? []), ...(intMaterialsQ.data ?? [])];
-  const companyOptions = companies.map((c) => ({ value: c.id, label: `${c.company_code} — ${c.company_name}` }));
-  const prodshadeOptions = prodshadeMaterials.map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }));
+  // Auto-select when the user has exactly one work company.
+  useEffect(() => {
+    if (!companyId && companies.length === 1) setCompanyId(companies[0].id);
+  }, [companies, companyId]);
+
+  // Prodshade options come from THIS company's batch series (real production Prodshades),
+  // not the full material master. MTS rows carry a Prodshade; company-level types don't.
+  const batchSeriesQ = useQuery({
+    queryKey: ["batch-series", companyId],
+    queryFn: () => listBatchSeries({ company_id: companyId }),
+    enabled: !!companyId,
+    select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
+  });
+  const prodshadeOptions = useMemo(() => {
+    const seen = new Map();
+    for (const row of batchSeriesQ.data ?? []) {
+      const mid = row.prodshade_material_id;
+      if (!mid || seen.has(mid)) continue;
+      const m = row.material ?? null;
+      seen.set(mid, { value: mid, label: m ? `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` : mid });
+    }
+    return [...seen.values()];
+  }, [batchSeriesQ.data]);
 
   const listQ = useQuery({
-    queryKey: ["conversion-rates", companyFilter, segmentFilter],
-    queryFn: () => listConversionRates({ company_id: companyFilter || undefined, segment_code: segmentFilter || undefined }),
+    queryKey: ["conversion-rates", companyId, segmentFilter],
+    queryFn: () => listConversionRates({ company_id: companyId, segment_code: segmentFilter || undefined }),
+    enabled: !!companyId,
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
   const rows = listQ.data ?? [];
 
   async function handleCreate(e) {
     e.preventDefault();
-    if (!form.company_id || !form.segment_code || !form.valid_from) {
+    if (!companyId || !form.segment_code || !form.valid_from) {
       toast("Company, segment, and valid-from date are required.", "error");
       return;
     }
@@ -85,7 +113,7 @@ export default function SAProductionConversionRatePage() {
     setSaving(true);
     try {
       await createConversionRate({
-        company_id: form.company_id,
+        company_id: companyId,
         segment_code: form.segment_code,
         prodshade_material_id: form.scope === "OVERRIDE" ? form.prodshade_material_id : null,
         valid_from: form.valid_from,
@@ -93,7 +121,7 @@ export default function SAProductionConversionRatePage() {
       });
       toast("Conversion rate added.");
       setCreateOpen(false);
-      setForm({ ...EMPTY_FORM });
+      setForm(emptyForm());
       qc.invalidateQueries({ queryKey: ["conversion-rates"] });
     } catch (err) { toast(friendly(err.code) || err.message, "error"); }
     finally { setSaving(false); }
@@ -101,21 +129,22 @@ export default function SAProductionConversionRatePage() {
 
   return (
     <ErpScreenScaffold
-      title="Production Conversion Cost"
-      subtitle="SA — per-KG conversion rate (§104.8). Segment default + optional Prodshade override, dated by Valid From. Append-only: a change is a new dated row; old rows are kept. Verify hard-blocks with no rate."
+      title="Conversion Cost Config"
+      subtitle="Accounts — per-KG conversion rate (§104.8). Segment default + optional Prodshade override, dated by Valid From. Append-only: a change is a new dated row. MTS can carry per-Prodshade rates; Process PO Verify hard-blocks with no rate."
       actions={[{
         label: "New Rate",
         tone: "primary",
         mnemonic: "N",
-        onClick: () => { setForm({ ...EMPTY_FORM }); setCreateOpen(true); },
+        disabled: !companyId,
+        onClick: () => { setForm(emptyForm()); setCreateOpen(true); },
       }]}
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard>
         <div className="flex gap-3 mb-4">
-          <div className="flex flex-col gap-1 w-64">
-            <label className="text-xs text-slate-500">Company</label>
-            <ErpComboboxField value={companyFilter} onChange={setCompanyFilter} options={companyOptions} placeholder="-- All companies --" />
+          <div className="flex flex-col gap-1 w-72">
+            <label className="text-xs text-slate-500">Company <span className="text-rose-500">*</span></label>
+            <ErpComboboxField value={companyId} onChange={setCompanyId} options={companyOptions} placeholder="-- Select company --" />
           </div>
           <div className="flex flex-col gap-1 w-56">
             <label className="text-xs text-slate-500">Segment</label>
@@ -126,15 +155,16 @@ export default function SAProductionConversionRatePage() {
           </div>
         </div>
 
-        {listQ.isLoading ? (
+        {!companyId ? (
+          <p className="text-slate-400 text-sm py-6 text-center">Select a company to view its conversion rates.</p>
+        ) : listQ.isLoading ? (
           <p className="text-slate-400 text-sm py-6 text-center">Loading…</p>
         ) : rows.length === 0 ? (
-          <p className="text-slate-400 text-sm py-6 text-center">No conversion rates configured. Press <kbd className="bg-slate-100 border px-1 rounded text-xs">Alt+N</kbd> to add one. <span className="text-rose-500">Verify will hard-block until a rate exists for the segment/date.</span></p>
+          <p className="text-slate-400 text-sm py-6 text-center">No conversion rates for this company. Press <kbd className="bg-slate-100 border px-1 rounded text-xs">Alt+N</kbd> to add one. <span className="text-rose-500">Verify will hard-block until a rate exists for the segment/date.</span></p>
         ) : (
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-slate-50 text-slate-500 text-xs uppercase">
-                <th className="text-left py-2 px-3 border-b">Company</th>
                 <th className="text-left py-2 px-3 border-b">Segment</th>
                 <th className="text-left py-2 px-3 border-b">Scope</th>
                 <th className="text-left py-2 px-3 border-b">Valid From</th>
@@ -146,7 +176,6 @@ export default function SAProductionConversionRatePage() {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50">
-                  <td className="py-2 px-3 text-slate-600">{r.company_code ? `${r.company_code} — ${r.company_name}` : "—"}</td>
                   <td className="py-2 px-3"><span className="text-xs px-2 py-0.5 rounded bg-sky-50 text-sky-700 font-medium">{r.segment_code}</span></td>
                   <td className="py-2 px-3 text-slate-500">
                     {r.prodshade
@@ -171,9 +200,8 @@ export default function SAProductionConversionRatePage() {
       {/* Create Drawer */}
       <DrawerBase visible={createOpen} title="New Conversion Rate" onClose={() => setCreateOpen(false)}>
         <form onSubmit={handleCreate} className="flex flex-col gap-4 p-4">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
-            <ErpComboboxField value={form.company_id} onChange={(v) => setForm((f) => ({ ...f, company_id: v }))} options={companyOptions} />
+          <div className="text-xs text-slate-500 bg-slate-50 rounded px-3 py-2">
+            <span className="font-medium">Company:</span> {companyOptions.find((o) => o.value === companyId)?.label ?? "—"}
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Segment <span className="text-rose-500">*</span></label>
@@ -191,13 +219,14 @@ export default function SAProductionConversionRatePage() {
           {form.scope === "OVERRIDE" && (
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-600">Prodshade <span className="text-rose-500">*</span></label>
-              <ErpComboboxField value={form.prodshade_material_id} onChange={(v) => setForm((f) => ({ ...f, prodshade_material_id: v }))} options={prodshadeOptions} emptyStateLabel="No SFG/INT prodshades found" />
+              <ErpComboboxField value={form.prodshade_material_id} onChange={(v) => setForm((f) => ({ ...f, prodshade_material_id: v }))} options={prodshadeOptions} emptyStateLabel="No Prodshades in this company's batch series" />
+              <p className="text-xs text-slate-400">From this company's Batch Number Series. MTS products can each carry a different rate.</p>
             </div>
           )}
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Valid From <span className="text-rose-500">*</span></label>
             <input type="date" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.valid_from} onChange={(e) => setForm((f) => ({ ...f, valid_from: e.target.value }))} required />
-            <p className="text-xs text-slate-400">The rate applies from this date onward until a later-dated row supersedes it. Back-dated postings pick the rate valid on their posting date.</p>
+            <p className="text-xs text-slate-400">Applies from this date until a later-dated row supersedes it. Back-dated postings pick the rate valid on their posting date.</p>
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Conversion Rate / KG (₹) <span className="text-rose-500">*</span></label>

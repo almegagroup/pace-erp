@@ -7,6 +7,10 @@
  *          dated — a rate change inserts a new row; old rows are never edited/deleted, so the
  *          full rate history is preserved and back-dated postings pick the rate valid then.
  *          The resolver (erp_production.resolve_conversion_rate) is used by Process PO Verify.
+ *          Ownership (CORRECTED 2026-07-18): this is an ACCOUNTS function, not SA — SA can't know
+ *          when a rate changes. The page lives in the ACL universe under the Accounts menu
+ *          (resource ACC_CONVERSION_COST). Access is enforced by the route-ACL registry; these
+ *          handlers do not hard-gate on SA.
  * Authority: Backend
  */
 
@@ -14,7 +18,6 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
-  assertSARole,
   assertProdReadRole,
   parseBody,
   toTrimmedString,
@@ -144,11 +147,12 @@ export async function listConversionRatesHandler(req: Request, ctx: ProdHandlerC
 }
 
 // POST /api/production/conversion-rates
-// SA-only. Append-only: inserts a new (company, segment, nullable prodshade, valid_from) row.
-// prodshade_material_id NULL = the segment default; a value = a Prodshade-specific override.
+// Accounts (ACL — resource ACC_CONVERSION_COST, enforced by the route registry). Append-only:
+// inserts a new (company, segment, nullable prodshade, valid_from) row. prodshade_material_id
+// NULL = the segment default; a value = a Prodshade-specific override.
 export async function createConversionRateHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertProdReadRole(ctx);
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
     const segmentCode = toUpperTrimmedString(body.segment_code);
@@ -190,7 +194,6 @@ export async function createConversionRateHandler(req: Request, ctx: ProdHandler
     return createdOkResponse({ id: (data as JsonRecord).id }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_CONV_RATE_CREATE_FAILED";
-    const status = code === "PROD_SA_REQUIRED" ? 403 : 500;
-    return convError(req, ctx, code, status, "Conversion rate create failed");
+    return convError(req, ctx, code, 500, "Conversion rate create failed");
   }
 }
