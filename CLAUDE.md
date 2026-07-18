@@ -688,6 +688,46 @@ List page per-row detail endpoint call করবে না। List এ দেখ
 Migration file PR এর সাথে travel করে → prod deploy এ automatically apply হয়।
 MCP change শুধু যে DB তে run করা হয় সেখানেই থাকে।
 
+### 🔴 Migration Integrity — local file আর remote history সবসময় হুবহু মিলতে হবে (LOCKED 2026-07-18)
+
+**দুবার এই ভুল হয়েছে** (§4-old-D, আবার 2026-07-18)। কারণ দুটো:
+- MCP **`apply_migration`** migration কে **নিজের timestamp** দিয়ে record করে — local filename-এর timestamp দিয়ে নয়। ফলে local `20260718090000_x.sql` remote-এ `20260717184809` হয়ে বসে থাকে।
+- MCP **`execute_sql`** দিয়ে DDL চালালে migration history-তে **কিছুই লেখা হয় না** — schema বদলায় কিন্তু record থাকে না।
+
+দুটোতেই local ≠ remote হয়ে যায়, আর ধরা পড়ে অনেক পরে — `supabase db push` এ
+`Remote migration versions not found in local migrations directory` error দিয়ে।
+
+**নিয়ম — প্রতিবার schema change এ:**
+
+1. **Local migration file-ই একমাত্র সত্য (SSOT)।** আগে file লেখো — `<version>_<name>.sql`।
+2. Dev-এ apply করার পর **সাথে সাথে** history reconcile করো, পরে নয়:
+   - `apply_migration` ব্যবহার করলে → remote row-এর `version` কে local filename-এর timestamp-এ **UPDATE** করো (DELETE+INSERT নয় — `statements` হারিয়ে যাবে):
+     ```sql
+     UPDATE supabase_migrations.schema_migrations
+     SET version = '<local_timestamp>'
+     WHERE version = '<mcp_timestamp>' AND name = '<migration_name>';
+     ```
+   - `execute_sql` দিয়ে DDL চালালে → history-তে row **INSERT** করো:
+     ```sql
+     INSERT INTO supabase_migrations.schema_migrations (version, name, statements)
+     SELECT '<local_timestamp>','<migration_name>', ARRAY['-- applied via MCP execute_sql']
+     WHERE NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='<local_timestamp>');
+     ```
+3. **যাচাই করো** (এটা বাদ দেওয়া চলবে না):
+   ```
+   node scripts/migration-integrity-check.mjs
+   ```
+   ছাপা SQL টা target project-এ চালাও → `in_sync = true` না এলে থামো।
+   Drift থাকলে `--diff` দিয়ে চালিয়ে দেখো ঠিক কোন migration মেলেনি।
+4. **Prod deploy-এর আগে ও পরে** একই check চালাও।
+
+> ⚠️ `supabase_migrations.schema_migrations` শুধু **metadata** — এটা বদলালে schema বদলায় না।
+> তাই reconcile করা নিরাপদ। কিন্তু `version` PK, তাই সবসময় `name` মিলিয়ে UPDATE করো।
+
+**ইতিহাস:** 2026-07-18-এ ৬টা §106/§104-1 migration timestamp আলাদা ছিল আর `20260718120000`
+(OPENING enum) history-তেই ছিল না। সব reconcile করা হয়েছে — Dev এখন local-এর সাথে
+byte-perfect (357 files, md5 `df8bb114…`)। Prod তখনো অক্ষত ছিল, তাই ওখানে কিছু করতে হয়নি।
+
 ---
 
 ## 8B. Batch vs Sequential Loop Rule (Mandatory — LOCKED 2026-07-08)
