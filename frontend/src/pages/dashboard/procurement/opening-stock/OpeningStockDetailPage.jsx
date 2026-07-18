@@ -32,6 +32,7 @@ import {
   useMaterialOptionsQuery,
   useStorageLocationsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { getDerivedOpeningRate } from "../../production/prodApi.js";
 
 const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 const ENTRY_MODES = Object.freeze({ SINGLE: "SINGLE", BULK: "BULK" });
@@ -225,6 +226,20 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     () => Number(singleForm.quantity || 0) * Number(singleForm.rate_per_unit || 0),
     [singleForm],
   );
+
+  // §104.8 (LOCKED 2026-07-18): for a produced material (INT today, SFG later) the opening rate can
+  // be derived from its own Stroke — Σ(dosage% × that RM's current rate) — because opening stock is
+  // loaded bottom-up (RM/PM → INT → SFG → FG), so the inputs are already valued by the time we get
+  // here. It is only a SUGGESTION: a *purchased* opening INT must keep its purchase price, and
+  // suggesting (not forcing) stops a hand-typed rate from diverging from the formula in-house
+  // production will use — which would make the weighted average jump on the first PO after go-live.
+  const derivedRateQuery = useQuery({
+    queryKey: ["derived-opening-rate", companyId, singleForm.material_id],
+    queryFn: () => getDerivedOpeningRate({ company_id: companyId, material_id: singleForm.material_id }),
+    enabled: Boolean(companyId && singleForm.material_id),
+    select: (response) => response?.data ?? response ?? null,
+  });
+  const derivedRate = derivedRateQuery.data?.derivable ? derivedRateQuery.data : null;
 
   const lines = Array.isArray(detail?.lines) ? detail.lines : [];
   const computedTotalValue = lines.reduce((sum, line) => sum + Number(line.total_value ?? 0), 0);
@@ -761,6 +776,45 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                 className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                               />
                             </ErpDenseFormRow>
+                            {derivedRate && (
+                              <div className="col-span-full border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-slate-700">
+                                <div className="flex items-center justify-between gap-3">
+                                  <span>
+                                    Suggested rate from Stroke {derivedRate.stroke_number ?? "--"}:{" "}
+                                    <strong className="font-mono">{Number(derivedRate.rate).toFixed(4)}</strong>
+                                    <span className="text-slate-500"> / unit</span>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSingleForm((current) => ({
+                                      ...current,
+                                      rate_per_unit: String(Number(derivedRate.rate).toFixed(4)),
+                                    }))}
+                                    className="border border-sky-500 bg-white px-2 py-0.5 text-xs text-sky-700 hover:bg-sky-100"
+                                  >
+                                    Use this
+                                  </button>
+                                </div>
+                                <div className="mt-1 text-slate-500">
+                                  {derivedRate.lines.map((l) => (
+                                    <span key={l.material_id} className="mr-3 inline-block">
+                                      {(l.pace_code || "--")} {Number(l.dosage_pct).toFixed(2)}% x{" "}
+                                      {Number(l.rm_rate).toFixed(4)} = {Number(l.contribution).toFixed(4)}
+                                    </span>
+                                  ))}
+                                </div>
+                                {derivedRate.incomplete && (
+                                  <div className="mt-1 text-amber-700">
+                                    One or more inputs have no valued stock yet — load their opening stock first,
+                                    or this suggestion is understated.
+                                  </div>
+                                )}
+                                <div className="mt-1 text-slate-400">
+                                  Use only if this stock was produced in-house. If it was purchased, enter the
+                                  purchase rate instead.
+                                </div>
+                              </div>
+                            )}
                             <ErpDenseFormRow label="Total Value">
                               <input
                                 value={formatCurrency(totalValue, currencyCode)}

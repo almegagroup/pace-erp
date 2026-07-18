@@ -268,6 +268,9 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/production/segment-locations":          { skipAcl: false, resourceCode: "SA_PROD_SEGMENT_LOCATIONS", action: "WRITE" },
   "GET:/api/production/conversion-rates":            { skipAcl: false, resourceCode: "ACC_CONVERSION_COST", action: "VIEW" },
   "POST:/api/production/conversion-rates":           { skipAcl: false, resourceCode: "ACC_CONVERSION_COST", action: "WRITE" },
+  // §104.8 stroke-derived opening-rate suggestion — consumed by IN05 Opening Stock, so it rides
+  // that page's own resource rather than the Accounts one.
+  "GET:/api/production/derived-opening-rate":        { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW" },
   "GET:/api/production/stroke-masters":              { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "VIEW" },
   "POST:/api/production/stroke-masters":             { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "WRITE" },
   "GET:/api/production/plan-feed":                   { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },

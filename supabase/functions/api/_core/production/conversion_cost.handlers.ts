@@ -197,3 +197,119 @@ export async function createConversionRateHandler(req: Request, ctx: ProdHandler
     return convError(req, ctx, code, 500, "Conversion rate create failed");
   }
 }
+
+// GET /api/production/derived-opening-rate?company_id=&material_id=
+// §104.8 (LOCKED 2026-07-18): suggests the opening rate for a produced material (INT today, SFG
+// later) as Σ(dosage% × that RM's current UNRESTRICTED rate), taken from the material's APPROVED
+// stroke. This works because opening stock is loaded bottom-up (RM/PM → INT → SFG → FG), so by the
+// time this material's line is entered every input rate already sits in stock_snapshot.
+//
+// It is a SUGGESTION, never enforced: a *purchased* opening INT must be entered at its purchase
+// price, where the stroke-derived figure does not apply. Suggesting also stops a hand-typed opening
+// rate from differing from the formula the system will use for in-house production — which would
+// make the weighted average jump on the first in-house PO after go-live.
+export async function getDerivedOpeningRateHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const materialId = toTrimmedString(url.searchParams.get("material_id") ?? "");
+    if (!companyId || !materialId) {
+      return convError(req, ctx, "PROD_DERIVED_RATE_INVALID", 400, "company_id and material_id required");
+    }
+
+    // The material's own APPROVED stroke (it is the output/prodshade of that stroke).
+    const { data: strokeRow, error: strokeErr } = await serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("id, stroke_number, po_type")
+      .eq("company_id", companyId)
+      .eq("prodshade_material_id", materialId)
+      .eq("status", "APPROVED")
+      .maybeSingle();
+    if (strokeErr) {
+      console.error("[conversion_cost.derivedOpeningRate] stroke query failed:", JSON.stringify(strokeErr));
+      throw new Error("PROD_DERIVED_RATE_FAILED");
+    }
+    const stroke = strokeRow as JsonRecord | null;
+    if (!stroke) {
+      // Not a produced material (or no approved stroke) — nothing to suggest; caller keeps manual entry.
+      return okResponse({ data: { derivable: false, reason: "NO_APPROVED_STROKE", rate: null, lines: [] } }, ctx.request_id, req);
+    }
+
+    const { data: lineRows, error: lineErr } = await serviceRoleClient
+      .schema("erp_production").from("stroke_line")
+      .select("material_id, dosage_pct, display_order")
+      .eq("stroke_master_id", String(stroke.id))
+      .order("display_order");
+    if (lineErr) {
+      console.error("[conversion_cost.derivedOpeningRate] stroke_line query failed:", JSON.stringify(lineErr));
+      throw new Error("PROD_DERIVED_RATE_FAILED");
+    }
+    const lines = (lineRows ?? []) as JsonRecord[];
+    if (lines.length === 0) {
+      return okResponse({ data: { derivable: false, reason: "STROKE_HAS_NO_LINES", rate: null, lines: [] } }, ctx.request_id, req);
+    }
+
+    const rmIds = [...new Set(lines.map((l) => String(l.material_id)).filter(Boolean))];
+    const [matMap, rateRows] = await Promise.all([
+      getMaterialMapByIds(rmIds),
+      serviceRoleClient
+        .schema("erp_inventory").from("stock_snapshot")
+        .select("material_id, quantity, value")
+        .eq("company_id", companyId)
+        .eq("stock_type_code", "UNRESTRICTED")
+        .is("batch_id", null)
+        .in("material_id", rmIds),
+    ]);
+    if ((rateRows as { error?: unknown }).error) {
+      console.error("[conversion_cost.derivedOpeningRate] snapshot query failed:", JSON.stringify((rateRows as { error?: unknown }).error));
+      throw new Error("PROD_DERIVED_RATE_FAILED");
+    }
+    // Rate per material = Σvalue ÷ Σqty across that material's locations (its blended current cost).
+    const agg = new Map<string, { qty: number; value: number }>();
+    for (const row of ((rateRows as { data?: JsonRecord[] }).data ?? [])) {
+      const key = String(row.material_id);
+      const cur = agg.get(key) ?? { qty: 0, value: 0 };
+      cur.qty += Number(row.quantity ?? 0);
+      cur.value += Number(row.value ?? 0);
+      agg.set(key, cur);
+    }
+
+    let rate = 0;
+    let anyMissing = false;
+    const breakup = lines.map((l) => {
+      const rmId = String(l.material_id);
+      const a = agg.get(rmId) ?? { qty: 0, value: 0 };
+      const rmRate = a.qty > 0 ? a.value / a.qty : 0;
+      if (rmRate <= 0) anyMissing = true;
+      const dosagePct = Number(l.dosage_pct ?? 0);
+      const contribution = (dosagePct / 100) * rmRate;
+      rate += contribution;
+      const mat = matMap.get(rmId) ?? null;
+      return {
+        material_id: rmId,
+        pace_code: mat ? String((mat as JsonRecord).pace_code ?? "") : null,
+        material_name: mat ? String((mat as JsonRecord).material_name ?? "") : null,
+        dosage_pct: dosagePct,
+        rm_rate: rmRate,
+        contribution,
+      };
+    });
+
+    return okResponse({
+      data: {
+        derivable: true,
+        stroke_number: stroke.stroke_number ?? null,
+        po_type: stroke.po_type ?? null,
+        rate,
+        // true when at least one input has no valued stock yet — the suggestion is then incomplete
+        // (load that RM's opening first). Caller should warn rather than silently use a low number.
+        incomplete: anyMissing,
+        lines: breakup,
+      },
+    }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_DERIVED_RATE_FAILED";
+    return convError(req, ctx, code, 500, "Derived opening rate failed");
+  }
+}

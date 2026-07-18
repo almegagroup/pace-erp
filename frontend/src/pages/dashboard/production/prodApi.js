@@ -67,6 +67,8 @@ export const upsertSegmentLocation = (body) => fetchProd("POST", "/api/productio
 // ── Conversion Cost Config (Accounts ACL — §104.8) ────────────────────────────
 export const listConversionRates = (p) => fetchProd("GET", "/api/production/conversion-rates", undefined, p);
 export const createConversionRate = (body) => fetchProd("POST", "/api/production/conversion-rates", body);
+// §104.8 — stroke-derived opening-rate suggestion, consumed by IN05 Opening Stock
+export const getDerivedOpeningRate = (p) => fetchProd("GET", "/api/production/derived-opening-rate", undefined, p);
 
 // ── Opening Genealogy (§104.9) — PR22 Old Process PO / PR23 Old Packing PO ────
 export const createOldProcessPo = (body) => fetchProd("POST", "/api/production/old-process-po", body);

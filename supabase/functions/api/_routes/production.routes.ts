@@ -44,6 +44,7 @@ import {
 import {
   listConversionRatesHandler,
   createConversionRateHandler,
+  getDerivedOpeningRateHandler,
 } from "../_core/production/conversion_cost.handlers.ts";
 import {
   createOldProcessPoHandler,
@@ -179,6 +180,9 @@ export async function dispatchProductionRoutes(
       return await listConversionRatesHandler(req, ctx);
     case "POST:/api/production/conversion-rates":
       return await createConversionRateHandler(req, ctx);
+    // §104.8 — suggested opening rate for a produced material (stroke-derived), used by IN05
+    case "GET:/api/production/derived-opening-rate":
+      return await getDerivedOpeningRateHandler(req, ctx);
 
     // Opening Genealogy (§104.9) — PR22 Old Process PO + PR23 Old Packing PO (no stock movement)
     case "POST:/api/production/old-process-po":
