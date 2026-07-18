@@ -311,6 +311,60 @@ function enforceContextInvariants(ctx: ContextResolution): ContextResolution {
   return ctx;
 }
 
+/* =========================================================
+ * PERF: short-lived context memoization
+ *
+ * Measured via Server-Timing on a live request: `context` was 492ms of a 1.00s
+ * pipeline, i.e. ~2 serial Mumbai round trips paid on EVERY request. The app
+ * loads a page as a burst of ~30 requests within a few seconds, so the exact
+ * same context was being re-resolved ~30 times per page.
+ *
+ * stepContext() is a pure function of a small, fully-enumerable input set:
+ *   session: authUserId, roleCode, selectedCompanyId, selectedWorkContextId,
+ *            workspaceMode
+ *   headers: x-company-id, x-project-id, x-department-id
+ * ...so memoizing on exactly those inputs returns a provably identical result —
+ * no auth logic is reimplemented or bypassed, it is the same code path, just
+ * not re-run for a few seconds.
+ *
+ * 🔒 SECURITY: the cache key MUST contain every input, `authUserId` above all.
+ * An incomplete key could hand one user another user's context. Do not remove a
+ * component from buildContextCacheKey without re-reading stepContext's inputs.
+ *
+ * Staleness is bounded by the TTL: a permission change takes effect within
+ * PIPELINE_CONTEXT_CACHE_TTL_MS. Company/work-context switches change the key
+ * itself, so they take effect immediately. Set the TTL to 0 to disable the
+ * cache entirely and restore the previous behaviour without a code change.
+ * ========================================================= */
+
+const PIPELINE_CONTEXT_CACHE_TTL_MS = (() => {
+  const raw = typeof Deno !== "undefined"
+    ? Deno.env.get("PIPELINE_CONTEXT_CACHE_TTL_MS")
+    : process.env.PIPELINE_CONTEXT_CACHE_TTL_MS;
+  const parsed = Number(raw);
+  // 5s: long enough to cover one page's request burst, short enough that a
+  // permission change is picked up almost immediately.
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 5000;
+})();
+
+const contextCache = new Map<string, { at: number; value: ContextResolution }>();
+const CONTEXT_CACHE_MAX_ENTRIES = 500;
+
+function buildContextCacheKey(req: Request, session: PipelineSession): string {
+  // Every input stepContext reads. Keep in sync with resolveContextFromDb /
+  // resolveContextForCompany if either ever reads something new.
+  return [
+    session.authUserId,
+    session.roleCode,
+    session.selectedCompanyId ?? "",
+    session.selectedWorkContextId ?? "",
+    session.workspaceMode ?? "",
+    req.headers.get("x-company-id")?.trim() ?? "",
+    req.headers.get("x-project-id") ?? "",
+    req.headers.get("x-department-id") ?? "",
+  ].join("|");
+}
+
 export async function stepContext(
   req: Request,
   session: PipelineSession,
@@ -329,6 +383,31 @@ export async function stepContext(
     };
   }
 
+  const cacheKey = PIPELINE_CONTEXT_CACHE_TTL_MS > 0
+    ? buildContextCacheKey(req, session)
+    : null;
+
+  if (cacheKey) {
+    const hit = contextCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < PIPELINE_CONTEXT_CACHE_TTL_MS) {
+      return hit.value;
+    }
+  }
+
   const resolved = await resolveContextFromDb(req, session).catch(() => unresolved());
-  return enforceContextInvariants(resolved);
+  const finalCtx = enforceContextInvariants(resolved);
+
+  // Only cache a RESOLVED context. An UNRESOLVED result is often transient
+  // (mid-setup user, race on company assignment) and caching a denial would
+  // keep a user locked out for the whole TTL for no benefit.
+  if (cacheKey && finalCtx.status === "RESOLVED") {
+    if (contextCache.size >= CONTEXT_CACHE_MAX_ENTRIES) {
+      // Bounded memory: drop the oldest inserted key (Map preserves insertion order).
+      const oldestKey = contextCache.keys().next().value;
+      if (oldestKey !== undefined) contextCache.delete(oldestKey);
+    }
+    contextCache.set(cacheKey, { at: Date.now(), value: finalCtx });
+  }
+
+  return finalCtx;
 }
