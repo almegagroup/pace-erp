@@ -105,6 +105,11 @@ console.log("Allowed Origins:", ALLOWED_ORIGINS);
   headers.set("Access-Control-Allow-Credentials", "true");
   headers.set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   headers.set("Access-Control-Allow-Headers", ALLOWED_CORS_HEADERS);
+  // PERF: the frontend and this API are different origins, so `Server-Timing` (per-step pipeline
+  // cost) stays hidden from the browser unless explicitly exposed. Timing-Allow-Origin additionally
+  // lets Chrome render it in DevTools → Timing. Carries only millisecond numbers, no data.
+  headers.set("Access-Control-Expose-Headers", "Server-Timing");
+  headers.set("Timing-Allow-Origin", origin);
 
   console.log("✅ CORS PASSED:", origin);
 console.log("------------------------------");
