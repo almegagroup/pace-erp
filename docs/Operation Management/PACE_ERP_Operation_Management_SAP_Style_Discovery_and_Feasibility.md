@@ -13948,9 +13948,19 @@ it too for ledger-value symmetry, though the snapshot ignores `p_unit_value` on 
 CORS reverse, Packing PO reverse + COR6 correct, and PR19 partial reversal (both SFG-row and SKU-row
 branches). commits `0edb16b` (104-2), `757dbf2` (104-3/104-4).
 
-**Implementation status (2026-07-18):** items 1–5 ✅ done; items 6 (SA config page) + 7 (§104.9
-opening genealogy) ⏳ pending; live end-to-end verification on the deployed app ⏳ pending
-(business-owner login required — verified so far by typecheck + DB inspection only).
+**Implementation status (2026-07-18): items 1–7 ✅ ALL DONE.** Item 6 shipped as the **Accounts ACL**
+page (AC04, not SA — see the ownership correction above). Item 7 (§104.9) shipped as PR22/PR23 under
+the **Production ACL**, including two behaviours that only surfaced during implementation:
+- **PR19's `buildRmIntPreview` filtered `source_txn_type='PRODUCTION'` only**, so an opening batch
+  would have returned **no RM/INT lines at all**. `'OPENING'` rows are original consumption and are
+  now included (the negative PARTIAL_REVERSAL/RETURN credit rows stay excluded).
+- **Opening-origin reversal legs need a rate, not just a NULL pointer.** §104.9 locked
+  `reversalOfId = NULL`; but since `post_stock_movement()` recomputes the weighted average from
+  `p_unit_value` on IN, posting those legs at 0 would dilute the restored material's rate toward
+  zero. They now post at the material's **current** unrestricted rate (`resolveLegRef()`).
+
+Live end-to-end verification on the deployed app ⏳ still pending (business-owner login required —
+verified so far by typecheck + build + DB inspection only).
 
 **Go-live criticality (business owner raised 2026-07-17):** this is a **1 July go-live blocker**,
 unlike the FI/Accounting document layer (§104 Phase-3, genuinely additive and safe to defer).
