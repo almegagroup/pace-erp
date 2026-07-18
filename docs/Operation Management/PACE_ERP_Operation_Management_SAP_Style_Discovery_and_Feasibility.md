@@ -13875,8 +13875,8 @@ mid-period restatement, that is its own design.
 | PM rates | ✅ live (Barrel ₹10, Label ₹9.89) |
 | RM consumption per batch | ✅ `process_order_line_reco` |
 | Pack size | ✅ `packing_order.fill_qty_per_pack` |
-| **Conversion rate/KG** | ❌ **no config table exists** (`cost_center_master` has code/name only — no rate; no activity/routing/overhead table anywhere) |
-| **Roll-up wiring** | ❌ production handlers pass `unit_value: 0` — all 91 P261 postings have value 0 |
+| **Conversion rate/KG** | ✅ **built (2026-07-18, 104-1)** — `erp_production.conversion_cost_config` + `resolve_conversion_rate()` (migration `20260718090000`). *Table still empty in Dev — needs real rows via 104-5 page or MCP seed before any Verify can post.* |
+| **Roll-up wiring** | ✅ **built (2026-07-18, 104-2/104-3/104-4)** — Process PO Verify, Packing PO Final, and all reversals now pass real rates. MTS/INT/MTEST output paths still pass 0 (deliberately out of this MTO/HPS/Admix-scoped pass). |
 
 **Worked example — real Dev data, batch `EV02602` / Packing PO `940005` (22 barrels, 5,060 KG, fill 230):**
 
@@ -13913,6 +13913,23 @@ changing any snapshot arithmetic** (zero risk to existing balances). On **IN**, 
    `'OPENING'` added to the `source_txn_type` CHECK; the no-stock-movement guard; the
    Opening-Stock reconciliation validation; PR19 relaxed to accept `reversalOfId = NULL` for
    opening-origin lines.
+
+**⚠️ Reversal-valuation trap (discovered + fixed 2026-07-18, item 5):** the "Engine mechanic"
+paragraph above is only half the story for reversals. On **IN**, `post_stock_movement()` recomputes
+the weighted average from `p_unit_value` — so an **IN reversal leg posted at `unit_value: 0` silently
+dilutes the restored material's rate toward zero** (P262 RM/PM restore, P321 QI restore, PR19's
+SFG/RM/PM P262 legs). A reversal must therefore restore/remove at the **original leg's own posted
+rate**, not 0 and not the current snapshot rate. Implementation: each production handler's
+`resolveStockDocumentIdsByLedgerIds` was widened to `resolveStockLedgerRefsByLedgerIds`, returning
+`{docId, rate}` from one batched `stock_ledger` read (`valuation_rate` of the original leg); every
+reversal/correction leg now passes that rate as `unitValue`. OUT reversal legs (P102/P322/P261) carry
+it too for ledger-value symmetry, though the snapshot ignores `p_unit_value` on OUT. Covers Process PO
+CORS reverse, Packing PO reverse + COR6 correct, and PR19 partial reversal (both SFG-row and SKU-row
+branches). commits `0edb16b` (104-2), `757dbf2` (104-3/104-4).
+
+**Implementation status (2026-07-18):** items 1–5 ✅ done; items 6 (SA config page) + 7 (§104.9
+opening genealogy) ⏳ pending; live end-to-end verification on the deployed app ⏳ pending
+(business-owner login required — verified so far by typecheck + DB inspection only).
 
 **Go-live criticality (business owner raised 2026-07-17):** this is a **1 July go-live blocker**,
 unlike the FI/Accounting document layer (§104 Phase-3, genuinely additive and safe to defer).
