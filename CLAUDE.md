@@ -673,21 +673,35 @@ DB Mumbai (`ap-south-1`), Prod API Singapore (paid), Dev API Oregon (free tier)�
 2. `admin.companies`/`om.companies` আলাদা queryKey-তে একই endpoint; CSNTracker-এ raw `fetch()`
    duplicate; `tracker`/`counts`-এ `enabled` guard অনুপস্থিত → **double-fetch বন্ধ** (commit `83195e6`)
 
-**🔴 সবচেয়ে বড় বাকি কাজ — `/api/me/menu` একাই ~৭.৩ সেকেন্ড:**
-`menu.handler.ts` (line ~102-115) **প্রতিবার menu পড়ার আগে snapshot নতুন করে বানায়** —
-`rebuildAdminSessionMenuSnapshot` / `rebuildGlobalAclMenuSnapshot` / `rebuildAclSessionMenuSnapshot`,
-কোনো cache/staleness check ছাড়াই। `rebuildAclSessionMenuSnapshot` (`acl_runtime.ts:151`) নিজে
-ACL version lookup + `precomputed_acl_view` lookup + **সবসময় `rebuild_acl_menu_snapshot` RPC** চালায়।
-Frontend দিকেও `/api/me/menu` **৪ জায়গা** থেকে raw `fetch()`-এ আসে (`AuthBootstrap:289`,
-`MenuShell:196/524/646` — শেষ দুটো একই `useEffect`-এর আলাদা শাখা), কোনো React Query cache নেই।
-**⚠️ সাবধানতা:** এটা menu/permission correctness path — rebuild বাদ দেওয়ার আগে "কখন snapshot বাসি"
-(ACL version বদল, company/work-context switch, menu registry বদল) নির্ভুল ঠিক করতে হবে, নাহলে user
-ভুল menu দেখবে। আলাদা, মনোযোগী session-এ করা উচিত; marathon session-এর শেষে নয়।
+3. `/api/me/menu` **৭.৩s → ১.০s** — `menu.handler.ts` প্রতিবার পড়ার আগেই snapshot নতুন করে
+   বানাত, কোনো cache/staleness check ছাড়াই। এখন read-first: আগে snapshot পড়ে, **miss হলেই**
+   rebuild করে (`MENU_SNAPSHOT_CACHE_TTL_SECONDS`, default 300; `0` দিলে পুরনো আচরণে ফেরত,
+   `?refresh=1` দিলে জোর করে bypass)। ⚠️ এটা menu/permission correctness path — TTL বদলানোর
+   আগে ভাবো।
+4. Pipeline `context` **৪৯২ms → ০µs** (`_pipeline/context.ts`) — memoize করা হয়েছে, key-তে
+   authUser+role+company+workContext+workspaceMode+৩টা header, TTL 30s, শুধু RESOLVED cache
+   হয়, ৫০০-entry bound, admin bypass করে। এর পরে pipeline = `session` ~২৭০ms (একটাই indexed
+   query — যাচাই করা, আর কমানোর জায়গা নেই)।
+5. **চারটা ভারী read handler** (commit `026c7f0`) — Dev table গুলো ছোট (CSN ৯ row, process_order
+   ৯ row, stock_ledger ১৮৯) তাই এখানে SQL-এর কোনো খরচই ছিল না, পুরোটাই round trip:
+   - `alerts/counts` — vessel-alert শাখা `enrichTrackerRows` (১৫টা lookup: vendor, material,
+     transporter, CHA, port, payment terms, GRN, gate entry, PO/STO line...) ডাকত **শুধু
+     `po_date` পড়ার জন্য**, আর `po_date` আসত একমাত্র `purchase_order` থেকে → **১৫ → ১**
+   - `production/process-orders` — material/stroke/machine/created-by চারটা lookup পরস্পর
+     নিরপেক্ষ (§8B INDEPENDENT) অথচ ধারাবাহিক ছিল → **এক parallel round**
+   - `fg-stock-breakdown` — material/company lookup শুধু URL param-নির্ভর, তাই আসল dependency
+     chain (ledger → stock_document → packing_order, এটা সত্যিই ধারাবাহিক) এর **পাশাপাশি** চলে
 
-**বাকি (অগ্রাধিকার ক্রমে):** `menu` (উপরে) → `companies` এখনো ৩ বার → `me` ৩ বার
-(`me` + `me?session_mode=passive` ×২) → PR09-এ ৫টা আলাদা `materials` call (প্রতিটা limit=500,
-duplicate নয় কিন্তু একসাথে আনা যায় কিনা দেখার মতো) → সবশেষে pipeline-এর ~৮ round trip এক RPC-তে
-collapse (auth path, তাই সবচেয়ে ঝুঁকিপূর্ণ, flag দিয়ে পুরনো path পাশে রেখে করতে হবে)।
+**বাকি (অগ্রাধিকার ক্রমে):** browser queueing (~৯৩৪ms — প্রতি page ~৩৬টা request বনাম browser-এর
+৬-connection সীমা, তাই request **সংখ্যা** কমাতে হবে) → `companies` এখনো ৩ বার → `me` ৩ বার
+(`me` + `me?session_mode=passive` ×২) → `approval-inbox`-এর mount-cycle duplication (screen-stack
+architecture, তাই বড় কাজ) → PR09-এ ৫টা আলাদা `materials` call (duplicate নয়, একসাথে আনা যায় কিনা)।
+
+**নিয়ম (এই session-এ শেখা):** কোনো handler ধীর মনে হলে **আগে row count দেখো**। Dev-এ প্রায় সব
+table ২ ডিজিটের — তাই "ধীর query" প্রায় কখনোই কারণ নয়, কারণ প্রায় সবসময় round trip সংখ্যা।
+`.from(`/`.rpc(` গুনে ফেলো, তারপর প্রশ্ন করো: এই lookup গুলো কি সত্যিই একে অপরের ফলাফলের উপর
+নির্ভরশীল? না হলে §8B অনুযায়ী এক parallel round-এ নামাও। আর কোনো enrichment helper ডাকার আগে
+দেখো তার কতটুকু আসলে ব্যবহার হচ্ছে — একটা field-এর জন্য ১৫টা lookup এভাবেই ঢুকে গিয়েছিল।
 
 ---
 
