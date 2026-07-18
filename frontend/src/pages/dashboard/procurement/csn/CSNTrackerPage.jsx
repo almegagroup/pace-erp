@@ -10,6 +10,7 @@ import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen, openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import { requestWideWorkspace } from "../../../../store/wideWorkspace.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import {
   confirmCSNDispatchQty,
   createSubCSN,
@@ -521,6 +522,11 @@ export default function CSNTrackerPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
+  // PERF: `companyId` starts as "" and is filled a tick later by the auto-select effect above.
+  // Without a guard both of these fired immediately with no company (fetching every company's
+  // rows — the expensive case), then fired AGAIN once the company resolved. Measured live: two
+  // wasted heavy calls per page load, ~6s. Gate them until the company is known; the auto-select
+  // always sets one, so nothing is lost — the query just runs once, with the right scope.
   const trackerQuery = useQuery({
     queryKey: ["csn-tracker", companyId, status, csnType, dateFrom, dateTo, page],
     queryFn: () =>
@@ -533,11 +539,13 @@ export default function CSNTrackerPage() {
         limit: LIMIT,
         offset: (page - 1) * LIMIT,
       }),
+    enabled: Boolean(companyId),
   });
 
   const alertsQuery = useQuery({
     queryKey: ["csn-alert-counts", companyId],
     queryFn: () => getAllAlertCounts({ company_id: companyId || undefined }),
+    enabled: Boolean(companyId),
   });
 
   useErpScreenHotkeys({
@@ -564,14 +572,12 @@ export default function CSNTrackerPage() {
     queryFn: () => listPorts({ is_active: "true", port_role: "DISCHARGE" }),
   });
 
-  const companiesQuery = useQuery({
-    queryKey: ["csn-procurement-companies"],
-    queryFn: async () => {
-      const result = await fetch(`${import.meta.env.VITE_API_BASE}/api/procurement/companies`, { credentials: "include" });
-      const json = await result.json();
-      return json?.data?.data || [];
-    },
-  });
+  // PERF: this was a raw fetch() under its own key ("csn-procurement-companies"), hitting the very
+  // same endpoint as the shared useCompaniesQuery hook. Two keys for one endpoint = React Query
+  // can't dedupe or share the cache, so /api/procurement/companies was fetched twice. Use the
+  // shared hook so every consumer reads one cached copy. (It also bypassed the fetchProcurement
+  // helper, so it skipped the standard error handling.)
+  const companiesQuery = useCompaniesQuery();
 
   const rows = useMemo(() => {
     const baseRows = Array.isArray(trackerQuery.data?.data) ? trackerQuery.data.data : [];
