@@ -46,6 +46,11 @@ import {
   createConversionRateHandler,
 } from "../_core/production/conversion_cost.handlers.ts";
 import {
+  createOldProcessPoHandler,
+  listOldProcessPoBatchesHandler,
+  createOldPackingPoHandler,
+} from "../_core/production/opening_genealogy.handlers.ts";
+import {
   listPlanFeedHandler,
   getPlanFeedHandler,
   createPlanFeedHandler,
@@ -169,11 +174,19 @@ export async function dispatchProductionRoutes(
     case "POST:/api/production/segment-locations":
       return await upsertSegmentLocationHandler(req, ctx);
 
-    // Conversion Cost Config (SA — §104.8, per-KG conversion rate, valid_from dated)
+    // Conversion Cost Config (Accounts ACL — §104.8, per-KG conversion rate, valid_from dated)
     case "GET:/api/production/conversion-rates":
       return await listConversionRatesHandler(req, ctx);
     case "POST:/api/production/conversion-rates":
       return await createConversionRateHandler(req, ctx);
+
+    // Opening Genealogy (§104.9) — PR22 Old Process PO + PR23 Old Packing PO (no stock movement)
+    case "POST:/api/production/old-process-po":
+      return await createOldProcessPoHandler(req, ctx);
+    case "GET:/api/production/old-process-po/batches":
+      return await listOldProcessPoBatchesHandler(req, ctx);
+    case "POST:/api/production/old-packing-po":
+      return await createOldPackingPoHandler(req, ctx);
 
     // Stroke Masters
     case "GET:/api/production/stroke-masters":

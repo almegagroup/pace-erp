@@ -295,6 +295,10 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/partial-reversals/detail":         { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "VIEW" },
   "POST:/api/production/partial-reversals":               { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "WRITE" },
   "GET:/api/production/partial-reversals":                { skipAcl: false, resourceCode: "PROD_PARTIAL_REVERSAL_REPORT", action: "VIEW" },
+  // §104.9 Opening Genealogy — Production ACL (PR22/PR23)
+  "POST:/api/production/old-process-po":                  { skipAcl: false, resourceCode: "PROD_OLD_PROCESS_PO", action: "WRITE" },
+  "GET:/api/production/old-process-po/batches":           { skipAcl: false, resourceCode: "PROD_OLD_PACKING_PO", action: "VIEW" },
+  "POST:/api/production/old-packing-po":                  { skipAcl: false, resourceCode: "PROD_OLD_PACKING_PO", action: "WRITE" },
 
   // ── Admin: All routes — SA/GA only, ACL enforced in stepAcl (skipAcl here) ─
   "GET:/api/admin/system-health":                          { skipAcl: true },
