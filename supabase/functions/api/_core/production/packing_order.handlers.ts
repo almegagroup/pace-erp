@@ -716,6 +716,17 @@ export async function fgStockBreakdownHandler(req: Request, ctx: ProdHandlerCont
       return packErr(req, ctx, "PROD_FG_STOCK_BREAKDOWN_INVALID", 400, "material_id and company_id required");
     }
 
+    // PERF: these two lookups key off URL params only — they do not depend on the
+    // ledger -> stock_document -> packing_order chain below (which is a genuine dependency chain
+    // and must stay sequential). Start them now, await after, saving one round trip.
+    const lookupsPromise = Promise.all([
+      getMaterialMapByIds([materialId], "[packing_order.fgStockBreakdown]", "PROD_FG_STOCK_BREAKDOWN_FAILED", "id, pace_code, material_name, external_code"),
+      getCompanyMapByIds([companyId]),
+    ]);
+    // Mark as handled so a failure in the chain below can't surface this as an unhandled
+    // rejection; the original rejection is still delivered at the `await` further down.
+    lookupsPromise.catch(() => {});
+
     const { data: ledgerRows, error: ledgerErr } = await serviceRoleClient
       .schema("erp_inventory")
       .from("stock_ledger")
@@ -747,10 +758,7 @@ export async function fgStockBreakdownHandler(req: Request, ctx: ProdHandlerCont
       : { data: [], error: null };
     if (poErr) throw new Error("PROD_FG_STOCK_BREAKDOWN_FAILED");
     const poMap = new Map(((poRows ?? []) as JsonRecord[]).map((po) => [String(po.po_number), po]));
-    const [materialMap, companyMap] = await Promise.all([
-      getMaterialMapByIds([materialId], "[packing_order.fgStockBreakdown]", "PROD_FG_STOCK_BREAKDOWN_FAILED", "id, pace_code, material_name, external_code"),
-      getCompanyMapByIds([companyId]),
-    ]);
+    const [materialMap, companyMap] = await lookupsPromise;
 
     const batchMap = new Map<string, JsonRecord[]>();
     for (const ledger of ledgers) {

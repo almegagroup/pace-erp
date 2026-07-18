@@ -1722,7 +1722,7 @@ export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHan
         let query: any = serviceRoleClient
           .schema("erp_procurement")
           .from("consignment_note")
-          .select("*")
+          .select("id, po_id")
           .eq("csn_type", "IMPORT")
           .is("vessel_booking_confirmed_date", null)
           .not("status", "in", '("GED","GRD","CAN","KOF")');
@@ -1732,9 +1732,25 @@ export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHan
         }
         const { data, error } = await query;
         if (error) throw new Error("PROCUREMENT_VESSEL_ALERT_COUNT_FAILED");
-        const enriched = await enrichTrackerRows((data as CsnRow[] | null) ?? []);
-        return enriched.filter((row) => {
-          const poDate = toTrimmedString(row.po_date);
+        // PERF: this branch needs exactly one field — po_date — and enrichTrackerRows sourced it
+        // solely from purchase_order (`po_date: po?.po_date ?? null`). Calling the full enrichment
+        // here cost 15 round trips (vendor, material, transporter, CHA, port, payment terms, GRN,
+        // gate entry, PO/STO lines, ...) to read that one field. One targeted lookup instead.
+        const rows = (data as CsnRow[] | null) ?? [];
+        const poIds = [...new Set(rows.map((row) => toTrimmedString(row.po_id)).filter(Boolean))];
+        if (poIds.length === 0) return 0;
+        const { data: poRows, error: poError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("purchase_order")
+          .select("id, po_date")
+          .in("id", poIds);
+        if (poError) throw new Error("PROCUREMENT_VESSEL_ALERT_COUNT_FAILED");
+        const poDateMap = new Map(
+          ((poRows as Array<Record<string, unknown>> | null) ?? [])
+            .map((po) => [toTrimmedString(po.id), toTrimmedString(po.po_date)]),
+        );
+        return rows.filter((row) => {
+          const poDate = poDateMap.get(toTrimmedString(row.po_id));
           return poDate && poDate <= threshold;
         }).length;
       })(),

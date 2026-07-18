@@ -1339,58 +1339,66 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
     }
 
     const rows = (data ?? []) as JsonRecord[];
-    const materialMap = await getMaterialMapByIds(
-      rows.map((row) => String(row.material_id ?? "")),
-      "[process_order.listProcessOrders]",
-      "PROD_PO_LIST_FAILED",
-      "id, pace_code, material_name, shade_code",
-    );
 
     const strokeIds = [...new Set(rows.map((row) => String(row.stroke_master_id ?? "")).filter(Boolean))];
     const machineIds = [...new Set(rows.map((row) => String(row.machine_id ?? "")).filter(Boolean))];
     const createdByIds = [...new Set(rows.map((row) => String(row.created_by ?? "")).filter(Boolean))];
-    const strokeNumberById = new Map<string, string>();
-    const machineById = new Map<string, JsonRecord>();
 
-    if (strokeIds.length > 0) {
-      const { data: strokes, error: strokeErr } = await serviceRoleClient
-        .schema("erp_production")
-        .from("stroke_master")
-        .select("id, stroke_number")
-        .in("id", strokeIds);
-      if (strokeErr) {
-        console.error("[process_order.listProcessOrders] stroke query failed:", JSON.stringify(strokeErr));
-        throw new Error("PROD_PO_LIST_FAILED");
-      }
-      for (const stroke of (strokes ?? []) as JsonRecord[]) {
-        strokeNumberById.set(String(stroke.id), String(stroke.stroke_number ?? ""));
-      }
-    }
-
-    if (machineIds.length > 0) {
-      const { data: machines, error: machineErr } = await serviceRoleClient
-        .schema("erp_master")
-        .from("machine_master")
-        .select("id, machine_code, machine_name")
-        .in("id", machineIds);
-      if (machineErr) {
-        console.error("[process_order.listProcessOrders] machine query failed:", JSON.stringify(machineErr));
-        throw new Error("PROD_PO_LIST_FAILED");
-      }
-      for (const machine of (machines ?? []) as JsonRecord[]) {
-        machineById.set(String(machine.id), machine);
-      }
-    }
-
-    let createdByDisplayMap = new Map<string, string>();
-    if (createdByIds.length > 0) {
-      try {
-        createdByDisplayMap = await resolveUserDisplayNames(createdByIds);
-      } catch (error) {
-        console.error("[process_order.listProcessOrders] created-by resolution failed:", JSON.stringify(error));
-        throw new Error("PROD_PO_LIST_FAILED");
-      }
-    }
+    // PERF: INDEPENDENT per CLAUDE.md 8B — all four lookups read only `rows`, never each other's
+    // result, so they run as one parallel round instead of four sequential Oregon->Mumbai round
+    // trips. Every branch raises the same PROD_PO_LIST_FAILED, so Promise.all's first-rejection
+    // surfaces the identical error the old sequential order did.
+    const [materialMap, strokeNumberById, machineById, createdByDisplayMap] = await Promise.all([
+      getMaterialMapByIds(
+        rows.map((row) => String(row.material_id ?? "")),
+        "[process_order.listProcessOrders]",
+        "PROD_PO_LIST_FAILED",
+        "id, pace_code, material_name, shade_code",
+      ),
+      (async () => {
+        const map = new Map<string, string>();
+        if (strokeIds.length === 0) return map;
+        const { data: strokes, error: strokeErr } = await serviceRoleClient
+          .schema("erp_production")
+          .from("stroke_master")
+          .select("id, stroke_number")
+          .in("id", strokeIds);
+        if (strokeErr) {
+          console.error("[process_order.listProcessOrders] stroke query failed:", JSON.stringify(strokeErr));
+          throw new Error("PROD_PO_LIST_FAILED");
+        }
+        for (const stroke of (strokes ?? []) as JsonRecord[]) {
+          map.set(String(stroke.id), String(stroke.stroke_number ?? ""));
+        }
+        return map;
+      })(),
+      (async () => {
+        const map = new Map<string, JsonRecord>();
+        if (machineIds.length === 0) return map;
+        const { data: machines, error: machineErr } = await serviceRoleClient
+          .schema("erp_master")
+          .from("machine_master")
+          .select("id, machine_code, machine_name")
+          .in("id", machineIds);
+        if (machineErr) {
+          console.error("[process_order.listProcessOrders] machine query failed:", JSON.stringify(machineErr));
+          throw new Error("PROD_PO_LIST_FAILED");
+        }
+        for (const machine of (machines ?? []) as JsonRecord[]) {
+          map.set(String(machine.id), machine);
+        }
+        return map;
+      })(),
+      (async () => {
+        if (createdByIds.length === 0) return new Map<string, string>();
+        try {
+          return await resolveUserDisplayNames(createdByIds);
+        } catch (error) {
+          console.error("[process_order.listProcessOrders] created-by resolution failed:", JSON.stringify(error));
+          throw new Error("PROD_PO_LIST_FAILED");
+        }
+      })(),
+    ]);
 
     return okResponse({
       data: rows.map((row) => ({
