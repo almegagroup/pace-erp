@@ -342,9 +342,22 @@ const PIPELINE_CONTEXT_CACHE_TTL_MS = (() => {
     ? Deno.env.get("PIPELINE_CONTEXT_CACHE_TTL_MS")
     : process.env.PIPELINE_CONTEXT_CACHE_TTL_MS;
   const parsed = Number(raw);
-  // 5s: long enough to cover one page's request burst, short enough that a
-  // permission change is picked up almost immediately.
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 5000;
+  // 30s. The original 5s was chosen on a wrong assumption — that a page's request
+  // burst finishes in ~3s. Live Server-Timing data disproved it: each request takes
+  // 1.5-2s and the browser runs ~6 in parallel, so a ~30-request page takes 10-30s.
+  // A 5s TTL therefore expired mid-burst and threw away most of the benefit.
+  //
+  // 30s covers a typical burst while halving the staleness window vs 60s. What that
+  // window can and cannot do:
+  //   • CANNOT grant anything — the cache only replays a context that was legitimately
+  //     resolved moments ago for the exact same key. It can only DELAY a revocation.
+  //   • Company / work-context switch, a different user, or different scope headers all
+  //     change the key, so they take effect immediately.
+  //   • Session validity (login, logout, idle lock) is NOT cached — session.ts is untouched.
+  //   • ACL decisions are NOT cached — stepAcl re-evaluates every request.
+  // So the only bounded staleness is an admin revoking company/work-context/project
+  // access, which takes up to 30s to bite.
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 30000;
 })();
 
 const contextCache = new Map<string, { at: number; value: ContextResolution }>();
