@@ -2470,6 +2470,20 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
     // the Process PO number is the reference.
     const intMatDoc = await generateMaterialDocNumber(String(po.company_id));
 
+    // §104.8 (INT valuation, LOCKED 2026-07-18): in-house INT costs what its RM cost —
+    // Σ(RM issue qty × that RM's rate) ÷ output qty. Pre-fetch every RM line's current
+    // UNRESTRICTED rate so the P261 issues post at real value and roll up into the INT output.
+    // Purchased INT keeps its own GRN rate; the two sources blend in stock_snapshot's weighted
+    // average, which is the correct combined cost an MTO batch should consume at.
+    const intRateMap = await fetchUnrestrictedRates(
+      String(po.company_id),
+      lines.map((line) => ({
+        materialId: toTrimmedString(line.actual_material_id) || String(line.material_id),
+        slocId: String(getIssueStorageLocationId(line) ?? ""),
+      })),
+    );
+    let totalIntRmValue = 0;
+
     for (const line of lines) {
       const actualQty = lineOverrideMap.has(String(line.id))
         ? Number(lineOverrideMap.get(String(line.id)) ?? 0)
@@ -2496,6 +2510,10 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
         throw new Error("PROD_PO_VERIFY_FAILED");
       }
 
+      // §104.8: issue at the RM's real cost and accumulate it — this sum IS the INT's value.
+      const intRmRate = intRateMap.get(`${movementMaterialId}|${slocId}`) ?? 0;
+      totalIntRmValue += actualQty * intRmRate;
+
       const posting = await postStockMovement({
         documentNumber: docNumber,
         documentDate: today,
@@ -2506,7 +2524,7 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
         materialId: movementMaterialId,
         quantity: actualQty,
         baseUomCode: baseUom,
-        unitValue: 0,
+        unitValue: intRmRate,
         stockTypeCode: "UNRESTRICTED",
         direction: "OUT",
         postedBy,
@@ -2546,6 +2564,21 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
     }
 
     const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
+
+    // §104.8 (LOCKED 2026-07-18): INT conversion cost is OPTIONAL and data-driven — INT resolves the
+    // SAME conversion_cost_config as SFG, but a missing rate means 0-and-proceed, NOT a hard block
+    // (contrast verifyProcessOrderHandler's PROD_PO_CONVERSION_RATE_MISSING). Rationale: SFG
+    // conversion is known to exist so a missing rate is a config error; INT conversion does not
+    // exist today, so absent legitimately means zero. If a future INT ever needs one, the business
+    // adds a dated row on the AC04 page (segment INT, optional per-material override) — no code
+    // change, no migration, no deploy.
+    const intConversionRate = (await resolveConversionRate(
+      String(po.company_id), String(po.segment_code ?? ""), String(po.material_id), today,
+    )) ?? 0;
+    const intCostPerKg = actualOutputQty > 0
+      ? (totalIntRmValue / actualOutputQty) + intConversionRate
+      : intConversionRate;
+
     const fgPosting = await postStockMovement({
       documentNumber: docNumber,
       documentDate: today,
@@ -2556,7 +2589,7 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
       materialId: po.material_id,
       quantity: actualOutputQty,
       baseUomCode: fgUom,
-      unitValue: 0,
+      unitValue: intCostPerKg,
       stockTypeCode: "UNRESTRICTED",
       direction: "IN",
       postedBy,
