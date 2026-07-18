@@ -13880,6 +13880,62 @@ user does not know in advance how long a rate will last, so they must not be ask
 | **No rate ⇒ hard block** | If no rate is valid for the posting date, the posting **fails** rather than posting at zero/wrong cost — that history could never be corrected afterwards (see go-live note below). |
 | **Rate used is stored on the batch** | The resolved rate is recorded on the Process PO so the costing of any batch is auditable without re-deriving it. |
 
+**INT (Intermediate) valuation — dual-source, RMC-only for now (LOCKED — 2026-07-18).** Business
+owner challenged an earlier "INT is out of scope" call and was right: **INT is not a separate
+production type for costing — it is an *input* to MTO.** Live check: 5 MTO strokes consume
+`INT-00001` (Caustic Soda Lye). Leaving the INT output unvalued puts a hole straight through the
+SFG/FG cost chain above. Rules:
+
+| Source | How INT gets its rate |
+|---|---|
+| **Direct purchase** | The GRN's own landed rate — already correct, nothing to build. |
+| **In-house production** | `INT rate/KG = Σ(RM issue qty × that RM's rate) ÷ output qty` — i.e. the issued RM's real value, exactly as the business owner stated (*"Issued RM dosage % × oi RM gulor rate"*). |
+
+Both sources blend naturally in `stock_snapshot`'s weighted average, which is correct — an MTO batch
+then consumes INT at the true combined cost. **The bug being fixed:** `completeIntProcessOrderHandler`
+posts the in-house output (P101) at `unit_value: 0`, which drags that blend toward zero and silently
+understates RMC → SFG → FG for every MTO batch using it. Masked today only because all INT stock so
+far came from Opening Stock (P561 @ ₹10); the first in-house INT PO would expose it.
+
+**Conversion on INT — optional and data-driven (LOCKED — 2026-07-18).** Business owner: *"amader kono
+INT-r akhono obdi kono conversion cost nei, kintu ami sure noy … future e je je INT material asbe,
+tader kono conversion rate asbe kina."* Rather than force a decision now, INT resolves the **same**
+`conversion_cost_config` used by SFG, but with the opposite missing-rate behaviour:
+
+| | SFG (MTO/HPS/MTS) | **INT** |
+|---|---|---|
+| Rate configured | add it | add it |
+| **No rate configured** | 🔴 **hard block** (`PROD_PO_CONVERSION_RATE_MISSING`) | ✅ **treat as 0, proceed** |
+
+Rationale for the asymmetry: SFG conversion is known to exist, so a missing rate is a config error
+worth blocking on; INT conversion does not exist today, so a missing rate legitimately means zero.
+Consequence — **today INT costs RMC only with zero config; if a future INT ever needs conversion, the
+business adds one dated row on the AC04 Conversion Cost page (segment `INT`, optionally a
+per-INT-material override) and it takes effect with no code change, migration or deploy.**
+
+**Opening INT rate — auto-suggest from the Stroke, override allowed (LOCKED — 2026-07-18).** Because
+opening stock is loaded RM-first, by the time the INT line is entered every input rate is already in
+`stock_snapshot`, so the system can compute the same figure it will use for in-house production:
+`Σ(dosage% × that RM's current rate)` (e.g. INT-00001 = 52% Water + 48% Caustic Flakes). IN05 today
+takes `rate_per_unit` as a pure manual entry with no derivation — it will show this **suggested** rate
+plus its per-RM breakup, with the field still **editable**: a *purchased* opening INT must be entered
+at its purchase price, where the stroke-derived figure does not apply. Suggesting (not forcing) also
+prevents the real risk of a hand-typed opening rate differing from the formula, which would make the
+weighted average jump on the first in-house INT PO after go-live.
+
+**Opening-stock load ORDER matters (LOCKED — 2026-07-18).** The cost build-up is bottom-up, so
+opening stock must be entered in the same order or the derived rates have nothing to stand on:
+
+```
+1. RM + PM opening   → real purchase / landed rate
+2. INT opening       → stroke-derived (in-house) or purchase rate
+3. SFG opening       → RMC + conversion
+4. FG opening        → SFG + PMC
+```
+
+This is a required input to the still-pending **Opening Stock (RM+PM+FG) go-live session** — that
+session was scoped as RM+PM+FG, but INT and SFG sit in the same chain and must be included.
+
 **What a rate change does NOT do (LOCKED):** it does **not** retroactively revalue stock already
 produced. Batches posted before the change keep their original value — that is correct accounting
 (they really were made at the old cost), and the snapshot's moving average blends old and new stock
