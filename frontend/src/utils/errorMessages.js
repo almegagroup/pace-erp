@@ -174,6 +174,34 @@ export const ERROR_MESSAGES = {
 export const GENERIC_PERMISSION_MESSAGE = "You do not have permission to perform this action.";
 export const GENERIC_IT_MESSAGE = "A system error occurred. Please contact your Administrator.";
 
+/*
+ * A write (POST/PATCH/PUT/DELETE) that never received an HTTP response — the connection
+ * dropped, timed out, or the server restarted mid-request.
+ *
+ * This is NOT the same as a failed save. The server keeps processing after the browser
+ * disconnects, so the work has very likely COMPLETED even though no response came back.
+ * Our stock postings are not wrapped in a single transaction (see CLAUDE.md 8C), so a
+ * blind retry can post the same movements a second time — double stock issue, and the
+ * first posting's ledger link gets overwritten so a later reversal cannot undo it.
+ *
+ * Therefore the user must be told to VERIFY before retrying, never "try again".
+ */
+export const AMBIGUOUS_WRITE_MESSAGE =
+  "Connection lost before the server replied. This action may have already been saved. " +
+  "Refresh the page and check before trying again — repeating it could record the same entry twice.";
+
+/*
+ * True when a fetch() rejected without ever producing a response (browser network-layer
+ * failure). Real HTTP errors never reach here — they resolve with a response object and
+ * are handled by resolveErrorMessage() instead.
+ */
+export function isNetworkFailure(error) {
+  if (!error) return false;
+  if (error.ambiguousWrite === true) return true;
+  // Browsers reject with TypeError for DNS/connection/CORS-layer failures; AbortError for timeouts.
+  return error instanceof TypeError || error?.name === "AbortError";
+}
+
 function looksSafeForUsers(message) {
   if (typeof message !== "string") {
     return false;
