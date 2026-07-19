@@ -53,14 +53,29 @@ BEGIN
   WHERE rd.id = (r->>'reservation_id')::uuid;
 
   -- ── 3. Reco (costing) rows ──────────────────────────────────────────────
-  -- TS-এর বানানো row গুলোই হুবহু বসছে — column তালিকা এখানে লেখা নেই, তাই
-  -- ভবিষ্যতে reco-তে column যোগ হলে এই function বদলাতে হবে না।
+  -- TS-এর বানানো row গুলোই হুবহু বসছে — column তালিকা লেখা নেই, তাই ভবিষ্যতে
+  -- reco-তে column যোগ হলে এই function বদলাতে হবে না।
+  --
+  -- ⚠️ jsonb_populate_record JSON-এ **অনুপস্থিত** field-কে NULL ধরে, ফলে table-এর
+  -- DEFAULT কখনো চলে না। id-তে এটা ধরা পড়েছিল (`gen_random_uuid()` উপেক্ষিত হয়ে
+  -- NOT NULL ভাঙছিল)। তাই default গুলো এখানে স্পষ্ট করে আগে বসিয়ে, caller-এর
+  -- মান ডানদিকে concat করা হচ্ছে — `||`-তে ডান পাশ জেতে, তাই caller যা পাঠায়
+  -- সেটাই প্রাধান্য পায়, আর না পাঠালে default টিকে থাকে।
   IF jsonb_array_length(COALESCE(p_context->'reco_rows','[]'::jsonb)) > 0 THEN
     INSERT INTO erp_production.process_order_line_reco
-    SELECT * FROM jsonb_populate_recordset(
-      NULL::erp_production.process_order_line_reco,
-      p_context->'reco_rows'
-    );
+    SELECT (jsonb_populate_record(
+              NULL::erp_production.process_order_line_reco,
+              jsonb_build_object(
+                'id',                  gen_random_uuid(),
+                'line_material_type',  'RM',
+                'is_formulation_line', true,
+                'is_voided',           false,
+                'source_txn_type',     'PRODUCTION',
+                'reco_document_year',  '',
+                'last_updated_at',     now()
+              ) || row_json
+            )).*
+    FROM jsonb_array_elements(p_context->'reco_rows') AS row_json;
   END IF;
 
   -- ── 4. Header ───────────────────────────────────────────────────────────
