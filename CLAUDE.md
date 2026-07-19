@@ -650,7 +650,21 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
 
 ---
 
-## 8-PERF. Performance — মাপা তথ্য ও বাকি কাজ (2026-07-18)
+## 8-PERF. Performance — ⏸️ GO-LIVE পর্যন্ত থামানো (2026-07-19)
+
+> **অবস্থা:** এই ধাপের কাজ শেষ ও deploy করা। **বাকি item গুলো business owner-এর সিদ্ধান্তে
+> go-live (1 July 2026)-এর পরে হবে** — এখন আর এই লাইনে কোড বদলানো হবে না।
+> নতুন session এই section পড়ে সরাসরি অবস্থা বুঝে নাও; নতুন করে re-audit কোরো না।
+
+**এক নজরে ফল (dev, deployed):**
+
+| যা | আগে | পরে |
+|---|---|---|
+| `/api/me/menu` | ~৭.৩ s | **~১.০ s** |
+| Pipeline `context` | ৪৯২ ms | **০ µs** (cache hit) |
+| Pipeline মোট | ~১০০০ ms | **~২৭০ ms** (`session` একটাই query) |
+| প্রতি request মোট | ১.৪৭–১.৭৯ s | **১.০৮–১.৩০ s** |
+| `alerts/counts`-এর enrichment | ১৫ round trip | **১** |
 
 **পটভূমি:** business owner Tally Cloud-এর সাথে তুলনা করে slowness নিয়ে প্রশ্ন তোলেন।
 DB Mumbai (`ap-south-1`), Prod API Singapore (paid), Dev API Oregon (free tier)। **Region বদলানো
@@ -673,12 +687,12 @@ DB Mumbai (`ap-south-1`), Prod API Singapore (paid), Dev API Oregon (free tier)�
 2. `admin.companies`/`om.companies` আলাদা queryKey-তে একই endpoint; CSNTracker-এ raw `fetch()`
    duplicate; `tracker`/`counts`-এ `enabled` guard অনুপস্থিত → **double-fetch বন্ধ** (commit `83195e6`)
 
-3. `/api/me/menu` **৭.৩s → ১.০s** — `menu.handler.ts` প্রতিবার পড়ার আগেই snapshot নতুন করে
+3. `/api/me/menu` **৭.৩s → ১.০s** (commit `5900c28`) — `menu.handler.ts` প্রতিবার পড়ার আগেই snapshot নতুন করে
    বানাত, কোনো cache/staleness check ছাড়াই। এখন read-first: আগে snapshot পড়ে, **miss হলেই**
    rebuild করে (`MENU_SNAPSHOT_CACHE_TTL_SECONDS`, default 300; `0` দিলে পুরনো আচরণে ফেরত,
    `?refresh=1` দিলে জোর করে bypass)। ⚠️ এটা menu/permission correctness path — TTL বদলানোর
    আগে ভাবো।
-4. Pipeline `context` **৪৯২ms → ০µs** (`_pipeline/context.ts`) — memoize করা হয়েছে, key-তে
+4. Pipeline `context` **৪৯২ms → ০µs** (`_pipeline/context.ts`, commits `06eb77d` + `23830bc`) — memoize করা হয়েছে, key-তে
    authUser+role+company+workContext+workspaceMode+৩টা header, TTL 30s, শুধু RESOLVED cache
    হয়, ৫০০-entry bound, admin bypass করে। এর পরে pipeline = `session` ~২৭০ms (একটাই indexed
    query — যাচাই করা, আর কমানোর জায়গা নেই)।
@@ -704,14 +718,27 @@ Render **free tier** (কম CPU), তাই ৩৬টা সমান্তর�
 ~২৭০ms `session` query আছে। যদি তাই হয়, **Prod (Singapore, paid) এ এই সমস্যা অনেক কম** — অর্থাৎ
 dev-এর মাপ দিয়ে prod-এর সিদ্ধান্ত নেওয়া যাবে না।
 
-**পরের ধাপ (business owner কে deployed app-এ মাপতে হবে):** DevTools → Network, Preserve log **বন্ধ**,
-clear করে একটা refresh → **Protocol column** যোগ করে দেখো `h2` কিনা, আর একটা ধীর request-এর Timing
-tab-এ Queueing/Stalled বনাম "Waiting (TTFB)" আলাদা করে দেখো। TTFB বড় হলে server-side, Stalled বড়
-হলে client-side — দুটোর দাওয়াই সম্পূর্ণ আলাদা।
+### 🔵 GO-LIVE-এর পরে করার তালিকা (এখন হাত দেবে না)
 
-**request সংখ্যা কমানো এখনো মূল্যবান** (server CPU-র জন্য), কিন্তু কারণটা browser connection সীমা নয়।
-বাকি তালিকা: `companies` এখনো ৩ বার → `approval-inbox`-এর mount-cycle duplication (screen-stack
-architecture, তাই বড় কাজ) → PR09-এ ৫টা আলাদা `materials` call (duplicate নয়, একসাথে আনা যায় কিনা)।
+**ধাপ ১ — আগে মাপো, তারপর কোড (এটা বাদ দিলে অন্ধের মতো কাজ হবে):**
+deployed app-এ DevTools → Network, Preserve log **বন্ধ**, clear করে একটা refresh →
+- **Protocol column** যোগ করে দেখো `h2` কিনা
+- একটা ধীর request-এর **Timing tab**-এ **Queueing/Stalled** বনাম **Waiting (TTFB)** আলাদা করে দেখো
+
+**TTFB বড় হলে server-side, Stalled বড় হলে client-side — দুটোর দাওয়াই সম্পূর্ণ আলাদা।** এটা না
+জেনে কিছু বদলানো যাবে না। আর মনে রেখো: dev = Render free tier, prod = paid — **dev-এর মাপ দিয়ে
+prod-এর সিদ্ধান্ত নেওয়া যাবে না**, go-live-এর পরে prod-এই মাপতে হবে।
+
+**ধাপ ২ — request সংখ্যা কমানো** (server CPU-র জন্য এখনো মূল্যবান, কিন্তু কারণটা browser
+connection সীমা **নয়**): `companies` এখনো ৩ বার → `approval-inbox`-এর mount-cycle duplication
+(screen-stack architecture, তাই বড় কাজ) → PR09-এ ৫টা আলাদা `materials` call (duplicate নয়,
+একসাথে আনা যায় কিনা)।
+
+**ধাপ ৩ — master data-র `staleTime` বাড়ানো (বিবেচনাধীন, যাচাই ছাড়া কোরো না):** global staleTime
+এখন 60s। companies/UOM/material-type জাতীয় reference data খুব কম বদলায়, তাই বেশি staleTime দিলে
+page-to-page navigation-এ অনেক refetch বেঁচে যায়। **শর্ত:** প্রতিটা সংশ্লিষ্ট mutation ঠিকমতো
+`invalidateQueries` করে কিনা আগে যাচাই করতে হবে — না করলে user নতুন তৈরি করা company/material
+দেখতে পাবে না। এই যাচাই ছাড়া এটা করা বিপজ্জনক।
 
 **`me ×3` — bug নয়, উপসর্গ ছিল:** `me` + `me?session_mode=passive` ×২। Passive probe-এর call site
 মাত্র একটাই (`SessionWatchdog.jsx`), কিন্তু tab visible থাকলে cooldown `FAST_RECHECK_MS = 5s`।
