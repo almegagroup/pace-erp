@@ -14965,3 +14965,46 @@ Sales Order — Packing PO নয় — তাই trigger-এর নিয়�
 পরে retrofit করতে না হয় (ততদিনে অজানা-লট dispatch data ঢুকে যাবে)।
 
 **Migrations:** `20260719200000` (column), `20260719210000` (trigger)।
+
+---
+
+### 83.4.1 — PR10 Packing PO Edit + Cancel (LOCKED — 2026-07-19)
+
+**পটভূমি:** PR10-এর Packing PO edit এতদিন **half-done** ছিল — শুধু PM line-এর storage location
+বদলানো যেত, num_packs read-only ছিল, cancel-এর পথই ছিল না (§6-এর "Packing PO's PR10 half
+deferred" নোট অনুযায়ী ইচ্ছাকৃত)। business owner testing-এ আটকে গিয়ে ঠিক করতে বলেন।
+
+**🔴 আসল বিপদ (কোডে যাচাই):** legacy `updatePackingOrderLinesHandler` num_packs আপডেট করত
+**কিন্তু reservation ছুঁত না**। STANDARD Packing PO তৈরির সময় দুটো reservation বসে:
+- **SFG** — `required_qty = qty_per_pack × num_packs` (batch এখনো NULL, Final-এ বাছা হয়)
+- **PM** (প্রতি line) — `required_qty = qty_per_pack × num_packs`
+
+num_packs বদলে reservation বাসি থেকে গেলে বাকি PO-তে ভুল "কম stock" দেখাত — নীরব gap।
+
+**Business owner সিদ্ধান্ত (2026-07-19), তিনটি:**
+1. **Fill Qty/pack (ব্যারেল সাইজ) editable** — num_packs-এর পাশাপাশি
+2. **Cancel-এ reason বাধ্যতামূলক**
+3. **Manual (bomRequired=false) হলেও PM line গুলো scale হবে** — num_packs/fill বদলালে PM-ও
+   তার per-pack হার ধরে বদলাবে (Process PO-র RM dosage scaling-এর হুবহু সমতুল্য)
+
+**Recompute সূত্র (float-drift-মুক্ত, `qty_per_pack` line-এই সংরক্ষিত):**
+- প্রতি line: `total_qty = qty_per_pack × new_num_packs`
+- **bomRequired=false** (599/000/001): fill বদলালে FG+SFG line-এর `qty_per_pack = new_fill`
+  (কারণ ওখানে sfgQtyPerPack = fill_qty); PM fill-নিরপেক্ষ (ব্যারেল-প্রতি, KG-প্রতি নয়)
+- **bomRequired=true** (fixed Pack BOM): SFG per-pack BOM-চালিত, fill user-lever **নয়** —
+  তখন শুধু num_packs editable, fill field দেখাবে না
+- `total_qty_kg = sfgQtyPerPack × num_packs` header-এ
+
+**Edit handler (dedicated, `editPackingOrderHandler` — legacy-তে bolt করা নিষিদ্ধ, §6 lock):**
+- Guard: **STANDARD only** (Final হলে COR6/reverse-এর পথ)। সব pack type।
+- Recompute করে → **SFG + PM reservation-এর `required_qty` আপডেট** → PM availability re-check
+  (§83.5 hard-block; SFG batch এখনো বাছা হয়নি বলে SFG check Final-এ)
+- PM line storage location + actual/alternate material (Process PO-র মতো) — অপরিবর্তিত রাখা
+
+**Cancel handler (dedicated, `cancelPackingOrderHandler`):**
+- Guard: **STANDARD only**, reason বাধ্যতামূলক
+- SFG + PM reservation সব **CANCELLED** → PO status **CANCELLED**
+- কোনো stock movement নেই (STANDARD-এ কিছু post হয়নি), তাই শুধু reservation release + status
+
+**Frontend PR10 Packing tab:** Num Packs + Fill Qty input (bomRequired অনুযায়ী fill দেখাবে/লুকাবে),
+PM line sloc + alternate, আর **Cancel button + reason modal**।

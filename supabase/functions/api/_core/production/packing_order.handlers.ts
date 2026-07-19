@@ -946,7 +946,7 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
       .schema("erp_production").from("packing_order")
       .select(`
         *,
-        pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type, billing_uom, outer_uom_code),
+        pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type, billing_uom, outer_uom_code, bom_required),
         process_order:process_order!process_order_id(id, po_number, batch_number, status, segment_code)
       `)
       .eq("id", id).maybeSingle();
@@ -1366,6 +1366,209 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CREATE_FAILED";
     return packErr(req, ctx, code, PACK_SHORTAGE_ERROR_CODES.has(code) ? 422 : 500, `Packing order create failed: ${err instanceof Error ? err.message : ""}`);
+  }
+}
+
+// PATCH /api/production/packing-orders/:id/edit  (PR10 — feasibility §83.4.1)
+//
+// Proper Packing PO edit at STANDARD. Unlike the legacy lines-only update, this
+// keeps the SFG + PM reservations in sync when num_packs / fill change — the gap
+// that made the old edit unsafe (num_packs changed, reservation left stale).
+//
+// Scaling mirrors Process PO's RM-dosage scaling: every line's total = its stored
+// qty_per_pack × new num_packs, so the recipe stays proportional with no float
+// drift. For bomRequired=false pack codes, fill is a real lever and drives the
+// FG/SFG per-pack; for bomRequired=true the SFG per-pack is BOM-fixed, so fill is
+// ignored there.
+export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    const id = getIdFromPath(req);
+    if (!id) return packErr(req, ctx, "PROD_PACK_INVALID", 400, "Packing PO id required");
+    const body = (await req.json().catch(() => ({}))) as JsonRecord;
+
+    const { data: poRow, error: poErr2 } = await serviceRoleClient
+      .schema("erp_production").from("packing_order")
+      .select("id, company_id, status, num_packs, fill_qty_per_pack, pack_code_id, po_type")
+      .eq("id", id).maybeSingle();
+    if (poErr2) throw new Error("PROD_PACK_EDIT_FAILED");
+    if (!poRow) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing PO not found");
+    const po = poRow as JsonRecord;
+    if (String(po.status) !== "STANDARD") {
+      return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Packing PO is editable only at STANDARD status.");
+    }
+
+    // bomRequired decides whether fill is a user lever (§83.4.1).
+    let bomRequired = true;
+    if (po.pack_code_id) {
+      const { data: pc } = await serviceRoleClient
+        .schema("erp_production").from("pack_code_master")
+        .select("bom_required").eq("id", po.pack_code_id as string).maybeSingle();
+      bomRequired = (pc as JsonRecord | null)?.bom_required !== false;
+    }
+
+    const oldNumPacks = parsePositiveInt(po.num_packs) ?? 0;
+    const newNumPacks = Object.prototype.hasOwnProperty.call(body, "num_packs")
+      ? parsePositiveInt(body.num_packs) : oldNumPacks;
+    if (!newNumPacks || newNumPacks <= 0) {
+      return packErr(req, ctx, "PROD_PACK_INVALID", 400, "num_packs must be a positive integer");
+    }
+    // fill only editable for bomRequired=false; ignored otherwise.
+    const oldFill = parsePositiveNumber(po.fill_qty_per_pack) ?? 0;
+    const newFill = (!bomRequired && Object.prototype.hasOwnProperty.call(body, "fill_qty_per_pack"))
+      ? (parsePositiveNumber(body.fill_qty_per_pack) ?? oldFill) : oldFill;
+    if (!bomRequired && (!newFill || newFill <= 0)) {
+      return packErr(req, ctx, "PROD_PACK_FILL_QTY_REQUIRED", 400, "fill_qty_per_pack must be positive for this pack code");
+    }
+
+    const now = new Date().toISOString();
+
+    const { data: lineRows, error: lineErr } = await serviceRoleClient
+      .schema("erp_production").from("packing_order_line")
+      .select("id, line_type, material_id, actual_material_id, qty_per_pack, total_qty, issue_sloc_id, has_alternate, material_group_id")
+      .eq("packing_order_id", id);
+    if (lineErr) throw new Error("PROD_PACK_EDIT_FAILED");
+    const lines = (lineRows ?? []) as JsonRecord[];
+
+    // Optional per-line edits (sloc + alternate), keyed by line id — same shape as create's pm_lines.
+    const pmEdits = new Map<string, JsonRecord>();
+    if (Array.isArray(body.pm_lines)) {
+      for (const pl of body.pm_lines as JsonRecord[]) {
+        const lid = toTrimmedString(pl.id);
+        if (lid) pmEdits.set(lid, pl);
+      }
+    }
+
+    // ── recompute every line ─────────────────────────────────────────────────
+    // total = qty_per_pack × new num_packs. For bomRequired=false the FG/SFG
+    // per-pack IS the fill, so update those two lines' qty_per_pack first.
+    const lineUpdates: Array<{ id: string; qty_per_pack: number; total_qty: number; issue_sloc_id?: string; actual_material_id?: string | null }> = [];
+    for (const line of lines) {
+      const lt = String(line.line_type ?? "");
+      let perPack = parsePositiveNumber(line.qty_per_pack) ?? 0;
+      if (!bomRequired && (lt === "FG" || lt === "SFG")) perPack = newFill;
+      const total = Number((perPack * newNumPacks).toFixed(4));
+
+      const upd: { id: string; qty_per_pack: number; total_qty: number; issue_sloc_id?: string; actual_material_id?: string | null } = {
+        id: String(line.id), qty_per_pack: perPack, total_qty: total,
+      };
+
+      const edit = pmEdits.get(String(line.id));
+      if (lt === "PM" && edit) {
+        const sloc = toTrimmedString(edit.issue_sloc_id);
+        if (sloc) upd.issue_sloc_id = sloc;
+        if (Object.prototype.hasOwnProperty.call(edit, "actual_material_id")) {
+          const alt = toTrimmedString(edit.actual_material_id) || null;
+          if (alt && line.has_alternate !== true) {
+            return packErr(req, ctx, "PROD_PACK_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id requires a registered alternate on this line");
+          }
+          upd.actual_material_id = alt;
+        }
+      }
+      lineUpdates.push(upd);
+    }
+
+    // ── PM availability re-check (SFG batch not chosen until Final) ───────────
+    const pmNeeds: PackingPmNeed[] = [];
+    for (const u of lineUpdates) {
+      const line = lines.find((l) => String(l.id) === u.id)!;
+      if (String(line.line_type) !== "PM") continue;
+      const effMat = u.actual_material_id ?? (toTrimmedString(line.actual_material_id) || String(line.material_id));
+      const sloc = u.issue_sloc_id ?? toTrimmedString(line.issue_sloc_id);
+      if (effMat && sloc) pmNeeds.push({ materialId: String(effMat), storageLocationId: String(sloc), qty: u.total_qty });
+    }
+    if (pmNeeds.length > 0) {
+      const avail = await computePackingAvailability(String(po.company_id), null, pmNeeds);
+      const short: string[] = [];
+      for (const [mat, row] of avail.pm.entries()) if (row.short > 0) short.push(mat);
+      if (short.length > 0) {
+        return packErr(req, ctx, "PROD_PACK_PM_SHORTAGE", 422, `Insufficient PM stock for ${short.length} material(s) at the new quantity`);
+      }
+    }
+
+    // ── apply: lines, then header, then reservations ─────────────────────────
+    // INDEPENDENT (§8B): each line update touches a different row.
+    await Promise.all(lineUpdates.map((u) => {
+      const patch: JsonRecord = { qty_per_pack: u.qty_per_pack, total_qty: u.total_qty, last_updated_at: now, last_updated_by: ctx.auth_user_id };
+      if (u.issue_sloc_id) patch.issue_sloc_id = u.issue_sloc_id;
+      if (Object.prototype.hasOwnProperty.call(u, "actual_material_id")) patch.actual_material_id = u.actual_material_id;
+      return serviceRoleClient.schema("erp_production").from("packing_order_line").update(patch).eq("id", u.id);
+    }));
+
+    const sfgLine = lineUpdates.find((u) => String(lines.find((l) => String(l.id) === u.id)?.line_type) === "SFG");
+    const headerQty = sfgLine ? sfgLine.total_qty : Number((oldFill * newNumPacks).toFixed(4));
+    const { error: hdrErr } = await serviceRoleClient
+      .schema("erp_production").from("packing_order")
+      .update({ num_packs: newNumPacks, fill_qty_per_pack: newFill, total_qty_kg: headerQty, last_updated_at: now, last_updated_by: ctx.auth_user_id })
+      .eq("id", id);
+    if (hdrErr) throw new Error("PROD_PACK_EDIT_FAILED");
+
+    // Reservations: required_qty follows the new per-line total. SFG reservation
+    // has no batch yet at STANDARD, so it is matched by material only.
+    const { data: resRows } = await serviceRoleClient
+      .schema("erp_production").from("reservation_document")
+      .select("id, material_id, status")
+      .eq("source_id", id).in("status", RESERVATION_OPEN_STATUSES);
+    for (const res of (resRows ?? []) as JsonRecord[]) {
+      // DEPENDENT: reservation required_qty must reflect the line it mirrors.
+      const line = lines.find((l) => String(l.material_id) === String(res.material_id)
+        || String(l.actual_material_id) === String(res.material_id));
+      const u = line ? lineUpdates.find((x) => x.id === String(line.id)) : undefined;
+      if (!u) continue;
+      const { error: resErr } = await serviceRoleClient
+        .schema("erp_production").from("reservation_document")
+        // balance_qty is a generated column (required_qty − issued_qty) — never written directly.
+        .update({ required_qty: u.total_qty, last_updated_at: now, last_updated_by: ctx.auth_user_id })
+        .eq("id", res.id as string);
+      if (resErr) throw new Error("PROD_PACK_EDIT_FAILED");
+    }
+
+    return okResponse({ id, num_packs: newNumPacks, fill_qty_per_pack: newFill, total_qty_kg: headerQty }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PACK_EDIT_FAILED";
+    return packErr(req, ctx, code, code.includes("SHORTAGE") ? 422 : 500, `Packing PO edit failed: ${err instanceof Error ? err.message : ""}`);
+  }
+}
+
+// POST /api/production/packing-orders/:id/cancel  (PR10 — feasibility §83.4.1)
+// Cancel a STANDARD Packing PO: release SFG + PM reservations, set CANCELLED.
+// No stock has moved at STANDARD, so there is nothing to reverse — only
+// reservations to release. Reason is mandatory (business owner, 2026-07-19).
+export async function cancelPackingOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    const id = getIdFromPath(req);
+    if (!id) return packErr(req, ctx, "PROD_PACK_INVALID", 400, "Packing PO id required");
+    const body = (await req.json().catch(() => ({}))) as JsonRecord;
+    const reason = toTrimmedString(body.reason);
+    if (!reason) return packErr(req, ctx, "PROD_PACK_CANCEL_REASON_REQUIRED", 400, "A reason is required to cancel a Packing PO.");
+
+    const { data: poRow, error: poErr2 } = await serviceRoleClient
+      .schema("erp_production").from("packing_order")
+      .select("id, status").eq("id", id).maybeSingle();
+    if (poErr2) throw new Error("PROD_PACK_CANCEL_FAILED");
+    if (!poRow) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing PO not found");
+    if (String((poRow as JsonRecord).status) !== "STANDARD") {
+      return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Only a STANDARD Packing PO can be cancelled here. A finalised PO must be reversed.");
+    }
+
+    const now = new Date().toISOString();
+
+    // Release every open reservation for this PO.
+    const { error: resErr } = await serviceRoleClient
+      .schema("erp_production").from("reservation_document")
+      .update({ status: "CANCELLED", last_updated_at: now, last_updated_by: ctx.auth_user_id })
+      .eq("source_id", id).in("status", RESERVATION_OPEN_STATUSES);
+    if (resErr) throw new Error("PROD_PACK_CANCEL_FAILED");
+
+    const { error: hdrErr } = await serviceRoleClient
+      .schema("erp_production").from("packing_order")
+      .update({ status: "CANCELLED", cancel_reason: reason, last_updated_at: now, last_updated_by: ctx.auth_user_id })
+      .eq("id", id);
+    if (hdrErr) throw new Error("PROD_PACK_CANCEL_FAILED");
+
+    return okResponse({ id, status: "CANCELLED" }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PACK_CANCEL_FAILED";
+    return packErr(req, ctx, code, 500, `Packing PO cancel failed: ${err instanceof Error ? err.message : ""}`);
   }
 }
 

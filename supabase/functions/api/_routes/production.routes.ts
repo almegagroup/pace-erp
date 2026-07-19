@@ -86,6 +86,8 @@ import {
   finalizePackingOrderHandler,
   reversePackingOrderHandler,
   correctPackingOrderHandler,
+  editPackingOrderHandler,
+  cancelPackingOrderHandler,
   fgStockBreakdownHandler,
 } from "../_core/production/packing_order.handlers.ts";
 import {
@@ -367,6 +369,12 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/packing-orders\/[^/]+\/lines$/.test(pathname) && req.method === "PATCH") {
     return await updatePackingOrderLinesHandler(req, ctx);
+  }
+  if (/^\/api\/production\/packing-orders\/[^/]+\/edit$/.test(pathname) && req.method === "PATCH") {
+    return await editPackingOrderHandler(req, ctx);
+  }
+  if (/^\/api\/production\/packing-orders\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+    return await cancelPackingOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/packing-orders\/[^/]+\/link-fo$/.test(pathname) && req.method === "POST") {
     return await linkFoHandler(req, ctx);

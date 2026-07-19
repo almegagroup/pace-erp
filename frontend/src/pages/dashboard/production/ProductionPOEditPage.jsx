@@ -20,7 +20,8 @@ import {
   getProcessOrder,
   listPackingOrders,
   listProcessOrders,
-  updatePackingOrderLines,
+  editPackingOrder,
+  cancelPackingOrder,
 } from "./prodApi.js";
 import { listMachines } from "../om/omApi.js";
 
@@ -135,6 +136,10 @@ function PackingPoEditTab() {
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [pmOverrides, setPmOverrides] = useState({});
+  const [numPacks, setNumPacks] = useState("");
+  const [fillQty, setFillQty] = useState("");
+  const [cancelReason, setCancelReason] = useState("");
+  const [showCancel, setShowCancel] = useState(false);
 
   const detailQ = useQuery({
     queryKey: ["packing-edit-lookup", submittedPoNumber],
@@ -166,7 +171,16 @@ function PackingPoEditTab() {
 
   useEffect(() => {
     setPmOverrides({});
-  }, [po?.id]);
+    setNumPacks(po?.num_packs != null ? String(po.num_packs) : "");
+    setFillQty(po?.fill_qty_per_pack != null ? String(po.fill_qty_per_pack) : "");
+    setCancelReason("");
+    setShowCancel(false);
+  }, [po?.id, po?.num_packs, po?.fill_qty_per_pack]);
+
+  // fill is a user lever only for bomRequired=false pack codes (§83.4.1); for
+  // fixed Pack BOM the SFG per-pack is BOM-driven. bom_required comes from the
+  // embedded pack_code. Default to hiding fill (safer) if the flag is absent.
+  const fillEditable = po?.pack_code?.bom_required === false;
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -202,22 +216,58 @@ function PackingPoEditTab() {
       toast("Select a storage location for every PM line.", "error");
       return;
     }
+    const packs = parseInt(numPacks, 10);
+    if (!Number.isFinite(packs) || packs <= 0) {
+      toast("Num Packs must be a positive whole number.", "error");
+      return;
+    }
+    if (fillEditable) {
+      const fill = Number(fillQty);
+      if (!Number.isFinite(fill) || fill <= 0) {
+        toast("Fill Qty per pack must be a positive number.", "error");
+        return;
+      }
+    }
     setSaving(true);
     try {
-      await updatePackingOrderLines(po.id, {
+      // Single call: the edit handler recomputes every line + keeps the SFG/PM
+      // reservations in sync, then re-checks PM availability. num_packs / fill
+      // and PM sloc all go together (§83.4.1).
+      const body = {
+        num_packs: packs,
         pm_lines: pmLines.map((line) => ({
-          material_id: line.material_id,
-          qty_per_pack: line.qty_per_pack,
-          total_qty: line.total_qty,
+          id: line.id,
           issue_sloc_id: pmOverrides[line.id] ?? line.issue_sloc_id,
         })),
-      });
-      toast("Packing PO PM lines updated.");
+      };
+      if (fillEditable) body.fill_qty_per_pack = Number(fillQty);
+      await editPackingOrder(po.id, body);
+      toast("Packing PO updated. Quantities and reservations recalculated.");
       qc.invalidateQueries({ queryKey: ["pack-orders"] });
       qc.invalidateQueries({ queryKey: ["packing-edit-lookup", submittedPoNumber] });
       detailQ.refetch();
     } catch (error) {
       toast(error.message || "Update failed.", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleCancel() {
+    if (!po || blockMessage) return;
+    if (!cancelReason.trim()) {
+      toast("A reason is required to cancel this Packing PO.", "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      await cancelPackingOrder(po.id, { reason: cancelReason.trim() });
+      toast("Packing PO cancelled. Reservations released.");
+      qc.invalidateQueries({ queryKey: ["pack-orders"] });
+      setShowCancel(false);
+      resetLookup();
+    } catch (error) {
+      toast(error.message || "Cancel failed.", "error");
     } finally {
       setSaving(false);
     }
@@ -283,8 +333,33 @@ function PackingPoEditTab() {
                 </div>
                 <div>
                   <span className="block text-xs text-slate-400">Num Packs</span>
-                  <p className="font-mono">{po.num_packs ?? "--"}</p>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={numPacks}
+                    onChange={(event) => setNumPacks(event.target.value)}
+                    className="h-8 w-28 border border-slate-300 bg-[#fffef7] px-2 font-mono text-sm outline-none focus:border-sky-500"
+                  />
                 </div>
+                {fillEditable ? (
+                  <div>
+                    <span className="block text-xs text-slate-400">Fill Qty / Pack (KG)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.001"
+                      value={fillQty}
+                      onChange={(event) => setFillQty(event.target.value)}
+                      className="h-8 w-32 border border-slate-300 bg-[#fffef7] px-2 font-mono text-sm outline-none focus:border-sky-500"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <span className="block text-xs text-slate-400">Fill Qty / Pack</span>
+                    <p className="font-mono">{po.fill_qty_per_pack ?? "--"} <span className="text-xs text-slate-400">(BOM-driven)</span></p>
+                  </div>
+                )}
               </div>
               <button
                 type="button"
@@ -335,7 +410,15 @@ function PackingPoEditTab() {
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setShowCancel((current) => !current)}
+                disabled={saving}
+                className="rounded border border-rose-300 px-4 py-2 text-sm font-medium text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-50"
+              >
+                Cancel Packing PO
+              </button>
               <button
                 type="button"
                 onClick={handleSave}
@@ -345,6 +428,41 @@ function PackingPoEditTab() {
                 {saving ? "Saving..." : "Save PR10 Edit"}
               </button>
             </div>
+
+            {showCancel ? (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 p-4">
+                <h4 className="mb-2 text-sm font-semibold text-rose-800">Cancel this Packing PO</h4>
+                <p className="mb-3 text-xs text-rose-700">
+                  This releases the SFG and PM reservations and marks the PO CANCELLED. It cannot be undone.
+                </p>
+                <label className="mb-1 block text-xs font-medium text-rose-700">Reason (required)</label>
+                <textarea
+                  rows={2}
+                  value={cancelReason}
+                  onChange={(event) => setCancelReason(event.target.value)}
+                  placeholder="Why is this Packing PO being cancelled?"
+                  className="mb-3 w-full border border-rose-300 bg-white px-2 py-1 text-sm outline-none focus:border-rose-500"
+                />
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setShowCancel(false); setCancelReason(""); }}
+                    disabled={saving}
+                    className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Keep PO
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    disabled={saving || !cancelReason.trim()}
+                    className="rounded bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+                  >
+                    {saving ? "Cancelling..." : "Confirm Cancel"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </ErpSectionCard>
       )}
