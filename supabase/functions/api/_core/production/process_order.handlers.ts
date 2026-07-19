@@ -460,6 +460,77 @@ async function postStockMovement(params: {
   return data[0] as StockPostingResult;
 }
 
+type MovementSpec = Record<string, unknown>;
+
+type DocumentPosting = {
+  line_ref: string;
+  stock_document_id: string;
+  stock_ledger_id: string;
+  valuation_rate: number | null;
+};
+
+/*
+ * Takes the SAME argument shape as postStockMovement, but builds an entry for
+ * erp_inventory.post_document instead of posting straight away. Keeping the shapes
+ * identical is deliberate: migrating a call site is then a one-line change, and the
+ * two cannot drift apart into subtly different parameter sets.
+ *
+ * `lineRef` is how the returned stock_ledger_id finds its way back to the right
+ * business row — a process_order_line id for RM/PM lines, or one of the fixed
+ * labels FG / QI_OUT / QI_RELEASE that complete_process_po_verify looks for.
+ */
+function toMovement(params: Parameters<typeof postStockMovement>[0], lineRef: string): MovementSpec {
+  return {
+    line_ref: lineRef,
+    document_number: params.documentNumber,
+    document_date: params.documentDate,
+    posting_date: params.postingDate,
+    movement_type_code: params.movementTypeCode,
+    company_id: params.companyId,
+    storage_location_id: params.storageLocationId,
+    material_id: params.materialId,
+    quantity: params.quantity,
+    base_uom_code: params.baseUomCode,
+    unit_value: params.unitValue,
+    stock_type_code: params.stockTypeCode,
+    direction: params.direction,
+    reversal_of_id: params.reversalOfId ?? null,
+    batch_number: params.batchNumber ?? null,
+    material_doc_number: params.matDoc?.docNumber ?? null,
+    material_doc_year: params.matDoc?.docYear ?? null,
+    reference_document_number: params.matDoc ? params.documentNumber : null,
+  };
+}
+
+/*
+ * One round trip, one transaction (CLAUDE.md 8D, feasibility §107.8). Every movement
+ * plus the source's registered completion function run together — any failure rolls
+ * back all of it, so a half-posted document is no longer possible.
+ */
+async function postDocument(args: {
+  referenceDocumentType: string;
+  referenceDocumentId: string;
+  movements: MovementSpec[];
+  postedBy: string;
+  context: Record<string, unknown>;
+}): Promise<DocumentPosting[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .rpc("post_document", {
+      p_reference_document_type: args.referenceDocumentType,
+      p_reference_document_id: args.referenceDocumentId,
+      p_movements: args.movements,
+      p_posted_by: args.postedBy,
+      p_context: args.context,
+    });
+  if (error) {
+    console.error("[process_order.postDocument] rpc failed:", JSON.stringify(error));
+    throw new Error("PROD_PO_VERIFY_FAILED");
+  }
+  const postings = (data as { postings?: unknown } | null)?.postings;
+  return (Array.isArray(postings) ? postings : []) as DocumentPosting[];
+}
+
 // §104: current UNRESTRICTED valuation rate for a set of (material, storage_location)
 // pairs, so RM/INT issues can post at their real cost (not 0) and roll up into the SFG
 // cost. Batched read (one query), keyed `${materialId}|${slocId}`; 0 when not yet valued.
@@ -2798,7 +2869,10 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const docNumber = String(po.po_number);
     const postedBy = ctx.auth_user_id;
     const batchNumber = toTrimmedString(po.batch_number) || null;
-    const ledgerEntries: JsonRecord[] = [];
+    // Collected here, posted once at the end via post_document — nothing below
+    // touches the database until that single transactional call.
+    const movements: MovementSpec[] = [];
+    const reservationUpdates: Array<{ reservation_id: string; issued_qty: number; status: string }> = [];
     const reservationMap = await fetchReservationRowsBySourceLineIds(lines.map((line) => String(line.id)));
 
     // §106: one Material Document for the whole Verify event — every RM/INT issue (P261),
@@ -2864,8 +2938,11 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       // handler, so the guard cannot silently no-op.
       if (toTrimmedString(line.stock_ledger_id)) continue;
 
-      // DEPENDENT: each P261 issue and its reservation issue update must stay in posting order.
-      const posting = await postStockMovement({
+      // Collected, not posted. Array order is still the posting order, and post_document
+      // applies them in that order — DEPENDENT per §8B, since the negative-stock guard
+      // depends on what came before. The line's own id is the line_ref, which is how
+      // complete_process_po_verify writes the resulting ledger id back to this row.
+      movements.push(toMovement({
         documentNumber: docNumber,
         documentDate: today,
         postingDate: today,
@@ -2881,40 +2958,20 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         postedBy,
         matDoc: verifyMatDoc,
         referenceDocumentId: String(po.id),
-      });
+      }, String(line.id)));
 
-      const { error: lineUpdateErr } = await serviceRoleClient
-        .schema("erp_production")
-        .from("process_order_line")
-        .update({ stock_ledger_id: posting.stock_ledger_id })
-        .eq("id", line.id as string);
-      if (lineUpdateErr) {
-        console.error("[process_order.verify] line stock-ledger update failed:", JSON.stringify(lineUpdateErr));
-        throw new Error("PROD_PO_VERIFY_FAILED");
-      }
-
+      // Reservation arithmetic is unchanged — still computed here, just applied inside
+      // the transaction instead of in its own round trip.
       const reservation = reservationMap.get(String(line.id));
       if (reservation && RESERVATION_OPEN_STATUSES.includes(String(reservation.status ?? ""))) {
         const issuedQty = Number(reservation.issued_qty ?? 0) + actualQty;
         const requiredQty = Number(reservation.required_qty ?? 0);
-        const reservationStatus = issuedQty >= requiredQty - EPSILON ? "FULLY_ISSUED" : "PARTIAL";
-        const { error: reservationErr } = await serviceRoleClient
-          .schema("erp_production")
-          .from("reservation_document")
-          .update({
-            issued_qty: issuedQty,
-            status: reservationStatus,
-            last_updated_at: new Date().toISOString(),
-            last_updated_by: ctx.auth_user_id,
-          })
-          .eq("id", reservation.id as string);
-        if (reservationErr) {
-          console.error("[process_order.verify] reservation issue update failed:", JSON.stringify(reservationErr));
-          throw new Error("PROD_PO_VERIFY_FAILED");
-        }
+        reservationUpdates.push({
+          reservation_id: String(reservation.id),
+          issued_qty: issuedQty,
+          status: issuedQty >= requiredQty - EPSILON ? "FULLY_ISSUED" : "PARTIAL",
+        });
       }
-
-      ledgerEntries.push({ line_id: line.id, movement: "P261", direction: "OUT", ...posting });
     }
 
     // §104.8: SFG cost/KG = RMC/KG + Conversion/KG. This is the value the SFG enters stock at.
@@ -2922,7 +2979,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
 
     const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
     // Receipt into QUALITY_INSPECTION at the computed SFG cost (weighted-avg on IN).
-    const fgPosting = await postStockMovement({
+    movements.push(toMovement({
       documentNumber: docNumber,
       documentDate: today,
       postingDate: today,
@@ -2939,8 +2996,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       batchNumber,
       matDoc: verifyMatDoc,
       referenceDocumentId: String(po.id),
-    });
-    ledgerEntries.push({ movement: "P101", direction: "IN", ...fgPosting });
+    }, "FG"));
 
     // §104 BUGFIX (2026-07-18): the QI→Unrestricted release used to post ONLY the IN leg to
     // UNRESTRICTED and never drained QUALITY_INSPECTION, so every verified batch left its full
@@ -2949,7 +3005,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     // QI = 0. On OUT unit_value is ignored for the snapshot (QI drains at its own rate); the IN
     // below folds the SFG cost into Unrestricted. The CORS reverse path adds the mirror leg
     // (P321 IN-QI restore) so it stays balanced.
-    const qiOutPosting = await postStockMovement({
+    movements.push(toMovement({
       documentNumber: docNumber,
       documentDate: today,
       postingDate: today,
@@ -2966,10 +3022,9 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       batchNumber,
       matDoc: verifyMatDoc,
       referenceDocumentId: String(po.id),
-    });
-    ledgerEntries.push({ movement: "P321", direction: "OUT", ...qiOutPosting });
+    }, "QI_OUT"));
 
-    const qiReleasePosting = await postStockMovement({
+    movements.push(toMovement({
       documentNumber: docNumber,
       documentDate: today,
       postingDate: today,
@@ -2986,8 +3041,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       batchNumber,
       matDoc: verifyMatDoc,
       referenceDocumentId: String(po.id),
-    });
-    ledgerEntries.push({ movement: "P321", direction: "IN", ...qiReleasePosting });
+    }, "QI_RELEASE"));
 
     const strokeNumber = toTrimmedString((po.stroke as JsonRecord | null)?.stroke_number) || null;
     // §106 Phase 3: one Reco/Costing document (BELNR+GJAHR equivalent) for this Verify
@@ -3028,44 +3082,55 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       last_updated_by: ctx.auth_user_id,
     }));
 
-    if (recoRows.length > 0) {
-      const { error: recoErr } = await serviceRoleClient
-        .schema("erp_production")
-        .from("process_order_line_reco")
-        .insert(recoRows);
-      if (recoErr) {
-        console.error("[process_order.verify] reco insert failed:", JSON.stringify(recoErr));
-        throw new Error("PROD_PO_VERIFY_FAILED");
-      }
-    }
-
-    const now = new Date().toISOString();
-    const { error: poUpdateErr } = await serviceRoleClient
-      .schema("erp_production")
-      .from("process_order")
-      .update({
-        status: "VERIFIED",
-        actual_qty: verifiedQty,
-        fg_stock_ledger_id: fgPosting.stock_ledger_id,
-        qi_release_stock_ledger_id: qiReleasePosting.stock_ledger_id,
-        verified_at: now,
-        verified_by: ctx.auth_user_id,
-        has_unapproved_deviation: applyResult.hasUnapprovedDeviation ?? false,
-        last_updated_at: now,
-        last_updated_by: ctx.auth_user_id,
-      })
-      .eq("id", id);
-    if (poUpdateErr) {
-      console.error("[process_order.verify] process-order update failed:", JSON.stringify(poUpdateErr));
-      throw new Error("PROD_PO_VERIFY_FAILED");
-    }
+    /* ---------------------------------------------------------------------
+     * ONE transaction (CLAUDE.md 8D, feasibility §107.8).
+     *
+     * Everything above only COLLECTED — nothing has touched the database yet.
+     * This single call posts all movements in order and then runs the registered
+     * completion function (erp_production.complete_process_po_verify), which
+     * writes the line ledger ids, the reservation issues, the reco rows and the
+     * VERIFIED header — all inside the same transaction.
+     *
+     * Previously this was ~31 separate round trips, each its own commit, so a
+     * failure part-way left stock half-issued with the order still at FINAL and a
+     * retry re-posting whatever had already gone through. Now it is all-or-nothing.
+     *
+     * Note the arithmetic did not move: sfgCostPerKg, the reco rows and the
+     * reservation quantities are still computed above exactly as before and are
+     * handed over as a prepared payload. Only where they get persisted changed,
+     * so §104 costing cannot drift because of this.
+     * ------------------------------------------------------------------- */
+    const postings = await postDocument({
+      referenceDocumentType: "PROC_PO",
+      referenceDocumentId: String(po.id),
+      movements,
+      postedBy,
+      context: {
+        header: {
+          actual_qty: verifiedQty,
+          verified_by: ctx.auth_user_id,
+          last_updated_by: ctx.auth_user_id,
+          has_unapproved_deviation: applyResult.hasUnapprovedDeviation ?? false,
+        },
+        reservations: reservationUpdates,
+        reco_rows: recoRows,
+      },
+    });
 
     return okResponse({
       id,
       status: "VERIFIED",
       batch_number: po.batch_number,
       verified_qty: verifiedQty,
-      ledger_entries: ledgerEntries,
+      // Rebuilt from what the transaction actually wrote, rather than accumulated
+      // as we went — the response now reports committed facts, not intentions.
+      ledger_entries: postings.map((p) => ({
+        line_id: ["FG", "QI_OUT", "QI_RELEASE"].includes(p.line_ref) ? null : p.line_ref,
+        movement: p.line_ref === "FG" ? "P101" : p.line_ref === "QI_OUT" || p.line_ref === "QI_RELEASE" ? "P321" : "P261",
+        direction: p.line_ref === "FG" || p.line_ref === "QI_RELEASE" ? "IN" : "OUT",
+        stock_document_id: p.stock_document_id,
+        stock_ledger_id: p.stock_ledger_id,
+      })),
     }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PO_VERIFY_FAILED";
