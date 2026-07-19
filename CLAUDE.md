@@ -877,6 +877,55 @@ Code review এ নতুন `for`/`for...of` loop এ `await` দেখলে �
 
 ---
 
+## 8D. 🔴 Write Atomicity — সবচেয়ে বড় খোলা structural ঝুঁকি (2026-07-19)
+
+**সমস্যা:** প্রতিটা stock-posting handler **multi-step লেখে TypeScript থেকে, round trip করে করে**,
+কোনো transaction ছাড়া। Process PO Verify-তে যাচাই করা: প্রতি RM line-এ **৩টা ধারাবাহিক round trip**
+(P261 RPC → `process_order_line` update → `reservation_document` update)। ৮ লাইনের PO = **~৩১টা
+round trip**, প্রতিটা আলাদা commit।
+
+**১২টা posting handler-ই একই ছাঁচে** (যাচাই করা — grn, inward_qa, opening_stock,
+physical_inventory, pto, rtv, sales_order, sto, opening_genealogy, packing_order,
+partial_reversal, process_order):
+- **আগে posting, শেষে status** — মাঝপথে মরলে status অপরিবর্তিত থাকে
+- **কোনো idempotency guard নেই** — `stock_ledger_id` **লেখা হয়, কখনো পড়া হয় না**
+
+**ফলে retry = দ্বিগুণ posting**, আর retry-তে `stock_ledger_id` **overwrite** হয় বলে প্রথম posting
+অনাথ হয়ে যায় — পরে CORS শুধু দ্বিতীয়টা ফেরাবে, প্রথমটা stock-এ ভূত হয়ে থাকবে। `issued_qty`-ও
+দুবার যোগ হয়।
+
+**⚠️ ভুল ধারণা এড়াও:** "network down = অর্ধেক কাজ" — এটাই প্রধান পথ **নয়**। Browser disconnect
+হলে server থামে না, কাজ **শেষ করেই ফেলে**; user শুধু উত্তর পায় না। তাই সবচেয়ে সম্ভাব্য ঘটনা
+**"পুরো কাজ, তারপর user আবার Save চেপে দ্বিগুণ"**। সত্যিকারের অর্ধেক-posting হতে server crash /
+deploy / DB connection ছিঁড়ে যাওয়া লাগবে ঠিক ওই মুহূর্তে — বিরল।
+
+**✅ ধাপ ১ DONE (commit `42e00ae`):** global fetch wrapper (`main.jsx`) এখন mutating request-এর
+network-layer failure আলাদা করে চেনে আর `AMBIGUOUS_WRITE_MESSAGE` দেয় ("refresh করে যাচাই করুন,
+আবার চাপলে দুবার বসে যেতে পারে") + `error.ambiguousWrite = true`। GET/HEAD আর আসল 4xx/5xx
+অপরিবর্তিত। ⚠️ `.code` **ইচ্ছে করে সেট করা হয়নি** — page গুলো `friendly(err.code) || err.message`
+করে আর তাদের local `friendly` হলো `ERRORS[code] ?? code`, তাই unmapped code user-কে কাঁচা লেখা
+হিসেবে দেখাত।
+**নিজে পরীক্ষা করতে:** DevTools → Network → **Offline** করে একটা Save চাপো → নতুন বার্তা আসবে।
+
+**🔴 বাকি — go-live-এর আগে:**
+- **ধাপ ২ — Detection script:** ১২টা table-এর partial-posting query (signature: terminal status
+  পায়নি অথচ কিছু line-এ `stock_ledger_id` বসে গেছে)। **2026-07-19-এ dev-এ চালিয়ে দেখা হয়েছে —
+  শূন্য, অর্থাৎ এখনো কিছু ঘটেনি।** go-live-এর দিন থেকে রোজ চালাতে হবে।
+- **ধাপ ৩ — Idempotency guard**, শুধু যেগুলো রোজ চলবে: Opening Stock, GRN, Inward QA,
+  Process PO Verify, Packing PO Final। বাকি ৭টা পরে।
+
+**🔵 go-live-এর পরে — আসল নিরাময়:** প্রতিটা multi-step লেখা একটা plpgsql function-এ নিয়ে **একটাই
+RPC** (§8B-তে নিয়মটা আগে থেকেই লেখা)। তখন Postgres নিজেই transaction দেয় — মাঝপথে মরলে **সব
+rollback**, অর্ধেক বলে কিছু থাকে না। **বোনাস: ~৩১ round trip → ১, ~৭s → ~০.৫s** — অর্থাৎ integrity
+আর performance একই কাজে সমাধান হয়। **নিজস্ব design session লাগবে; go-live-এর ঠিক আগে কোরো না**
+— stock engine-এ হাত দেওয়া মানে যে বিপদ ঠেকাতে চাইছি সেটাই ডেকে আনা।
+
+**ইতিহাস:** §8C-র ঘটনা (Inward QA, stock একদিক থেকে বেরিয়ে গিয়ে আর credit হয়নি) ছিল এই শ্রেণিরই।
+ওর **নির্দিষ্ট কারণ** (duplicate document_number) `item_number` দিয়ে সারানো হয়েছে, কিন্তু
+**গঠনগত দুর্বলতা রয়ে গেছে** — তাই একই শ্রেণির ঘটনা অন্য কারণে আবার ঘটতে পারে।
+
+---
+
 ## 9. PACE ERP Build Layers — SAP Equivalent (Design Status)
 
 PACE ERP টা SAP এর equivalent হিসেবে build হচ্ছে। মোট **10টা Layer (L1–L10)**। প্রতিটার design completeness:
