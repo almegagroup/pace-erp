@@ -1040,11 +1040,43 @@ persist করতে হবে (৩টা বাড়তি round trip), নয
 ⚠️ STO-তে guard বসানোর আগে ওর ledger-link column আগে যোগ করতে হবে (উপরে দেখো) — নাহলে
 "ইতিমধ্যে post হয়েছে কিনা" জিজ্ঞেস করার উপায়ই নেই।
 
-**🔵 go-live-এর পরে — আসল নিরাময়:** প্রতিটা multi-step লেখা একটা plpgsql function-এ নিয়ে **একটাই
-RPC** (§8B-তে নিয়মটা আগে থেকেই লেখা)। তখন Postgres নিজেই transaction দেয় — মাঝপথে মরলে **সব
-rollback**, অর্ধেক বলে কিছু থাকে না। **বোনাস: ~৩১ round trip → ১, ~৭s → ~০.৫s** — অর্থাৎ integrity
-আর performance একই কাজে সমাধান হয়। **নিজস্ব design session লাগবে; go-live-এর ঠিক আগে কোরো না**
-— stock engine-এ হাত দেওয়া মানে যে বিপদ ঠেকাতে চাইছি সেটাই ডেকে আনা।
+**✅ ধাপ ৪ক DONE (commit `d8f37fc`) — `scripts/stock-posting-guard.mjs`, CI-তে চলে:**
+
+`post_stock_movement` **সরাসরি** ডাকলে build fail। কিন্তু আজ ১২টা handler-ই ডাকে, তাই এটা
+**ratchet** — script-এর ভিতরের baseline (আজ ১৫ call, ১১ file) একটা **সিলিং**:
+
+| | |
+|---|---|
+| নতুন file ডাকল | **FAIL** |
+| পুরনো file-এ call বাড়ল | **FAIL** |
+| migrate হয়ে call কমল | **FAIL**, baseline নামাতে বলবে |
+
+> শেষেরটা ইচ্ছাকৃত — নাহলে migrate করা handler পরে নীরবে পুরনো পথে ফিরে গিয়েও সিলিং-এর
+> নিচেই থাকত। **সংখ্যা শুধু নামতে পারে, কখনো উঠতে নয়।**
+
+**লক্ষ্য: baseline খালি হওয়া।** তখন `REVOKE EXECUTE ... FROM service_role` — ভুল পথটা আর
+থাকবেই না।
+
+**🔵 ধাপ ৪খ — আসল নিরাময় (design আগে, তারপর কোড):** প্রতিটা multi-step লেখা একটা plpgsql
+function-এ নিয়ে **একটাই RPC** (§8B-তে নিয়মটা আগে থেকেই লেখা)। তখন Postgres নিজেই transaction
+দেয় — মাঝপথে মরলে **সব rollback**। **বোনাস: ~৩১ round trip → ১, ~৭s → ~০.৫s** — integrity আর
+performance একই কাজে।
+
+**⚠️ business owner-এর শর্ত (2026-07-19):** handler ধরে ধরে ঠিক করা **যথেষ্ট নয়** — তাতে নিয়মটা
+মানুষের স্মৃতির উপর থাকে, আর ১৩ নম্বর module-এ ভাঙে। তাই তিন স্তরে করতে হবে:
+১. **নিরাপদ পথ সহজ** — একটাই generic `post_document(reference_type, reference_id, movements…)`
+২. **অনিরাপদ পথ বন্ধ** — `REVOKE EXECUTE` (baseline খালি হলে)
+৩. **ship-এর আগে ধরা** — ✅ উপরের guard, আজ থেকেই চালু
+
+`reference_document_type` বাধ্যতামূলক রাখলে registry-র সাথে জোড়া লেগে যায় — নতুন module হয়
+নিজেকে ঘোষণা করবে, নয়তো post করতেই পারবে না।
+
+**খোলা design প্রশ্ন:** business-table update গুলো (`stock_ledger_id`, `issued_qty`…) handler-ভেদে
+আলাদা। (ক) declarative `writes` payload — পুরোপুরি generic কিন্তু কার্যত একটা mini-DSL, ৬ মাস পরে
+দুর্বোধ্য; নাকি (খ) প্রতি module-এ ছোট wrapper function যা ভিতরে common gate ডাকে — কম generic,
+অনেক পাঠযোগ্য। **আমার মত (খ)** — "সরল কিন্তু পুনরাবৃত্ত" সবসময় "চতুর কিন্তু দুর্বোধ্য"-র চেয়ে
+টেকসই, আর স্তর ২-র তালা ভোলার সুযোগ রাখে না। **নিজস্ব design session লাগবে; feasibility §107-এ
+লিখে তারপর কোড।**
 
 **ইতিহাস:** §8C-র ঘটনা (Inward QA, stock একদিক থেকে বেরিয়ে গিয়ে আর credit হয়নি) ছিল এই শ্রেণিরই।
 ওর **নির্দিষ্ট কারণ** (duplicate document_number) `item_number` দিয়ে সারানো হয়েছে, কিন্তু
