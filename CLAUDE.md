@@ -1071,12 +1071,21 @@ performance একই কাজে।
 `reference_document_type` বাধ্যতামূলক রাখলে registry-র সাথে জোড়া লেগে যায় — নতুন module হয়
 নিজেকে ঘোষণা করবে, নয়তো post করতেই পারবে না।
 
-**খোলা design প্রশ্ন:** business-table update গুলো (`stock_ledger_id`, `issued_qty`…) handler-ভেদে
-আলাদা। (ক) declarative `writes` payload — পুরোপুরি generic কিন্তু কার্যত একটা mini-DSL, ৬ মাস পরে
-দুর্বোধ্য; নাকি (খ) প্রতি module-এ ছোট wrapper function যা ভিতরে common gate ডাকে — কম generic,
-অনেক পাঠযোগ্য। **আমার মত (খ)** — "সরল কিন্তু পুনরাবৃত্ত" সবসময় "চতুর কিন্তু দুর্বোধ্য"-র চেয়ে
-টেকসই, আর স্তর ২-র তালা ভোলার সুযোগ রাখে না। **নিজস্ব design session লাগবে; feasibility §107-এ
-লিখে তারপর কোড।**
+**✅ Design LOCKED — feasibility §107.8 (2026-07-19)।** কোড শুরুর আগে ওটা পড়ো।
+
+সারমর্ম: movement গুলো **common gate** (`post_document`) দিয়ে যাবে, আর business write গুলো
+(`stock_ledger_id`, `issued_qty`, status…) থাকবে **module-এর নিজস্ব plpgsql function**-এ, যেটা
+`post_document` **একই transaction-এর ভিতরে** ডাকবে। দুটোর জোড়া লাগানো থাকবে
+**`posting_source_registry.completion_function`** column-এ — তাই মনে রাখার কিছু নেই।
+
+> **⚠️ যে গর্তটা প্রথম নকশায় ছিল (business owner ধরিয়ে দেন):** শুধু "প্রতি module-এ wrapper"
+> বললে কেউ `post_document` দিয়ে movement বসিয়ে **business write গুলো TS-এ বাইরে** রেখে দিতে
+> পারত — আবার অর্ধেক কাজ, আর **CI guard সেটা ধরত না** (নিষিদ্ধ function তো ডাকা হয়নি)।
+> registry-তে `completion_function` বাধ্যতামূলক করাই ওই ফাঁক বন্ধ করে।
+
+**ক্রম:** Process PO Verify → Packing PO Final → GRN → Opening Stock → Inward QA → বাকি ৭টা →
+baseline ০ হলে **`REVOKE EXECUTE`**। পুরনো path শেষ ধাপ পর্যন্ত পাশে থাকবে, তাই **যেকোনো ধাপে
+থামা যায়**।
 
 **ইতিহাস:** §8C-র ঘটনা (Inward QA, stock একদিক থেকে বেরিয়ে গিয়ে আর credit হয়নি) ছিল এই শ্রেণিরই।
 ওর **নির্দিষ্ট কারণ** (duplicate document_number) `item_number` দিয়ে সারানো হয়েছে, কিন্তু

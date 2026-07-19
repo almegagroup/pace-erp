@@ -14789,3 +14789,121 @@ Inward QA (পরিমাণ-ভিত্তিক, পুরো decided হল
 
 **রোজকার অভ্যাস (go-live-এর দিন থেকে):**
 `SELECT * FROM erp_inventory.stock_health_check();` — dev ও prod আলাদা করে, `FAIL` এলে থামো।
+
+### 107.8 — `post_document`: এক transaction, আর যেভাবে scale-এ নিজে টিকে থাকে (DESIGN, 2026-07-19)
+
+**কেন আলাদা design লাগল:** প্রথমে ঠিক হয়েছিল handler ধরে ধরে plpgsql-এ সরানো হবে। business owner
+আপত্তি করেন — **"পরে আরও module ঢুকবে, তখন maintain হবে কী করে? সবসময় তো বলব না check করো।"**
+আপত্তিটা যথার্থ: handler-ভিত্তিক সমাধানে নিয়মটা **মানুষের স্মৃতিতে** থাকে, তাই ১৩ নম্বর module-এ
+ভাঙে আর কেউ ধরিয়ে না দিলে ধরাই পড়ে না।
+
+#### 107.8.1 — তিন স্তর
+
+| স্তর | কী | অবস্থা |
+|---|---|---|
+| ১ | **নিরাপদ পথ সহজ** — একটাই `post_document` | 🔵 এই design |
+| ২ | **অনিরাপদ পথ বন্ধ** — `REVOKE EXECUTE` | 🔵 baseline ০ হলে |
+| ৩ | **ship-এর আগে ধরা** — CI guard | ✅ DONE (`d8f37fc`) |
+
+#### 107.8.2 — ⚠️ যে গর্তটা প্রথম নকশায় ছিল
+
+"প্রতি module-এ ছোট wrapper" (পাঠযোগ্যতার জন্য পছন্দ) — কিন্তু তাতে একটা ফাঁক থেকে যায়:
+
+```
+post_document(...)        ← movement transaction-এ  ✅
+তারপর TS-এ .update(...)   ← business write বাইরে    ❌  আবার অর্ধেক কাজ
+```
+
+CI guard এটা **ধরে না** — নিষিদ্ধ function তো ডাকা হয়নি। অর্থাৎ *"business write গুলো ভিতরে
+রাখতে হবে"* আবার স্মৃতির উপর। **এটাই বাতিল করার কারণ।**
+
+#### 107.8.3 — সমাধান: registry-তে `completion_function`
+
+| অংশ | কে করে | কেন |
+|---|---|---|
+| Movement | **common gate** (generic) | সবার এক |
+| Business write | **module-এর নিজস্ব plpgsql function** | পাঠযোগ্য, DSL নয় |
+| **দুটোর জোড়া** | **`posting_source_registry.completion_function`** | মনে রাখার দরকার নেই |
+
+`post_document` নিজেই ওই function-কে **একই transaction-এর ভিতরে** ডাকে।
+
+#### 107.8.4 — চুক্তি (contract)
+
+```sql
+erp_inventory.post_document(
+  p_reference_document_type text,   -- registry key; অচেনা হলে RAISE
+  p_reference_document_id   uuid,
+  p_movements               jsonb,  -- ordered array; ক্রম DEPENDENT (§8B)
+  p_context                 jsonb DEFAULT '{}'::jsonb
+) RETURNS jsonb
+```
+
+`p_movements[]` — `post_stock_movement`-এর প্যারামিটারগুলোরই আয়না, **প্লাস `line_ref`**:
+
+```json
+{ "line_ref": "<caller-এর নিজের key, যেমন process_order_line.id>",
+  "document_number": "...", "movement_type_code": "P261", "direction": "OUT",
+  "company_id": "...", "storage_location_id": "...", "material_id": "...",
+  "quantity": 100, "base_uom_code": "KG", "unit_value": 12.5,
+  "stock_type_code": "UNRESTRICTED", "batch_number": null, "reversal_of_id": null }
+```
+
+**`line_ref` অপরিহার্য** — ফেরত আসা ledger id গুলো business row-এর সাথে মেলানোর একমাত্র সূত্র।
+
+Returns:
+
+```json
+{ "postings": [ { "line_ref": "...", "stock_ledger_id": "...",
+                  "stock_document_id": "...", "valuation_rate": 12.5 } ],
+  "material_doc_number": "...", "material_doc_year": "..." }
+```
+
+**Completion function:**
+
+```sql
+<schema>.<fn>(p_reference_document_id uuid, p_postings jsonb, p_context jsonb) RETURNS void
+```
+
+`post_document` সব movement বসানোর **পরে**, একই transaction-এ, `EXECUTE format('SELECT %I.%I($1,$2,$3)', ...)`
+দিয়ে ডাকে। ওখানেই `stock_ledger_id` লেখা, `issued_qty` বাড়ানো, status বদল — সব।
+
+#### 107.8.5 — Error / rollback
+
+- `post_document` **কোনো exception ধরবে না** — যেকোনো ব্যর্থতা মানে **পুরো transaction rollback**।
+  এটাই পুরো কাজের মূল কথা; ভিতরে `EXCEPTION WHEN OTHERS` লিখলে সেটাই নষ্ট হয়।
+- Movement গুলো **array-ক্রমে** প্রয়োগ হবে (negative-stock guard ক্রমনির্ভর — §8B DEPENDENT)।
+- `reference_document_type` registry-তে না থাকলে **সাথে সাথে RAISE** — post করার আগেই।
+- **Idempotency এখানে নয়।** কিছু flow ইচ্ছাকৃতভাবে একই document-এ বারবার post করে
+  (Inward QA-র partial decision, COR6 correction)। তাই "আগে post হয়েছে কিনা" — সেটা caller/
+  completion function-এর দায়িত্ব, §8D ধাপ ৩-এর guard গুলোর মতো।
+
+#### 107.8.6 — scale-এ নিজে টিকে থাকে যেভাবে
+
+| নতুন module যা করলে | কী হবে |
+|---|---|
+| সরাসরি `post_stock_movement` ডাকল | **Build FAIL** (CI guard) |
+| Registry-তে ঢুকল না | **Health check FAIL** |
+| Registry-তে ঢুকল, `completion_function` দিল না | **Registry অসম্পূর্ণ → FAIL** |
+| Business write transaction-এর বাইরে রাখল | **ledger id-ই পাবে না — কাজ করবে না** |
+
+শেষেরটা সবচেয়ে শক্ত enforcement: **ভুল পথ চুপচাপ ভুল ফল দেয় না, একেবারে চলেই না।**
+কাউকে কিছু মনে রাখতে হয় না — **registry-তে এক লাইন**, ঠিক যেমন নতুন page registry-তে।
+
+#### 107.8.7 — সহাবস্থান ও ক্রম
+
+1. `post_document` + registry-তে `completion_function` column
+2. **Process PO Verify** প্রথমে — সবচেয়ে জটিল (~৩১ round trip), তাই সবচেয়ে বড় প্রমাণ ও লাভ
+3. তারপর Packing PO Final → GRN → Opening Stock → Inward QA (রোজ-চলা ৫টা)
+4. **প্রতিটার পরে** CI guard-এর baseline নামাও (নাহলে guard নিজেই FAIL করবে — ইচ্ছাকৃত)
+5. বাকি ৭টা (RTV, STO, PID, PTO, Sales, PR19, opening_genealogy)
+6. Baseline ০ → **`REVOKE EXECUTE ON post_stock_movement FROM service_role`** = স্তর ২ সম্পূর্ণ
+
+পুরনো path **ধাপ ৬ পর্যন্ত পাশে থাকবে**, তাই যেকোনো ধাপে থামা যায়; থামলে শুধু ওই handler গুলো
+পুরনো আচরণে থাকে, কিছু ভাঙে না।
+
+#### 107.8.8 — যাচাই (প্রতিটা handler-এর পরে)
+
+- MCP দিয়ে **আসল posting** চালানো (UI/login লাগে না)
+- `stock_ledger` / `stock_snapshot` মিলিয়ে দেখা
+- **ইচ্ছাকৃতভাবে মাঝপথে ব্যর্থ করে rollback সত্যিই হয় কিনা** — বর্তমান কোডে এই পরীক্ষাটাই করা যায় না
+- `SELECT * FROM erp_inventory.stock_health_check();`
