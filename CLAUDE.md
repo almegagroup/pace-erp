@@ -877,7 +877,7 @@ Code review এ নতুন `for`/`for...of` loop এ `await` দেখলে �
 
 ---
 
-## 8D. 🔴 Write Atomicity — সবচেয়ে বড় খোলা structural ঝুঁকি (2026-07-19)
+## 8D. Write Atomicity — ধাপ ১-৩ ✅ DONE, ধাপ ৪ go-live-এর পরে (2026-07-19)
 
 **সমস্যা:** প্রতিটা stock-posting handler **multi-step লেখে TypeScript থেকে, round trip করে করে**,
 কোনো transaction ছাড়া। Process PO Verify-তে যাচাই করা: প্রতি RM line-এ **৩টা ধারাবাহিক round trip**
@@ -951,11 +951,35 @@ FAIL দেখাবে, **ইচ্ছাকৃত**, যাতে বাকি
 > `issue_+receipt_stock_document_id` — চার রকম), আর **`stock_transfer_order`/`_line`-এ কিছুই নেই**।
 > তাই STO registry-তে ঢোকানোর **আগে** ওর link column যোগ করতে হবে।
 
-**🔴 বাকি — go-live-এর আগে:**
-- **ধাপ ৩ — Idempotency guard**, শুধু যেগুলো রোজ চলবে: Opening Stock, GRN, Inward QA,
-  Process PO Verify, Packing PO Final। বাকি ৭টা পরে।
-  ⚠️ STO-তে guard বসানোর আগে ওর ledger-link column-টা আগে যোগ করতে হবে (উপরে দেখো) —
-  নাহলে "ইতিমধ্যে post হয়েছে কিনা" জিজ্ঞেস করার উপায়ই নেই।
+**✅ ধাপ ৩ DONE (commit `80fd918`) — ৫টা রোজ-চলা handler-এ idempotency:**
+
+| Handler | Guard | অবস্থা |
+|---|---|---|
+| Opening Stock | `posted_stock_document_id` থাকলে skip | ✅ **আগেই ছিল** |
+| Inward QA | বিদ্যমান decision line থেকে `alreadyDecidedQty`, পুরো হলে **409** | ✅ **আগেই ছিল** (পরিমাণ-ভিত্তিক, boolean-এর চেয়ে শক্ত) |
+| GRN | একই gate entry line-এ দ্বিতীয় GRN = `GRN_ALREADY_EXISTS` | ✅ **আগেই ছিল** |
+| Process PO Verify | line-এ `stock_ledger_id` থাকলে skip | ✅ যোগ করা |
+| Packing PO Final | একই + **select-এ column যোগ** | ✅ যোগ করা |
+
+> **⚠️ দুটো ফাঁদ, যেগুলোর যেকোনোটাই fix-টাকে নীরবে নষ্ট করত — নতুন handler-এ guard বসানোর
+> আগে এই দুটো মিলিয়ে দেখো:**
+> 1. **Process PO Verify-তে guard `totalRmValue` জমার *পরে* বসাতে হয়েছে**, loop-এর শুরুতে নয়।
+>    ওই যোগফল loop-এর পরে `sfgCostPerKg` হিসাব করে — আগে skip করলে **প্রতিটা retry-তে SFG cost
+>    কম দেখাত**, অর্থাৎ corruption ঠেকাতে গিয়ে costing bug ঢুকত।
+> 2. **Packing PO-র line query-তে `stock_ledger_id` select-ই হতো না** — guard বসালে সবসময়
+>    `undefined` পড়ত, **কখনো চলত না অথচ ঠিক আছে বলে মনে হত**। select-এ যোগ করা হয়েছে।
+
+**নিরাপত্তা:** Verify শুধু `FINAL` নেয়, Final শুধু `STANDARD`; দুটোর reversal-ই `REVERSED`-এ শেষ হয়,
+entry status-এ **ফেরে না** — তাই posted line কখনো আবার post হওয়ার কথা নয়।
+
+**🔴 এখনো খোলা (ধাপ ৪-এ সমাধান হবে):** Verify-র loop-**পরবর্তী** ৩টা posting (FG receipt,
+QI out, QI release) guard-বিহীন — কারণ ওদের ledger id শুধু **একদম শেষের update-এ** status-এর
+সাথে লেখা হয়, তাই মাঝপথে মরলে কোনো চিহ্নই থাকে না। ঠিক করতে হলে হয় প্রতিটার পরে আলাদা করে
+persist করতে হবে (৩টা বাড়তি round trip), নয়তো ধাপ ৪-এর plpgsql transaction — **পরেরটাই সঠিক**।
+
+**বাকি ৭টা handler (RTV, STO, PID, PTO, Sales, PR19, opening_genealogy):** go-live-এর পরে।
+⚠️ STO-তে guard বসানোর আগে ওর ledger-link column আগে যোগ করতে হবে (উপরে দেখো) — নাহলে
+"ইতিমধ্যে post হয়েছে কিনা" জিজ্ঞেস করার উপায়ই নেই।
 
 **🔵 go-live-এর পরে — আসল নিরাময়:** প্রতিটা multi-step লেখা একটা plpgsql function-এ নিয়ে **একটাই
 RPC** (§8B-তে নিয়মটা আগে থেকেই লেখা)। তখন Postgres নিজেই transaction দেয় — মাঝপথে মরলে **সব
