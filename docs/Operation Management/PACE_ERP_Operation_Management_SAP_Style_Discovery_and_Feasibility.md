@@ -15006,5 +15006,7 @@ num_packs বদলে reservation বাসি থেকে গেলে বা
 - SFG + PM reservation সব **CANCELLED** → PO status **CANCELLED**
 - কোনো stock movement নেই (STANDARD-এ কিছু post হয়নি), তাই শুধু reservation release + status
 
+**➕ Create-এ batch-blind SFG hygiene check (LOCKED 2026-07-19, business owner):** Packing PO Create-এ এতদিন PM availability check হতো কিন্তু SFG হতো না — কারণ SFG batch Final-এ বাছা হয়, তাই batch-specific check তখন অসম্ভব। কিন্তু তাতে user একই SFG-র বিরুদ্ধে stock ছাড়িয়ে বহু impossible Packing PO বানিয়ে ফেলতে পারত (লাইভ প্রমাণ: SFG-00004-এ 15,000 on-hand, 14,600 আগেই reserved, free মাত্র 400 — তবু আরেকটা 10,000 কেজির PO বানানো যেত)। এখন Create-এ একটা **batch-blind hard block**: `computeSfgTotalFree()` = মোট Unrestricted − সব open SFG reservation; নতুন PO-র SFG দরকার ওই free-র বেশি হলে `PROD_PACK_SFG_SHORTAGE` (422)। এটা batch-specific check-এর **বদলি নয়** — Final-এ ওই নির্দিষ্ট batch-এর check অপরিবর্তিত থাকে (guarantee)। Create = hygiene (মোট free), Final = guarantee (batch)। §83.5-এর পুরনো "SFG NOT checked at Standard" line তখন batch-specific check ভেবে লেখা হয়েছিল; এই batch-blind total check আলাদা স্তর, তাই lock ভাঙা নয়, যোগ করা।
+
 **Frontend PR10 Packing tab:** Num Packs + Fill Qty input (bomRequired অনুযায়ী fill দেখাবে/লুকাবে),
 PM line sloc + alternate, আর **Cancel button + reason modal**।

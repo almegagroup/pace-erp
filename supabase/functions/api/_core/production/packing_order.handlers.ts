@@ -475,6 +475,52 @@ async function resolvePackingSfgBatchOptions(
     .sort((a, b) => b.available_qty - a.available_qty || a.batch_number.localeCompare(b.batch_number));
 }
 
+/*
+ * Batch-BLIND SFG availability for Create (feasibility §83.4.1 hygiene check).
+ *
+ * At Create the SFG batch is not chosen yet, so this cannot check a specific
+ * batch (that is Final's job). But asking for more than the material's total
+ * FREE SFG is always wrong regardless of batch, so we block it here to stop a
+ * pile of impossible Packing POs being created.
+ *
+ * free = total UNRESTRICTED across all batches − every open SFG reservation
+ *        (the reservations of the STANDARD POs already created against it).
+ * Returns { free, short } where short > 0 means the new PO overdraws.
+ */
+async function computeSfgTotalFree(
+  companyId: string,
+  sfgMaterialId: string,
+  neededQty: number,
+): Promise<{ free: number; short: number }> {
+  const [ledgerResult, reservationResult] = await Promise.all([
+    serviceRoleClient.schema("erp_inventory").from("stock_ledger")
+      .select("direction, quantity")
+      .eq("company_id", companyId)
+      .eq("material_id", sfgMaterialId)
+      .eq("stock_type_code", "UNRESTRICTED"),
+    serviceRoleClient.schema("erp_production").from("reservation_document")
+      .select("balance_qty")
+      .eq("company_id", companyId)
+      .eq("material_id", sfgMaterialId)
+      .in("status", RESERVATION_OPEN_STATUSES),
+  ]);
+  if (ledgerResult.error || reservationResult.error) {
+    console.error("[packing_order.computeSfgTotalFree] query failed:",
+      JSON.stringify(ledgerResult.error ?? reservationResult.error));
+    throw new Error("PROD_PACK_SFG_AVAILABILITY_FAILED");
+  }
+  let onHand = 0;
+  for (const row of (ledgerResult.data ?? []) as JsonRecord[]) {
+    onHand += String(row.direction) === "IN" ? Number(row.quantity ?? 0) : -Number(row.quantity ?? 0);
+  }
+  let reserved = 0;
+  for (const row of (reservationResult.data ?? []) as JsonRecord[]) {
+    reserved += Number(row.balance_qty ?? 0);
+  }
+  const free = Number((onHand - reserved).toFixed(4));
+  return { free, short: Number(Math.max(0, neededQty - free).toFixed(4)) };
+}
+
 async function computePackingAvailability(
   companyId: string,
   sfgNeed: PackingSfgNeed | null,
@@ -1207,8 +1253,17 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       "id, material_type, base_uom_code",
     );
 
-    // SFG availability is intentionally NOT checked here — the batch (and
-    // therefore which stock to check against) is chosen at Final, not Create.
+    // SFG check at Create is batch-BLIND (§83.4.1): the specific batch is chosen
+    // at Final, but asking for more than the material's total FREE SFG (total
+    // Unrestricted − all open reservations) is always wrong regardless of batch,
+    // so it is a hard block here — hygiene, to stop impossible Packing POs piling
+    // up. The batch-SPECIFIC guarantee still happens at Final (unchanged).
+    const sfgFree = await computeSfgTotalFree(companyId, String(sfgBomLine.material_id), plannedQtyKg);
+    if (sfgFree.short > 0) {
+      return packErr(req, ctx, "PROD_PACK_SFG_SHORTAGE", 422,
+        `Not enough free SFG stock: need ${plannedQtyKg}, only ${sfgFree.free} free (total on hand minus existing reservations).`);
+    }
+
     // PM availability is checked against the effective (actual/substitute if
     // given, else formulation) material — that's what will really be drawn.
     const pmNeeds: PackingPmNeed[] = normalizedPmLines.map((line) => ({
