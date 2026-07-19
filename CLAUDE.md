@@ -692,10 +692,33 @@ DB Mumbai (`ap-south-1`), Prod API Singapore (paid), Dev API Oregon (free tier)�
    - `fg-stock-breakdown` — material/company lookup শুধু URL param-নির্ভর, তাই আসল dependency
      chain (ledger → stock_document → packing_order, এটা সত্যিই ধারাবাহিক) এর **পাশাপাশি** চলে
 
-**বাকি (অগ্রাধিকার ক্রমে):** browser queueing (~৯৩৪ms — প্রতি page ~৩৬টা request বনাম browser-এর
-৬-connection সীমা, তাই request **সংখ্যা** কমাতে হবে) → `companies` এখনো ৩ বার → `me` ৩ বার
-(`me` + `me?session_mode=passive` ×২) → `approval-inbox`-এর mount-cycle duplication (screen-stack
+**❌ ভুল premise, সংশোধিত (2026-07-19):** আগে এখানে লেখা ছিল "~৯৩৪ms browser queueing, কারণ প্রতি
+page ~৩৬টা request বনাম browser-এর ৬-connection সীমা"। **এটা ভুল।** ৬-connection সীমা HTTP/1.1-এর
+জিনিস — Render server ALPN-এ **`h2` negotiate করে** (Node `tls.connect` দিয়ে যাচাই করা), তাই browser
+HTTP/2 ব্যবহার করে আর সব request **একটাই connection-এ multiplex** হয়। ওই সীমাই প্রযোজ্য নয়।
+⚠️ `curl -w %{http_version}` দিয়ে যাচাই করতে যেও না — এই মেশিনের libcurl-এ HTTP/2 support নেই,
+তাই ও সবসময় "1.1" বলে আর **server সম্পর্কে কিছুই প্রমাণ করে না**। ALPN দিয়ে দেখো।
+
+তাহলে ওই queueing/stall টা কীসের? **এখনো নিশ্চিত নয়** — অনুমান না করে মাপতে হবে। সম্ভাব্য: Dev API
+Render **free tier** (কম CPU), তাই ৩৬টা সমান্তরাল request server-এ গিয়ে জমে; প্রতিটার pipeline-এ
+~২৭০ms `session` query আছে। যদি তাই হয়, **Prod (Singapore, paid) এ এই সমস্যা অনেক কম** — অর্থাৎ
+dev-এর মাপ দিয়ে prod-এর সিদ্ধান্ত নেওয়া যাবে না।
+
+**পরের ধাপ (business owner কে deployed app-এ মাপতে হবে):** DevTools → Network, Preserve log **বন্ধ**,
+clear করে একটা refresh → **Protocol column** যোগ করে দেখো `h2` কিনা, আর একটা ধীর request-এর Timing
+tab-এ Queueing/Stalled বনাম "Waiting (TTFB)" আলাদা করে দেখো। TTFB বড় হলে server-side, Stalled বড়
+হলে client-side — দুটোর দাওয়াই সম্পূর্ণ আলাদা।
+
+**request সংখ্যা কমানো এখনো মূল্যবান** (server CPU-র জন্য), কিন্তু কারণটা browser connection সীমা নয়।
+বাকি তালিকা: `companies` এখনো ৩ বার → `approval-inbox`-এর mount-cycle duplication (screen-stack
 architecture, তাই বড় কাজ) → PR09-এ ৫টা আলাদা `materials` call (duplicate নয়, একসাথে আনা যায় কিনা)।
+
+**`me ×3` — bug নয়, উপসর্গ ছিল:** `me` + `me?session_mode=passive` ×২। Passive probe-এর call site
+মাত্র একটাই (`SessionWatchdog.jsx`), কিন্তু tab visible থাকলে cooldown `FAST_RECHECK_MS = 5s`।
+Page load ৫s+ লাগলে ঠিক দুটো probe ওই window-এ পড়ে। menu ৭.৩s→১.০s হওয়ার পর window ছোট হয়েছে,
+তাই এটা সম্ভবত নিজে থেকেই কমে গেছে। ⚠️ SessionWatchdog **inactivity lock — security path**
+(§4B-তে এখানকার পুরনো regression লেখা আছে)। ৫s cooldown কমানো/বাড়ানো = lock-এর responsiveness
+বদলানো, সেটা business decision, perf-এর অজুহাতে একতরফা বদলাবে না।
 
 **নিয়ম (এই session-এ শেখা):** কোনো handler ধীর মনে হলে **আগে row count দেখো**। Dev-এ প্রায় সব
 table ২ ডিজিটের — তাই "ধীর query" প্রায় কখনোই কারণ নয়, কারণ প্রায় সবসময় round trip সংখ্যা।
