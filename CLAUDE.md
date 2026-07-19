@@ -907,24 +907,49 @@ network-layer failure আলাদা করে চেনে আর `AMBIGUOUS_W
 হিসেবে দেখাত।
 **নিজে পরীক্ষা করতে:** DevTools → Network → **Offline** করে একটা Save চাপো → নতুন বার্তা আসবে।
 
-**✅ ধাপ ২ DONE (commit `fb3df1a`) — `scripts/stock-health-check.sql`:**
-পুরো file Supabase SQL Editor-এ paste করে চালাও। **go-live-এর দিন থেকে রোজ কাজ শেষে, dev ও prod
-আলাদা করে।** `severity = FAIL` এলে থামো — কারণ না বোঝা পর্যন্ত আর posting কোরো না।
-Check: snapshot ↔ ledger যোগফল, negative stock (দুই স্তরে), orphan ledger row, ledger-হীন
-stock_document, + `coverage_watch` (informational)। **2026-07-19 Dev: পাঁচটাই OK, coverage 22।**
+**✅ ধাপ ২ DONE (commits `fb3df1a`, `e1389da`) — registry-চালিত health check:**
 
-> **⚠️ নকশার সিদ্ধান্ত — script-এ business table-এর কোনো তালিকা নেই, ইচ্ছে করেই।**
-> হাতে লেখা "১২টা table"-এর তালিকা বাসি হয়ে যেত: Dispatch/Return/L5 এলে ১৩ নম্বরটা চুপচাপ বাদ
-> পড়ত আর আমরা ভুল করে নিরাপদ ভাবতাম — **check না থাকার চেয়েও খারাপ**। তাই সব check শুধু
-> `stock_ledger`/`stock_snapshot`/`stock_document` দেখে, যেখান দিয়ে প্রতিটা posting যেতে **বাধ্য**
-> (সবাই `post_stock_movement()` ডাকে)। নতুন handler নিজে থেকেই ঢাকা পড়ে, script কখনো update
-> করতে হয় না।
->
-> **Business row থেকে খোঁজার পথটা প্রমাণসহ বাতিল** — সর্বজনীন link convention **নেই**:
-> `stock_ledger_id` / `stock_document_id` / `posted_stock_document_id` /
-> `issue_+receipt_stock_document_id` — **চার রকম**, আর **`stock_transfer_order`/`_line`-এ কিছুই
-> নেই**, অর্থাৎ STO-র posting আজই business row থেকে খুঁজে পাওয়া যায় না। এটা আলাদা করে সারানোর
-> মতো একটা gap (ধাপ ৩-এর সাথে ভাবো)।
+চালাও: **`SELECT * FROM erp_inventory.stock_health_check();`** (`scripts/stock-health-check.sql`)
+**go-live-এর দিন থেকে রোজ কাজ শেষে, dev ও prod আলাদা করে।** `FAIL` এলে থামো।
+
+Migration `20260719120000` — `erp_inventory.posting_source_registry` + `stock_health_check()`।
+**2026-07-19 Dev: ১২টা check-ই OK** (`legacy_untagged_posting` = 189 INFO)।
+
+> **⚠️ প্রথম সংস্করণে একটা ফাঁক ছিল, সেটা এখানে লেখা থাকল যাতে ভুলটা আবার না হয়:**
+> শুধু stock-layer invariant (snapshot↔ledger, negative, orphan) **partial posting ধরে না** —
+> কারণ partial posting-এ stock layer **নিজের ভিতরে নিখুঁতই থাকে** (যে movement গুলো হয়েছে সেগুলো
+> ledger ও snapshot দুটোতেই ঠিক আছে)। গরমিলটা stock ও business layer-**এর মাঝে**, তাই কোন
+> posting কোন business document থেকে এসেছে সেটা জানতেই হয়।
+
+**তাই দুই স্তর:**
+- **Tier 1 — সর্বজনীন** (কোনো table-এর নাম লাগে না): snapshot↔ledger যোগফল, negative stock,
+  orphan ledger row, ledger-হীন stock_document
+- **Tier 2 — registry-চালিত:** `posting_source_registry` (type → schema/table/status column/
+  suspect statuses) ধরে ধরে "posting হয়েছে অথচ business doc এখনো শুরুর status-এ" খোঁজে,
+  **+ registry-তে নেই এমন type = FAIL, + tag-ই নেই এমন posting = FAIL**
+
+> **এই শেষ দুটোই ভবিষ্যতের গ্যারান্টি।** নতুন module (Dispatch/Return/L5...) হয় registry-তে
+> এক লাইন INSERT করবে, **নয়তো check চিৎকার করবে** — নীরবে বাদ পড়ার পথ নেই। **Script কখনো
+> hand-edit করতে হয় না।** (frontend-এর `screenRegistry` + `validateScreenRegistry` একই idiom।)
+
+**⚠️ `suspect_statuses` = যে status-এ posting থাকা অস্বাভাবিক** (handler যেখান থেকে posting
+*শুরু* করে) — **terminal status নয়**। REVERSED/CANCELLED terminal নয় কিন্তু বৈধ (CORS-এর পর
+posting থাকবেই); ওগুলো দিলে মিথ্যা FAIL আসবে। মানগুলো live CHECK constraint থেকে নেওয়া।
+
+**Registered (2026-07-19):** PROC_PO(FINAL), PACK_PO(STANDARD), GRN(DRAFT), OS(APPROVED),
+QA(PENDING/IN_PROGRESS)। বাকিগুলো go-live-এর পরে — ততদিন ওদের posting `untagged_posting`-এ
+FAIL দেখাবে, **ইচ্ছাকৃত**, যাতে বাকি কাজ চোখের সামনে থাকে।
+
+**✅ Reference tagging আগে থেকেই কাজ করে — এটা নতুন করে করার দরকার নেই।** handler গুলো
+`p_reference_document_type`/`_id` পাঠায় (§106 Phase 2) আর `post_stock_movement()` সেগুলো লেখে।
+১৮৯টা row NULL শুধু এই কারণে যে ওগুলো **১৫ জুলাই বা তার আগের**, আর tagging এসেছে **১৭ জুলাই** —
+তারপর একটাও posting হয়নি। ⚠️ অর্থাৎ tagging কোড **বাস্তব data দিয়ে কখনো চলেনি**; প্রথম posting-এর
+পর `untagged_posting` check-ই সেটা যাচাই করে দেবে (NULL হলে FAIL)।
+
+> **🔴 আলাদা gap — STO:** business row থেকে posting খোঁজার সর্বজনীন convention নেই
+> (`stock_ledger_id` / `stock_document_id` / `posted_stock_document_id` /
+> `issue_+receipt_stock_document_id` — চার রকম), আর **`stock_transfer_order`/`_line`-এ কিছুই নেই**।
+> তাই STO registry-তে ঢোকানোর **আগে** ওর link column যোগ করতে হবে।
 
 **🔴 বাকি — go-live-এর আগে:**
 - **ধাপ ৩ — Idempotency guard**, শুধু যেগুলো রোজ চলবে: Opening Stock, GRN, Inward QA,
