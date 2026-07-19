@@ -245,6 +245,37 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 
 ## 6. Next Actions
 
+> ### 📍 বর্তমান অবস্থা (2026-07-19) — নতুন session এটা আগে পড়ো
+>
+> **go-live: 1 July 2026 (Liquid — Admix/Hypershot/IWC)।**
+>
+> **এই মুহূর্তে go-live-blocking কিছু খোলা নেই।** সর্বশেষ দুটো বড় কাজ শেষ:
+> - **§104 Costing** — 104-1..104-7 + §104.9 সব DONE। বাকি শুধু deployed app-এ live
+>   end-to-end verification (business owner-এর login লাগে)।
+> - **§8D Write Atomicity** — ধাপ ১-৩ DONE, **ধাপ ৪ (plpgsql transaction) ইচ্ছাকৃতভাবে
+>   go-live-এর পরে** (feasibility §107)।
+> - **§8-PERF** — menu 7.3s→1.0s, pipeline ~1000ms→~270ms। বাকিটা ⏸️ go-live পর্যন্ত থামানো।
+>
+> **🔴 PROD deploy-এর আগে যা MCP দিয়ে চালাতেই হবে** (কোনোটাই migration নয় — pure data config,
+> তাই নিজে নিজে যাবে না):
+> 1. Document range widening — §8-এর table, `starting_number` নতুন base + **`last_number = 0`**
+>    (0 না করলে `generate_doc_number()` পুরনো counter-ই চালিয়ে যাবে) + `pad_width = 10`
+> 2. PROC_PO/PACK_PO — নতুন global range row insert + পুরনো company-scoped ৮টা row deactivate
+> 3. AC04 (Conversion Cost, Accounts ACL) — **§8-এর ৪-ধাপ versioned-ACL sequence**
+> 4. PR22/PR23 (Old Process/Packing PO, Production ACL) — একই ৪-ধাপ sequence
+> 5. **প্রকৃত conversion rate বসানো** — `conversion_cost_config` খালি থাকলে Verify hard-block
+>    করবে (`PROD_PO_CONVERSION_RATE_MISSING`)
+> 6. Dashboard → Settings → API → **Exposed schemas**-এ `erp_menu` + `erp_production` আছে কিনা
+>    যাচাই (platform config, migration-এর সাথে travel করে না)
+> 7. Deploy-এর আগে ও পরে `node scripts/migration-integrity-check.mjs` → `in_sync = true`
+>
+> **🔵 go-live-এর পরের সারি (ক্রম অনুযায়ী):** §8D ধাপ ৪ (plpgsql transaction — integrity +
+> performance একসাথে) → §8-PERF-এর বাকি → §83.6 Return design → Plan Feed (FO) → SO →
+> Dispatch/L5 → Opening Stock go-live session (RM+PM+**INT+SFG**+FG একসাথে, §104.8-এর নতুন lock)।
+>
+> **রোজকার অভ্যাস (go-live-এর দিন থেকে):**
+> `SELECT * FROM erp_inventory.stock_health_check();` — dev ও prod আলাদা, `FAIL` এলে থামো (§8D)।
+
 ### 🔴 Immediate — Remaining User Setup
 P0006, P0008, P0009, P0002 এর work context assign করতে হবে।
 প্রতিটার জন্য:
@@ -875,9 +906,17 @@ Code review এ নতুন `for`/`for...of` loop এ `await` দেখলে �
 ### নতুন কোনো handler লেখার সময়
 `post_stock_movement()`-কে একই document_number দিয়ে একাধিকবার call করা সম্পূর্ণ safe — প্রতিটা call আলাদা item হিসেবে বসবে, কোনো collision হবে না। Migration: `supabase/migrations/20260709025725_stock_document_item_number.sql`।
 
+> **➡️ কিন্তু এতে গঠনগত দুর্বলতা যায়নি — §8D পড়ো।** এখানকার fix ওই নির্দিষ্ট *কারণটা*
+> (duplicate document_number) সারিয়েছে, কিন্তু multi-step posting এখনো transaction-বিহীন, তাই
+> একই শ্রেণির ঘটনা অন্য কারণে আবার ঘটতে পারে। নতুন posting handler লিখলে **§8D-র idempotency
+> guard + registry registration দুটোই লাগবে**।
+
 ---
 
 ## 8D. Write Atomicity — ধাপ ১-৩ ✅ DONE, ধাপ ৪ go-live-এর পরে (2026-07-19)
+
+> **পূর্ণ design + যুক্তি: feasibility doc `Section 107`।** এখানে কাজের অবস্থা ও নিয়ম;
+> "কেন এভাবে" জানতে §107 পড়ো। §8C-র ধারাবাহিকতা (একই শ্রেণির সমস্যা, ভিন্ন কারণ)।
 
 **সমস্যা:** প্রতিটা stock-posting handler **multi-step লেখে TypeScript থেকে, round trip করে করে**,
 কোনো transaction ছাড়া। Process PO Verify-তে যাচাই করা: প্রতি RM line-এ **৩টা ধারাবাহিক round trip**

@@ -14697,3 +14697,95 @@ the deployed app). Also note the two other `source_txn_type` values — `RETURN`
 lands with the §83.6 Return design (the very thing this phase unblocks), and
 `COR6_CORRECTION` should be wired when Process PO's COR6 correction path is revisited.
 
+
+---
+
+## Section 107 — Write Atomicity: Partial Postings, Retry Safety, Health Check (2026-07-19)
+
+**পটভূমি:** business owner প্রশ্ন তোলেন — "POST চলছে, network down, তখন কী হবে? অর্ধেক কাজ
+হবে অর্ধেক হবে না, ফলে পুরো ERP-র গরবর।" প্রশ্নটা সঠিক ছিল, আর §105-এর ঘটনা (Inward QA-তে
+stock একদিক থেকে বেরিয়ে গিয়ে আর credit হয়নি) ছিল ঠিক এই শ্রেণিরই।
+
+### 107.1 — সমস্যার প্রকৃত আকার (কোড পড়ে যাচাই করা)
+
+প্রতিটা stock-posting handler **multi-step লেখে TypeScript থেকে, round trip করে করে**, কোনো
+transaction ছাড়া। Process PO Verify-তে প্রতি RM line-এ **৩টা ধারাবাহিক round trip** (P261 RPC →
+`process_order_line` update → `reservation_document` update)। ৮ লাইনের PO = **~৩১টা round trip**,
+প্রত্যেকটা আলাদা commit।
+
+**১২টা posting handler-ই একই ছাঁচে** — grn, inward_qa, opening_stock, physical_inventory, pto,
+rtv, sales_order, sto, opening_genealogy, packing_order, partial_reversal, process_order:
+- **আগে posting, শেষে status** — মাঝপথে মরলে status অপরিবর্তিত থাকে, তাই entry guard আবার পাস করে
+- ফলে retry-তে ইতিমধ্যে posted line **আবার post হয়**, আর `stock_ledger_id` overwrite হয়ে
+  **প্রথম posting অনাথ** হয়ে যায় — পরে CORS শুধু দ্বিতীয়টা ফেরাবে, প্রথমটা stock-এ থেকে যাবে
+
+### 107.2 — ⚠️ ভুল mental model (সংশোধন)
+
+"network down = অর্ধেক কাজ" — **এটাই প্রধান পথ নয়**। Browser disconnect হলে server থামে না,
+কাজ **শেষ করেই ফেলে**; user শুধু উত্তর পায় না। তাই সবচেয়ে সম্ভাব্য ঘটনা **"পুরো কাজ, তারপর
+user আবার Save চেপে দ্বিগুণ"**। সত্যিকারের অর্ধেক-posting হতে server crash / deploy / DB
+connection ছিঁড়ে যাওয়া লাগবে ঠিক ওই মুহূর্তে — সম্ভব, কিন্তু বিরল।
+
+**এটা গুরুত্বপূর্ণ, কারণ এতে সবচেয়ে সস্তা দাওয়াই-ই সবচেয়ে সম্ভাব্য বিপদটা ঢাকে।**
+
+### 107.3 — চার ধাপের সমাধান
+
+| ধাপ | কাজ | কখন | কী ঢাকে |
+|---|---|---|---|
+| ১ ✅ | Ambiguous-failure guard (frontend) | DONE | user-এর অন্ধ retry |
+| ২ ✅ | Registry-চালিত health check | DONE | অন্ধত্ব — কিছু ঘটলে সেদিনই জানা |
+| ৩ ✅ | Idempotency guard, ৫টা রোজ-চলা handler | DONE | server-দিকে দ্বিগুণ posting |
+| ৪ 🔵 | plpgsql transaction | **go-live-এর পরে** | অর্ধেক posting (আসল নিরাময়) |
+
+### 107.4 — ধাপ ২: কেন registry, কেন তালিকা নয়
+
+প্রথম চেষ্টায় শুধু stock-layer invariant লেখা হয়েছিল (snapshot↔ledger, negative, orphan)।
+**সেগুলো partial posting ধরেই না** — কারণ partial posting-এ stock layer **নিজের ভিতরে নিখুঁতই
+থাকে**; গরমিলটা stock ও business layer-**এর মাঝে**। তাই source document জানা বাধ্যতামূলক।
+
+হাতে লেখা "১২টা table"-এর তালিকাও চলবে না — নতুন module এলে ১৩ নম্বরটা চুপচাপ বাদ পড়বে আর
+আমরা ভুল করে নিরাপদ ভাববো, যা **check না থাকার চেয়েও খারাপ**।
+
+**সমাধান:** `erp_inventory.posting_source_registry` + `erp_inventory.stock_health_check()` —
+registry-তে **নেই** এমন type বা tag-**ই নেই** এমন posting দেখলে **FAIL**। নতুন module হয়
+registry-তে এক লাইন INSERT করবে, নয়তো check চিৎকার করবে। **নীরবে বাদ পড়ার পথ নেই।**
+(frontend-এর `screenRegistry` + `validateScreenRegistry` ঠিক এই idiom।)
+
+**`suspect_statuses` = যে status-এ posting থাকা অস্বাভাবিক** (handler যেখান থেকে posting *শুরু*
+করে) — **terminal status নয়**। REVERSED/CANCELLED terminal নয় কিন্তু বৈধ (CORS-এর পর posting
+থাকবেই); ওগুলো দিলে মিথ্যা FAIL আসবে।
+
+### 107.5 — Business row → posting: সর্বজনীন convention নেই (আলাদা gap)
+
+চার রকম column নাম চালু: `stock_ledger_id` / `stock_document_id` /
+`posted_stock_document_id` / `issue_+receipt_stock_document_id` — আর
+**`stock_transfer_order`/`_line`-এ কিছুই নেই**, অর্থাৎ STO-র posting আজ business row থেকে খুঁজেই
+পাওয়া যায় না। **STO-কে registry/guard-এ আনার আগে ওর link column যোগ করতে হবে।**
+
+উল্টো দিকটা (posting → business row) ঠিক আছে: `stock_document.reference_document_type/_id`
+§106 Phase 2-তেই চালু হয়েছে এবং handler গুলো মান পাঠায়।
+
+### 107.6 — ধাপ ৩-এর দুটো ফাঁদ (নতুন handler-এ guard বসানোর আগে মিলিয়ে দেখো)
+
+1. **Accumulator:** Process PO Verify-তে guard `totalRmValue` জমার **পরে** বসাতে হয়েছে। ওই
+   যোগফল loop-এর পরে `sfgCostPerKg` হিসাব করে — loop-এর শুরুতে skip করলে **প্রতিটা retry-তে
+   SFG cost কম দেখাত**, অর্থাৎ corruption ঠেকাতে গিয়ে costing bug ঢুকত।
+2. **Select:** Packing PO-র line query-তে `stock_ledger_id` select-**ই হতো না**। Guard বসালে
+   সবসময় `undefined` পড়ত — **কখনো চলত না অথচ ঠিক আছে বলে মনে হত**।
+
+তিনটে handler আগে থেকেই সুরক্ষিত ছিল: Opening Stock (`posted_stock_document_id` skip),
+Inward QA (পরিমাণ-ভিত্তিক, পুরো decided হলে 409), GRN (`GRN_ALREADY_EXISTS`)।
+
+### 107.7 — এখনো খোলা
+
+- **Verify-র loop-পরবর্তী ৩টা posting** (FG receipt, QI out, QI release) guard-বিহীন — ওদের
+  ledger id শুধু **একদম শেষের update-এ** status-এর সাথে লেখা হয়, তাই মাঝপথে মরলে চিহ্নই থাকে না।
+  ধাপ ৪-এ সমাধান হবে।
+- **বাকি ৭টা handler** (RTV, STO, PID, PTO, Sales, PR19, opening_genealogy) — go-live-এর পরে।
+- **ধাপ ৪ (plpgsql transaction)** — §8B-তে নিয়মটা আগে থেকেই লেখা। **বোনাস: ~৩১ round trip → ১,
+  ~৭s → ~০.৫s** — integrity আর performance একই কাজে সমাধান হয়। নিজস্ব design session লাগবে;
+  **go-live-এর ঠিক আগে কোরো না** — stock engine-এ হাত দেওয়া মানে যে বিপদ ঠেকাতে চাইছি সেটাই
+  ডেকে আনা।
+
+**রোজকার অভ্যাস (go-live-এর দিন থেকে):**
+`SELECT * FROM erp_inventory.stock_health_check();` — dev ও prod আলাদা করে, `FAIL` এলে থামো।

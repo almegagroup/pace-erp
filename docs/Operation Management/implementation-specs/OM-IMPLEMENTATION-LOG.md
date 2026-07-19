@@ -2791,3 +2791,83 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Files:** `supabase/functions/api/_core/production/packing_order.handlers.ts`, `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
 
 **Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts` and `production.routes.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
+
+---
+
+## 2026-07-19 - Performance round + Write Atomicity (§8D / feasibility §107)
+
+**Run by:** Claude (not Codex). Two separate threads of work in one session.
+
+### A. Performance (commits `a4df6ea`, `83195e6`, `5900c28`, `06eb77d`, `23830bc`, `026c7f0`)
+
+Region is fixed (DB Mumbai, Prod API Singapore, Dev API Oregon), so the only lever is
+round-trip count.
+
+| | before | after |
+|---|---|---|
+| `/api/me/menu` | ~7.3 s | **~1.0 s** |
+| pipeline `context` | 492 ms | **0 µs** (cache hit) |
+| pipeline total | ~1000 ms | **~270 ms** |
+| per request | 1.47-1.79 s | **1.08-1.30 s** |
+
+- `menu.handler.ts` rebuilt the snapshot on **every** read with no staleness check. Now
+  read-first, rebuild only on miss (`MENU_SNAPSHOT_CACHE_TTL_SECONDS`, `0` restores old
+  behaviour, `?refresh=1` forces).
+- `_pipeline/context.ts` memoized (key = authUser+role+company+workContext+workspaceMode+3
+  headers, TTL 30 s, RESOLVED only, 500-entry bound, admin bypass).
+- Four heavy read handlers: `alerts/counts` called `enrichTrackerRows` (15 lookups) purely to
+  read **one field** (`po_date`, sourced solely from `purchase_order`) -> 15 round trips to 1;
+  `production/process-orders` four mutually-independent lookups collapsed into one parallel
+  round (§8B INDEPENDENT); `fg-stock-breakdown` param-only lookups moved alongside the genuine
+  dependency chain.
+
+**Key measured fact:** Dev tables are tiny (CSN 9 rows, process_order 9, stock_ledger 189), so
+"slow SQL" is essentially never the cause — count `.from(`/`.rpc(` first.
+
+**Corrected a wrong premise** (was written into CLAUDE.md by me, now fixed): the "~934 ms
+browser queueing = 36 requests vs the 6-connection limit" claim is **invalid** — the server
+negotiates **h2** (verified via Node `tls.connect` ALPN), so requests multiplex over one
+connection. `curl -w %{http_version}` is useless here: this machine's libcurl has no HTTP/2
+support and always reports 1.1. Remaining work paused until after go-live at business owner's
+direction.
+
+### B. Write Atomicity (commits `42e00ae`, `fb3df1a`, `e1389da`, `80fd918`)
+
+Raised by the business owner: an interrupted POST could leave half-posted stock. Audit of all
+12 posting handlers confirmed the structural exposure — multi-step writes, no transaction,
+postings first and terminal status last, no idempotency check.
+
+- **Step 1** - global fetch wrapper now distinguishes a network-layer failure on a *mutating*
+  request from a real HTTP error, and tells the user to refresh and verify rather than retry.
+  Sets no `.code` on purpose: pages render `friendly(err.code) || err.message` where
+  `friendly` is `ERRORS[code] ?? code`, so an unmapped code would have been shown verbatim.
+- **Step 2** - `erp_inventory.posting_source_registry` + `stock_health_check()`
+  (migration `20260719120000`). Registry-driven: an unregistered or untagged posting **FAILs**,
+  so new modules cannot be silently omitted. Stock-layer-only invariants were **not enough** —
+  a partial posting leaves the stock layer internally consistent.
+- **Step 3** - idempotency guards on Process PO Verify and Packing PO Final. Opening Stock,
+  Inward QA and GRN were already protected.
+
+**Two traps caught during step 3, both of which would have silently voided the fix:** the
+Verify guard must sit *after* `totalRmValue` accumulates (it feeds `sfgCostPerKg`, so an
+early skip understates SFG cost on retry), and Packing PO's line query was not selecting
+`stock_ledger_id` at all.
+
+**Still open:** Verify's three post-loop postings (their ledger ids are persisted only in the
+final status update), the other 7 handlers, and step 4 (one plpgsql call per write — buys
+rollback and collapses ~31 round trips to 1). Step 4 is explicitly **post-go-live**.
+
+**Verification:** `deno check` clean on every touched handler; frontend eslint + production
+build clean; `stock_health_check()` returns 12 OK on Dev, and was deliberately made to FAIL
+(tagged one stock_document against the lone FINAL process order -> `partial_posting__PROC_PO`
+FAIL count 1) then reverted, because a check never seen to fail is not a check. Migration
+integrity `in_sync = true` after reconciling the MCP timestamp per §8A.
+
+**Files:** `supabase/functions/api/_core/auth/menu.handler.ts`,
+`supabase/functions/api/_pipeline/context.ts`,
+`supabase/functions/api/_core/procurement/csn.handlers.ts`,
+`supabase/functions/api/_core/production/process_order.handlers.ts`,
+`supabase/functions/api/_core/production/packing_order.handlers.ts`,
+`supabase/migrations/20260719120000_posting_source_registry_and_health_check.sql`,
+`scripts/stock-health-check.sql`, `frontend/src/main.jsx`,
+`frontend/src/utils/errorMessages.js`, `CLAUDE.md`, feasibility §107.
