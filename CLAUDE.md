@@ -256,18 +256,29 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 >   go-live-এর পরে** (feasibility §107)।
 > - **§8-PERF** — menu 7.3s→1.0s, pipeline ~1000ms→~270ms। বাকিটা ⏸️ go-live পর্যন্ত থামানো।
 >
-> **🔴 PROD deploy-এর আগে যা MCP দিয়ে চালাতেই হবে** (কোনোটাই migration নয় — pure data config,
-> তাই নিজে নিজে যাবে না):
-> 1. Document range widening — §8-এর table, `starting_number` নতুন base + **`last_number = 0`**
->    (0 না করলে `generate_doc_number()` পুরনো counter-ই চালিয়ে যাবে) + `pad_width = 10`
-> 2. PROC_PO/PACK_PO — নতুন global range row insert + পুরনো company-scoped ৮টা row deactivate
-> 3. AC04 (Conversion Cost, Accounts ACL) — **§8-এর ৪-ধাপ versioned-ACL sequence**
-> 4. PR22/PR23 (Old Process/Packing PO, Production ACL) — একই ৪-ধাপ sequence
-> 5. **প্রকৃত conversion rate বসানো** — `conversion_cost_config` খালি থাকলে Verify hard-block
+> **⚠️ Prod-এ এখনো কিছুই করা হয়নি** (business owner, 2026-07-19) — অর্থাৎ dev-এ MCP দিয়ে করা
+> সব data config prod-এ **অনুপস্থিত**। আমার MCP শুধু dev-এ যুক্ত, **prod আমি কখনো দেখিনি**;
+> নিচের তালিকা dev-এ যা লেগেছে তার ভিত্তিতে, prod-এর প্রকৃত অবস্থা যাচাই করা নয়।
+>
+> **✅ যেগুলো এখন migration-এ চলে গেছে (আর হাতে করতে হবে না):**
+> - Document range 10-digit widening + `last_number` reset + PROC_PO/PACK_PO global range +
+>   পুরনো company-scoped ৮টা row deactivate → **migration `20260719140000`**
+>   (idempotent — dev-এ চালিয়ে যাচাই করা, checksum অপরিবর্তিত)।
+>   *কেন migration:* §8A-তেই লেখা "document number range = migration-এর কাজ"; এতদিন ভুল করে
+>   MCP-only ছিল, তাই prod-এ পুরনো ৬-অঙ্কের range বসে যেত।
+>
+> **🔴 PROD deploy-এর আগে যা MCP দিয়ে চালাতেই হবে** (এগুলো সত্যিই data config, migration নয়):
+> 1. AC04 (Conversion Cost, Accounts ACL) — **§8-এর ৪-ধাপ ACL sequence**
+> 2. PR22/PR23 (Old Process/Packing PO, Production ACL) — একই ৪-ধাপ sequence
+> 3. **প্রকৃত conversion rate বসানো** — `conversion_cost_config` খালি থাকলে Verify hard-block
 >    করবে (`PROD_PO_CONVERSION_RATE_MISSING`)
-> 6. Dashboard → Settings → API → **Exposed schemas**-এ `erp_menu` + `erp_production` আছে কিনা
+> 4. Dashboard → Settings → API → **Exposed schemas**-এ `erp_menu` + `erp_production` আছে কিনা
 >    যাচাই (platform config, migration-এর সাথে travel করে না)
-> 7. Deploy-এর আগে ও পরে `node scripts/migration-integrity-check.mjs` → `in_sync = true`
+> 5. Deploy-এর আগে ও পরে `node scripts/migration-integrity-check.mjs` → `in_sync = true`
+>
+> **নিয়ম:** ভবিষ্যতে কোনো MCP data change করলে সাথে সাথে জিজ্ঞেস করো — "এটা কি design config?
+> তাহলে migration-এ যাক।" শুধু সত্যিকারের operational data (user setup, ACL snapshot, test
+> data) MCP-only থাকবে। নাহলে prod-এ নীরবে অনুপস্থিত থেকে যাবে।
 >
 > **🔵 go-live-এর পরের সারি (ক্রম অনুযায়ী):** §8D ধাপ ৪ (plpgsql transaction — integrity +
 > performance একসাথে) → §8-PERF-এর বাকি → §83.6 Return design → Plan Feed (FO) → SO →
@@ -677,7 +688,16 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
 - `stock_document.document_number` = business document (SAP MKPF header), UNIQUE শুধু `(document_number, item_number)` জোড়ায় — `post_stock_movement()` নিজে item_number বসায়, caller কখনো suffix বানাবে না (দেখো Section 8C)
 - **নতুন schema বানালে PostgREST-এ expose করতে হবে (platform config, migration নয়):** `serviceRoleClient.schema("X")` কাজ করবে না যদি `X` Supabase Dashboard → Settings → API → **Exposed schemas** list-এ না থাকে — না থাকলে `PGRST106: Invalid schema` → সব call 500 (grants ঠিক থাকলেও, কারণ PostgREST route-ই করে না)। এটা migration-এর সাথে travel করে না — **dev ও prod দুই Dashboard-এ আলাদাভাবে add করতে হবে**। ইতিহাস: `erp_menu` (Session 2026-06-12), `erp_production` (Gate-27.1, 2026-07-10)। নতুন কোনো `erp_*` schema-র প্রথম page live করার আগে এই list চেক করো।
 
-- **নতুন ACL (non-SA) menu page sidebar-এ আনতে হলে live `acl.capability_menu_actions` edit করাই যথেষ্ট নয় (LOCKED 2026-07-18):** ACL menu snapshot chain হলো `acl.version_*` (captured/versioned copy) → `acl.generate_acl_snapshot(acl_version_id, company_id)` → `acl.precomputed_acl_view` → `public.rebuild_acl_menu_snapshot(user, company, work_context)` → `erp_menu.menu_snapshot`. `generate_acl_snapshot` **live `capability_menu_actions` পড়ে না** — পড়ে `acl.version_capability_menu_actions` (+ `version_role_capabilities`, `version_work_context_capabilities`, ইত্যাদি — সব `acl_versions.source_captured_at`-এ frozen)। তাই নতুন `(capability, menu)` grant শুধু live table-এ দিলে page কখনো আসবে না (SA universe আলাদা — সেখানে এই সমস্যা নেই, SA সব দেখে)। সঠিক MCP sequence: (1) `erp_menu.menu_master` + `acl.menu_master` + `erp_menu.menu_tree` (parent group) + live `acl.capability_menu_actions` insert; (2) **`acl.version_capability_menu_actions`-এ ওই grant insert করো — প্রতিটা relevant `acl_version_id`-র জন্য** (existing peer page যেমন `PROC_LC_LIST`-এর version-গুলো mirror করো; sidebar-এর জন্য `VIEW`, POST-এর জন্য `WRITE`); (3) active version-দের `generate_acl_snapshot` চালাও; (4) তারপর `rebuild_acl_menu_snapshot`। GLOBAL_ACL combo (company/work_context NULL) rebuild function নেয় না — আলাদা। ইতিহাস: `ACC_CONVERSION_COST` (AC04, §104-5 Accounts-move, 2026-07-18)। **Prod deploy-এও এই পুরো ৪-ধাপ MCP sequence চালাতে হবে** — pure data config, migration নয়।
+- **নতুন ACL (non-SA) menu page sidebar-এ আনতে হলে live `acl.capability_menu_actions` edit করাই যথেষ্ট নয় (LOCKED 2026-07-18):** ACL menu snapshot chain হলো `acl.version_*` (captured/versioned copy) → `acl.generate_acl_snapshot(acl_version_id, company_id)` → `acl.precomputed_acl_view` → `public.rebuild_acl_menu_snapshot(user, company, work_context)` → `erp_menu.menu_snapshot`. `generate_acl_snapshot` **live `capability_menu_actions` পড়ে না** — পড়ে `acl.version_capability_menu_actions` (+ `version_role_capabilities`, `version_work_context_capabilities`, ইত্যাদি — সব `acl_versions.source_captured_at`-এ frozen)। তাই নতুন `(capability, menu)` grant শুধু live table-এ দিলে page কখনো আসবে না (SA universe আলাদা — সেখানে এই সমস্যা নেই, SA সব দেখে)। সঠিক MCP sequence: (1) `erp_menu.menu_master` + `acl.menu_master` + `erp_menu.menu_tree` (parent group) + live `acl.capability_menu_actions` insert; (2) **`acl.capture_acl_version_source(acl_version_id, company_id)` চালাও** — এটাই live table গুলো version table-এ copy করে; (3) active version-দের `generate_acl_snapshot` চালাও; (4) তারপর `rebuild_acl_menu_snapshot`। GLOBAL_ACL combo (company/work_context NULL) rebuild function নেয় না — আলাদা। ইতিহাস: `ACC_CONVERSION_COST` (AC04, §104-5 Accounts-move, 2026-07-18)। **Prod deploy-এও এই পুরো ৪-ধাপ MCP sequence চালাতে হবে** — pure data config, migration নয়।
+
+  > **⚠️ সংশোধন (2026-07-19, business owner-এর চ্যালেঞ্জে ধরা পড়ে):** ধাপ ২-তে আগে লেখা ছিল
+  > "`acl.version_capability_menu_actions`-এ হাতে grant insert করো"। **ওটা ভুল ও অপ্রয়োজনীয়।**
+  > `acl.capture_acl_version_source(p_acl_version_id, p_company_id, p_actor)` নামে function
+  > আগে থেকেই আছে যা live → version copy করে, আর সে **৬টা table-ই** ঢাকে:
+  > `version_role_menu_permissions`, `version_role_capabilities`,
+  > `version_capability_menu_actions`, `version_user_overrides`,
+  > `version_company_module_map`, `version_work_context_capabilities`।
+  > হাতে insert করলে বাকি ৫টা অসম্পূর্ণ থেকে যেত। **ACL version capture করাই যথেষ্ট।**
 
 ---
 
