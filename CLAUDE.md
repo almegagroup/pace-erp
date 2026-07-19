@@ -1087,6 +1087,33 @@ performance একই কাজে।
 baseline ০ হলে **`REVOKE EXECUTE`**। পুরনো path শেষ ধাপ পর্যন্ত পাশে থাকবে, তাই **যেকোনো ধাপে
 থামা যায়**।
 
+**✅ Process PO Verify DONE ও LIVE-VERIFIED (2026-07-19, commit `fa988c0`)** —
+migrations `20260719160000` (`post_document`) + `20260719180000` (`complete_process_po_verify`)।
+
+deployed app-এ আসল PO **930008** (batch EV02609, ১০ RM line) Verify করে যাচাই:
+
+| | আগে | পরে |
+|---|---|---|
+| status | FINAL | **VERIFIED** |
+| line-এ ledger id | 0 | **10** |
+| reco rows | 0 | **10** |
+| stock_ledger | 192 | **205** (১৩ posting) |
+| tagged stock_document | 3 | **16** |
+| `stock_health_check()` | — | **১২টাই OK** |
+
+**সবগুলো ১৩টা posting একটাই transaction-এ।** আগে ~৩১টা আলাদা commit।
+
+**দুটো জিনিস এখানেই প্রথম প্রমাণিত হলো:**
+1. **`untagged_posting` = OK** — reference tagging (§106 Phase 2) এতদিন কোডে ছিল কিন্তু
+   ১৫ জুলাইয়ের পর কোনো posting না হওয়ায় **বাস্তব data দিয়ে কখনো চলেনি**। এই Verify-ই প্রথম।
+2. **§104 costing সঠিক** — RM 10,000 কেজি × ₹10 = ₹1,00,000 → RMC ₹10.00/কেজি + conversion
+   ₹1.95 = **SFG ₹11.95/কেজি**, ledger-এ ঠিক তাই বসেছে। **একটাও `value = 0` নয়** (আগে সব ০ বসত)।
+   QI নিট শূন্য, তাই phantom stock নেই।
+
+> **⚠️ guard-এর baseline কমেনি (১৫/১৫), এটাই প্রত্যাশিত** — guard `.rpc(` call-site গোনে,
+> handler নয়। `process_order.handlers.ts`-এর একটাই `postStockMovement` wrapper এখনো
+> INT/MTEST/reverse ব্যবহার করে। **পুরো file migrate হলে তবেই সংখ্যা নামবে।**
+
 **ইতিহাস:** §8C-র ঘটনা (Inward QA, stock একদিক থেকে বেরিয়ে গিয়ে আর credit হয়নি) ছিল এই শ্রেণিরই।
 ওর **নির্দিষ্ট কারণ** (duplicate document_number) `item_number` দিয়ে সারানো হয়েছে, কিন্তু
 **গঠনগত দুর্বলতা রয়ে গেছে** — তাই একই শ্রেণির ঘটনা অন্য কারণে আবার ঘটতে পারে।
