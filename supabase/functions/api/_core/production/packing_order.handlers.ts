@@ -743,12 +743,37 @@ export async function fgStockBreakdownHandler(req: Request, ctx: ProdHandlerCont
       ? await serviceRoleClient
           .schema("erp_inventory")
           .from("stock_document")
-          .select("id, document_number, posting_date")
+          .select("id, document_number, posting_date, source_lot_ref, reference_document_type, reference_document_number")
           .in("id", docIds)
       : { data: [], error: null };
     if (docErr) throw new Error("PROD_FG_STOCK_BREAKDOWN_FAILED");
     const docMap = new Map(((docRows ?? []) as JsonRecord[]).map((doc) => [String(doc.id), doc]));
-    const poNumbers = [...new Set([...docMap.values()].map((doc) => String(doc.document_number ?? "")).filter(Boolean))];
+
+    /*
+     * Which Packing PO produced this FG — has moved twice, so read it in that order.
+     *
+     *   source_lot_ref            the lot, set by the derive trigger (current)
+     *   reference_document_number where §106 Phase 2 moved the business number to
+     *   document_number           where it lived before §106 (legacy rows only)
+     *
+     * §83.15 originally specified document_number, and this handler still read only
+     * that — but §106 repurposed document_number for the Material Document number,
+     * so every Packing PO finalised after 17 Jul would have matched nothing here and
+     * silently lost its barrel count. It had not broken yet only because no Packing
+     * PO has been finalised since that change landed.
+     */
+    const resolveLotRef = (doc: JsonRecord | undefined): string => {
+      if (!doc) return "";
+      const lot = toTrimmedString(doc.source_lot_ref);
+      if (lot) return lot;
+      if (toTrimmedString(doc.reference_document_type) === "PACK_PO") {
+        const ref = toTrimmedString(doc.reference_document_number);
+        if (ref) return ref;
+      }
+      return toTrimmedString(doc.document_number);
+    };
+
+    const poNumbers = [...new Set([...docMap.values()].map((doc) => resolveLotRef(doc as JsonRecord)).filter(Boolean))];
     const { data: poRows, error: poErr } = poNumbers.length
       ? await serviceRoleClient
           .schema("erp_production")
@@ -763,7 +788,9 @@ export async function fgStockBreakdownHandler(req: Request, ctx: ProdHandlerCont
     const batchMap = new Map<string, JsonRecord[]>();
     for (const ledger of ledgers) {
       const doc = docMap.get(String(ledger.stock_document_id ?? ""));
-      const po = poMap.get(String(doc?.document_number ?? ""));
+      // Same resolution as the lookup above — both sides must agree, or every row
+      // silently drops out on the `if (!po) continue` below.
+      const po = poMap.get(resolveLotRef(doc as JsonRecord | undefined));
       if (!po) continue;
       const batchNumber = toTrimmedString(ledger.batch_number) || "UNBATCHED";
       if (!batchMap.has(batchNumber)) batchMap.set(batchNumber, []);
