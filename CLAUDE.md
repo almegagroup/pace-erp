@@ -907,12 +907,30 @@ network-layer failure আলাদা করে চেনে আর `AMBIGUOUS_W
 হিসেবে দেখাত।
 **নিজে পরীক্ষা করতে:** DevTools → Network → **Offline** করে একটা Save চাপো → নতুন বার্তা আসবে।
 
+**✅ ধাপ ২ DONE (commit `fb3df1a`) — `scripts/stock-health-check.sql`:**
+পুরো file Supabase SQL Editor-এ paste করে চালাও। **go-live-এর দিন থেকে রোজ কাজ শেষে, dev ও prod
+আলাদা করে।** `severity = FAIL` এলে থামো — কারণ না বোঝা পর্যন্ত আর posting কোরো না।
+Check: snapshot ↔ ledger যোগফল, negative stock (দুই স্তরে), orphan ledger row, ledger-হীন
+stock_document, + `coverage_watch` (informational)। **2026-07-19 Dev: পাঁচটাই OK, coverage 22।**
+
+> **⚠️ নকশার সিদ্ধান্ত — script-এ business table-এর কোনো তালিকা নেই, ইচ্ছে করেই।**
+> হাতে লেখা "১২টা table"-এর তালিকা বাসি হয়ে যেত: Dispatch/Return/L5 এলে ১৩ নম্বরটা চুপচাপ বাদ
+> পড়ত আর আমরা ভুল করে নিরাপদ ভাবতাম — **check না থাকার চেয়েও খারাপ**। তাই সব check শুধু
+> `stock_ledger`/`stock_snapshot`/`stock_document` দেখে, যেখান দিয়ে প্রতিটা posting যেতে **বাধ্য**
+> (সবাই `post_stock_movement()` ডাকে)। নতুন handler নিজে থেকেই ঢাকা পড়ে, script কখনো update
+> করতে হয় না।
+>
+> **Business row থেকে খোঁজার পথটা প্রমাণসহ বাতিল** — সর্বজনীন link convention **নেই**:
+> `stock_ledger_id` / `stock_document_id` / `posted_stock_document_id` /
+> `issue_+receipt_stock_document_id` — **চার রকম**, আর **`stock_transfer_order`/`_line`-এ কিছুই
+> নেই**, অর্থাৎ STO-র posting আজই business row থেকে খুঁজে পাওয়া যায় না। এটা আলাদা করে সারানোর
+> মতো একটা gap (ধাপ ৩-এর সাথে ভাবো)।
+
 **🔴 বাকি — go-live-এর আগে:**
-- **ধাপ ২ — Detection script:** ১২টা table-এর partial-posting query (signature: terminal status
-  পায়নি অথচ কিছু line-এ `stock_ledger_id` বসে গেছে)। **2026-07-19-এ dev-এ চালিয়ে দেখা হয়েছে —
-  শূন্য, অর্থাৎ এখনো কিছু ঘটেনি।** go-live-এর দিন থেকে রোজ চালাতে হবে।
 - **ধাপ ৩ — Idempotency guard**, শুধু যেগুলো রোজ চলবে: Opening Stock, GRN, Inward QA,
   Process PO Verify, Packing PO Final। বাকি ৭টা পরে।
+  ⚠️ STO-তে guard বসানোর আগে ওর ledger-link column-টা আগে যোগ করতে হবে (উপরে দেখো) —
+  নাহলে "ইতিমধ্যে post হয়েছে কিনা" জিজ্ঞেস করার উপায়ই নেই।
 
 **🔵 go-live-এর পরে — আসল নিরাময়:** প্রতিটা multi-step লেখা একটা plpgsql function-এ নিয়ে **একটাই
 RPC** (§8B-তে নিয়মটা আগে থেকেই লেখা)। তখন Postgres নিজেই transaction দেয় — মাঝপথে মরলে **সব
