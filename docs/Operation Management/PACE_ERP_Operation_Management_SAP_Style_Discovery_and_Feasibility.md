@@ -9419,11 +9419,11 @@ This also **replaces the older, vaguer "S003 → F003 Transfer" step** used in t
 
 **FG batch/lot identity for stock movements and reporting (MTO/HPS/MTEST scope — MTS has no variable-fill issue, out of scope here):**
 - `stock_ledger.batch_number` stays = the parent **Process PO's** batch_number, unchanged for every Packing PO drawn from it — required for AP/QA recognizability (the batch number is the externally-recognized product identity); it can never be swapped for a Packing PO number, even when multiple Packing POs share the same source batch with different fill quantities.
-- Granular per-fill-group distinguishing (e.g. 2 barrels @230 KG vs 1 balance barrel @115 KG, both from the same Process-PO batch) uses the **already-mandatory** `stock_document.document_number` (§8C engine rule) = that specific **Packing PO's own `po_number`**. No new column or number series is needed — `stock_ledger.batch_number` (product identity) and `stock_document.document_number` (specific packing run) are two independent, already-existing keys that together give full granularity.
+- Granular per-fill-group distinguishing (e.g. 2 barrels @230 KG vs 1 balance barrel @115 KG, both from the same Process-PO batch) uses the Packing PO's own `po_number` as the lot key. ~~via `stock_document.document_number`~~ **CORRECTED 2026-07-19 — see §83.15.1: §106 repurposed `document_number` for the Material Document number, so the lot now lives in `stock_ledger.source_lot_ref`.** No new number series is needed — `stock_ledger.batch_number` (product identity) and `stock_document.document_number` (specific packing run) are two independent, already-existing keys that together give full granularity.
 - **Real gap found (2026-07-13):** `stock_snapshot` never splits by batch — both `post_stock_movement()` overloads (`20260709025725_stock_document_item_number.sql`, `20260712013000_gate27_batch_number_persistence.sql`) hardcode `batch_id IS NULL` in the snapshot lookup/upsert, so there is only **one blended running total** per (company, location, material, stock_type); no per-batch balance is cached anywhere in the engine. **Decision: leave as-is for now** — derive any per-batch balance on demand by summing `stock_ledger` rows filtered by `batch_number`. Extending `stock_snapshot` to also split by batch would be a core §8C engine change touching RM/PM/SFG/INT posting too; deferred until a real performance need is observed, since it is an isolated, backward-compatible change to make later.
-- **FG stock breakdown report** (the PACE equivalent of SAP's MMBE/ZMB51 for batch-managed FG): query `stock_ledger` (P101 IN rows) JOIN `stock_document` (on `document_number`) JOIN `packing_order` (on `po_number` = that `document_number`, to pull `num_packs`/`fill_qty_per_pack`), grouped by `batch_number` with drill-down to individual Packing PO rows. This exact shape was already envisioned back in §83.1 (2026-06-30, "F003 Stock Record — Container Count" table) — this session re-derived and confirmed the concrete join path from first principles; no contradiction, just execution detail. The **same query/table is designed to double as the future Dispatch (L5) selection UI** (user picks which barrel-group/Packing-PO-lot to dispatch, by count) — build once as a reusable component, reuse in both places. Tracking the remaining balance of a specific Packing-PO-group after a *partial* dispatch (e.g. 1 of 2 barrels from one PO already sent out) is deferred to the formal L5 design session; the underlying linkage (`batch_number` + `document_number`) is already schema-compatible with that need.
+- **FG stock breakdown report** (the PACE equivalent of SAP's MMBE/ZMB51 for batch-managed FG): query `stock_ledger` (P101 IN rows) JOIN `stock_document` (on `source_lot_ref`, falling back to `reference_document_number` then `document_number` for older rows) JOIN `packing_order` (on `po_number`, to pull `num_packs`/`fill_qty_per_pack`), grouped by `batch_number` with drill-down to individual Packing PO rows. This exact shape was already envisioned back in §83.1 (2026-06-30, "F003 Stock Record — Container Count" table) — this session re-derived and confirmed the concrete join path from first principles; no contradiction, just execution detail. The **same query/table is designed to double as the future Dispatch (L5) selection UI** (user picks which barrel-group/Packing-PO-lot to dispatch, by count) — build once as a reusable component, reuse in both places. Tracking the remaining balance of a specific Packing-PO-group after a *partial* dispatch (e.g. 1 of 2 barrels from one PO already sent out) is deferred to the formal L5 design session; the underlying linkage (`batch_number` + `document_number`) is already schema-compatible with that need.
 - **Packing PO Final — 3-movement posting (LOCKED — 2026-07-13, closes a real gap):** verified against current `packing_order.handlers.ts` that Final today posts **only** PM issue (P261) — no SFG issue and no FG receipt are posted at all, meaning FG stock has never actually been created by any Packing PO Final run to date. Locked fix: Final must post all three in one transaction — **SFG issue (P261, OUT)** from the Pack BOM INPUT row's S0xx location, **PM issue (P261, OUT)** per PM line from the Pack BOM's own line location, and **FG receipt (P101, IN)** into the Pack BOM OUTPUT row's F0xx location (§83.15's already-locked movement-type assignment, just never wired into Final's actual posting code). All three share `document_number = packing_order.po_number` (unchanged, already correct in the existing code) and `batch_number = the parent Process PO's batch_number` (via the Gate-27.19 batch-aware `post_stock_movement()` overload — not currently used anywhere in this file).
-- **Packing PO CORS reversal — matching 3-movement reversal (LOCKED — 2026-07-13):** reversal must undo all three of the above, not just PM (today's `reversePackingOrderHandler` only reverses PM). SFG issue reverses via **P262** (existing P261↔P262 pairing, same code already used for PM's own reversal today). FG receipt reverses via **P102** (existing P101↔P102 pairing, per §83.4's 2026-07-11 "reuses P101/P102" lock). Each reversal is tied back to its original posting via `reversalOfId` (the stored `stock_ledger_id` on that line), not by re-deriving qty independently.
+- **Packing PO CORS reversal — matching 3-movement reversal (LOCKED — 2026-07-13):** reversal must undo all three of the above, not just PM. ~~(today's `reversePackingOrderHandler` only reverses PM)~~ **NO LONGER TRUE — verified 2026-07-19: `reversePackingOrderHandler` reverses all three (`lineType === 'FG' ? 'P102' : 'P262'`). This was fixed at some point after the note was written; do not re-open it as a gap.** SFG issue reverses via **P262** (existing P261↔P262 pairing, same code already used for PM's own reversal today). FG receipt reverses via **P102** (existing P101↔P102 pairing, per §83.4's 2026-07-11 "reuses P101/P102" lock). Each reversal is tied back to its original posting via `reversalOfId` (the stored `stock_ledger_id` on that line), not by re-deriving qty independently.
 - **SO↔FO chain status:** FO↔Packing PO link already exists in schema (`packing_order.plan_feed_id` → `erp_production.plan_feed`, which holds `fo_number`, per §83.18's Plan Feed page). **SO↔FO does not exist yet** — `erp_procurement.sales_order_line` has no `fo_id`/`fo_number` column; that table is still the legacy pre-Gate-27 L2 Sales schema. Once that link is added (as part of the formal Dispatch/L5 session), the same batch+Packing-PO breakdown report extends upward: SO → FO → linked Packing PO(s) → batch/fill-group balance, with no new mechanism beyond that one FK.
 
 **PID for FG batches — still not formally designed.** Deferred together with Opening Stock (MTO/HPS/MTEST), per the existing "PENDING" note above. This session only sketched a *direction*, not a lock: count/enter at the batch level (what a counter can actually see on a drum label); book quantity for comparison = on-demand `stock_ledger` sum for that batch_number (not from `stock_snapshot`, which doesn't split by batch); any variance posts tagged to that same batch_number, with no need to attribute it to a specific Packing PO at count time. Revisit and formally lock this at the same session as Opening Stock (MTO/HPS/MTEST) and PID design.
@@ -14907,3 +14907,61 @@ Returns:
 - `stock_ledger` / `stock_snapshot` মিলিয়ে দেখা
 - **ইচ্ছাকৃতভাবে মাঝপথে ব্যর্থ করে rollback সত্যিই হয় কিনা** — বর্তমান কোডে এই পরীক্ষাটাই করা যায় না
 - `SELECT * FROM erp_inventory.stock_health_check();`
+
+---
+
+### 83.15.1 — FG Lot Identity: `source_lot_ref` (LOCKED — 2026-07-19)
+
+**কেন লাগল:** business owner প্রশ্ন করেন — *"একই Process PO-তে দুটো Packing PO, দুটোতে per barrel
+আলাদা হলে এখনকার design-এ বোঝার উপায় কী?"* বাস্তব উদাহরণ: batch `EV02602` → PO `940003`
+(২০০ কেজি/ব্যারেল) আর PO `940005` (২৩০ কেজি/ব্যারেল)। **batch একা যথেষ্ট নয়** — ব্যারেল গুনতে
+হলে লট চাই।
+
+#### কেন `document_number` দিয়ে আর হয় না
+
+§83.15 (2026-07-13) লিখেছিল লট = `stock_document.document_number` = Packing PO নম্বর। **§106
+Phase 2 (2026-07-17) সেটা ভেঙে দিয়েছে** — এখন `document_number` = Material Document নম্বর
+(`00000001`), আর business নম্বর সরে গেছে `reference_document_number`-এ।
+
+**ফলাফল:** PR21-এর join নীরবে ভাঙা অবস্থায় deployed ছিল। ১৭ জুলাইয়ের পর কোনো Packing PO Final
+হয়নি বলে ধরা পড়েনি — প্রথম Final-এই ব্যারেল সংখ্যা উধাও হত। (একই কারণে reference tagging-ও
+১৯ জুলাইয়ের আগে কখনো চলেনি।)
+
+#### সমাধান: `stock_ledger.source_lot_ref` + `stock_document.source_lot_ref`
+
+`batch_number` **অপরিবর্তিত** থাকে (= parent Process PO-র batch) — §83.15-এর AP/QA lock অক্ষত।
+লট তার **পাশে** বসে, বদলে নয়।
+
+**মান সবসময় derived, কোনো handler কখনো পাঠায় না** — trigger
+`erp_inventory.derive_source_lot_ref()` (BEFORE INSERT on `stock_ledger`):
+
+| ঘটনা | লট আসে |
+|---|---|
+| FG receipt (`PACK_PO` + `P101` + `IN`) | Packing PO নম্বর |
+| Reversal / COR6 / PR19 | **মূল posting থেকে নকল** (`reversal_document_id` ধরে) |
+| caller যা পাঠায় | **উপেক্ষিত** |
+
+**কেন trigger, কেন `post_stock_movement` বদলাইনি:** ওটা ৬,২৭০ অক্ষরের, সবচেয়ে সংবেদনশীল
+function — কয়েক লাইনের জন্য পুরোটা replace করা অকারণ ঝুঁকি। trigger **যেকোনো path** ঢাকে
+(`post_stock_movement`, `post_document`, ভবিষ্যতের যা-ই), তাই bypass করা যায় না।
+
+**PR19 ও COR6-এ কোনো কোড লাগেনি** — ওরা আগে থেকেই `reversalOfId` পাঠায়, তাই লট আপনাআপনি
+অনুসরণ করে। এটা না থাকলে partial reversal-এ লট তার পুরো মূল qty দেখাত, আর পাশে একটা ভাসমান
+ঋণাত্মক row থাকত — batch মোট ঠিক, অথচ প্রতিটা লট ভুল।
+
+#### 🔴 L5 Dispatch-এর জন্য বাধ্যতামূলক শর্ত
+
+**Dispatch-এ OUT posting-এ কোন লট থেকে যাচ্ছে সেটা লিখতেই হবে।** আজ dispatch-এর reference হবে
+Sales Order — Packing PO নয় — তাই trigger-এর নিয়ম ২ ওখানে খাটবে না, user-কে লট **বাছতে হবে**।
+
+না করলে: ৫ ব্যারেল গেলে system জানবে না কোন লট থেকে, আর **লট-স্তরের হিসাব চিরতরে ভুল** হয়ে
+যাবে — পিছিয়ে হিসাব করা অসম্ভব, কারণ তথ্যটাই কোথাও থাকে না।
+
+**Dispatch design-এর সময় constraint চালু করতে হবে:** batch-tracked material-এর OUT posting-এ
+`source_lot_ref` NULL হলে **DB reject করবে**। এখন চালু করা যায়নি — কোনো handler এখনো লট পাঠায়
+না, তাই সব posting সাথে সাথে fail করত।
+
+**Column আগেই বানানো হয়েছে ইচ্ছাকৃতভাবে** — dispatch তৈরির *আগে*, যাতে শর্তটা গোড়া থেকেই ঢোকে,
+পরে retrofit করতে না হয় (ততদিনে অজানা-লট dispatch data ঢুকে যাবে)।
+
+**Migrations:** `20260719200000` (column), `20260719210000` (trigger)।
