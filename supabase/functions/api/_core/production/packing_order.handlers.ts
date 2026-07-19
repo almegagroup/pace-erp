@@ -1468,7 +1468,7 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     const { data: stockLines, error: lineErr } = await serviceRoleClient
       .schema("erp_production").from("packing_order_line")
       .select(`
-        id, line_type, material_id, actual_material_id, batch_number, actual_qty, total_qty, issue_sloc_id, uom_code, movement_type_code
+        id, line_type, material_id, actual_material_id, batch_number, actual_qty, total_qty, issue_sloc_id, uom_code, movement_type_code, stock_ledger_id
       `)
       .eq("packing_order_id", id);
     if (lineErr) {
@@ -1612,6 +1612,21 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       const lineType = String(line.line_type ?? "");
       const qty = Number(line.actual_qty ?? line.total_qty ?? 0);
       if (qty <= 0) continue;
+
+      // IDEMPOTENCY (CLAUDE.md 8D): this line already posted in an earlier attempt that died
+      // before the handler finished. A retry would re-post the same movement and overwrite
+      // stock_ledger_id, orphaning the first posting so the reverse handler could never undo
+      // it — and would double-count the reservation issue below.
+      //
+      // Safe against a legitimate re-run: Final only accepts status STANDARD, and reverse
+      // ends at REVERSED (never back to STANDARD). Unlike Process PO Verify there is no
+      // in-loop accumulator to preserve here — totalInputValue/fgCostPerKg are both computed
+      // before the loop — so skipping early is correct.
+      //
+      // NOTE: stock_ledger_id had to be added to the select above; without it this guard
+      // would read undefined on every line and silently never fire.
+      if (toTrimmedString(line.stock_ledger_id)) continue;
+
       const slocId = (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string | null;
       if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
       // Post against the effective (actual/substitute if set) material — the

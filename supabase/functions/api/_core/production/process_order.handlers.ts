@@ -2847,6 +2847,23 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const rmRate = rateMap.get(`${movementMaterialId}|${slocId}`) ?? 0;
       totalRmValue += actualQty * rmRate;
 
+      // IDEMPOTENCY (CLAUDE.md 8D): this line already posted during an earlier attempt that
+      // died before the handler finished. Without this guard a retry re-issues the same P261
+      // AND overwrites stock_ledger_id below, orphaning the first posting so no later CORS
+      // reversal could undo it — and reservation issued_qty would be added twice.
+      //
+      // ⚠️ Placed AFTER totalRmValue accumulates, deliberately. The RM value must be summed
+      // over EVERY line regardless of whether it posts on this pass, because it feeds
+      // sfgCostPerKg below. Skipping earlier would silently understate the SFG cost on any
+      // retry. Everything past this point is posting + its two bookkeeping updates, so
+      // `continue` here is safe.
+      //
+      // Safe against a legitimate re-run: Verify only accepts status FINAL, and a CORS
+      // reversal ends at REVERSED (never back to FINAL), so a verified line is never meant
+      // to post again. fetchOrderLines() selects stock_ledger_id on every path into this
+      // handler, so the guard cannot silently no-op.
+      if (toTrimmedString(line.stock_ledger_id)) continue;
+
       // DEPENDENT: each P261 issue and its reservation issue update must stay in posting order.
       const posting = await postStockMovement({
         documentNumber: docNumber,
