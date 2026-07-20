@@ -1019,6 +1019,16 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
 
     const poRow = po as JsonRecord;
     const lineRows = (lines ?? []) as JsonRecord[];
+    // Registered alternate members per PM line's group — feeds the PR10 edit
+    // page's PM Actual-Material picker (§83.4.1). Resolved from material_group_id,
+    // same source create validates a substitute against.
+    const groupMemberMap = await getMaterialGroupMemberIdsByGroupIds(
+      lineRows.filter((line) => String(line.line_type) === "PM")
+        .map((line) => String(line.material_group_id ?? "")),
+    );
+    const alternateMemberIds = [...new Set(
+      [...groupMemberMap.values()].flat().filter(Boolean),
+    )];
     const [poMaterialMap, lineMaterialMap, slocMap, machineMap] = await Promise.all([
       getMaterialMapByIds(
         [String(poRow.material_id ?? "")],
@@ -1027,7 +1037,11 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
         "id, pace_code, material_name, shade_code",
       ),
       getMaterialMapByIds(
-        [...lineRows.map((line) => String(line.material_id ?? "")), ...lineRows.map((line) => String(line.actual_material_id ?? ""))],
+        [
+          ...lineRows.map((line) => String(line.material_id ?? "")),
+          ...lineRows.map((line) => String(line.actual_material_id ?? "")),
+          ...alternateMemberIds,
+        ],
         "[packing_order.getPackingOrder]",
         "PROD_PACK_FETCH_FAILED",
         "id, pace_code, material_name, base_uom_code",
@@ -1046,6 +1060,14 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
           material: lineMaterialMap.get(String(line.material_id ?? "")) ?? null,
           actual_material: lineMaterialMap.get(String(line.actual_material_id ?? "")) ?? null,
           storage_location: slocMap.get(String(line.issue_sloc_id ?? "")) ?? null,
+          // PM alternate members (excluding the formulation material itself) so
+          // the PR10 edit page can offer a substitute picker (§83.4.1).
+          allowed_alternate_materials: String(line.line_type) === "PM"
+            ? (groupMemberMap.get(String(line.material_group_id ?? "")) ?? [])
+                .filter((memberId) => memberId && memberId !== String(line.material_id ?? ""))
+                .map((memberId) => lineMaterialMap.get(memberId))
+                .filter(Boolean)
+            : [],
         })),
       },
     }, ctx.request_id, req);

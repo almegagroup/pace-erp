@@ -136,6 +136,7 @@ function PackingPoEditTab() {
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [pmOverrides, setPmOverrides] = useState({});
+  const [pmMatOverrides, setPmMatOverrides] = useState({});
   const [numPacks, setNumPacks] = useState("");
   const [fillQty, setFillQty] = useState("");
   const [cancelReason, setCancelReason] = useState("");
@@ -171,6 +172,7 @@ function PackingPoEditTab() {
 
   useEffect(() => {
     setPmOverrides({});
+    setPmMatOverrides({});
     setNumPacks(po?.num_packs != null ? String(po.num_packs) : "");
     setFillQty(po?.fill_qty_per_pack != null ? String(po.fill_qty_per_pack) : "");
     setCancelReason("");
@@ -191,6 +193,7 @@ function PackingPoEditTab() {
     setSubmittedPoNumber("");
     setPoNumberInput("");
     setPmOverrides({});
+    setPmMatOverrides({});
   }
 
   function handleLookupSubmit(event) {
@@ -235,10 +238,18 @@ function PackingPoEditTab() {
       // and PM sloc all go together (§83.4.1).
       const body = {
         num_packs: packs,
-        pm_lines: pmLines.map((line) => ({
-          id: line.id,
-          issue_sloc_id: pmOverrides[line.id] ?? line.issue_sloc_id,
-        })),
+        pm_lines: pmLines.map((line) => {
+          const pl = {
+            id: line.id,
+            issue_sloc_id: pmOverrides[line.id] ?? line.issue_sloc_id,
+          };
+          // Only send actual_material_id when the user touched this line's picker —
+          // "" means "(same as formulation)" and clears any prior substitute.
+          if (Object.prototype.hasOwnProperty.call(pmMatOverrides, line.id)) {
+            pl.actual_material_id = pmMatOverrides[line.id] || null;
+          }
+          return pl;
+        }),
       };
       if (fillEditable) body.fill_qty_per_pack = Number(fillQty);
       await editPackingOrder(po.id, body);
@@ -379,6 +390,7 @@ function PackingPoEditTab() {
                   <thead>
                     <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                       <th className="border-b px-3 py-2 text-left">Material</th>
+                      <th className="border-b px-3 py-2 text-left">Actual Material</th>
                       <th className="border-b px-3 py-2 text-right">Total Qty</th>
                       <th className="border-b px-3 py-2 text-left">Storage Location</th>
                     </tr>
@@ -386,13 +398,36 @@ function PackingPoEditTab() {
                   <tbody>
                     {pmLines.length === 0 ? (
                       <tr>
-                        <td colSpan={3} className="px-3 py-6 text-center text-sm text-slate-400">
+                        <td colSpan={4} className="px-3 py-6 text-center text-sm text-slate-400">
                           No PM lines on this Packing PO.
                         </td>
                       </tr>
-                    ) : pmLines.map((line) => (
+                    ) : pmLines.map((line) => {
+                      // "(same)" = use the formulation material; otherwise a registered
+                      // group alternate. Only shown when the line has alternates (§83.4.1).
+                      const altOptions = [
+                        { value: "", label: "(same as formulation)" },
+                        ...(line.allowed_alternate_materials ?? []).map((mat) => ({
+                          value: mat.id,
+                          label: materialLabelSimple(mat) || "Registered alternate",
+                        })),
+                      ];
+                      const hasAlternates = (line.allowed_alternate_materials ?? []).length > 0;
+                      return (
                       <tr key={line.id} className="border-b border-slate-100">
                         <td className="px-3 py-2">{materialLabelSimple(line.material) || "--"}</td>
+                        <td className="px-3 py-2 min-w-[220px]">
+                          {hasAlternates ? (
+                            <ErpComboboxField
+                              value={pmMatOverrides[line.id] ?? line.actual_material_id ?? ""}
+                              onChange={(value) => setPmMatOverrides((current) => ({ ...current, [line.id]: value }))}
+                              options={altOptions}
+                              placeholder="(same as formulation)"
+                            />
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-right font-mono">{Number(line.total_qty ?? 0).toFixed(3)}</td>
                         <td className="px-3 py-2 min-w-[220px]">
                           <ErpComboboxField
@@ -404,7 +439,8 @@ function PackingPoEditTab() {
                           />
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
