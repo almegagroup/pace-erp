@@ -1496,40 +1496,57 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
     // ── recompute every line ─────────────────────────────────────────────────
     // total = qty_per_pack × new num_packs. For bomRequired=false the FG/SFG
     // per-pack IS the fill, so update those two lines' qty_per_pack first.
-    const lineUpdates: Array<{ id: string; qty_per_pack: number; total_qty: number; issue_sloc_id?: string; actual_material_id?: string | null }> = [];
+    type LineUpdate = {
+      id: string; line_type: string; qty_per_pack: number; total_qty: number;
+      issue_sloc_id?: string; actual_material_id?: string | null;
+      // effectiveMaterialId / effectiveSlocId = the values the reservation must
+      // mirror AFTER this edit (actual/substitute if set, else formulation).
+      effectiveMaterialId: string; effectiveSlocId: string | null;
+    };
+    const lineUpdates: LineUpdate[] = [];
     for (const line of lines) {
       const lt = String(line.line_type ?? "");
       let perPack = parsePositiveNumber(line.qty_per_pack) ?? 0;
       if (!bomRequired && (lt === "FG" || lt === "SFG")) perPack = newFill;
       const total = Number((perPack * newNumPacks).toFixed(4));
 
-      const upd: { id: string; qty_per_pack: number; total_qty: number; issue_sloc_id?: string; actual_material_id?: string | null } = {
-        id: String(line.id), qty_per_pack: perPack, total_qty: total,
-      };
+      let nextActual = toTrimmedString(line.actual_material_id) || null;
+      let nextSloc = toTrimmedString(line.issue_sloc_id) || null;
 
       const edit = pmEdits.get(String(line.id));
       if (lt === "PM" && edit) {
         const sloc = toTrimmedString(edit.issue_sloc_id);
-        if (sloc) upd.issue_sloc_id = sloc;
+        if (sloc) nextSloc = sloc;
         if (Object.prototype.hasOwnProperty.call(edit, "actual_material_id")) {
           const alt = toTrimmedString(edit.actual_material_id) || null;
           if (alt && line.has_alternate !== true) {
             return packErr(req, ctx, "PROD_PACK_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id requires a registered alternate on this line");
           }
-          upd.actual_material_id = alt;
+          nextActual = alt;
         }
+      }
+
+      const upd: LineUpdate = {
+        id: String(line.id), line_type: lt, qty_per_pack: perPack, total_qty: total,
+        effectiveMaterialId: nextActual || String(line.material_id),
+        effectiveSlocId: nextSloc,
+      };
+      if (lt === "PM" && edit) {
+        if (nextSloc && nextSloc !== (toTrimmedString(line.issue_sloc_id) || null)) upd.issue_sloc_id = nextSloc;
+        if (Object.prototype.hasOwnProperty.call(edit, "actual_material_id")) upd.actual_material_id = nextActual;
       }
       lineUpdates.push(upd);
     }
 
     // ── PM availability re-check (SFG batch not chosen until Final) ───────────
+    // Checks the POST-edit effective material + location — the new values, so a
+    // material/location swap is validated against the stock it will really draw.
     const pmNeeds: PackingPmNeed[] = [];
     for (const u of lineUpdates) {
-      const line = lines.find((l) => String(l.id) === u.id)!;
-      if (String(line.line_type) !== "PM") continue;
-      const effMat = u.actual_material_id ?? (toTrimmedString(line.actual_material_id) || String(line.material_id));
-      const sloc = u.issue_sloc_id ?? toTrimmedString(line.issue_sloc_id);
-      if (effMat && sloc) pmNeeds.push({ materialId: String(effMat), storageLocationId: String(sloc), qty: u.total_qty });
+      if (u.line_type !== "PM") continue;
+      if (u.effectiveMaterialId && u.effectiveSlocId) {
+        pmNeeds.push({ materialId: u.effectiveMaterialId, storageLocationId: u.effectiveSlocId, qty: u.total_qty });
+      }
     }
     if (pmNeeds.length > 0) {
       const avail = await computePackingAvailability(String(po.company_id), null, pmNeeds);
@@ -1557,23 +1574,31 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
       .eq("id", id);
     if (hdrErr) throw new Error("PROD_PACK_EDIT_FAILED");
 
-    // Reservations: required_qty follows the new per-line total. SFG reservation
-    // has no batch yet at STANDARD, so it is matched by material only.
+    // Reservations must stay aligned with their line on ALL of: material,
+    // storage location, and quantity — not just quantity. Matched by
+    // source_line_id (create sets it per line), so a PM material/location swap
+    // is followed correctly rather than left blocking the old material/location.
+    // balance_qty is generated (required_qty − issued_qty) — never written.
     const { data: resRows } = await serviceRoleClient
       .schema("erp_production").from("reservation_document")
-      .select("id, material_id, status")
+      .select("id, source_line_id, status")
       .eq("source_id", id).in("status", RESERVATION_OPEN_STATUSES);
     for (const res of (resRows ?? []) as JsonRecord[]) {
-      // DEPENDENT: reservation required_qty must reflect the line it mirrors.
-      const line = lines.find((l) => String(l.material_id) === String(res.material_id)
-        || String(l.actual_material_id) === String(res.material_id));
-      const u = line ? lineUpdates.find((x) => x.id === String(line.id)) : undefined;
+      // DEPENDENT: each reservation mirrors exactly one line, keyed by source_line_id.
+      const u = lineUpdates.find((x) => x.id === String(res.source_line_id));
       if (!u) continue;
+      const patch: JsonRecord = {
+        required_qty: u.total_qty,
+        material_id: u.effectiveMaterialId,
+        last_updated_at: now,
+        last_updated_by: ctx.auth_user_id,
+      };
+      // SFG reservation carries no storage location at STANDARD (batch/location
+      // resolved at Final); only set it where the line actually has one.
+      if (u.effectiveSlocId) patch.storage_location_id = u.effectiveSlocId;
       const { error: resErr } = await serviceRoleClient
         .schema("erp_production").from("reservation_document")
-        // balance_qty is a generated column (required_qty − issued_qty) — never written directly.
-        .update({ required_qty: u.total_qty, last_updated_at: now, last_updated_by: ctx.auth_user_id })
-        .eq("id", res.id as string);
+        .update(patch).eq("id", res.id as string);
       if (resErr) throw new Error("PROD_PACK_EDIT_FAILED");
     }
 
