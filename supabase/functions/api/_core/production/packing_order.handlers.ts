@@ -2283,6 +2283,27 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
           referenceDocumentId: String(poData.id),
         });
       }
+
+      // §83.4.1-addendum: mirrors process_order.reverse's own reco-void step
+      // (§104's "CORS behavior = append, not reset-in-place") — a fully
+      // reversed Packing PO's PM AP-Reco must stop counting toward billing
+      // just like its stock did, or a SUM() over packing_order_line_reco
+      // would still recognize PM cost for a PO that no longer exists.
+      const { error: recoVoidErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("packing_order_line_reco")
+        .update({
+          is_voided: true,
+          voided_at: reverseNow,
+          last_updated_at: reverseNow,
+          last_updated_by: ctx.auth_user_id,
+        })
+        .eq("packing_order_id", id)
+        .eq("is_voided", false);
+      if (recoVoidErr) {
+        console.error("[packing_order.reversePackingOrder] reco void failed:", JSON.stringify(recoVoidErr));
+        throw new Error("PROD_PACK_REVERSE_FAILED");
+      }
     }
 
     await serviceRoleClient.schema("erp_production").from("packing_order")
