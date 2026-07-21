@@ -156,7 +156,20 @@ function PackingPoEditTab() {
 
   const po = detailQ.data ?? null;
   const blockMessage = useMemo(() => packingBlockMessage(po), [po]);
-  const pmLines = (po?.lines ?? []).filter((line) => line.line_type === "PM");
+  const pmLinesRaw = (po?.lines ?? []).filter((line) => line.line_type === "PM");
+
+  // Live preview: PM total = qty_per_pack (fixed ratio, unaffected by this
+  // edit) × the Num Packs value currently in the input — mirrors the backend
+  // formula in editPackingOrderHandler exactly, so the table reflects the save
+  // result before the user even clicks Save, instead of only after refetch.
+  const previewNumPacks = Number(numPacks) || 0;
+  const pmLines = useMemo(
+    () => pmLinesRaw.map((line) => ({
+      ...line,
+      preview_total_qty: Number(line.qty_per_pack ?? 0) * previewNumPacks,
+    })),
+    [pmLinesRaw, previewNumPacks],
+  );
 
   const storageLocationQ = useStorageLocationOptionsQuery(
     { company_id: po?.company_id || undefined },
@@ -428,7 +441,7 @@ function PackingPoEditTab() {
                             <span className="text-slate-400">—</span>
                           )}
                         </td>
-                        <td className="px-3 py-2 text-right font-mono">{Number(line.total_qty ?? 0).toFixed(3)}</td>
+                        <td className="px-3 py-2 text-right font-mono">{line.preview_total_qty.toFixed(3)}</td>
                         <td className="px-3 py-2 min-w-[220px]">
                           <ErpComboboxField
                             value={pmOverrides[line.id] ?? line.issue_sloc_id ?? ""}

@@ -1606,9 +1606,13 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
 
     const sfgLine = lineUpdates.find((u) => String(lines.find((l) => String(l.id) === u.id)?.line_type) === "SFG");
     const headerQty = sfgLine ? sfgLine.total_qty : Number((oldFill * newNumPacks).toFixed(4));
+    // packing_order carries planned_qty_kg AND total_qty_kg as separate columns
+    // (create writes both — see createPackingOrderHandler). Order List reads
+    // planned_qty_kg; missing it here left the list showing the pre-edit qty
+    // even though total_qty_kg (and every line) was correctly recalculated.
     const { error: hdrErr } = await serviceRoleClient
       .schema("erp_production").from("packing_order")
-      .update({ num_packs: newNumPacks, fill_qty_per_pack: newFill, total_qty_kg: headerQty, last_updated_at: now, last_updated_by: ctx.auth_user_id })
+      .update({ num_packs: newNumPacks, fill_qty_per_pack: newFill, total_qty_kg: headerQty, planned_qty_kg: headerQty, last_updated_at: now, last_updated_by: ctx.auth_user_id })
       .eq("id", id);
     if (hdrErr) throw new Error("PROD_PACK_EDIT_FAILED");
 
