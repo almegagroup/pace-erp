@@ -10,7 +10,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
-import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
 import { okResponse, errorResponse } from "../response.ts";
@@ -1007,7 +1007,8 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
       .schema("erp_production").from("packing_order_line")
       .select(`
         id, line_type, material_id, actual_material_id, batch_number, qty_per_pack, total_qty,
-        actual_qty, issue_sloc_id, uom_code, movement_type_code, has_alternate, material_group_id, display_order
+        actual_qty, issue_sloc_id, uom_code, movement_type_code, has_alternate, material_group_id, display_order,
+        approved_status, ap_approved_qty, variance_qty
       `)
       .eq("packing_order_id", id)
       .order("line_type")
@@ -1787,6 +1788,30 @@ export async function linkFoHandler(req: Request, ctx: ProdHandlerContext): Prom
   }
 }
 
+// §83.4.1 addendum (2026-07-21): PM-line AP Reco. Mirrors the exact rule the
+// frontend's computeRowValues() already applies for Process PO RM/INT lines
+// (ProductionPOVerifyPage.jsx / ProductionPOFinalPage.jsx) — NOT the older,
+// stale feasibility-doc table ("No→0, Yes→Std"), which the live code
+// contradicts. Recomputed server-side, never trusted from the client.
+// A brand-new ad-hoc PM line (added at Final) has standardQty=0, so it can
+// never auto-match — the caller must always pick an Approved status for it.
+function computePmApprovalFields(
+  standardQty: number,
+  actualQty: number,
+  approvedInput: string | null,
+  apApprovedInput: number | null,
+): { approved: string; apApproved: number; variance: number } {
+  const autoYes = Math.abs(actualQty - standardQty) < 0.0001;
+  if (autoYes) return { approved: "YES", apApproved: actualQty, variance: 0 };
+  const approved = toUpperTrimmedString(approvedInput ?? "") || "YES";
+  if (approved === "NO") return { approved, apApproved: standardQty, variance: actualQty - standardQty };
+  if (approved === "PARTIAL") {
+    const apApproved = apApprovedInput ?? 0;
+    return { approved, apApproved, variance: actualQty - apApproved };
+  }
+  return { approved: "YES", apApproved: actualQty, variance: 0 };
+}
+
 // POST /api/production/packing-orders/:id/finalize
 // Enter actual qty, post PM consumption (P261).
 export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -1806,21 +1831,89 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     const requestedActualQtyKg = parsePositiveNumber(body.actual_qty_kg);
     const requestedSfgBatchNumber = toTrimmedString(body.sfg_batch_number);
 
-    // Update actual_qty on each line
-    const lineUpdates = Array.isArray(body.lines) ? body.lines : [];
-    for (const lu of lineUpdates as JsonRecord[]) {
+    // §83.4.1 addendum (2026-07-21): PM lines only get Approved/AP-Approved/
+    // Variance (mirrors Process PO's computeRowValues rule, recomputed
+    // server-side, never trusted from the client) — SFG/FG never deviate in
+    // a way requiring approval. A brand-new ad-hoc PM line (no id, extra
+    // consumable not in the Pack BOM) is inserted here too; its Std is 0, so
+    // it can never auto-match and the caller must always supply an approved
+    // status for it.
+    const { data: existingLineRows, error: existingLineErr } = await serviceRoleClient
+      .schema("erp_production").from("packing_order_line")
+      .select("id, line_type, material_id, total_qty, has_alternate, display_order")
+      .eq("packing_order_id", id);
+    if (existingLineErr) {
+      console.error("[packing_order.finalizePackingOrder] existing line query failed:", JSON.stringify(existingLineErr));
+      throw new Error("PROD_PACK_FINALIZE_FAILED");
+    }
+    const existingLineList = (existingLineRows ?? []) as JsonRecord[];
+    const existingLineMap = new Map(existingLineList.map((l) => [String(l.id), l]));
+    let nextDisplayOrder = existingLineList.reduce((max, l) => Math.max(max, Number(l.display_order ?? 0)), 0) + 1;
+
+    const lineUpdates = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    const pmLineIdsForReco: string[] = [];
+    for (const lu of lineUpdates) {
       const lineId = toTrimmedString(lu.id);
+      const actualQty = parsePositiveNumber(lu.actual_qty) ?? 0;
+
       if (lineId) {
+        const existing = existingLineMap.get(lineId);
+        if (!existing) continue;
+        const patch: JsonRecord = { actual_qty: actualQty };
+        if (String(existing.line_type ?? "") === "PM") {
+          if (Object.prototype.hasOwnProperty.call(lu, "actual_material_id")) {
+            const alt = toTrimmedString(lu.actual_material_id) || null;
+            if (alt && existing.has_alternate !== true) {
+              return packErr(req, ctx, "PROD_PACK_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id requires a registered alternate on this line");
+            }
+            patch.actual_material_id = alt;
+          }
+          const standardQty = Number(existing.total_qty ?? 0);
+          const fields = computePmApprovalFields(
+            standardQty, actualQty, toTrimmedString(lu.approved_status) || null, parsePositiveNumber(lu.ap_approved_qty),
+          );
+          patch.approved_status = fields.approved;
+          patch.ap_approved_qty = fields.apApproved;
+          patch.variance_qty = fields.variance;
+          pmLineIdsForReco.push(lineId);
+        }
         await serviceRoleClient.schema("erp_production").from("packing_order_line")
-          .update({ actual_qty: parsePositiveNumber(lu.actual_qty) ?? 0 })
-          .eq("id", lineId).eq("packing_order_id", id);
+          .update(patch).eq("id", lineId).eq("packing_order_id", id);
+        continue;
       }
+
+      // Brand-new ad-hoc PM line.
+      const materialId = toTrimmedString(lu.material_id);
+      if (!materialId || actualQty <= 0) continue;
+      const newMaterialMap = await getMaterialMapByIds(
+        [materialId], "[packing_order.finalizePackingOrder]", "PROD_PACK_FINALIZE_FAILED", "id, base_uom_code",
+      );
+      const fields = computePmApprovalFields(
+        0, actualQty, toTrimmedString(lu.approved_status) || null, parsePositiveNumber(lu.ap_approved_qty),
+      );
+      const { data: inserted, error: insertErr } = await serviceRoleClient
+        .schema("erp_production").from("packing_order_line")
+        .insert({
+          packing_order_id: id, line_type: "PM", material_id: materialId,
+          qty_per_pack: 0, total_qty: 0, actual_qty: actualQty,
+          issue_sloc_id: toTrimmedString(lu.issue_sloc_id) || null,
+          display_order: nextDisplayOrder, movement_type_code: "P261",
+          uom_code: (newMaterialMap.get(materialId)?.base_uom_code as string | undefined) ?? "KG",
+          approved_status: fields.approved, ap_approved_qty: fields.apApproved, variance_qty: fields.variance,
+        })
+        .select("id").single();
+      if (insertErr || !inserted) {
+        console.error("[packing_order.finalizePackingOrder] new PM line insert failed:", JSON.stringify(insertErr));
+        throw new Error("PROD_PACK_FINALIZE_FAILED");
+      }
+      nextDisplayOrder += 1;
+      pmLineIdsForReco.push(String((inserted as JsonRecord).id));
     }
 
     const { data: stockLines, error: lineErr } = await serviceRoleClient
       .schema("erp_production").from("packing_order_line")
       .select(`
-        id, line_type, material_id, actual_material_id, batch_number, actual_qty, total_qty, issue_sloc_id, uom_code, movement_type_code, stock_ledger_id
+        id, line_type, material_id, actual_material_id, batch_number, actual_qty, total_qty, issue_sloc_id, uom_code, movement_type_code, stock_ledger_id, approved_status, ap_approved_qty, variance_qty
       `)
       .eq("packing_order_id", id);
     if (lineErr) {
@@ -2031,6 +2124,55 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       .update({ status: "FINAL", actual_qty_kg: actualQtyKg, total_qty_kg: actualQtyKg, finalized_at: now, finalized_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id })
       .eq("id", id);
 
+    // §83.4.1 addendum: commit the PM Reco/Costing layer, one row per PM line
+    // (every PM line, not just deviated ones — mirrors Process PO Verify's
+    // recoRows.map() over every line). Written only after Final's postings
+    // above have all succeeded.
+    const pmLinesForReco = lineRows.filter((line) => String(line.line_type ?? "") === "PM");
+    if (pmLinesForReco.length > 0) {
+      const recoDoc = await generateRecoDocNumber(String(poData.company_id));
+      const recoRows = pmLinesForReco.map((line) => {
+        const standardQty = Number(line.total_qty ?? 0);
+        const actualQty = Number(line.actual_qty ?? line.total_qty ?? 0);
+        const fields = computePmApprovalFields(
+          standardQty, actualQty,
+          toTrimmedString(line.approved_status) || null,
+          line.ap_approved_qty != null ? Number(line.ap_approved_qty) : null,
+        );
+        return {
+          company_id: poData.company_id,
+          po_number: poData.po_number,
+          sku_material_id: poData.material_id,
+          batch_number: effectiveSfgBatchNumber || toTrimmedString(poData.batch_number) || null,
+          po_type: poData.po_type,
+          finalized_at: now,
+          packing_order_id: id,
+          packing_order_line_id: line.id,
+          material_id: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
+          formulation_material_id: line.material_id ?? null,
+          standard_qty: standardQty,
+          actual_qty: actualQty,
+          approved_status: fields.approved,
+          ap_approved_qty: fields.apApproved,
+          variance_qty: fields.variance,
+          is_voided: false,
+          last_updated_at: now,
+          last_updated_by: ctx.auth_user_id,
+          reco_document_number: recoDoc.docNumber,
+          reco_document_year: recoDoc.docYear,
+          source_txn_type: "PRODUCTION",
+          reference_document_number: String(poData.po_number),
+          reference_document_type: "PACK_PO",
+        };
+      });
+      const { error: recoErr } = await serviceRoleClient
+        .schema("erp_production").from("packing_order_line_reco").insert(recoRows);
+      if (recoErr) {
+        console.error("[packing_order.finalizePackingOrder] reco insert failed:", JSON.stringify(recoErr));
+        throw new Error("PROD_PACK_RECO_WRITE_FAILED");
+      }
+    }
+
     return okResponse({ id, status: "FINAL", actual_qty_kg: actualQtyKg }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_FINALIZE_FAILED";
@@ -2184,7 +2326,7 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     const lineIds = corrections.map((line) => toTrimmedString(line.id)).filter(Boolean);
     const { data: dbLines, error: lineErr } = await serviceRoleClient
       .schema("erp_production").from("packing_order_line")
-      .select("id, line_type, material_id, actual_material_id, batch_number, actual_qty, total_qty, issue_sloc_id, stock_ledger_id")
+      .select("id, line_type, material_id, actual_material_id, batch_number, actual_qty, total_qty, issue_sloc_id, stock_ledger_id, has_alternate")
       .eq("packing_order_id", id)
       .in("id", lineIds);
     if (lineErr) throw new Error("PROD_PACK_CORRECTION_FAILED");
@@ -2245,6 +2387,11 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     // Document number, where the first insert has nothing to lock — parallel calls would
     // race and collide on (document_number, document_year, item_number). Must be sequential.
     const postings: Array<JsonRecord | null> = [];
+    // §83.4.1 addendum: PM-line deltas get their own Reco/Costing row (§106 Phase 3
+    // append pattern — matches PR19's credit rows, never edits/voids the PRODUCTION
+    // row from Final). A correction delta has no Std of its own (it IS the deviation),
+    // so approval is always mandatory here, never auto-YES.
+    const pmRecoRows: JsonRecord[] = [];
     for (const correction of corrections) {
       const line = lineMap.get(toTrimmedString(correction.id));
       if (!line) throw new Error("PROD_PACK_LINE_NOT_FOUND");
@@ -2252,11 +2399,30 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       if (!newActual) throw new Error("PROD_PACK_CORRECTION_INVALID");
       const oldActual = Number(line.actual_qty ?? line.total_qty ?? 0);
       const delta = newActual - oldActual;
-      if (delta === 0) { postings.push(null); continue; }
       const lineType = String(line.line_type ?? "");
+
+      let effectiveMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
+      const linePatch: JsonRecord = { actual_qty: newActual };
+      if (lineType === "PM" && Object.prototype.hasOwnProperty.call(correction, "actual_material_id")) {
+        const alt = toTrimmedString(correction.actual_material_id) || null;
+        if (alt && line.has_alternate !== true) {
+          return packErr(req, ctx, "PROD_PACK_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id requires a registered alternate on this line");
+        }
+        linePatch.actual_material_id = alt;
+        effectiveMaterialId = alt || String(line.material_id ?? "");
+      }
+
+      if (delta === 0) {
+        if (linePatch.actual_material_id !== undefined) {
+          await serviceRoleClient.schema("erp_production").from("packing_order_line")
+            .update(linePatch).eq("id", line.id as string);
+        }
+        postings.push(null);
+        continue;
+      }
+
       const slocId = (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string | null;
       if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
-      const effectiveMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
       const material = materialMap.get(effectiveMaterialId) ?? {};
       const baseUom = (material.base_uom_code ?? "KG") as string;
       const isIncrease = delta > 0;
@@ -2297,9 +2463,53 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
         referenceDocumentId: String(poData.id),
       });
       await serviceRoleClient.schema("erp_production").from("packing_order_line")
-        .update({ actual_qty: newActual })
-        .eq("id", line.id as string);
+        .update(linePatch).eq("id", line.id as string);
       postings.push({ line_id: line.id, movement_type_code: movementTypeCode, stock_ledger_id: posting.stock_ledger_id });
+
+      if (lineType === "PM") {
+        const approvedInput = toTrimmedString(correction.approved_status) || null;
+        const apApprovedInput = parsePositiveNumber(correction.ap_approved_qty);
+        const fields = computePmApprovalFields(0, delta, approvedInput, apApprovedInput);
+        pmRecoRows.push({
+          company_id: poData.company_id,
+          po_number: poData.po_number,
+          sku_material_id: poData.material_id,
+          batch_number: toTrimmedString(poData.batch_number) || null,
+          po_type: poData.po_type,
+          finalized_at: null,
+          packing_order_id: id,
+          packing_order_line_id: line.id,
+          material_id: effectiveMaterialId,
+          formulation_material_id: line.material_id ?? null,
+          standard_qty: 0,
+          actual_qty: delta,
+          approved_status: fields.approved,
+          ap_approved_qty: fields.apApproved,
+          variance_qty: fields.variance,
+          is_voided: false,
+          last_updated_at: new Date().toISOString(),
+          last_updated_by: ctx.auth_user_id,
+          reco_document_number: null,
+          reco_document_year: "",
+          source_txn_type: "COR6_CORRECTION",
+          reference_document_number: String(poData.po_number),
+          reference_document_type: "PACK_PO",
+        });
+      }
+    }
+
+    if (pmRecoRows.length > 0) {
+      const recoDoc = await generateRecoDocNumber(String(poData.company_id));
+      for (const row of pmRecoRows) {
+        row.reco_document_number = recoDoc.docNumber;
+        row.reco_document_year = recoDoc.docYear;
+      }
+      const { error: recoErr } = await serviceRoleClient
+        .schema("erp_production").from("packing_order_line_reco").insert(pmRecoRows);
+      if (recoErr) {
+        console.error("[packing_order.correctPackingOrder] reco insert failed:", JSON.stringify(recoErr));
+        throw new Error("PROD_PACK_RECO_WRITE_FAILED");
+      }
     }
 
     return okResponse({ id, corrections: postings.filter(Boolean) }, ctx.request_id, req);

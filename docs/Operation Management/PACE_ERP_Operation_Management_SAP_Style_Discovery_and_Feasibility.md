@@ -8696,6 +8696,8 @@ PO Type = PMTO / PHPS / PMTS / PTEST triggers Packing PO behavior.
 | P261 | Each PM line (actual qty) | pm_sloc → consumed |
 | P101 | FG (actual output qty) | → F003 |
 
+> **⚠️ Correction (2026-07-21) — this 2026-07-05 table was never implemented and is superseded by §83.4.1-addendum below.** The Gate-27.19 build (`finalizePackingOrderHandler`/`correctPackingOrderHandler`) shipped Actual Qty only — no AP-Approved concept existed anywhere on `packing_order_line` until this session. The "Yes→Std, No→0" rule above also **contradicts** the live, already-tested rule Process PO's Verify/Final pages actually run (`computeRowValues()`): No→AP Approved=Std (deviation stays PACE's own cost), Partial→manual, Yes(override)→AP Approved=Actual (fully billable despite the deviation). §83.4.1-addendum implements that live rule, PM-lines-only (SFG/Output never get an approval workflow — output is always accepted as actual), plus a new `packing_order_line_reco` table mirroring `process_order_line_reco`.
+
 ---
 
 ##### PR12 — COR6 Correction Mode (Packing PO)
@@ -11239,6 +11241,22 @@ Procurement → fills tracking details retroactively
 - Procurement enters LR in STO → tracker auto-updates
 - Tracker entry → STO auto-updates
 - Single source — enter anywhere, syncs everywhere
+
+**GRN → CSN sync-back — exact field mapping, IMPORT vs DOMESTIC (LOCKED — 2026-07-21, corrects a real gap found this session):**
+
+GRN's post-flow form (Stores) captures Transporter, LR number/date, BL number/date, and BOE number/date together, on every GRN regardless of vendor type — but the sync-back into `consignment_note` was found to only copy a subset, so Stores' entry silently never reached the CSN Tracker for two fields. Corrected mapping (both directions apply automatically at GRN post, no manual Tracker entry needed):
+
+| CSN Type | GRN field (Stores enters) | CSN Tracker field it syncs to |
+|---|---|---|
+| Both | `transporter_id` | IMPORT → `transporter_id`; DOMESTIC → `domestic_transporter_id` |
+| DOMESTIC | `lr_number` / `lr_date` | `lr_number` / `lr_date` (unchanged — already correct) |
+| IMPORT | `lr_number` / `lr_date` | `lr_number_port_to_plant` / `post_clearance_lr_date` — **was previously not synced at all** |
+| IMPORT | `bl_number` / `bl_date` | `bl_number` / `bl_date` (unchanged — already correct) |
+| IMPORT | `boe_number` / `boe_date` | `boe_number` / `boe_date` — **was previously not synced at all** |
+
+Rationale for the IMPORT LR mapping: GRN only has one generic LR number/date pair (Stores doesn't distinguish Import vs Domestic when filling the form) — for an IMPORT shipment that LR is physically the port-to-plant truck leg (post-customs-clearance), which CSN already models as separate columns (`lr_number_port_to_plant`, `post_clearance_lr_date`) distinct from Domestic's `lr_number`/`lr_date`. No new GRN field was needed, only the sync-back target.
+
+Fix applied in `grn.handlers.ts`'s CSN sync-back block (the same `if (csnId) { ... }` guard already used for the existing bl_number/bl_date/transporter_id sync) — purely additive, no schema change.
 
 ---
 
@@ -15010,3 +15028,62 @@ num_packs বদলে reservation বাসি থেকে গেলে বা
 
 **Frontend PR10 Packing tab:** Num Packs + Fill Qty input (bomRequired অনুযায়ী fill দেখাবে/লুকাবে),
 PM line sloc + alternate, আর **Cancel button + reason modal**।
+
+---
+
+### §83.4.1-addendum — Packing PO PM-line AP Reco (LOCKED — 2026-07-21)
+
+**পটভূমি:** Packing PO-র COR6 correction (এবং normal Final)-এ কখনো কোনো AP Approved ধারণা
+ছিল না — শুধু `actual_qty` (physical layer) store হতো। business owner প্রশ্ন তুললেন: alternate
+PM material use হলে বা Final-এ নতুন PM line add হলে, পরে Reco হওয়ার সময় AP Approved qty
+আসবে কোথা থেকে? সরাসরি কোড check করে confirm হলো — কিছুই ছিল না। Process PO-র নিজের
+`process_order_line_reco` (§104 lock, 2026-07-11) সম্পূর্ণভাবে Process-PO-scoped, কখনো
+Packing PO-র জন্য implement হয়নি। একই সময় দেখা গেল, উপরের §PR11 Final section-এর 2026-07-05
+draft table ("Yes→Std, No→0") কখনো code-এ যায়নি, আর Process PO-র **আসলে চলমান** rule
+(`computeRowValues()`, Verify+Final দুই পেজেই identical) তার **উল্টো** — সেই ভুল-ধরে-রাখা draft
+বাদ দিয়ে **live code-ভিত্তিক** rule-টাই এখানে mirror করা হলো।
+
+**Scope — PM lines only:** SFG আর FG(Output) line কখনো approval দরকার এমন deviate করে না
+(output সবসময় actual হিসেবেই মানা হয়) — তাই এই mechanism শুধু PM line-এ।
+
+**Approved rule (live code থেকে mirror করা, ভুল draft table থেকে না):**
+- `autoYes` যখন Actual == Std (±0.0001) — Approved auto-লক "YES", AP Approved = Actual, Variance = 0
+- ভিন্ন হলে ইউজার বেছে নেয়:
+  - **NO** → AP Approved = Std (deviation টা PACE-এর নিজের cost, APL বিল হবে না)
+  - **PARTIAL** → AP Approved = manual entry, Variance = Actual − AP Approved
+  - **YES** (override করে, deviation থাকা সত্ত্বেও) → AP Approved = Actual (পুরোটাই billable)
+- একটা নতুন ad-hoc PM line (Final-এ "+ Add PM Row" দিয়ে যোগ করা, Pack BOM-এ ছিল না)-এর Std
+  সবসময় 0 — তাই কখনো auto-match হয় না, Approved বেছে নেওয়া বাধ্যতামূলক।
+
+**Schema (migration `20260721070000`):**
+- `packing_order_line`-এ ৩টা নতুন column: `approved_status`, `ap_approved_qty`, `variance_qty`
+  (nullable, PM-only — SFG/FG row-এ ব্যবহার হয় না)
+- নতুন table `erp_production.packing_order_line_reco` — `process_order_line_reco`-র হুবহু
+  mirror (append-only, `is_voided`, `reco_document_number`+`reco_document_year`), কিন্তু
+  PM-only আর Packing PO-scoped column (`sku_material_id`, `packing_order_id`,
+  `packing_order_line_id`)।
+
+**লেখা কখন হয় (SUM()-reconciled, PR19-র credit-row pattern-এর সাথে symmetric):**
+- **Final** → প্রতিটা PM line-এর জন্য একটা row, `source_txn_type='PRODUCTION'` (Process PO
+  Verify-র মতোই — deviation না থাকলেও সব line-এর row যায়, Process PO-র `lines.map()`
+  ঠিক যেমন করে)
+- **COR6 correction** → পুরনো row কখনো edit/void হয় না (Process PO-র কোনো COR6 নেই বলে
+  mirror করার কিছু নেই সেখানে; এর বদলে PR19 partial reversal-এর negative-credit-row
+  pattern mirror করা হলো) — প্রতিটা correction delta-র জন্য একটা **নতুন** row append হয়
+  (`source_txn_type='COR6_CORRECTION'`, `actual_qty=delta` — cumulative না)। তাই সবসময়
+  SUM(non-voided rows) = সঠিক cumulative Actual/AP-Approved/Variance।
+
+**Costing অপরিবর্তিত থাকে:** §104-3-এর FG cost formula ((SFG value + ΣPM value) ÷ FG qty)
+সবসময় physical Actual দিয়েই চলে — AP Approved শুধু আলাদা Reco/billing layer, stock/costing-এ
+কখনো ছোঁয় না (§104-এর already-locked two-layer principle অনুযায়ী)।
+
+**Frontend (PR11 Final tab):** PM line-এ এখন Actual Qty (editable, আগে ছিলই না —
+আসলে total_qty-তেই লক ছিল), Actual Material picker (alternate থাকলে), Approved
+dropdown, AP Approved, Variance — সব Process PO-র Input table-এর মতোই। "+ Add PM Row"
+বাটন দিয়ে নতুন ad-hoc line (material + storage location + qty + Approved)। COR6
+correction mode-এও একই column-গুলো, delta-র উপর প্রযোজ্য।
+
+**Files:** `supabase/functions/api/_core/production/packing_order.handlers.ts`
+(`computePmApprovalFields`, `finalizePackingOrderHandler`, `correctPackingOrderHandler`),
+`frontend/src/pages/dashboard/production/ProductionPOFinalPage.jsx`
+(`computePmValues`, `PackingPoFinalTab`), migration `20260721070000_packing_order_line_reco.sql`।

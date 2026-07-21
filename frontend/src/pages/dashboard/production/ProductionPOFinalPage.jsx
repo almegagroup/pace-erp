@@ -24,6 +24,7 @@ import {
 } from "./prodApi.js";
 
 const FINAL_TABS = ["Process PO", "Packing PO"];
+const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }));
 
 function materialLabelSimple(material) {
   return [material?.pace_code || material?.external_code, material?.material_name].filter(Boolean).join(" - ");
@@ -48,9 +49,42 @@ function PACKING_ERR(error) {
     PROD_PACK_SFG_BATCH_SHORTAGE: "Selected SFG batch does not have enough unrestricted stock.",
     PROD_PACK_STATUS_INVALID: "Action not valid for current status.",
     PROD_PACK_CORRECTION_STATUS_INVALID: "Packing PO must be FINAL to correct.",
+    PROD_PACK_SUBSTITUTE_NOT_REGISTERED: "Actual Material must be a registered alternate for that line.",
   };
   const code = error?.code || error?.message || "";
   return map[code] ?? error?.message ?? "Request failed.";
+}
+
+// §83.4.1 addendum (2026-07-21): PM-line Approved/AP-Approved/Variance rule —
+// mirrors computeRowValues() in ProductionPOVerifyPage.jsx / the Process PO
+// tab below, exactly (the live code, not the older stale doc table). Output
+// (FG) never deviates in a way requiring approval, so this only applies to PM.
+function computePmValues(standardQty, actualQty, approvedStatus, apApprovedQtyInput) {
+  const autoYes = Math.abs(actualQty - standardQty) < 0.0001;
+  const approved = autoYes ? "YES" : (approvedStatus || "YES");
+  let apApproved = actualQty;
+  let variance = 0;
+  if (!autoYes) {
+    if (approved === "NO") {
+      apApproved = standardQty;
+      variance = actualQty - standardQty;
+    } else if (approved === "PARTIAL") {
+      apApproved = Number(apApprovedQtyInput || 0);
+      variance = actualQty - apApproved;
+    } else {
+      apApproved = actualQty;
+    }
+  }
+  return { autoYes, approved, apApproved, variance };
+}
+
+function buildPmAlternateOptions(line) {
+  const options = [{ value: "", label: "(same as formulation)" }];
+  for (const material of line.allowed_alternate_materials ?? []) {
+    if (!material?.id) continue;
+    options.push({ value: material.id, label: materialLabelSimple(material) || "Registered alternate" });
+  }
+  return options;
 }
 
 function PackingPoFinalTab() {
@@ -64,6 +98,14 @@ function PackingPoFinalTab() {
   const [saving, setSaving] = useState(false);
   const [sfgBatchNumber, setSfgBatchNumber] = useState("");
   const [correctionQty, setCorrectionQty] = useState({});
+  // §83.4.1 addendum: PM-line Actual Qty / Actual Material / Approved / AP
+  // Approved overrides, keyed by line id — used both at STANDARD (Final) and
+  // at FINAL (COR6 correction); the correction delta reuses the same maps.
+  const [pmActualQty, setPmActualQty] = useState({});
+  const [pmMatOverrides, setPmMatOverrides] = useState({});
+  const [pmApproved, setPmApproved] = useState({});
+  const [pmApApproved, setPmApApproved] = useState({});
+  const [newPmRows, setNewPmRows] = useState([]);
 
   const companiesQ = useCompaniesForOmQuery();
   const companyOptions = useMemo(
@@ -119,10 +161,16 @@ function PackingPoFinalTab() {
   useEffect(() => {
     setSfgBatchNumber("");
     setCorrectionQty({});
+    setPmActualQty({});
+    setPmMatOverrides({});
+    setPmApproved({});
+    setPmApApproved({});
+    setNewPmRows([]);
   }, [po?.id, po?.status]);
 
   const isBatchBlind = po?.po_type === "PMTS" || po?.po_type === "PTEST";
   const sfgLine = (po?.lines ?? []).find((line) => line.line_type === "SFG") ?? null;
+  const pmLines = (po?.lines ?? []).filter((line) => line.line_type === "PM");
   const effectiveSfgBatchNumber = sfgBatchNumber || po?.batch_number || sfgLine?.batch_number || "";
   const sfgBatchesQ = useQuery({
     queryKey: ["packing-final-sfg-batches", po?.id, po?.company_id, sfgLine?.material_id, sfgLine?.storage_location?.id],
@@ -138,6 +186,29 @@ function PackingPoFinalTab() {
   const selectedSfgBatch = (sfgBatchesQ.data ?? []).find((batch) => batch.batch_number === effectiveSfgBatchNumber) ?? null;
   const sfgRequiredQty = Number(sfgLine?.total_qty ?? 0);
   const sfgShortage = selectedSfgBatch ? Math.max(0, sfgRequiredQty - Number(selectedSfgBatch.available_qty ?? 0)) : 0;
+
+  // "+ Add PM Row" material/storage-location pickers — only queried once a PO
+  // is loaded and still STANDARD (an ad-hoc extra consumable can only be
+  // added at Final, not at COR6 correction time).
+  const pmMaterialQ = useMaterialOptionsQuery(
+    { status: "ACTIVE", material_type: "PM", limit: 500 },
+    { enabled: Boolean(po?.status === "STANDARD") },
+  );
+  const pmMaterialOptions = useMemo(
+    () => (pmMaterialQ.materials ?? []).map((material) => ({ value: material.id, label: materialLabelSimple(material) || "Material" })),
+    [pmMaterialQ.materials],
+  );
+  const storageLocationQ = useStorageLocationOptionsQuery(
+    { company_id: po?.company_id || undefined },
+    { enabled: Boolean(po?.company_id) },
+  );
+  const storageLocationOptions = useMemo(
+    () => (storageLocationQ.storageLocations ?? []).map((location) => ({
+      value: location.id,
+      label: slocLabelSimple(location) || "Storage Location",
+    })),
+    [storageLocationQ.storageLocations],
+  );
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -171,6 +242,17 @@ function PackingPoFinalTab() {
     setActiveOrderId(selectedOrderId);
   }
 
+  function addPmRow() {
+    setNewPmRows((current) => [...current, {
+      key: `new-${Date.now()}-${current.length}`,
+      material_id: "", issue_sloc_id: "", actual_qty: "", approved_status: "YES", ap_approved_qty: "",
+    }]);
+  }
+
+  function updateNewPmRow(key, patch) {
+    setNewPmRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  }
+
   async function handleFinalize() {
     if (!isBatchBlind) {
       if (!effectiveSfgBatchNumber) {
@@ -195,7 +277,39 @@ function PackingPoFinalTab() {
     if (!confirmed) return;
     setSaving(true);
     try {
-      await finalizePackingOrder(po.id, isBatchBlind ? {} : { sfg_batch_number: effectiveSfgBatchNumber });
+      // Only PM lines ever need to be sent — SFG/FG output is never edited
+      // here (§83.4.1: output is always accepted as actual).
+      const pmLinePayload = pmLines.map((line) => {
+        const standardQty = Number(line.total_qty ?? 0);
+        const actualQty = pmActualQty[line.id] !== undefined && pmActualQty[line.id] !== ""
+          ? Number(pmActualQty[line.id]) : standardQty;
+        const values = computePmValues(standardQty, actualQty, pmApproved[line.id], pmApApproved[line.id]);
+        const payload = { id: line.id, actual_qty: actualQty };
+        if (!values.autoYes) {
+          payload.approved_status = values.approved;
+          if (values.approved === "PARTIAL") payload.ap_approved_qty = values.apApproved;
+        }
+        if (Object.prototype.hasOwnProperty.call(pmMatOverrides, line.id)) {
+          payload.actual_material_id = pmMatOverrides[line.id] || null;
+        }
+        return payload;
+      });
+      const newLinePayload = newPmRows
+        .filter((row) => row.material_id && Number(row.actual_qty) > 0)
+        .map((row) => {
+          const actualQty = Number(row.actual_qty);
+          const values = computePmValues(0, actualQty, row.approved_status, row.ap_approved_qty);
+          const payload = {
+            material_id: row.material_id, issue_sloc_id: row.issue_sloc_id || undefined,
+            actual_qty: actualQty, approved_status: values.approved,
+          };
+          if (values.approved === "PARTIAL") payload.ap_approved_qty = values.apApproved;
+          return payload;
+        });
+      await finalizePackingOrder(po.id, {
+        ...(isBatchBlind ? {} : { sfg_batch_number: effectiveSfgBatchNumber }),
+        lines: [...pmLinePayload, ...newLinePayload],
+      });
       toast("Packing PO finalized.");
       qc.invalidateQueries({ queryKey: ["pack-orders"] });
       qc.invalidateQueries({ queryKey: ["packing-final-detail", po.id] });
@@ -210,7 +324,18 @@ function PackingPoFinalTab() {
   async function handleCorrect() {
     const lines = (po.lines ?? [])
       .filter((line) => correctionQty[line.id] !== undefined && correctionQty[line.id] !== "")
-      .map((line) => ({ id: line.id, actual_qty: Number(correctionQty[line.id]) }))
+      .map((line) => {
+        const payload = { id: line.id, actual_qty: Number(correctionQty[line.id]) };
+        if (line.line_type === "PM") {
+          if (Object.prototype.hasOwnProperty.call(pmMatOverrides, line.id)) {
+            payload.actual_material_id = pmMatOverrides[line.id] || null;
+          }
+          const approvedStatus = pmApproved[line.id] || "YES";
+          payload.approved_status = approvedStatus;
+          if (approvedStatus === "PARTIAL") payload.ap_approved_qty = Number(pmApApproved[line.id] || 0);
+        }
+        return payload;
+      })
       .filter((line) => Number.isFinite(line.actual_qty) && line.actual_qty > 0);
     if (lines.length === 0) {
       toast("Enter a new actual qty for at least one line.", "error");
@@ -228,6 +353,9 @@ function PackingPoFinalTab() {
       await correctPackingOrder(po.id, { lines });
       toast("Correction posted.");
       setCorrectionQty({});
+      setPmMatOverrides({});
+      setPmApproved({});
+      setPmApApproved({});
       qc.invalidateQueries({ queryKey: ["pack-orders"] });
       qc.invalidateQueries({ queryKey: ["packing-final-detail", po.id] });
       detailQ.refetch();
@@ -383,45 +511,237 @@ function PackingPoFinalTab() {
               ) : null}
 
               <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto">
-                <table className="w-full min-w-[900px] border-collapse text-sm">
+                <table className="w-full min-w-[1300px] border-collapse text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                       <th className="border-b px-3 py-2 text-left">Type</th>
                       <th className="border-b px-3 py-2 text-left">Material</th>
+                      <th className="border-b px-3 py-2 text-left">Actual Material</th>
                       <th className="border-b px-3 py-2 text-left">Storage Location</th>
                       <th className="border-b px-3 py-2 text-left">Batch</th>
-                      <th className="border-b px-3 py-2 text-right">Total Qty</th>
+                      <th className="border-b px-3 py-2 text-right">Std Qty</th>
+                      <th className="border-b px-3 py-2 text-right">Actual Qty</th>
+                      <th className="border-b px-3 py-2 text-left">Approved</th>
+                      <th className="border-b px-3 py-2 text-right">AP Appr</th>
+                      <th className="border-b px-3 py-2 text-right">Var</th>
                       {po.status === "FINAL" ? <th className="border-b px-3 py-2 text-right">New Actual Qty (correction)</th> : null}
                       <th className="border-b px-3 py-2 text-left">Movement</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(po.lines ?? []).map((line) => (
-                      <tr key={line.id} className="border-b border-slate-100">
-                        <td className="px-3 py-2 font-semibold">{line.line_type}</td>
-                        <td className="px-3 py-2">{materialLabelSimple(line.material)}</td>
-                        <td className="px-3 py-2">{slocLabelSimple(line.storage_location)}</td>
-                        <td className="px-3 py-2 font-mono">{line.batch_number || "--"}</td>
-                        <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.actual_qty ?? line.total_qty)}</td>
-                        {po.status === "FINAL" ? (
-                          <td className="px-3 py-2 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.001"
-                              className="w-28 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
-                              value={correctionQty[line.id] ?? ""}
-                              placeholder={qtyFmt(line.actual_qty ?? line.total_qty)}
-                              onChange={(event) => setCorrectionQty((current) => ({ ...current, [line.id]: event.target.value }))}
-                            />
+                    {(po.lines ?? []).map((line) => {
+                      const isPm = line.line_type === "PM";
+                      const standardQty = Number(line.total_qty ?? 0);
+
+                      // STANDARD (Final) view — editable Actual Qty/Material/Approved for PM.
+                      const actualQtyForFinal = pmActualQty[line.id] !== undefined && pmActualQty[line.id] !== ""
+                        ? Number(pmActualQty[line.id]) : standardQty;
+                      const finalValues = isPm
+                        ? computePmValues(standardQty, actualQtyForFinal, pmApproved[line.id], pmApApproved[line.id])
+                        : null;
+
+                      // FINAL (COR6) view — the correction input holds the NEW absolute
+                      // actual; approval applies to the delta it implies.
+                      const correctionInput = correctionQty[line.id];
+                      const hasCorrectionDelta = isPm && correctionInput !== undefined && correctionInput !== "";
+                      const correctionDelta = hasCorrectionDelta ? Number(correctionInput) - Number(line.actual_qty ?? line.total_qty ?? 0) : 0;
+                      const correctionValues = hasCorrectionDelta
+                        ? computePmValues(0, correctionDelta, pmApproved[line.id], pmApApproved[line.id])
+                        : null;
+
+                      const altOptions = isPm ? buildPmAlternateOptions(line) : [];
+                      const hasAlternates = (line.allowed_alternate_materials ?? []).length > 0;
+
+                      return (
+                        <tr key={line.id} className="border-b border-slate-100">
+                          <td className="px-3 py-2 font-semibold">{line.line_type}</td>
+                          <td className="px-3 py-2">{materialLabelSimple(line.material)}</td>
+                          <td className="px-3 py-2 min-w-[200px]">
+                            {isPm && hasAlternates ? (
+                              <ErpComboboxField
+                                value={pmMatOverrides[line.id] ?? line.actual_material_id ?? ""}
+                                onChange={(value) => setPmMatOverrides((current) => ({ ...current, [line.id]: value }))}
+                                options={altOptions}
+                                placeholder="(same as formulation)"
+                              />
+                            ) : (
+                              <span className="text-slate-400">{isPm ? "—" : ""}</span>
+                            )}
                           </td>
-                        ) : null}
-                        <td className="px-3 py-2 font-mono">{line.movement_type_code || (line.line_type === "FG" ? "P101" : "P261")}</td>
+                          <td className="px-3 py-2">{slocLabelSimple(line.storage_location)}</td>
+                          <td className="px-3 py-2 font-mono">{line.batch_number || "--"}</td>
+                          <td className="px-3 py-2 text-right font-mono">{qtyFmt(standardQty)}</td>
+
+                          {po.status === "STANDARD" ? (
+                            <>
+                              <td className="px-3 py-2 text-right">
+                                {isPm ? (
+                                  <input
+                                    type="number" min="0" step="0.001"
+                                    className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                    value={pmActualQty[line.id] ?? ""}
+                                    placeholder={qtyFmt(standardQty)}
+                                    onChange={(event) => setPmActualQty((current) => ({ ...current, [line.id]: event.target.value }))}
+                                  />
+                                ) : (
+                                  <span className="font-mono">{qtyFmt(line.actual_qty ?? line.total_qty)}</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2">
+                                {isPm && !finalValues.autoYes ? (
+                                  <ErpComboboxField
+                                    value={pmApproved[line.id] || "YES"}
+                                    onChange={(value) => setPmApproved((current) => ({ ...current, [line.id]: value }))}
+                                    options={APPROVED_OPTIONS}
+                                    hideBlank
+                                  />
+                                ) : isPm ? (
+                                  <span className="inline-flex rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">* YES</span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {isPm && finalValues.approved === "PARTIAL" && !finalValues.autoYes ? (
+                                  <input
+                                    type="number" min="0" step="0.001"
+                                    className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                    value={pmApApproved[line.id] ?? ""}
+                                    onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
+                                  />
+                                ) : isPm ? (
+                                  <span className="font-mono">{finalValues.apApproved.toFixed(3)}</span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono">{isPm ? finalValues.variance.toFixed(3) : "—"}</td>
+                            </>
+                          ) : (
+                            <>
+                              <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.actual_qty ?? line.total_qty)}</td>
+                              <td className="px-3 py-2">
+                                {hasCorrectionDelta && !correctionValues.autoYes ? (
+                                  <ErpComboboxField
+                                    value={pmApproved[line.id] || "YES"}
+                                    onChange={(value) => setPmApproved((current) => ({ ...current, [line.id]: value }))}
+                                    options={APPROVED_OPTIONS}
+                                    hideBlank
+                                  />
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {hasCorrectionDelta && correctionValues.approved === "PARTIAL" ? (
+                                  <input
+                                    type="number" min="0" step="0.001"
+                                    className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                    value={pmApApproved[line.id] ?? ""}
+                                    onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
+                                  />
+                                ) : hasCorrectionDelta ? (
+                                  <span className="font-mono">{correctionValues.apApproved.toFixed(3)}</span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono">{hasCorrectionDelta ? correctionValues.variance.toFixed(3) : "—"}</td>
+                            </>
+                          )}
+
+                          {po.status === "FINAL" ? (
+                            <td className="px-3 py-2 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.001"
+                                className="w-28 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                value={correctionQty[line.id] ?? ""}
+                                placeholder={qtyFmt(line.actual_qty ?? line.total_qty)}
+                                onChange={(event) => setCorrectionQty((current) => ({ ...current, [line.id]: event.target.value }))}
+                              />
+                            </td>
+                          ) : null}
+                          <td className="px-3 py-2 font-mono">{line.movement_type_code || (line.line_type === "FG" ? "P101" : "P261")}</td>
+                        </tr>
+                      );
+                    })}
+
+                    {po.status === "STANDARD" ? newPmRows.map((row) => (
+                      <tr key={row.key} className="border-b border-slate-100 bg-amber-50/40">
+                        <td className="px-3 py-2 font-semibold">PM<span className="ml-1 text-xs font-normal text-amber-600">(new)</span></td>
+                        <td className="px-3 py-2 min-w-[220px]" colSpan={2}>
+                          <ErpComboboxField
+                            value={row.material_id}
+                            onChange={(value) => updateNewPmRow(row.key, { material_id: value })}
+                            options={pmMaterialOptions}
+                            placeholder="-- Select PM material --"
+                            emptyStateLabel={pmMaterialQ.isLoading ? "Loading PM materials..." : "No PM materials"}
+                          />
+                        </td>
+                        <td className="px-3 py-2 min-w-[200px]">
+                          <ErpComboboxField
+                            value={row.issue_sloc_id}
+                            onChange={(value) => updateNewPmRow(row.key, { issue_sloc_id: value })}
+                            options={storageLocationOptions}
+                            placeholder="-- Select storage location --"
+                            emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                          />
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">0.000</td>
+                        <td className="px-3 py-2 text-right">
+                          <input
+                            type="number" min="0" step="0.001"
+                            className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                            value={row.actual_qty}
+                            onChange={(event) => updateNewPmRow(row.key, { actual_qty: event.target.value })}
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <ErpComboboxField
+                            value={row.approved_status}
+                            onChange={(value) => updateNewPmRow(row.key, { approved_status: value })}
+                            options={APPROVED_OPTIONS}
+                            hideBlank
+                          />
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {row.approved_status === "PARTIAL" ? (
+                            <input
+                              type="number" min="0" step="0.001"
+                              className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                              value={row.ap_approved_qty}
+                              onChange={(event) => updateNewPmRow(row.key, { ap_approved_qty: event.target.value })}
+                            />
+                          ) : (
+                            <span className="font-mono">{qtyFmt(row.approved_status === "NO" ? 0 : row.actual_qty)}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">
+                          {row.approved_status === "NO" ? qtyFmt(row.actual_qty) : (row.approved_status === "PARTIAL" ? qtyFmt(Number(row.actual_qty || 0) - Number(row.ap_approved_qty || 0)) : "0.000")}
+                        </td>
+                        <td className="px-3 py-2">P261</td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() => setNewPmRows((current) => current.filter((entry) => entry.key !== row.key))}
+                            className="text-sm font-medium text-rose-600 hover:underline"
+                          >
+                            Remove
+                          </button>
+                        </td>
                       </tr>
-                    ))}
+                    )) : null}
                   </tbody>
                 </table>
               </div>
+
+              {po.status === "STANDARD" ? (
+                <button type="button" onClick={addPmRow} className="self-start text-sm font-medium text-sky-700 hover:underline">
+                  + Add PM Row (extra consumable)
+                </button>
+              ) : null}
 
               <div className="flex justify-end gap-2">
                 {po.status === "STANDARD" ? (
