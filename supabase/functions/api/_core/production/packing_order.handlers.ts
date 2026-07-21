@@ -1581,12 +1581,28 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
 
     // ── apply: lines, then header, then reservations ─────────────────────────
     // INDEPENDENT (§8B): each line update touches a different row.
-    await Promise.all(lineUpdates.map((u) => {
-      const patch: JsonRecord = { qty_per_pack: u.qty_per_pack, total_qty: u.total_qty, last_updated_at: now, last_updated_by: ctx.auth_user_id };
+    //
+    // packing_order_line has NO last_updated_at/last_updated_by columns (unlike
+    // packing_order and reservation_document) — confirmed against live schema.
+    // Including them here previously made every one of these updates fail with
+    // 42703, silently: the Supabase client resolves {data, error} rather than
+    // throwing, and this call ignored .error, so Promise.all resolved "clean"
+    // while every line update actually failed. Header + reservations (checked
+    // below) still succeeded, so the PO looked edited while its lines were
+    // untouched — exactly the mismatch reported (num_packs changed, line
+    // total_qty did not). Fixed by dropping the nonexistent columns AND
+    // checking .error on every result, so a schema mismatch fails loudly.
+    const lineUpdateResults = await Promise.all(lineUpdates.map((u) => {
+      const patch: JsonRecord = { qty_per_pack: u.qty_per_pack, total_qty: u.total_qty };
       if (u.issue_sloc_id) patch.issue_sloc_id = u.issue_sloc_id;
       if (Object.prototype.hasOwnProperty.call(u, "actual_material_id")) patch.actual_material_id = u.actual_material_id;
       return serviceRoleClient.schema("erp_production").from("packing_order_line").update(patch).eq("id", u.id);
     }));
+    const lineUpdateErr = lineUpdateResults.find((r) => r.error)?.error;
+    if (lineUpdateErr) {
+      console.error("[packing_order.editPackingOrder] line update failed:", JSON.stringify(lineUpdateErr));
+      throw new Error("PROD_PACK_EDIT_FAILED");
+    }
 
     const sfgLine = lineUpdates.find((u) => String(lines.find((l) => String(l.id) === u.id)?.line_type) === "SFG");
     const headerQty = sfgLine ? sfgLine.total_qty : Number((oldFill * newNumPacks).toFixed(4));
