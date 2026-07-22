@@ -829,15 +829,32 @@ export async function fgStockBreakdownHandler(req: Request, ctx: ProdHandlerCont
       : { data: [], error: null };
     if (poErr) throw new Error("PROD_FG_STOCK_BREAKDOWN_FAILED");
     const poMap = new Map(((poRows ?? []) as JsonRecord[]).map((po) => [String(po.po_number), po]));
+
+    // §104.9: PR23 "Old Packing PO" (opening genealogy) never posts a P101 — its real FG stock
+    // came from IN05's own P561, and its lines carry stock_ledger_id=NULL by design. So it can
+    // never be found via the ledger->stock_document->po_number chain above, and would otherwise
+    // silently vanish from this report. Separately fetch every non-REVERSED Packing PO for this
+    // material+company and fold in any not already covered by a real P101 posting, using the
+    // header's own batch_number/actual_qty_kg (all it has, since it was never really posted).
+    const { data: allPoRows, error: allPoErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("packing_order")
+      .select("po_number, po_type, source_po_type, num_packs, fill_qty_per_pack, actual_qty_kg, batch_number, finalized_at")
+      .eq("company_id", companyId)
+      .eq("material_id", materialId)
+      .neq("status", "REVERSED");
+    if (allPoErr) throw new Error("PROD_FG_STOCK_BREAKDOWN_FAILED");
     const [materialMap, companyMap] = await lookupsPromise;
 
     const batchMap = new Map<string, JsonRecord[]>();
+    const coveredPoNumbers = new Set<string>();
     for (const ledger of ledgers) {
       const doc = docMap.get(String(ledger.stock_document_id ?? ""));
       // Same resolution as the lookup above — both sides must agree, or every row
       // silently drops out on the `if (!po) continue` below.
       const po = poMap.get(resolveLotRef(doc as JsonRecord | undefined));
       if (!po) continue;
+      coveredPoNumbers.add(String(po.po_number));
       const batchNumber = toTrimmedString(ledger.batch_number) || "UNBATCHED";
       if (!batchMap.has(batchNumber)) batchMap.set(batchNumber, []);
       batchMap.get(batchNumber)?.push({
@@ -848,6 +865,22 @@ export async function fgStockBreakdownHandler(req: Request, ctx: ProdHandlerCont
         fill_qty_per_pack: po.fill_qty_per_pack,
         quantity: ledger.quantity,
         posting_date: doc?.posting_date ?? null,
+      });
+    }
+    for (const po of (allPoRows ?? []) as JsonRecord[]) {
+      const poNumber = String(po.po_number ?? "");
+      if (!poNumber || coveredPoNumbers.has(poNumber)) continue;
+      const batchNumber = toTrimmedString(po.batch_number) || "UNBATCHED";
+      if (!batchMap.has(batchNumber)) batchMap.set(batchNumber, []);
+      batchMap.get(batchNumber)?.push({
+        po_number: po.po_number,
+        po_type: po.po_type,
+        source_po_type: po.source_po_type,
+        num_packs: po.num_packs,
+        fill_qty_per_pack: po.fill_qty_per_pack,
+        quantity: po.actual_qty_kg,
+        posting_date: po.finalized_at ?? null,
+        is_opening_origin: true,
       });
     }
 
