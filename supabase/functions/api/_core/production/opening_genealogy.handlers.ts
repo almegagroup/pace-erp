@@ -64,6 +64,26 @@ async function sumOpeningQty(companyId: string, materialId: string, batchNumber:
   return ((data ?? []) as JsonRecord[]).reduce((s, r) => s + Number(r.quantity ?? 0), 0);
 }
 
+// §83.14 "balance barrel": one SFG/FG opening batch can legitimately split across several
+// Packing POs at different fill sizes (e.g. 23 barrels @230kg + 1 @200kg from the same batch),
+// exactly like live production already allows. Sums actual_qty_kg from every NON-REVERSED
+// synthetic Packing PO already created for this (company, SKU, batch) — the running total
+// already allocated, so a new PR23 entry only needs to fit in what's left.
+async function sumAllocatedPackingQty(companyId: string, skuMaterialId: string, batchNumber: string): Promise<number> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production").from("packing_order")
+    .select("actual_qty_kg")
+    .eq("company_id", companyId)
+    .eq("material_id", skuMaterialId)
+    .eq("batch_number", batchNumber)
+    .neq("status", "REVERSED");
+  if (error) {
+    console.error("[opening_genealogy.sumAllocatedPackingQty] query failed:", JSON.stringify(error));
+    throw new Error("PROD_OLD_OPENING_LOOKUP_FAILED");
+  }
+  return ((data ?? []) as JsonRecord[]).reduce((s, r) => s + Number(r.actual_qty_kg ?? 0), 0);
+}
+
 // Does ANY posted opening (P561 IN) line exist for this (company, batch)? Anti-typo guard.
 async function openingBatchExists(companyId: string, batchNumber: string): Promise<boolean> {
   const { count, error } = await serviceRoleClient
@@ -337,23 +357,21 @@ export async function createOldPackingPoHandler(req: Request, ctx: ProdHandlerCo
       return genErr(req, ctx, "PROD_OLD_PACKING_PO_PARENT_NOT_OPENING", 422, "Parent Process PO is not an opening-genealogy order");
     }
 
-    // Duplicate guard — one synthetic Packing PO per (company, SKU, batch).
-    const { data: dup } = await serviceRoleClient
-      .schema("erp_production").from("packing_order")
-      .select("id").eq("company_id", companyId).eq("material_id", skuMaterialId).eq("batch_number", batchNumber).maybeSingle();
-    if (dup) {
-      return genErr(req, ctx, "PROD_OLD_PACKING_PO_BATCH_EXISTS", 409, `A Packing PO already exists for SKU + batch ${batchNumber}`);
-    }
-
     // §104.9.1 reconciliation: the FG (SKU) opening line must exist for this batch and reconcile.
     if (!(await openingBatchExists(companyId, batchNumber))) {
       return genErr(req, ctx, "PROD_OLD_OPENING_BATCH_NOT_FOUND", 422,
         `Batch ${batchNumber} has no posted Opening Stock (IN05) for this company.`);
     }
+    // §83.14 "balance barrel": several Packing POs (different fill sizes) can legitimately
+    // share one SFG/FG opening batch — so this checks the RUNNING remainder, not a strict
+    // one-shot equality. A duplicate/typo re-entry of the same qty is still caught because
+    // it would push the running total past the IN05 total.
     const openingFgQty = await sumOpeningQty(companyId, skuMaterialId, batchNumber);
-    if (openingFgQty > 0 && Math.abs(openingFgQty - actualQtyKg) > QTY_TOL) {
+    const alreadyAllocatedQty = await sumAllocatedPackingQty(companyId, skuMaterialId, batchNumber);
+    const remainingFgQty = openingFgQty - alreadyAllocatedQty;
+    if (openingFgQty > 0 && actualQtyKg > remainingFgQty + QTY_TOL) {
       return genErr(req, ctx, "PROD_OLD_OPENING_QTY_MISMATCH", 422,
-        `Actual Qty KG (${actualQtyKg}) does not match the opening FG stock for batch ${batchNumber} (${openingFgQty}).`);
+        `Actual Qty KG (${actualQtyKg}) exceeds the remaining opening FG stock for batch ${batchNumber} (${remainingFgQty} left of ${openingFgQty}).`);
     }
 
     const segmentCode = toUpperTrimmedString(parent.segment_code as string) || null;
