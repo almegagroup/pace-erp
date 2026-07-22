@@ -59,6 +59,7 @@ export default function PartialBatchReversalPage() {
 
   // Page 3
   const [reverseQty, setReverseQty] = useState("");
+  const [numPacksToReverse, setNumPacksToReverse] = useState("");
   const [salvageBatchNumber, setSalvageBatchNumber] = useState("");
   const [pmExclusions, setPmExclusions] = useState(() => new Set());
   const [submitting, setSubmitting] = useState(false);
@@ -112,8 +113,18 @@ export default function PartialBatchReversalPage() {
   function handlePickRow(row) {
     setSelectedRow(row);
     setReverseQty("");
+    setNumPacksToReverse("");
     setSalvageBatchNumber("");
     setPmExclusions(new Set());
+  }
+
+  function handleNumPacksChange(value) {
+    setNumPacksToReverse(value);
+    const packs = Number(value);
+    const fillQty = Number(selectedRow?.fill_qty_per_pack ?? 0);
+    if (Number.isFinite(packs) && packs > 0 && fillQty > 0) {
+      setReverseQty(String(packs * fillQty));
+    }
   }
 
   function proceedToPage3() {
@@ -284,6 +295,8 @@ export default function PartialBatchReversalPage() {
                     <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Material</th>
                     <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Packing PO</th>
                     <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Batch #</th>
+                    <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Fill Qty/Pack</th>
+                    <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Num Packs</th>
                     <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Available (KG)</th>
                   </tr>
                 </thead>
@@ -302,6 +315,8 @@ export default function PartialBatchReversalPage() {
                       <td className="py-2 px-3">{materialLabel(row.material)}</td>
                       <td className="py-2 px-3 font-mono">{row.po_number || "--"}</td>
                       <td className="py-2 px-3 font-mono">{row.batch_number}</td>
+                      <td className="py-2 px-3 text-right font-mono">{row.fill_qty_per_pack != null ? fmt(row.fill_qty_per_pack) : "—"}</td>
+                      <td className="py-2 px-3 text-right font-mono">{row.num_packs ?? "—"}</td>
                       <td className="py-2 px-3 text-right font-mono">{fmt(row.available_qty)}</td>
                     </tr>
                   ))}
@@ -328,7 +343,26 @@ export default function PartialBatchReversalPage() {
           <div className="mb-4 grid gap-3 md:grid-cols-4 text-sm">
             <div><span className="block text-xs text-slate-400">Row</span><p>{selectedRow.row_type === "SFG" ? "SFG" : "FG (SKU)"} — {materialLabel(selectedRow.material)}</p></div>
             <div><span className="block text-xs text-slate-400">Packing PO</span><p className="font-mono">{selectedRow.po_number || "--"}</p></div>
-            <div><span className="block text-xs text-slate-400">Available</span><p className="font-mono">{fmt(selectedRow.available_qty)} KG</p></div>
+            <div><span className="block text-xs text-slate-400">Fill Qty/Pack</span><p className="font-mono">{selectedRow.fill_qty_per_pack != null ? `${fmt(selectedRow.fill_qty_per_pack)} KG` : "—"}</p></div>
+            <div><span className="block text-xs text-slate-400">Available</span><p className="font-mono">{fmt(selectedRow.available_qty)} KG{selectedRow.num_packs != null ? ` (${selectedRow.num_packs} packs)` : ""}</p></div>
+          </div>
+
+          <div className="mb-4 grid gap-3 md:grid-cols-4 text-sm">
+            {selectedRow.fill_qty_per_pack ? (
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-slate-600">Num Packs to Reverse</label>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  className="h-9 rounded border border-slate-300 px-2 text-sm"
+                  value={numPacksToReverse}
+                  onChange={(e) => handleNumPacksChange(e.target.value)}
+                  max={selectedRow.num_packs ?? undefined}
+                />
+                <span className="text-[11px] text-slate-400">= {fmt(Number(numPacksToReverse || 0) * Number(selectedRow.fill_qty_per_pack))} KG</span>
+              </div>
+            ) : null}
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-600">Reverse Qty (KG)</label>
               <input
@@ -336,7 +370,7 @@ export default function PartialBatchReversalPage() {
                 step="0.001"
                 className="h-9 rounded border border-slate-300 px-2 text-sm"
                 value={reverseQty}
-                onChange={(e) => setReverseQty(e.target.value)}
+                onChange={(e) => { setReverseQty(e.target.value); setNumPacksToReverse(""); }}
                 max={selectedRow.available_qty}
               />
               {reverseQty && !validQty ? <span className="text-[11px] text-rose-600">Exceeds available quantity.</span> : null}

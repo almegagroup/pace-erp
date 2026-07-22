@@ -433,7 +433,7 @@ export async function listPartialReversalStockLinesHandler(req: Request, ctx: Pr
     const { data: packingOrders, error: poeErr } = await serviceRoleClient
       .schema("erp_production")
       .from("packing_order")
-      .select("id, po_number, material_id, status, batch_number")
+      .select("id, po_number, material_id, status, batch_number, num_packs, fill_qty_per_pack")
       .eq("batch_number", batchNumber)
       .eq("status", "FINAL");
     if (poeErr) throw new Error("PR19_STOCK_LINES_FAILED");
@@ -462,6 +462,12 @@ export async function listPartialReversalStockLinesHandler(req: Request, ctx: Pr
           po_number: pkRow.po_number,
           batch_number: batchNumber,
           available_qty: availableQty,
+          // §83.14 "balance barrel": one batch can split across several Packing POs at
+          // different fill sizes — surfaced here so Page 2 shows which fill shape each
+          // row is (not just an opaque PO number), and Page 3 can offer a "Num Packs to
+          // reverse" helper that derives Reverse Qty = num_packs × fill_qty_per_pack.
+          num_packs: pkRow.num_packs ?? null,
+          fill_qty_per_pack: pkRow.fill_qty_per_pack ?? null,
         });
       }
     }
