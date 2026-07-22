@@ -1094,6 +1094,55 @@ export async function createSTOHandler(
   }
 }
 
+// STO carries no material-type restriction of its own (unlike Sales Order's RM/PM-only
+// gate) -- it moves any material between companies. The "RM/PM Sale" combined page (SO +
+// STO tabs) needs an RM/PM-only view of STOs for that presentation, so this filters the
+// already-fetched header rows down to ones whose every line is one of the allowed types.
+async function filterStosByMaterialTypes(stos: StoRow[], allowedTypes: string[]): Promise<StoRow[]> {
+  const stoIds = stos.map((sto) => String(sto.id));
+  if (stoIds.length === 0) return [];
+
+  const { data: lineRows, error: lineError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("stock_transfer_order_line")
+    .select("sto_id, material_id")
+    .in("sto_id", stoIds);
+  if (lineError) {
+    throw new Error("STO_LINE_FETCH_FAILED");
+  }
+  const lines = (lineRows ?? []) as { sto_id: string; material_id: string }[];
+  const materialIds = [...new Set(lines.map((l) => String(l.material_id)))];
+
+  const materialTypeMap = new Map<string, string>();
+  if (materialIds.length > 0) {
+    const { data: materialRows, error: materialError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .select("id, material_type")
+      .in("id", materialIds);
+    if (materialError) {
+      throw new Error("STO_MATERIAL_FETCH_FAILED");
+    }
+    for (const m of (materialRows ?? []) as { id: string; material_type: string | null }[]) {
+      materialTypeMap.set(String(m.id), toUpperTrimmedString(m.material_type));
+    }
+  }
+
+  const linesBySto = new Map<string, string[]>();
+  for (const line of lines) {
+    const key = String(line.sto_id);
+    const arr = linesBySto.get(key) ?? [];
+    arr.push(String(line.material_id));
+    linesBySto.set(key, arr);
+  }
+
+  return stos.filter((sto) => {
+    const lineMaterialIds = linesBySto.get(String(sto.id)) ?? [];
+    if (lineMaterialIds.length === 0) return false;
+    return lineMaterialIds.every((id) => allowedTypes.includes(materialTypeMap.get(id) ?? ""));
+  });
+}
+
 export async function listSTOsHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -1104,6 +1153,7 @@ export async function listSTOsHandler(
     const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const stoType = toUpperTrimmedString(url.searchParams.get("sto_type"));
+    const materialScope = toUpperTrimmedString(url.searchParams.get("material_scope"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
 
     let query = serviceRoleClient
@@ -1128,7 +1178,12 @@ export async function listSTOsHandler(
       return stoErrorResponse(req, ctx, "STO_LIST_FAILED", 500, "Unable to list STOs.");
     }
 
-    return okResponse({ items: data ?? [] }, ctx.request_id, req);
+    let items = (data ?? []) as StoRow[];
+    if (materialScope === "RM_PM" && items.length > 0) {
+      items = await filterStosByMaterialTypes(items, ["RM", "PM"]);
+    }
+
+    return okResponse({ items }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_LIST_FAILED";
     return stoErrorResponse(req, ctx, code, 500, code);
