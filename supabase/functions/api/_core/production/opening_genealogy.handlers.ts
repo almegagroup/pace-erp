@@ -395,6 +395,10 @@ export async function createOldPackingPoHandler(req: Request, ctx: ProdHandlerCo
         movement_type_code: "P261",
       });
     }
+    // §83.4.1-addendum: PM lines get the same Approved/AP-Approved/Variance treatment
+    // as a real Final — no deviation was ever recorded for opening genealogy, so
+    // Approved="YES" (auto-match, actual == total) for every PM line, matching the
+    // live computePmApprovalFields() rule.
     pmLines.forEach((ln, idx) => {
       const qty = Number(parsePositiveNumber(ln.actual_qty ?? ln.total_qty) ?? 0);
       lineRows.push({
@@ -405,13 +409,41 @@ export async function createOldPackingPoHandler(req: Request, ctx: ProdHandlerCo
         total_qty: qty, actual_qty: qty, issue_sloc_id: toTrimmedString(ln.issue_sloc_id) || null,
         display_order: 3 + idx, stock_ledger_id: null, uom_code: toTrimmedString(ln.uom_code) || "EA",
         movement_type_code: "P261",
+        approved_status: "YES", ap_approved_qty: qty, variance_qty: 0,
       });
     });
-    const { error: lineInsErr } = await serviceRoleClient
-      .schema("erp_production").from("packing_order_line").insert(lineRows);
+    const { data: insertedLines, error: lineInsErr } = await serviceRoleClient
+      .schema("erp_production").from("packing_order_line").insert(lineRows)
+      .select("id, line_type, material_id, total_qty, actual_qty, approved_status, ap_approved_qty, variance_qty");
     if (lineInsErr) {
       console.error("[opening_genealogy.createOldPackingPo] line insert failed:", JSON.stringify(lineInsErr));
       throw new Error("PROD_OLD_PACKING_PO_CREATE_FAILED");
+    }
+
+    // §83.4.1-addendum: PM Reco/Costing layer, one row per PM line — mirrors PR22's
+    // own process_order_line_reco write for RM/INT, same source_txn_type='OPENING'.
+    const pmInsertedLines = ((insertedLines ?? []) as JsonRecord[]).filter((l) => l.line_type === "PM");
+    if (pmInsertedLines.length > 0) {
+      const recoDoc = await generateRecoDocNumber(companyId);
+      const pmRecoRows = pmInsertedLines.map((line) => ({
+        company_id: companyId, po_number: poNumber, sku_material_id: skuMaterialId,
+        batch_number: batchNumber, po_type: poType || null, finalized_at: now,
+        packing_order_id: poId, packing_order_line_id: line.id,
+        material_id: line.material_id, formulation_material_id: line.material_id,
+        standard_qty: line.total_qty, actual_qty: line.actual_qty,
+        approved_status: line.approved_status, ap_approved_qty: line.ap_approved_qty,
+        variance_qty: line.variance_qty, is_voided: false,
+        last_updated_at: now, last_updated_by: ctx.auth_user_id,
+        reco_document_number: recoDoc.docNumber, reco_document_year: recoDoc.docYear,
+        source_txn_type: "OPENING",
+        reference_document_number: poNumber, reference_document_type: "PACK_PO",
+      }));
+      const { error: recoErr } = await serviceRoleClient
+        .schema("erp_production").from("packing_order_line_reco").insert(pmRecoRows);
+      if (recoErr) {
+        console.error("[opening_genealogy.createOldPackingPo] reco insert failed:", JSON.stringify(recoErr));
+        throw new Error("PROD_OLD_PACKING_PO_CREATE_FAILED");
+      }
     }
 
     return createdOk({ id: poId, po_number: poNumber, batch_number: batchNumber, status: "FINAL" }, ctx.request_id, req);
