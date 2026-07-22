@@ -363,7 +363,7 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - **Batch Number generation timing:** At "Start Batch" click (not Standard, not QA approval)
 - **Final:** Actual qty entry. Can add items. Cannot remove (enter 0). No stock movement.
 - **Verify:** QA confirms actuals vs batch paper. Can edit qty, add items. Wrong formulation = prune+redo. Stock movement HERE (P261+PM+P231).
-- **Reversal:** Step-by-step from any stage back to beginning
+- ~~**Reversal:** Step-by-step from any stage back to beginning~~ — **corrected 2026-07-21 (LOCKED):** reverse (CORS) makes the **PO number permanently dead** for both Process PO and Packing PO — it never returns to STANDARD, no redo on the same PO. The reusability need is met separately: a Process PO's **batch number** (not the PO number) goes `ACTIVE → VOIDED` (automatic, on reverse) → `RELEASED` (manual, manager/SA + reason, `releaseBatchNumberHandler`) → picked up by a **new** Process PO at Start Batch (`activateReleasedBatchNumberInstance`). Packing PO has no batch number of its own (draws from the Process PO's), so this release/reuse step is Process-PO-only.
 - **Availability check at PO creation:** Unrestricted stock only (no In-Transit, no QA). Exception: INT planned output for INT materials.
 - **Pack Type Change:** Delink → PRUNE → new Packing PO → relink (corrected from "auto-delete")
 - **SO → FO link** (corrected: SO links to FO, not Packing PO)

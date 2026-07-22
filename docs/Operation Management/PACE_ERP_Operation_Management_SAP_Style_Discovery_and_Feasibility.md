@@ -8581,7 +8581,7 @@ STANDARD → FINAL (terminal — movements happen here)
 | STANDARD | Production | Create, freely editable |
 | FINAL | Production | Actual qty entry → movements posted on save |
 | COR6 Correction | QA only | Append corrections (P261/P262), no approval, status stays FINAL |
-| CORS → STANDARD | Production / Manager | Full reversal, reason mandatory |
+| ~~CORS → STANDARD~~ **CORS → REVERSED (terminal, LOCKED 2026-07-21)** | Production / Manager | Full reversal, reason mandatory. The `→ STANDARD` in this row predates the actual build and was never implemented — the real code (`reversePackingOrderHandler`) sets status to `REVERSED`, permanently. A reversed Packing PO's `po_number` is dead; redo means creating a brand-new Packing PO. See §83.4.1-addendum-2 for the full reasoning (business owner confirmed this matches SAP's own PO-vs-batch-number distinction) and Process PO's parallel lock. |
 
 **No QA Approval. No Batch Number. No Verify phase.**
 
@@ -15087,3 +15087,28 @@ correction mode-এও একই column-গুলো, delta-র উপর প্
 (`computePmApprovalFields`, `finalizePackingOrderHandler`, `correctPackingOrderHandler`),
 `frontend/src/pages/dashboard/production/ProductionPOFinalPage.jsx`
 (`computePmValues`, `PackingPoFinalTab`), migration `20260721070000_packing_order_line_reco.sql`।
+
+---
+
+### §83.4.1-addendum-2 — Reverse (CORS) = PO number permanently dead; batch number reuse is a separate, already-built mechanism (LOCKED — 2026-07-21)
+
+**প্রশ্ন উঠেছিল:** business owner SAP-এর real behavior reference করে challenge করলেন — SAP-এ CORS একটা confirmation reverse করে, পুরো order মরে যায় না, আবার confirm করা যায়। আমাদের code-এ (`reverseProcessOrderHandler`/`reversePackingOrderHandler`) reverse করলে status `REVERSED` (terminal) হয়ে যায়, আর কখনো ফেরে না — এটা তো আগের doc-এর "CORS → STANDARD" (Packing PO, §83.4-এর lifecycle table) আর "Reversal: Step-by-step from any stage back to beginning" (Process PO, CLAUDE.md §83.4) লাইনগুলোর সাথেও মেলে না।
+
+**যাচাই করে যা পাওয়া গেল:** ওই দুটো doc লাইন কখনো code-এ implement হয়নি — stale draft, অন্য অনেক জায়গার মতোই। কিন্তু codebase-এ **already একটা সম্পূর্ণ, আলাদা, আরও ভালো মেকানিজম বানানো আছে** যা এই একই দরকার মেটায় — batch number-এর নিজস্ব ৩-state lifecycle (`erp_production.batch_number_instance`, Gate-27.19):
+
+```
+ACTIVE ──(CORS reverse, automatic)──▶ VOIDED ──(manager/SA "Release", reason mandatory)──▶ RELEASED
+                                                                                                │
+                                                          নতুন Process PO-র Start Batch ◀────────┘
+                                                          (activateReleasedBatchNumberInstance) → ACTIVE (নতুন PO-র সাথে)
+```
+
+**LOCKED সিদ্ধান্ত (business owner, 2026-07-21):**
+1. **PO number (Process PO বা Packing PO, দুটোই) reverse হলে permanently dead** — কখনো `STANDARD`/`FINAL`-এ ফেরে না, একই PO-তে redo করা যায় না। Redo করতে হলে **নতুন PO** বানাতে হবে (নতুন po_number)।
+2. **Batch number আলাদা জিনিস, dead হয় না** — Process PO reverse হলে ওর batch_number স্বয়ংক্রিয়ভাবে `VOIDED` হয় (ইতিমধ্যে কোড করা, `upsertBatchNumberInstanceForProcessOrder` with `status: "VOIDED"`), তারপর manager/SA ইচ্ছে করলে manually `RELEASED` করে দিতে পারে, আর একটা **নতুন** Process PO সেই একই batch number Start Batch-এর সময় তুলে নিতে পারে।
+3. **Packing PO-র নিজস্ব কোনো batch number নেই** (ও Process PO-র batch থেকে SFG টানে), তাই এই release/reuse mechanism শুধু Process PO-স্কোপড। Packing PO reverse হলে শুধু PO number-টাই dead হয়, batch number ওর হাতে নেই যে release করার প্রশ্ন আসবে।
+4. **কারণ যা এই সিদ্ধান্তকে সমর্থন করে:** PO number = "কোন attempt/transaction" identify করে (এক-বারই, dead হলে শেষ)। Batch number = "কোন material lot" identify করে (QA/genealogy-র জন্য গুরুত্বপূর্ণ, পুনরায় ব্যবহারযোগ্য)। এই দুটো আলাদা রাখাই SAP-এর real practice — order number আর batch/lot number কখনো এক জিনিস হিসেবে treat হয় না।
+
+**Doc correction:** §83.4-এর Packing PO lifecycle table-এর "CORS → STANDARD" row আর CLAUDE.md-এর "Reversal: Step-by-step from any stage back to beginning" লাইন — দুটোই এই lock-এর সাথে সংশোধন করা হলো (struck-through + correction note, delete না করে)।
+
+**কোনো code change লাগেনি** — বর্তমান কোড (terminal REVERSED + batch_number_instance lifecycle) already এই locked design-এর সাথেই মেলে। যা লাগছিল সেটা শুধু doc-কে code-এর সাথে মিলিয়ে নেওয়া।
