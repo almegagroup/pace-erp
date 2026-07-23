@@ -48,7 +48,10 @@ function friendlyErr(code) { return ERRORS[code] ?? code; }
 
 function materialLabel(m) {
   if (!m) return "--";
-  return [m.pace_code || m.external_code, m.material_name].filter(Boolean).join(" - ");
+  // For FG SKUs, material_name often mirrors external_code (not a readable name) --
+  // document_name is where the real product description lives (verified live: pace_code
+  // FG-00008 has material_name="1B60SS67599" but document_name="Maximoplast PC 250").
+  return [m.pace_code || m.external_code, m.document_name || m.material_name].filter(Boolean).join(" - ");
 }
 function customerLabel(c) {
   if (!c) return "--";
@@ -521,7 +524,7 @@ export default function PlanFeedPage() {
                   ...f,
                   sku: m.pace_code || m.external_code || f.sku,
                   material_id: m.id,
-                  description: m.material_name || f.description,
+                  description: m.document_name || m.material_name || f.description,
                 }))}
               />
               {form.material_id
@@ -659,7 +662,7 @@ export default function PlanFeedPage() {
                         ...d,
                         sku: m.pace_code || m.external_code || d.sku,
                         material_id: m.id,
-                        description: m.material_name || d.description,
+                        description: m.document_name || m.material_name || d.description,
                       }))}
                     />
                   </div>
