@@ -48,10 +48,12 @@ function friendlyErr(code) { return ERRORS[code] ?? code; }
 
 function materialLabel(m) {
   if (!m) return "--";
-  // For FG SKUs, material_name often mirrors external_code (not a readable name) --
-  // document_name is where the real product description lives (verified live: pace_code
-  // FG-00008 has material_name="1B60SS67599" but document_name="Maximoplast PC 250").
-  return [m.pace_code || m.external_code, m.document_name || m.material_name].filter(Boolean).join(" - ");
+  // pace_code is PACE's own internal sequential numbering (FG-00001...) -- meaningless
+  // to a business user. The real "SKU" they recognize is external_code (the 11-char
+  // code, per §83.18's original "11-char FG SKU code" spec), paired with document_name
+  // for the readable description (material_name mirrors external_code for FG, not a
+  // real name -- verified live). pace_code never shown here.
+  return [m.external_code || m.pace_code, m.document_name || m.material_name].filter(Boolean).join(" - ");
 }
 function customerLabel(c) {
   if (!c) return "--";
@@ -583,7 +585,7 @@ export default function PlanFeedPage() {
                 onTextChange={(text) => setForm(f => ({ ...f, sku: text, material_id: "" }))}
                 onPickMaterial={(m) => setForm(f => ({
                   ...f,
-                  sku: m.pace_code || m.external_code || f.sku,
+                  sku: m.external_code || m.pace_code || f.sku,
                   material_id: m.id,
                   description: m.document_name || m.material_name || f.description,
                 }))}
@@ -727,7 +729,7 @@ export default function PlanFeedPage() {
                       onTextChange={(text) => setEditDraft(d => ({ ...d, sku: text, material_id: "" }))}
                       onPickMaterial={(m) => setEditDraft(d => ({
                         ...d,
-                        sku: m.pace_code || m.external_code || d.sku,
+                        sku: m.external_code || m.pace_code || d.sku,
                         material_id: m.id,
                         description: m.document_name || m.material_name || d.description,
                       }))}
