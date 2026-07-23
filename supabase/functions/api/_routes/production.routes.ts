@@ -62,6 +62,7 @@ import {
   upsertFoAllocationHandler,
   listUnmappedStockHandler,
   checkOrderedStrokeHandler,
+  listStrokeOptionsHandler,
 } from "../_core/production/plan_feed.handlers.ts";
 import {
   listProcessOrdersHandler,
@@ -214,6 +215,8 @@ export async function dispatchProductionRoutes(
       return await listUnmappedStockHandler(req, ctx);
     case "GET:/api/production/plan-feed/check-stroke":
       return await checkOrderedStrokeHandler(req, ctx);
+    case "GET:/api/production/plan-feed/stroke-options":
+      return await listStrokeOptionsHandler(req, ctx);
 
     // Process Orders
     case "GET:/api/production/process-orders":

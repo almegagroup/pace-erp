@@ -278,6 +278,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/plan-feed/summary":           { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
   "GET:/api/production/plan-feed/unmapped-stock":    { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
   "GET:/api/production/plan-feed/check-stroke":      { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  "GET:/api/production/plan-feed/stroke-options":    { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
   "GET:/api/production/process-orders":              { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   "GET:/api/production/process-orders/availability-preview": { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   "POST:/api/production/process-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },

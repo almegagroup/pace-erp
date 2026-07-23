@@ -17,7 +17,7 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import {
   listPlanFeed, getPlanFeed, createPlanFeed, updatePlanFeed,
   cancelPlanFeed, getPlanFeedSummary, upsertFoAllocation,
-  getUnmappedStock, checkOrderedStroke, listPackingOrders,
+  getUnmappedStock, checkOrderedStroke, listStrokeOptions, listPackingOrders,
 } from "./prodApi.js";
 import { listMaterials, listCustomers, createCustomer, updateCustomer } from "../om/omApi.js";
 
@@ -103,6 +103,45 @@ function SkuTypeaheadField({ skuText, materials, onTextChange, onPickMaterial, d
   );
 }
 
+// Same hybrid pattern as SkuTypeaheadField: shows existing Stroke numbers for this SKU's
+// Prodshade as suggestions, but typing a number that isn't in the list is accepted too
+// (Ordered Stroke can be planned ahead of the Stroke actually existing in Stroke Master).
+function StrokeTypeaheadField({ strokeText, strokeOptions, onTextChange, onPickStroke, disabled, placeholder }) {
+  const [open, setOpen] = useState(false);
+  const matches = useMemo(() => {
+    const needle = strokeText.trim().toLowerCase();
+    return strokeOptions.filter((s) => !needle || String(s.stroke_number).toLowerCase().includes(needle)).slice(0, 8);
+  }, [strokeText, strokeOptions]);
+
+  return (
+    <div className="relative">
+      <input
+        className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-64 disabled:opacity-50"
+        value={strokeText}
+        disabled={disabled}
+        onChange={(e) => { onTextChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder={placeholder}
+      />
+      {open && matches.length > 0 && (
+        <ul className="absolute z-50 mt-1 max-h-48 w-64 overflow-y-auto border border-slate-300 bg-white shadow-md text-sm">
+          {matches.map((s) => (
+            <li
+              key={s.id}
+              className="px-2 py-1 cursor-pointer hover:bg-sky-50 flex justify-between gap-2"
+              onMouseDown={(e) => { e.preventDefault(); onPickStroke(s); setOpen(false); }}
+            >
+              <span className="font-mono">{s.stroke_number}</span>
+              <span className="text-[10px] text-slate-400 uppercase">{s.status}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function productionStatusTone(status) {
   switch (status) {
     case "FULLY_MAPPED": return "bg-emerald-100 text-emerald-800";
@@ -178,6 +217,13 @@ export default function PlanFeedPage() {
     queryFn: () => getUnmappedStock({ company_id: effectiveCompanyId, material_id: form.material_id }),
     enabled: Boolean(effectiveCompanyId && form.material_id),
     select: (d) => d?.data ?? d,
+  });
+
+  const strokeOptionsQ = useQuery({
+    queryKey: ["plan-feed-stroke-options", effectiveCompanyId, form.material_id],
+    queryFn: () => listStrokeOptions({ company_id: effectiveCompanyId, material_id: form.material_id }),
+    enabled: Boolean(effectiveCompanyId && form.material_id),
+    select: (d) => d?.data ?? [],
   });
 
   async function handleCreateNewParty() {
@@ -270,6 +316,21 @@ export default function PlanFeedPage() {
   }, [listQ.data, editSearch]);
 
   const skuLockedForEdit = Boolean(editData?.allocations?.length);
+
+  const editStrokeOptionsQ = useQuery({
+    queryKey: ["plan-feed-stroke-options", editData?.company_id, editDraft.material_id],
+    queryFn: () => listStrokeOptions({ company_id: editData?.company_id, material_id: editDraft.material_id }),
+    enabled: Boolean(editData?.company_id && editDraft.material_id),
+    select: (d) => d?.data ?? [],
+  });
+  const editStrokeCheckQ = useQuery({
+    queryKey: ["plan-feed-stroke-check", editData?.company_id, editDraft.material_id, editDraft.ordered_stroke_number],
+    queryFn: () => checkOrderedStroke({
+      company_id: editData?.company_id, material_id: editDraft.material_id, stroke_number: (editDraft.ordered_stroke_number || "").trim(),
+    }),
+    enabled: Boolean(editData?.company_id && editDraft.material_id && (editDraft.ordered_stroke_number || "").trim()),
+    select: (d) => d?.data ?? d,
+  });
 
   async function loadEditFo(foId) {
     if (!foId) return;
@@ -567,7 +628,13 @@ export default function PlanFeedPage() {
 
             <div className="flex flex-col gap-1 col-span-2">
               <label className="text-xs text-slate-600 font-medium">Ordered Stroke (Production fills in later)</label>
-              <input className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-64" value={form.ordered_stroke_number} onChange={e => setForm(f => ({ ...f, ordered_stroke_number: e.target.value }))} placeholder="Stroke number" />
+              <StrokeTypeaheadField
+                strokeText={form.ordered_stroke_number}
+                strokeOptions={strokeOptionsQ.data ?? []}
+                placeholder="Type stroke number — pick an existing one, or a new one"
+                onTextChange={(text) => setForm(f => ({ ...f, ordered_stroke_number: text }))}
+                onPickStroke={(s) => setForm(f => ({ ...f, ordered_stroke_number: s.stroke_number }))}
+              />
               {strokeCheckQ.data && (
                 strokeCheckQ.data.exists
                   ? <span className="text-[11px] text-emerald-700">Stroke exists (status: {strokeCheckQ.data.status}).</span>
@@ -690,7 +757,19 @@ export default function PlanFeedPage() {
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Ordered Stroke</label>
-                    <input className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.ordered_stroke_number} onChange={e => setEditDraft(d => ({ ...d, ordered_stroke_number: e.target.value }))} disabled={editData.status === "CANCELLED"} />
+                    <StrokeTypeaheadField
+                      strokeText={editDraft.ordered_stroke_number || ""}
+                      strokeOptions={editStrokeOptionsQ.data ?? []}
+                      placeholder="Type stroke number — pick an existing one, or a new one"
+                      disabled={editData.status === "CANCELLED"}
+                      onTextChange={(text) => setEditDraft(d => ({ ...d, ordered_stroke_number: text }))}
+                      onPickStroke={(s) => setEditDraft(d => ({ ...d, ordered_stroke_number: s.stroke_number }))}
+                    />
+                    {editStrokeCheckQ.data && (
+                      editStrokeCheckQ.data.exists
+                        ? <span className="text-[11px] text-emerald-700">Stroke exists (status: {editStrokeCheckQ.data.status}).</span>
+                        : <span className="text-[11px] text-amber-700">Stroke does not exist yet — will need to be created in Stroke Master.</span>
+                    )}
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Actual Stroke(s)</label>
@@ -818,6 +897,7 @@ export default function PlanFeedPage() {
                     <th className="text-left py-2 px-3 border-b">FO #</th>
                     <th className="text-left py-2 px-3 border-b">Party</th>
                     <th className="text-left py-2 px-3 border-b">SKU</th>
+                    <th className="text-left py-2 px-3 border-b">Ordered Stroke</th>
                     <th className="text-right py-2 px-3 border-b">Ordered KG</th>
                     <th className="text-right py-2 px-3 border-b">Pack Qty</th>
                     <th className="text-right py-2 px-3 border-b">Mapped KG</th>
@@ -834,6 +914,14 @@ export default function PlanFeedPage() {
                       <td className="py-2 px-3 font-mono font-semibold text-sky-700">{row.fo_number}</td>
                       <td className="py-2 px-3">{row.party_name}</td>
                       <td className="py-2 px-3 font-mono text-slate-600">{row.sku}</td>
+                      <td className="py-2 px-3 font-mono">
+                        {row.ordered_stroke_number || "--"}
+                        {row.ordered_stroke_missing && (
+                          <span className="ml-1 inline-flex rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-rose-800" title="Not in Stroke Master yet">
+                            Not in Stroke Master
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2 px-3 text-right font-mono">{fmt(row.ordered_qty_kg)}</td>
                       <td className="py-2 px-3 text-right font-mono">{row.pack_qty ?? "--"}</td>
                       <td className="py-2 px-3 text-right font-mono">{fmt(row.allocated_qty_kg)}</td>

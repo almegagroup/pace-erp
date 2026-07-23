@@ -661,6 +661,83 @@ export async function checkOrderedStrokeHandler(req: Request, ctx: ProdHandlerCo
   }
 }
 
+// GET /api/production/plan-feed/stroke-options?company_id=&material_id=
+// Lists every stroke_master row (any status) for the SKU's derived Prodshade, so the
+// Ordered Stroke field can suggest existing strokes -- the same free-text-or-pick
+// pattern as the SKU field. An empty list is normal (no config yet / no strokes yet),
+// never an error.
+export async function listStrokeOptionsHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const materialId = toTrimmedString(url.searchParams.get("material_id") ?? "");
+    if (!companyId || !materialId) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_STROKE_OPTIONS_INVALID", 400, "company_id and material_id required");
+    }
+
+    const materialMap = await getMaterialMapByIds([materialId]);
+    const sku = materialMap.get(materialId);
+    if (!sku) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const prodshade = await resolveProdshadeForSku(sku);
+    if (!prodshade) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("id, stroke_number, status")
+      .eq("company_id", companyId)
+      .eq("prodshade_material_id", String((prodshade as JsonRecord).id))
+      .order("stroke_number");
+    if (error) {
+      console.error("[plan_feed.listStrokeOptions] query failed:", JSON.stringify(error));
+      throw new Error("PROD_PLAN_FEED_STROKE_OPTIONS_FAILED");
+    }
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_STROKE_OPTIONS_FAILED";
+    return foErr(req, ctx, code, 500, "Stroke options lookup failed");
+  }
+}
+
+// Batched SKU -> Prodshade resolution for the Total Table's "ordered stroke missing"
+// check -- one prodshade_pack_config fetch for the whole page instead of one per row.
+async function resolveProdshadeMapForMaterials(materialIds: string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(materialIds.filter(Boolean))];
+  const map = new Map<string, string>();
+  if (ids.length === 0) return map;
+
+  const materialMap = await getMaterialMapByIds(ids);
+  const { data: configs, error } = await serviceRoleClient
+    .schema("erp_production").from("prodshade_pack_config")
+    .select(`
+      id, material_id, pack_code_id, active,
+      pack_code:pack_code_master!pack_code_id(id, pack_code)
+    `)
+    .eq("active", true);
+  if (error) {
+    console.error("[plan_feed.resolveProdshadeMapForMaterials] query failed:", JSON.stringify(error));
+    throw new Error("PROD_PLAN_FEED_PRODSHADE_LOOKUP_FAILED");
+  }
+  const configRows = (configs ?? []) as JsonRecord[];
+  const prodshadeMap = await getMaterialMapByIds(configRows.map((row) => String(row.material_id ?? "")));
+
+  for (const materialId of ids) {
+    const sku = materialMap.get(materialId);
+    if (!sku) continue;
+    const shadeCode = toTrimmedString(sku.shade_code);
+    const packCode = toTrimmedString(sku.pack_code);
+    if (!shadeCode || !packCode) continue;
+    const match = configRows.find((row) => {
+      const pack = (row.pack_code ?? {}) as JsonRecord;
+      const prod = prodshadeMap.get(String(row.material_id ?? "")) ?? {};
+      return toTrimmedString(pack.pack_code) === packCode && toTrimmedString(prod.shade_code) === shadeCode;
+    });
+    if (match) map.set(materialId, String(match.material_id));
+  }
+  return map;
+}
+
 function computeProductionStatus(orderedQtyKg: number, allocatedQtyKg: number): string {
   if (allocatedQtyKg <= QTY_TOL) return "UNMAPPED";
   if (allocatedQtyKg >= orderedQtyKg - QTY_TOL) return "FULLY_MAPPED";
@@ -677,8 +754,9 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     let foQuery = serviceRoleClient
       .schema("erp_production").from("plan_feed")
       .select(`
-        id, fo_number, party_name, sku, description,
-        ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date, status
+        id, company_id, fo_number, party_name, sku, description, material_id,
+        ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date, status,
+        ordered_stroke_number
       `)
       .neq("status", "CANCELLED");
     if (companyId) foQuery = foQuery.eq("company_id", companyId);
@@ -688,6 +766,26 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     if (!fos || fos.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
     const foIds = (fos as JsonRecord[]).map(f => f.id as string);
+
+    // §83.18-REVISED: flag rows whose Ordered Stroke isn't (yet) in Stroke Master --
+    // live check, so the flag clears itself the moment someone creates that Stroke,
+    // no manual update needed here.
+    const materialIdsWithStroke = (fos as JsonRecord[])
+      .filter((f) => toTrimmedString(f.ordered_stroke_number))
+      .map((f) => String(f.material_id ?? ""));
+    const prodshadeMap = await resolveProdshadeMapForMaterials(materialIdsWithStroke);
+    const prodshadeIds = [...new Set([...prodshadeMap.values()])];
+    const existingStrokePairs = new Set<string>();
+    if (prodshadeIds.length > 0) {
+      const { data: strokeRows, error: strokeErr } = await serviceRoleClient
+        .schema("erp_production").from("stroke_master")
+        .select("company_id, prodshade_material_id, stroke_number")
+        .in("prodshade_material_id", prodshadeIds);
+      if (strokeErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
+      for (const s of (strokeRows ?? []) as JsonRecord[]) {
+        existingStrokePairs.add(`${s.company_id}|${s.prodshade_material_id}|${s.stroke_number}`);
+      }
+    }
 
     const { data: allocs, error: allocErr } = await serviceRoleClient
       .schema("erp_production").from("plan_feed_packing_order_allocation")
@@ -711,6 +809,10 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       const allocatedKg = foAllocs.reduce((s, a) => s + (Number(a.allocated_qty_kg) || 0), 0);
       const orderedKg = Number(fo.ordered_qty_kg) || 0;
       const dispatchedKg = 0;
+      const strokeNumber = toTrimmedString(fo.ordered_stroke_number);
+      const prodshadeId = prodshadeMap.get(String(fo.material_id ?? ""));
+      const orderedStrokeMissing = Boolean(strokeNumber) &&
+        !existingStrokePairs.has(`${fo.company_id}|${prodshadeId}|${strokeNumber}`);
       return {
         id: foId,
         fo_number: fo.fo_number,
@@ -722,6 +824,8 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         order_date: fo.order_date,
         scheduled_delivery_date: fo.scheduled_delivery_date,
         status: fo.status,
+        ordered_stroke_number: strokeNumber || null,
+        ordered_stroke_missing: orderedStrokeMissing,
         allocated_qty_kg: allocatedKg,
         packing_po_count: foAllocs.length,
         production_status: computeProductionStatus(orderedKg, allocatedKg),
