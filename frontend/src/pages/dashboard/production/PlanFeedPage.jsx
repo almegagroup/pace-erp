@@ -19,7 +19,7 @@ import {
   cancelPlanFeed, getPlanFeedSummary, upsertFoAllocation,
   getUnmappedStock, checkOrderedStroke, listPackingOrders,
 } from "./prodApi.js";
-import { listMaterials, listCustomers, createCustomer } from "../om/omApi.js";
+import { listMaterials, listCustomers, createCustomer, updateCustomer } from "../om/omApi.js";
 
 const TABS = [
   { key: "create", label: "Create FO" },
@@ -160,6 +160,24 @@ export default function PlanFeedPage() {
       toast(err.message || "Party create failed.", "error");
     } finally {
       setNewPartySaving(false);
+    }
+  }
+
+  const [partyTypeEdit, setPartyTypeEdit] = useState(false);
+  const [partyTypeSaving, setPartyTypeSaving] = useState(false);
+
+  async function handleUpdatePartyType(partyId, newType) {
+    if (!partyId) return;
+    setPartyTypeSaving(true);
+    try {
+      await updateCustomer({ id: partyId, fo_customer_type: newType || "" });
+      await qc.invalidateQueries({ queryKey: ["plan-feed-customers"] });
+      setPartyTypeEdit(false);
+      toast("Party's FO Type updated.");
+    } catch (err) {
+      toast(err.message || "Update failed.", "error");
+    } finally {
+      setPartyTypeSaving(false);
     }
   }
 
@@ -410,6 +428,24 @@ export default function PlanFeedPage() {
               <button type="button" onClick={() => setNewPartyOpen((v) => !v)} className="text-[11px] text-sky-600 underline self-start">
                 + New party
               </button>
+              {selectedParty && (
+                partyTypeEdit ? (
+                  <div className="flex items-center gap-2 mt-1">
+                    <ErpComboboxField
+                      value={selectedParty.fo_customer_type || ""}
+                      onChange={(v) => handleUpdatePartyType(selectedParty.id, v)}
+                      options={FO_CUSTOMER_TYPES}
+                      placeholder="-- Not an FO party --"
+                      disabled={partyTypeSaving}
+                    />
+                    <button type="button" onClick={() => setPartyTypeEdit(false)} className="text-[11px] text-slate-500 underline">Done</button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => setPartyTypeEdit(true)} className="text-[11px] text-slate-500 underline self-start mt-1">
+                    This party's FO Type: <strong>{selectedParty.fo_customer_type || "not set"}</strong> — change here
+                  </button>
+                )
+              )}
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">Party Address</label>
@@ -543,6 +579,24 @@ export default function PlanFeedPage() {
                       placeholder="-- Select party --"
                       disabled={editData.status === "CANCELLED"}
                     />
+                    {editDraft.party_id && customerMap.get(editDraft.party_id) && (
+                      partyTypeEdit ? (
+                        <div className="flex items-center gap-2 mt-1">
+                          <ErpComboboxField
+                            value={customerMap.get(editDraft.party_id)?.fo_customer_type || ""}
+                            onChange={(v) => handleUpdatePartyType(editDraft.party_id, v)}
+                            options={FO_CUSTOMER_TYPES}
+                            placeholder="-- Not an FO party --"
+                            disabled={partyTypeSaving}
+                          />
+                          <button type="button" onClick={() => setPartyTypeEdit(false)} className="text-[11px] text-slate-500 underline">Done</button>
+                        </div>
+                      ) : (
+                        <button type="button" onClick={() => setPartyTypeEdit(true)} className="text-[11px] text-slate-500 underline self-start mt-1">
+                          This party's FO Type: <strong>{customerMap.get(editDraft.party_id)?.fo_customer_type || "not set"}</strong> — change here
+                        </button>
+                      )
+                    )}
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">
