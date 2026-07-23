@@ -59,6 +59,47 @@ function fmt(n) {
   return Number.isFinite(v) ? v.toLocaleString(undefined, { maximumFractionDigits: 3 }) : "0";
 }
 
+// SKU field needs to cover both cases: an existing FG material (pick from suggestions,
+// description auto-fills) and a brand-new SKU not yet in Material Master (just type it,
+// write the description by hand) -- a strict dropdown can only do the first. Typing
+// freely always clears any previously-picked material_id (parent's onTextChange);
+// clicking a suggestion re-links it.
+function SkuTypeaheadField({ skuText, materials, onTextChange, onPickMaterial, disabled, placeholder }) {
+  const [open, setOpen] = useState(false);
+  const matches = useMemo(() => {
+    const needle = skuText.trim().toLowerCase();
+    if (!needle) return [];
+    return materials.filter((m) => materialLabel(m).toLowerCase().includes(needle)).slice(0, 8);
+  }, [skuText, materials]);
+
+  return (
+    <div className="relative">
+      <input
+        className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-full disabled:opacity-50"
+        value={skuText}
+        disabled={disabled}
+        onChange={(e) => { onTextChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder={placeholder}
+      />
+      {open && matches.length > 0 && (
+        <ul className="absolute z-50 mt-1 max-h-48 w-full overflow-y-auto border border-slate-300 bg-white shadow-md text-sm">
+          {matches.map((m) => (
+            <li
+              key={m.id}
+              className="px-2 py-1 cursor-pointer hover:bg-sky-50"
+              onMouseDown={(e) => { e.preventDefault(); onPickMaterial(m); setOpen(false); }}
+            >
+              {materialLabel(m)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function productionStatusTone(status) {
   switch (status) {
     case "FULLY_MAPPED": return "bg-emerald-100 text-emerald-800";
@@ -109,10 +150,6 @@ export default function PlanFeedPage() {
   const customerOptions = useMemo(
     () => (customersQ.data ?? []).map((c) => ({ value: c.id, label: customerLabel(c) })),
     [customersQ.data],
-  );
-  const materialOptions = useMemo(
-    () => (materialsQ.data ?? []).map((m) => ({ value: m.id, label: materialLabel(m) })),
-    [materialsQ.data],
   );
   const customerMap = useMemo(() => new Map((customersQ.data ?? []).map((c) => [c.id, c])), [customersQ.data]);
 
@@ -242,6 +279,7 @@ export default function PlanFeedPage() {
       setEditDraft({
         party_id: row.party_id ?? "",
         material_id: row.material_id ?? "",
+        sku: row.sku ?? "",
         description: row.description ?? "",
         ordered_qty_kg: row.ordered_qty_kg ?? "",
         pack_qty: row.pack_qty ?? "",
@@ -271,6 +309,7 @@ export default function PlanFeedPage() {
       };
       if (!skuLockedForEdit) {
         payload.material_id = editDraft.material_id || null;
+        payload.sku = editDraft.sku || null;
         payload.description = editDraft.description || null;
       }
       await updatePlanFeed(editData.id, payload);
@@ -473,13 +512,21 @@ export default function PlanFeedPage() {
 
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">SKU <span className="text-rose-500">*</span></label>
-              <ErpComboboxField
-                value={form.material_id}
-                onChange={(v) => setForm(f => ({ ...f, material_id: v }))}
-                options={materialOptions}
-                placeholder="-- Select FG SKU --"
-                emptyStateLabel={materialsQ.isLoading ? "Loading..." : "No FG materials found"}
+              <SkuTypeaheadField
+                skuText={form.sku}
+                materials={materialsQ.data ?? []}
+                placeholder="Type SKU — pick a match, or keep typing for a new one"
+                onTextChange={(text) => setForm(f => ({ ...f, sku: text, material_id: "" }))}
+                onPickMaterial={(m) => setForm(f => ({
+                  ...f,
+                  sku: m.pace_code || m.external_code || f.sku,
+                  material_id: m.id,
+                  description: m.material_name || f.description,
+                }))}
               />
+              {form.material_id
+                ? <span className="text-[11px] text-emerald-700">Linked to an existing FG material.</span>
+                : <span className="text-[11px] text-amber-700">No existing material picked — will be saved as a new/free-text SKU.</span>}
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">Description</label>
@@ -602,12 +649,18 @@ export default function PlanFeedPage() {
                     <label className="text-xs text-slate-600 font-medium">
                       SKU {skuLockedForEdit ? <span className="text-amber-600">(locked — allocations exist)</span> : null}
                     </label>
-                    <ErpComboboxField
-                      value={editDraft.material_id}
-                      onChange={(v) => setEditDraft(d => ({ ...d, material_id: v }))}
-                      options={materialOptions}
-                      placeholder="-- Select FG SKU --"
+                    <SkuTypeaheadField
+                      skuText={editDraft.sku ?? ""}
+                      materials={materialsQ.data ?? []}
+                      placeholder="Type SKU — pick a match, or keep typing for a new one"
                       disabled={editData.status === "CANCELLED" || skuLockedForEdit}
+                      onTextChange={(text) => setEditDraft(d => ({ ...d, sku: text, material_id: "" }))}
+                      onPickMaterial={(m) => setEditDraft(d => ({
+                        ...d,
+                        sku: m.pace_code || m.external_code || d.sku,
+                        material_id: m.id,
+                        description: m.material_name || d.description,
+                      }))}
                     />
                   </div>
                   <div className="flex flex-col gap-1 col-span-2">
