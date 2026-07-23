@@ -21,6 +21,13 @@ import {
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 
+const FO_CUSTOMER_TYPE_OPTIONS = [
+  { value: "", label: "-- Not an FO party --" },
+  { value: "MTO_HPS", label: "MTO / HPS" },
+  { value: "ZTEST", label: "ZTEST" },
+  { value: "MTS", label: "MTS" },
+];
+
 function formatVendorAddress(vendor) {
   if (!vendor) return "";
   const parts = [
@@ -44,6 +51,7 @@ export default function CustomerCreatePage() {
     parent_customer_id: "",
     customer_name: "",
     customer_type: "DOMESTIC",
+    fo_customer_type: "",
     currency_code: "BDT",
     delivery_address: "",
     billing_address: "",
@@ -154,6 +162,7 @@ export default function CustomerCreatePage() {
         parent_customer_id: form.parent_customer_id || undefined,
         customer_name: isVendorLinked ? undefined : form.customer_name.trim(),
         customer_type: form.customer_type,
+        fo_customer_type: form.fo_customer_type || undefined,
         currency_code: form.currency_code,
         delivery_address: form.delivery_address.trim(),
         billing_address: form.billing_address.trim() || undefined,
@@ -307,6 +316,17 @@ export default function CustomerCreatePage() {
             >
               <option value="DOMESTIC">DOMESTIC</option>
               <option value="EXPORT">EXPORT</option>
+            </select>
+          </ErpDenseFormRow>
+          <ErpDenseFormRow label="FO Type (Plan Feed party filter)">
+            <select
+              value={form.fo_customer_type}
+              onChange={(event) => updateField("fo_customer_type", event.target.value)}
+              className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+            >
+              {FO_CUSTOMER_TYPE_OPTIONS.map((entry) => (
+                <option key={entry.value} value={entry.value}>{entry.label}</option>
+              ))}
             </select>
           </ErpDenseFormRow>
           <ErpDenseFormRow label="Currency" required>

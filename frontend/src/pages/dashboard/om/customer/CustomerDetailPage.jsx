@@ -29,6 +29,13 @@ import {
   useParentCustomersQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 
+const FO_CUSTOMER_TYPE_OPTIONS = [
+  { value: "", label: "-- Not an FO party --" },
+  { value: "MTO_HPS", label: "MTO / HPS" },
+  { value: "ZTEST", label: "ZTEST" },
+  { value: "MTS", label: "MTS" },
+];
+
 function getAllowedStatusTargets(status) {
   const transitions = {
     DRAFT: ["ACTIVE", "INACTIVE", "PENDING_APPROVAL"],
@@ -102,6 +109,7 @@ export default function CustomerDetailPage() {
       primary_contact_person: customer.primary_contact_person ?? "",
       phone: customer.phone ?? "",
       primary_email: customer.primary_email ?? "",
+      fo_customer_type: customer.fo_customer_type ?? "",
     });
   }, [customer]);
 
@@ -141,6 +149,7 @@ export default function CustomerDetailPage() {
         primary_contact_person: form.primary_contact_person,
         phone: form.phone,
         primary_email: form.primary_email,
+        fo_customer_type: form.fo_customer_type,
       });
       if (result?.data) {
         await detailQuery.refetch();
@@ -223,6 +232,7 @@ export default function CustomerDetailPage() {
             <div className="grid gap-3 md:grid-cols-4">
               <ErpFieldPreview label="Status" value={customer.status} tone="sky" />
               <ErpFieldPreview label="Type" value={customer.customer_type} />
+              <ErpFieldPreview label="FO Type" value={customer.fo_customer_type || "Not an FO party"} />
               <ErpFieldPreview label="Currency" value={customer.currency_code} />
               <ErpFieldPreview label="GST Number" value={customer.gst_number} />
               <ErpFieldPreview
@@ -285,6 +295,17 @@ export default function CustomerDetailPage() {
                       <option key={entry.code} value={entry.code}>
                         {entry.code} | {entry.country}
                       </option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="FO Type (Plan Feed party filter)">
+                  <select
+                    value={form.fo_customer_type}
+                    onChange={(event) => setField("fo_customer_type", event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    {FO_CUSTOMER_TYPE_OPTIONS.map((entry) => (
+                      <option key={entry.value} value={entry.value}>{entry.label}</option>
                     ))}
                   </select>
                 </ErpDenseFormRow>
