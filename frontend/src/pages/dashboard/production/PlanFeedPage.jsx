@@ -716,6 +716,7 @@ export default function PlanFeedPage() {
                         <th className="text-left py-2 px-3 border-b">Status</th>
                         <th className="text-right py-2 px-3 border-b">PO Qty</th>
                         <th className="text-right py-2 px-3 border-b">Allocated (KG)</th>
+                        <th className="text-right py-2 px-3 border-b">Room to Increase</th>
                         <th className="py-2 px-3 border-b"></th>
                       </tr>
                     </thead>
@@ -731,6 +732,7 @@ export default function PlanFeedPage() {
                             <td className="py-2 px-3 text-right">
                               <input
                                 type="number" step="0.01" defaultValue={a.allocated_qty_kg}
+                                max={po.available_qty_kg_excl_this_fo}
                                 className="w-28 border border-slate-300 rounded px-2 py-1 text-sm font-mono text-right"
                                 onBlur={(e) => {
                                   if (Number(e.target.value) !== Number(a.allocated_qty_kg)) {
@@ -739,6 +741,9 @@ export default function PlanFeedPage() {
                                 }}
                               />
                             </td>
+                            <td className="py-2 px-3 text-right font-mono text-emerald-700">
+                              {fmt(Math.max(0, (po.available_qty_kg_excl_this_fo ?? 0) - Number(a.allocated_qty_kg)))}
+                            </td>
                             <td className="py-2 px-3">
                               <button type="button" onClick={() => handleAllocationQtyChange(a, 0)} className="text-rose-600 text-xs underline">Unmap</button>
                             </td>
@@ -746,7 +751,7 @@ export default function PlanFeedPage() {
                         );
                       })}
                       {(editData.allocations ?? []).length === 0 && (
-                        <tr><td colSpan={6} className="py-4 text-center text-slate-400 text-sm">No Packing PO allocated yet.</td></tr>
+                        <tr><td colSpan={7} className="py-4 text-center text-slate-400 text-sm">No Packing PO allocated yet.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -759,20 +764,34 @@ export default function PlanFeedPage() {
                     <button type="button" onClick={handleFindAllocationCandidate} disabled={allocSearching} className="px-3 py-1.5 border border-slate-300 text-sm rounded hover:bg-slate-50">
                       {allocSearching ? "Searching..." : "Find"}
                     </button>
-                    {allocCandidate && (
-                      <>
-                        <div className="text-sm text-slate-600">
-                          Found: <span className="font-mono">{allocCandidate.po_number}</span> ({materialLabel(allocCandidate.material)}, {fmt(allocCandidate.actual_qty_kg || allocCandidate.planned_qty_kg)} KG)
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          <label className="text-xs text-slate-600 font-medium">Allocate Qty (KG)</label>
-                          <input type="number" step="0.01" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-32" value={allocQty} onChange={e => setAllocQty(e.target.value)} />
-                        </div>
-                        <button type="button" disabled={saving || !allocQty} onClick={() => submitAllocation(false)} className="px-3 py-1.5 bg-sky-600 text-white text-sm rounded hover:bg-sky-700 disabled:opacity-50">
-                          Allocate
-                        </button>
-                      </>
-                    )}
+                    {allocCandidate && (() => {
+                      const totalQty = Number(allocCandidate.actual_qty_kg) || Number(allocCandidate.planned_qty_kg) || 0;
+                      const ownExisting = (editData.allocations ?? []).find(
+                        (a) => a.packing_order_id === allocCandidate.id,
+                      )?.allocated_qty_kg ?? 0;
+                      const availableForThisFo = (allocCandidate.fo_available_qty_kg ?? totalQty) + Number(ownExisting);
+                      return (
+                        <>
+                          <div className="text-sm text-slate-600">
+                            Found: <span className="font-mono">{allocCandidate.po_number}</span> ({materialLabel(allocCandidate.material)})
+                            <br />
+                            Total: <strong>{fmt(totalQty)} KG</strong> &nbsp;|&nbsp;
+                            Already allocated elsewhere: <strong>{fmt(allocCandidate.fo_allocated_qty_kg ? Number(allocCandidate.fo_allocated_qty_kg) - Number(ownExisting) : 0)} KG</strong> &nbsp;|&nbsp;
+                            <span className="text-emerald-700">Available to allocate: <strong>{fmt(availableForThisFo)} KG</strong></span>
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs text-slate-600 font-medium">Allocate Qty (KG)</label>
+                            <input type="number" step="0.01" max={availableForThisFo} className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-32" value={allocQty} onChange={e => setAllocQty(e.target.value)} />
+                            {Number(allocQty) > availableForThisFo && (
+                              <span className="text-[11px] text-rose-600">Exceeds available quantity.</span>
+                            )}
+                          </div>
+                          <button type="button" disabled={saving || !allocQty} onClick={() => submitAllocation(false)} className="px-3 py-1.5 bg-sky-600 text-white text-sm rounded hover:bg-sky-700 disabled:opacity-50">
+                            Allocate
+                          </button>
+                        </>
+                      );
+                    })()}
                   </div>
                 </ErpSectionCard>
               )}

@@ -999,11 +999,37 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
       "id, pace_code, material_name, shade_code",
     );
 
+    // §83.18-REVISED: surface FO-allocation room directly on this list so the Plan
+    // Feed "find Packing PO to allocate" flow can show Total/Allocated/Available
+    // before the user commits a qty, instead of only failing at submit time.
+    const poIds = rows.map((row) => String(row.id));
+    const allocatedByPo = new Map<string, number>();
+    if (poIds.length > 0) {
+      const { data: allocs, error: allocErr } = await serviceRoleClient
+        .schema("erp_production").from("plan_feed_packing_order_allocation")
+        .select("packing_order_id, allocated_qty_kg")
+        .in("packing_order_id", poIds);
+      if (allocErr) {
+        console.error("[packing_order.listPackingOrders] allocation query failed:", JSON.stringify(allocErr));
+        throw new Error("PROD_PACK_LIST_FAILED");
+      }
+      for (const a of (allocs ?? []) as JsonRecord[]) {
+        const key = String(a.packing_order_id);
+        allocatedByPo.set(key, (allocatedByPo.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
+      }
+    }
+
     return okResponse({
-      data: rows.map((row) => ({
-        ...row,
-        material: materialMap.get(String(row.material_id ?? "")) ?? null,
-      })),
+      data: rows.map((row) => {
+        const totalQty = Number(row.actual_qty_kg) || Number(row.planned_qty_kg) || 0;
+        const allocatedQty = allocatedByPo.get(String(row.id)) ?? 0;
+        return {
+          ...row,
+          material: materialMap.get(String(row.material_id ?? "")) ?? null,
+          fo_allocated_qty_kg: allocatedQty,
+          fo_available_qty_kg: Math.max(0, totalQty - allocatedQty),
+        };
+      }),
       pagination: { page, per_page: perPage, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / perPage) },
     }, ctx.request_id, req);
   } catch (err) {

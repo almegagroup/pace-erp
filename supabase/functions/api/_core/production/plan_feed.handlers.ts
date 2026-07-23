@@ -212,9 +212,29 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
 
   const materialMap = await getMaterialMapByIds(((pos ?? []) as JsonRecord[]).map((p) => String(p.material_id ?? "")));
 
+  // Room to increase each row: total across every FO for that Packing PO, minus what's
+  // allocated to OTHER FOs (this row's own qty is excluded so the UI can show "you can
+  // raise this up to X more" rather than a number that already double-counts itself).
+  const { data: allOtherAllocs, error: otherAllocErr } = await serviceRoleClient
+    .schema("erp_production").from("plan_feed_packing_order_allocation")
+    .select("plan_feed_id, packing_order_id, allocated_qty_kg")
+    .in("packing_order_id", poIds);
+  if (otherAllocErr) {
+    console.error("[plan_feed.fetchAllocationsForFo] other-allocations query failed:", JSON.stringify(otherAllocErr));
+    throw new Error("PROD_PLAN_FEED_ALLOCATION_FETCH_FAILED");
+  }
+  const otherAllocatedByPo = new Map<string, number>();
+  for (const a of (allOtherAllocs ?? []) as JsonRecord[]) {
+    if (String(a.plan_feed_id) === planFeedId) continue;
+    const key = String(a.packing_order_id);
+    otherAllocatedByPo.set(key, (otherAllocatedByPo.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
+  }
+
   return rows.map((row) => {
     const po = poMap.get(String(row.packing_order_id)) ?? null;
     const procInfo = po ? strokeByProcessOrder.get(String((po as JsonRecord).process_order_id ?? "")) ?? null : null;
+    const totalQty = po ? (Number((po as JsonRecord).actual_qty_kg) || Number((po as JsonRecord).planned_qty_kg) || 0) : 0;
+    const otherAllocated = otherAllocatedByPo.get(String(row.packing_order_id)) ?? 0;
     return {
       ...row,
       packing_order: po ? {
@@ -222,6 +242,7 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
         material: materialMap.get(String((po as JsonRecord).material_id ?? "")) ?? null,
         batch_number: procInfo?.batch_number ?? null,
         actual_stroke: procInfo?.stroke ?? null,
+        available_qty_kg_excl_this_fo: Math.max(0, totalQty - otherAllocated),
       } : null,
     };
   });
