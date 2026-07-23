@@ -178,7 +178,7 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
   const poIds = [...new Set(rows.map((r) => String(r.packing_order_id)))];
   const { data: pos, error: poErr } = await serviceRoleClient
     .schema("erp_production").from("packing_order")
-    .select("id, po_number, material_id, status, planned_qty_kg, actual_qty_kg, process_order_id")
+    .select("id, po_number, material_id, status, planned_qty_kg, actual_qty_kg, process_order_id, num_packs, fill_qty_per_pack")
     .in("id", poIds);
   if (poErr) {
     console.error("[plan_feed.fetchAllocationsForFo] packing_order query failed:", JSON.stringify(poErr));

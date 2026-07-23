@@ -302,6 +302,7 @@ export default function PlanFeedPage() {
   const [allocPoNumber, setAllocPoNumber] = useState("");
   const [allocCandidate, setAllocCandidate] = useState(null);
   const [allocQty, setAllocQty] = useState("");
+  const [allocNumPacks, setAllocNumPacks] = useState("");
   const [allocSearching, setAllocSearching] = useState(false);
 
   const listQ = useQuery({
@@ -409,6 +410,7 @@ export default function PlanFeedPage() {
     if (!editData || !allocPoNumber.trim()) return;
     setAllocSearching(true);
     setAllocCandidate(null);
+    setAllocNumPacks("");
     try {
       const res = await listPackingOrders({ company_id: editData.company_id, po_number: allocPoNumber.trim(), per_page: 5 });
       const rows = res?.data ?? [];
@@ -424,6 +426,15 @@ export default function PlanFeedPage() {
     }
   }
 
+  function handleAllocNumPacksChange(value) {
+    setAllocNumPacks(value);
+    const packs = Number(value);
+    const fillQty = Number(allocCandidate?.fill_qty_per_pack ?? 0);
+    if (Number.isFinite(packs) && packs > 0 && fillQty > 0) {
+      setAllocQty(String(packs * fillQty));
+    }
+  }
+
   async function submitAllocation(confirmMismatch) {
     if (!editData || !allocCandidate) return;
     setSaving(true);
@@ -434,7 +445,7 @@ export default function PlanFeedPage() {
         confirm_mismatch: confirmMismatch === true,
       });
       toast("Allocation saved.");
-      setAllocPoNumber(""); setAllocCandidate(null); setAllocQty("");
+      setAllocPoNumber(""); setAllocCandidate(null); setAllocQty(""); setAllocNumPacks("");
       await loadEditFo(editData.id);
     } catch (err) {
       if (err.message === "PROD_PLAN_FEED_MATERIAL_MISMATCH") {
@@ -798,6 +809,8 @@ export default function PlanFeedPage() {
                         <th className="text-left py-2 px-3 border-b">PO Number</th>
                         <th className="text-left py-2 px-3 border-b">Material</th>
                         <th className="text-left py-2 px-3 border-b">Status</th>
+                        <th className="text-right py-2 px-3 border-b">Fill Qty/Pack</th>
+                        <th className="text-right py-2 px-3 border-b">Num Packs</th>
                         <th className="text-right py-2 px-3 border-b">PO Qty</th>
                         <th className="text-right py-2 px-3 border-b">Allocated (KG)</th>
                         <th className="text-right py-2 px-3 border-b">Room to Increase</th>
@@ -812,6 +825,8 @@ export default function PlanFeedPage() {
                             <td className="py-2 px-3 font-mono">{po.po_number}</td>
                             <td className="py-2 px-3">{materialLabel(po.material)}</td>
                             <td className="py-2 px-3">{po.status}</td>
+                            <td className="py-2 px-3 text-right font-mono">{po.fill_qty_per_pack != null ? fmt(po.fill_qty_per_pack) : "—"}</td>
+                            <td className="py-2 px-3 text-right font-mono">{po.num_packs ?? "—"}</td>
                             <td className="py-2 px-3 text-right font-mono">{fmt(po.actual_qty_kg || po.planned_qty_kg)}</td>
                             <td className="py-2 px-3 text-right">
                               <input
@@ -835,7 +850,7 @@ export default function PlanFeedPage() {
                         );
                       })}
                       {(editData.allocations ?? []).length === 0 && (
-                        <tr><td colSpan={7} className="py-4 text-center text-slate-400 text-sm">No Packing PO allocated yet.</td></tr>
+                        <tr><td colSpan={9} className="py-4 text-center text-slate-400 text-sm">No Packing PO allocated yet.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -858,14 +873,24 @@ export default function PlanFeedPage() {
                         <>
                           <div className="text-sm text-slate-600">
                             Found: <span className="font-mono">{allocCandidate.po_number}</span> ({materialLabel(allocCandidate.material)})
+                            {allocCandidate.fill_qty_per_pack != null && (
+                              <span> — {fmt(allocCandidate.fill_qty_per_pack)} KG/pack × {allocCandidate.num_packs ?? "—"} packs</span>
+                            )}
                             <br />
                             Total: <strong>{fmt(totalQty)} KG</strong> &nbsp;|&nbsp;
                             Already allocated elsewhere: <strong>{fmt(allocCandidate.fo_allocated_qty_kg ? Number(allocCandidate.fo_allocated_qty_kg) - Number(ownExisting) : 0)} KG</strong> &nbsp;|&nbsp;
                             <span className="text-emerald-700">Available to allocate: <strong>{fmt(availableForThisFo)} KG</strong></span>
                           </div>
+                          {allocCandidate.fill_qty_per_pack ? (
+                            <div className="flex flex-col gap-1">
+                              <label className="text-xs text-slate-600 font-medium">Num Packs to Allocate</label>
+                              <input type="number" step="1" min="0" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-28" value={allocNumPacks} onChange={e => handleAllocNumPacksChange(e.target.value)} />
+                              <span className="text-[11px] text-slate-400">= {fmt(Number(allocNumPacks || 0) * Number(allocCandidate.fill_qty_per_pack))} KG</span>
+                            </div>
+                          ) : null}
                           <div className="flex flex-col gap-1">
                             <label className="text-xs text-slate-600 font-medium">Allocate Qty (KG)</label>
-                            <input type="number" step="0.01" max={availableForThisFo} className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-32" value={allocQty} onChange={e => setAllocQty(e.target.value)} />
+                            <input type="number" step="0.01" max={availableForThisFo} className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-32" value={allocQty} onChange={e => { setAllocQty(e.target.value); setAllocNumPacks(""); }} />
                             {Number(allocQty) > availableForThisFo && (
                               <span className="text-[11px] text-rose-600">Exceeds available quantity.</span>
                             )}
