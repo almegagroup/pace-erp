@@ -58,6 +58,10 @@ import {
   updatePlanFeedHandler,
   cancelPlanFeedHandler,
   planFeedSummaryHandler,
+  listFoAllocationsHandler,
+  upsertFoAllocationHandler,
+  listUnmappedStockHandler,
+  checkOrderedStrokeHandler,
 } from "../_core/production/plan_feed.handlers.ts";
 import {
   listProcessOrdersHandler,
@@ -82,7 +86,6 @@ import {
   listPackingSfgBatchOptionsHandler,
   createPackingOrderHandler,
   updatePackingOrderLinesHandler,
-  linkFoHandler,
   finalizePackingOrderHandler,
   reversePackingOrderHandler,
   correctPackingOrderHandler,
@@ -207,6 +210,10 @@ export async function dispatchProductionRoutes(
       return await createPlanFeedHandler(req, ctx);
     case "GET:/api/production/plan-feed/summary":
       return await planFeedSummaryHandler(req, ctx);
+    case "GET:/api/production/plan-feed/unmapped-stock":
+      return await listUnmappedStockHandler(req, ctx);
+    case "GET:/api/production/plan-feed/check-stroke":
+      return await checkOrderedStrokeHandler(req, ctx);
 
     // Process Orders
     case "GET:/api/production/process-orders":
@@ -313,6 +320,10 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/plan-feed\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
     return await cancelPlanFeedHandler(req, ctx);
   }
+  if (/^\/api\/production\/plan-feed\/[^/]+\/allocations$/.test(pathname)) {
+    if (req.method === "GET") return await listFoAllocationsHandler(req, ctx);
+    if (req.method === "POST") return await upsertFoAllocationHandler(req, ctx);
+  }
 
   // Process Orders /:id actions
   if (/^\/api\/production\/process-orders\/[^/]+$/.test(pathname)) {
@@ -375,9 +386,6 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/packing-orders\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
     return await cancelPackingOrderHandler(req, ctx);
-  }
-  if (/^\/api\/production\/packing-orders\/[^/]+\/link-fo$/.test(pathname) && req.method === "POST") {
-    return await linkFoHandler(req, ctx);
   }
   if (/^\/api\/production\/packing-orders\/[^/]+\/finalize$/.test(pathname) && req.method === "POST") {
     return await finalizePackingOrderHandler(req, ctx);

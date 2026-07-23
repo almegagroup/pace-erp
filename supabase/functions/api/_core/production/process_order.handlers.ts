@@ -1553,7 +1553,7 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
     const { data: packOrders, error: packErr } = await serviceRoleClient
       .schema("erp_production")
       .from("packing_order")
-      .select("id, po_number, status, planned_qty_kg, actual_qty_kg, plan_feed_id")
+      .select("id, po_number, status, planned_qty_kg, actual_qty_kg")
       .eq("process_order_id", id)
       .neq("status", "REVERSED");
     if (packErr) {

@@ -958,7 +958,6 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
     const poNumber = toTrimmedString(url.searchParams.get("po_number") ?? "");
     const processOrderId = toTrimmedString(url.searchParams.get("process_order_id") ?? "");
-    const planFeedId = toTrimmedString(url.searchParams.get("plan_feed_id") ?? "");
     const status = toUpperTrimmedString(url.searchParams.get("status") ?? "");
     const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10));
     const perPage = Math.min(100, Math.max(10, parseInt(url.searchParams.get("per_page") ?? "20", 10)));
@@ -968,7 +967,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
       .select(`
         id, company_id, po_number, po_type, source_po_type, process_order_id, material_id,
         pack_code_id, fill_qty_per_pack, num_packs, sku_qty, fg_conversion_qty, sfg_conversion_qty, planned_qty_kg, actual_qty_kg,
-        status, plan_feed_id, segment_code, created_by, created_at,
+        status, segment_code, created_by, created_at,
         finalized_at, last_updated_at,
         pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type),
         process_order:process_order!process_order_id(po_number, batch_number, status)
@@ -978,7 +977,6 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
     if (companyId) query = query.eq("company_id", companyId);
     if (poNumber) query = query.eq("po_number", poNumber);
     if (processOrderId) query = query.eq("process_order_id", processOrderId);
-    if (planFeedId) query = query.eq("plan_feed_id", planFeedId);
     if (status) query = query.eq("status", status);
 
     const { data, error, count } = await ((query as typeof query & {
@@ -1132,7 +1130,6 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     const materialId = toTrimmedString(body.material_id);
     const numPacks = parsePositiveInt(body.num_packs);
     const fillQtyPerPack = numberOrNull(body.fill_qty_per_pack);
-    const planFeedId = toTrimmedString(body.plan_feed_id) || null;
     const pmLocationInputs = Array.isArray(body.pm_lines) ? body.pm_lines as JsonRecord[] : [];
 
     if (!companyId || !VALID_PACK_PO_TYPES.has(poType) || !["MTO", "HPS", "MTS", "ZTEST"].includes(normalizedSourcePoType) || !materialId || !numPacks) {
@@ -1357,7 +1354,6 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         planned_qty_kg: plannedQtyKg,
         total_qty_kg: plannedQtyKg,
         status: "STANDARD",
-        plan_feed_id: planFeedId,
         segment_code: normalizedSourcePoType,
         created_by: ctx.auth_user_id,
         created_at: now,
@@ -1782,44 +1778,11 @@ export async function updatePackingOrderLinesHandler(req: Request, ctx: ProdHand
   }
 }
 
-// POST /api/production/packing-orders/:id/link-fo
-// Link or delink a Firm Order to this packing order.
-export async function linkFoHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
-  try {
-    assertManagerOrSARole(ctx);
-    const id = getIdFromPath(req);
-    if (!id) return packErr(req, ctx, "PROD_PACK_ID_MISSING", 400, "ID required");
-
-    const { data: po } = await serviceRoleClient.schema("erp_production").from("packing_order")
-      .select("id, status").eq("id", id).maybeSingle();
-    if (!po) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Not found");
-    if ((po as JsonRecord).status === "REVERSED") {
-      return packErr(req, ctx, "PROD_PACK_REVERSED", 422, "Cannot modify reversed packing order");
-    }
-
-    const body = await parseBody(req);
-    const planFeedId = toTrimmedString(body.plan_feed_id) || null;
-
-    if (planFeedId) {
-      // Verify FO exists and is ACTIVE
-      const { data: fo } = await serviceRoleClient.schema("erp_production").from("plan_feed")
-        .select("id, status").eq("id", planFeedId).maybeSingle();
-      if (!fo || (fo as JsonRecord).status !== "ACTIVE") {
-        return packErr(req, ctx, "PROD_PACK_FO_INVALID", 422, "FO not found or not ACTIVE");
-      }
-    }
-
-    const { error } = await serviceRoleClient.schema("erp_production").from("packing_order")
-      .update({ plan_feed_id: planFeedId, last_updated_at: new Date().toISOString(), last_updated_by: ctx.auth_user_id })
-      .eq("id", id);
-    if (error) throw new Error("PROD_PACK_LINK_FO_FAILED");
-
-    return okResponse({ id, plan_feed_id: planFeedId }, ctx.request_id, req);
-  } catch (err) {
-    const code = err instanceof Error ? err.message : "PROD_PACK_LINK_FO_FAILED";
-    return packErr(req, ctx, code, 500, "Link FO failed");
-  }
-}
+// §83.18-REVISED (2026-07-23): FO<->Packing PO linking moved to the quantity-level
+// allocation endpoints in plan_feed.handlers.ts (upsertFoAllocationHandler /
+// listFoAllocationsHandler) -- the old whole-record link-fo action (single FK,
+// packing_order.plan_feed_id, now dropped) could not express partial/multi-FO
+// allocation. Removed here, not replaced in this file.
 
 // §83.4.1 addendum (2026-07-21): PM-line AP Reco. Mirrors the exact rule the
 // frontend's computeRowValues() already applies for Process PO RM/INT lines
@@ -2339,10 +2302,20 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
       }
     }
 
+    // §83.18-REVISED: a REVERSED Packing PO's qty no longer exists, so any FO
+    // allocation against it is stale -- drop those allocation rows too (the FO itself
+    // is untouched, exactly like FO Cancel only ever removes the link, never the FO).
+    const { error: allocDeleteErr } = await serviceRoleClient
+      .schema("erp_production").from("plan_feed_packing_order_allocation")
+      .delete().eq("packing_order_id", id);
+    if (allocDeleteErr) {
+      console.error("[packing_order.reversePackingOrder] allocation cleanup failed:", JSON.stringify(allocDeleteErr));
+      throw new Error("PROD_PACK_REVERSE_FAILED");
+    }
+
     await serviceRoleClient.schema("erp_production").from("packing_order")
       .update({
         status: "REVERSED",
-        plan_feed_id: null,
         reversed_by: ctx.auth_user_id,
         reversed_at: reverseNow,
         last_updated_at: reverseNow,

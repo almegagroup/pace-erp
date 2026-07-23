@@ -496,12 +496,13 @@ export async function createCustomer(payload) {
 
 export async function listCustomers({
   customer_type,
+  fo_customer_type,
   status,
   search,
   limit = 50,
   offset = 0,
 } = {}) {
-  const params = buildParams({ customer_type, status, search, limit, offset });
+  const params = buildParams({ customer_type, fo_customer_type, status, search, limit, offset });
   return fetchJson(`/api/om/customers?${params.toString()}`, {}, "OM_CUSTOMER_LIST_FAILED");
 }
 

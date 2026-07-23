@@ -276,6 +276,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/plan-feed":                   { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
   "POST:/api/production/plan-feed":                  { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "WRITE" },
   "GET:/api/production/plan-feed/summary":           { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  "GET:/api/production/plan-feed/unmapped-stock":    { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  "GET:/api/production/plan-feed/check-stroke":      { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
   "GET:/api/production/process-orders":              { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   "GET:/api/production/process-orders/availability-preview": { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   "POST:/api/production/process-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
@@ -939,6 +941,13 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "EDIT" } },
   },
   {
+    pattern: /^\/api\/production\/plan-feed\/[^/]+\/allocations$/,
+    methods: {
+      GET:  { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+      POST: { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "EDIT" },
+    },
+  },
+  {
     pattern: /^\/api\/production\/process-orders\/[^/]+$/,
     methods: { GET: { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" } },
   },
@@ -1014,10 +1023,6 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/production\/packing-orders\/[^/]+\/cancel$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
-  },
-  {
-    pattern: /^\/api\/production\/packing-orders\/[^/]+\/link-fo$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
   },
   {

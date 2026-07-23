@@ -9542,7 +9542,7 @@ Pack Code | Fill Size(s)       | Actions
 
 ### 83.18 — Plan Feed Page
 
-**LOCKED — 2026-06-11**
+**LOCKED — 2026-06-11.** ~~Superseded 2026-07-23 — the original 3-field-set design below predates real usage (Dev has 0 `plan_feed` rows) and turned out to be missing the whole allocation/status/master-linkage layer.~~ **See §83.18-REVISED below for the current locked design.** Kept here for history — do not implement against this version.
 
 ---
 
@@ -9615,6 +9615,71 @@ Overview of all plan entries. Rows are sorted by Order Date and Scheduled Delive
 - Data updates live as system progresses (Packing PO created, batch started, dispatch posted)
 - Pagination: standard page-based pagination
 - Smart Filters: by date range, SKU, Party, FO status (Active / Cancelled / Completed), dispatch status
+
+---
+
+### 83.18-REVISED — Plan Feed Page Full Redesign
+
+**LOCKED — 2026-07-23 (business owner session, supersedes 83.18 above).**
+
+#### Purpose (re-confirmed)
+
+Plan Feed (FO) is the earliest signal in the whole production chain — it is where PACE first learns what Asian Paints (or any FG customer) has ordered, before any production starts. It is fundamentally an **order-visibility + status page**, not just a data-entry form: "what did the customer order, and what state is it in right now" (production done? dispatched?).
+
+**FO vs SO (recap, unchanged from original §83.1 lock):** FO arrives early and drives production (Process PO/Packing PO get created against it). SO arrives 1–2 days before dispatch — in ~99% of cases it just confirms the same qty/SKU the FO already carried; it is a late-stage commercial confirmation, not a separate demand signal. FO is what unlocks production; SO is what (eventually, in the Dispatch design) authorizes shipment.
+
+#### Master data prerequisites
+
+- **`erp_master.customer_master` gets a new nullable `fo_customer_type` column** (`MTO_HPS`, `ZTEST`, `MTS`) — same customer master RM/PM Sales already uses (confirmed: one shared Party master, not a separate one for FO). Named `fo_` to avoid colliding with the table's existing unrelated `customer_type` column (DOMESTIC/EXPORT-style commercial classification, live data) — caught by a duplicate-column DB error on first migration attempt. RM/PM Sales customers keep `fo_customer_type = NULL`. On Plan Feed's Create tab, selecting a PO Type (MTO/HPS/MTS/MTEST) filters the Party dropdown to matching `fo_customer_type` (MTO and HPS share one type value since they use the same customer pool).
+- **`plan_feed.party_id` and `plan_feed.material_id`** (both already existed as unused columns) become the actual source of truth — Party and SKU are proper dropdowns (customer_master / material_master), not free text. Selecting a Party auto-displays its `delivery_address`/`billing_address` (read-only, from the master — never re-typed).
+- **Company resolution** reuses the existing `TransactionCompanySelector` component (same one Process PO/Packing PO/Pack BOM already use) — single-company users get it auto-resolved with no dropdown; multi-company (GLOBAL_ACL MULTI) users get a required dropdown. Replaces today's raw-text Company ID input (R-01 violation).
+- **FO Edit's "find FO" step** stops being a raw-UUID-paste field — becomes a proper search/list picker (R-01).
+
+#### Ordered Stroke / Actual Stroke
+
+- **Ordered Stroke** — a manual field (`plan_feed.ordered_stroke_number`, text), filled in later by Production (not at FO creation by Sales/Commercial). Typing a value triggers a live existence check against `stroke_master` (scoped by company + the FO's own Prodshade-derived material) and tells the user whether that Stroke already exists or still needs to be created.
+- **Actual Stroke** — read-only, never typed. Derived live from every Packing PO allocated to this FO → that Packing PO's Process PO → its Stroke. If multiple allocated Packing POs were produced from different Strokes, each is shown on its own line (never blended into one value) — this is how a deviation between planned and actual formulation becomes visible at the FO level.
+
+#### FO ↔ Packing PO mapping — quantity-level allocation (replaces the single-FK design)
+
+The original design (`packing_order.plan_feed_id`, a single FK — one Packing PO belongs to at most one FO) does not cover the required flexibility. Locked replacement:
+
+**New table `erp_production.plan_feed_packing_order_allocation`** — many-to-many between `plan_feed` and `packing_order`, carrying its own `allocated_qty_kg`. One row per (FO, Packing PO) pair; increasing/decreasing an allocation updates that row's qty rather than inserting a new one. `packing_order.plan_feed_id` is retired entirely (dropped) — it cannot express partial/multi-FO allocation.
+
+**Rules (all confirmed, business owner examples used barrels/KG throughout):**
+- One Packing PO can be **fully** allocated to one FO, **partially** allocated to one FO with the remainder going to a different FO (or staying unallocated), or **not allocated at all** (PACE's own free/balance stock).
+- Any existing allocation's qty can be **increased or decreased at any time** — the only hard rule: the sum of all allocations against one Packing PO can never exceed that Packing PO's own actual qty. No time-based restriction (can reduce today, increase again tomorrow).
+- **Full or partial unmap** — reducing an allocation to zero deletes the allocation row (equivalent to full unmap for that PO).
+- **Material mismatch is a soft warning, never a hard block** — if the Packing PO's material does not match the FO's SKU/material, show a warning ("material differs from this FO's SKU — map anyway?") and proceed on confirm. Reason: rare but legitimate cross-SKU dispatch decisions exist and must not be blocked outright.
+- **Unmapped/free-stock helper** — when creating a new FO for a given SKU, show the SKU's existing unallocated Packing PO stock (qty with no allocation, or the unallocated remainder of a partially-allocated one) as a live query (`Σ actual_qty_kg − Σ allocated_qty_kg` per Packing PO, summed for that material) — helps Production see "X KG already sitting free, only need to make (ordered − X) more." This is a live query, not a cached counter — the moment an allocation is reduced/removed, the freed qty reappears here automatically with no extra bookkeeping.
+
+#### FO Cancel
+
+- Per-row Cancel action on the FO. On cancel: **all of that FO's allocation rows are deleted** (Packing POs become unallocated/free again, available for re-allocation to a different FO later) and the FO's own status becomes `CANCELLED`.
+- **The Packing PO itself is never cancelled or altered** by this action — only the allocation link disappears. This mirrors the already-existing principle elsewhere in the system that reversing a link never reverses the underlying production.
+
+#### Field edit-lock rules (replaces the old "any Packing PO exists → whole FO locked" rule)
+
+| Field | Lock rule |
+|---|---|
+| FO Number | Locked forever from creation — never editable (already true in code today, no change needed) |
+| SKU / Material, Description | Locked once **any** allocation exists against this FO |
+| Party, Ordered Qty (KG), Pack Qty, Order Date, Scheduled Delivery Date, Ordered Stroke | **Always editable**, allocations or not |
+
+The old blanket `PROD_PLAN_FEED_LOCKED` (any linked Packing PO → entire FO uneditable) is removed — it directly conflicted with the allocation flexibility above (you cannot dynamically map/unmap against a record you can no longer touch).
+
+#### Tab 3 — Total Table (Summary), revised
+
+Two independent derived status badges per row (never combined into one status) — because "how much is produced" and "how much is dispatched" are different concerns for different teams:
+
+- **Production status** (from `Σ allocated_qty_kg` vs `ordered_qty_kg`): Unmapped → Partially Mapped → Fully Mapped
+- **Dispatch status** (from dispatched qty, once Dispatch/L5 exists, vs allocated/mapped qty): Undispatched → Partially Dispatched → Fully Dispatched
+
+Columns: FO #, Party, SKU, Ordered Qty (KG), Pack Qty, Mapped Qty (KG + pack/barrel count), Production status badge, Dispatched Qty (KG + count), Dispatch status badge, Pending Qty, Dispatch Dates (one line per distinct dispatch event — an FO can be dispatched across several separate events on different dates), Scheduled Delivery Date.
+
+**Sort:** rows still needing action (not Fully Dispatched) sort to the top by nearest Scheduled Delivery Date first; Fully Dispatched rows sink to the bottom, most-recent-dispatch-date first within that group.
+
+**Note:** the Dispatch-status/Dispatch-Dates columns are placeholders until the formal Dispatch (L5) session defines where dispatch events actually get recorded — implement the Production-status half now, wire the Dispatch half in once that schema exists.
 
 ---
 

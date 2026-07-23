@@ -92,6 +92,10 @@ export const createPlanFeed = (body) => fetchProd("POST", "/api/production/plan-
 export const updatePlanFeed = (id, body) => fetchProd("PATCH", `/api/production/plan-feed/${id}`, body);
 export const cancelPlanFeed = (id) => fetchProd("POST", `/api/production/plan-feed/${id}/cancel`);
 export const getPlanFeedSummary = (p) => fetchProd("GET", "/api/production/plan-feed/summary", undefined, p);
+export const listFoAllocations = (foId) => fetchProd("GET", `/api/production/plan-feed/${foId}/allocations`);
+export const upsertFoAllocation = (foId, body) => fetchProd("POST", `/api/production/plan-feed/${foId}/allocations`, body);
+export const getUnmappedStock = (p) => fetchProd("GET", "/api/production/plan-feed/unmapped-stock", undefined, p);
+export const checkOrderedStroke = (p) => fetchProd("GET", "/api/production/plan-feed/check-stroke", undefined, p);
 
 // ── Process Orders ────────────────────────────────────────────────────────────
 export const listProcessOrders = (p) => fetchProd("GET", "/api/production/process-orders", undefined, p);
@@ -132,7 +136,6 @@ export const createPackingOrder = (body) => fetchProd("POST", "/api/production/p
 export const updatePackingOrderLines = (id, body) => fetchProd("PATCH", `/api/production/packing-orders/${id}/lines`, body);
 export const editPackingOrder = (id, body) => fetchProd("PATCH", `/api/production/packing-orders/${id}/edit`, body);
 export const cancelPackingOrder = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/cancel`, body);
-export const linkFo = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/link-fo`, body);
 export const finalizePackingOrder = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/finalize`, body);
 export const reversePackingOrder = (id) => fetchProd("POST", `/api/production/packing-orders/${id}/reverse`);
 export const correctPackingOrder = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/correct`, body);

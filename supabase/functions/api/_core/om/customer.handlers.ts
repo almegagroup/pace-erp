@@ -16,6 +16,10 @@ import { assertManagerOrSARole } from "./shared.ts";
 type JsonRecord = Record<string, unknown>;
 
 const ALLOWED_CUSTOMER_TYPES = new Set(["DOMESTIC", "EXPORT"]);
+// §83.18-REVISED (2026-07-23): separate from customer_type above (unrelated
+// DOMESTIC/EXPORT commercial classification) -- this filters the Plan Feed (FO) Party
+// dropdown by PO Type. Optional/nullable: RM/PM Sales customers never set it.
+const ALLOWED_FO_CUSTOMER_TYPES = new Set(["MTO_HPS", "ZTEST", "MTS"]);
 const CUSTOMER_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL", "ACTIVE", "INACTIVE", "BLOCKED"]);
 const CUSTOMER_TRANSITIONS = new Map<string, Set<string>>([
   ["DRAFT", new Set(["ACTIVE", "INACTIVE", "PENDING_APPROVAL"])],
@@ -161,9 +165,13 @@ export async function createCustomerHandler(
     const customerName = toTrimmedString(body.customer_name);
     const customerType = toTrimmedString(body.customer_type).toUpperCase();
     const deliveryAddress = toTrimmedString(body.delivery_address);
+    const foCustomerTypeRaw = toTrimmedString(body.fo_customer_type).toUpperCase();
 
     if ((!customerName && !vendorId) || !deliveryAddress || !ALLOWED_CUSTOMER_TYPES.has(customerType)) {
       return customerErrorResponse(req, ctx, "OM_INVALID_CUSTOMER_TYPE", 400, "Invalid customer type");
+    }
+    if (foCustomerTypeRaw && !ALLOWED_FO_CUSTOMER_TYPES.has(foCustomerTypeRaw)) {
+      return customerErrorResponse(req, ctx, "OM_INVALID_FO_CUSTOMER_TYPE", 400, "Invalid FO customer type");
     }
     if (vendorId && !(await ensureVendorExists(vendorId))) {
       return customerErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
@@ -185,6 +193,7 @@ export async function createCustomerHandler(
       // Vendor-linked: name/GST resolve live from vendor_master (see enrichCustomerRows) — not stored here.
       customer_name: vendorId ? null : customerName,
       customer_type: customerType,
+      fo_customer_type: foCustomerTypeRaw || null,
       delivery_address: deliveryAddress,
       billing_address: toTrimmedString(body.billing_address) || null,
       gst_number: vendorId ? null : toTrimmedString(body.gst_number) || null,
@@ -231,6 +240,7 @@ export async function listCustomersHandler(
 
     const url = new URL(req.url);
     const customerType = toTrimmedString(url.searchParams.get("customer_type")).toUpperCase();
+    const foCustomerType = toTrimmedString(url.searchParams.get("fo_customer_type")).toUpperCase();
     const statusFilter = toTrimmedString(url.searchParams.get("status")).toUpperCase();
     const search = normalizeSearch(toTrimmedString(url.searchParams.get("search")));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
@@ -245,6 +255,9 @@ export async function listCustomersHandler(
 
     if (customerType) {
       query = query.eq("customer_type", customerType);
+    }
+    if (foCustomerType) {
+      query = query.eq("fo_customer_type", foCustomerType);
     }
     if (statusFilter) {
       query = query.eq("status", statusFilter);
@@ -331,6 +344,14 @@ export async function updateCustomerHandler(
       if (body[field] !== undefined) {
         updates[field] = body[field];
       }
+    }
+
+    if (body.fo_customer_type !== undefined) {
+      const foCustomerType = toTrimmedString(body.fo_customer_type).toUpperCase();
+      if (foCustomerType && !ALLOWED_FO_CUSTOMER_TYPES.has(foCustomerType)) {
+        return customerErrorResponse(req, ctx, "OM_INVALID_FO_CUSTOMER_TYPE", 400, "Invalid FO customer type");
+      }
+      updates.fo_customer_type = foCustomerType || null;
     }
 
     if (body.parent_customer_id !== undefined) {
