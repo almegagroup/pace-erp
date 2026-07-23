@@ -18,6 +18,7 @@ import {
   listPlanFeed, getPlanFeed, createPlanFeed, updatePlanFeed,
   cancelPlanFeed, getPlanFeedSummary, upsertFoAllocation,
   getUnmappedStock, checkOrderedStroke, listStrokeOptions, listPackingOrders,
+  findPlanFeedByNumber,
 } from "./prodApi.js";
 import { listMaterials, listCustomers, createCustomer, updateCustomer } from "../om/omApi.js";
 
@@ -296,6 +297,9 @@ export default function PlanFeedPage() {
 
   // ── Edit tab state ────────────────────────────────────────────────────────
   const [editSearch, setEditSearch] = useState("");
+  const [foNumberSearch, setFoNumberSearch] = useState("");
+  const [foNumberMatches, setFoNumberMatches] = useState(null);
+  const [foNumberSearching, setFoNumberSearching] = useState(false);
   const [editData, setEditData] = useState(null);
   const [editDraft, setEditDraft] = useState({});
   const [editLoading, setEditLoading] = useState(false);
@@ -359,6 +363,41 @@ export default function PlanFeedPage() {
     } finally {
       setEditLoading(false);
     }
+  }
+
+  // Exact FO Number lookup, scoped to every company this user can see (not just the
+  // one currently selected) -- auto-resolves the company for multi-company users if
+  // the FO turns out to live in a different one of their own companies.
+  async function handleFindFoByNumber() {
+    const foNumber = foNumberSearch.trim();
+    if (!foNumber) return;
+    const companyIds = (runtimeContext?.availableCompanies ?? []).map((c) => c.id).filter(Boolean);
+    if (companyIds.length === 0) return;
+    setFoNumberSearching(true);
+    setFoNumberMatches(null);
+    try {
+      const res = await findPlanFeedByNumber({ fo_number: foNumber, company_ids: companyIds.join(",") });
+      const matches = res?.data ?? [];
+      if (matches.length === 0) {
+        toast(`FO number "${foNumber}" not found.`, "error");
+      } else if (matches.length === 1) {
+        await handlePickFoMatch(matches[0]);
+      } else {
+        setFoNumberMatches(matches);
+      }
+    } catch (err) {
+      toast(err.message || "FO lookup failed.", "error");
+    } finally {
+      setFoNumberSearching(false);
+    }
+  }
+
+  async function handlePickFoMatch(match) {
+    if (match.company_id && match.company_id !== effectiveCompanyId) {
+      setCompanyId(match.company_id);
+    }
+    setFoNumberMatches(null);
+    await loadEditFo(match.id);
   }
 
   async function handleSaveEdit(e) {
@@ -670,21 +709,58 @@ export default function PlanFeedPage() {
       {/* ── Tab: Edit ── */}
       {tab === "edit" && (
         <>
-          <ErpSectionCard title="Find FO to Edit">
-            <input className="border border-slate-300 rounded px-2 py-1 text-sm w-80" value={editSearch} onChange={e => setEditSearch(e.target.value)} placeholder="Search FO number or party..." />
-            <div className="mt-3">
-              <div className="flex flex-col divide-y divide-slate-100 max-h-56 overflow-y-auto border border-slate-200 rounded">
-                {foListFiltered.map(fo => (
-                  <button key={fo.id} onClick={() => loadEditFo(fo.id)}
-                    className="flex items-center justify-between px-3 py-2 text-sm hover:bg-sky-50 text-left">
-                    <span className="font-mono font-medium text-sky-700">{fo.fo_number}</span>
-                    <span className="text-slate-500">{fo.party_name}</span>
-                    <span className="text-slate-400 text-xs">{fo.order_date}</span>
-                  </button>
-                ))}
-                {foListFiltered.length === 0 && (
-                  <p className="px-3 py-4 text-center text-sm text-slate-400">{listQ.isLoading ? "Loading..." : "No FOs matched."}</p>
-                )}
+          <ErpSectionCard title="Find FO by Number">
+            <div className="flex gap-2 items-end flex-wrap">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-slate-600 font-medium">FO Number</label>
+                <input
+                  className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-64"
+                  value={foNumberSearch}
+                  onChange={(e) => setFoNumberSearch(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleFindFoByNumber(); }}
+                  placeholder="Exact FO number"
+                />
+              </div>
+              <button type="button" onClick={handleFindFoByNumber} disabled={foNumberSearching || !foNumberSearch.trim()} className="px-3 py-1.5 bg-sky-600 text-white text-sm rounded hover:bg-sky-700 disabled:opacity-50">
+                {foNumberSearching ? "Searching..." : "Find"}
+              </button>
+              <span className="text-[11px] text-slate-400">Searches across every company you have access to.</span>
+            </div>
+            {foNumberMatches && foNumberMatches.length > 1 && (
+              <div className="mt-3 border border-amber-200 bg-amber-50 rounded p-2">
+                <p className="text-xs text-amber-800 mb-2">This FO number exists in more than one of your companies — pick one:</p>
+                <div className="flex flex-col divide-y divide-amber-100">
+                  {foNumberMatches.map((m) => {
+                    const company = (runtimeContext?.availableCompanies ?? []).find((c) => c.id === m.company_id);
+                    return (
+                      <button key={m.id} onClick={() => handlePickFoMatch(m)} className="flex items-center justify-between px-2 py-1.5 text-sm hover:bg-amber-100 text-left">
+                        <span className="text-slate-700">{company?.company_name || company?.company_code || m.company_id}</span>
+                        <span className="text-slate-500">{m.party_name}</span>
+                        <span className="text-slate-400 text-xs">{m.order_date}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 border-t border-slate-200 pt-3">
+              <p className="text-xs text-slate-500 mb-2">Or browse recent FOs in this company:</p>
+              <input className="border border-slate-300 rounded px-2 py-1 text-sm w-80" value={editSearch} onChange={e => setEditSearch(e.target.value)} placeholder="Filter by FO number or party..." />
+              <div className="mt-2">
+                <div className="flex flex-col divide-y divide-slate-100 max-h-56 overflow-y-auto border border-slate-200 rounded">
+                  {foListFiltered.map(fo => (
+                    <button key={fo.id} onClick={() => loadEditFo(fo.id)}
+                      className="flex items-center justify-between px-3 py-2 text-sm hover:bg-sky-50 text-left">
+                      <span className="font-mono font-medium text-sky-700">{fo.fo_number}</span>
+                      <span className="text-slate-500">{fo.party_name}</span>
+                      <span className="text-slate-400 text-xs">{fo.order_date}</span>
+                    </button>
+                  ))}
+                  {foListFiltered.length === 0 && (
+                    <p className="px-3 py-4 text-center text-sm text-slate-400">{listQ.isLoading ? "Loading..." : "No FOs matched."}</p>
+                  )}
+                </div>
               </div>
             </div>
           </ErpSectionCard>

@@ -97,6 +97,7 @@ export const upsertFoAllocation = (foId, body) => fetchProd("POST", `/api/produc
 export const getUnmappedStock = (p) => fetchProd("GET", "/api/production/plan-feed/unmapped-stock", undefined, p);
 export const checkOrderedStroke = (p) => fetchProd("GET", "/api/production/plan-feed/check-stroke", undefined, p);
 export const listStrokeOptions = (p) => fetchProd("GET", "/api/production/plan-feed/stroke-options", undefined, p);
+export const findPlanFeedByNumber = (p) => fetchProd("GET", "/api/production/plan-feed/find", undefined, p);
 
 // ── Process Orders ────────────────────────────────────────────────────────────
 export const listProcessOrders = (p) => fetchProd("GET", "/api/production/process-orders", undefined, p);

@@ -163,6 +163,40 @@ export async function listPlanFeedHandler(req: Request, ctx: ProdHandlerContext)
   }
 }
 
+// GET /api/production/plan-feed/find?fo_number=&company_ids=id1,id2,...
+// The Edit tab's primary lookup: exact FO Number match, scoped to whichever companies
+// the caller passes (their own accessible company list, e.g. runtimeContext's
+// availableCompanies) -- not a system-wide search. fo_number is only unique per
+// company, so a multi-company user could in rare cases get more than one match; the
+// caller decides (auto-load if exactly one, otherwise let the user disambiguate).
+export async function findPlanFeedByNumberHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const foNumber = toTrimmedString(url.searchParams.get("fo_number") ?? "");
+    const companyIds = toTrimmedString(url.searchParams.get("company_ids") ?? "")
+      .split(",").map((s) => s.trim()).filter(Boolean);
+    if (!foNumber || companyIds.length === 0) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_FIND_INVALID", 400, "fo_number and company_ids required");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_production").from("plan_feed")
+      .select("id, company_id, fo_number, party_name, order_date, status")
+      .eq("fo_number", foNumber)
+      .in("company_id", companyIds);
+    if (error) {
+      console.error("[plan_feed.findPlanFeedByNumber] query failed:", JSON.stringify(error));
+      throw new Error("PROD_PLAN_FEED_FIND_FAILED");
+    }
+
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_FIND_FAILED";
+    return foErr(req, ctx, code, 500, "FO lookup failed");
+  }
+}
+
 async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> {
   const { data: allocations, error } = await serviceRoleClient
     .schema("erp_production").from("plan_feed_packing_order_allocation")
