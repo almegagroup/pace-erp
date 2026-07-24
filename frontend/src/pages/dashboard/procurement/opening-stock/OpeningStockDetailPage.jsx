@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
@@ -253,6 +253,28 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
 
   const lines = Array.isArray(detail?.lines) ? detail.lines : [];
   const computedTotalValue = lines.reduce((sum, line) => sum + Number(line.total_value ?? 0), 0);
+
+  // §104-7/§109 — SFG and INT get the same dosage-derived rate suggestion at
+  // Recalculate time as they do at original Opening entry (Stroke dosage% x
+  // that RM's CURRENT rate) — useful here because the RM side may have just
+  // been corrected in an earlier step of the same sweep. Still only a
+  // suggestion: a purchased INT/SFG batch keeps its own real rate.
+  const recalcSuggestLines = lines.filter((line) => {
+    if (line.already_recalculated) return false;
+    const materialType = materialMap.get(line.material_id)?.material_type;
+    return materialType === "SFG" || materialType === "INT";
+  });
+  const recalcDerivedRateQueries = useQueries({
+    queries: recalcSuggestLines.map((line) => ({
+      queryKey: ["derived-opening-rate-recalc", detail?.company_id, line.material_id],
+      queryFn: () => getDerivedOpeningRate({ company_id: detail?.company_id, material_id: line.material_id }),
+      enabled: Boolean(detail?.status === "POSTED" && detail?.company_id && line.material_id),
+      select: (response) => response?.data ?? response ?? null,
+    })),
+  });
+  const recalcDerivedRateByLineId = new Map(
+    recalcSuggestLines.map((line, index) => [line.id, recalcDerivedRateQueries[index]?.data ?? null]),
+  );
   const queryError =
     (!documentId ? "Opening stock document id is required." : "") ||
     detailQuery.error?.message ||
@@ -597,22 +619,40 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                           key: "corrected_rate",
                           label: "Corrected Rate (§109)",
                           width: "160px",
-                          render: (row) =>
-                            row.already_recalculated ? (
-                              <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                                Recalculated
-                              </span>
-                            ) : (
-                              <input
-                                type="number"
-                                min="0"
-                                step="any"
-                                placeholder="New rate"
-                                value={recalcRates[row.id] ?? ""}
-                                onChange={(event) => updateRecalcRate(row.id, event.target.value)}
-                                className="h-8 w-full border border-amber-300 bg-amber-50 px-2 text-sm text-amber-950 outline-none focus:border-amber-500"
-                              />
-                            ),
+                          render: (row) => {
+                            if (row.already_recalculated) {
+                              return (
+                                <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                                  Recalculated
+                                </span>
+                              );
+                            }
+                            const suggested = recalcDerivedRateByLineId.get(row.id);
+                            const derivable = suggested?.derivable ? suggested : null;
+                            return (
+                              <div className="flex flex-col gap-1">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  placeholder="New rate"
+                                  value={recalcRates[row.id] ?? ""}
+                                  onChange={(event) => updateRecalcRate(row.id, event.target.value)}
+                                  className="h-8 w-full border border-amber-300 bg-amber-50 px-2 text-sm text-amber-950 outline-none focus:border-amber-500"
+                                />
+                                {derivable && (
+                                  <button
+                                    type="button"
+                                    onClick={() => updateRecalcRate(row.id, String(Number(derivable.rate).toFixed(4)))}
+                                    title={`From Stroke ${derivable.stroke_number ?? "--"} dosage: ${Number(derivable.rate).toFixed(4)}/unit. Only a suggestion — purchased SFG/INT keeps its own purchase rate.`}
+                                    className="truncate text-left text-xs text-sky-700 underline decoration-dotted hover:text-sky-900"
+                                  >
+                                    Suggest {Number(derivable.rate).toFixed(4)} (from dosage)
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          },
                         }]
                       : []),
                     {
