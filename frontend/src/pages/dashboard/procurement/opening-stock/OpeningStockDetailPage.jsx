@@ -119,11 +119,15 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   const [entryDrawerOpen, setEntryDrawerOpen] = useState(false);
   const [editingLineId, setEditingLineId] = useState("");
   const [editForm, setEditForm] = useState(createEmptySingleForm());
-  // §109 — Opening Rate "Recalculate" (Phase 1, single material, no cascade yet)
-  const [recalcLineId, setRecalcLineId] = useState("");
-  const [recalcRate, setRecalcRate] = useState("");
+  // §109 — Opening Rate "Recalculate" (Phase 1, single material, no cascade yet).
+  // Bulk-table UX per business owner feedback (2026-07-24): every un-recalculated
+  // POSTED line gets an inline Corrected Rate input; ONE shared Reason + ONE
+  // "Recalculate All" button submits every filled-in line in one action. Each
+  // line is one-time-use (enforced server-side, VALUATION_RECALC_ALREADY_DONE) —
+  // once done it shows as locked, no "reopen" mechanism exists yet.
+  const [recalcRates, setRecalcRates] = useState({});
   const [recalcReason, setRecalcReason] = useState("");
-  const [recalcResult, setRecalcResult] = useState(null);
+  const [recalcResults, setRecalcResults] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -392,44 +396,56 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     }
   }
 
-  function startRecalculate(line) {
-    setRecalcLineId(line.id);
-    setRecalcRate(String(line.rate_per_unit ?? ""));
-    setRecalcReason("");
-    setRecalcResult(null);
+  function updateRecalcRate(lineId, value) {
+    setRecalcRates((current) => ({ ...current, [lineId]: value }));
   }
 
-  function cancelRecalculate() {
-    setRecalcLineId("");
-    setRecalcRate("");
-    setRecalcReason("");
-    setRecalcResult(null);
-  }
-
-  async function handleRecalculate(line) {
-    if (!detail || !recalcReason.trim()) {
+  // §8B: each line's correction touches a different (material, location, stock_type)
+  // snapshot row — independent of every other line — so this batch runs in parallel,
+  // not a sequential for-loop.
+  async function handleRecalculateAll() {
+    if (!detail) return;
+    const targets = lines.filter((line) => !line.already_recalculated && recalcRates[line.id]?.trim());
+    if (targets.length === 0) {
+      setError("Enter a Corrected Rate on at least one line first.");
+      return;
+    }
+    if (!recalcReason.trim()) {
       setError("A reason is required before recalculating.");
       return;
     }
     setSaving(true);
     setError("");
     setNotice("");
-    try {
-      const result = await recalculateValuation({
-        company_id: detail.company_id,
-        material_id: line.material_id,
-        storage_location_id: line.storage_location_id,
-        stock_type_code: line.stock_type,
-        new_rate: Number(recalcRate),
-        reason: recalcReason.trim(),
-      });
-      setRecalcResult(result);
-      setNotice(`Valuation recalculated: ${result.old_rate} -> ${result.new_rate}. ${result.impacted_rows.length} downstream posting(s) not yet corrected (Phase 2/3, §109).`);
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "VALUATION_RECALC_FAILED");
-    } finally {
-      setSaving(false);
-    }
+    const results = await Promise.all(
+      targets.map(async (line) => {
+        try {
+          const result = await recalculateValuation({
+            line_id: line.id,
+            company_id: detail.company_id,
+            material_id: line.material_id,
+            storage_location_id: line.storage_location_id,
+            stock_type_code: line.stock_type,
+            new_rate: Number(recalcRates[line.id]),
+            reason: recalcReason.trim(),
+          });
+          return { lineId: line.id, materialId: line.material_id, ok: true, ...result };
+        } catch (saveError) {
+          return {
+            lineId: line.id,
+            materialId: line.material_id,
+            ok: false,
+            error: saveError instanceof Error ? saveError.message : "VALUATION_RECALC_FAILED",
+          };
+        }
+      }),
+    );
+    setRecalcResults(results);
+    setRecalcRates({});
+    const succeeded = results.filter((r) => r.ok).length;
+    setNotice(`Recalculated ${succeeded} of ${results.length} line(s). See results below for details.`);
+    setSaving(false);
+    await detailQuery.refetch();
   }
 
   async function handleRemoveLine(lineId) {
@@ -582,10 +598,33 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                       render: (row) => formatCurrency(row.total_value, currencyCode),
                     },
                     { key: "movement_type_code", label: "Movement", width: "100px" },
+                    ...(detail.status === "POSTED"
+                      ? [{
+                          key: "corrected_rate",
+                          label: "Corrected Rate (§109)",
+                          width: "160px",
+                          render: (row) =>
+                            row.already_recalculated ? (
+                              <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                                Recalculated
+                              </span>
+                            ) : (
+                              <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                placeholder="New rate"
+                                value={recalcRates[row.id] ?? ""}
+                                onChange={(event) => updateRecalcRate(row.id, event.target.value)}
+                                className="h-8 w-full border border-amber-300 bg-amber-50 px-2 text-sm text-amber-950 outline-none focus:border-amber-500"
+                              />
+                            ),
+                        }]
+                      : []),
                     {
                       key: "action",
                       label: "Action",
-                      width: "180px",
+                      width: "140px",
                       render: (row) =>
                         detail.status === "DRAFT" ? (
                           <div className="flex gap-2">
@@ -604,14 +643,6 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                               Remove
                             </button>
                           </div>
-                        ) : detail.status === "POSTED" ? (
-                          <button
-                            type="button"
-                            onClick={() => startRecalculate(row)}
-                            className="border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800"
-                          >
-                            Recalculate
-                          </button>
                         ) : (
                           "—"
                         ),
@@ -621,6 +652,61 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                   rowKey={(row) => row.id}
                   emptyMessage={loading ? "Loading opening stock lines..." : "No lines added yet."}
                 />
+
+                {detail.status === "POSTED" ? (
+                  <div className="grid gap-3 rounded border border-amber-200 bg-amber-50 p-4">
+                    <div className="text-sm font-semibold text-amber-900">
+                      Recalculate Valuation (§109 Phase 1 — one click for every filled-in line above, one-time-use per line)
+                    </div>
+                    <div className="text-xs text-amber-800">
+                      Fill in "Corrected Rate" on whichever lines above need it, give one shared reason, then Recalculate All.
+                      Downstream SFG/FG batches that consumed these materials are <strong>not</strong> auto-corrected yet —
+                      check each result below for impacted postings that still need manual review. Already-recalculated lines
+                      are locked — no "reopen" action exists yet.
+                    </div>
+                    <ErpDenseFormRow label="Reason (required, applies to all lines recalculated in this action)">
+                      <input
+                        type="text"
+                        value={recalcReason}
+                        onChange={(event) => setRecalcReason(event.target.value)}
+                        placeholder="e.g. 31 July closing WAR received from Commercial"
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-amber-500"
+                      />
+                    </ErpDenseFormRow>
+                    <div className="flex">
+                      <button
+                        type="button"
+                        onClick={() => void handleRecalculateAll()}
+                        disabled={saving}
+                        className="border border-amber-700 bg-amber-100 px-3 py-1 text-sm font-semibold text-amber-950 disabled:opacity-50"
+                      >
+                        {saving ? "Recalculating..." : "Recalculate All"}
+                      </button>
+                    </div>
+                    {recalcResults.length > 0 ? (
+                      <div className="grid gap-1 border-t border-amber-200 pt-3 text-sm text-amber-900">
+                        {recalcResults.map((result) => {
+                          const material = materialMap.get(result.materialId);
+                          const materialLabel = material ? (material.material_name ?? result.materialId) : result.materialId;
+                          return (
+                            <div key={result.lineId}>
+                              {result.ok ? (
+                                <>
+                                  <strong>{materialLabel}</strong>: {result.old_rate} {"->"} {result.new_rate} —{" "}
+                                  {result.impacted_rows.length} downstream posting(s) not yet corrected
+                                </>
+                              ) : (
+                                <span className="text-rose-700">
+                                  <strong>{materialLabel}</strong>: failed — {result.error}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 {detail.status === "DRAFT" && editingLineId ? (
                   <div className="grid gap-3 rounded border border-sky-200 bg-sky-50 p-4">
@@ -700,85 +786,6 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                         Cancel
                       </button>
                     </div>
-                  </div>
-                ) : null}
-
-                {detail.status === "POSTED" && recalcLineId ? (
-                  <div className="grid gap-3 rounded border border-amber-200 bg-amber-50 p-4">
-                    <div className="text-sm font-semibold text-amber-900">
-                      Recalculate Valuation (§109 Phase 1 — this material only, no cascade)
-                    </div>
-                    <div className="text-xs text-amber-800">
-                      Replays this material&apos;s full stock ledger history from a corrected opening rate. Downstream SFG/FG
-                      batches that consumed this material are <strong>not</strong> auto-corrected yet — check the result below
-                      for impacted postings that still need manual review.
-                    </div>
-                    <div className="grid gap-3 xl:grid-cols-2">
-                      <ErpDenseFormRow label="Current Rate">
-                        <input
-                          type="text"
-                          readOnly
-                          value={lines.find((l) => l.id === recalcLineId)?.rate_per_unit ?? ""}
-                          className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-sm text-slate-500"
-                        />
-                      </ErpDenseFormRow>
-                      <ErpDenseFormRow label="Corrected Rate">
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={recalcRate}
-                          onChange={(event) => setRecalcRate(event.target.value)}
-                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-amber-500"
-                        />
-                      </ErpDenseFormRow>
-                      <ErpDenseFormRow label="Reason (required)">
-                        <input
-                          type="text"
-                          value={recalcReason}
-                          onChange={(event) => setRecalcReason(event.target.value)}
-                          placeholder="e.g. 31 July closing WAR received from Commercial"
-                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-amber-500"
-                        />
-                      </ErpDenseFormRow>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void handleRecalculate(lines.find((l) => l.id === recalcLineId))}
-                        disabled={saving}
-                        className="border border-amber-700 bg-amber-100 px-3 py-1 text-sm font-semibold text-amber-950 disabled:opacity-50"
-                      >
-                        {saving ? "Recalculating..." : "Confirm Recalculate"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={cancelRecalculate}
-                        className="border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                    {recalcResult ? (
-                      <div className="grid gap-1 border-t border-amber-200 pt-3 text-sm text-amber-900">
-                        <div>
-                          Rate: <span className="font-mono">{recalcResult.old_rate}</span> {"->"}{" "}
-                          <span className="font-mono">{recalcResult.new_rate}</span>
-                        </div>
-                        <div>
-                          Impacted downstream postings (not yet corrected): <strong>{recalcResult.impacted_rows.length}</strong>
-                        </div>
-                        {recalcResult.impacted_rows.length > 0 ? (
-                          <ul className="ml-4 list-disc">
-                            {recalcResult.impacted_rows.map((row) => (
-                              <li key={row.stock_ledger_id}>
-                                Doc {row.document_number || row.stock_ledger_id}: qty {row.quantity}, value delta {Number(row.value_delta).toFixed(2)}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </div>
-                    ) : null}
                   </div>
                 ) : null}
 

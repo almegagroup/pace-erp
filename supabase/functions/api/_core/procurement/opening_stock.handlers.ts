@@ -140,11 +140,43 @@ async function fetchOpeningStockLines(documentId: string): Promise<OpeningStockL
   return (data ?? []) as OpeningStockLineRow[];
 }
 
+async function attachRecalculationFlags(companyId: string, lines: OpeningStockLineRow[]): Promise<OpeningStockLineRow[]> {
+  if (lines.length === 0) return lines;
+
+  // §109 Phase 1 — valuation_correction_log's own existence for a
+  // (company, material, storage_location, stock_type) key is the one-time-use
+  // lock; surface it here so the UI can grey out already-corrected lines
+  // instead of relying on a client-side guess that the backend doesn't share.
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("valuation_correction_log")
+    .select("material_id, storage_location_id, stock_type_code")
+    .eq("company_id", companyId);
+  if (error) throw new Error("OPENING_STOCK_RECALC_FLAG_LOOKUP_FAILED");
+
+  const doneKeys = new Set(
+    ((data ?? []) as JsonRecord[]).map(
+      (row) => `${row.material_id}::${row.storage_location_id}::${toUpperTrimmedString(row.stock_type_code)}`,
+    ),
+  );
+
+  return lines.map((line) => ({
+    ...line,
+    already_recalculated: doneKeys.has(
+      `${line.material_id}::${line.storage_location_id}::${toUpperTrimmedString(line.stock_type)}`,
+    ),
+  }));
+}
+
 async function hydrateOpeningStockDocument(documentId: string): Promise<JsonRecord> {
-  const [document, lines] = await Promise.all([
+  const [document, rawLines] = await Promise.all([
     fetchOpeningStockDocument(documentId),
     fetchOpeningStockLines(documentId),
   ]);
+
+  const lines = document.status === "POSTED"
+    ? await attachRecalculationFlags(String(document.company_id), rawLines)
+    : rawLines;
 
   const totals = lines.reduce(
     (accumulator: { total_lines: number; total_value: number }, line) => {
@@ -1301,6 +1333,7 @@ export async function recalculateValuationHandler(
   try {
     assertManagerOrSARole(ctx);
     const body = await parseBody(req);
+    const lineId = toTrimmedString(body.line_id);
     const companyId = toTrimmedString(body.company_id);
     const materialId = toTrimmedString(body.material_id);
     const storageLocationId = toTrimmedString(body.storage_location_id);
@@ -1335,8 +1368,22 @@ export async function recalculateValuationHandler(
 
     if (error) {
       const code = toTrimmedString(error.message).split(":")[0] || "VALUATION_RECALC_FAILED";
-      const status = code === "VALUATION_RECALC_SNAPSHOT_NOT_FOUND" ? 404 : code === "VALUATION_RECALC_RATE_INVALID" ? 400 : 500;
+      const status = code === "VALUATION_RECALC_SNAPSHOT_NOT_FOUND" ? 404
+        : code === "VALUATION_RECALC_ALREADY_DONE" ? 409
+        : code === "VALUATION_RECALC_RATE_INVALID" ? 400
+        : 500;
       return openingStockErrorResponse(req, ctx, code, status, error.message);
+    }
+
+    // Keep the opening_stock_line's own rate_per_unit in sync with the
+    // corrected snapshot rate, so the "Current Rate" the user sees on next
+    // load reflects reality rather than the original (wrong) entry.
+    if (lineId) {
+      await serviceRoleClient
+        .schema("erp_procurement")
+        .from("opening_stock_line")
+        .update({ rate_per_unit: (data as JsonRecord)?.new_rate })
+        .eq("id", lineId);
     }
 
     return okResponse(data, ctx.request_id, req);
