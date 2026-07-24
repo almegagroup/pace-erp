@@ -11,7 +11,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import {
-  listPackCodes, listPackConfigs, upsertPackConfig, deletePackConfig,
+  listPackCodes, listPackConfigs, upsertPackConfig, deletePackConfig, listStrokeMasters,
 } from "./prodApi.js";
 
 const TABS = ["Pack Codes", "Prodshade Configs"];
@@ -31,6 +31,7 @@ export default function PackConfigPage() {
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [form, setForm] = useState({ company_id: "", material_id: "", pack_code_id: "", fill_qty: "" });
+  const [fillQtyLiter, setFillQtyLiter] = useState("");
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -49,6 +50,25 @@ export default function PackConfigPage() {
     select: d => Array.isArray(d) ? d : d?.data ?? [],
     enabled: tab === 1,
   });
+
+  // §108.2 item 4 — MTS/IWC Prodshades take fill_qty in Liter (physical container
+  // size, e.g. 1L/5L/50L); everything else keeps entering it directly in KG.
+  // conversion_factor lives on the Prodshade's own approved Stroke (§83.3, same
+  // source as List A item 3 — never on pack_code_master, it's density not pack-code).
+  const strokeForFormMaterialQ = useQuery({
+    queryKey: ["prod-pack-config-stroke-lookup", form.material_id],
+    queryFn: () => listStrokeMasters({ material_id: form.material_id, status: "APPROVED" }),
+    enabled: Boolean(form.material_id),
+    select: d => Array.isArray(d) ? d : d?.data ?? [],
+  });
+  const approvedStrokeForFormMaterial = strokeForFormMaterialQ.data?.[0] ?? null;
+  const isMtsFormMaterial = approvedStrokeForFormMaterial?.po_type === "MTS";
+  const fillQtyLiterFactor = isMtsFormMaterial
+    && approvedStrokeForFormMaterial?.conversion_uom_code
+    && Number(approvedStrokeForFormMaterial?.conversion_factor) > 0
+    ? Number(approvedStrokeForFormMaterial.conversion_factor)
+    : null;
+  const fillQtyLiterConversionMissing = isMtsFormMaterial && !strokeForFormMaterialQ.isLoading && fillQtyLiterFactor === null;
 
   async function handleCreate(e) {
     e.preventDefault();
@@ -85,7 +105,7 @@ export default function PackConfigPage() {
     <ErpScreenScaffold
       title="Pack Configuration"
       subtitle="Manage pack codes and prodshade-level pack configs"
-      actions={tab === 1 ? [{ label: "New Config", tone: "primary", mnemonic: "N", onClick: () => { setForm({ company_id: "", material_id: "", pack_code_id: "", fill_qty: "" }); setDrawerOpen(true); } }] : []}
+      actions={tab === 1 ? [{ label: "New Config", tone: "primary", mnemonic: "N", onClick: () => { setForm({ company_id: "", material_id: "", pack_code_id: "", fill_qty: "" }); setFillQtyLiter(""); setDrawerOpen(true); } }] : []}
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       {/* Tabs */}
@@ -194,7 +214,12 @@ export default function PackConfigPage() {
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs text-slate-600 font-medium">Prodshade Material ID <span className="text-rose-500">*</span></label>
-            <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.material_id} onChange={e => setForm(f => ({ ...f, material_id: e.target.value }))} required />
+            <input
+              className="border border-slate-300 rounded px-2 py-1.5 text-sm"
+              value={form.material_id}
+              onChange={e => { setForm(f => ({ ...f, material_id: e.target.value })); setFillQtyLiter(""); }}
+              required
+            />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs text-slate-600 font-medium">Pack Code <span className="text-rose-500">*</span></label>
@@ -205,11 +230,45 @@ export default function PackConfigPage() {
               ))}
             </select>
           </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-600 font-medium">Fill Qty (KG)</label>
-            <input type="number" step="0.01" min="0" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.fill_qty} onChange={e => setForm(f => ({ ...f, fill_qty: e.target.value }))} placeholder="e.g. 200" />
-            <p className="text-xs text-slate-400">Required for barrel (599) pack type.</p>
-          </div>
+          {isMtsFormMaterial ? (
+            <>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-slate-600 font-medium">Fill Qty (Liter)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
+                  value={fillQtyLiter}
+                  disabled={fillQtyLiterConversionMissing || strokeForFormMaterialQ.isLoading}
+                  onChange={e => {
+                    const literValue = e.target.value;
+                    setFillQtyLiter(literValue);
+                    const liters = Number(literValue);
+                    if (fillQtyLiterFactor && Number.isFinite(liters) && liters > 0) {
+                      setForm(f => ({ ...f, fill_qty: (liters * fillQtyLiterFactor).toFixed(4) }));
+                    } else {
+                      setForm(f => ({ ...f, fill_qty: "" }));
+                    }
+                  }}
+                  placeholder="e.g. 5"
+                />
+                {fillQtyLiterConversionMissing && (
+                  <span className="text-xs text-rose-600">এই Prodshade-এর Stroke-এ Conversion UOM/Factor সেট করা নেই — Stroke Master-এ গিয়ে যোগ করুন।</span>
+                )}
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-slate-600 font-medium">= Fill Qty (KG, derived)</label>
+                <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-900">{form.fill_qty || "--"}</div>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-slate-600 font-medium">Fill Qty (KG)</label>
+              <input type="number" step="0.01" min="0" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.fill_qty} onChange={e => setForm(f => ({ ...f, fill_qty: e.target.value }))} placeholder="e.g. 200" />
+              <p className="text-xs text-slate-400">Required for barrel (599) pack type.</p>
+            </div>
+          )}
         </form>
       </DrawerBase>
     </ErpScreenScaffold>

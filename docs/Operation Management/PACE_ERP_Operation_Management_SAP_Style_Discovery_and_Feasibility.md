@@ -15177,3 +15177,50 @@ ACTIVE ──(CORS reverse, automatic)──▶ VOIDED ──(manager/SA "Releas
 **Doc correction:** §83.4-এর Packing PO lifecycle table-এর "CORS → STANDARD" row আর CLAUDE.md-এর "Reversal: Step-by-step from any stage back to beginning" লাইন — দুটোই এই lock-এর সাথে সংশোধন করা হলো (struck-through + correction note, delete না করে)।
 
 **কোনো code change লাগেনি** — বর্তমান কোড (terminal REVERSED + batch_number_instance lifecycle) already এই locked design-এর সাথেই মেলে। যা লাগছিল সেটা শুধু doc-কে code-এর সাথে মিলিয়ে নেওয়া।
+
+---
+
+## Section 108 — MTS/IWC (Liquid) Discovery Session: Volume Input, Reco Skip, Reservation Choice (LOCKED — 2026-07-24)
+
+**পটভূমি:** Gate-27-এর MTO/HPS chain বন্ধ হয়ে যাওয়ার পর MTS (IWC + Powder, §83.7-এ unified) নিয়ে existing setup-এর সাথে live code চেক করে একটা gap-analysis session হলো। প্রতিটা claim code/DB-এর against verify করে হয়েছে (কয়েকবার আমার নিজের ভুল ধারণা ধরা পড়েছে — নিচের প্রতিটা item-এই সেই যাচাইয়ের রেফারেন্স আছে)। ফলাফল তিনটা list — এখনই implement করার (A), শুধু data/config লাগবে এমন prerequisite (B), আর এখনো design-ready না তাই সরিয়ে রাখা (C)।
+
+### 108.1 — কেন এই session লাগল
+
+IWC (MTS)-এর Process PO **Liter-এ চলে** (ব্যবসায়িক ভাষা — "1600 Ltr banano holo"), কিন্তু Stroke/BOM/RM সব **KG-তে** — MTO/HPS-এর কোনো volume/mass সমস্যা কখনো ছিল না, তাই এই conversion layer টা প্রথমবার সামনে এলো। এর পাশাপাশি MTS-এর তিনটা mechanism, যেগুলো আসলে MTO/HPS-থেকে টেনে আনা হয়েছিল, ভুল ধরে নেওয়া হয়েছিল:
+- reco (`process_order_line_reco`/`packing_order_line_reco`) — MTS-এর জন্য লেখা হচ্ছে, কিন্তু MTS-এর কোনো Approved/AP-Approved workflow নেই (§108.2-এ বিস্তারিত)
+- SFG reservation — earlier tasks #38/#39-এ deliberately "batch-blind" করা হয়েছিল MTO/HPS-এর pattern দেখে ধরে নিয়ে; business owner challenge করলেন এটা ভুল — pack size fixed হওয়া আর কোন batch থেকে SFG টানা হবে সেটা user-এর choice হওয়া, দুটো আলাদা জিনিস
+
+### 108.2 — List A: এখনই implement
+
+| # | Item | কেন |
+|---|---|---|
+| 1 | ~~`uom_master`-এ `LTR` row~~ **✅ ইতিমধ্যে আছে** — 2026-07-24 MCP verify: `code='L', name='Litre', uom_type='VOLUME'` (আর `ML`/Millilitre ও আছে)। কোনো কাজ লাগবে না, List A থেকে বাদ। | — |
+| 2 | ~~FG SKU-র `material_uom_conversion` (KG↔LTR)~~ **✅ mechanism ইতিমধ্যেই fully generic** — 2026-07-24 verify: `material_uom_conversion` আজও কোনো material-এ `BOT→L` conversion row রাখে, কোনো নতুন column/logic লাগে না। বাস্তব IWC SKU তৈরি হলে তার KG↔L factor row বসানো **শুধু data-entry**, তাই এটা **List B-তে সরানো হলো** (নিচে দেখো)। | — |
+| 3 | ✅ **DONE (2026-07-24)** — Process PO Create, Page 3: MTS-এর জন্য Batch Qty input **Liter-এ** (derived KG পাশে read-only দেখায়), RM calculation-এর আগে KG-এ convert। **Source যা প্রথমে ভুল ধরেছিলাম:** প্রথমে নতুন `material_uom_conversion`-based endpoint বানিয়েছিলাম, পরে ধরা পড়ল **`stroke_master.base_uom_code`/`conversion_uom_code`/`conversion_factor` (§83.3-এ 2026-06-এই locked, "Conversion Factor = KG per Litre") এই exact কাজের জন্য আগে থেকেই আছে** — কখনো কোনো কোডে read/apply হয়নি, শুধু write+display হতো (StrokeMasterPage.jsx)। এই session-এ প্রথমবার wire করা হলো — `processStep 3`-এ ইতিমধ্যেই `strokeDetailQ` loaded থাকে (Stroke Step 2-তেই select হয়), তাই নতুন কোনো endpoint লাগেনি, নতুন যা বানানো হয়েছিল তা সরিয়ে ফেলা হলো। | User Liter-এ ভাবে ("1600 Ltr"), কিন্তু RM lines/Stroke dosage% সব KG-ভিত্তিক — conversion না হলে RM qty ভুল বসবে |
+| 4 | ✅ **DONE (2026-07-24)** — Prodshade Pack Config (`PackConfigPage.jsx`)-এ MTS Prodshade-এর fill size input **Liter-এ** (derived KG পাশে দেখায়), item 3-এর একই source (`stroke_master.conversion_factor`, ওই Prodshade-এর APPROVED Stroke lookup করে) — `pack_code_master`-এ কোনো conversion বসানো হয়নি, কারণ এটা density/Prodshade-ভিত্তিক জিনিস, pack-code-ভিত্তিক নয় | পুরনো ভুল স্বীকার (this session-এ প্রথমে ধরে নিয়েছিলাম pack config সবসময় KG-তেই থাকবে — IWC-এর 1L/5L/50L ইত্যাদি pack size ব্যবসায়িক ভাষায় সবসময় Liter-এ বলা হয়, KG দিয়ে user কে ভাবাতে চাওয়া ভুল) |
+| 5 | ✅ **DONE (2026-07-24)** — Process PO Verify — MTS-এর জন্য `process_order_line_reco` insert **skip** (reco doc number generation-ও skip, series-এ অব্যবহৃত number না বসার জন্য) | MTS-এর কোনো Approved/Unapproved deviation workflow নেই (এই ধারণা MTO/HPS থেকে টানা হয়েছিল, MTS-এ প্রযোজ্য নয়) — reco row লিখলে একটা অর্থহীন/অব্যবহৃত row জমে যাবে, ভবিষ্যতে ভুলভাবে report-এ ঢুকতে পারে |
+| 6 | ✅ **DONE (2026-07-24)** — Packing PO Final ও COR6 correction দুই জায়গাতেই — PMTS-এর জন্য `packing_order_line_reco` insert **skip** | একই কারণ, Packing PO-র পাশে |
+| 7 | ✅ **DONE (2026-07-24)** — Approved/AP-Approved Qty UI — MTS/PMTS-এ **hide** (`ProductionPOFinalPage.jsx`-এ existing `isBatchBlind`-এর মতো নতুন `hideRmApproval`/`hidePmApproval` flag, Process PO Final-এর Input+Output table এবং Packing PO Final-এর PM table দুটোতেই) | item 5/6-এর UI-side — না থাকা field দেখানো user-কে বিভ্রান্ত করবে |
+| 8 | ✅ **DONE (2026-07-24)** — Packing PO SFG reservation — PMTS-এর জন্য "batch-blind" **উল্টানো**, user নিজে batch choose করবে (PMTO/PHPS-এর মতোই dropdown+shortage check)। `isBatchBlindPackingType()` (`packing_order.handlers.ts`) এখন শুধু `PTEST` return করে; frontend `ProductionPOFinalPage.jsx`-এর `isBatchBlind` একইভাবে সংশোধন। নতুন কোনো logic লাগেনি — PMTO/PHPS-এর existing batch-selection/reservation path (Final + COR6) generic-ই ছিল, শুধু PMTS-কে ওই gate থেকে বের করে দেওয়া হলো | tasks #38/#39 (2026-07-এর আগের session)-এ ভুলভাবে ধরে নেওয়া হয়েছিল pack-size-fixed হওয়া মানেই batch-selection-ও অপ্রয়োজনীয় — business owner-এর challenge-এ ধরা পড়ল এই দুটো স্বতন্ত্র সিদ্ধান্ত। **PTEST (MTEST)-এর batch-blind অবস্থা অপরিবর্তিত থাকছে** — user শুধু PMTS-এর কথা বলেছেন, MTEST আলাদা |
+
+**Files (item 5-8, প্রত্যাশিত — implement করার সময় নিশ্চিত করে নেওয়া):** `supabase/functions/api/_core/production/process_order.handlers.ts` (reco insert ~line 3116/3325), `supabase/functions/api/_core/production/packing_order.handlers.ts` (`isBatchBlindPackingType` ~line 208, reco insert ~line 2191/2561), `frontend/src/pages/dashboard/production/ProductionPOFinalPage.jsx` (`isBatchBlind` ~line 171)।
+
+### 108.3 — List B: data/config prerequisite (code নয়, migration/MCP এর পরে business data)
+
+1. AC04 (Conversion Cost Config) — MTS/IWC-এর real conversion rate বসানো
+2. Prodshade Pack Config — বাস্তব 1L/5L/10L/20L/50L ইত্যাদি fill size গুলো তৈরি করা (List A #3 বানানোর পরে)
+3. Pack BOM — প্রতিটা pack size-এর জন্য আলাদা BOM row তৈরি করা
+4. FG SKU-র `material_uom_conversion` (KG↔L) row — বাস্তব IWC SKU তৈরি হলে তার জন্য এই row বসানো (mechanism আজই generic, শুধু data লাগবে — §108.2 item 2-এর সংশোধন)
+
+### 108.4 — List C: এখনো design-ready না, ভবিষ্যতের dedicated session-এ
+
+| Item | কেন এখন না |
+|---|---|
+| PID (Physical Inventory) → FG/SFG extension | আজ `PI_MATERIAL_TYPES = {"RM","PM","INT"}` (verify করা, `physical_inventory.handlers.ts`) — FG/SFG পুরো বাদ। MI04-এর dispatch-UOM-count pattern reference হিসেবে আলোচনা হয়েছে এই session-এ, কিন্তু formal L7 session লাগবে |
+| MTS Quarterly Reco mechanism | dispatch-triggered, formulation-based (dosage% × Dispatched Qty), quarterly-aggregated, কোনো Approved-Qty concept নেই — MTO/HPS-এর reco থেকে সম্পূর্ণ আলাদা মেকানিজম, **Dispatch (L5)-এর উপর নির্ভরশীল**, তার আগে design করা যাবে না |
+| MTS-এর জন্য Dispatch/SO | formal L5 session-এর scope, এখনো শুরু হয়নি |
+| MTS Repack | undesigned — MTS-এর CORS আছে (কাজ করে, কোনো gap নেই), কিন্তু "repack" নামের আলাদা কোনো feature নেই |
+| **FOR_REPROCESS / Damaged FG Salvage-Rework** (নতুন এই session-এ উঠেছে) | ২০০ ব্যাগ FG-এর ১৫টা damaged হলে অন্য চলতি batch-এ salvage করে মিশিয়ে দেওয়ার scenario — ⚠️ **এই session-এ আমি প্রথমে ভুলভাবে "BLOCKED stock + receiving batch-এর RM line-এ Alternate Material substitution (PR10 pattern)" প্রস্তাব করেছিলাম, যাচাই না করেই।** পরে ধরা পড়ল **§83.6 "FG Reuse, Return and Reprocess"-এ (2026-06-08, আগে থেকেই LOCKED) এই একদম এই scenario-র জন্য আলাদা, আরও সঠিক design আগে থেকেই আছে**: dedicated `FOR_REPROCESS` stock type (BLOCKED নয়), consumption হয় Process PO-তে **additional RM line যোগ করে** (existing formulation RM-এর জায়গায় substitute না করে), movement type P267/P268 (CLAUDE.md-এ "Missing movement types" হিসেবে flagged, এখনো build হয়নি)। **তাই এই item-এর জন্য নতুন design লাগবে না, বরং §83.6-এর already-locked design-টাই বাস্তবায়ন (P267/P268 movement type + FOR_REPROCESS stock-type wiring) করতে হবে** — যা এখনো করা হয়নি। MTS-স্পেসিফিক প্রশ্ন (batch-per-Prodshade numbering, MTS-এ PR19 না থাকা তাই partial-reversal precedent থেকে আলাদা করে বানাতে হবে) দেখার সময় §83.6-এর সাথে মিলিয়ে দেখতে হবে যে ওটা MTO/HPS/MTS তিনটার জন্যই generic কিনা। Dedicated FOR_REPROCESS session-এ শুরু করার আগে এই reconciliation note-টা প্রথমে পড়তে হবে। |
+| PR22/PR23 (Opening Genealogy) MTS-এ না থাকা | এটা gap **নয়** — already সঠিক ও closed (MTS-এর কোনো production-time reco layer নেই যে PR22/23 feed করবে) |
+
+---

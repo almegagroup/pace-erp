@@ -201,12 +201,15 @@ async function getMachineMapByIds(ids: string[]): Promise<Map<string, JsonRecord
   return map;
 }
 
-// PMTS (MTS/IWC-Powder) and PTEST (MTEST/AP-test-batch) Packing POs draw SFG
-// generically (material+location only) — business does not batch-manage these
-// FG lines, so no batch is ever selected/required at Final and the FG/SFG
-// lines' batch_number columns stay null (locked 2026-07-14).
+// PTEST (MTEST/AP-test-batch) Packing POs draw SFG generically (material+location
+// only) — no batch is ever selected/required at Final, FG/SFG lines' batch_number
+// columns stay null (locked 2026-07-14).
+// §108.2 item 8 (2026-07-24, business owner correction): PMTS was wrongly lumped in
+// here — "pack size is always Fixed BOM" (true, §83.14) does not imply "batch choice
+// is also removed" (false) — those are two independent decisions. PMTS now behaves
+// exactly like PMTO/PHPS: user picks which Process PO batch to draw SFG from.
 function isBatchBlindPackingType(poType: string): boolean {
-  return poType === "PMTS" || poType === "PTEST";
+  return poType === "PTEST";
 }
 
 async function getMaterialGroupMemberIdsByGroupIds(groupIds: string[]): Promise<Map<string, string[]>> {
@@ -2150,7 +2153,11 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     // (every PM line, not just deviated ones — mirrors Process PO Verify's
     // recoRows.map() over every line). Written only after Final's postings
     // above have all succeeded.
-    const pmLinesForReco = lineRows.filter((line) => String(line.line_type ?? "") === "PM");
+    // §108.2 item 6 — PMTS has no Approved/AP-Approved reco workflow (same reason as
+    // Process PO Verify's MTS skip, feasibility §108.4): its real costing is
+    // dispatch-triggered/formulation-based/quarterly, so a production-time reco row
+    // here would be dead data. Skip the reco doc number too.
+    const pmLinesForReco = String(poData.po_type ?? "") === "PMTS" ? [] : lineRows.filter((line) => String(line.line_type ?? "") === "PM");
     if (pmLinesForReco.length > 0) {
       const recoDoc = await generateRecoDocNumber(String(poData.company_id));
       const recoRows = pmLinesForReco.map((line) => {
@@ -2519,7 +2526,8 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
         .update(linePatch).eq("id", line.id as string);
       postings.push({ line_id: line.id, movement_type_code: movementTypeCode, stock_ledger_id: posting.stock_ledger_id });
 
-      if (lineType === "PM") {
+      // §108.2 item 6 — same PMTS reco skip as Final, applied to COR6 correction rows too.
+      if (lineType === "PM" && String(poData.po_type ?? "") !== "PMTS") {
         const approvedInput = toTrimmedString(correction.approved_status) || null;
         const apApprovedInput = parsePositiveNumber(correction.ap_approved_qty);
         const fields = computePmApprovalFields(0, delta, approvedInput, apApprovedInput);

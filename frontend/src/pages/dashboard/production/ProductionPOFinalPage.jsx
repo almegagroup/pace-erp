@@ -168,7 +168,13 @@ function PackingPoFinalTab() {
     setNewPmRows([]);
   }, [po?.id, po?.status]);
 
-  const isBatchBlind = po?.po_type === "PMTS" || po?.po_type === "PTEST";
+  // §108.2 item 8 (2026-07-24, business owner correction): PMTS reversed back to
+  // batch-selection like PMTO/PHPS — "Fixed BOM/pack size" and "batch choice" are
+  // independent decisions; only PTEST (MTEST) stays generically batch-blind.
+  const isBatchBlind = po?.po_type === "PTEST";
+  // §108.2 item 7 — PMTS has no Approved/AP-Approved reco workflow (§108.4); the
+  // backend already skips the reco insert entirely for PMTS at Final/COR6.
+  const hidePmApproval = po?.po_type === "PMTS";
   const sfgLine = (po?.lines ?? []).find((line) => line.line_type === "SFG") ?? null;
   const pmLines = (po?.lines ?? []).filter((line) => line.line_type === "PM");
   const effectiveSfgBatchNumber = sfgBatchNumber || po?.batch_number || sfgLine?.batch_number || "";
@@ -521,8 +527,8 @@ function PackingPoFinalTab() {
                       <th className="border-b px-3 py-2 text-left">Batch</th>
                       <th className="border-b px-3 py-2 text-right">Std Qty</th>
                       <th className="border-b px-3 py-2 text-right">Actual Qty</th>
-                      <th className="border-b px-3 py-2 text-left">Approved</th>
-                      <th className="border-b px-3 py-2 text-right">AP Appr</th>
+                      {!hidePmApproval && <th className="border-b px-3 py-2 text-left">Approved</th>}
+                      {!hidePmApproval && <th className="border-b px-3 py-2 text-right">AP Appr</th>}
                       <th className="border-b px-3 py-2 text-right">Var</th>
                       {po.status === "FINAL" ? <th className="border-b px-3 py-2 text-right">New Actual Qty (correction)</th> : null}
                       <th className="border-b px-3 py-2 text-left">Movement</th>
@@ -587,65 +593,73 @@ function PackingPoFinalTab() {
                                   <span className="font-mono">{qtyFmt(line.actual_qty ?? line.total_qty)}</span>
                                 )}
                               </td>
-                              <td className="px-3 py-2">
-                                {isPm && !finalValues.autoYes ? (
-                                  <ErpComboboxField
-                                    value={pmApproved[line.id] || "YES"}
-                                    onChange={(value) => setPmApproved((current) => ({ ...current, [line.id]: value }))}
-                                    options={APPROVED_OPTIONS}
-                                    hideBlank
-                                  />
-                                ) : isPm ? (
-                                  <span className="inline-flex rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">* YES</span>
-                                ) : (
-                                  <span className="text-slate-400">—</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                {isPm && finalValues.approved === "PARTIAL" && !finalValues.autoYes ? (
-                                  <input
-                                    type="number" min="0" step="0.001"
-                                    className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
-                                    value={pmApApproved[line.id] ?? ""}
-                                    onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
-                                  />
-                                ) : isPm ? (
-                                  <span className="font-mono">{finalValues.apApproved.toFixed(3)}</span>
-                                ) : (
-                                  <span className="text-slate-400">—</span>
-                                )}
-                              </td>
+                              {!hidePmApproval && (
+                                <td className="px-3 py-2">
+                                  {isPm && !finalValues.autoYes ? (
+                                    <ErpComboboxField
+                                      value={pmApproved[line.id] || "YES"}
+                                      onChange={(value) => setPmApproved((current) => ({ ...current, [line.id]: value }))}
+                                      options={APPROVED_OPTIONS}
+                                      hideBlank
+                                    />
+                                  ) : isPm ? (
+                                    <span className="inline-flex rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">* YES</span>
+                                  ) : (
+                                    <span className="text-slate-400">—</span>
+                                  )}
+                                </td>
+                              )}
+                              {!hidePmApproval && (
+                                <td className="px-3 py-2 text-right">
+                                  {isPm && finalValues.approved === "PARTIAL" && !finalValues.autoYes ? (
+                                    <input
+                                      type="number" min="0" step="0.001"
+                                      className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                      value={pmApApproved[line.id] ?? ""}
+                                      onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
+                                    />
+                                  ) : isPm ? (
+                                    <span className="font-mono">{finalValues.apApproved.toFixed(3)}</span>
+                                  ) : (
+                                    <span className="text-slate-400">—</span>
+                                  )}
+                                </td>
+                              )}
                               <td className="px-3 py-2 text-right font-mono">{isPm ? finalValues.variance.toFixed(3) : "—"}</td>
                             </>
                           ) : (
                             <>
                               <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.actual_qty ?? line.total_qty)}</td>
-                              <td className="px-3 py-2">
-                                {hasCorrectionDelta && !correctionValues.autoYes ? (
-                                  <ErpComboboxField
-                                    value={pmApproved[line.id] || "YES"}
-                                    onChange={(value) => setPmApproved((current) => ({ ...current, [line.id]: value }))}
-                                    options={APPROVED_OPTIONS}
-                                    hideBlank
-                                  />
-                                ) : (
-                                  <span className="text-slate-400">—</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                {hasCorrectionDelta && correctionValues.approved === "PARTIAL" ? (
-                                  <input
-                                    type="number" min="0" step="0.001"
-                                    className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
-                                    value={pmApApproved[line.id] ?? ""}
-                                    onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
-                                  />
-                                ) : hasCorrectionDelta ? (
-                                  <span className="font-mono">{correctionValues.apApproved.toFixed(3)}</span>
-                                ) : (
-                                  <span className="text-slate-400">—</span>
-                                )}
-                              </td>
+                              {!hidePmApproval && (
+                                <td className="px-3 py-2">
+                                  {hasCorrectionDelta && !correctionValues.autoYes ? (
+                                    <ErpComboboxField
+                                      value={pmApproved[line.id] || "YES"}
+                                      onChange={(value) => setPmApproved((current) => ({ ...current, [line.id]: value }))}
+                                      options={APPROVED_OPTIONS}
+                                      hideBlank
+                                    />
+                                  ) : (
+                                    <span className="text-slate-400">—</span>
+                                  )}
+                                </td>
+                              )}
+                              {!hidePmApproval && (
+                                <td className="px-3 py-2 text-right">
+                                  {hasCorrectionDelta && correctionValues.approved === "PARTIAL" ? (
+                                    <input
+                                      type="number" min="0" step="0.001"
+                                      className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                      value={pmApApproved[line.id] ?? ""}
+                                      onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
+                                    />
+                                  ) : hasCorrectionDelta ? (
+                                    <span className="font-mono">{correctionValues.apApproved.toFixed(3)}</span>
+                                  ) : (
+                                    <span className="text-slate-400">—</span>
+                                  )}
+                                </td>
+                              )}
                               <td className="px-3 py-2 text-right font-mono">{hasCorrectionDelta ? correctionValues.variance.toFixed(3) : "—"}</td>
                             </>
                           )}
@@ -928,6 +942,10 @@ function ProcessPoFinalTab() {
   );
 
   const po = detailQ.data ?? null;
+  // §108.2 item 7 — MTS has no Approved/AP-Approved reco workflow (§108.4); showing
+  // these fields would suggest a concept that doesn't apply and is never written
+  // (process_order.handlers.ts skips the reco insert entirely for MTS at Verify).
+  const hideRmApproval = po?.po_type === "MTS";
   const lookupMessage = useMemo(() => {
     if (lookupQ.error) return lookupQ.error.message || "Process PO lookup failed.";
     if (!submittedPoNumber || lookupQ.isFetching) return "";
@@ -1183,8 +1201,8 @@ function ProcessPoFinalTab() {
                         <th className="border-b px-3 py-2 text-left">SLoc</th>
                         <th className="border-b px-3 py-2 text-right">Std</th>
                         <th className="border-b px-3 py-2 text-right">Actual</th>
-                        <th className="border-b px-3 py-2 text-left">Approved</th>
-                        <th className="border-b px-3 py-2 text-right">AP Appr</th>
+                        {!hideRmApproval && <th className="border-b px-3 py-2 text-left">Approved</th>}
+                        {!hideRmApproval && <th className="border-b px-3 py-2 text-right">AP Appr</th>}
                         <th className="border-b px-3 py-2 text-right">Var</th>
                         <th className="border-b px-3 py-2 text-left">Mvt</th>
                       </tr>
@@ -1251,32 +1269,36 @@ function ProcessPoFinalTab() {
                                 onChange={(event) => updateRow(row.key, { actual_qty: event.target.value })}
                               />
                             </td>
-                            <td className="px-3 py-2">
-                              {values.autoYes && row.id ? (
-                                <span className="inline-flex rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">* YES</span>
-                              ) : (
-                                <ErpComboboxField
-                                  value={row.approved_status}
-                                  onChange={(value) => updateRow(row.key, { approved_status: value })}
-                                  options={["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }))}
-                                  hideBlank
-                                />
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              {row.approved_status === "PARTIAL" && !values.autoYes ? (
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.001"
-                                  className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
-                                  value={row.ap_approved_qty}
-                                  onChange={(event) => updateRow(row.key, { ap_approved_qty: event.target.value })}
-                                />
-                              ) : (
-                                <span className="font-mono">{values.apApproved.toFixed(3)}</span>
-                              )}
-                            </td>
+                            {!hideRmApproval && (
+                              <td className="px-3 py-2">
+                                {values.autoYes && row.id ? (
+                                  <span className="inline-flex rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">* YES</span>
+                                ) : (
+                                  <ErpComboboxField
+                                    value={row.approved_status}
+                                    onChange={(value) => updateRow(row.key, { approved_status: value })}
+                                    options={["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }))}
+                                    hideBlank
+                                  />
+                                )}
+                              </td>
+                            )}
+                            {!hideRmApproval && (
+                              <td className="px-3 py-2 text-right">
+                                {row.approved_status === "PARTIAL" && !values.autoYes ? (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.001"
+                                    className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                    value={row.ap_approved_qty}
+                                    onChange={(event) => updateRow(row.key, { ap_approved_qty: event.target.value })}
+                                  />
+                                ) : (
+                                  <span className="font-mono">{values.apApproved.toFixed(3)}</span>
+                                )}
+                              </td>
+                            )}
                             <td className="px-3 py-2 text-right font-mono">{values.variance.toFixed(3)}</td>
                             <td className="px-3 py-2">P261</td>
                           </tr>
@@ -1297,7 +1319,7 @@ function ProcessPoFinalTab() {
                         <th className="border-b px-3 py-2 text-left">Material</th>
                         <th className="border-b px-3 py-2 text-right">Std</th>
                         <th className="border-b px-3 py-2 text-right">Actual</th>
-                        <th className="border-b px-3 py-2 text-right">AP Appr</th>
+                        {!hideRmApproval && <th className="border-b px-3 py-2 text-right">AP Appr</th>}
                         <th className="border-b px-3 py-2 text-right">Var</th>
                         <th className="border-b px-3 py-2 text-left">Mvt</th>
                       </tr>
@@ -1307,7 +1329,7 @@ function ProcessPoFinalTab() {
                         <td className="border-b border-slate-100 px-3 py-2">{materialLabel(po.material) || "--"}</td>
                         <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{Number(po.planned_qty || 0).toFixed(3)}</td>
                         <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputActualQty.toFixed(3)}</td>
-                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputApprovedQty.toFixed(3)}</td>
+                        {!hideRmApproval && <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputApprovedQty.toFixed(3)}</td>}
                         <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputVariance.toFixed(3)}</td>
                         <td className="border-b border-slate-100 px-3 py-2">P101</td>
                       </tr>

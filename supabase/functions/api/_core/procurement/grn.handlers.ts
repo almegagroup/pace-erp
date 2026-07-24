@@ -847,6 +847,10 @@ export async function createAndPostGRNFromLineHandler(
         csnPatch.transporter_id = grn.transporter_id ?? null;
         csnPatch.bl_number = grn.bl_number ?? null;
         csnPatch.bl_date = grn.bl_date ?? null;
+        csnPatch.boe_number = grn.boe_number ?? null;
+        csnPatch.boe_date = grn.boe_date ?? null;
+        csnPatch.lr_number_port_to_plant = grn.lr_number ?? null;
+        csnPatch.post_clearance_lr_date = grn.lr_date ?? null;
       }
       await serviceRoleClient.schema("erp_procurement").from("consignment_note")
         .update(csnPatch).eq("id", csnId);

@@ -153,6 +153,7 @@ export default function ProductionPOCreatePage() {
   const [lineActualMaterialOverrides, setLineActualMaterialOverrides] = useState({});
   const [lineLocationOverrides, setLineLocationOverrides] = useState({});
   const [debouncedCreatePreview, setDebouncedCreatePreview] = useState([]);
+  const [batchQtyLiter, setBatchQtyLiter] = useState("");
 
   const companiesQ = useCompaniesForOmQuery();
   const companies = companiesQ.data ?? [];
@@ -276,6 +277,23 @@ export default function ProductionPOCreatePage() {
     enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
+
+  // §108.2 item 3 — MTS/IWC Batch Qty is entered in Liter, RM calc needs KG.
+  // Source of truth: the selected Stroke's own conversion_uom_code/conversion_factor
+  // (§83.3 — "Conversion Factor = KG per Litre (density-based)", captured at Stroke
+  // Master create/approve, StrokeMasterPage.jsx). By processStep 3 the Stroke (step 2)
+  // is already selected, so strokeDetailQ is already loaded — no separate lookup needed.
+  const strokeConversionFactor = Number(strokeDetailQ.data?.conversion_factor);
+  const literToKgFactor = processForm.po_type === "MTS"
+    && strokeDetailQ.data?.conversion_uom_code
+    && Number.isFinite(strokeConversionFactor)
+    && strokeConversionFactor > 0
+    ? strokeConversionFactor
+    : null;
+  const literConversionMissing = processForm.po_type === "MTS"
+    && Boolean(processForm.stroke_master_id)
+    && !strokeDetailQ.isLoading
+    && literToKgFactor === null;
   const machineOptions = useMemo(
     () => (machinesQ.data ?? []).map((machine) => ({ value: machine.id, label: machineLabel(machine) || "Machine" })),
     [machinesQ.data],
@@ -526,6 +544,10 @@ export default function ProductionPOCreatePage() {
   }, [processForm.company_id, processForm.po_type, processForm.prodshade_material_id, processForm.stroke_master_id]);
 
   useEffect(() => {
+    setBatchQtyLiter("");
+  }, [processForm.po_type, processForm.prodshade_material_id, processForm.stroke_master_id]);
+
+  useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setDebouncedCreatePreview(
         strokePreviewRows
@@ -621,6 +643,7 @@ export default function ProductionPOCreatePage() {
         next.stroke_master_id = "";
         next.machine_id = "";
         next.mts_segment_code = "";
+        next.planned_qty_kg = "";
       }
       if (field === "prodshade_material_id") {
         next.stroke_master_id = "";
@@ -1070,18 +1093,56 @@ export default function ProductionPOCreatePage() {
                     </div>
                   )}
 
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-slate-600">Batch Size (Planned Qty KG) <span className="text-rose-500">*</span></label>
-                    <input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
-                      value={processForm.planned_qty_kg}
-                      onChange={(event) => updateProcess("planned_qty_kg", event.target.value)}
-                      required
-                    />
-                  </div>
+                  {processForm.po_type === "MTS" ? (
+                    <>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">Batch Size (Liter) <span className="text-rose-500">*</span></label>
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
+                          value={batchQtyLiter}
+                          disabled={!processForm.stroke_master_id || literConversionMissing || strokeDetailQ.isLoading}
+                          onChange={(event) => {
+                            const literValue = event.target.value;
+                            setBatchQtyLiter(literValue);
+                            const liters = Number(literValue);
+                            if (literToKgFactor && Number.isFinite(liters) && liters > 0) {
+                              updateProcess("planned_qty_kg", (liters * literToKgFactor).toFixed(4));
+                            } else {
+                              updateProcess("planned_qty_kg", "");
+                            }
+                          }}
+                          required
+                        />
+                        {literConversionMissing && (
+                          <span className="text-xs text-rose-600">
+                            এই Stroke-এ Conversion UOM/Factor সেট করা নেই — Stroke Master-এ গিয়ে KG→Liter conversion factor যোগ করুন।
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">= Batch Size (KG, derived)</label>
+                        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-900">
+                          {processForm.planned_qty_kg || "--"}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-slate-600">Batch Size (Planned Qty KG) <span className="text-rose-500">*</span></label>
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
+                        value={processForm.planned_qty_kg}
+                        onChange={(event) => updateProcess("planned_qty_kg", event.target.value)}
+                        required
+                      />
+                    </div>
+                  )}
 
                   <div className="flex flex-col gap-1">
                     <label className="text-xs font-medium text-slate-600">Planned Start Date</label>

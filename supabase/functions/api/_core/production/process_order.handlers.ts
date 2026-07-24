@@ -3044,43 +3044,51 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     }, "QI_RELEASE"));
 
     const strokeNumber = toTrimmedString((po.stroke as JsonRecord | null)?.stroke_number) || null;
+    // §108.2 item 5 — MTS has no Approved/AP-Approved reco workflow at all (its real
+    // costing is dispatch-triggered, formulation-based, quarterly — feasibility §108.4);
+    // writing production-time reco rows here would just be dead, unused data. Skip the
+    // reco doc number too, so MTS Verify never burns a RECO series number for nothing.
+    const isMtsProcessOrder = po.po_type === "MTS";
     // §106 Phase 3: one Reco/Costing document (BELNR+GJAHR equivalent) for this Verify
     // costing event; every line row below shares it, tagged source_txn_type='PRODUCTION'.
-    const recoDoc = await generateRecoDocNumber(String(po.company_id));
-    const recoRows = lines.map((line) => ({
-      company_id: po.company_id,
-      po_number: po.po_number,
-      batch_number: po.batch_number,
-      po_type: po.po_type,
-      prodshade_material_id: po.material_id,
-      stroke_number: strokeNumber,
-      machine_id: po.machine_id ?? null,
-      segment_code: po.segment_code ?? null,
-      batch_started_at: po.batch_started_at ?? null,
-      verified_at: new Date().toISOString(),
-      process_order_id: po.id,
-      process_order_line_id: line.id,
-      material_id: line.material_id,
-      line_material_type: (line.material as JsonRecord | null)?.material_type === "INT" ? "INT" : "RM",
-      dosage_pct: line.dosage_pct ?? null,
-      actual_material_id: line.actual_material_id ?? null,
-      storage_location_id: line.issue_sloc_id ?? null,
-      standard_qty: line.planned_qty ?? null,
-      actual_qty: Number(line.actual_qty ?? line.planned_qty ?? 0),
-      approved_status: line.approved_status ?? "YES",
-      ap_approved_qty: Number(line.ap_approved_qty ?? line.actual_qty ?? line.planned_qty ?? 0),
-      variance_qty: Number(line.variance_qty ?? 0),
-      is_formulation_line: line.is_formulation_line !== false,
-      is_voided: false,
-      // §106 Phase 3: this Verify is the costing event that produced these rows.
-      reco_document_number: recoDoc.docNumber,
-      reco_document_year: recoDoc.docYear,
-      source_txn_type: "PRODUCTION",
-      reference_document_number: String(po.po_number),
-      reference_document_type: "PROC_PO",
-      last_updated_at: new Date().toISOString(),
-      last_updated_by: ctx.auth_user_id,
-    }));
+    const recoRows: JsonRecord[] = [];
+    if (!isMtsProcessOrder) {
+      const recoDoc = await generateRecoDocNumber(String(po.company_id));
+      recoRows.push(...lines.map((line) => ({
+        company_id: po.company_id,
+        po_number: po.po_number,
+        batch_number: po.batch_number,
+        po_type: po.po_type,
+        prodshade_material_id: po.material_id,
+        stroke_number: strokeNumber,
+        machine_id: po.machine_id ?? null,
+        segment_code: po.segment_code ?? null,
+        batch_started_at: po.batch_started_at ?? null,
+        verified_at: new Date().toISOString(),
+        process_order_id: po.id,
+        process_order_line_id: line.id,
+        material_id: line.material_id,
+        line_material_type: (line.material as JsonRecord | null)?.material_type === "INT" ? "INT" : "RM",
+        dosage_pct: line.dosage_pct ?? null,
+        actual_material_id: line.actual_material_id ?? null,
+        storage_location_id: line.issue_sloc_id ?? null,
+        standard_qty: line.planned_qty ?? null,
+        actual_qty: Number(line.actual_qty ?? line.planned_qty ?? 0),
+        approved_status: line.approved_status ?? "YES",
+        ap_approved_qty: Number(line.ap_approved_qty ?? line.actual_qty ?? line.planned_qty ?? 0),
+        variance_qty: Number(line.variance_qty ?? 0),
+        is_formulation_line: line.is_formulation_line !== false,
+        is_voided: false,
+        // §106 Phase 3: this Verify is the costing event that produced these rows.
+        reco_document_number: recoDoc.docNumber,
+        reco_document_year: recoDoc.docYear,
+        source_txn_type: "PRODUCTION",
+        reference_document_number: String(po.po_number),
+        reference_document_type: "PROC_PO",
+        last_updated_at: new Date().toISOString(),
+        last_updated_by: ctx.auth_user_id,
+      })));
+    }
 
     /* ---------------------------------------------------------------------
      * ONE transaction (CLAUDE.md 8D, feasibility §107.8).
