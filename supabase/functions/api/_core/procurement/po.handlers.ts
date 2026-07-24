@@ -2960,3 +2960,36 @@ export async function rejectPOOrderGroupHandler(
     return procurementErrorResponse(req, ctx, code, status, "Purchase order group rejection failed");
   }
 }
+
+// §110 — reusable "UoM Quantity Picker" data source (GRN/PO line entry, Phase A/B).
+// Deliberately NOT reusing OM's listMaterialUomConversionsHandler
+// (assertManagerOrSARole) — L1/L2 procurement staff create GRN/PO, not just
+// managers, so a manager-only gate here would 403 the exact users this is for.
+export async function listMaterialUomConversionsForProcurementHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const materialId = (url.searchParams.get("material_id") ?? "").trim();
+    if (!materialId) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_UOM_CONVERSION_MATERIAL_REQUIRED", 400, "material_id is required.");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_uom_conversion")
+      .select("from_uom_code, to_uom_code, conversion_factor, variable_conversion")
+      .eq("material_id", materialId)
+      .eq("active", true);
+    if (error) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_UOM_CONVERSION_LOOKUP_FAILED", 500, error.message);
+    }
+
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_UOM_CONVERSION_LOOKUP_FAILED";
+    return procurementErrorResponse(req, ctx, code, 500, "UOM conversion lookup failed");
+  }
+}

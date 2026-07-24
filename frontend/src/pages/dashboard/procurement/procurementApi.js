@@ -87,6 +87,10 @@ export function getPoFilterOptions(params) {
   return fetchProcurement("GET", "/api/procurement/po-filter-options", undefined, params);
 }
 
+export function listMaterialUomConversionsForProcurement(materialId) {
+  return fetchProcurement("GET", "/api/procurement/materials/uom-conversion", undefined, { material_id: materialId });
+}
+
 export function listReferenceDateTypes(params) {
   return fetchProcurement("GET", "/api/procurement/reference-date-types", undefined, params);
 }

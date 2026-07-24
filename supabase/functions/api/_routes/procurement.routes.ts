@@ -213,6 +213,7 @@ import {
   getPoFilterOptionsHandler,
   knockOffPOLineHandler,
   knockOffPOHandler,
+  listMaterialUomConversionsForProcurementHandler,
   listPOsHandler,
   listPOOrderGroupsHandler,
   rejectPOHandler,
@@ -488,6 +489,8 @@ export async function dispatchProcurementRoutes(
       return await listPOOrderGroupsHandler(req, ctx);
     case "GET:/api/procurement/po-filter-options":
       return await getPoFilterOptionsHandler(req, ctx);
+    case "GET:/api/procurement/materials/uom-conversion":
+      return await listMaterialUomConversionsForProcurementHandler(req, ctx);
     default:
       break;
   }

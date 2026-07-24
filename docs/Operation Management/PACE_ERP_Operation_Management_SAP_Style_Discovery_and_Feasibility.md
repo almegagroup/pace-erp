@@ -15279,3 +15279,44 @@ Commercial team সময়মতো real WAR দিতে পারবে ন�
 **শিক্ষা (এই session-এর নিজের established discipline, আবার লঙ্ঘন হয়েছিল):** "নেই" বলার আগে broad query চালাও, নির্দিষ্ট একটা path চেক করেই সিদ্ধান্ত নিও না।
 
 ---
+
+## Section 110 — SAP-Identical Multi-UoM (Base/Purchase/Sales-Dispatch) — LOCKED (2026-07-24)
+
+### 110.1 — পটভূমি
+
+Recalculate-এর discussion থেকে উঠে এলো একটা বড় প্রশ্ন: FG stock বর্তমানে শুধু KG-তেই দেখা যায় — বাস্তবে dispatch/receiving সবসময় pack unit-এ (bag/bottle/carton) হয়, KG-তে না। Business owner-এর real SAP অভিজ্ঞতা (MB52/MIGO/VL01N reference) থেকে challenge: **"user 3 te UoM hisabe stock dekhte r use korte chaibe r parbe"** — Base UoM (KG), Middle UoM (Bottle), Dispatch/Receiving UoM (Carton) — SAP-এ যেভাবে হয় ঠিক সেভাবেই, কোনো পার্থক্য ছাড়া।
+
+### 110.2 — Design Principle (LOCKED)
+
+- **ভিতরে (stock_ledger/stock_snapshot/costing/WAR): সবসময় base UoM (KG)** — অপরিবর্তিত, এটাই SAP-ও করে (Base Unit of Measure সব valuation-এর ভিত্তি)।
+- **প্রতিটা transaction entry screen-এ (GRN, PO, ভবিষ্যতের Dispatch, Physical Inventory)**: user-কে সেই material-এর জন্য define করা সব alternate UoM-এর একটা dropdown দেখানো হবে + quantity input, একটা designated default unit দিয়ে pre-select করা থাকবে। User চাইলে অন্য unit বেছে entry করতে পারবে (base UoM-সহ)। Entry submit হওয়ার সাথে সাথেই conversion factor দিয়ে base UoM-এ convert হয়ে যাবে — posting/stock layer কখনো জানবে না user কোন unit-এ টাইপ করেছিল।
+- **Stock report-এ (MB52-স্টাইল)**: current balance-এর পাশে derived alternate-unit quantity-ও দেখানো যাবে (read-only, conversion factor দিয়ে হিসাব করা)।
+
+### 110.3 — যা verify করে পাওয়া গেল ইতিমধ্যেই আছে (schema-তে নতুন কিছু লাগবে না)
+
+| উপাদান | কোথায় | অবস্থা |
+|---|---|---|
+| FG-এর dispatch/outer unit designation | `erp_production.pack_code_master.outer_uom_code` — প্রতিটা pack code-এর জন্য সঠিক ভাবে বসানো আছে (BTL/PKT/BAG/JAR/BBL/IBC/KG) | ✅ সম্পূর্ণ, verify করা — `material_master.pack_code → pack_code_master.outer_uom_code` join দিয়ে যেকোনো FG SKU-র dispatch unit বের করা যায়, **নতুন column লাগে না** |
+| Unit-এ না KG-তে বিল হবে | `pack_code_master.billing_uom` (PER_UNIT/PER_KG) | ✅ আছে |
+| RM/PM-এর purchase/issue unit designation | `material_master.purchase_uom_code`/`issue_uom_code` | ⚠️ Column আছে, কিন্তু মাত্র ৩টা material-এ বসানো আছে (৯২টার মধ্যে RM+PM), আর **কোনো screen (GRN/PO) সেটা read/use করেই না** — এতদিন শুধু metadata ছিল |
+| Conversion factor storage (যেকোনো unit, যেকোনো material) | `erp_master.material_uom_conversion` — generic, একাধিক row নিতে পারে (single-hop, pre-collapsed factor — chain না, এটা SAP-ও তাই করে) | ✅ সম্পূর্ণ, কাজ করছে (Pack BOM auto-sync দিয়ে verify করা) |
+| Transaction entry-তে UoM picker (user unit বেছে qty দেয়, auto-convert) | কোথাও নেই — GRN/PO/সব জায়গায় সবসময় শুধু base UoM (KG)-তেই entry হয় | ❌ সম্পূর্ণ অনুপস্থিত, RM/PM/FG সব material-এর জন্যই সমানভাবে |
+| Stock report-এ alternate-unit display | কোনো report-ই `material_uom_conversion` ব্যবহার করে না | ❌ সম্পূর্ণ অনুপস্থিত |
+
+### 110.4 — Data gap-এর জন্য সিদ্ধান্ত: Graceful fallback, বাধ্যতামূলক bulk data-entry নয় (LOCKED)
+
+`purchase_uom_code`/`issue_uom_code` বেশিরভাগ material-এ নেই — এটা পূরণ করা একটা বড়, ধীর, ভুল-প্রবণ manual data-entry কাজ (প্রতিটা material-এর real conversion factor জানতে হবে, যেটা Claude-এর অনুমান করার বিষয় না)। **সিদ্ধান্ত: UoM picker কোনো material-এর জন্য alternate unit না পেলে শুধু base UoM (KG) দেখাবে (dropdown-ই আসবে না)** — এটাই আজকের আচরণ, কিছু ভাঙবে না। যখনই business কোনো material-এর জন্য alternate unit চালু করতে চাইবে, Material Master-এর (এখন-ঠিক-হওয়া) UOM Conversion tab-এ গিয়ে বসিয়ে দিলেই সেই material পরের বার থেকে picker-এ দেখাবে — কোনো code change লাগবে না প্রতিবার। SAP নিজেও এভাবেই কাজ করে — প্রতিটা material-এর alternate unit থাকা বাধ্যতামূলক না।
+
+### 110.5 — Phased Plan of Action (LOCKED)
+
+| ধাপ | কাজ | নির্ভরতা | অবস্থা |
+|---|---|---|---|
+| **A** | Reusable "UoM Quantity Picker" — নতুন procurement-domain read-gated endpoint (`assertProcurementReadRole`, OM-এর manager-only endpoint reuse করা হয়নি — L1/L2 procurement staff-ও GRN/PO বানায়) + generic frontend component (qty input + UoM dropdown, base UoM-এ auto-convert করে ফেরত দেয়) | কিছুই না | 🔨 আজই implement |
+| **B** | GRN + PO line quantity entry-তে ধাপ A বসানো (purchase_uom_code default, না থাকলে শুধু base UoM) | ধাপ A | 🔨 আজই implement |
+| **C** | Stock report-এ alternate-unit derived column (FG Stock Breakdown প্রথমে) | ধাপ A | 🔨 আজই implement |
+| **D** | Physical Inventory (PID) — dispatch-UoM-এ count করা (MI04-এর মতো, business owner-এর নিজের SAP অভিজ্ঞতা থেকে reference করা) | ধাপ A, **PID নিজেই এখনো "L7 formal session required"** | 🔵 PID-এর formal session-এ বানাতে হবে, এই component-ই reuse করে — design আলাদা হবে না |
+| **E** | Dispatch (L5) — user bag/bottle-এ dispatch entry করবে, system KG-তে convert করে stock কমাবে | ধাপ A, **Dispatch নিজেই এখনো "L5 formal session required"** | 🔵 L5-এর formal session-এ বানাতে হবে, এই component-ই reuse করে |
+
+**গুরুত্বপূর্ণ:** ধাপ D আর E যখন formal session-এ design হবে, তখন যেন এই ধাপ A-এর component-টাই reuse করা হয় (নতুন আলাদা UoM-picker আবিষ্কার না করে) — এটাই "কোনোদিন আর এই প্রশ্ন না আসা"-র নিশ্চয়তা।
+
+---
