@@ -139,8 +139,18 @@ export default function CurrentStockPage() {
           ) : (
             <ErpDenseGrid
               columns={[
-                { key: "material_id", label: "Material ID", width: "220px" },
-                { key: "storage_location_id", label: "SLOC ID", width: "220px" },
+                {
+                  key: "material_id",
+                  label: "Material",
+                  width: "260px",
+                  render: (row) => (row.material_name ? `${row.material_code ?? "—"} — ${row.material_name}` : "—"),
+                },
+                {
+                  key: "storage_location_id",
+                  label: "Storage Location",
+                  width: "220px",
+                  render: (row) => (row.location_name ? `${row.location_code ?? "—"} — ${row.location_name}` : "—"),
+                },
                 {
                   key: "stock_type_code",
                   label: "Stock Type",
@@ -165,6 +175,13 @@ export default function CurrentStockPage() {
                   render: (row) => formatNumber(row.quantity, 6),
                 },
                 { key: "base_uom_code", label: "UOM", width: "90px" },
+                {
+                  key: "alt_quantity",
+                  label: "Alt. Unit (§110)",
+                  width: "140px",
+                  align: "right",
+                  render: (row) => (row.alt_uom_code ? `${formatNumber(row.alt_quantity, 3)} ${row.alt_uom_code}` : "—"),
+                },
                 {
                   key: "value",
                   label: "Value",
