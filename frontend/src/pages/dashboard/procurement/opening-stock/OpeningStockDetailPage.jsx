@@ -417,35 +417,29 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     setSaving(true);
     setError("");
     setNotice("");
-    const results = await Promise.all(
-      targets.map(async (line) => {
-        try {
-          const result = await recalculateValuation({
-            line_id: line.id,
-            company_id: detail.company_id,
-            material_id: line.material_id,
-            storage_location_id: line.storage_location_id,
-            stock_type_code: line.stock_type,
-            new_rate: Number(recalcRates[line.id]),
-            reason: recalcReason.trim(),
-          });
-          return { lineId: line.id, materialId: line.material_id, ok: true, ...result };
-        } catch (saveError) {
-          return {
-            lineId: line.id,
-            materialId: line.material_id,
-            ok: false,
-            error: saveError instanceof Error ? saveError.message : "VALUATION_RECALC_FAILED",
-          };
-        }
-      }),
-    );
-    setRecalcResults(results);
-    setRecalcRates({});
-    const succeeded = results.filter((r) => r.ok).length;
-    setNotice(`Recalculated ${succeeded} of ${results.length} line(s). See results below for details.`);
-    setSaving(false);
-    await detailQuery.refetch();
+    try {
+      // Single batch call — the backend cascades RM/PM -> SFG -> FG in one
+      // action (§109). Sending each line separately would let two lines that
+      // feed the same downstream batch race and silently overwrite each
+      // other's correction, so this is never split into per-line calls.
+      const { results } = await recalculateValuation({
+        reason: recalcReason.trim(),
+        lines: targets.map((line) => ({
+          line_id: line.id,
+          new_rate: Number(recalcRates[line.id]),
+          posted_stock_document_id: line.posted_stock_document_id,
+        })),
+      });
+      setRecalcResults(results);
+      setRecalcRates({});
+      const succeeded = results.filter((r) => r.ok).length;
+      setNotice(`Recalculated ${succeeded} of ${results.length} step(s) across the RM/PM -> SFG -> FG chain. See results below for details.`);
+      await detailQuery.refetch();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "VALUATION_RECALC_FAILED");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleRemoveLine(lineId) {
@@ -656,13 +650,13 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                 {detail.status === "POSTED" ? (
                   <div className="grid gap-3 rounded border border-amber-200 bg-amber-50 p-4">
                     <div className="text-sm font-semibold text-amber-900">
-                      Recalculate Valuation (§109 Phase 1 — one click for every filled-in line above, one-time-use per line)
+                      Recalculate Valuation (§109 — one click, fully automatic, one-time-use per line)
                     </div>
                     <div className="text-xs text-amber-800">
                       Fill in "Corrected Rate" on whichever lines above need it, give one shared reason, then Recalculate All.
-                      Downstream SFG/FG batches that consumed these materials are <strong>not</strong> auto-corrected yet —
-                      check each result below for impacted postings that still need manual review. Already-recalculated lines
-                      are locked — no "reopen" action exists yet.
+                      The system corrects these materials and then <strong>automatically cascades</strong> into every SFG batch
+                      and FG batch that consumed them — no separate manual step. The results below list every step the
+                      cascade actually touched. Already-recalculated lines are locked — no "reopen" action exists yet.
                     </div>
                     <ErpDenseFormRow label="Reason (required, applies to all lines recalculated in this action)">
                       <input
@@ -685,15 +679,17 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                     </div>
                     {recalcResults.length > 0 ? (
                       <div className="grid gap-1 border-t border-amber-200 pt-3 text-sm text-amber-900">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                          Every step the cascade actually touched (RM/PM you entered, then any SFG/FG it flowed into):
+                        </div>
                         {recalcResults.map((result) => {
                           const material = materialMap.get(result.materialId);
-                          const materialLabel = material ? (material.material_name ?? result.materialId) : result.materialId;
+                          const materialLabel = material ? (material.material_name ?? result.materialId) : (result.materialId || result.ledgerId);
                           return (
-                            <div key={result.lineId}>
+                            <div key={result.ledgerId}>
                               {result.ok ? (
                                 <>
-                                  <strong>{materialLabel}</strong>: {result.old_rate} {"->"} {result.new_rate} —{" "}
-                                  {result.impacted_rows.length} downstream posting(s) not yet corrected
+                                  <strong>{materialLabel}</strong>: {result.oldRate} {"->"} {result.newRate}
                                 </>
                               ) : (
                                 <span className="text-rose-700">

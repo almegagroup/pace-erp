@@ -140,32 +140,44 @@ async function fetchOpeningStockLines(documentId: string): Promise<OpeningStockL
   return (data ?? []) as OpeningStockLineRow[];
 }
 
-async function attachRecalculationFlags(companyId: string, lines: OpeningStockLineRow[]): Promise<OpeningStockLineRow[]> {
+async function attachRecalculationFlags(_companyId: string, lines: OpeningStockLineRow[]): Promise<OpeningStockLineRow[]> {
   if (lines.length === 0) return lines;
 
-  // §109 Phase 1 — valuation_correction_log's own existence for a
-  // (company, material, storage_location, stock_type) key is the one-time-use
-  // lock; surface it here so the UI can grey out already-corrected lines
-  // instead of relying on a client-side guess that the backend doesn't share.
-  const { data, error } = await serviceRoleClient
+  // §109 — the one-time-use lock now keys on the specific ledger row
+  // (target_ledger_id), not the material overall (a material can have many
+  // correctable events over its lifetime once SFG/FG cascade exists). Each
+  // opening line's own ledger row is the IN posting created when it was
+  // posted (posted_stock_document_id -> stock_ledger).
+  const documentIds = [...new Set(lines.map((line) => toTrimmedString(line.posted_stock_document_id)).filter(Boolean))];
+  if (documentIds.length === 0) return lines.map((line) => ({ ...line, already_recalculated: false }));
+
+  const { data: ledgerRows, error: ledgerErr } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_ledger")
+    .select("id, stock_document_id")
+    .in("stock_document_id", documentIds)
+    .eq("direction", "IN");
+  if (ledgerErr) throw new Error("OPENING_STOCK_RECALC_FLAG_LOOKUP_FAILED");
+
+  const ledgerIdByDocumentId = new Map(
+    ((ledgerRows ?? []) as JsonRecord[]).map((row) => [String(row.stock_document_id), String(row.id)]),
+  );
+  const ledgerIds = [...ledgerIdByDocumentId.values()];
+  if (ledgerIds.length === 0) return lines.map((line) => ({ ...line, already_recalculated: false }));
+
+  const { data: logRows, error: logErr } = await serviceRoleClient
     .schema("erp_inventory")
     .from("valuation_correction_log")
-    .select("material_id, storage_location_id, stock_type_code")
-    .eq("company_id", companyId);
-  if (error) throw new Error("OPENING_STOCK_RECALC_FLAG_LOOKUP_FAILED");
+    .select("target_ledger_id")
+    .in("target_ledger_id", ledgerIds);
+  if (logErr) throw new Error("OPENING_STOCK_RECALC_FLAG_LOOKUP_FAILED");
 
-  const doneKeys = new Set(
-    ((data ?? []) as JsonRecord[]).map(
-      (row) => `${row.material_id}::${row.storage_location_id}::${toUpperTrimmedString(row.stock_type_code)}`,
-    ),
-  );
+  const doneLedgerIds = new Set(((logRows ?? []) as JsonRecord[]).map((row) => String(row.target_ledger_id)));
 
-  return lines.map((line) => ({
-    ...line,
-    already_recalculated: doneKeys.has(
-      `${line.material_id}::${line.storage_location_id}::${toUpperTrimmedString(line.stock_type)}`,
-    ),
-  }));
+  return lines.map((line) => {
+    const ledgerId = ledgerIdByDocumentId.get(toTrimmedString(line.posted_stock_document_id));
+    return { ...line, already_recalculated: Boolean(ledgerId && doneLedgerIds.has(ledgerId)) };
+  });
 }
 
 async function hydrateOpeningStockDocument(documentId: string): Promise<JsonRecord> {
@@ -1321,11 +1333,169 @@ export async function postOpeningStockDocumentHandler(
   }
 }
 
-// Opening Rate "Recalculate" — Phase 1 (feasibility §109). Corrects one
-// material's own stock_snapshot.valuation_rate by replaying its full
-// stock_ledger history in chronological order from a corrected opening
-// rate (erp_inventory.recalculate_valuation()). Does NOT cascade into
-// downstream SFG/FG batches yet — that is Phase 2/3, not built here.
+type CascadeNode = { ledgerId: string; newRate: number };
+type CascadeStepResult = {
+  ledgerId: string;
+  ok: boolean;
+  materialId?: string;
+  oldRate?: number;
+  newRate?: number;
+  error?: string;
+};
+
+async function callRecalculateAtRow(
+  ledgerId: string,
+  newRate: number,
+  actor: string,
+  reason: string,
+): Promise<{ data: JsonRecord | null; error: string | null }> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .rpc("recalculate_valuation_at_row", {
+      p_target_ledger_id: ledgerId,
+      p_new_rate: newRate,
+      p_actor: actor,
+      p_reason: reason,
+    });
+  if (error) return { data: null, error: error.message };
+  return { data: data as JsonRecord, error: null };
+}
+
+// §109 — one Process PO line or one Packing PO line's stock_ledger_id may be
+// the impacted row; whichever it is determines whether the downstream cost
+// recompute is §104-2's (SFG) or §104-3's (FG) formula.
+async function findDownstreamGroup(
+  impactedLedgerId: string,
+): Promise<{ kind: "PROCESS_PO"; documentId: string; fgLedgerId: string | null } | { kind: "PACKING_PO"; documentId: string; fgLedgerId: string | null } | null> {
+  const { data: poLine } = await serviceRoleClient
+    .schema("erp_production")
+    .from("process_order_line")
+    .select("process_order_id")
+    .eq("stock_ledger_id", impactedLedgerId)
+    .maybeSingle();
+  if (poLine?.process_order_id) {
+    const { data: po } = await serviceRoleClient
+      .schema("erp_production")
+      .from("process_order")
+      .select("fg_stock_ledger_id")
+      .eq("id", poLine.process_order_id)
+      .maybeSingle();
+    return { kind: "PROCESS_PO", documentId: String(poLine.process_order_id), fgLedgerId: (po?.fg_stock_ledger_id as string | null) ?? null };
+  }
+
+  const { data: packLine } = await serviceRoleClient
+    .schema("erp_production")
+    .from("packing_order_line")
+    .select("packing_order_id")
+    .eq("stock_ledger_id", impactedLedgerId)
+    .maybeSingle();
+  if (packLine?.packing_order_id) {
+    const { data: fgLine } = await serviceRoleClient
+      .schema("erp_production")
+      .from("packing_order_line")
+      .select("stock_ledger_id")
+      .eq("packing_order_id", packLine.packing_order_id)
+      .eq("line_type", "FG")
+      .maybeSingle();
+    return { kind: "PACKING_PO", documentId: String(packLine.packing_order_id), fgLedgerId: (fgLine?.stock_ledger_id as string | null) ?? null };
+  }
+
+  return null; // no known downstream (RTV/STO/etc.) — leaf, nothing more to cascade
+}
+
+// §109 full cascade — one click corrects the root material(s), then walks
+// impacted OUT-rows level by level (RM/PM -> SFG -> FG), grouping every
+// impacted row that shares a downstream Process/Packing PO before
+// recomputing that PO's cost ONCE with every relevant correction applied
+// together. This grouping matters: correcting two RM lines that both feed
+// the same batch in the same action and recomputing that batch's SFG cost
+// one line at a time would silently apply only whichever line's cascade
+// got there first (one-time-use blocks the second) — the multi-line-aware
+// recompute_sfg_cost/recompute_fg_cost + this per-level grouping is what
+// makes "system corrects everything automatically" actually correct.
+async function cascadeRecalculate(
+  roots: CascadeNode[],
+  actor: string,
+  reason: string,
+): Promise<CascadeStepResult[]> {
+  const results: CascadeStepResult[] = [];
+  let levelImpacted: JsonRecord[] = [];
+
+  for (const root of roots) {
+    const { data, error } = await callRecalculateAtRow(root.ledgerId, root.newRate, actor, reason);
+    if (error) {
+      results.push({ ledgerId: root.ledgerId, ok: false, error });
+      continue;
+    }
+    results.push({
+      ledgerId: root.ledgerId, ok: true,
+      materialId: toTrimmedString(data?.material_id),
+      oldRate: Number(data?.old_rate), newRate: Number(data?.new_rate),
+    });
+    levelImpacted.push(...((data?.impacted_rows as JsonRecord[]) ?? []));
+  }
+
+  while (levelImpacted.length > 0) {
+    const processGroups = new Map<string, { fgLedgerId: string | null; corrections: JsonRecord[] }>();
+    const packGroups = new Map<string, { fgLedgerId: string | null; corrections: JsonRecord[] }>();
+
+    for (const impacted of levelImpacted) {
+      const impactedLedgerId = toTrimmedString(impacted.stock_ledger_id);
+      if (!impactedLedgerId) continue;
+      const group = await findDownstreamGroup(impactedLedgerId);
+      if (!group) continue;
+      const correction = { stock_ledger_id: impactedLedgerId, corrected_rate: Number(impacted.corrected_rate) };
+      const target = group.kind === "PROCESS_PO" ? processGroups : packGroups;
+      if (!target.has(group.documentId)) target.set(group.documentId, { fgLedgerId: group.fgLedgerId, corrections: [] });
+      target.get(group.documentId)!.corrections.push(correction);
+    }
+
+    const nextRoots: CascadeNode[] = [];
+
+    for (const [processOrderId, group] of processGroups) {
+      if (!group.fgLedgerId) continue;
+      const { data: rate, error } = await serviceRoleClient
+        .schema("erp_production")
+        .rpc("recompute_sfg_cost", { p_process_order_id: processOrderId, p_corrections: group.corrections });
+      if (error || rate == null) continue;
+      nextRoots.push({ ledgerId: group.fgLedgerId, newRate: Number(rate) });
+    }
+    for (const [packingOrderId, group] of packGroups) {
+      if (!group.fgLedgerId) continue;
+      const { data: rate, error } = await serviceRoleClient
+        .schema("erp_production")
+        .rpc("recompute_fg_cost", { p_packing_order_id: packingOrderId, p_corrections: group.corrections });
+      if (error || rate == null) continue;
+      nextRoots.push({ ledgerId: group.fgLedgerId, newRate: Number(rate) });
+    }
+
+    levelImpacted = [];
+    for (const node of nextRoots) {
+      const { data, error } = await callRecalculateAtRow(node.ledgerId, node.newRate, actor, reason);
+      if (error) {
+        // ALREADY_DONE here means a sibling correction in this same batch already
+        // reached this exact SFG/FG row (e.g. two Packing POs sharing one Process
+        // PO batch) — not a real failure, just nothing further to do from here.
+        results.push({ ledgerId: node.ledgerId, ok: error === "VALUATION_RECALC_ALREADY_DONE", error });
+        continue;
+      }
+      results.push({
+        ledgerId: node.ledgerId, ok: true,
+        materialId: toTrimmedString(data?.material_id),
+        oldRate: Number(data?.old_rate), newRate: Number(data?.new_rate),
+      });
+      levelImpacted.push(...((data?.impacted_rows as JsonRecord[]) ?? []));
+    }
+  }
+
+  return results;
+}
+
+// Opening Rate "Recalculate" (feasibility §109) — one action, fully
+// automatic: corrects every filled-in Opening Stock line's own rate, then
+// cascades RM/PM -> SFG -> FG without any further manual step, per business
+// owner's explicit direction ("system does everything, user does nothing
+// after clicking").
 export async function recalculateValuationHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -1333,60 +1503,55 @@ export async function recalculateValuationHandler(
   try {
     assertManagerOrSARole(ctx);
     const body = await parseBody(req);
-    const lineId = toTrimmedString(body.line_id);
-    const companyId = toTrimmedString(body.company_id);
-    const materialId = toTrimmedString(body.material_id);
-    const storageLocationId = toTrimmedString(body.storage_location_id);
-    const stockTypeCode = toUpperTrimmedString(body.stock_type_code);
-    const newRate = parseNonNegativeNumber(body.new_rate);
     const reason = toTrimmedString(body.reason);
+    const lines = Array.isArray(body.lines) ? body.lines as JsonRecord[] : [];
 
-    if (!companyId || !materialId || !storageLocationId || !STOCK_TYPES.has(stockTypeCode) || newRate === null) {
-      return openingStockErrorResponse(
-        req,
-        ctx,
-        "VALUATION_RECALC_INVALID",
-        400,
-        "company_id, material_id, storage_location_id, stock_type_code and a valid new_rate are required.",
-      );
-    }
     if (!reason) {
       return openingStockErrorResponse(req, ctx, "VALUATION_RECALC_REASON_REQUIRED", 400, "A reason is required for this correction.");
     }
-
-    const { data, error } = await serviceRoleClient
-      .schema("erp_inventory")
-      .rpc("recalculate_valuation", {
-        p_company_id: companyId,
-        p_material_id: materialId,
-        p_storage_location_id: storageLocationId,
-        p_stock_type_code: stockTypeCode,
-        p_new_opening_rate: newRate,
-        p_actor: ctx.auth_user_id,
-        p_reason: reason,
-      });
-
-    if (error) {
-      const code = toTrimmedString(error.message).split(":")[0] || "VALUATION_RECALC_FAILED";
-      const status = code === "VALUATION_RECALC_SNAPSHOT_NOT_FOUND" ? 404
-        : code === "VALUATION_RECALC_ALREADY_DONE" ? 409
-        : code === "VALUATION_RECALC_RATE_INVALID" ? 400
-        : 500;
-      return openingStockErrorResponse(req, ctx, code, status, error.message);
+    if (lines.length === 0) {
+      return openingStockErrorResponse(req, ctx, "VALUATION_RECALC_INVALID", 400, "At least one line with a new_rate is required.");
     }
 
-    // Keep the opening_stock_line's own rate_per_unit in sync with the
-    // corrected snapshot rate, so the "Current Rate" the user sees on next
-    // load reflects reality rather than the original (wrong) entry.
-    if (lineId) {
-      await serviceRoleClient
-        .schema("erp_procurement")
-        .from("opening_stock_line")
-        .update({ rate_per_unit: (data as JsonRecord)?.new_rate })
-        .eq("id", lineId);
+    const roots: (CascadeNode & { lineId: string })[] = [];
+    for (const line of lines) {
+      const lineId = toTrimmedString(line.line_id);
+      const newRate = parseNonNegativeNumber(line.new_rate);
+      const postedStockDocumentId = toTrimmedString(line.posted_stock_document_id);
+      if (!lineId || newRate === null || !postedStockDocumentId) {
+        return openingStockErrorResponse(req, ctx, "VALUATION_RECALC_INVALID", 400, "Each line requires line_id, posted_stock_document_id and a valid new_rate.");
+      }
+      const { data: ledgerRow, error: ledgerErr } = await serviceRoleClient
+        .schema("erp_inventory")
+        .from("stock_ledger")
+        .select("id")
+        .eq("stock_document_id", postedStockDocumentId)
+        .eq("direction", "IN")
+        .limit(1)
+        .maybeSingle();
+      if (ledgerErr || !ledgerRow?.id) {
+        return openingStockErrorResponse(req, ctx, "VALUATION_RECALC_LEDGER_NOT_FOUND", 404, `Could not resolve the opening ledger row for line ${lineId}.`);
+      }
+      roots.push({ lineId, ledgerId: String(ledgerRow.id), newRate });
     }
 
-    return okResponse(data, ctx.request_id, req);
+    const results = await cascadeRecalculate(roots, ctx.auth_user_id, reason);
+
+    // Keep each root opening_stock_line's own rate_per_unit in sync with the
+    // corrected snapshot rate, so "Current Rate" reflects reality next load.
+    await Promise.all(
+      roots.map((root) => {
+        const result = results.find((r) => r.ledgerId === root.ledgerId);
+        if (!result?.ok || result.newRate === undefined) return Promise.resolve();
+        return serviceRoleClient
+          .schema("erp_procurement")
+          .from("opening_stock_line")
+          .update({ rate_per_unit: result.newRate })
+          .eq("id", root.lineId);
+      }),
+    );
+
+    return okResponse({ results }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "VALUATION_RECALC_FAILED";
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
