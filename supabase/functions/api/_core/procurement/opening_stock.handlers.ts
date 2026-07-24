@@ -1363,10 +1363,27 @@ async function callRecalculateAtRow(
 
 // §109 — one Process PO line or one Packing PO line's stock_ledger_id may be
 // the impacted row; whichever it is determines whether the downstream cost
-// recompute is §104-2's (SFG) or §104-3's (FG) formula.
+// recompute is §104-2's (SFG) or §104-3's (FG) formula. A third case (found
+// by testing against a real live PO in Dev, 930008): the impacted row can
+// also be the QI-release-OUT leg of Verify's own P321 (§83.5 — Verify IS the
+// QA release, no separate screen). That leg matches neither line table — the
+// release's IN-to-UNRESTRICTED sibling (process_order.qi_release_stock_ledger_id)
+// is a DIFFERENT stock_ledger row (own stock_document, per post_document's
+// one-document-per-direction pattern) that must get the SAME rate passed
+// through, not recomputed — it's the same value moving stock_type, not a new
+// cost. Only resolvable via the impacted row's own reference_document_id
+// (§106 tagging) — legacy untagged rows (pre-17 July) can't cascade through
+// this leg, a known accepted gap (CLAUDE.md §104).
 async function findDownstreamGroup(
-  impactedLedgerId: string,
-): Promise<{ kind: "PROCESS_PO"; documentId: string; fgLedgerId: string | null } | { kind: "PACKING_PO"; documentId: string; fgLedgerId: string | null } | null> {
+  impacted: JsonRecord,
+): Promise<
+  | { kind: "PROCESS_PO"; documentId: string; fgLedgerId: string | null }
+  | { kind: "PACKING_PO"; documentId: string; fgLedgerId: string | null }
+  | { kind: "PASSTHROUGH"; targetLedgerId: string }
+  | null
+> {
+  const impactedLedgerId = toTrimmedString(impacted.stock_ledger_id);
+
   const { data: poLine } = await serviceRoleClient
     .schema("erp_production")
     .from("process_order_line")
@@ -1400,7 +1417,19 @@ async function findDownstreamGroup(
     return { kind: "PACKING_PO", documentId: String(packLine.packing_order_id), fgLedgerId: (fgLine?.stock_ledger_id as string | null) ?? null };
   }
 
-  return null; // no known downstream (RTV/STO/etc.) — leaf, nothing more to cascade
+  if (toTrimmedString(impacted.reference_document_type) === "PROC_PO" && toTrimmedString(impacted.reference_document_id)) {
+    const { data: po } = await serviceRoleClient
+      .schema("erp_production")
+      .from("process_order")
+      .select("qi_release_stock_ledger_id")
+      .eq("id", toTrimmedString(impacted.reference_document_id))
+      .maybeSingle();
+    if (po?.qi_release_stock_ledger_id) {
+      return { kind: "PASSTHROUGH", targetLedgerId: String(po.qi_release_stock_ledger_id) };
+    }
+  }
+
+  return null; // no known downstream (RTV/STO/legacy untagged rows/etc.) — leaf, nothing more to cascade
 }
 
 // §109 full cascade — one click corrects the root material(s), then walks
@@ -1438,19 +1467,24 @@ async function cascadeRecalculate(
   while (levelImpacted.length > 0) {
     const processGroups = new Map<string, { fgLedgerId: string | null; corrections: JsonRecord[] }>();
     const packGroups = new Map<string, { fgLedgerId: string | null; corrections: JsonRecord[] }>();
+    const nextRoots: CascadeNode[] = [];
 
     for (const impacted of levelImpacted) {
       const impactedLedgerId = toTrimmedString(impacted.stock_ledger_id);
       if (!impactedLedgerId) continue;
-      const group = await findDownstreamGroup(impactedLedgerId);
+      const group = await findDownstreamGroup(impacted);
       if (!group) continue;
+      if (group.kind === "PASSTHROUGH") {
+        // Same value, different stock_type bucket (P321 release) — no cost
+        // recompute, just carry the corrected rate through.
+        nextRoots.push({ ledgerId: group.targetLedgerId, newRate: Number(impacted.corrected_rate) });
+        continue;
+      }
       const correction = { stock_ledger_id: impactedLedgerId, corrected_rate: Number(impacted.corrected_rate) };
       const target = group.kind === "PROCESS_PO" ? processGroups : packGroups;
       if (!target.has(group.documentId)) target.set(group.documentId, { fgLedgerId: group.fgLedgerId, corrections: [] });
       target.get(group.documentId)!.corrections.push(correction);
     }
-
-    const nextRoots: CascadeNode[] = [];
 
     for (const [processOrderId, group] of processGroups) {
       if (!group.fgLedgerId) continue;
