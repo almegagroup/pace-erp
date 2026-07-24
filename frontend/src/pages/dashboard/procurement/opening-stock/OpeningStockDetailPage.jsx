@@ -16,6 +16,7 @@ import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import UomQuantityInput from "../../../../components/forms/UomQuantityInput.jsx";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -23,6 +24,7 @@ import ErpScreenScaffold, {
 import {
   addOpeningStockLine,
   getOpeningStockDocument,
+  listMaterialUomConversionsForProcurement,
   recalculateValuation,
   removeOpeningStockLine,
   submitOpeningStockDocument,
@@ -50,6 +52,8 @@ function createEmptySingleForm() {
     stock_type: "UNRESTRICTED",
     batch_number: "",
     quantity: "",
+    entered_uom_code: "",
+    entered_quantity: "",
     rate_per_unit: "",
   };
 }
@@ -62,6 +66,8 @@ function createBulkRow(index) {
     stock_type: "UNRESTRICTED",
     batch_number: "",
     quantity: "",
+    entered_uom_code: "",
+    entered_quantity: "",
     rate_per_unit: "",
     is_zero_stock: false,
   };
@@ -251,6 +257,32 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   });
   const derivedRate = derivedRateQuery.data?.derivable ? derivedRateQuery.data : null;
 
+  // §110 Phase B — the material's own alternate UoMs (e.g. a purchased-in-bags
+  // RM, or an FG SKU's own outer pack unit), so the user can type "23 bags"
+  // instead of hand-computing KG. Falls back to base-UoM-only display when a
+  // material has no material_uom_conversion rows (§110.4, deliberate — no
+  // bulk data-entry forced on materials that don't need it).
+  const singleConversionsQuery = useQuery({
+    queryKey: ["material-uom-conversions", singleForm.material_id],
+    queryFn: () => listMaterialUomConversionsForProcurement(singleForm.material_id),
+    enabled: Boolean(singleForm.material_id),
+    select: (response) => response?.data ?? [],
+  });
+  const editConversionsQuery = useQuery({
+    queryKey: ["material-uom-conversions", editForm.material_id],
+    queryFn: () => listMaterialUomConversionsForProcurement(editForm.material_id),
+    enabled: Boolean(editForm.material_id),
+    select: (response) => response?.data ?? [],
+  });
+  const bulkConversionQueries = useQueries({
+    queries: bulkRows.map((row) => ({
+      queryKey: ["material-uom-conversions", row.material_id],
+      queryFn: () => listMaterialUomConversionsForProcurement(row.material_id),
+      enabled: Boolean(row.material_id),
+      select: (response) => response?.data ?? [],
+    })),
+  });
+
   const lines = Array.isArray(detail?.lines) ? detail.lines : [];
   const computedTotalValue = lines.reduce((sum, line) => sum + Number(line.total_value ?? 0), 0);
 
@@ -323,6 +355,8 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
             ? singleForm.batch_number.trim().toUpperCase() || null
             : null,
         quantity: Number(singleForm.quantity),
+        entered_uom_code: singleForm.entered_uom_code || null,
+        entered_quantity: singleForm.entered_quantity === "" ? null : Number(singleForm.entered_quantity),
         rate_per_unit: Number(singleForm.rate_per_unit),
       });
       setNotice("Opening stock line added.");
@@ -361,8 +395,8 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
             quantity,
             rate_per_unit: row.rate_per_unit === "" ? 0 : Number(row.rate_per_unit),
             is_zero_stock: Boolean(row.is_zero_stock),
-            entered_uom_code: baseUom,
-            entered_quantity: quantity,
+            entered_uom_code: row.is_zero_stock ? baseUom : (row.entered_uom_code || baseUom),
+            entered_quantity: row.is_zero_stock ? 0 : (row.entered_quantity === "" ? quantity : Number(row.entered_quantity)),
             batch_number:
               material?.material_type === "SFG" || material?.material_type === "FG"
                 ? row.batch_number.trim().toUpperCase() || null
@@ -387,6 +421,8 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       storage_location_id: line.storage_location_id,
       stock_type: line.stock_type,
       quantity: String(line.quantity ?? ""),
+      entered_uom_code: line.entered_uom_code ?? "",
+      entered_quantity: line.entered_quantity != null ? String(line.entered_quantity) : "",
       rate_per_unit: String(line.rate_per_unit ?? ""),
       batch_number: String(line.batch_number ?? ""),
     });
@@ -406,6 +442,8 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
             ? editForm.batch_number.trim().toUpperCase() || null
             : null,
         quantity: Number(editForm.quantity),
+        entered_uom_code: editForm.entered_uom_code || null,
+        entered_quantity: editForm.entered_quantity === "" ? null : Number(editForm.entered_quantity),
         rate_per_unit: Number(editForm.rate_per_unit),
       });
       setEditingLineId("");
@@ -605,7 +643,21 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                     },
                   },
                     { key: "stock_type", label: "Stock Type", width: "170px" },
-                    { key: "quantity", label: "Qty", width: "100px" },
+                    {
+                      key: "quantity",
+                      label: "Qty (Base UOM)",
+                      width: "120px",
+                      render: (row) => `${row.quantity} ${materialMap.get(row.material_id)?.base_uom_code ?? ""}`,
+                    },
+                    {
+                      key: "entered_uom_code",
+                      label: "Entered As",
+                      width: "130px",
+                      render: (row) =>
+                        row.entered_uom_code && row.entered_uom_code !== materialMap.get(row.material_id)?.base_uom_code
+                          ? `${row.entered_quantity} ${row.entered_uom_code}`
+                          : "—",
+                    },
                     { key: "rate_per_unit", label: "Rate", width: "100px" },
                     {
                       key: "total_value",
@@ -776,13 +828,18 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                         </select>
                       </ErpDenseFormRow>
                       <ErpDenseFormRow label="Quantity">
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
+                        <UomQuantityInput
+                          key={editForm.material_id}
+                          baseUomCode={selectedEditMaterial?.base_uom_code}
+                          conversions={editConversionsQuery.data}
+                          defaultUomCode={editForm.entered_uom_code || selectedEditMaterial?.purchase_uom_code}
                           value={editForm.quantity}
-                          onChange={(event) => setEditForm((current) => ({ ...current, quantity: event.target.value }))}
-                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                          onChange={(baseQty, meta) => setEditForm((current) => ({
+                            ...current,
+                            quantity: baseQty != null ? String(baseQty) : "",
+                            entered_uom_code: meta.enteredUomCode,
+                            entered_quantity: Number.isFinite(meta.enteredQty) ? String(meta.enteredQty) : "",
+                          }))}
                         />
                       </ErpDenseFormRow>
                       <ErpDenseFormRow label="Rate Per Unit">
@@ -933,13 +990,17 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                           ) : null}
                           <div className="grid gap-3 xl:grid-cols-3">
                             <ErpDenseFormRow label="Quantity" required>
-                              <input
-                                type="number"
-                                min="0"
-                                step="any"
-                                value={singleForm.quantity}
-                                onChange={(event) => setSingleForm((current) => ({ ...current, quantity: event.target.value }))}
-                                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                              <UomQuantityInput
+                                key={singleForm.material_id}
+                                baseUomCode={selectedSingleMaterial?.base_uom_code}
+                                conversions={singleConversionsQuery.data}
+                                defaultUomCode={selectedSingleMaterial?.purchase_uom_code}
+                                onChange={(baseQty, meta) => setSingleForm((current) => ({
+                                  ...current,
+                                  quantity: baseQty != null ? String(baseQty) : "",
+                                  entered_uom_code: meta.enteredUomCode,
+                                  entered_quantity: Number.isFinite(meta.enteredQty) ? String(meta.enteredQty) : "",
+                                }))}
                               />
                             </ErpDenseFormRow>
                             <ErpDenseFormRow label="Rate Per Unit" required>
@@ -1088,15 +1149,18 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                             <span className="text-slate-400">—</span>
                                           )}
                                         </td>
-                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[130px]">
-                                          <input
-                                            type="number"
-                                            min="0"
-                                            step="any"
-                                            value={row.is_zero_stock ? "0" : row.quantity}
+                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[220px]">
+                                          <UomQuantityInput
+                                            key={row.material_id}
+                                            baseUomCode={material?.base_uom_code}
+                                            conversions={bulkConversionQueries[index]?.data}
+                                            defaultUomCode={material?.purchase_uom_code}
                                             disabled={row.is_zero_stock}
-                                            onChange={(event) => updateBulkRow(row.key, { quantity: event.target.value })}
-                                            className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-500"
+                                            onChange={(baseQty, meta) => updateBulkRow(row.key, {
+                                              quantity: row.is_zero_stock ? "0" : (baseQty != null ? String(baseQty) : ""),
+                                              entered_uom_code: meta.enteredUomCode,
+                                              entered_quantity: Number.isFinite(meta.enteredQty) ? String(meta.enteredQty) : "",
+                                            })}
                                           />
                                         </td>
                                         <td className="border-b border-slate-100 px-3 py-2">
