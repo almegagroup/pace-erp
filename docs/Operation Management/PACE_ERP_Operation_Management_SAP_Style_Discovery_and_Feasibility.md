@@ -15324,3 +15324,83 @@ Recalculate-এর discussion থেকে উঠে এলো একটা ব�
 **গুরুত্বপূর্ণ:** ধাপ D আর E যখন formal session-এ design হবে, তখন যেন এই ধাপ A-এর component-টাই reuse করা হয় (নতুন আলাদা UoM-picker আবিষ্কার না করে) — এটাই "কোনোদিন আর এই প্রশ্ন না আসা"-র নিশ্চয়তা।
 
 ---
+
+## Section 111 — WAR Landed-Cost Gap Discovery + Priority Sequencing (2026-07-25, DEFERRED — not a go-live blocker)
+
+### 111.1 — পটভূমি
+
+Dispatch-এর formal session শুরু করার আগে business owner WAR (Weighted Average Rate) নিয়ে একটা review চাইলেন — "Dispatch-এর আগে WAR নিয়ে design-এ কী কী বাকি সেটা একবার দেখে নিতে হবে।" এই review থেকে code-verified কয়েকটা real gap বেরিয়ে এলো, যেগুলো এই section-এ লক করা হলো।
+
+### 111.2 — WAR engine নিজে সঠিক (verified, কোনো সমস্যা নেই)
+
+`post_stock_movement()`-এর exact ফর্মুলা (migration `20260712013000`, IN branch):
+```
+নতুন Qty   = আগের Qty + আসা Qty
+নতুন Value = আগের Value + (আসা Qty × আসার Rate)
+নতুন Rate  = নতুন Value ÷ নতুন Qty
+```
+OUT branch rate বদলায় না (`v_new_rate := v_old_rate`) — শুধু আগের rate দিয়ে value কমে। Opening entry-কে আলাদা কিছু হিসেবে treat করা হয় না, এটা শুধু "প্রথম IN" (snapshot না থাকলে)। এটাই standard moving-weighted-average, business owner-এর নিজের বর্ণনা ("Opening Qty×Rate + Inward Qty×Rate সব যোগ, Total Qty দিয়ে ভাগ") এর সাথে ঠিক মেলে — শুধু list-ভিত্তিক না, event-by-event running/cumulative।
+
+### 111.3 — যা আজ WAR-এ ঢোকে, যা ঢোকে না (সব code-verified)
+
+| উপাদান | আজ WAR-এ যায়? | কোথায় capture হয় |
+|---|---|---|
+| PO rate (`po_rate`) | ✅ হ্যাঁ — এটাই একমাত্র উৎস | PO Create |
+| Invoice rate (`invoice_rate`) | ❌ **না** — GRN-এ capture হয়, DB-তে save হয়, কিন্তু `effectiveGrnRate`/`baseUomRate` হিসাবে কখনো ব্যবহার হয় না (`grn.handlers.ts` লাইন ৬৫৮-৬৬০ verified) | GRN Post |
+| GST% (`gst_pct`) | ❌ না (ইচ্ছাকৃতভাবে ঠিকই আছে — নিচে ১১১.৪ দেখো) | GRN Post |
+| Landed Cost (Freight/Insurance/Customs Duty/CHA/Loading/Unloading/Port/Other) | ❌ **না** — `landed_cost`/`landed_cost_line` টেবিল+পেজ (`/dashboard/procurement/accounts/landed-costs`) সম্পূর্ণ বানানো আছে, কিন্তু `postLandedCostHandler` শুধু status DRAFT→POSTED করে, `stock_snapshot` কোথাও ছোঁয় না | Landed Cost page (Accounts) |
+| Debit Note (RTV-linked) | আংশিক — RTV-এর ফেরত qty-র জন্য landed cost proportionally apportion করে (qty ratio, freight FOR হলে বাদ), কিন্তু এটা শুধু vendor-claim number, WAR-কে ছোঁয় না | RTV flow |
+| Reject/RTV-এর stock reversal | ✅ সঠিক — current WAR rate দিয়েই reverse হয় (§104-4-এর reversal-symmetry rule মতো) | RTV flow |
+
+**সবচেয়ে গুরুত্বপূর্ণ finding:** Landed Cost-এর apportionment logic (qty-ratio ভাগ, cost_type-ভিত্তিক, freight-term-aware) **ইতিমধ্যেই বানানো আছে** (Debit Note-এর জন্য) — WAR-এ feed করার সময় এই logic নতুন করে বানাতে হবে না, reuse করতে হবে।
+
+### 111.4 — GST কখনোই WAR-এ ঢোকা উচিত না (accounting principle, business owner-কে জানানো হয়েছে)
+
+Domestic GST আর বেশিরভাগ import IGST — creditable (Input Tax Credit, GST liability-র বিরুদ্ধে claim হয়) — তাই এটা "cost" না, inventory valuation-এ ঢোকা উচিত না। শুধু non-creditable duty (BCD) landed cost-এর অংশ হওয়া উচিত। **আজকের সিস্টেম কাকতালীয়ভাবে এটাই করছে** (GST কখনো WAR স্পর্শ করে না) — এখানে fix করার কিছু নেই। ⚠️ Business owner-কে বলা হয়েছে exact ITC-eligibility rule material/HSN-ভেদে exception থাকতে পারে, CA-র সাথে confirm করে নিতে।
+
+Bundled rate (Basic+Freight+GST একসাথে quote করা vendor)-এর ক্ষেত্রে: GST invoice আইনত সবসময় GST আলাদা দেখাতে বাধ্য (mandatory tax invoice format) — তাই real invoice হাতে এলে GST% জানা যাবেই, `gst_pct` ফিল্ড থেকে ex-GST rate বের করা সম্ভব (`Basic = Total ÷ (1+GST%/100)`) — কিন্তু এই back-calculated rate-ও আজ WAR-এ যায় না (একই ১১১.৩-এর gap)।
+
+### 111.5 — Import landed-cost buildup (business owner-এর ব্যাখ্যা, ভবিষ্যতের ডিজাইনের জন্য রেকর্ড করা)
+
+**Type 1 — Full import (PACE নিজে করে):** PO Basic Rate (Dollar/Euro/INR) + Duty + Shipping Line + CFS + CHA + Transporter + Unloading।
+**Type 2 — Consignor Port-পর্যন্ত deliver করে (INR-এ):** Consignor-এর bundled Port-rate + Transporter + Unloading (transporter-এর GST থাকতেও পারে, না-ও পারে)।
+**Exchange rate:** BOE (Bill of Entry) হাতে এলেই জানা যায় — PO date-এর rate না। আজ `boe_number`/`boe_date` GRN-এ capture হয়, কিন্তু কোনো exchange-rate ফিল্ড নেই।
+
+### 111.6 — মূল architectural আবিষ্কার: কোনো component-ই "সবসময় একই সময়ে আসে" এমন না
+
+প্রথমে ভাবা হয়েছিল একটা ২-bucket ভাগ চলবে (invoice_rate/GST = GRN-এর সময়েই জানা যায়, landed cost = পরে জানা যায়) — **এটা ভুল প্রমাণিত হলো।** Business owner নিশ্চিত করলেন Bulk RM (domestic)-এর invoice-ও অনেক পরে আসে। তাই বাস্তবতা হলো: basic rate, GST breakdown, Duty, CHA, Transporter, Unloading — **প্রতিটাই স্বাধীনভাবে, আলাদা আলাদা সময়ে জানা যায়**, কোনো পরিষ্কার bucket-ভাগ নেই।
+
+**সরাসরি consequence:** একটা single GRN-এর rate ৩-৪ বার (বা বেশি) বদলাতে হতে পারে, সময়ের সাথে সাথে। §109-এর Recalculate engine-এর **one-time-use lock** (`target_ledger_id`-ভিত্তিক) এই ব্যবহারের জন্য **অনুপযুক্ত** — এটা Opening Stock-এর জন্য ঠিক ছিল (একবারই ভুল হয়, একবারই ঠিক হয়) কিন্তু GRN landed-cost correction-এর জন্য না।
+
+**সম্ভাব্য সমাধান (এখনো lock হয়নি, Step 4-এ decide করতে হবে):** "নতুন absolute rate বসাও" মডেলের বদলে **"এই GRN-এ ₹X নতুন value যোগ করো"** — additive/incremental মডেল, কারণ কোনো মুহূর্তেই "চূড়ান্ত rate" জানা যায় না, শুধু "নতুন এক component যোগ হলো" জানা যায়।
+
+### 111.7 — Locked Priority Sequencing (2026-07-25, business owner)
+
+```
+1. Dispatch (L5)
+2. Costing / AP Reco
+3. Accounts Module — GRN-পরবর্তী: Invoice Acknowledgement, Debit/Credit Note,
+   Reject, Return — এই সবগুলোর সঠিক re-design (আজ যা আছে তা সঠিক design না,
+   business owner-এর নিজের কথায়)
+4. WAR Implementation — Accounts Module-এর data WAR-এ feed করা, Recalculate-কে
+   repeatable/additive করা, তারপর retroactive catch-up চালানো
+```
+
+**সিদ্ধান্ত: এখন (go-live-এর আগে) WAR/Landed-Cost নিয়ে কোনো design বা code কাজ না।** যা আজ আছে (PO-rate-only WAR) তাতেই go-live করবে। ⚠️ **Accounts-কে আজ থেকেই existing Landed Cost পেজ ব্যবহার শুরু করতে বলা হয়েছে** — এটা তাদের normal bookkeeping-এর অংশ (Debit Note/GST-এর জন্য এমনিতেও লাগবে), WAR-wiring-এর জন্য অপেক্ষা করার দরকার নেই। এতে Step 4 শুরু হওয়ার সময় data আগে থেকেই থাকবে, কোনো backfill scramble লাগবে না।
+
+### 111.8 — Deferred হওয়ার blast-radius (কেন এটা নিরাপদ, verified)
+
+- Stock qty/movement — সবসময় সঠিক থাকে (WAR অসম্পূর্ণ থাকলেও ভাঙে না)
+- AP billing/Reco (§104.7) — WAR-নির্ভর না, `AP Approved Qty × AP Monthly Rate` দিয়ে চলে (আলাদা layer, আগেই lock করা)
+- Dispatch — WAR-নির্ভর না
+- **যা প্রভাবিত হয়:** PACE-এর নিজের internal cost report (RMC/SFG/FG cost) কিছুদিন understated থাকবে — §109 Recalculate দিয়ে পরে সংশোধনযোগ্য
+- **Dispatch আগে হয়ে যাওয়ার প্রভাব:** Step 4-এ correction চালানোর সময় কিছু FG ইতিমধ্যে dispatch হয়ে গেছে (physically নেই) — কিন্তু `recalculate_valuation_at_row`-এর `impacted_rows` OUT-direction leg-কেও ধরে, তাই ledger-এ রেকর্ড করা value retroactively ঠিক হয়ে যায় (physically ফেরানোর দরকার নেই)। AP billing প্রভাবিত হয় না (আলাদা layer), শুধু PACE-এর নিজের margin/COGS report Step 4-এর পরে refresh করতে হবে।
+
+### 111.9 — Step 4 (WAR Implementation)-এর জন্য এখন থেকেই মনে রাখতে হবে (না করলে তখন আবার আটকে যাবে)
+
+1. **One-time-use lock repeatable/additive-এ বদলাতে হবে** (§111.6) — নাহলে জমা করা multi-bill data কাজে লাগানো যাবে না।
+2. **Batch-controlled catch-up** — Aug 1 থেকে জমে থাকা সব GRN একসাথে replay করলে scale/performance কেমন হবে, এখনো প্রমাণিত না (শুধু একটা real chain-এ verified)। Vendor/month ধরে ধরে চালানোর পরিকল্পনা রাখা ভালো।
+3. **Debit Note-এর apportionment logic reuse করা** — নতুন allocation logic বানাতে হবে না, `createDebitNoteHandler`-এর qty-ratio + cost_type + freight-term-aware logic-টাই WAR-এর দিকেও পাঠাতে হবে।
+4. **এখনো lock হয়নি (Step 3/4-এ decide করতে হবে):** landed cost multi-material allocation basis (qty vs value ratio, per cost_type), CSN/PO-linked landed cost-এর scope (multi-GRN allocation-এর জন্য junction table লাগবে কিনা, নাকি বাস্তবে ব্যবহারই হয় না), exchange-rate capture mechanism (BOE-ভিত্তিক)।
+
+---
