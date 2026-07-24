@@ -1288,3 +1288,61 @@ export async function postOpeningStockDocumentHandler(
     return openingStockErrorResponse(req, ctx, code, status, code);
   }
 }
+
+// Opening Rate "Recalculate" — Phase 1 (feasibility §109). Corrects one
+// material's own stock_snapshot.valuation_rate by replaying its full
+// stock_ledger history in chronological order from a corrected opening
+// rate (erp_inventory.recalculate_valuation()). Does NOT cascade into
+// downstream SFG/FG batches yet — that is Phase 2/3, not built here.
+export async function recalculateValuationHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id);
+    const materialId = toTrimmedString(body.material_id);
+    const storageLocationId = toTrimmedString(body.storage_location_id);
+    const stockTypeCode = toUpperTrimmedString(body.stock_type_code);
+    const newRate = parseNonNegativeNumber(body.new_rate);
+    const reason = toTrimmedString(body.reason);
+
+    if (!companyId || !materialId || !storageLocationId || !STOCK_TYPES.has(stockTypeCode) || newRate === null) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "VALUATION_RECALC_INVALID",
+        400,
+        "company_id, material_id, storage_location_id, stock_type_code and a valid new_rate are required.",
+      );
+    }
+    if (!reason) {
+      return openingStockErrorResponse(req, ctx, "VALUATION_RECALC_REASON_REQUIRED", 400, "A reason is required for this correction.");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_inventory")
+      .rpc("recalculate_valuation", {
+        p_company_id: companyId,
+        p_material_id: materialId,
+        p_storage_location_id: storageLocationId,
+        p_stock_type_code: stockTypeCode,
+        p_new_opening_rate: newRate,
+        p_actor: ctx.auth_user_id,
+        p_reason: reason,
+      });
+
+    if (error) {
+      const code = toTrimmedString(error.message).split(":")[0] || "VALUATION_RECALC_FAILED";
+      const status = code === "VALUATION_RECALC_SNAPSHOT_NOT_FOUND" ? 404 : code === "VALUATION_RECALC_RATE_INVALID" ? 400 : 500;
+      return openingStockErrorResponse(req, ctx, code, status, error.message);
+    }
+
+    return okResponse(data, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "VALUATION_RECALC_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
+    return openingStockErrorResponse(req, ctx, code, status, code);
+  }
+}

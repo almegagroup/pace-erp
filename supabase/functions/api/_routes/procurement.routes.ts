@@ -129,6 +129,7 @@ import {
   getOpeningStockDocumentHandler,
   listOpeningStockDocumentsHandler,
   postOpeningStockDocumentHandler,
+  recalculateValuationHandler,
   removeOpeningStockLineHandler,
   submitOpeningStockDocumentHandler,
   updateOpeningStockLineHandler,
@@ -387,6 +388,8 @@ export async function dispatchProcurementRoutes(
       return await listOpeningStockDocumentsHandler(req, ctx);
     case "GET:/api/procurement/opening-stock/by-number":
       return await getOpeningStockDocumentByNumberHandler(req, ctx);
+    case "POST:/api/procurement/opening-stock/recalculate-valuation":
+      return await recalculateValuationHandler(req, ctx);
     case "POST:/api/procurement/physical-inventory":
       return await createPIDHandler(req, ctx);
     case "GET:/api/procurement/physical-inventory":

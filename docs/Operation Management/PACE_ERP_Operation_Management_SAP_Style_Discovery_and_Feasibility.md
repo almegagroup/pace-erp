@@ -15224,3 +15224,49 @@ IWC (MTS)-এর Process PO **Liter-এ চলে** (ব্যবসায়ি
 | PR22/PR23 (Opening Genealogy) MTS-এ না থাকা | এটা gap **নয়** — already সঠিক ও closed (MTS-এর কোনো production-time reco layer নেই যে PR22/23 feed করবে) |
 
 ---
+
+## Section 109 — Opening Rate Correction: "Recalculate" Mechanism (2026-07-24 — মূল সিদ্ধান্ত LOCKED, cascade-scope OPEN)
+
+### 109.1 — পটভূমি (recap)
+
+Commercial team সময়মতো real WAR দিতে পারবে না (go-live cutover অনুযায়ী)। তাই RM/PM-এর Opening Rate শুরুতে **provisional** বসবে, পরে যখন real rate আসবে (target: **31 July-এর closing WAR**), সেটা দিয়ে সংশোধন করতে হবে। UX: একটাই editable Opening Rate field + একটা "Recalculate" button, প্রতি material-এ **একবার** use হবে (§104.9-এর ধারাবাহিকতা, business owner-এর confirm করা design intent — CLAUDE.md-এর পূর্বের note)।
+
+### 109.2 — Mechanism LOCKED (2026-07-24, business owner-এর সরাসরি a/b/c উত্তর)
+
+| প্রশ্ন | উত্তর |
+|---|---|
+| (a) Opening থেকে আজ পর্যন্ত সব posting নতুন rate দিয়ে **replay** হবে (`post_stock_movement()` আবার কল করে, original chronological order-এ)? | **✅ Yes** |
+| (b) নাকি সরাসরি `stock_snapshot`-এ গিয়ে current balance-টা এক ধাক্কায় সংশোধন (shortcut adjustment entry)? | **❌ No** — এই lighter approach বাতিল |
+| (c) মাঝখানে PR19 (salvage/partial reversal)-এর মতো posting থাকলে সেগুলোও replay-এর আওতায় আসবে? | **✅ Yes** |
+
+মানে: **heavy, নির্ভুল replay**-ই চাওয়া হয়েছে — GRN, Process PO Verify, Packing PO Final, PR19, COR6, CORS — সবকিছু যা ওই material-এর `stock_ledger`-এ posting করেছে opening-এর পর থেকে, **সবই** replay-এর scope-এ থাকবে, কোনো shortcut নয়।
+
+### 109.3 — টেকনিক্যাল বাস্তবতা: append-only ledger-এর সাথে "replay" কীভাবে সম্ভব
+
+**§8C/§8D-এ locked rule:** `stock_ledger` append-only — `stock_ledger_no_delete`/`stock_ledger_no_update` rule আছে, কোনো historical row **কখনো edit/delete করা যায় না**। তাই "replay" মানে literal অর্থে পুরনো row বদলানো **নয়** — এটা সম্ভবই না।
+
+তাহলে "replay" বাস্তবে কী হবে: পুরনো prior-এর মতোই (CORS/COR6/PR19 — সবখানেই এই একই pattern) **নতুন correction posting-এর একটা সিরিজ** তৈরি হবে, প্রতিটা historical event-এর জন্য একটা করে, chronological order-এ apply করে, যাতে শেষে `stock_snapshot`-এর current balance+rate ঠিক সেই মানেই পৌঁছায় যেটা opening rate সঠিক হলে হতো। পুরনো row-গুলো audit trail-এ **অক্ষত থেকে যাবে** (যেমন আজও থাকে), correction-গুলো তার **উপরে** বসবে — ঠিক reversal/correction-এর existing idiom-এর মতোই, নতুন কিছু আবিষ্কার নয়।
+
+### 109.4 — Cascade scope LOCKED (2026-07-24, business owner সরাসরি সিদ্ধান্ত): RM → SFG → FG পুরো cascade
+
+`post_stock_movement()`-এর WAR নিয়ম — IN movement-এ rate blend হয়, OUT movement rate **অপরিবর্তিত রেখে** current rate-এই মাল বের করে। মানে RM-এর Opening Rate ভুল থাকলে সেই RM থেকে যত **OUT** (Process PO Verify P261) হয়েছে সবই ভুল rate-এ "value removed" হিসাব করেছে, তার উপর §104-2 SFG cost বসেছে, তার উপর §104-3 FG cost বসেছে — **business owner সিদ্ধান্ত নিয়েছেন এই পুরো chain-টাই automatically সংশোধন হবে, শুধু RM-এর নিজের rate ঠিক করে downstream-কে "manual review"-এ ছেড়ে দেওয়া হবে না।**
+
+### 109.5 — Implementation plan: ৩ ধাপ (single build এ পুরোটা নয় — §107.8-এর post_document staged-rollout-এর মতোই discipline)
+
+কারণ পুরো cascade একবারে বানানো risky (stock engine-এর গভীরে হাত, বড় blast radius) — §8D-এর নিজের সতর্কবার্তার সাথেও মেলে ("stock engine-এ হাত দেওয়া মানে যে বিপদ ঠেকাতে চাইছি সেটাই ডেকে আনা")। তাই ৩ ধাপে ভাগ করা হলো, প্রতিটা ধাপ নিজে থেকেই সম্পূর্ণ ও testable:
+
+**ধাপ ১ — ✅ DONE (2026-07-24) — Core simulation engine + শুধু root material (RM/PM)-এর নিজের সংশোধন:**
+- ✅ নতুন table `erp_inventory.valuation_correction_log` — audit trail (আগে যেমন CORS/COR6/PR19-এর জন্য কখনো history edit হয়নি, নতুন posting-ই হয়েছে, এখানেও সেই idiom)। Migration `20260724100000_valuation_correction_recalculate.sql`।
+- ✅ নতুন function `erp_inventory.recalculate_valuation(company, material, storage_location, stock_type, new_opening_rate, actor, reason)` — opening থেকে আজ পর্যন্ত সেই material-এর প্রতিটা `stock_ledger` row chronologically walk করে, IN row-এ blend recompute করে (GRN-এর নিজের rate অপরিবর্তিত, শুধু blended average বদলায়), OUT row-এ "corrected value removed" বনাম "originally recorded value removed" তুলনা করে একটা **impacted_rows list** বানায় (এটাই ধাপ ২/৩-এর input হবে)। Live Dev data (Tartaric Acid, opening 594@₹10 + GRN 1000@₹113, current blended ₹74.617315) দিয়ে rolled-back transaction-এ হাতে-হিসাব করে verify করা — গণিত ঠিক, rollback পরিষ্কার (০ residual row)।
+- ✅ `stock_snapshot.valuation_rate` আপডেট হয় simulation-এর ফলাফল দিয়ে (row-lock করে, `post_stock_movement()`-এর concurrency pattern অনুসরণ করে) — qty mismatch হলে hard-block (`VALUATION_RECALC_QTY_MISMATCH`)।
+- ✅ Backend: `recalculateValuationHandler` (`opening_stock.handlers.ts`, manager/SA gated) + route `POST /api/procurement/opening-stock/recalculate-valuation` + ACL (`PROC_OPENING_STOCK_APPROVAL`, action `APPROVE` — post-এর মতোই sensitive)।
+- ✅ Frontend: IN05 (`OpeningStockDetailPage.jsx`)-এ POSTED line-এ "Recalculate" button → inline form (Current Rate read-only, Corrected Rate input, Reason required) → Confirm করলে result দেখায় (old→new rate + impacted downstream posting count/list, স্পষ্ট করে বলে এগুলো এখনো auto-corrected হয়নি)। এই ধাপে শুধু RM/PM-এর নিজের rate সংশোধন করে, downstream এখনো ছোঁয় না (কিন্তু impacted_rows list ইতিমধ্যেই সঠিকভাবে গণনা হয়ে যাচ্ছে, ধাপ ২/৩-এর জন্য প্রস্তুত)।
+- ⏳ বাকি: live end-to-end verification deployed app-এ (business owner login লাগবে), তারপর ধাপ ২ (SFG cascade)।
+
+**ধাপ ২ — SFG cascade:** ধাপ ১-এর `impacted_rows`-এর মধ্যে যেগুলো Process PO Verify-র RM issue (feeding একটা SFG receipt), তাদের জন্য §104-2-এর `sfgCostPerKg` formula আবার চালিয়ে corrected SFG rate বের করা, তারপর সেই SFG batch-এর জন্য **আবার ধাপ ১-এর একই simulation engine recursively** চালানো।
+
+**ধাপ ৩ — FG cascade:** ধাপ ২-এর ফলে impacted SFG batch-গুলোর মধ্যে যেগুলো Packing PO Final-এ consume হয়েছে (§104-3), সেই FG batch-গুলোর জন্য একই recursive correction।
+
+**⚠️ ধাপ ১-ই সবচেয়ে বড়/নতুন কাজ — এটা আগে সম্পূর্ণ ও সঠিকভাবে বানিয়ে, verify করে, তারপর ২/৩-এ যাওয়া হবে।** ধাপ ২/৩ ধাপ ১-এর engine-টাই recursively reuse করে, তাই ধাপ ১ ভুল হলে ২/৩ ভুলই cascade করবে — তাই এই ক্রম বাধ্যতামূলক, এড়িয়ে যাওয়া চলবে না।
+
+---

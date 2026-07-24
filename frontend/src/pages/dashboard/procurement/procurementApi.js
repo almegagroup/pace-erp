@@ -914,6 +914,10 @@ export function postOpeningStockDocument(id) {
   return fetchProcurement("POST", `/api/procurement/opening-stock/${encodeURIComponent(id)}/post`);
 }
 
+export function recalculateValuation(data) {
+  return fetchProcurement("POST", "/api/procurement/opening-stock/recalculate-valuation", data);
+}
+
 export function listPIDocuments(params) {
   return fetchProcurement("GET", "/api/procurement/physical-inventory", undefined, params);
 }
