@@ -143,6 +143,11 @@ export default function STOListPage() {
     },
   });
 
+  function openCreate() {
+    openScreen(OPERATION_SCREENS.PROC_STO_CREATE.screen_code);
+    navigate("/dashboard/procurement/stos/create");
+  }
+
   function openDetail(row) {
     openScreen(OPERATION_SCREENS.PROC_STO_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/stos/${encodeURIComponent(row.id)}`);
@@ -159,6 +164,7 @@ export default function STOListPage() {
           tone: "neutral",
           onClick: () => setRefreshToken((value) => value + 1),
         },
+        { key: "create", label: "New STO", tone: "primary", onClick: openCreate },
       ]}
       notices={error ? [{ key: "sto-list-error", tone: "error", message: error }] : []}
       filterSection={{

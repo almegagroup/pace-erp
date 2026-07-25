@@ -41,6 +41,7 @@ import {
   listGateEntriesHandler,
   listOpenCSNsForGEHandler,
   listOpenPOsForGEHandler,
+  listOpenSTOsForGEHandler,
   pruneGateEntryHandler,
   updateGateEntryHandler,
 } from "../_core/procurement/gate_entry.handlers.ts";
@@ -405,6 +406,8 @@ export async function dispatchProcurementRoutes(
       return await listOpenCSNsForGEHandler(req, ctx);
     case "GET:/api/procurement/gate-entries/open-pos":
       return await listOpenPOsForGEHandler(req, ctx);
+    case "GET:/api/procurement/gate-entries/open-stos":
+      return await listOpenSTOsForGEHandler(req, ctx);
     case "GET:/api/procurement/gate-entries/by-number":
       return await getGateEntryByNumberHandler(req, ctx);
     case "POST:/api/procurement/gate-exits/inbound":

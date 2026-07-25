@@ -9,6 +9,7 @@ import {
   createGateEntry,
   listOpenCSNsForGE,
   listOpenPOsForGE,
+  listOpenSTOsForGE,
 } from "../procurementApi.js";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -39,9 +40,11 @@ function time12to24(time, ampm) {
 }
 
 const EMPTY_LINE = () => ({
-  poQuery: "",
+  refQuery: "",
   po: null,
   poLine: null,
+  sto: null,
+  stoLine: null,
   csn: null,
   rcvQty: "",
   lrNumber: "",
@@ -68,12 +71,13 @@ export default function GateEntryCreatePage() {
   // ── lines state
   const [lines, setLines] = useState(() => Array.from({ length: 6 }, EMPTY_LINE));
 
-  // ── PO / CSN data
+  // ── PO / STO / CSN data
   const [allPos, setAllPos] = useState([]);
+  const [allStos, setAllStos] = useState([]);
   const [allCsns, setAllCsns] = useState([]);
   const [dataLoading, setDataLoading] = useState(false);
 
-  // ── PO dropdown per-row
+  // ── PO/STO dropdown per-row
   const [poDropRow, setPoDropRow] = useState(null);
   const [poDropHi, setPoDropHi] = useState(0);
 
@@ -81,7 +85,9 @@ export default function GateEntryCreatePage() {
   const [drawer, setDrawer] = useState({
     open: false,
     rowIndex: null,
-    poNumber: null,
+    refLabel: null,
+    refKind: null,
+    refItem: null,
     csns: [],
     hiIdx: 0,
     selected: null,
@@ -113,11 +119,13 @@ export default function GateEntryCreatePage() {
     setDataLoading(true);
     Promise.all([
       listOpenPOsForGE({ company_id: companyId }),
+      listOpenSTOsForGE({ company_id: companyId }),
       listOpenCSNsForGE({ company_id: companyId }),
     ])
-      .then(([poRes, csnRes]) => {
+      .then(([poRes, stoRes, csnRes]) => {
         if (!active) return;
         setAllPos(Array.isArray(poRes?.items) ? poRes.items : []);
+        setAllStos(Array.isArray(stoRes?.items) ? stoRes.items : []);
         setAllCsns(Array.isArray(csnRes?.items) ? csnRes.items : []);
       })
       .catch((e) => {
@@ -130,54 +138,86 @@ export default function GateEntryCreatePage() {
     return () => { active = false; };
   }, [companyId]);
 
-  function getPoSuggestions(query) {
-    if (!query) return allPos.slice(0, 8);
+  // §111 (2026-07-25) — one search box, either PO or STO number. STO has no
+  // po_number of its own (it's a different document, per-company-transfer,
+  // not per-vendor-purchase), so a plain PO-only search could never find an
+  // STO-originated shipment at the gate. Suggestions are merged and tagged
+  // with __kind so the rest of the flow knows which lookup table to use.
+  function getRefSuggestions(query) {
+    const poItems = allPos.map((p) => ({ ...p, __kind: "PO", __number: p.po_number }));
+    const stoItems = allStos.map((s) => ({ ...s, __kind: "STO", __number: s.sto_number }));
+    const all = [...poItems, ...stoItems];
+    if (!query) return all.slice(0, 8);
     const q = query.toLowerCase();
-    return allPos
+    return all
       .filter(
-        (p) =>
-          (p.po_number || "").toLowerCase().includes(q) ||
-          (p.vendor_name || "").toLowerCase().includes(q)
+        (item) =>
+          (item.__number || "").toLowerCase().includes(q) ||
+          (item.vendor_name || "").toLowerCase().includes(q)
       )
       .slice(0, 8);
   }
 
-  function getCsnsForPo(poId) {
-    return allCsns.filter((c) => c.po_id === poId);
+  function getCsnsForRef(kind, refId) {
+    return kind === "STO"
+      ? allCsns.filter((c) => c.sto_id === refId)
+      : allCsns.filter((c) => c.po_id === refId);
   }
 
   function updateLine(i, patch) {
     setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   }
 
-  function selectPO(rowIndex, po) {
+  function selectRef(rowIndex, item) {
+    if (item.__kind === "STO") {
+      updateLine(rowIndex, { refQuery: item.sto_number, po: null, poLine: null, sto: item, stoLine: null, csn: null });
+      setPoDropRow(null);
+      const csns = getCsnsForRef("STO", item.id);
+      if (csns.length > 0) {
+        setTimeout(() => openDrawer(rowIndex, null, item), 60);
+      }
+      return;
+    }
+    const po = item;
     const isBulk = ["BULK", "TANKER"].includes((po.delivery_type || "").toUpperCase());
     const firstOpenLine = isBulk
       ? (po.lines ?? []).find((l) =>
           ["OPEN", "PARTIALLY_RECEIVED"].includes((l.line_status || "").toUpperCase())
         ) ?? null
       : null;
-    updateLine(rowIndex, { poQuery: po.po_number, po, csn: null, poLine: firstOpenLine });
+    updateLine(rowIndex, { refQuery: po.po_number, po, poLine: firstOpenLine, sto: null, stoLine: null, csn: null });
     setPoDropRow(null);
     if (!isBulk) {
-      const csns = getCsnsForPo(po.id);
+      const csns = getCsnsForRef("PO", po.id);
       if (csns.length > 0) {
-        setTimeout(() => openDrawer(rowIndex, po), 60);
+        setTimeout(() => openDrawer(rowIndex, po, null), 60);
       }
     }
   }
 
-  function openDrawer(rowIndex, po) {
+  function openDrawer(rowIndex, po, sto) {
     const resolvedPo = po ?? lines[rowIndex]?.po;
-    if (!resolvedPo) return;
-    const csns = getCsnsForPo(resolvedPo.id);
+    const resolvedSto = sto ?? lines[rowIndex]?.sto;
+    const kind = resolvedSto ? "STO" : "PO";
+    const refItem = resolvedSto ?? resolvedPo;
+    if (!refItem) return;
+    const csns = getCsnsForRef(kind, refItem.id);
     const currentCsn = lines[rowIndex]?.csn;
     const hiIdx = csns.findIndex((c) => c.id === currentCsn?.id);
-    setDrawer({ open: true, rowIndex, poNumber: resolvedPo.po_number ?? null, csns, hiIdx: Math.max(0, hiIdx), selected: currentCsn });
+    setDrawer({
+      open: true,
+      rowIndex,
+      refLabel: kind === "STO" ? refItem.sto_number : (refItem.po_number ?? null),
+      refKind: kind,
+      refItem,
+      csns,
+      hiIdx: Math.max(0, hiIdx),
+      selected: currentCsn,
+    });
   }
 
   function closeDrawer() {
-    setDrawer({ open: false, rowIndex: null, poNumber: null, csns: [], hiIdx: 0, selected: null });
+    setDrawer({ open: false, rowIndex: null, refLabel: null, refKind: null, refItem: null, csns: [], hiIdx: 0, selected: null });
   }
 
   function confirmDrawer() {
@@ -185,11 +225,20 @@ export default function GateEntryCreatePage() {
     if (drawer.selected && rowIndex !== null) {
       const csn = drawer.selected;
       const isImport = (csn.csn_type || "").toUpperCase() === "IMPORT";
-      updateLine(rowIndex, {
+      const patch = {
         csn,
         lrNumber: isImport ? (csn.boe_number || "") : (csn.invoice_number || ""),
         lrDate: isImport ? (csn.bl_date || "") : (csn.lr_date || ""),
-      });
+      };
+      if (drawer.refKind === "STO") {
+        // The CSN itself has no line-level STO reference (consignment_note
+        // only carries the STO header id) — the actual sto_line_id GE needs
+        // to post against lives on stock_transfer_order_line, resolved here
+        // by matching material_id within the STO we already fetched.
+        const stoLines = drawer.refItem?.lines ?? [];
+        patch.stoLine = stoLines.find((l) => l.material_id === csn.material_id) ?? null;
+      }
+      updateLine(rowIndex, patch);
     }
     closeDrawer();
     if (rowIndex !== null) {
@@ -212,24 +261,29 @@ export default function GateEntryCreatePage() {
       setError("Gross weight (KG) is required.");
       return;
     }
-    const activeLines = lines.filter((l) => l.po !== null);
+    const activeLines = lines.filter((l) => l.po !== null || l.sto !== null);
     if (activeLines.length === 0) {
-      setError("At least one PO line must be added.");
+      setError("At least one PO or STO line must be added.");
       return;
     }
     for (let i = 0; i < activeLines.length; i++) {
       const l = activeLines[i];
-      const isBulk = ["BULK", "TANKER"].includes((l.po.delivery_type || "").toUpperCase());
+      const refNumber = l.po ? l.po.po_number : l.sto.sto_number;
+      const isBulk = l.po ? ["BULK", "TANKER"].includes((l.po.delivery_type || "").toUpperCase()) : false;
       if (!isBulk && !l.csn) {
-        setError(`Line ${i + 1} (${l.po.po_number}): CSN must be selected.`);
+        setError(`Line ${i + 1} (${refNumber}): CSN must be selected.`);
         return;
       }
       if (isBulk && !l.poLine) {
-        setError(`Line ${i + 1} (${l.po.po_number}): No open PO line found for this BULK PO.`);
+        setError(`Line ${i + 1} (${refNumber}): No open PO line found for this BULK PO.`);
+        return;
+      }
+      if (l.sto && !l.stoLine) {
+        setError(`Line ${i + 1} (${refNumber}): Could not resolve the STO line for the selected CSN.`);
         return;
       }
       if (!l.rcvQty || Number(l.rcvQty) <= 0) {
-        setError(`Line ${i + 1} (${l.po.po_number}): Received quantity is required.`);
+        setError(`Line ${i + 1} (${refNumber}): Received quantity is required.`);
         return;
       }
     }
@@ -250,7 +304,7 @@ export default function GateEntryCreatePage() {
         vehicle_number: vehicleNumber.trim().toUpperCase(),
         gross_weight: gw,
         lines: activeLines.map((l, index) => {
-          const isBulk = ["BULK", "TANKER"].includes((l.po.delivery_type || "").toUpperCase());
+          const isBulk = l.po ? ["BULK", "TANKER"].includes((l.po.delivery_type || "").toUpperCase()) : false;
           const rcvQty = Number(l.rcvQty) || 0;
           let lineGrossWeight;
           if (index === activeLines.length - 1) {
@@ -263,7 +317,9 @@ export default function GateEntryCreatePage() {
           allocatedGrossWeight += lineGrossWeight;
           return {
             csn_id: isBulk ? null : (l.csn?.id || null),
-            po_line_id: isBulk ? (l.poLine?.id || "") : (l.csn?.po_line_id || ""),
+            po_line_id: isBulk ? (l.poLine?.id || "") : (l.po ? (l.csn?.po_line_id || "") : ""),
+            sto_id: l.sto?.id || null,
+            sto_line_id: l.sto ? (l.stoLine?.id || "") : null,
             material_id: isBulk ? (l.poLine?.material_id || "") : (l.csn?.material_id || ""),
             ge_qty: rcvQty,
             uom_code: isBulk ? (l.poLine?.uom_code || l.poLine?.po_uom_code || "") : (l.csn?.po_uom_code || ""),
@@ -332,7 +388,10 @@ export default function GateEntryCreatePage() {
   function renderCsnCard(csn, idx) {
     const isImport = (csn.csn_type || "").toUpperCase() === "IMPORT";
     const matDisplay = csn.material_name || csn.material_id || "—";
-    const poNumber = allPos.find((p) => p.id === csn.po_id)?.po_number || "—";
+    const refLabel = csn.po_id ? "PO number" : "STO number";
+    const refNumber = csn.po_id
+      ? allPos.find((p) => p.id === csn.po_id)?.po_number || "—"
+      : allStos.find((s) => s.id === csn.sto_id)?.sto_number || "—";
     const isSelected = drawer.selected?.id === csn.id;
     const isHi = idx === drawer.hiIdx;
 
@@ -367,7 +426,7 @@ export default function GateEntryCreatePage() {
         </div>
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
           {[
-            ["PO number", poNumber],
+            [refLabel, refNumber],
             ["Material", matDisplay],
             ["Quantity", csn.dispatch_qty ? `${Number(csn.dispatch_qty).toLocaleString()} ${csn.po_uom_code || ""}` : "—"],
             [isImport ? "BOE number" : "Invoice number", csn.invoice_number || csn.boe_number || "—"],
@@ -386,10 +445,11 @@ export default function GateEntryCreatePage() {
   }
 
   function renderLineRow(line, i) {
+    const hasRef = line.po !== null || line.sto !== null;
     const isBulk = ["BULK", "TANKER"].includes((line.po?.delivery_type || "").toUpperCase());
     const isImportLine = (line.csn?.csn_type || "").toUpperCase() === "IMPORT";
-    const sugs = line.po === null ? getPoSuggestions(line.poQuery) : [];
-    const showDrop = poDropRow === i && sugs.length > 0 && allPos.length > 0;
+    const sugs = hasRef ? [] : getRefSuggestions(line.refQuery);
+    const showDrop = poDropRow === i && sugs.length > 0 && (allPos.length > 0 || allStos.length > 0);
     const matName = isBulk
       ? (line.poLine?.material_name || line.poLine?.material_id || "")
       : (line.csn?.material_name || line.csn?.material_id || "");
@@ -402,19 +462,19 @@ export default function GateEntryCreatePage() {
       <tr key={i} className="border-b border-slate-100 last:border-0">
         <td className="w-6 py-1 text-center text-[10px] text-slate-400">{i + 1}</td>
 
-        {/* PO combobox */}
+        {/* PO/STO combobox */}
         <td className="relative w-[160px] py-1 pr-1">
           <input
             className="h-7 w-full border border-slate-200 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500 focus:bg-white"
-            value={line.poQuery}
-            placeholder="Type PO…"
+            value={line.refQuery}
+            placeholder="Type PO or STO…"
             onChange={(e) => {
-              updateLine(i, { poQuery: e.target.value, po: null, csn: null, poLine: null });
+              updateLine(i, { refQuery: e.target.value, po: null, poLine: null, sto: null, stoLine: null, csn: null });
               setPoDropRow(i);
               setPoDropHi(0);
             }}
             onFocus={() => {
-              if (!line.po) { setPoDropRow(i); setPoDropHi(0); }
+              if (!hasRef) { setPoDropRow(i); setPoDropHi(0); }
             }}
             onBlur={() => setTimeout(() => setPoDropRow(null), 200)}
             onKeyDown={(e) => {
@@ -424,32 +484,40 @@ export default function GateEntryCreatePage() {
                 else setPoDropHi((h) => Math.min(h + 1, sugs.length - 1));
               }
               else if (e.key === "ArrowUp") { e.preventDefault(); setPoDropHi((h) => Math.max(h - 1, 0)); }
-              else if (e.key === "Enter" && showDrop) { e.preventDefault(); selectPO(i, sugs[poDropHi]); }
-              else if (e.key === "Tab" && showDrop && sugs.length > 0) { e.preventDefault(); selectPO(i, sugs[poDropHi]); }
+              else if (e.key === "Enter" && showDrop) { e.preventDefault(); selectRef(i, sugs[poDropHi]); }
+              else if (e.key === "Tab" && showDrop && sugs.length > 0) { e.preventDefault(); selectRef(i, sugs[poDropHi]); }
               else if (e.key === "Escape") { setPoDropRow(null); }
             }}
           />
           {showDrop && (
             <div className="absolute left-0 top-full z-50 min-w-[280px] border border-slate-300 bg-white shadow-lg">
-              {sugs.map((p, si) => (
+              {sugs.map((item, si) => (
                 <div
-                  key={p.id}
+                  key={`${item.__kind}-${item.id}`}
                   className={[
                     "cursor-pointer border-b border-slate-100 px-3 py-2 last:border-0",
                     si === poDropHi ? "bg-sky-50" : "hover:bg-slate-50",
                   ].join(" ")}
-                  onMouseDown={() => selectPO(i, p)}
+                  onMouseDown={() => selectRef(i, item)}
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-medium text-slate-900">{p.po_number}</span>
-                    {["BULK", "TANKER"].includes((p.delivery_type || "").toUpperCase()) && (
+                    <span className="text-[11px] font-medium text-slate-900">{item.__number}</span>
+                    <span
+                      className={[
+                        "rounded px-1.5 py-0.5 text-[9px] font-semibold",
+                        item.__kind === "STO" ? "bg-violet-100 text-violet-800" : "bg-slate-100 text-slate-700",
+                      ].join(" ")}
+                    >
+                      {item.__kind}
+                    </span>
+                    {["BULK", "TANKER"].includes((item.delivery_type || "").toUpperCase()) && (
                       <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">
-                        {p.delivery_type}
+                        {item.delivery_type}
                       </span>
                     )}
                   </div>
-                  {p.vendor_name && (
-                    <div className="mt-0.5 text-[10px] text-slate-500">{p.vendor_name}</div>
+                  {item.vendor_name && (
+                    <div className="mt-0.5 text-[10px] text-slate-500">{item.vendor_name}</div>
                   )}
                 </div>
               ))}
@@ -459,7 +527,7 @@ export default function GateEntryCreatePage() {
 
         {/* CSN */}
         <td className="w-[150px] py-1 pr-1">
-          {!line.po ? (
+          {!hasRef ? (
             <span className="text-[11px] text-slate-400">—</span>
           ) : isBulk ? (
             <span className="text-[11px] italic text-amber-600">BULK — no CSN</span>
@@ -727,7 +795,7 @@ export default function GateEntryCreatePage() {
                     <tr className="border-b border-slate-300 bg-slate-50">
                       {[
                         ["#", "w-6"],
-                        ["PO number *", "w-[160px]"],
+                        ["PO / STO *", "w-[160px]"],
                         ["CSN", "w-[150px]"],
                         ["Material", "w-[160px]"],
                         ["UOM", "w-[52px] text-center"],
@@ -767,13 +835,13 @@ export default function GateEntryCreatePage() {
       {/* ── CSN Drawer ── */}
       <DrawerBase
         visible={drawer.open}
-        title={drawer.poNumber ? `Select CSN — ${drawer.poNumber}` : "Select CSN"}
+        title={drawer.refLabel ? `Select CSN — ${drawer.refLabel}` : "Select CSN"}
         onEscape={closeDrawer}
         onClose={closeDrawer}
         width="min(420px, calc(100vw - 24px))"
       >
         {drawer.csns.length === 0 ? (
-          <p className="text-sm text-slate-500">No open CSNs for this PO.</p>
+          <p className="text-sm text-slate-500">No open CSNs for this {drawer.refKind === "STO" ? "STO" : "PO"}.</p>
         ) : (
           <div className="flex flex-col gap-2">
             <p className="mb-1 text-xs text-slate-400">

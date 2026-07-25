@@ -717,7 +717,7 @@ export async function listOpenCSNsForGEHandler(
       .schema("erp_procurement")
       .from("consignment_note")
       .select(
-        "id, csn_number, csn_type, status, company_id, po_id, po_line_id, " +
+        "id, csn_number, csn_type, status, company_id, po_id, po_line_id, sto_id, " +
         "material_id, vendor_id, dispatch_qty, po_qty, po_uom_code, " +
         "invoice_number, boe_number, bl_date, lr_date, lr_number, delivery_type"
       )
@@ -811,6 +811,77 @@ export async function listOpenPOsForGEHandler(
     return okResponse({ items: result }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "PO_OPEN_LIST_FAILED";
+    return procurementErrorResponse(req, ctx, message, 500, message);
+  }
+}
+
+// §111 (2026-07-25) — mirrors listOpenPOsForGEHandler exactly, but for
+// INTER_PLANT STOs: Gate Entry today could only search by PO number, so an
+// STO-originated shipment (no po_id at all) had no way to be found at the
+// gate. GE happens at the RECEIVING company, so this filters on
+// receiving_company_id (not sending_company_id).
+export async function listOpenSTOsForGEHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+
+    const { data: stos, error: stosError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order")
+      .select("id, sto_number, sto_type, sending_company_id, receiving_company_id, status")
+      .eq("receiving_company_id", companyId)
+      .in("status", ["CREATED", "DISPATCHED"])
+      .order("created_at", { ascending: false });
+
+    if (stosError) {
+      return procurementErrorResponse(req, ctx, "STO_OPEN_LIST_FAILED", 500, "Unable to list open STOs.");
+    }
+
+    const stoIds = (stos ?? []).map((s) => String(s.id));
+    let lines: JsonRecord[] = [];
+    if (stoIds.length > 0) {
+      const { data: lineData, error: lineError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("stock_transfer_order_line")
+        .select("id, sto_id, material_id, uom_code, line_status")
+        .in("sto_id", stoIds)
+        .eq("line_status", "OPEN");
+
+      if (!lineError) {
+        lines = (lineData ?? []) as JsonRecord[];
+      }
+    }
+
+    const lineMatIds = [...new Set(lines.map((l) => l.material_id).filter(Boolean))] as string[];
+    const lineMatMap = new Map<string, string>();
+    if (lineMatIds.length > 0) {
+      const { data: mats } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id, material_name")
+        .in("id", lineMatIds);
+      for (const m of mats ?? []) lineMatMap.set(String(m.id), String(m.material_name ?? ""));
+    }
+
+    const linesMap = new Map<string, JsonRecord[]>();
+    for (const line of lines) {
+      const stoId = String(line.sto_id);
+      if (!linesMap.has(stoId)) linesMap.set(stoId, []);
+      linesMap.get(stoId)!.push({ ...line, material_name: lineMatMap.get(String(line.material_id)) ?? null });
+    }
+
+    const result = (stos ?? []).map((sto) => ({
+      ...sto,
+      lines: linesMap.get(String(sto.id)) ?? [],
+    }));
+
+    return okResponse({ items: result }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "STO_OPEN_LIST_FAILED";
     return procurementErrorResponse(req, ctx, message, 500, message);
   }
 }

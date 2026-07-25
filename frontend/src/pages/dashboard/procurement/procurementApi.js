@@ -462,6 +462,10 @@ export function listOpenPOsForGE(params) {
   return fetchProcurement("GET", "/api/procurement/gate-entries/open-pos", undefined, params);
 }
 
+export function listOpenSTOsForGE(params) {
+  return fetchProcurement("GET", "/api/procurement/gate-entries/open-stos", undefined, params);
+}
+
 export function createGateExitInbound(data) {
   return fetchProcurement("POST", "/api/procurement/gate-exits/inbound", data);
 }
