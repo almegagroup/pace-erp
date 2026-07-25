@@ -11371,6 +11371,8 @@ Receiving company Stores + Accounts → open STO visible automatically
 | Both types | Same workflow |
 | LR delayed | Procurement enters later in STO → flows to tracker |
 
+**⚠️ সংশোধন (2026-07-25, business owner confirmed):** এই section-এর flow diagram-এ INTER_PLANT-এর জন্য কোনো CSN step দেখানো নেই (সরাসরি STO → GE → GRN)। কিন্তু বাস্তবে (Gate-27-পূর্ব STO approval workflow build, ২৫ জুন) `confirmSTOHandler`/`approveSTOHandler`-এ **INTER_PLANT STO-র প্রতিটা line-এর জন্যও CSN তৈরি হয়** (§88.11-এর `CSN (LOCAL)` ধাপ, যা এই section-এ শুধু CONSIGNMENT_DISTRIBUTION-এর জন্য লেখা ছিল বলে ধরে নিয়েছিলাম INTER_PLANT-এ প্রযোজ্য না)। **এটা bug না, business owner-এর নিজের আগের decision** — INTER_PLANT STO-ও CSN তৈরি করবে, CSN Tracker-এ ঢুকবে, ঠিক CONSIGNMENT_DISTRIBUTION-এর মতোই। উপরের diagram-এ GE-এর ঠিক আগে একটা CSN (LOCAL) ধাপ যোগ করে পড়তে হবে — code-ই সঠিক, এই doc-এর diagram-টা stale ছিল।
+
 ---
 
 ### 88.13 — Planning View — Per Company
