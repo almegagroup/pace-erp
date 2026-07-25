@@ -12,7 +12,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { useMenu } from "../../../context/useMenu.js";
 import {
   availabilityPreviewPackingOrder,
   availabilityPreviewProcessOrder,
@@ -155,8 +157,8 @@ export default function ProductionPOCreatePage() {
   const [debouncedCreatePreview, setDebouncedCreatePreview] = useState([]);
   const [batchQtyLiter, setBatchQtyLiter] = useState("");
 
-  const companiesQ = useCompaniesForOmQuery();
-  const companies = companiesQ.data ?? [];
+  const { runtimeContext } = useMenu();
+  const companies = runtimeContext?.availableCompanies ?? [];
   const effectiveCompanyId = processForm.company_id || (companies.length === 1 ? companies[0].id : "");
   const companyOptions = useMemo(
     () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Unnamed company" })),
@@ -925,14 +927,11 @@ export default function ProductionPOCreatePage() {
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
-                    <ErpComboboxField
+                    <TransactionCompanySelector
+                      runtimeContext={runtimeContext}
                       value={effectiveCompanyId}
                       onChange={(value) => updateProcess("company_id", value)}
-                      options={companyOptions}
-                      placeholder="-- Select company --"
-                      emptyStateLabel={companiesQ.isLoading ? "Loading companies..." : "No companies available"}
-                      disabled={companies.length === 1}
+                      label="Company"
                     />
                   </div>
 
@@ -1306,14 +1305,11 @@ export default function ProductionPOCreatePage() {
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
-                    <ErpComboboxField
+                    <TransactionCompanySelector
+                      runtimeContext={runtimeContext}
                       value={effectivePackingCompanyId}
                       onChange={(value) => updatePacking("company_id", value)}
-                      options={companyOptions}
-                      placeholder="-- Select company --"
-                      emptyStateLabel={companiesQ.isLoading ? "Loading companies..." : "No companies available"}
-                      disabled={companies.length === 1}
+                      label="Company"
                     />
                   </div>
 

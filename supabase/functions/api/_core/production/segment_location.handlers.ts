@@ -11,6 +11,7 @@
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertManagerOrSARole,
@@ -59,6 +60,13 @@ export async function listSegmentLocationsHandler(req: Request, ctx: ProdHandler
     assertProdReadRole(ctx);
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return segErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
 
     let query = serviceRoleClient
       .schema("erp_production").from("production_segment_location_config")
@@ -112,6 +120,11 @@ export async function upsertSegmentLocationHandler(req: Request, ctx: ProdHandle
     if (!companyId || !VALID_SEGMENTS.has(segmentCode)) {
       return segErr(req, ctx, "PROD_SEG_LOC_INVALID", 400,
         `company_id required; segment_code must be one of ${[...VALID_SEGMENTS].join(",")}`);
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return segErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const nullOrStr = (v: unknown) => toTrimmedString(v) || null;

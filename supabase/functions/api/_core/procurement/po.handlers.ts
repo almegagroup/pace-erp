@@ -12,6 +12,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type PurchaseOrderRow = Record<string, unknown>;
@@ -1028,6 +1029,13 @@ export async function createPOHandler(
 
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const vendorId = toTrimmedString(body.vendor_id);
     const vendorType = toUpperTrimmedString(body.vendor_type);
     const deliveryType = toUpperTrimmedString(body.delivery_type || "STANDARD");
@@ -1453,6 +1461,13 @@ export async function updatePOHandler(
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1634,6 +1649,13 @@ export async function confirmPOHandler(
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1699,6 +1721,13 @@ export async function approvePOHandler(
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1768,6 +1797,13 @@ export async function rejectPOHandler(
     }
 
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1832,6 +1868,13 @@ export async function amendPOHandler(
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -2034,6 +2077,13 @@ export async function approveAmendmentHandler(
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -2132,6 +2182,13 @@ export async function cancelPOHandler(
     }
 
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -2227,6 +2284,13 @@ export async function knockOffPOLineHandler(
     }
 
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -2323,6 +2387,13 @@ export async function knockOffPOHandler(
     }
 
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -2704,6 +2775,13 @@ export async function confirmPOOrderGroupHandler(
     const groupId = getOrderGroupIdFromPath(req);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const group = await getOrderGroupById(groupId, companyId);
     if (!group) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND", 404, "Order group not found");
@@ -2793,6 +2871,13 @@ export async function approvePOOrderGroupHandler(
     const groupId = getOrderGroupIdFromPath(req);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const group = await getOrderGroupById(groupId, companyId);
     if (!group) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND", 404, "Order group not found");
@@ -2888,6 +2973,13 @@ export async function rejectPOOrderGroupHandler(
     }
 
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const group = await getOrderGroupById(groupId, companyId);
     if (!group) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND", 404, "Order group not found");

@@ -12,7 +12,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { availabilityPreviewProcessOrder, finalizeProcessOrder, getProcessOrder, listProcessOrders } from "./prodApi.js";
 import {
@@ -107,10 +108,11 @@ function PackingPoFinalTab() {
   const [pmApApproved, setPmApApproved] = useState({});
   const [newPmRows, setNewPmRows] = useState([]);
 
-  const companiesQ = useCompaniesForOmQuery();
+  const { runtimeContext } = useMenu();
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyOptions = useMemo(
-    () => (companiesQ.data ?? []).map((company) => ({ value: company.id, label: [company.company_code, company.company_name].filter(Boolean).join(" - ") || "Company" })),
-    [companiesQ.data],
+    () => companies.map((company) => ({ value: company.id, label: [company.company_code, company.company_name].filter(Boolean).join(" - ") || "Company" })),
+    [companies],
   );
 
   const ordersQ = useQuery({
@@ -889,10 +891,11 @@ function ProcessPoFinalTab() {
   const [rows, setRows] = useState([]);
   const [debouncedPreviewRows, setDebouncedPreviewRows] = useState([]);
 
-  const companiesQ = useCompaniesForOmQuery();
+  const { runtimeContext } = useMenu();
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyOptions = useMemo(
-    () => (companiesQ.data ?? []).map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
-    [companiesQ.data],
+    () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
+    [companies],
   );
 
   const ordersQ = useQuery({

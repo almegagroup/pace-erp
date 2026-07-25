@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -324,6 +325,11 @@ export async function createGateEntryHandler(
 
     if (!companyId || !vehicleNumber || !gateStaffId || lines.length === 0) {
       return procurementErrorResponse(req, ctx, "GE_CREATE_INVALID", 400, "Company, vehicle, gate staff, and lines are required.");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const preparedLines: JsonRecord[] = [];

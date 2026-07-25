@@ -12,7 +12,7 @@ import React, { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { listPartialBatchReversals, getPartialBatchReversal } from "./prodApi.js";
 
 const PO_TYPES = ["MTO", "HPS"];
@@ -99,10 +99,11 @@ export default function PartialReversalReportPage() {
   const [batchNumber, setBatchNumber] = useState("");
   const [expandedId, setExpandedId] = useState("");
 
-  const companiesQ = useCompaniesForOmQuery();
+  const { runtimeContext } = useMenu();
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyOptions = useMemo(
-    () => (companiesQ.data ?? []).map((c) => ({ value: c.id, label: companyLabel(c) || "Company" })),
-    [companiesQ.data],
+    () => companies.map((c) => ({ value: c.id, label: companyLabel(c) || "Company" })),
+    [companies],
   );
 
   const listQ = useQuery({

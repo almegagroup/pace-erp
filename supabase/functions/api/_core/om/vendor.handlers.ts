@@ -12,6 +12,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
 import { assertManagerOrSARole } from "./shared.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -785,6 +786,11 @@ export async function mapVendorToCompanyHandler(
     }
     if (!(await ensureCompanyExists(companyId))) {
       return vendorErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return vendorErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const { data, error } = await serviceRoleClient

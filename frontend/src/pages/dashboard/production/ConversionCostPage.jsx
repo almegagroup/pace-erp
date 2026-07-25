@@ -19,7 +19,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { listConversionRates, createConversionRate, listBatchSeries } from "./prodApi.js";
 
 const SEGMENTS = [
@@ -59,8 +59,8 @@ export default function ConversionCostPage() {
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 4000);
   }
 
-  const companiesQ = useCompaniesForOmQuery();
-  const companies = useMemo(() => companiesQ.data ?? [], [companiesQ.data]);
+  const { runtimeContext } = useMenu();
+  const companies = useMemo(() => runtimeContext?.availableCompanies ?? [], [runtimeContext]);
   const companyOptions = companies.map((c) => ({ value: c.id, label: companyLabel(c) }));
 
   // Auto-select when the user has exactly one work company.

@@ -13,6 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -719,6 +720,11 @@ export async function storageLocationTransferHandler(
 
     if (!companyId || !sourceSlocId || !targetSlocId || !materialId || !transferQty || !uomCode) {
       return ptoErrorResponse(req, ctx, "PTO_SLOC_TRANSFER_INVALID", 400, "Missing required SLOC transfer fields.");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return ptoErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
     if (sourceSlocId === targetSlocId) {
       return ptoErrorResponse(req, ctx, "PTO_SAME_SLOC", 400, "Source and target storage locations must differ.");

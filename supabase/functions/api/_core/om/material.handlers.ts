@@ -12,6 +12,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
 import { assertManagerOrSARole } from "./shared.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1102,6 +1103,11 @@ export async function extendMaterialToCompanyHandler(
     if (!(await ensureCompanyExists(companyId))) {
       return materialErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found");
     }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return materialErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     const payload = {
       material_id: materialId,
@@ -1146,6 +1152,11 @@ export async function extendMaterialToPlantHandler(
     }
     if (!(await ensureCompanyExists(companyId))) {
       return materialErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return materialErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const payload = {

@@ -764,6 +764,11 @@ export async function fgStockBreakdownHandler(req: Request, ctx: ProdHandlerCont
     if (!materialId || !companyId) {
       return packErr(req, ctx, "PROD_FG_STOCK_BREAKDOWN_INVALID", 400, "material_id and company_id required");
     }
+    try {
+      await assertPackingCompanyScope(ctx, companyId);
+    } catch {
+      return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     // PERF: these two lookups key off URL params only — they do not depend on the
     // ledger -> stock_document -> packing_order chain below (which is a genuine dependency chain
@@ -909,6 +914,11 @@ export async function availabilityPreviewPackingOrderHandler(req: Request, ctx: 
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
     if (!companyId) return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id required");
+    try {
+      await assertPackingCompanyScope(ctx, companyId);
+    } catch {
+      return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     const needs = parsePackingAvailabilityNeeds(url.searchParams.get("needs") ?? "[]");
     if (needs.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
@@ -944,6 +954,11 @@ export async function listPackingSfgBatchOptionsHandler(req: Request, ctx: ProdH
     if (!companyId || !materialId || !storageLocationId) {
       return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id, material_id and storage_location_id required");
     }
+    try {
+      await assertPackingCompanyScope(ctx, companyId);
+    } catch {
+      return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     const options = await resolvePackingSfgBatchOptions(companyId, materialId, storageLocationId, excludeSourceId);
     return okResponse({ data: options }, ctx.request_id, req);
@@ -965,6 +980,27 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
     const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10));
     const perPage = Math.min(100, Math.max(10, parseInt(url.searchParams.get("per_page") ?? "20", 10)));
 
+    // Same rationale as process_order.listProcessOrders (§112) — scope to the
+    // caller's own companies unless SA/GA, so an empty Company filter never
+    // leaks every company's Packing POs.
+    let allowedCompanyIds: string[] | null = null;
+    if (!isAdminBypass(ctx)) {
+      const { data: userCompanies, error: userCompaniesError } = await serviceRoleClient
+        .schema("erp_map")
+        .from("user_companies")
+        .select("company_id")
+        .eq("auth_user_id", ctx.auth_user_id);
+      if (userCompaniesError) {
+        console.error("[packing_order.listPackingOrders] user_companies query failed:", JSON.stringify(userCompaniesError));
+        throw new Error("PROD_PACK_LIST_FAILED");
+      }
+      const resolvedCompanyIds = ((userCompanies ?? []) as JsonRecord[]).map((row) => String(row.company_id ?? ""));
+      allowedCompanyIds = resolvedCompanyIds;
+      if (companyId && !resolvedCompanyIds.includes(companyId)) {
+        return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
+
     let query = serviceRoleClient
       .schema("erp_production").from("packing_order")
       .select(`
@@ -978,6 +1014,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
       .order("created_at", { ascending: false });
 
     if (companyId) query = query.eq("company_id", companyId);
+    else if (allowedCompanyIds) query = query.in("company_id", allowedCompanyIds);
     if (poNumber) query = query.eq("po_number", poNumber);
     if (processOrderId) query = query.eq("process_order_id", processOrderId);
     if (status) query = query.eq("status", status);
@@ -1062,6 +1099,11 @@ export async function getPackingOrderHandler(req: Request, ctx: ProdHandlerConte
       throw new Error("PROD_PACK_FETCH_FAILED");
     }
     if (!po) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing order not found");
+    try {
+      await assertPackingCompanyScope(ctx, String((po as JsonRecord).company_id ?? ""));
+    } catch {
+      return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     const { data: lines, error: lineErr } = await serviceRoleClient
       .schema("erp_production").from("packing_order_line")
@@ -1529,6 +1571,11 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
     if (poErr2) throw new Error("PROD_PACK_EDIT_FAILED");
     if (!poRow) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing PO not found");
     const po = poRow as JsonRecord;
+    try {
+      await assertPackingCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (String(po.status) !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Packing PO is editable only at STANDARD status.");
     }
@@ -1724,9 +1771,14 @@ export async function cancelPackingOrderHandler(req: Request, ctx: ProdHandlerCo
 
     const { data: poRow, error: poErr2 } = await serviceRoleClient
       .schema("erp_production").from("packing_order")
-      .select("id, status").eq("id", id).maybeSingle();
+      .select("id, status, company_id").eq("id", id).maybeSingle();
     if (poErr2) throw new Error("PROD_PACK_CANCEL_FAILED");
     if (!poRow) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing PO not found");
+    try {
+      await assertPackingCompanyScope(ctx, String((poRow as JsonRecord).company_id ?? ""));
+    } catch {
+      return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (String((poRow as JsonRecord).status) !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Only a STANDARD Packing PO can be cancelled here. A finalised PO must be reversed.");
     }
@@ -1762,8 +1814,13 @@ export async function updatePackingOrderLinesHandler(req: Request, ctx: ProdHand
     if (!id) return packErr(req, ctx, "PROD_PACK_ID_MISSING", 400, "ID required");
 
     const { data: po } = await serviceRoleClient.schema("erp_production").from("packing_order")
-      .select("id, status").eq("id", id).maybeSingle();
+      .select("id, status, company_id").eq("id", id).maybeSingle();
     if (!po) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Not found");
+    try {
+      await assertPackingCompanyScope(ctx, String((po as JsonRecord).company_id ?? ""));
+    } catch {
+      return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if ((po as JsonRecord).status !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Lines editable only at STANDARD status");
     }
@@ -1848,6 +1905,11 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     const { data: po } = await serviceRoleClient.schema("erp_production").from("packing_order")
       .select("*").eq("id", id).maybeSingle();
     if (!po) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Not found");
+    try {
+      await assertPackingCompanyScope(ctx, String((po as JsonRecord).company_id ?? ""));
+    } catch {
+      return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if ((po as JsonRecord).status !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_INVALID", 422, "Must be STANDARD to finalize");
     }
@@ -2220,6 +2282,11 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
       .select("*").eq("id", id).maybeSingle();
     if (!po) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Not found");
     const poData = po as JsonRecord;
+    try {
+      await assertPackingCompanyScope(ctx, String(poData.company_id ?? ""));
+    } catch {
+      return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (poData.status === "REVERSED") {
       return packErr(req, ctx, "PROD_PACK_ALREADY_REVERSED", 409, "Already reversed");
     }
@@ -2379,6 +2446,11 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       .select("*").eq("id", id).maybeSingle();
     if (!po) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Not found");
     const poData = po as JsonRecord;
+    try {
+      await assertPackingCompanyScope(ctx, String(poData.company_id ?? ""));
+    } catch {
+      return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (poData.status !== "FINAL") {
       return packErr(req, ctx, "PROD_PACK_CORRECTION_STATUS_INVALID", 422, "Packing PO must be FINAL to correct");
     }

@@ -13,7 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
 import {
   getProcessOrder,
   listBatchNumbers,
@@ -67,10 +67,11 @@ export default function QAQueuePage() {
   const [rejectReason, setRejectReason] = useState("");
   const [startBatchOrder, setStartBatchOrder] = useState(null);
 
-  const companiesQ = useCompaniesForOmQuery();
+  const { runtimeContext } = useMenu();
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyOptions = useMemo(
-    () => (companiesQ.data ?? []).map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
-    [companiesQ.data],
+    () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
+    [companies],
   );
 
   const queueQ = useQuery({
@@ -192,7 +193,7 @@ export default function QAQueuePage() {
               }}
               options={companyOptions}
               placeholder="-- Select company --"
-              emptyStateLabel={companiesQ.isLoading ? "Loading companies..." : "No companies"}
+              emptyStateLabel="No companies"
             />
           </div>
           <div className="pb-1 text-xs text-slate-400">Auto-refreshes every 30 seconds</div>

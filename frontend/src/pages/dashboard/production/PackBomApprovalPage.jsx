@@ -8,7 +8,7 @@
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { approvePackBom, getPackBom, listPackBoms, rejectPackBom } from "./prodApi.js";
 import { addMaterialCategoryMember, createMaterialCategoryGroup, listMaterialCategoryGroups, listMaterials } from "../om/omApi.js";
 import { GroupCreateModal, MemberAddModal, PackBomLinesTable } from "./strokeShared.jsx";
@@ -55,7 +55,7 @@ export default function PackBomApprovalPage() {
     queryFn: () => listPackBoms({ status: statusFilter || undefined, company_id: companyFilter || undefined }),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
-  const companiesQ = useCompaniesForOmQuery();
+  const { runtimeContext } = useMenu();
   const pmMaterialsQ = useQuery({
     queryKey: ["om-materials", "PM"],
     queryFn: () => listMaterials({ material_type: "PM", limit: 500 }),
@@ -68,7 +68,7 @@ export default function PackBomApprovalPage() {
   });
 
   const boms = bomsQ.data ?? [];
-  const companies = companiesQ.data?.data ?? companiesQ.data ?? [];
+  const companies = runtimeContext?.availableCompanies ?? [];
   const pmMaterials = pmMaterialsQ.data ?? [];
   const groups = groupsQ.data ?? [];
 

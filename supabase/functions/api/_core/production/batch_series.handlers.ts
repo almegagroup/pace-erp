@@ -12,6 +12,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertManagerOrSARole,
@@ -272,6 +273,27 @@ export async function listBatchSeriesHandler(req: Request, ctx: ProdHandlerConte
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
 
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return batchError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
+    let allowedCompanyIds: string[] | null = null;
+    if (!companyId && ctx.roleCode !== "SA" && ctx.roleCode !== "GA" && ctx.context.isAdmin !== true) {
+      const { data: userCompanies, error: userCompaniesError } = await serviceRoleClient
+        .schema("erp_map")
+        .from("user_companies")
+        .select("company_id")
+        .eq("auth_user_id", ctx.auth_user_id);
+      if (userCompaniesError) {
+        console.error("[batch_series.listBatchSeries] user_companies query failed:", JSON.stringify(userCompaniesError));
+        throw new Error("PROD_BATCH_SERIES_LIST_FAILED");
+      }
+      allowedCompanyIds = ((userCompanies ?? []) as JsonRecord[]).map((row) => String(row.company_id ?? ""));
+    }
+
     let query = serviceRoleClient
       .schema("erp_production").from("batch_number_series")
       .select(`
@@ -281,6 +303,7 @@ export async function listBatchSeriesHandler(req: Request, ctx: ProdHandlerConte
       .order("batch_type").order("prefix");
 
     if (companyId) query = query.eq("company_id", companyId);
+    else if (allowedCompanyIds) query = query.in("company_id", allowedCompanyIds);
     const { data, error } = await query;
     if (error) {
       console.error("[batch_series.listBatchSeries] query failed:", JSON.stringify(error));
@@ -386,6 +409,16 @@ export async function listBatchNumbersHandler(req: Request, ctx: ProdHandlerCont
     const status = toUpperTrimmedString(url.searchParams.get("status") ?? "") || null;
     const poType = toUpperTrimmedString(url.searchParams.get("po_type") ?? "") || null;
 
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return batchError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    } else if (ctx.roleCode !== "SA" && ctx.roleCode !== "GA" && ctx.context.isAdmin !== true) {
+      return batchError(req, ctx, "PROD_BATCH_NUMBER_COMPANY_REQUIRED", 400, "company_id required");
+    }
+
     const rows = await listBatchNumberInstances({ companyId, status, poType });
     const processOrderIds = [...new Set(rows.map((row) => row.source_process_order_id).filter(Boolean))];
     let orderMap = new Map<string, JsonRecord>();
@@ -468,6 +501,23 @@ export async function releaseBatchNumberHandler(req: Request, ctx: ProdHandlerCo
     const reason = toTrimmedString(body.reason);
     if (!reason) {
       return batchError(req, ctx, "PROD_BATCH_NUMBER_REASON_REQUIRED", 400, "reason required");
+    }
+
+    const { data: existing, error: existingErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("batch_number_instance")
+      .select("id, company_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (existingErr) {
+      console.error("[batch_series.releaseBatchNumber] lookup failed:", JSON.stringify(existingErr));
+      throw new Error("PROD_BATCH_NUMBER_RELEASE_FAILED");
+    }
+    if (!existing) return batchError(req, ctx, "PROD_BATCH_NUMBER_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String((existing as JsonRecord).company_id ?? ""));
+    } catch {
+      return batchError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const now = new Date().toISOString();

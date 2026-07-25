@@ -14,6 +14,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -1231,6 +1232,11 @@ export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: 
     if (!companyId) {
       return poErr(req, ctx, "PROD_PO_INVALID", 400, "company_id required");
     }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     let overrides: JsonRecord[] = [];
     try {
@@ -1505,6 +1511,11 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
       throw new Error("PROD_PO_FETCH_FAILED");
     }
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Process order not found");
+    try {
+      await assertCompanyScope(ctx, String((po as JsonRecord).company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     const poRow = po as JsonRecord;
     const strokeMasterId = toTrimmedString(poRow.stroke_master_id) || null;
@@ -1600,6 +1611,12 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
 
     if (!companyId || !VALID_PO_TYPES.has(poType) || !VALID_SEGMENTS.has(segmentCode) || !materialId || !plannedQty) {
       return poErr(req, ctx, "PROD_PO_INVALID", 400, "company_id, po_type, segment_code, material_id, planned_qty required");
+    }
+
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const machineValidation = await validateRequiredMachine(req, ctx, companyId, poType, machineId);
@@ -1946,6 +1963,11 @@ export async function pruneProcessOrderHandler(req: Request, ctx: ProdHandlerCon
 
     const po = await fetchProcessOrder(id);
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Process order not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_PRUNE_STATUS_INVALID", 422, "Prune allowed only at STANDARD");
     }
@@ -2005,6 +2027,11 @@ export async function updateProcessOrderLinesHandler(req: Request, ctx: ProdHand
 
     const po = await fetchProcessOrder(id);
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_LOCKED", 422, "Lines editable only at STANDARD status");
     }
@@ -2079,6 +2106,11 @@ export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandle
 
     const po = await fetchProcessOrder(id);
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected STANDARD, got ${po.status}`);
     }
@@ -2120,6 +2152,11 @@ export async function qaRejectProcessOrderHandler(req: Request, ctx: ProdHandler
 
     const po = await fetchProcessOrder(id);
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected STANDARD, got ${po.status}`);
     }
@@ -2168,6 +2205,11 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
 
     const po = await fetchProcessOrder(id);
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     const requiredStatus = po.po_type === "MTS" ? "STANDARD" : "QA_APPROVED";
     if (po.status !== requiredStatus) {
@@ -2256,6 +2298,11 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
 
     const po = await fetchProcessOrder(id);
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (!["MTO", "HPS"].includes(String(po.po_type ?? "").toUpperCase())) {
       return poErr(req, ctx, "PROD_PO_EDIT_TYPE_INVALID", 422, "PR10 edit is available only for MTO or HPS Process POs");
     }
@@ -2513,6 +2560,11 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
 
     const po = await fetchProcessOrder(id);
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (po.po_type !== "INT") {
       return poErr(req, ctx, "PROD_PO_NOT_INT", 422, "Only INT orders can use complete-int");
     }
@@ -2715,6 +2767,11 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
 
     const po = await fetchProcessOrder(id);
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (po.status !== "BATCH_STARTED") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, "Must be BATCH_STARTED to finalize");
     }
@@ -2832,6 +2889,11 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
 
     const po = await fetchProcessOrder(id);
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (po.status !== "FINAL") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, "Must be at FINAL to verify");
     }
@@ -3154,6 +3216,11 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
 
     const po = await fetchProcessOrder(id);
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (po.status === "REVERSED") return poErr(req, ctx, "PROD_PO_ALREADY_REVERSED", 409, "Already reversed");
 
     const body = await parseBody(req);

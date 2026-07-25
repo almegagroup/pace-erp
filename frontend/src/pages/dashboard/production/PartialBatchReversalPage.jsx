@@ -13,7 +13,7 @@ import React, { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import {
   listPartialReversalProdshades,
@@ -69,10 +69,11 @@ export default function PartialBatchReversalPage() {
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 4000);
   }
 
-  const companiesQ = useCompaniesForOmQuery();
+  const { runtimeContext } = useMenu();
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyOptions = useMemo(
-    () => (companiesQ.data ?? []).map((c) => ({ value: c.id, label: companyLabel(c) || "Company" })),
-    [companiesQ.data],
+    () => companies.map((c) => ({ value: c.id, label: companyLabel(c) || "Company" })),
+    [companies],
   );
 
   const prodshadesQ = useQuery({

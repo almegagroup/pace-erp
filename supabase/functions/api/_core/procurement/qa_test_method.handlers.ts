@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type QATestMethodHandlerContext = {
@@ -150,6 +151,11 @@ export async function createTestMethodHandler(
     const methodName = toTrimmedString(body.method_name);
 
     if (!companyId) throw new ApiError(400, "company_id is required");
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      throw new ApiError(403, "You do not have access to this company.");
+    }
     if (!TEST_GROUPS.has(testGroup)) throw new ApiError(400, "test_group must be MCT, OTHR, or CT");
     if (!methodName) throw new ApiError(400, "method_name is required");
 
@@ -251,6 +257,11 @@ export async function createCategoryTestConfigHandler(
     const usl = parseNullableNumber(body.usl);
 
     if (!companyId) throw new ApiError(400, "company_id is required");
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      throw new ApiError(403, "You do not have access to this company.");
+    }
     if (!materialCategory) throw new ApiError(400, "material_category is required");
     if (!testMethodId) throw new ApiError(400, "test_method_id is required");
 

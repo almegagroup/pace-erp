@@ -17,6 +17,7 @@ import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { useMenu } from "../../../../context/useMenu.js";
 import {
   changeCustomerStatus,
   getCustomer,
@@ -25,7 +26,6 @@ import {
   updateCustomer,
 } from "../omApi.js";
 import {
-  useCompaniesForOmQuery,
   useParentCustomersQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 
@@ -58,8 +58,8 @@ export default function CustomerDetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const { runtimeContext } = useMenu();
   const parentCustomerQuery = useParentCustomersQuery();
-  const companiesQuery = useCompaniesForOmQuery();
   const detailQuery = useQuery({
     queryKey: ["om", "customer-detail", id],
     queryFn: async () => {
@@ -80,12 +80,11 @@ export default function CustomerDetailPage() {
     : Array.isArray(parentCustomerQuery.data)
     ? parentCustomerQuery.data
     : [];
-  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyMaps = detailQuery.data?.companyMaps ?? [];
   const loading =
     detailQuery.isLoading ||
-    parentCustomerQuery.isLoading ||
-    companiesQuery.isLoading;
+    parentCustomerQuery.isLoading;
 
   const isVendorLinked = Boolean(customer?.vendor_id);
 
@@ -118,10 +117,9 @@ export default function CustomerDetailPage() {
       (!id ? "OM_CUSTOMER_NOT_FOUND" : "") ||
       detailQuery.error?.message ||
       parentCustomerQuery.error?.message ||
-      companiesQuery.error?.message ||
       ""
     );
-  }, [companiesQuery.error, detailQuery.error, id, parentCustomerQuery.error]);
+  }, [detailQuery.error, id, parentCustomerQuery.error]);
 
   function setField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));

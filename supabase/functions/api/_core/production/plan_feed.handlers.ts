@@ -17,6 +17,7 @@
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertManagerOrSARole,
@@ -355,6 +356,11 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
     if (!companyId || !foNumber || !partyName || (!sku && !materialId) || !orderedQtyKg || !orderDate) {
       return foErr(req, ctx, "PROD_PLAN_FEED_INVALID", 400,
         "company_id, fo_number, party_name, sku or material_id, ordered_qty_kg, order_date required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const { data, error } = await serviceRoleClient

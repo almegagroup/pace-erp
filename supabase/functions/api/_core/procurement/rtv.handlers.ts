@@ -12,6 +12,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -320,6 +321,11 @@ export async function createRTVHandler(
 
     if (!companyId || !vendorId || !grnId || !RTV_SETTLEMENT_MODES.has(settlementMode) || !RTV_REASON_CATEGORIES.has(reasonCategory)) {
       return rtvErrorResponse(req, ctx, "RTV_CREATE_INVALID", 400, "company_id, vendor_id, grn_id, settlement_mode, and reason_category are required.");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return rtvErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const grn = await getGrn(grnId);

@@ -14,7 +14,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { getPackingOrder, getProcessOrder, listPackingOrders, listProcessOrders, reversePackingOrder, reverseProcessOrder } from "./prodApi.js";
 
@@ -186,10 +186,11 @@ export default function ReversalPage() {
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
 
-  const companiesQ = useCompaniesForOmQuery();
+  const { runtimeContext } = useMenu();
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyMap = useMemo(
-    () => new Map((companiesQ.data ?? []).map((company) => [String(company.id), company])),
-    [companiesQ.data],
+    () => new Map(companies.map((company) => [String(company.id), company])),
+    [companies],
   );
 
   // PO numbers are global (§8 — 93xxxxxxxx = Process PO, 94xxxxxxxx = Packing

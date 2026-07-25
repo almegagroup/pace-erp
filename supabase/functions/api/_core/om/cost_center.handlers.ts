@@ -12,6 +12,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
 import { assertManagerOrSARole, assertOmSaContext } from "./shared.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -47,6 +48,11 @@ export async function createCostCenterHandler(
 
     if (!companyId || !costCenterCode || !costCenterName) {
       return costCenterErrorResponse(req, ctx, "OM_CC_CREATE_FAILED", 400, "Invalid cost center input");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return costCenterErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const { data, error } = await serviceRoleClient

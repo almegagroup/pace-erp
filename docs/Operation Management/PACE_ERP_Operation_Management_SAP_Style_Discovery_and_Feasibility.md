@@ -15406,3 +15406,99 @@ Bundled rate (Basic+Freight+GST একসাথে quote করা vendor)-এ�
 4. **এখনো lock হয়নি (Step 3/4-এ decide করতে হবে):** landed cost multi-material allocation basis (qty vs value ratio, per cost_type), CSN/PO-linked landed cost-এর scope (multi-GRN allocation-এর জন্য junction table লাগবে কিনা, নাকি বাস্তবে ব্যবহারই হয় না), exchange-rate capture mechanism (BOE-ভিত্তিক)।
 
 ---
+
+## Section 112 — Company-Scope Data Leak: Discovery + Permanent Enforcement Design (2026-07-25, LOCKED, GO-LIVE BLOCKER)
+
+### 112.1 — পটভূমি
+
+ACL role/department restructure (Section-এর বাইরে, session worksheet-এ ট্র্যাক করা) করার সময় dev test user-দের প্রথমবার real single/multi-company scope দেওয়া হলো (আগে সবাই DIRECTOR ছিল, সব company)। P0003 (single-company user) লগইন করে Production PO Create (PR09)-এ Company dropdown-এ **৪টা company** দেখতে পেল, যদিও তার নিজের `erp_map.user_companies`-এ মাত্র ১টা row। এটাই প্রথম সূত্র — investigation করে দেখা গেল এটা একটা isolated UI bug না, একটা **systemic company-scope enforcement gap**।
+
+### 112.2 — মূল আবিষ্কার: তিন ধরনের leak shape, একই root cause
+
+**Shape 1 — Create action (body-তে নতুন company_id আসে):**
+নতুন record তৈরির handler body থেকে `company_id` নিয়ে সরাসরি insert করে — caller-এর `erp_map.user_companies`-এর সাথে মেলানো হয় না।
+
+**Shape 2 — Act-on-existing action (body-তে company_id নেই, `:id` দিয়ে fetch):**
+Finalize/Verify/Reverse/QA-Approve/Batch-Release ধরনের handler একটা existing record `:id` দিয়ে fetch করে, action করে — কিন্তু fetched record-এর নিজের `company_id` caller-এর scope-এ আছে কিনা কখনো চেক হয় না। এটা Shape 1-এর চেক দিয়ে ধরা পড়বে না, কারণ body-তে company_id-ই থাকে না — আলাদা check-shape লাগে (fetch করার পরে record-এর company_id verify করা)।
+
+**Shape 3 — Plain read (GET/detail by id, কোনো action ছাড়াই):**
+"শুধু দেখা"-ও leak হতে পারে যদি detail/GET endpoint fetched record-এর company_id caller-এর scope-এর সাথে না মেলায়। **এই shape এখনো audit হয়নি** — Section 112.4-এর audit শুধু write handler-এ scope করা হয়েছিল, read-only detail endpoint-এ এখনো নিশ্চিত করা বাকি।
+
+### 112.3 — Root cause: কোনো generic/mandatory gate নেই, প্রতিটা handler-এর নিজের discretion
+
+`_pipeline/context.ts`-এর `stepContext()` **সেশনের active company** (`ctx.context.companyId`, header/session থেকে) resolve+validate করে — কিন্তু এটা POST/PATCH body-র ভেতরের `company_id` field স্পর্শই করে না। প্রতিটা handler-কে নিজে থেকে আলাদা করে caller-এর company scope চেক করতে হয় — আর বেশিরভাগ handler এটা করেনি।
+
+**Live code audit-এ (2026-07-25) পাওয়া গেছে:**
+
+| Handler | company-scope check আছে? |
+|---|---|
+| `createProcessOrderHandler` | ❌ নেই |
+| `finalizeProcessOrderHandler` | ❌ নেই |
+| `verifyProcessOrderHandler` | ❌ নেই |
+| `qaApproveProcessOrderHandler` / `qaRejectProcessOrderHandler` | ❌ নেই |
+| `reverseProcessOrderHandler` | ❌ নেই |
+| `editPackingOrderHandler` / `finalizePackingOrderHandler` / `reversePackingOrderHandler` / `correctPackingOrderHandler` / `cancelPackingOrderHandler` | ❌ নেই |
+| `createOldProcessPoHandler` / `createOldPackingPoHandler` | ❌ নেই |
+| `createConversionRateHandler` | ❌ নেই |
+| `releaseBatchNumberHandler` | ❌ নেই |
+| `mapVendorToCompanyHandler` / `mapCustomerToCompanyHandler` | ❌ নেই |
+| `extendMaterialToCompanyHandler` / `extendMaterialToPlantHandler` | ❌ নেই |
+| **`createPackingOrderHandler`** | ✅ আছে (`assertPackingCompanyScope`) |
+| **`createPartialBatchReversalHandler`** | ✅ আছে (`assertPartialReversalCompanyScope`) |
+| `listProcessOrdersHandler` (GET list) | ✅ আছে (`PROD_PO_COMPANY_SCOPE_VIOLATION`) |
+
+শুধু **২টা write handler** ঠিকভাবে করেছে — প্রমাণ করে এই pattern এই codebase-এ আগে থেকেই জানা/সম্ভব, কিন্তু consistently apply হয়নি।
+
+**⚠️ এই table অসম্পূর্ণ ছিল (২০২৬-০৭-২৫ implementation-এর সময় ধরা পড়ে) — শুধু Production module manually audit করা হয়েছিল।** `scripts/company-scope-guard.mjs` (§112.6) চালিয়ে systematic scan করার পর দেখা গেল একই leak Procurement module-এও ব্যাপকভাবে ছিল (PO, CSN, RTV, STO, Sales Order, Gate Entry, Invoice Verification, Landed Cost ইত্যাদি, মোট আরও ২১টা ফাইল) — বিস্তারিত ও চূড়ান্ত ৩০-ফাইলের তালিকা §112.6/§112.7-এ।
+
+**Frontend-এর নিজের একটা leak-ও পাওয়া গেছে, একই ধরনের:** `ProductionPOCreatePage.jsx`, `OldProcessPoPage.jsx`, `OldPackingPoPage.jsx`, `ConversionCostPage.jsx`, `ProductionPOFinalPage.jsx`, `ProductionPOVerifyPage.jsx`, `QAQueuePage.jsx` (production), `ReversalPage.jsx`, `BatchNumberReleasePage.jsx`, `VendorDetailPage.jsx`, `CustomerDetailPage.jsx`, `MaterialDetailPage.jsx` — সবগুলো Company dropdown-এ `TransactionCompanySelector` (যেটা user-scoped `runtimeContext.availableCompanies` থেকে data নেয়) ব্যবহার না করে `useCompaniesForOmQuery()` (যেটা unscoped `GET /api/admin/companies` কল করে) ব্যবহার করছে। SA-only পেজ (`admin/sa/screens/**`) এর ব্যতিক্রম, সেগুলোর জন্য এটা bug না।
+
+### 112.4 — কেন এতদিন ধরা পড়েনি
+
+Dev-এর সব ৯টা test user আগে **DIRECTOR** ছিল (সব company, সব access) — DIRECTOR-এর জন্য "wrong company" বলে কিছুই নেই, তাই এই bug কখনো exercise-ই হয়নি। ACL restructure সেশনে প্রথমবার real single/multi-company-scoped role দিয়ে test করা শুরু হলো — তখনই প্রথম প্রকাশ পেল। এটা কোনো একক ভুলের ফল না — **negative path (wrong-company access) কখনো test করা হয়নি**, কারণ test setup-ই সেটা allow করত না।
+
+### 112.5 — Locked permanent-fix design
+
+**একটাই generic helper, তিনটা call-shape:**
+
+```
+assertCompanyScope(ctx, companyId): Promise<void>
+```
+- SA/GA bypass (existing `isAdminBypass(ctx)` pattern অনুযায়ী)
+- `erp_map.user_companies` টেবিলে `auth_user_id = ctx.auth_user_id AND company_id = companyId` row আছে কিনা চেক করে
+- না থাকলে throw (403-class error)
+
+**Multi-company সঠিকভাবে কাজ করে (verified against live `assertPackingCompanyScope` code):** `erp_map.user_companies`-এ প্রতি company-র জন্য আলাদা row থাকে, তাই multi-company user-এর (P0004/P0006/P0007/P0008) জন্য এই check স্বয়ংক্রিয়ভাবে "caller-এর company-set-এর মধ্যে আছে কিনা" ধরনের হয়ে যায় — আলাদা special-case কোড লাগে না। single company হোক বা একাধিক, একই logic।
+
+**তিন জায়গায় call করতে হবে (shape ভিন্ন, helper একই):**
+1. **Create handler:** insert করার আগে, body-র `company_id` দিয়ে call
+2. **Act-on-existing handler:** record fetch করার পরে, **fetched record-এর নিজের** `company_id` দিয়ে call
+3. **Read/detail handler:** fetch করার পরে, একইভাবে fetched record-এর `company_id` দিয়ে call (এটাই তো "দেখতে পারা"-র leak বন্ধ করবে)
+
+### 112.6 — CI enforcement ✅ IMPLEMENTED (2026-07-25)
+
+§8D-তে `stock-posting-guard.mjs`-এর জন্য যে ratchet pattern locked হয়েছিল, সেই একই idiom এখানে বসানো হয়েছে।
+
+**`scripts/company-scope-guard.mjs`** — `_core/**/*.handlers.ts` স্ক্যান করে, যেখানে `body.company_id` literal থাকে সেখানে একই ফাইলে অন্তত একটা `assert*CompanyScope(...)` call (generic regex `\bassert\w*CompanyScope\s*\(` — shared `assertCompanyScope` হোক বা কোনো per-file local variant যেমন `assertPackingCompanyScope`/`assertPackBomCompanyScope`/`assertPartialReversalCompanyScope`/`assertOpeningStockCompanyScope`) আছে কিনা চেক করে; না থাকলে build **fail**। এটা শুধু **Shape 1** (Create action, body.company_id) ধরে — সবচেয়ে বেশি occurrence পাওয়া গিয়েছিল বলে সবচেয়ে নির্ভরযোগ্যভাবে regex দিয়ে ধরা যায়; Shape 2 (act-on-existing, fetched record-এর company_id) আর Shape 3 (plain read) ফাইল-ভিত্তিক regex দিয়ে নির্ভরযোগ্যভাবে আলাদা করা যায় না (company_id column reference read-only/display context-এও থাকে) — সেগুলো নতুন handler লেখার সময় এই section-এর discipline দিয়েই ধরতে হবে, code review-এ active গ্রেপ করে।
+
+**প্রথমবার চালিয়ে যা পাওয়া গেল (বড় আবিষ্কার):** ১১২.৩-এর audit table শুধু Production module-এর handler কভার করেছিল। Script চালিয়ে দেখা গেল **আরও ২১টা handler file** (Production-এর বাকি কয়েকটা + প্রায় পুরো **Procurement module** — PO, CSN, Gate Entry, RTV, STO, Sales Order, Invoice Verification, Landed Cost, L2 masters, QA Test Method, Number Series — আর OM-এর কয়েকটা SA-only master) একই body.company_id-না-check-করা shape-এ ছিল। বিশেষভাবে বিপজ্জনক: `gate_entry.handlers.ts`, `invoice_verification.handlers.ts`, `landed_cost.handlers.ts`, `rtv.handlers.ts`, `sales_order.handlers.ts`, `sto.handlers.ts`, `csn.handlers.ts`, `po.handlers.ts`-এ একটা function ছিল নাম **`getCompanyScope(ctx, requestedCompanyId)`** যেটা দেখতে scope-enforcement-এর মতো লাগে কিন্তু আসলে শুধু fallback resolver (`requestedCompanyId || ctx.context.companyId`) — caller-এর `erp_map.user_companies`-এর সাথে কোনো verification-ই করে না। এই নামকরণটাই misleading ছিল বলে এতদিন কারো চোখে পড়েনি। Business owner-কে এই আবিষ্কার জানানো হয় এবং **এখনই সব ২১টা ফাইল ঠিক করার সিদ্ধান্ত নেওয়া হয়** (এই একই session-এ)।
+
+**চূড়ান্ত ফল: baseline শূন্য, guard পাস করে।** মোট **৩০টা handler file**-এ `assertCompanyScope(ctx, companyId)` (বা file-local সমতুল্য) বসানো হয়েছে — Production (৯), OM (৪, সব SA-gated হলেও defense-in-depth হিসেবে), Procurement (১৭)। `node scripts/company-scope-guard.mjs` → `0 without a scope guard`।
+
+### 112.6a — HR-এর "Parent Company" scope — যাচাই করে দেখা গেছে design অনুযায়ীই সঠিক, gap না
+
+প্রাথমিকভাবে `erp_map.user_parent_companies` (HR-এর নিজস্ব tenant-boundary — CLAUDE.md-এ locked "Parent Company = HR only") এই একই class-এর leak-এর ঝুঁকিতে আছে বলে flag করা হয়েছিল। Business owner concrete example (Arka/CMP003, CMP005 Head-Office approver) দিয়ে challenge করার পর কোড সরাসরি পড়ে (`getParentCompanyScope()`, `process_decision.handler.ts`) **যাচাই করা হয়েছে design সঠিক**: approve করার জন্য approver-এর **Work Company** access লাগে requester-এর **Parent Company**-তে — এই দুটো independent scope dimension ইচ্ছাকৃতভাবেই আলাদা রাখা, ভুল করে গুলিয়ে যায়নি। তাই HR-এ Section 112.2-এর মতো leak নেই — এটা confirmed-correct-by-design, gap নয়। (HR module-এর অন্য কোনো handler-এ সত্যিকারের Shape 1/2/3 leak থাকতে পারে কিনা সেটা এই session-এ audit করা হয়নি, কারণ HR পুরোপুরি out-of-scope রাখা হয়েছিল — সেটা আলাদা প্রশ্ন, এই approve-flow-এর প্রশ্নটাই ছিল মূল উদ্বেগ, আর সেটা resolved।)
+
+### 112.7 — Implementation ✅ COMPLETE (2026-07-25)
+
+1. ✅ Read/detail (GET by :id) endpoint-এর Shape 3 leak audit করা হয়েছে — production module-এ পাওয়া প্রতিটা (`getProcessOrderHandler`, `getPackingOrderHandler`, availability-preview/list endpoint-গুলো) ঠিক করা হয়েছে; কিছু list endpoint-এ (`listPackingOrdersHandler`, `listBatchSeriesHandler`, `listConversionRatesHandler`) company_id filter খালি থাকলে caller-এর নিজের company-set-এ scope করার fix-ও যোগ করা হয়েছে (§112.2 Shape 3-এর আরেকটা রূপ — filter খালি রাখলে সব company leak হওয়া)।
+2. ✅ Generic `assertCompanyScope()` helper — `supabase/functions/api/_shared/companyScope.ts`। SA/GA/admin bypass, নাহলে `erp_map.user_companies`-এ row আছে কিনা চেক করে, নাহলে throw।
+3. ✅ প্রতিটা audited handler-এ সঠিক shape (Create/Act-on-existing/Read) অনুযায়ী call বসানো হয়েছে — মূল audit table-এর সব + guard script-এ ধরা পড়া বাড়তি ২১টা ফাইল, মোট ৩০টা handler file।
+4. ✅ `scripts/company-scope-guard.mjs` CI guard — baseline শূন্য (§112.6)।
+5. ✅ Frontend-এর ১২+১টা (মূল audit-এ ১২টা লেখা ছিল, বাস্তবে fix করার সময় আরও ৩টা related page — `FgStockBreakdownPage.jsx`, `PackBomApprovalPage.jsx`, `OrderListPage.jsx` — একই anti-pattern-এ পাওয়া গেছে, মোট ১৫টা) page `useCompaniesForOmQuery()` (unscoped `GET /api/admin/companies`) থেকে `useMenu()`-এর `runtimeContext.availableCompanies` (session-scoped)-এ swap করা হয়েছে। প্যাটার্ন `ProductionPOCreatePage.jsx`-এ প্রথম প্রয়োগ করা হয়েছিল।
+6. 🔵 Dev-এ live verify (single-company test user দিয়ে অন্য company-র record touch করলে 403) — কোড-level verification (deno check + eslint, সব ফাইলে ০টা নতুন error) হয়েছে; deployed-app-এ click-through যাচাই বাকি, business owner-এর login লাগবে।
+7. 🔵 Prod deploy checklist — schema/data নয়, pure code change, তাই normal deploy pipeline দিয়েই prod-এ যাবে; আলাদা কোনো MCP/migration step লাগবে না।
+
+**Verification method note:** এই session-এ CLAUDE.md-এর "No Localhost Preview" rule অনুযায়ী browser দিয়ে live click-through করা হয়নি (app login-gated, dev creds নেই) — verification হয়েছে (ক) `deno check` প্রতিটা touched backend file-এ, git-stash দিয়ে before/after error-count তুলনা করে নিশ্চিত করা হয়েছে কোনো নতুন TypeScript error ঢোকেনি (pre-existing `DbQueryBuilder` typing noise ছাড়া), (খ) `eslint` প্রতিটা touched frontend file-এ, (গ) `node scripts/company-scope-guard.mjs` পাস করা (baseline শূন্য)। Deployed app-এ single-company user দিয়ে আসল 403 click-through — 112.7 ধাপ ৬-এ flag করা আছে, এখনো বাকি।
+
+---

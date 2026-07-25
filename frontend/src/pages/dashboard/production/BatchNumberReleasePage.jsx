@@ -13,7 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { listBatchNumbers, releaseBatchNumber } from "./prodApi.js";
 
 function companyLabel(company) {
@@ -37,10 +37,11 @@ export default function BatchNumberReleasePage() {
   const [releasing, setReleasing] = useState(false);
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
 
-  const companiesQ = useCompaniesForOmQuery();
+  const { runtimeContext } = useMenu();
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyOptions = useMemo(
-    () => (companiesQ.data ?? []).map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
-    [companiesQ.data],
+    () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
+    [companies],
   );
 
   const batchNumbersQ = useQuery({
@@ -94,7 +95,7 @@ export default function BatchNumberReleasePage() {
               }}
               options={companyOptions}
               placeholder="-- Select company --"
-              emptyStateLabel={companiesQ.isLoading ? "Loading companies..." : "No companies"}
+              emptyStateLabel="No companies"
             />
           </div>
         </div>

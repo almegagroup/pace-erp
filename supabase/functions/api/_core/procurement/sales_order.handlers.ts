@@ -12,6 +12,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -429,6 +430,11 @@ export async function createSOHandler(
 
     if (!companyId || !customerId || !customerPoNumber || lines.length === 0) {
       return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id, customer_id, customer_po_number, and at least one line are required.");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const linePayload: JsonRecord[] = [];

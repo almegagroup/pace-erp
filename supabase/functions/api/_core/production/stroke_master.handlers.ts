@@ -15,6 +15,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
@@ -448,6 +449,11 @@ export async function createStrokeMasterHandler(
 
     if (!companyId || !strokeNumber) {
       return strokeError(req, ctx, "PROD_STROKE_INVALID", 400, "company_id, stroke_number required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return strokeError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
     if (!materialId && (!prodCode || !shadeCode)) {
       return strokeError(req, ctx, "PROD_STROKE_INVALID", 400, "prodshade_material_id required, or prod_code + shade_code for a new Prodshade");

@@ -13,7 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { completeIntProcessOrder, getProcessOrder, listPackingOrders, listProcessOrders } from "./prodApi.js";
 
 const PROCESS_STATUS_COLORS = {
@@ -67,10 +67,11 @@ export default function OrderListPage() {
   const [actualOutputQty, setActualOutputQty] = useState("");
   const [savingInt, setSavingInt] = useState(false);
 
-  const companiesQ = useCompaniesForOmQuery();
+  const { runtimeContext } = useMenu();
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyOptions = useMemo(
-    () => (companiesQ.data ?? []).map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
-    [companiesQ.data],
+    () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
+    [companies],
   );
 
   const processQ = useQuery({

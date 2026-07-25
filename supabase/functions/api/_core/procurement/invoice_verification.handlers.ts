@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -273,6 +274,11 @@ export async function createIVDraftHandler(
 
     if (!companyId || !vendorId || !vendorInvoiceNumber || !vendorInvoiceDate) {
       return ivErrorResponse(req, ctx, "IV_CREATE_INVALID", 400, "company_id, vendor_id, vendor_invoice_number, and vendor_invoice_date are required.");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return ivErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const hasDuplicatePostedVendorInvoice = await hasPostedVendorInvoiceDuplicate(vendorId, vendorInvoiceNumber);

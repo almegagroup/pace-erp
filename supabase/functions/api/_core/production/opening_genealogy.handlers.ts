@@ -22,6 +22,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { generateRecoDocNumber } from "../../_shared/materialDocument.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
@@ -118,6 +119,11 @@ export async function createOldProcessPoHandler(req: Request, ctx: ProdHandlerCo
 
     if (!companyId || !materialId || !batchNumber || !actualQty) {
       return genErr(req, ctx, "PROD_OLD_PROCESS_PO_INVALID", 400, "company_id, material_id, batch_number, actual_qty required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return genErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
     if (poType !== "MTO" && poType !== "HPS") {
       return genErr(req, ctx, "PROD_OLD_PROCESS_PO_TYPE_INVALID", 400, "Old Process PO is MTO/HPS only (§104.9)");
@@ -270,6 +276,11 @@ export async function listOldProcessPoBatchesHandler(req: Request, ctx: ProdHand
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
     if (!companyId) return okResponse({ data: [] }, ctx.request_id, req);
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return genErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     const { data: recoPoIds, error: recoErr } = await serviceRoleClient
       .schema("erp_production").from("process_order_line_reco")
@@ -332,6 +343,11 @@ export async function createOldPackingPoHandler(req: Request, ctx: ProdHandlerCo
 
     if (!companyId || !processOrderId || !skuMaterialId || !actualQtyKg) {
       return genErr(req, ctx, "PROD_OLD_PACKING_PO_INVALID", 400, "company_id, process_order_id, material_id, actual_qty_kg required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return genErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
     if (!fgSlocId) {
       return genErr(req, ctx, "PROD_OLD_PACKING_PO_FG_SLOC_REQUIRED", 400, "FG storage location required");

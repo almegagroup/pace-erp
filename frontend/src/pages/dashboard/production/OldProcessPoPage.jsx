@@ -16,7 +16,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { listStrokeMasters, getStrokeMaster, createOldProcessPo } from "./prodApi.js";
 import { listMachines } from "../om/omApi.js";
 
@@ -58,8 +58,8 @@ export default function OldProcessPoPage() {
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 5000);
   }
 
-  const companiesQ = useCompaniesForOmQuery();
-  const companies = useMemo(() => companiesQ.data ?? [], [companiesQ.data]);
+  const { runtimeContext } = useMenu();
+  const companies = useMemo(() => runtimeContext?.availableCompanies ?? [], [runtimeContext]);
   const companyOptions = companies.map((c) => ({ value: c.id, label: companyLabel(c) }));
   useEffect(() => {
     if (!companyId && companies.length === 1) setCompanyId(companies[0].id);

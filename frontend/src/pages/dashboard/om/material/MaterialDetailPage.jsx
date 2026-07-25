@@ -27,7 +27,6 @@ import {
   updateMaterial,
 } from "../omApi.js";
 import {
-  useCompaniesForOmQuery,
   useUomsQuery,
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -51,7 +50,7 @@ function getAllowedStatusTargets(status) {
 const MANAGER_OR_SA_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
 
 export default function MaterialDetailPage() {
-  const { shellProfile } = useMenu();
+  const { shellProfile, runtimeContext } = useMenu();
   const canEdit = MANAGER_OR_SA_ROLES.has(shellProfile?.roleCode);
   const [searchParams] = useSearchParams();
   const context = useMemo(() => getActiveScreenContext() ?? {}, []);
@@ -71,7 +70,6 @@ export default function MaterialDetailPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const uomQuery = useUomsQuery({ is_active: true });
-  const companiesQuery = useCompaniesForOmQuery();
   const detailQuery = useQuery({
     queryKey: ["om", "material-detail", id],
     queryFn: async () => {
@@ -102,7 +100,7 @@ export default function MaterialDetailPage() {
   );
   const material = detailQuery.data?.material ?? null;
   const uoms = Array.isArray(uomQuery.data?.data) ? uomQuery.data.data : [];
-  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyExtensions = detailQuery.data?.companyExtensions ?? [];
   const plantExtensions = detailQuery.data?.plantExtensions ?? [];
   const approvedVendors = approvedVendorsQuery.data ?? [];
@@ -110,8 +108,7 @@ export default function MaterialDetailPage() {
   const approvedVendorsLoading = approvedVendorsQuery.isLoading || vendorOptionsQuery.isLoading;
   const loading =
     detailQuery.isLoading ||
-    uomQuery.isLoading ||
-    companiesQuery.isLoading;
+    uomQuery.isLoading;
 
   useEffect(() => {
     if (!searchId && context.id) {
@@ -135,12 +132,11 @@ export default function MaterialDetailPage() {
     setError(
       detailQuery.error?.message ||
       uomQuery.error?.message ||
-      companiesQuery.error?.message ||
       approvedVendorsQuery.error?.message ||
       vendorOptionsQuery.error?.message ||
       ""
     );
-  }, [approvedVendorsQuery.error, companiesQuery.error, detailQuery.error, uomQuery.error, vendorOptionsQuery.error]);
+  }, [approvedVendorsQuery.error, detailQuery.error, uomQuery.error, vendorOptionsQuery.error]);
 
   function setField(key, value) { setForm((prev) => ({ ...prev, [key]: value })); }
 

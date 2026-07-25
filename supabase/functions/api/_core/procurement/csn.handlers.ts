@@ -12,6 +12,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -1273,6 +1274,13 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const csn = await getCsnById(id, companyId);
     if (!csn) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");
@@ -1351,6 +1359,13 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const mother = await getCsnById(id, companyId);
     if (!mother) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "Mother CSN not found");
@@ -1968,6 +1983,13 @@ export async function previewDispatchQtyAdjustmentHandler(req: Request, ctx: Pro
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const newDispatchQty = parseNullableNumber(body.value ?? body.dispatch_qty);
     if (newDispatchQty == null || newDispatchQty < 0) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_DISPATCH_QTY_REQUIRED", 400, "dispatch_qty must be zero or greater");
@@ -1992,6 +2014,13 @@ export async function confirmDispatchQtyAdjustmentHandler(req: Request, ctx: Pro
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const action = toUpperTrimmedString(body.action || "SAVE_ONLY");
     const newDispatchQty = parseNullableNumber(body.value ?? body.dispatch_qty);
     const knockOffQty = parseNullableNumber(body.knock_off_qty) ?? 0;
@@ -2117,6 +2146,13 @@ export async function inlineUpdateCSNHandler(req: Request, ctx: ProcurementHandl
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const csn = await getCsnById(id, companyId);
     if (!csn) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");

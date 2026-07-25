@@ -13,6 +13,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -1393,6 +1394,11 @@ export async function transformSubCSNToSTOHandler(
     const csnId = getIdFromPath(req);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return stoErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     const subCsn = await getSubCsnById(csnId, companyId);
 
     if (!toTrimmedString(subCsn.mother_csn_id)) {

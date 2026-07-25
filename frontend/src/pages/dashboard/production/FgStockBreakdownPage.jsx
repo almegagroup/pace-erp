@@ -9,7 +9,7 @@ import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { listMaterials } from "../om/omApi.js";
 import { getFgStockBreakdown } from "./prodApi.js";
 
@@ -68,13 +68,13 @@ export function FgStockBreakdownTable({ batches }) {
 export default function FgStockBreakdownPage() {
   const [companyId, setCompanyId] = useState("");
   const [materialId, setMaterialId] = useState("");
-  const companiesQ = useCompaniesForOmQuery();
+  const { runtimeContext } = useMenu();
   const materialsQ = useQuery({
     queryKey: ["om-materials", "FG", "fg-stock-breakdown"],
     queryFn: () => listMaterials({ material_type: "FG", limit: 500 }),
     select: (data) => data?.data ?? [],
   });
-  const companies = companiesQ.data?.data ?? companiesQ.data ?? [];
+  const companies = runtimeContext?.availableCompanies ?? [];
   const effectiveCompanyId = companyId || (companies.length === 1 ? companies[0].id : "");
   const reportQ = useQuery({
     queryKey: ["fg-stock-breakdown", effectiveCompanyId, materialId],

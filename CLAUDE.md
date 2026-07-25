@@ -245,11 +245,26 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 
 ## 6. Next Actions
 
-> ### 📍 বর্তমান অবস্থা (2026-07-19) — নতুন session এটা আগে পড়ো
+> ### 📍 বর্তমান অবস্থা (2026-07-25 আপডেট) — নতুন session এটা আগে পড়ো
 >
 > **go-live: 1 July 2026 (Liquid — Admix/Hypershot/IWC)।**
 >
-> **এই মুহূর্তে go-live-blocking কিছু খোলা নেই।** সর্বশেষ দুটো বড় কাজ শেষ:
+> **✅ Company-scope data leak — CODE-LEVEL FIX COMPLETE (2026-07-25), feasibility doc
+> Section 112 পড়ো।** ACL role restructure-এর সময় ধরা পড়েছিল — অনেক write handler
+> caller-এর `erp_map.user_companies` scope-এর সাথে `company_id` মিলিয়ে দেখত না। Generic
+> `assertCompanyScope()` (`_shared/companyScope.ts`) বানিয়ে **৩০টা backend handler file**-এ
+> বসানো হয়েছে (মূল audit-এ ছিল শুধু Production; `scripts/company-scope-guard.mjs` (নতুন CI
+> ratchet, baseline শূন্য) চালিয়ে দেখা গেল প্রায় পুরো Procurement module-ও একই leak-এ ছিল —
+> PO, CSN, RTV, STO, Sales Order, Gate Entry, Invoice Verification, Landed Cost সহ আরও ২১টা
+> ফাইল, একই session-এ সব ঠিক করা হয়েছে)। Frontend-এর ১৫টা page-ও unscoped company dropdown
+> থেকে session-scoped `TransactionCompanySelector`/`runtimeContext.availableCompanies`-এ
+> swap করা হয়েছে। **যাচাই:** প্রতিটা touched file-এ `deno check`/`eslint` (০টা নতুন error,
+> git-stash দিয়ে before/after তুলনা করা) + guard script pass। **বাকি:** deployed app-এ
+> single-company user দিয়ে live 403 click-through (business owner-এর login লাগবে, §112.7
+> ধাপ ৬) — এটা go-live-blocking নয় (কোড-level fix সম্পূর্ণ, শুধু final confirmation বাকি)।
+>
+> (আগে এখানে লেখা ছিল "এই মুহূর্তে go-live-blocking কিছু খোলা নেই" — সেটা এখন আর সত্যি না,
+> উপরের ব্লকারটা নতুন। বাকি ২টা আইটেম (§104, §8D/§8-PERF) 2026-07-19 পর্যন্ত সত্যিই বন্ধ ছিল:
 > - **§104 Costing** — 104-1..104-7 + §104.9 সব DONE। বাকি শুধু deployed app-এ live
 >   end-to-end verification (business owner-এর login লাগে)।
 > - **§8D Write Atomicity** — ধাপ ১-৩ DONE, **ধাপ ৪ (plpgsql transaction) ইচ্ছাকৃতভাবে

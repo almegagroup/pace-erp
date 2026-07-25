@@ -16,6 +16,7 @@
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
@@ -83,6 +84,30 @@ export async function listConversionRatesHandler(req: Request, ctx: ProdHandlerC
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
     const segmentCode = toUpperTrimmedString(url.searchParams.get("segment_code") ?? "");
 
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return convError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
+
+    // §112 — an empty Company filter must never leak every company's conversion
+    // rates; scope to the caller's own companies unless SA/GA/admin.
+    let allowedCompanyIds: string[] | null = null;
+    if (!companyId && ctx.roleCode !== "SA" && ctx.roleCode !== "GA" && ctx.context.isAdmin !== true) {
+      const { data: userCompanies, error: userCompaniesError } = await serviceRoleClient
+        .schema("erp_map")
+        .from("user_companies")
+        .select("company_id")
+        .eq("auth_user_id", ctx.auth_user_id);
+      if (userCompaniesError) {
+        console.error("[conversion_cost.list] user_companies query failed:", JSON.stringify(userCompaniesError));
+        throw new Error("PROD_CONV_RATE_LIST_FAILED");
+      }
+      allowedCompanyIds = ((userCompanies ?? []) as JsonRecord[]).map((row) => String(row.company_id ?? ""));
+    }
+
     let query = serviceRoleClient
       .schema("erp_production").from("conversion_cost_config")
       .select("id, company_id, segment_code, prodshade_material_id, valid_from, conversion_rate_per_kg, created_at, created_by")
@@ -90,6 +115,7 @@ export async function listConversionRatesHandler(req: Request, ctx: ProdHandlerC
       .order("prodshade_material_id", { nullsFirst: true })
       .order("valid_from", { ascending: true });
     if (companyId) query = query.eq("company_id", companyId);
+    else if (allowedCompanyIds) query = query.in("company_id", allowedCompanyIds);
     if (segmentCode) query = query.eq("segment_code", segmentCode);
 
     const { data, error } = await query;
@@ -164,6 +190,11 @@ export async function createConversionRateHandler(req: Request, ctx: ProdHandler
     if (!companyId || !VALID_SEGMENTS.has(segmentCode) || !validFrom) {
       return convError(req, ctx, "PROD_CONV_RATE_INVALID", 400, "company_id, segment_code, valid_from required");
     }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return convError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(validFrom)) {
       return convError(req, ctx, "PROD_CONV_RATE_DATE_INVALID", 400, "valid_from must be YYYY-MM-DD");
     }
@@ -216,6 +247,11 @@ export async function getDerivedOpeningRateHandler(req: Request, ctx: ProdHandle
     const materialId = toTrimmedString(url.searchParams.get("material_id") ?? "");
     if (!companyId || !materialId) {
       return convError(req, ctx, "PROD_DERIVED_RATE_INVALID", 400, "company_id and material_id required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return convError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     // The material's own APPROVED stroke (it is the output/prodshade of that stroke).

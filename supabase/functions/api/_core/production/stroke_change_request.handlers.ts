@@ -14,6 +14,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
@@ -262,6 +263,11 @@ export async function createStrokeChangeRequestHandler(
 
     if (!strokeMasterId || !companyId) {
       return crError(req, ctx, "PROD_SCR_INVALID", 400, "stroke_master_id and company_id required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return crError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
     if (lines.length === 0) {
       return crError(req, ctx, "PROD_SCR_NO_LINES", 400, "At least one line change required");

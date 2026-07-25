@@ -32,7 +32,6 @@ import {
   upsertVendorEmails,
 } from "../omApi.js";
 import {
-  useCompaniesForOmQuery,
   useMaterialOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 
@@ -51,7 +50,7 @@ function getAllowedStatusTargets(status) {
 const MANAGER_OR_SA_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
 
 export default function VendorDetailPage() {
-  const { shellProfile } = useMenu();
+  const { shellProfile, runtimeContext } = useMenu();
   const canEdit = MANAGER_OR_SA_ROLES.has(shellProfile?.roleCode);
   const [searchParams] = useSearchParams();
   const context = useMemo(() => getActiveScreenContext() ?? {}, []);
@@ -67,7 +66,6 @@ export default function VendorDetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const companiesQuery = useCompaniesForOmQuery();
   const detailQuery = useQuery({
     queryKey: ["om", "vendor-detail", id],
     queryFn: async () => {
@@ -103,13 +101,13 @@ export default function VendorDetailPage() {
     { enabled: Boolean(showApprovedMaterials) }
   );
   const vendor = detailQuery.data?.vendor ?? null;
-  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyMaps = detailQuery.data?.companyMaps ?? [];
   const paymentTerms = paymentTermsQuery.data ?? [];
   const aslRows = approvedMaterialsQuery.data ?? [];
   const materialDirectory = materialOptionsQuery.materials;
   const aslLoading = approvedMaterialsQuery.isLoading || materialOptionsQuery.isLoading;
-  const loading = detailQuery.isLoading || companiesQuery.isLoading;
+  const loading = detailQuery.isLoading;
 
   useEffect(() => {
     if (!searchId && context.id) {
@@ -149,13 +147,12 @@ export default function VendorDetailPage() {
   useEffect(() => {
     setError(
       detailQuery.error?.message ||
-      companiesQuery.error?.message ||
       paymentTermsQuery.error?.message ||
       approvedMaterialsQuery.error?.message ||
       materialOptionsQuery.error?.message ||
       ""
     );
-  }, [approvedMaterialsQuery.error, companiesQuery.error, detailQuery.error, materialOptionsQuery.error, paymentTermsQuery.error]);
+  }, [approvedMaterialsQuery.error, detailQuery.error, materialOptionsQuery.error, paymentTermsQuery.error]);
 
   async function handleLoadPaymentTerms(companyId) {
     if (!vendor?.id || !companyId) return;
