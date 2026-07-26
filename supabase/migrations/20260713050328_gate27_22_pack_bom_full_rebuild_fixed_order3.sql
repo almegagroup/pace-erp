@@ -71,7 +71,10 @@ ALTER TABLE erp_production.pack_bom
 UPDATE erp_production.pack_bom pb
 SET company_id = resolved.company_id
 FROM (
-  SELECT pb_inner.id, min(mpe.company_id) AS company_id
+  -- PostgreSQL has no built-in min()/max() aggregate for uuid — cast to text
+  -- and back. HAVING below already guarantees exactly one distinct value per
+  -- group, so which aggregate "picks" it is irrelevant to correctness.
+  SELECT pb_inner.id, min(mpe.company_id::text)::uuid AS company_id
   FROM erp_production.pack_bom pb_inner
   JOIN erp_master.material_plant_ext mpe
     ON mpe.material_id = pb_inner.sku_material_id
