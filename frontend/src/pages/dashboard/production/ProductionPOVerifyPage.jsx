@@ -1,307 +1,579 @@
 /*
  * File-ID: 27.FE-PR12
  * File-Path: frontend/src/pages/dashboard/production/ProductionPOVerifyPage.jsx
- * Gate: 27 | Domain: PRODUCTION
- * Purpose: QA confirms actuals and posts stock movement (COR6-Verify).
- *          Also handles Correction Mode for VERIFIED POs.
+ * Gate: 27
+ * Phase: 27
+ * Domain: PRODUCTION
+ * Purpose: Process PO verify screen for PR12.
+ * Authority: Frontend
  */
 
-import React, { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import React, { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import { getProcessOrder, verifyProcessOrder } from "./prodApi.js";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { useMenu } from "../../../context/useMenu.js";
+import { availabilityPreviewProcessOrder, getProcessOrder, listProcessOrders, verifyProcessOrder } from "./prodApi.js";
 
-const STATUS_COLORS = {
-  STANDARD:      "bg-slate-100 text-slate-700",
-  QA_APPROVED:   "bg-sky-100 text-sky-700",
-  QA_REJECTED:   "bg-rose-100 text-rose-700",
-  BATCH_STARTED: "bg-amber-100 text-amber-800",
-  FINAL:         "bg-purple-100 text-purple-700",
-  VERIFIED:      "bg-emerald-100 text-emerald-700",
-  REVERSED:      "bg-slate-100 text-slate-500",
-};
+function companyLabel(company) {
+  return [company.company_code, company.company_name].filter(Boolean).join(" - ");
+}
 
-const ERRORS = {
-  PROD_PO_NOT_FOUND:            "Process Order not found.",
-  PROD_PO_VERIFY_NOT_ALLOWED:   "Verify is only allowed from FINAL status.",
-  PROD_CORRECTION_NOT_ALLOWED:  "Correction mode is only allowed for VERIFIED orders.",
-  PROD_MANAGER_OR_SA_REQUIRED:  "Manager or SA access required.",
-};
-function friendly(code) { return ERRORS[code] ?? code; }
+function orderLabel(order) {
+  return [order.po_number, order.material?.material_name, order.po_type].filter(Boolean).join(" - ");
+}
+
+function materialLabel(material) {
+  return [material?.pace_code, material?.material_name].filter(Boolean).join(" - ");
+}
+
+function buildActualMaterialOptions(line) {
+  const options = [{ value: "", label: "(same)" }];
+  const seen = new Set([""]);
+  for (const material of line.allowed_alternate_materials ?? []) {
+    if (!material?.id || seen.has(material.id)) continue;
+    seen.add(material.id);
+    options.push({
+      value: material.id,
+      label: materialLabel(material) || "Registered alternate",
+    });
+  }
+  if (line.registered_alternate_material_id && !seen.has(line.registered_alternate_material_id)) {
+    seen.add(line.registered_alternate_material_id);
+    options.push({
+      value: line.registered_alternate_material_id,
+      label: materialLabel(line.registered_alternate_material) || "Registered alternate",
+    });
+  }
+  if (line.actual_material_id && !seen.has(line.actual_material_id)) {
+    options.push({
+      value: line.actual_material_id,
+      label: materialLabel(line.actual_material) || "Selected alternate",
+    });
+  }
+  return options;
+}
+
+function storageLocationLabel(location) {
+  return [location?.code || location?.location_code, location?.name || location?.location_name].filter(Boolean).join(" - ");
+}
+
+function validateVerifyPoStatus(status) {
+  return String(status || "").toUpperCase() === "FINAL"
+    ? ""
+    : "This Process PO is not applicable for Verify. Only `FINAL` is allowed.";
+}
+
+function computeRowValues(row) {
+  const planned = Number(row.planned_qty || 0);
+  const actual = Number(row.actual_qty || 0);
+  const autoYes = Math.abs(actual - planned) < 0.0001;
+  const approved = autoYes ? "YES" : (row.approved_status || "YES");
+  let apApproved = actual;
+  let variance = 0;
+  if (!autoYes) {
+    if (approved === "NO") {
+      apApproved = planned;
+      variance = actual - planned;
+    } else if (approved === "PARTIAL") {
+      apApproved = Number(row.ap_approved_qty || 0);
+      variance = actual - apApproved;
+    } else {
+      apApproved = actual;
+    }
+  }
+  return { planned, actual, autoYes, approved, apApproved, variance };
+}
+
+function makeDraftRow(line) {
+  return {
+    key: line.id,
+    id: line.id,
+    material_id: line.material_id,
+    material_label: materialLabel(line.material),
+    dosage_pct: line.dosage_pct ?? "",
+    registered_alternate_material_id: line.registered_alternate_material_id || "",
+    registered_alternate_material_label: materialLabel(line.registered_alternate_material),
+    allowed_alternate_material_options: buildActualMaterialOptions(line),
+    actual_material_id: line.actual_material_id || "",
+    issue_sloc_id: line.issue_sloc_id || line.issue_storage_location?.id || "",
+    planned_qty: String(line.planned_qty ?? 0),
+    actual_qty: String(line.actual_qty ?? line.planned_qty ?? 0),
+    approved_status: line.approved_status || "YES",
+    ap_approved_qty: String(line.ap_approved_qty ?? line.actual_qty ?? line.planned_qty ?? 0),
+    variance_qty: String(line.variance_qty ?? 0),
+    is_formulation_line: line.is_formulation_line !== false,
+  };
+}
 
 export default function ProductionPOVerifyPage() {
   const qc = useQueryClient();
-  const [poInput, setPoInput] = useState("");
-  const [order, setOrder] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [companyId, setCompanyId] = useState("");
+  const [selectedOrderId, setSelectedOrderId] = useState("");
+  const [activeOrderId, setActiveOrderId] = useState("");
+  const [poNumberInput, setPoNumberInput] = useState("");
+  const [submittedPoNumber, setSubmittedPoNumber] = useState("");
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
-  const [verifyLines, setVerifyLines] = useState([]);
-  const [correctionMode, setCorrectionMode] = useState(false);
-  const [deltaLines, setDeltaLines] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [rows, setRows] = useState([]);
+  const [debouncedPreviewRows, setDebouncedPreviewRows] = useState([]);
+
+  const { runtimeContext } = useMenu();
+  const companies = runtimeContext?.availableCompanies ?? [];
+  const companyOptions = useMemo(
+    () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
+    [companies],
+  );
+
+  const ordersQ = useQuery({
+    queryKey: ["production-verify-orders", companyId],
+    queryFn: () => listProcessOrders({ company_id: companyId || undefined, status: "FINAL", per_page: 100 }),
+    enabled: Boolean(companyId),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const orderOptions = useMemo(
+    () => (ordersQ.data ?? []).map((order) => ({ value: order.id, label: orderLabel(order) || order.po_number || "Process PO" })),
+    [ordersQ.data],
+  );
+
+  const lookupQ = useQuery({
+    queryKey: ["production-verify-lookup", submittedPoNumber],
+    enabled: Boolean(submittedPoNumber),
+    queryFn: async () => {
+      const result = await listProcessOrders({ po_number: submittedPoNumber, per_page: 10 });
+      const options = Array.isArray(result) ? result : result?.data ?? [];
+      const match = options.find((order) => String(order.po_number || "").toUpperCase() === submittedPoNumber.toUpperCase()) ?? null;
+      if (!match?.id) return { match: null, blockedMessage: "Process PO not found." };
+      const blockedMessage = validateVerifyPoStatus(match.status);
+      return { match, blockedMessage };
+    },
+  });
+
+  const detailQ = useQuery({
+    queryKey: ["production-verify-detail", activeOrderId],
+    queryFn: () => getProcessOrder(activeOrderId),
+    enabled: Boolean(activeOrderId),
+  });
+
+  const materialQ = useMaterialOptionsQuery({ status: "ACTIVE", limit: 500 });
+  const materialOptions = useMemo(
+    () => (materialQ.materials ?? []).map((material) => ({ value: material.id, label: materialLabel(material) || "Material" })),
+    [materialQ.materials],
+  );
+  const storageLocationQ = useStorageLocationOptionsQuery(
+    { company_id: companyId || undefined },
+    { enabled: Boolean(companyId) },
+  );
+  const storageLocationOptions = useMemo(
+    () => (storageLocationQ.storageLocations ?? []).map((location) => ({
+      value: location.id,
+      label: storageLocationLabel(location) || "Storage Location",
+    })),
+    [storageLocationQ.storageLocations],
+  );
+
+  const po = detailQ.data ?? null;
+  const lookupMessage = useMemo(() => {
+    if (lookupQ.error) return lookupQ.error.message || "Process PO lookup failed.";
+    if (!submittedPoNumber || lookupQ.isFetching) return "";
+    return lookupQ.data?.blockedMessage || "";
+  }, [lookupQ.data?.blockedMessage, lookupQ.error, lookupQ.isFetching, submittedPoNumber]);
+
+  useEffect(() => {
+    const match = lookupQ.data?.match ?? null;
+    if (!match?.id) return;
+    setCompanyId(String(match.company_id || ""));
+    setSelectedOrderId(lookupQ.data?.blockedMessage ? "" : match.id);
+    setActiveOrderId(lookupQ.data?.blockedMessage ? "" : match.id);
+  }, [lookupQ.data]);
+
+  useEffect(() => {
+    setRows((po?.lines ?? []).map(makeDraftRow));
+  }, [po]);
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedPreviewRows(rows.map((row) => ({
+        line_id: row.id || undefined,
+        material_id: row.actual_material_id || row.material_id,
+        storage_location_id: row.issue_sloc_id || undefined,
+        qty: Number(row.actual_qty || 0),
+      })));
+    }, 400);
+    return () => window.clearTimeout(timeoutId);
+  }, [rows]);
+
+  const availabilityPreviewQ = useQuery({
+    queryKey: ["production-verify-availability-preview", companyId, activeOrderId, debouncedPreviewRows],
+    queryFn: () => availabilityPreviewProcessOrder({
+      company_id: companyId,
+      process_order_id: activeOrderId,
+      overrides: debouncedPreviewRows,
+    }),
+    enabled: Boolean(companyId && activeOrderId),
+  });
+  const availabilityByKey = useMemo(
+    () => new Map((availabilityPreviewQ.data ?? []).map((row) => [`${row.material_id}::${row.storage_location_id}`, row])),
+    [availabilityPreviewQ.data],
+  );
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
   }
 
-  async function handleLoad() {
-    if (!poInput.trim()) { toast("Enter a Process Order ID.", "error"); return; }
-    setLoading(true);
-    setOrder(null);
-    setVerifyLines([]);
-    setDeltaLines([]);
-    setCorrectionMode(false);
-    try {
-      const data = await getProcessOrder(poInput.trim());
-      setOrder(data);
-      setVerifyLines((data.lines ?? []).map((l) => ({ ...l, confirmed_qty: l.actual_qty ?? l.planned_qty ?? "" })));
-      setDeltaLines((data.lines ?? []).map((l) => ({ ...l, delta_qty: "0" })));
-    } catch (err) {
-      toast(friendly(err.message), "error");
-    } finally {
-      setLoading(false);
+  function resetSelection(nextCompanyId = "") {
+    setCompanyId(nextCompanyId);
+    setSelectedOrderId("");
+    setActiveOrderId("");
+    setSubmittedPoNumber("");
+    setPoNumberInput("");
+    setRows([]);
+  }
+
+  function handleLookupSubmit(event) {
+    event.preventDefault();
+    const nextPoNumber = String(poNumberInput || "").trim().toUpperCase();
+    setSelectedOrderId("");
+    setActiveOrderId("");
+    setRows([]);
+    if (nextPoNumber && nextPoNumber === submittedPoNumber) {
+      lookupQ.refetch();
+      return;
     }
+    setSubmittedPoNumber(nextPoNumber);
   }
 
-  function updateConfirmed(i, val) {
-    setVerifyLines((ls) => ls.map((l, idx) => idx === i ? { ...l, confirmed_qty: val } : l));
+  function handleLoadSelected() {
+    if (!selectedOrderId) return;
+    setSubmittedPoNumber("");
+    setPoNumberInput("");
+    setActiveOrderId(selectedOrderId);
   }
 
-  function updateDelta(i, val) {
-    setDeltaLines((ls) => ls.map((l, idx) => idx === i ? { ...l, delta_qty: val } : l));
+  function updateRow(key, patch) {
+    setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
   }
 
-  async function handleVerify() {
-    if (!order || order.status !== "FINAL") {
-      toast("Verify is only allowed from FINAL status.", "error"); return;
-    }
+  function addRow() {
+    setRows((current) => [...current, {
+      key: `new-${Date.now()}`,
+      id: "",
+      material_id: "",
+      material_label: "",
+      dosage_pct: "",
+      registered_alternate_material_id: "",
+      registered_alternate_material_label: "",
+      actual_material_id: "",
+      issue_sloc_id: "",
+      planned_qty: "0",
+      actual_qty: "0",
+      approved_status: "YES",
+      ap_approved_qty: "0",
+      variance_qty: "0",
+      is_formulation_line: false,
+    }]);
+  }
+
+  async function handleSave() {
+    if (!po || po.status !== "FINAL") return;
     setSaving(true);
     try {
-      await verifyProcessOrder(order.id, {
-        confirmed_lines: verifyLines.map((l) => ({
-          line_id: l.id,
-          confirmed_qty: parseFloat(l.confirmed_qty) || 0,
-        })),
+      const payloadLines = rows.map((row) => {
+        const values = computeRowValues(row);
+        return {
+          id: row.id || undefined,
+          material_id: row.id ? undefined : row.material_id || undefined,
+          dosage_pct: row.dosage_pct === "" ? undefined : Number(row.dosage_pct),
+          actual_material_id: row.actual_material_id || undefined,
+          storage_location_id: row.issue_sloc_id || undefined,
+          actual_qty: values.actual,
+          approved_status: values.autoYes ? undefined : row.approved_status,
+          ap_approved_qty: values.autoYes ? undefined : (row.approved_status === "PARTIAL" ? Number(row.ap_approved_qty || 0) : undefined),
+          is_rm: true,
+        };
       });
-      toast("Process Order verified. Stock movements posted.");
+      const verifiedQty = rows.reduce((sum, row) => sum + computeRowValues(row).actual, 0);
+      await verifyProcessOrder(po.id, {
+        verified_qty: verifiedQty,
+        lines: payloadLines,
+      });
+      toast("Process PO verified and stock posted.");
       qc.invalidateQueries({ queryKey: ["process-orders"] });
-      // Reload
-      const updated = await getProcessOrder(order.id);
-      setOrder(updated);
-    } catch (err) {
-      toast(friendly(err.message), "error");
+      qc.invalidateQueries({ queryKey: ["production-verify-detail", po.id] });
+    } catch (error) {
+      toast(error.message || "Verify failed.", "error");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleCorrection() {
-    if (!order || order.status !== "VERIFIED") {
-      toast("Correction mode is only allowed for VERIFIED orders.", "error"); return;
-    }
-    const anyNonZero = deltaLines.some((l) => parseFloat(l.delta_qty) !== 0);
-    if (!anyNonZero) { toast("No delta quantities entered.", "error"); return; }
-    setSaving(true);
-    try {
-      await verifyProcessOrder(order.id, {
-        correction: true,
-        delta_lines: deltaLines.map((l) => ({
-          line_id: l.id,
-          delta_qty: parseFloat(l.delta_qty) || 0,
-        })),
-      });
-      toast("Correction applied. Stock movements adjusted.");
-      qc.invalidateQueries({ queryKey: ["process-orders"] });
-      const updated = await getProcessOrder(order.id);
-      setOrder(updated);
-      setDeltaLines((updated.lines ?? []).map((l) => ({ ...l, delta_qty: "0" })));
-      setCorrectionMode(false);
-    } catch (err) {
-      toast(friendly(err.message), "error");
-    } finally {
-      setSaving(false);
-    }
-  }
+  const outputApprovedQty = rows.reduce((sum, row) => sum + computeRowValues(row).apApproved, 0);
+  const outputActualQty = rows.reduce((sum, row) => sum + computeRowValues(row).actual, 0);
+  const outputVariance = outputActualQty - outputApprovedQty;
 
   return (
     <ErpScreenScaffold
-      title="Production PO Verify — PR12"
-      subtitle="QA confirms actuals and posts stock movement (COR6-Verify)"
+      title="Production PO Verify - PR12"
+      subtitle="QA verification and stock posting"
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
-      <ErpSectionCard title="Load Process Order">
-        <div className="flex gap-2 items-end max-w-lg">
-          <div className="flex flex-col gap-1 flex-1">
-            <label className="text-xs text-slate-600 font-medium">Process Order ID</label>
-            <input
-              className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-              placeholder="Enter PO ID…"
-              value={poInput}
-              onChange={(e) => setPoInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleLoad()}
-            />
+      <ErpSectionCard title="Select Process PO">
+        <div className="flex flex-col gap-4">
+          <form onSubmit={handleLookupSubmit} className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-600">PO Number</label>
+              <input
+                className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                value={poNumberInput}
+                onChange={(event) => setPoNumberInput(event.target.value)}
+                placeholder="Paste or enter Process PO number, then press Enter"
+                autoComplete="off"
+              />
+            </div>
+            <div className="flex items-end justify-end">
+              <button
+                type="submit"
+                disabled={lookupQ.isFetching || !String(poNumberInput || "").trim()}
+                className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+              >
+                {lookupQ.isFetching ? "Loading..." : "Search"}
+              </button>
+            </div>
+          </form>
+
+          {lookupMessage ? (
+            <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {lookupMessage}
+            </div>
+          ) : null}
+
+          {detailQ.isFetching && activeOrderId ? (
+            <p className="text-sm text-slate-500">Loading Process PO details...</p>
+          ) : null}
+
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-600">Company</label>
+              <ErpComboboxField
+                value={companyId}
+                onChange={(value) => resetSelection(value)}
+                options={companyOptions}
+                placeholder="-- Select company --"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-600">Process PO</label>
+              <ErpComboboxField
+                value={selectedOrderId}
+                onChange={setSelectedOrderId}
+                options={orderOptions}
+                placeholder="-- Select process PO --"
+                emptyStateLabel={ordersQ.isLoading ? "Loading process orders..." : "No FINAL process POs"}
+                disabled={!companyId}
+              />
+            </div>
+            <div className="flex items-end justify-end">
+              <button
+                type="button"
+                onClick={handleLoadSelected}
+                disabled={!selectedOrderId || detailQ.isFetching}
+                className="rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+              >
+                {detailQ.isFetching && activeOrderId === selectedOrderId ? "Loading..." : "Load"}
+              </button>
+            </div>
           </div>
-          <button
-            onClick={handleLoad}
-            disabled={loading}
-            className="bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded transition-colors"
-          >
-            {loading ? "Loading…" : "Load"}
-          </button>
         </div>
       </ErpSectionCard>
 
-      {order && (
-        <>
-          <ErpSectionCard title="Order Summary">
-            <div className="flex items-center gap-6 text-sm flex-wrap">
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">PO Number</span>
-                <p className="font-mono font-semibold">{order.po_number ?? order.id?.slice(0, 8)}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Type</span>
-                <p>{order.prod_type}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Status</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[order.status] ?? ""}`}>
-                  {order.status?.replace(/_/g, " ")}
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Batch Number</span>
-                <p className="font-mono">{order.batch_number ?? "—"}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Planned Qty</span>
-                <p className="font-mono">{order.planned_qty_kg} KG</p>
-              </div>
+      {po && (
+        <ErpSectionCard title="PR12 Verify">
+          {po.status !== "FINAL" ? (
+            <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              This Process PO is blocked for Verify. Only `FINAL` is allowed.
             </div>
-
-            {order.status === "VERIFIED" && !correctionMode && (
-              <div className="mt-4">
-                <div className="bg-emerald-50 border border-emerald-200 rounded p-3 text-sm text-emerald-800 mb-3">
-                  This order is <strong>VERIFIED</strong>. Stock movements have been posted. Use Correction Mode to apply qty deltas.
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="grid flex-1 gap-3 md:grid-cols-3 text-sm">
+                  <div><span className="block text-xs text-slate-400">PO #</span><p className="font-mono font-semibold text-sky-700">{po.po_number || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Batch #</span><p className="font-mono">{po.batch_number || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Status</span><p>{po.status || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Machine</span><p>{po.machine?.machine_name || po.machine?.machine_code || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Stroke #</span><p>{po.stroke?.stroke_number || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Prodshade</span><p>{materialLabel(po.material) || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Description</span><p>{po.stroke?.description || po.material?.material_name || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Type</span><p>{po.po_type || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Std Size</span><p className="font-mono">{Number(po.planned_qty || 0).toLocaleString()}</p></div>
                 </div>
                 <button
-                  onClick={() => setCorrectionMode(true)}
-                  className="text-sm px-4 py-1.5 rounded border border-amber-400 text-amber-700 hover:bg-amber-50 transition-colors"
-                >
-                  Enter Correction Mode
-                </button>
-              </div>
-            )}
-          </ErpSectionCard>
-
-          {/* Verify section — only for FINAL */}
-          {order.status === "FINAL" && (
-            <ErpSectionCard title="Verify Actual Quantities">
-              <p className="text-xs text-slate-500 mb-3">
-                Confirm actual quantities per RM line. Stock movements (P261 for RM/PM + P231 for FG) will be posted on Verify.
-              </p>
-              {verifyLines.length === 0 ? (
-                <p className="text-slate-400 text-sm">No lines on this order.</p>
-              ) : (
-                <table className="w-full text-sm border-collapse mb-4">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
-                      <th className="text-left py-2 px-3 border-b">#</th>
-                      <th className="text-left py-2 px-3 border-b">Material</th>
-                      <th className="text-right py-2 px-3 border-b">Planned Qty</th>
-                      <th className="text-right py-2 px-3 border-b">Actual Qty</th>
-                      <th className="text-right py-2 px-3 border-b">Confirmed Qty</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {verifyLines.map((line, i) => (
-                      <tr key={line.id ?? i} className="border-b border-slate-100">
-                        <td className="py-2 px-3 text-slate-400">{i + 1}</td>
-                        <td className="py-2 px-3">{line.material?.pace_code ?? line.material_id?.slice(0, 8)}</td>
-                        <td className="py-2 px-3 text-right font-mono text-slate-400">{Number(line.planned_qty ?? 0).toFixed(3)}</td>
-                        <td className="py-2 px-3 text-right font-mono text-slate-600">{Number(line.actual_qty ?? 0).toFixed(3)}</td>
-                        <td className="py-2 px-3 text-right">
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.001"
-                            className="border border-slate-300 rounded px-2 py-0.5 text-sm font-mono text-right w-32"
-                            value={line.confirmed_qty}
-                            onChange={(e) => updateConfirmed(i, e.target.value)}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-              <button
-                onClick={handleVerify}
-                disabled={saving}
-                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium px-5 py-2 rounded transition-colors"
-              >
-                {saving ? "Verifying…" : "Verify & Post Stock"}
-              </button>
-            </ErpSectionCard>
-          )}
-
-          {/* Correction Mode — only for VERIFIED */}
-          {order.status === "VERIFIED" && correctionMode && (
-            <ErpSectionCard title="Correction Mode">
-              <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-800 mb-4">
-                Enter qty deltas (positive = add stock, negative = reduce stock). Zero entries are skipped.
-              </div>
-              {deltaLines.length === 0 ? (
-                <p className="text-slate-400 text-sm">No lines on this order.</p>
-              ) : (
-                <table className="w-full text-sm border-collapse mb-4">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
-                      <th className="text-left py-2 px-3 border-b">#</th>
-                      <th className="text-left py-2 px-3 border-b">Material</th>
-                      <th className="text-right py-2 px-3 border-b">Verified Qty</th>
-                      <th className="text-right py-2 px-3 border-b">Delta Qty</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {deltaLines.map((line, i) => (
-                      <tr key={line.id ?? i} className="border-b border-slate-100">
-                        <td className="py-2 px-3 text-slate-400">{i + 1}</td>
-                        <td className="py-2 px-3">{line.material?.pace_code ?? line.material_id?.slice(0, 8)}</td>
-                        <td className="py-2 px-3 text-right font-mono text-slate-500">{Number(line.confirmed_qty ?? line.actual_qty ?? 0).toFixed(3)}</td>
-                        <td className="py-2 px-3 text-right">
-                          <input
-                            type="number"
-                            step="0.001"
-                            className="border border-slate-300 rounded px-2 py-0.5 text-sm font-mono text-right w-32"
-                            value={line.delta_qty}
-                            onChange={(e) => updateDelta(i, e.target.value)}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-              <div className="flex gap-2">
-                <button
-                  onClick={handleCorrection}
+                  onClick={handleSave}
                   disabled={saving}
-                  className="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-sm font-medium px-5 py-2 rounded transition-colors"
+                  className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
                 >
-                  {saving ? "Applying…" : "Apply Correction"}
-                </button>
-                <button
-                  onClick={() => { setCorrectionMode(false); setDeltaLines((order.lines ?? []).map((l) => ({ ...l, delta_qty: "0" }))); }}
-                  className="text-slate-500 hover:text-slate-700 text-sm px-4 py-2 rounded border border-slate-300 transition-colors"
-                >
-                  Cancel
+                  {saving ? "Posting..." : "Save & Post Stock"}
                 </button>
               </div>
-            </ErpSectionCard>
+
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Input</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[1180px] border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                        <th className="border-b px-3 py-2 text-left">Formulation Material</th>
+                        <th className="border-b px-3 py-2 text-right">Dosage%</th>
+                        <th className="border-b px-3 py-2 text-left">Actual Material</th>
+                        <th className="border-b px-3 py-2 text-left">SLoc</th>
+                        <th className="border-b px-3 py-2 text-right">Std</th>
+                        <th className="border-b px-3 py-2 text-right">Actual</th>
+                        <th className="border-b px-3 py-2 text-left">Approved</th>
+                        <th className="border-b px-3 py-2 text-right">AP Appr</th>
+                        <th className="border-b px-3 py-2 text-right">Var</th>
+                        <th className="border-b px-3 py-2 text-left">Mvt</th>
+                        <th className="border-b px-3 py-2 text-center">Delete</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row) => {
+                        const values = computeRowValues(row);
+                        const previewMaterialId = row.actual_material_id || row.material_id;
+                        const availability = row.issue_sloc_id
+                          ? availabilityByKey.get(`${previewMaterialId}::${row.issue_sloc_id}`) ?? null
+                          : null;
+                        const isShort = Boolean(availability && values.actual > Number(availability.available_qty ?? 0));
+                        const actualMaterialOptions = row.allowed_alternate_material_options?.length
+                          ? row.allowed_alternate_material_options
+                          : [{ value: "", label: "(same)" }];
+                        return (
+                          <tr key={row.key} className={isShort ? "bg-rose-50" : "border-b border-slate-100"}>
+                            <td className="px-3 py-2">
+                              {row.id ? (
+                                row.material_label || "--"
+                              ) : (
+                                <ErpComboboxField
+                                  value={row.material_id}
+                                  onChange={(value) => {
+                                    const selected = (materialQ.materials ?? []).find((material) => material.id === value);
+                                    updateRow(row.key, {
+                                      material_id: value,
+                                      material_label: materialLabel(selected),
+                                    });
+                                  }}
+                                  options={materialOptions}
+                                  placeholder="-- Select material --"
+                                  emptyStateLabel={materialQ.isLoading ? "Loading materials..." : "No materials"}
+                                />
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">{row.dosage_pct === "" ? "--" : Number(row.dosage_pct).toFixed(3)}</td>
+                            <td className="px-3 py-2">
+                              <ErpComboboxField
+                                value={row.actual_material_id}
+                                onChange={(value) => updateRow(row.key, { actual_material_id: value })}
+                                options={actualMaterialOptions}
+                                placeholder="(same)"
+                                disabled={actualMaterialOptions.length <= 1}
+                              />
+                            </td>
+                            <td className="px-3 py-2">
+                              <ErpComboboxField
+                                value={row.issue_sloc_id}
+                                onChange={(value) => updateRow(row.key, { issue_sloc_id: value })}
+                                options={storageLocationOptions}
+                                placeholder="-- Select storage location --"
+                                emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                              />
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">{values.planned.toFixed(3)}</td>
+                            <td className="px-3 py-2 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.001"
+                                className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                value={row.actual_qty}
+                                onChange={(event) => updateRow(row.key, { actual_qty: event.target.value })}
+                              />
+                            </td>
+                            <td className="px-3 py-2">
+                              {values.autoYes && row.id && row.is_formulation_line ? (
+                                <span className="inline-flex rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">* YES</span>
+                              ) : (
+                                <ErpComboboxField
+                                  value={row.approved_status}
+                                  onChange={(value) => updateRow(row.key, { approved_status: value })}
+                                  options={["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }))}
+                                  hideBlank
+                                />
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right">
+                              {row.approved_status === "PARTIAL" && !values.autoYes ? (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.001"
+                                  className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                  value={row.ap_approved_qty}
+                                  onChange={(event) => updateRow(row.key, { ap_approved_qty: event.target.value })}
+                                />
+                              ) : (
+                                <span className="font-mono">{values.apApproved.toFixed(3)}</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">{values.variance.toFixed(3)}</td>
+                            <td className="px-3 py-2">P261</td>
+                            <td className="px-3 py-2 text-center">
+                              {!row.is_formulation_line && (
+                                <button
+                                  onClick={() => setRows((current) => current.filter((entry) => entry.key !== row.key))}
+                                  className="text-sm font-medium text-rose-600 hover:underline"
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <button onClick={addRow} className="mt-2 text-sm font-medium text-sky-700 hover:underline">+ Add Row</button>
+              </div>
+
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Output</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[700px] border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                        <th className="border-b px-3 py-2 text-left">Material</th>
+                        <th className="border-b px-3 py-2 text-right">Std</th>
+                        <th className="border-b px-3 py-2 text-right">Actual</th>
+                        <th className="border-b px-3 py-2 text-right">AP Appr</th>
+                        <th className="border-b px-3 py-2 text-right">Var</th>
+                        <th className="border-b px-3 py-2 text-left">Mvt</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td className="border-b border-slate-100 px-3 py-2">{materialLabel(po.material) || "--"}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{Number(po.planned_qty || 0).toFixed(3)}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputActualQty.toFixed(3)}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputApprovedQty.toFixed(3)}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputVariance.toFixed(3)}</td>
+                        <td className="border-b border-slate-100 px-3 py-2">P101</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           )}
-        </>
+        </ErpSectionCard>
       )}
     </ErpScreenScaffold>
   );

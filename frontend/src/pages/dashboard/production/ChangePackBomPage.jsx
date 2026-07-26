@@ -4,12 +4,18 @@
  * Gate: 27 | Domain: PRODUCTION
  * Purpose: Procurement proposes changes to an ACTIVE Pack BOM.
  *          Creates a DRAFT change request → PR08 approval queue for L1 Manager.
+ *          Per 83.3 Pack BOM lock (2026-06-30): add / remove / edit qty /
+ *          substitute item / edit Material Group — same mechanism as Stroke
+ *          Master RM lines, but free-form CRUD instead of fixed substitution.
  */
 
 import React, { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { getPackBom, listPackBoms, createPackBomChangeRequest } from "./prodApi.js";
+import { listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember } from "../om/omApi.js";
+import { PackBomChangeLinesTable, GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 
 const ERRORS = {
   PROD_BCR_NO_CHANGES:      "At least one change required.",
@@ -19,39 +25,48 @@ const ERRORS = {
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 
-const ACTION_LABELS = { ADD: "Add", REMOVE: "Remove", EDIT: "Edit" };
-const ACTION_COLORS = {
-  ADD:    "bg-emerald-100 text-emerald-800",
-  REMOVE: "bg-rose-100 text-rose-800",
-  EDIT:   "bg-sky-100 text-sky-800",
-};
-
 export default function ChangePackBomPage() {
   const qc = useQueryClient();
-  const [skuInput, setSkuInput] = useState("");
+  const [selectedBomId, setSelectedBomId] = useState("");
   const [bom, setBom] = useState(null);
   const [loading, setLoading] = useState(false);
   const [changes, setChanges] = useState([]);
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
+
+  const [groupModal, setGroupModal] = useState(null);
+  const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
+  const [memberModal, setMemberModal] = useState(null);
+  const [memberMaterialId, setMemberMaterialId] = useState("");
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
   }
 
-  async function loadBom() {
-    if (!skuInput.trim()) return;
-    setLoading(true);
+  const activeBomsQ = useQuery({
+    queryKey: ["pack-boms-active-for-change"],
+    queryFn: () => listPackBoms({ status: "ACTIVE" }),
+    select: (d) => Array.isArray(d) ? d : d?.data ?? [],
+  });
+  const pmMaterialsQ = useQuery({ queryKey: ["om-materials", "PM"], queryFn: () => listMaterials({ material_type: "PM", limit: 500 }), select: (d) => d?.data ?? [] });
+  const groupsQ = useQuery({ queryKey: ["om-material-groups"], queryFn: () => listMaterialCategoryGroups(), select: (d) => d?.data ?? [] });
+
+  const activeBoms = activeBomsQ.data ?? [];
+  const pmMaterials = pmMaterialsQ.data ?? [];
+  const groups = groupsQ.data ?? [];
+  const bomOptions = activeBoms.map((b) => ({
+    value: b.id,
+    label: `${b.sku?.pace_code ?? "—"} — ${b.sku?.material_name ?? ""}${b.sku?.pack_code ? ` (${b.sku.pack_code})` : ""}`,
+  }));
+
+  async function handleBomChange(id) {
+    setSelectedBomId(id);
     setBom(null);
     setChanges([]);
+    if (!id) return;
+    setLoading(true);
     try {
-      const results = await listPackBoms({ sku_material_id: skuInput.trim(), status: "ACTIVE" });
-      const list = Array.isArray(results) ? results : results?.data ?? [];
-      if (list.length === 0) {
-        toast("No ACTIVE Pack BOM found for this FG material UUID.", "error");
-        return;
-      }
-      const full = await getPackBom(list[0].id);
+      const full = await getPackBom(id);
       setBom(full);
       setChanges(
         (full.lines ?? [])
@@ -60,54 +75,53 @@ export default function ChangePackBomPage() {
             _key: l.id,
             action: "EDIT",
             bom_line_id: l.id,
+            old_material_id: l.material_id ?? "",
+            old_qty: l.qty,
+            old_has_alternate: Boolean(l.material_group_id),
+            old_group_id: l.material_group_id ?? "",
             material_id: l.material_id ?? "",
-            material_pace: l.material?.pace_code ?? "",
             qty: String(l.qty ?? ""),
-            uom_code: l.uom_code ?? "KG",
-            has_alternate: Boolean(l.has_alternate),
+            uom_code: l.uom_code ?? "",
+            has_alternate: Boolean(l.material_group_id),
+            material_group_id: l.material_group_id ?? "",
+            old_is_primary_container: Boolean(l.is_primary_container),
+            is_primary_container: Boolean(l.is_primary_container),
             marked_remove: false,
-          }))
+          })),
       );
-    } catch (err) {
-      toast(friendly(err.message), "error");
+    } catch {
+      toast("Failed to load Pack BOM detail.", "error");
     } finally {
       setLoading(false);
     }
   }
 
-  function markRemove(key) {
-    setChanges((prev) =>
-      prev.map((c) =>
-        c._key === key
-          ? { ...c, marked_remove: !c.marked_remove, action: c.marked_remove ? "EDIT" : "REMOVE" }
-          : c
-      )
-    );
+  function openCreateGroupModal(onCreated) {
+    setGroupForm({ group_name: "", description: "" });
+    setGroupModal({ onCreated });
   }
 
-  function updateChange(key, field, value) {
-    setChanges((prev) =>
-      prev.map((c) =>
-        c._key === key ? { ...c, [field]: value, action: c.marked_remove ? "REMOVE" : "EDIT" } : c
-      )
-    );
+  async function handleCreateGroup() {
+    if (!groupForm.group_name.trim()) { toast("Group name required.", "error"); return; }
+    try {
+      const res = await createMaterialCategoryGroup(groupForm);
+      const newGroup = res?.data ?? res;
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Material group created.");
+      groupModal?.onCreated?.(newGroup.id);
+      setGroupModal(null);
+    } catch (err) { toast(friendly(err.code) || err.message, "error"); }
   }
 
-  function addLine() {
-    setChanges((prev) => [
-      ...prev,
-      {
-        _key: `new-${Math.random().toString(36).slice(2)}`,
-        action: "ADD",
-        bom_line_id: null,
-        material_id: "",
-        material_pace: "",
-        qty: "",
-        uom_code: "KG",
-        has_alternate: false,
-        marked_remove: false,
-      },
-    ]);
+  async function handleAddMember() {
+    if (!memberMaterialId) { toast("Select a material first.", "error"); return; }
+    try {
+      await addMaterialCategoryMember({ group_id: memberModal, material_id: memberMaterialId });
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Member added.");
+      setMemberModal(null);
+      setMemberMaterialId("");
+    } catch (err) { toast(friendly(err.code) || err.message, "error"); }
   }
 
   const submitMutation = useMutation({
@@ -116,29 +130,53 @@ export default function ChangePackBomPage() {
       toast("Change request created — awaiting L1 Manager Procurement approval (PR08).");
       setBom(null);
       setChanges([]);
-      setSkuInput("");
+      setSelectedBomId("");
       qc.invalidateQueries({ queryKey: ["pack-bom-change-requests"] });
     },
-    onError: (err) => toast(friendly(err.message), "error"),
+    onError: (err) => toast(friendly(err.code) || err.message, "error"),
   });
 
   function handleSubmit() {
     if (!bom) return;
-    const payload = changes
-      .filter((c) => {
-        if (c.action === "ADD") return c.material_id.length > 10 && Number(c.qty) > 0;
-        if (c.action === "REMOVE") return true;
-        if (c.action === "EDIT") return true;
-        return false;
-      })
-      .map((c) => ({
-        action: c.action,
-        bom_line_id: c.bom_line_id,
-        material_id: c.material_id,
-        qty: Number(c.qty),
-        uom_code: c.uom_code,
-        has_alternate: c.has_alternate,
-      }));
+    const payload = [];
+    for (const c of changes) {
+      if (c.action === "ADD") {
+        if (c.material_id && Number(c.qty) > 0) {
+          payload.push({
+            action: "ADD",
+            material_id: c.material_id,
+            qty: Number(c.qty),
+            uom_code: c.uom_code || "KG",
+            has_alternate: c.has_alternate,
+            material_group_id: c.has_alternate ? (c.material_group_id || null) : null,
+            is_primary_container: Boolean(c.is_primary_container),
+          });
+        }
+        continue;
+      }
+      if (c.marked_remove || c.action === "REMOVE") {
+        payload.push({ action: "REMOVE", bom_line_id: c.bom_line_id });
+        continue;
+      }
+      const changed =
+        c.material_id !== c.old_material_id ||
+        Number(c.qty) !== Number(c.old_qty) ||
+        Boolean(c.has_alternate) !== Boolean(c.old_has_alternate) ||
+        Boolean(c.is_primary_container) !== Boolean(c.old_is_primary_container) ||
+        (c.has_alternate && c.material_group_id !== c.old_group_id);
+      if (changed) {
+        payload.push({
+          action: "EDIT",
+          bom_line_id: c.bom_line_id,
+          material_id: c.material_id,
+          qty: Number(c.qty),
+          uom_code: c.uom_code || "KG",
+          has_alternate: c.has_alternate,
+          material_group_id: c.has_alternate ? (c.material_group_id || null) : null,
+          is_primary_container: Boolean(c.is_primary_container),
+        });
+      }
+    }
 
     if (payload.length === 0) {
       toast("No changes to submit.", "error");
@@ -153,24 +191,17 @@ export default function ChangePackBomPage() {
       subtitle="Propose PM line changes to an ACTIVE Pack BOM — creates a change request for L1 Manager approval"
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
-      <ErpSectionCard title="Load Active Pack BOM">
-        <div className="flex gap-2 items-end">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">FG Material UUID</label>
-            <input
-              className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-72"
-              placeholder="Paste FG SKU material UUID…"
-              value={skuInput}
-              onChange={(e) => setSkuInput(e.target.value)}
-            />
-          </div>
-          <button
-            className="bg-slate-700 hover:bg-slate-900 text-white text-sm px-4 py-1.5 rounded disabled:opacity-50"
-            onClick={loadBom}
-            disabled={loading || !skuInput.trim()}
-          >
-            {loading ? "Loading…" : "Load BOM"}
-          </button>
+      <ErpSectionCard title="Select Active Pack BOM">
+        <div className="max-w-md">
+          <label className="text-xs text-slate-500 block mb-1">FG SKU</label>
+          <ErpComboboxField
+            value={selectedBomId}
+            onChange={handleBomChange}
+            options={bomOptions}
+            placeholder="-- Select ACTIVE Pack BOM --"
+            emptyStateLabel="No ACTIVE Pack BOMs found"
+          />
+          {loading && <p className="text-xs text-slate-400 mt-1">Loading…</p>}
         </div>
       </ErpSectionCard>
 
@@ -195,98 +226,18 @@ export default function ChangePackBomPage() {
 
           <ErpSectionCard title="PM Lines — Propose Changes">
             <p className="text-xs text-slate-500 mb-3">
-              Toggle "Remove" to mark lines for removal. Edit qty/material inline. Click "+ Add Line" for new PM components.
+              Click "Remove" to mark a line for removal, edit qty/material/group inline, or "+ Add PM Line" for new components.
             </p>
-            <table className="w-full text-sm border-collapse mb-3">
-              <thead>
-                <tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
-                  <th className="text-left py-2 px-3 border-b">Action</th>
-                  <th className="text-left py-2 px-3 border-b">Material UUID</th>
-                  <th className="text-right py-2 px-3 border-b">Qty</th>
-                  <th className="text-left py-2 px-3 border-b">UOM</th>
-                  <th className="text-left py-2 px-3 border-b">Has Alt.</th>
-                  <th className="py-2 px-3 border-b"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {changes.map((c, idx) => (
-                  <tr
-                    key={c._key}
-                    className={`border-b border-slate-100 ${c.marked_remove ? "opacity-50 bg-rose-50" : c.action === "ADD" ? "bg-emerald-50" : ""}`}
-                  >
-                    <td className="py-2 px-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${ACTION_COLORS[c.action] ?? ""}`}>
-                        {ACTION_LABELS[c.action]}
-                      </span>
-                    </td>
-                    <td className="py-2 px-3">
-                      <input
-                        className="border border-slate-300 rounded px-2 py-1 text-xs font-mono w-52 disabled:bg-slate-50"
-                        value={c.material_id}
-                        disabled={c.marked_remove}
-                        onChange={(e) => updateChange(c._key, "material_id", e.target.value)}
-                      />
-                      {c.material_pace && !c.marked_remove && (
-                        <span className="text-slate-400 ml-1 text-xs">{c.material_pace}</span>
-                      )}
-                    </td>
-                    <td className="py-2 px-3">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.001"
-                        className="border border-slate-300 rounded px-2 py-1 text-xs text-right w-20 disabled:bg-slate-50"
-                        value={c.qty}
-                        disabled={c.marked_remove}
-                        onChange={(e) => updateChange(c._key, "qty", e.target.value)}
-                      />
-                    </td>
-                    <td className="py-2 px-3">
-                      <input
-                        className="border border-slate-300 rounded px-2 py-1 text-xs w-14 uppercase disabled:bg-slate-50"
-                        value={c.uom_code}
-                        disabled={c.marked_remove}
-                        onChange={(e) => updateChange(c._key, "uom_code", e.target.value.toUpperCase())}
-                      />
-                    </td>
-                    <td className="py-2 px-3 text-center">
-                      <input
-                        type="checkbox"
-                        checked={c.has_alternate}
-                        disabled={c.marked_remove}
-                        onChange={(e) => updateChange(c._key, "has_alternate", e.target.checked)}
-                        className="accent-sky-600"
-                      />
-                    </td>
-                    <td className="py-2 px-3">
-                      {c.action !== "ADD" ? (
-                        <button
-                          className={`text-xs ${c.marked_remove ? "text-slate-500 hover:text-slate-700" : "text-rose-500 hover:text-rose-700"}`}
-                          onClick={() => markRemove(c._key)}
-                        >
-                          {c.marked_remove ? "Undo" : "Remove"}
-                        </button>
-                      ) : (
-                        <button
-                          className="text-xs text-rose-500 hover:text-rose-700"
-                          onClick={() => setChanges((prev) => prev.filter((x) => x._key !== c._key))}
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <div className="flex justify-between items-center">
-              <button
-                className="text-sky-600 hover:text-sky-800 text-sm font-medium"
-                onClick={addLine}
-              >
-                + Add PM Line
-              </button>
+            <PackBomChangeLinesTable
+              lines={changes}
+              setLines={setChanges}
+              materials={pmMaterials}
+              groups={groups}
+              onCreateGroup={openCreateGroupModal}
+              onAddMember={(groupId) => setMemberModal(groupId)}
+              editable
+            />
+            <div className="flex justify-end mt-3">
               <button
                 className="bg-sky-600 hover:bg-sky-700 text-white text-sm px-5 py-2 rounded disabled:opacity-50"
                 onClick={handleSubmit}
@@ -298,6 +249,23 @@ export default function ChangePackBomPage() {
           </ErpSectionCard>
         </>
       )}
+
+      <GroupCreateModal
+        open={Boolean(groupModal)}
+        groupForm={groupForm}
+        setGroupForm={setGroupForm}
+        onCancel={() => setGroupModal(null)}
+        onCreate={handleCreateGroup}
+      />
+
+      <MemberAddModal
+        open={Boolean(memberModal)}
+        memberMaterialId={memberMaterialId}
+        setMemberMaterialId={setMemberMaterialId}
+        materialOptions={pmMaterials.map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
+        onCancel={() => setMemberModal(null)}
+        onAdd={handleAddMember}
+      />
     </ErpScreenScaffold>
   );
 }

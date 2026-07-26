@@ -8,32 +8,20 @@
  * Authority: Frontend
  */
 
+import { useRef } from "react";
+
 function mergeHandlers(primaryHandler, secondaryHandler) {
-  if (!primaryHandler) {
-    return secondaryHandler;
-  }
-
-  if (!secondaryHandler) {
-    return primaryHandler;
-  }
-
+  if (!primaryHandler) return secondaryHandler;
+  if (!secondaryHandler) return primaryHandler;
   return (event) => {
     primaryHandler(event);
-    if (!event.defaultPrevented) {
-      secondaryHandler(event);
-    }
+    if (!event.defaultPrevented) secondaryHandler(event);
   };
 }
 
 function normalizeCellAlign(align) {
-  if (align === "right") {
-    return "text-right";
-  }
-
-  if (align === "center") {
-    return "text-center";
-  }
-
+  if (align === "right") return "text-right";
+  if (align === "center") return "text-center";
   return "text-left";
 }
 
@@ -48,12 +36,18 @@ export default function ErpDenseGrid({
   maxHeight = "calc(100vh - 200px)",
   emptyMessage = "No rows available.",
 }) {
+  const rowRefs = useRef([]);
   const hasRows = Array.isArray(rows) && rows.length > 0;
   const viewportClassName =
     maxHeight === "none"
       ? "overflow-x-auto overflow-y-visible border border-slate-300 bg-white"
       : "overflow-x-auto border border-slate-300 bg-white";
   const viewportStyle = maxHeight === "none" ? undefined : { height: maxHeight, overflowY: "auto" };
+
+  function focusRow(index) {
+    const el = rowRefs.current[index];
+    if (el) el.focus();
+  }
 
   return (
     <div className="grid gap-0">
@@ -76,29 +70,32 @@ export default function ErpDenseGrid({
             {hasRows ? (
               rows.map((row, index) => {
                 const externalRowProps = getRowProps?.(row, index) ?? {};
-                const activationHandler =
-                  typeof onRowActivate === "function"
-                    ? (event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          onRowActivate(row, index);
-                        }
-                      }
-                    : null;
+
+                const keyboardHandler = (event) => {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    focusRow(Math.min(index + 1, rows.length - 1));
+                  } else if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    focusRow(Math.max(index - 1, 0));
+                  } else if (event.key === "Enter" && typeof onRowActivate === "function") {
+                    event.preventDefault();
+                    onRowActivate(row, index);
+                  }
+                };
 
                 const mergedRowProps = {
                   ...externalRowProps,
-                  onKeyDown: mergeHandlers(
-                    externalRowProps.onKeyDown,
-                    activationHandler
-                  ),
+                  onKeyDown: mergeHandlers(externalRowProps.onKeyDown, keyboardHandler),
                 };
 
                 return (
                   <tr
                     key={rowKey ? rowKey(row, index) : `${index}`}
+                    ref={(el) => { rowRefs.current[index] = el; }}
+                    tabIndex={0}
                     {...mergedRowProps}
-                    className={`h-[var(--erp-row-height)] border-b border-slate-200 bg-white text-[12px] text-slate-800 ${externalRowProps.className ?? ""}`.trim()}
+                    className={`h-[var(--erp-row-height)] cursor-pointer border-b border-slate-200 bg-white text-[12px] text-slate-800 outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${externalRowProps.className ?? ""}`.trim()}
                   >
                     {columns.map((column) => (
                       <td

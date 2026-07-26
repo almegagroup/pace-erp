@@ -532,6 +532,94 @@ No public schema assumptions
 
 ---
 
+## PART 1B — MANDATORY DEVELOPMENT RULES (সব Gate, সব Screen, সব Session)
+
+এই rules ভাঙা যাবে না। প্রতিটা Gate VERIFIED হওয়ার আগে এবং প্রতিটা নতুন Claude session শুরুতে এই rules মাথায় রাখতে হবে।
+
+---
+
+### Rule 1 — কোনো Business Data UUID হিসেবে দেখাবে না
+
+UI তে কোথাও raw UUID দেখানো যাবে না। প্রতিটা foreign key human-readable value হিসেবে resolve হয়ে আসবে।
+
+**Backend:** Handler এ সব FK bulk resolve করো — `.in()` দিয়ে একবারে fetch, map বানাও, response এ name attach করো। কখনো per-row serial call নয়।
+
+**Frontend:** `row.material_name` দেখাও, `row.material_id` নয়। Name না এলে `"—"` — raw ID fallback কখনো নয়।
+
+| Raw field | UI তে দেখাবে |
+|-----------|-------------|
+| `material_id` | `material_code — material_name` |
+| `vendor_id` | `vendor_code — vendor_name` |
+| `csn_id` | `csn_number` |
+| `po_id` | `po_number` |
+| `gate_entry_id` | `ge_number` |
+| `grn_id` | `grn_number` |
+| `storage_location_id` | `location_code — location_name` |
+| `*_by` / `*_staff_id` / `*_user_id` | `employee_code — full_name` অথবা field omit |
+| অন্য যেকোনো `*_id` FK | Corresponding code / number / name |
+
+---
+
+### Rule 2 — Back-and-forth Navigation এ Data Reload চলবে না
+
+API থেকে data fetch করে এমন প্রতিটা page অবশ্যই `useQuery` (React Query) use করবে। `useEffect` + `setState` দিয়ে API call করা forbidden।
+
+**কারণ:** User অন্য page এ গিয়ে ফিরে আসলে `useEffect` আবার run করে — আবার full reload, আবার wait। `useQuery` result cache করে রাখে, ফিরে আসলে instant দেখায়।
+
+- Mutation এর পরে `queryClient.setQueryData(key, result)` দিয়ে cache update করো
+- Refresh button এ `queryClient.invalidateQueries(...)` call করবে — কখনো `setTick` বা অন্য hack নয়
+
+---
+
+### Rule 3 — List Endpoint এ Accurate Display Data থাকবে
+
+List page কখনো per-row detail endpoint call করবে না। List এ দেখানোর জন্য যা দরকার — names, numbers, status, quantities — সব list endpoint থেকেই আসবে।
+
+Backend bulk fetch করে সব FK resolve করে দেবে। Frontend শুধু render করবে।
+
+---
+
+### Rule 4 — MCP vs Migration — সঠিক পথে কাজ করো
+
+| কাজের ধরন | কোথায় করবে |
+|-----------|------------|
+| Table create/alter, constraint, index, function, trigger | **Migration file** |
+| Document number range config, system design seed data | **Migration file** |
+| User setup, ACL snapshot regenerate, business data fix | **MCP direct SQL** (dev ও prod আলাদাভাবে) |
+
+Migration file PR এর সাথে travel করে → prod deploy এ automatically apply হয়।
+MCP change শুধু যে DB তে run করা হয় সেখানেই থাকে।
+
+---
+
+### Rule 5 — Report ও Heavy Query Pages এ SAP Selection Screen Pattern Mandatory
+
+**কোন pages এ এই pattern লাগবে:**
+
+যেসব page এ criteria ছাড়া data load করলে potentially বড় result set আসতে পারে, বা user কে আগে context দিতে হয় — সেসব page এ criteria-first pattern mandatory।
+
+| Page type | উদাহরণ | Pattern |
+|-----------|--------|---------|
+| Stock reports | Stock Ledger, MMBE, Valuation | Criteria → Execute → Results |
+| Movement reports | Stock movement history, Document flow | Criteria → Execute → Results |
+| Planning views | Procurement Planning, Production Planning | Criteria → Execute → Results |
+| Production PO create/edit | ZCoR1 equivalent | Criteria screen → PO form |
+| Physical Inventory | PID create, PID document list | Criteria → Execute → Results |
+| Financial reports | Costing report, Period valuation | Criteria → Execute → Results |
+
+**Simple registers (auto-load ঠিক আছে):** GE Register, PO Register, GRN Register, CSN Register — এগুলোতে company filter আছে, server-side paginated, তাই criteria screen দরকার নেই।
+
+**Pattern rules:**
+1. Page খুলবে criteria form নিয়ে — data load হবে না
+2. User criteria fill করবে → F8 বা "Execute" button চাপবে → তখন data fetch হবে
+3. Results screen এ "Change Criteria" বা ESC চাপলে criteria form এ ফিরে যাবে
+4. Criteria reusable component: `ErpSelectionScreen` (criteria state + results state)
+5. F8 = Execute keyboard shortcut সব selection screen এ থাকবে
+
+**Implementation:** `ErpSelectionScreen` component — `docs/PACE_ERP_UI_PATTERNS.md` তে full spec।
+
+---
+
 ## PART 2 — COST CONTROL & BACKEND RULEBOOK
 
 # ERP MASTER GUIDE

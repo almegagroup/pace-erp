@@ -185,6 +185,22 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_GATE_EXIT: {
+    screen_code: "PROC_GATE_EXIT",
+    route: "/dashboard/procurement/gate-exit",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_GATE_REPORT: {
+    screen_code: "PROC_GATE_REPORT",
+    route: "/dashboard/procurement/gate-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_GRN_LIST: {
     screen_code: "PROC_GRN_LIST",
     route: "/dashboard/procurement/grns",
@@ -201,17 +217,17 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  PROC_QA_QUEUE: {
-    screen_code: "PROC_QA_QUEUE",
-    route: "/dashboard/procurement/qa-queue",
+  PROC_GRN_POST_FLOW: {
+    screen_code: "PROC_GRN_POST_FLOW",
+    route: "/dashboard/procurement/grns/post",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
 
-  PROC_QA_DOCUMENT: {
-    screen_code: "PROC_QA_DOCUMENT",
-    route: "/dashboard/procurement/qa-documents/:id",
+  PROC_QA_QUEUE: {
+    screen_code: "PROC_QA_QUEUE",
+    route: "/dashboard/procurement/qa-queue",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
@@ -449,6 +465,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_OPENING_STOCK_APPROVAL: {
+    screen_code: "PROC_OPENING_STOCK_APPROVAL",
+    route: "/dashboard/procurement/opening-stock/approval",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_PI_LIST: {
     screen_code: "PROC_PI_LIST",
     route: "/dashboard/procurement/physical-inventory",
@@ -658,9 +682,65 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROD_SFG_RESULT_RECORDING: {
+    screen_code: "PROD_SFG_RESULT_RECORDING",
+    route: "/dashboard/production/sfg-result-recording",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROD_BATCH_RELEASE: {
     screen_code: "PROD_BATCH_RELEASE",
     route: "/dashboard/production/batch-release",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_FG_STOCK_BREAKDOWN: {
+    screen_code: "PROD_FG_STOCK_BREAKDOWN",
+    route: "/dashboard/production/fg-stock-breakdown",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_PARTIAL_BATCH_REVERSAL: {
+    screen_code: "PROD_PARTIAL_BATCH_REVERSAL",
+    route: "/dashboard/production/partial-batch-reversal",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_PARTIAL_REVERSAL_REPORT: {
+    screen_code: "PROD_PARTIAL_REVERSAL_REPORT",
+    route: "/dashboard/production/partial-reversal-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  ACC_CONVERSION_COST: {
+    screen_code: "ACC_CONVERSION_COST",
+    route: "/dashboard/production/conversion-cost",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_OLD_PROCESS_PO: {
+    screen_code: "PROD_OLD_PROCESS_PO",
+    route: "/dashboard/production/old-process-po",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_OLD_PACKING_PO: {
+    screen_code: "PROD_OLD_PACKING_PO",
+    route: "/dashboard/production/old-packing-po",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

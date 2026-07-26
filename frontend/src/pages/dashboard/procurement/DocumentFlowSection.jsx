@@ -20,7 +20,7 @@ const DOC_TYPE_CONFIG = {
   CSN: { label: "CSN", screen: "PROC_CSN_DETAIL", path: "/dashboard/procurement/csns", bg: "bg-violet-100", text: "text-violet-800" },
   GATE_ENTRY: { label: "Gate Entry", screen: "PROC_GATE_ENTRY_DETAIL", path: "/dashboard/procurement/gate-entries", bg: "bg-slate-100", text: "text-slate-700" },
   GRN: { label: "GRN", screen: "PROC_GRN_DETAIL", path: "/dashboard/procurement/grns", bg: "bg-emerald-100", text: "text-emerald-800" },
-  QA: { label: "QA", screen: "PROC_QA_DOCUMENT", path: "/dashboard/procurement/qa-documents", bg: "bg-amber-100", text: "text-amber-800" },
+  QA: { label: "QA", screen: "PROC_QA_QUEUE", path: "/dashboard/procurement/qa-queue", bg: "bg-amber-100", text: "text-amber-800" },
   IV: { label: "Invoice Verif", screen: "PROC_IV_DETAIL", path: "/dashboard/procurement/accounts/invoice-verifications", bg: "bg-blue-100", text: "text-blue-800" },
   LANDED_COST: { label: "Landed Cost", screen: "PROC_LC_DETAIL", path: "/dashboard/procurement/accounts/landed-costs", bg: "bg-indigo-100", text: "text-indigo-800" },
   RTV: { label: "RTV", screen: "PROC_RTV_DETAIL", path: "/dashboard/procurement/rtvs", bg: "bg-orange-100", text: "text-orange-800" },
@@ -65,6 +65,11 @@ export default function DocumentFlowSection({ docType, docId }) {
     if (!cfg) return;
     const screen = OPERATION_SCREENS[cfg.screen];
     if (screen) openScreen(screen.screen_code);
+    // QA has no standalone detail route — the queue page opens the matching row inline.
+    if (node.doc_type === "QA") {
+      navigate(`${cfg.path}?qa_id=${encodeURIComponent(node.id)}`);
+      return;
+    }
     navigate(`${cfg.path}/${node.id}`);
   }
 

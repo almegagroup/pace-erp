@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -7,12 +8,15 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
-  createGRNDraft,
   createGateExitInbound,
   getGateEntry,
+  pruneGateEntry,
 } from "../procurementApi.js";
 
 function statusTone(status) {
@@ -22,6 +26,9 @@ function statusTone(status) {
       return "emerald";
     case "OPEN":
       return "sky";
+    case "PRUNED":
+    case "CANCELLED":
+      return "rose";
     default:
       return "slate";
   }
@@ -32,8 +39,9 @@ export default function GateEntryDetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
-  const { runtimeContext } = useMenu();
-  const [detail, setDetail] = useState(null);
+  const { runtimeContext, allowedRoutes } = useMenu();
+  const canPruneGe = isRouteAllowed(allowedRoutes ?? new Set(), "/dashboard/procurement/grns/:id");
+  const queryClient = useQueryClient();
   const [gateExitForm, setGateExitForm] = useState({
     exit_date: new Date().toISOString().slice(0, 10),
     exit_time: "",
@@ -42,38 +50,31 @@ export default function GateEntryDetailPage() {
     rst_number_tare: "",
     remarks: "",
   });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   void runtimeContext;
 
+  const { data: detail, isLoading: loading, error: queryError } = useQuery({
+    queryKey: ["procurement", "ge-detail", id],
+    enabled: Boolean(id),
+    queryFn: () => getGateEntry(id),
+  });
+
+  const fetchError = queryError instanceof Error ? queryError.message : (queryError ? "GE_FETCH_FAILED" : "");
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void queryClient.invalidateQueries({ queryKey: ["procurement", "ge-detail", id] }),
+    },
+  });
+
   const hasGateExit = Boolean(detail?.gate_exit_inbound?.id);
   const weightedInbound = useMemo(
-    () =>
-      Array.isArray(detail?.lines) &&
-      detail.lines.some((line) => Number(line.gross_weight ?? 0) > 0),
+    () => Array.isArray(detail?.lines) && detail.lines.some((line) => Number(line.gross_weight ?? 0) > 0),
     [detail?.lines]
   );
-
-  const loadDetail = useCallback(async () => {
-    if (!id) return;
-    setLoading(true);
-    setError("");
-    try {
-      const data = await getGateEntry(id);
-      setDetail(data);
-    } catch (loadError) {
-      setDetail(null);
-      setError(loadError instanceof Error ? loadError.message : "GE_FETCH_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }, [id]);
-
-  useEffect(() => {
-    void loadDetail();
-  }, [loadDetail]);
 
   async function handleCreateGateExit() {
     if (!detail?.id) return;
@@ -124,18 +125,41 @@ export default function GateEntryDetailPage() {
       navigate(`/dashboard/procurement/grns/${encodeURIComponent(existingGrnId)}`);
       return;
     }
+    openScreen(OPERATION_SCREENS.PROC_GRN_POST_FLOW.screen_code);
+    navigate("/dashboard/procurement/grns/post");
+  }
+
+  async function handlePrune() {
+    if (!detail?.id) return;
+    const linkedGrns = Array.isArray(detail.linked_grns) ? detail.linked_grns : [];
+    const blockedGrns = linkedGrns.filter((g) => String(g.status || "").toUpperCase() !== "REVERSED");
+    if (blockedGrns.length > 0) {
+      const blockedList = blockedGrns.map((g) => g.grn_number).join(", ");
+      await openActionConfirm({
+        eyebrow: "Cannot Prune",
+        title: "Linked GRNs must be reversed first",
+        message: `The following GRN(s) are linked to this Gate Entry and have not been reversed yet. Reverse them before pruning.\n\nPending: ${blockedList}`,
+        confirmLabel: "OK",
+        cancelLabel: null,
+      });
+      return;
+    }
+    const confirmed = await openActionConfirm({
+      eyebrow: "GE Prune",
+      title: `Prune Gate Entry ${detail.ge_number}?`,
+      message: "GE will be marked PRUNED. All linked CSNs will be released back to their previous status. Serial number stays occupied. This cannot be undone.",
+      confirmLabel: "Prune GE",
+    });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");
     try {
-      const created = await createGRNDraft({ gate_entry_id: detail.id });
-      setNotice("GRN draft created.");
-      openScreen(OPERATION_SCREENS.PROC_GRN_DETAIL.screen_code);
-      navigate(`/dashboard/procurement/grns/${encodeURIComponent(created.id)}`);
+      const pruned = await pruneGateEntry(detail.id);
+      queryClient.setQueryData(["procurement", "ge-detail", id], pruned);
+      setNotice("Gate entry pruned. CSNs have been released.");
     } catch (saveError) {
-      setError(
-        saveError instanceof Error ? saveError.message : "GRN_CREATE_FAILED"
-      );
+      setError(saveError instanceof Error ? saveError.message : "GE_PRUNE_FAILED");
     } finally {
       setSaving(false);
     }
@@ -158,8 +182,8 @@ export default function GateEntryDetailPage() {
       eyebrow="Procurement"
       title="Gate Entry Detail"
       notices={[
-        ...(error
-          ? [{ key: "ge-detail-error", tone: "error", message: error }]
+        ...(fetchError || error
+          ? [{ key: "ge-detail-error", tone: "error", message: fetchError || error }]
           : []),
         ...(notice
           ? [{ key: "ge-detail-notice", tone: "success", message: notice }]
@@ -167,6 +191,9 @@ export default function GateEntryDetailPage() {
       ]}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
+        ...(canPruneGe && !["PRUNED", "CANCELLED"].includes(String(detail?.status || "").toUpperCase())
+          ? [{ key: "prune", label: saving ? "Pruning..." : "Prune GE", tone: "danger", onClick: () => void handlePrune(), disabled: saving }]
+          : []),
       ]}
     >
       {loading || !detail ? (
@@ -187,7 +214,7 @@ export default function GateEntryDetailPage() {
                 value={detail.status || "—"}
                 tone={statusTone(detail.status)}
               />
-              <ErpFieldPreview label="Gate Staff" value={detail.gate_staff_id || "—"} />
+              <ErpFieldPreview label="Remarks" value={detail.remarks || "—"} />
               <ErpFieldPreview label="GE Type" value={detail.ge_type || "—"} />
             </div>
           </ErpSectionCard>
@@ -196,7 +223,7 @@ export default function GateEntryDetailPage() {
             <ErpDenseGrid
               columns={[
                 { key: "line_number", label: "Line", width: "70px" },
-                { key: "material_id", label: "Material", width: "180px" },
+                { key: "material_name", label: "Material", width: "220px", render: (row) => row.material_name || "—" },
                 {
                   key: "linked_csn",
                   label: "CSN",
@@ -358,6 +385,45 @@ export default function GateEntryDetailPage() {
               </div>
             )}
           </ErpSectionCard>
+
+          {Array.isArray(detail.linked_grns) && detail.linked_grns.length > 0 && (
+            <ErpSectionCard eyebrow="Linked GRNs" title="Goods receipts linked to this gate entry">
+              <ErpDenseGrid
+                columns={[
+                  { key: "grn_number", label: "GRN Number", width: "160px" },
+                  {
+                    key: "status",
+                    label: "Status",
+                    width: "140px",
+                    render: (row) => {
+                      const s = String(row.status || "").toUpperCase();
+                      const tone =
+                        s === "REVERSED" ? "bg-rose-100 text-rose-800" :
+                        s === "POSTED" ? "bg-emerald-100 text-emerald-800" :
+                        "bg-amber-100 text-amber-800";
+                      return (
+                        <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${tone}`}>
+                          {row.status}
+                        </span>
+                      );
+                    },
+                  },
+                  {
+                    key: "prune_block",
+                    label: "",
+                    width: "200px",
+                    render: (row) =>
+                      String(row.status || "").toUpperCase() !== "REVERSED" ? (
+                        <span className="text-[11px] text-rose-600 font-medium">Must reverse before prune</span>
+                      ) : null,
+                  },
+                ]}
+                rows={detail.linked_grns}
+                rowKey={(row) => row.id}
+                emptyMessage="No GRNs linked."
+              />
+            </ErpSectionCard>
+          )}
 
           <ErpSectionCard eyebrow="GRN" title="Goods receipt">
             {hasGateExit ? (

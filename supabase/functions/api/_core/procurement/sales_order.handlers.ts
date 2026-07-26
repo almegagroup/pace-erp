@@ -10,7 +10,9 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -89,10 +91,14 @@ function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline/ACL layer.
 }
 
-function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): string {
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
+async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
@@ -421,13 +427,18 @@ export async function createSOHandler(
   try {
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     const customerId = toTrimmedString(body.customer_id);
     const customerPoNumber = toTrimmedString(body.customer_po_number);
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
 
     if (!companyId || !customerId || !customerPoNumber || lines.length === 0) {
       return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id, customer_id, customer_po_number, and at least one line are required.");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const linePayload: JsonRecord[] = [];
@@ -507,7 +518,7 @@ export async function createSOHandler(
   } catch (error) {
     const code = error instanceof Error ? error.message : "SO_CREATE_FAILED";
     const message = code === "ONLY_RM_PM_ALLOWED" ? "Only RM/PM materials allowed in Sales Order" : code;
-    const status = code === "MATERIAL_NOT_FOUND" ? 404 : code === "ONLY_RM_PM_ALLOWED" ? 400 : 500;
+    const status = code === "MATERIAL_NOT_FOUND" ? 404 : code === "ONLY_RM_PM_ALLOWED" ? 400 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return salesErrorResponse(req, ctx, code, status, message);
   }
 }
@@ -519,7 +530,7 @@ export async function listSOsHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const customerId = toTrimmedString(url.searchParams.get("customer_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
@@ -547,7 +558,7 @@ export async function listSOsHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SO_LIST_FAILED";
-    return salesErrorResponse(req, ctx, code, 500, code);
+    return salesErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 
@@ -693,6 +704,11 @@ export async function issueSOStockHandler(
     const dispatchResults: Array<{ soLine: SoLineRow; issueQty: number; stockDocumentId: string; netRate: number }> = [];
     let totalDispatchQty = 0;
 
+    // §106: one Material Document (MBLNR+MJAHR) for this whole SO issue event; the SO
+    // business number becomes the reference. Shared by every issued line.
+    const soMatDoc = await generateMaterialDocNumber(String(so.company_id));
+
+    // DEPENDENT: each issue line posts stock and updates remaining SO balances, so later lines must see the committed prior reductions.
     for (const requestLine of requestedLines) {
       const soLineId = toTrimmedString(requestLine.so_line_id);
       const issueQty = parsePositiveNumber(requestLine.qty ?? requestLine.quantity);
@@ -755,6 +771,11 @@ export async function issueSOStockHandler(
           p_direction: "OUT",
           p_posted_by: ctx.auth_user_id,
           p_reversal_of_id: null,
+          p_material_doc_number: soMatDoc.docNumber,
+          p_material_doc_year: soMatDoc.docYear,
+          p_reference_document_number: String(so.so_number),
+          p_reference_document_type: "SO",
+          p_reference_document_id: so.id ?? null,
         });
 
       if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {
@@ -990,7 +1011,7 @@ export async function createSalesInvoiceHandler(
       return salesErrorResponse(req, ctx, "SALES_INVOICE_DC_TYPE_INVALID", 400, "Only SALES delivery challans can create sales invoices.");
     }
 
-    const companyId = getCompanyScope(ctx, String(dc.selling_company_id));
+    const companyId = await getCompanyScope(ctx, String(dc.selling_company_id));
     if (companyId && companyId !== toTrimmedString(dc.selling_company_id)) {
       return salesErrorResponse(req, ctx, "SALES_INVOICE_SCOPE_VIOLATION", 403, "Delivery challan is outside current company scope.");
     }
@@ -1035,16 +1056,24 @@ export async function createSalesInvoiceHandler(
       return salesErrorResponse(req, ctx, "SALES_INVOICE_CREATE_FAILED", 500, "Unable to create sales invoice.");
     }
 
+    const soLineIds = Array.from(new Set(dcLines.map((dcLine) => toTrimmedString(dcLine.so_line_id)).filter(Boolean)));
+    const { data: soLineRows, error: soLineError } = soLineIds.length > 0
+      ? await serviceRoleClient
+        .schema("erp_procurement")
+        .from("sales_order_line")
+        .select("*")
+        .in("id", soLineIds)
+      : { data: [], error: null };
+    if (soLineError) {
+      return salesErrorResponse(req, ctx, "SALES_INVOICE_CREATE_FAILED", 500, "Unable to load source sales order lines.");
+    }
+    const soLineMap = new Map(
+      ((soLineRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]),
+    );
+
     const linePayload: JsonRecord[] = [];
     for (const dcLine of dcLines) {
-      const soLine = dcLine.so_line_id
-        ? (await serviceRoleClient
-            .schema("erp_procurement")
-            .from("sales_order_line")
-            .select("*")
-            .eq("id", String(dcLine.so_line_id))
-            .maybeSingle()).data ?? null
-        : null;
+      const soLine = dcLine.so_line_id ? soLineMap.get(String(dcLine.so_line_id)) ?? null : null;
       const rate = parseNullableNumber(soLine?.net_rate) ?? parseNullableNumber(dcLine.unit_value) ?? 0;
       const quantity = parsePositiveNumber(dcLine.quantity) ?? 0;
       const taxableValue = Number((quantity * rate).toFixed(4));
@@ -1084,7 +1113,7 @@ export async function createSalesInvoiceHandler(
     return okResponse(await hydrateSalesInvoice(String(invoice.id), ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SALES_INVOICE_CREATE_FAILED";
-    const status = ["DC_NOT_FOUND"].includes(code) ? 404 : ["SALES_INVOICE_SCOPE_VIOLATION"].includes(code) ? 403 : 500;
+    const status = ["DC_NOT_FOUND"].includes(code) ? 404 : ["SALES_INVOICE_SCOPE_VIOLATION", "COMPANY_SCOPE_VIOLATION"].includes(code) ? 403 : 500;
     return salesErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -1096,7 +1125,7 @@ export async function listSalesInvoicesHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const customerId = toTrimmedString(url.searchParams.get("customer_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
@@ -1124,7 +1153,7 @@ export async function listSalesInvoicesHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SALES_INVOICE_LIST_FAILED";
-    return salesErrorResponse(req, ctx, code, 500, code);
+    return salesErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 
@@ -1166,12 +1195,11 @@ export async function postSalesInvoiceHandler(
       return salesErrorResponse(req, ctx, "SALES_INVOICE_EMPTY", 400, "Sales invoice has no lines.");
     }
 
-    let totalTaxableValue = 0;
-    let totalCgstAmount = 0;
-    let totalSgstAmount = 0;
-    let totalIgstAmount = 0;
-
-    for (const line of lines) {
+    // Per-line recompute is independent (each line's totals only depend on its own
+    // quantity/rate/gst_rate, already fetched) — compute all lines synchronously
+    // first, then fire the per-line updates in parallel, then sum in-memory
+    // (addition is order-independent, unlike a DB-read running balance).
+    const lineComputations = lines.map((line) => {
       const quantity = parsePositiveNumber(line.quantity) ?? 0;
       const rate = parsePositiveNumber(line.rate) ?? 0;
       const taxableValue = Number((quantity * rate).toFixed(4));
@@ -1181,23 +1209,36 @@ export async function postSalesInvoiceHandler(
       const sgstAmount = toUpperTrimmedString(invoice.gst_type) === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : null;
       const igstAmount = toUpperTrimmedString(invoice.gst_type) === "IGST" ? gstAmount : null;
       const lineTotal = Number((taxableValue + gstAmount).toFixed(4));
+      return { line, taxableValue, cgstAmount, sgstAmount, igstAmount, lineTotal };
+    });
 
-      const { error: lineUpdateError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("sales_invoice_line")
-        .update({
-          taxable_value: taxableValue,
-          cgst_amount: cgstAmount,
-          sgst_amount: sgstAmount,
-          igst_amount: igstAmount,
-          line_total: lineTotal,
-        })
-        .eq("id", String(line.id));
+    const lineUpdateErrors = await Promise.all(
+      lineComputations.map(async ({ line, taxableValue, cgstAmount, sgstAmount, igstAmount, lineTotal }) => {
+        const { error } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("sales_invoice_line")
+          .update({
+            taxable_value: taxableValue,
+            cgst_amount: cgstAmount,
+            sgst_amount: sgstAmount,
+            igst_amount: igstAmount,
+            line_total: lineTotal,
+          })
+          .eq("id", String(line.id));
+        return error;
+      }),
+    );
 
-      if (lineUpdateError) {
-        return salesErrorResponse(req, ctx, "SALES_INVOICE_LINE_UPDATE_FAILED", 500, "Unable to recompute sales invoice line totals.");
-      }
+    if (lineUpdateErrors.some(Boolean)) {
+      return salesErrorResponse(req, ctx, "SALES_INVOICE_LINE_UPDATE_FAILED", 500, "Unable to recompute sales invoice line totals.");
+    }
 
+    let totalTaxableValue = 0;
+    let totalCgstAmount = 0;
+    let totalSgstAmount = 0;
+    let totalIgstAmount = 0;
+
+    for (const { taxableValue, cgstAmount, sgstAmount, igstAmount } of lineComputations) {
       totalTaxableValue += taxableValue;
       totalCgstAmount += cgstAmount ?? 0;
       totalSgstAmount += sgstAmount ?? 0;

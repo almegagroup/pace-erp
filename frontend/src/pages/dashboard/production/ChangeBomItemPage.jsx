@@ -2,30 +2,51 @@
  * File-ID: 27.FE-PR03
  * File-Path: frontend/src/pages/dashboard/production/ChangeBomItemPage.jsx
  * Gate: 27 | Domain: PRODUCTION
- * Purpose: L1/L2 Manager creates a material-substitution Change Request on an ACTIVE Stroke.
- *          Does NOT modify the live stroke — creates a DRAFT for L3 Manager approval (PR04).
+ * Purpose: L1/L2 Manager creates a material-substitution Change Request on an
+ *          ACTIVE Stroke. Does NOT modify the live stroke — creates a DRAFT
+ *          for L3 Manager approval (PR04). Per 83.3 PR03 (LOCKED 2026-06-30):
+ *          only Item / Has Alternate / Material Group can change — Dosage%,
+ *          Material Type, PO Type, Prod/Shade and Stroke Number are locked.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import { listStrokeMasters, createStrokeChangeRequest } from "./prodApi.js";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
+import { useMenu } from "../../../context/useMenu.js";
+import { listStrokeMasters, getStrokeMaster, createStrokeChangeRequest } from "./prodApi.js";
+import { listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember } from "../om/omApi.js";
+import { friendlyStrokeErr, ChangeBomLinesTable, GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 
-const ERRORS = {
-  PROD_SCR_INVALID:           "stroke_master_id and company_id required.",
-  PROD_SCR_NO_LINES:          "At least one line change is required.",
-  PROD_SCR_STROKE_NOT_ACTIVE: "Stroke must be APPROVED (active) to create a change request.",
-  PROD_SCR_ALREADY_PENDING:   "A pending change request already exists for this stroke.",
-  PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
-};
-function friendly(code) { return ERRORS[code] ?? code; }
+function prodshadeLabel(s) {
+  if (s.material) return `${s.material.pace_code ?? "—"} — ${s.material.material_name ?? "—"}`;
+  return `#${s.stroke_number}`;
+}
 
 export default function ChangeBomItemPage() {
   const qc = useQueryClient();
+  const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
+  const [companyInitialized, setCompanyInitialized] = useState(false);
   const [selectedStrokeId, setSelectedStrokeId] = useState("");
-  const [editedLines, setEditedLines] = useState([]);
+  const [changeLines, setChangeLines] = useState([]);
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
+  const [loadingLines, setLoadingLines] = useState(false);
+
+  const [groupModal, setGroupModal] = useState(null);
+  const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
+  const [memberModal, setMemberModal] = useState(null);
+  const [memberMaterialId, setMemberMaterialId] = useState("");
+
+  useEffect(() => {
+    if (companyInitialized) return;
+    const defaultId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (!defaultId) return;
+    setCompanyId(defaultId);
+    setCompanyInitialized(true);
+  }, [companyInitialized, runtimeContext]);
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -35,40 +56,68 @@ export default function ChangeBomItemPage() {
   const strokesQ = useQuery({
     queryKey: ["stroke-cr-strokes", companyId],
     queryFn: () => listStrokeMasters({ company_id: companyId || undefined, status: "APPROVED" }),
-    enabled: companyId.length > 10,
+    enabled: Boolean(companyId),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
-
   const strokes = strokesQ.data ?? [];
-  const selectedStroke = strokes.find((s) => s.id === selectedStrokeId) ?? null;
+  const strokeOptions = strokes.map((s) => ({ value: s.id, label: `${prodshadeLabel(s)} — stroke #${s.stroke_number}` }));
 
-  function handleStrokeChange(e) {
-    const id = e.target.value;
+  const groupsQ = useQuery({ queryKey: ["om-material-groups"], queryFn: () => listMaterialCategoryGroups(), select: (d) => d?.data ?? [] });
+  const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 500 }), select: (d) => d?.data ?? [] });
+  const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 500 }), select: (d) => d?.data ?? [] });
+  const groups = groupsQ.data ?? [];
+  const lineMaterialsByType = { RM: rmMaterialsQ.data ?? [], INT: intMaterialsQ.data ?? [] };
+
+  async function handleStrokeChange(id) {
     setSelectedStrokeId(id);
-    const stroke = strokes.find((s) => s.id === id);
-    if (stroke?.lines) {
-      setEditedLines(
-        stroke.lines.map((l) => ({
-          stroke_line_id: l.id,
-          current_material_pace: l.material?.pace_code ?? l.material_id?.slice(0, 8),
-          current_material_name: l.material?.material_name ?? "",
-          dosage_pct: l.dosage_pct,
-          new_material_id: "",
-          new_has_alternate: Boolean(l.alternate_material_id),
-          changed: false,
-        }))
-      );
-    } else {
-      setEditedLines([]);
+    setChangeLines([]);
+    if (!id) return;
+    setLoadingLines(true);
+    try {
+      const detail = await getStrokeMaster(id);
+      setChangeLines((detail.lines ?? []).map((l) => ({
+        stroke_line_id: l.id,
+        line_material_type: l.line_material_type ?? "RM",
+        current_material_id: l.material_id,
+        current_group_id: l.material_group_id ?? "",
+        dosage_pct: l.dosage_pct,
+        new_material_id: l.material_id,
+        new_has_alternate: Boolean(l.material_group_id),
+        new_group_id: l.material_group_id ?? "",
+      })));
+    } catch {
+      toast("Failed to load stroke lines.", "error");
+    } finally {
+      setLoadingLines(false);
     }
   }
 
-  function updateLine(idx, field, value) {
-    setEditedLines((prev) =>
-      prev.map((l, i) =>
-        i === idx ? { ...l, [field]: value, changed: true } : l
-      )
-    );
+  function openCreateGroupModal(onCreated) {
+    setGroupForm({ group_name: "", description: "" });
+    setGroupModal({ onCreated });
+  }
+
+  async function handleCreateGroup() {
+    if (!groupForm.group_name.trim()) { toast("Group name required.", "error"); return; }
+    try {
+      const res = await createMaterialCategoryGroup(groupForm);
+      const newGroup = res?.data ?? res;
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Material group created.");
+      groupModal?.onCreated?.(newGroup.id);
+      setGroupModal(null);
+    } catch (err) { toast(friendlyStrokeErr(err.code) || err.message, "error"); }
+  }
+
+  async function handleAddMember() {
+    if (!memberMaterialId) { toast("Select a material first.", "error"); return; }
+    try {
+      await addMaterialCategoryMember({ group_id: memberModal, material_id: memberMaterialId });
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Member added.");
+      setMemberModal(null);
+      setMemberMaterialId("");
+    } catch (err) { toast(friendlyStrokeErr(err.code) || err.message, "error"); }
   }
 
   const submitMutation = useMutation({
@@ -76,30 +125,34 @@ export default function ChangeBomItemPage() {
     onSuccess: () => {
       toast("Change request created — awaiting L3 Manager approval.");
       setSelectedStrokeId("");
-      setEditedLines([]);
+      setChangeLines([]);
       qc.invalidateQueries({ queryKey: ["stroke-cr-strokes"] });
     },
-    onError: (err) => toast(friendly(err.message), "error"),
+    onError: (err) => toast(friendlyStrokeErr(err.code) || err.message, "error"),
   });
 
   function handleSubmit() {
-    if (!selectedStroke || !companyId) {
+    if (!selectedStrokeId || !companyId) {
       toast("Select a company and stroke first.", "error");
       return;
     }
-    const changedLines = editedLines.filter((l) => l.changed && l.new_material_id.length > 10);
-    if (changedLines.length === 0) {
-      toast("Enter at least one new material UUID before submitting.", "error");
+    const hasChange = changeLines.some((l) =>
+      l.new_material_id !== l.current_material_id ||
+      Boolean(l.new_has_alternate) !== Boolean(l.current_group_id) ||
+      l.new_group_id !== l.current_group_id,
+    );
+    if (!hasChange) {
+      toast("Change at least one line before submitting.", "error");
       return;
     }
     submitMutation.mutate({
       stroke_master_id: selectedStrokeId,
       company_id: companyId,
-      lines: changedLines.map((l) => ({
+      lines: changeLines.map((l) => ({
         stroke_line_id: l.stroke_line_id,
-        new_material_id: l.new_material_id.trim(),
+        new_material_id: l.new_material_id,
         new_has_alternate: l.new_has_alternate,
-        new_group_id: null,
+        new_group_id: l.new_has_alternate ? (l.new_group_id || null) : null,
       })),
     });
   }
@@ -107,107 +160,76 @@ export default function ChangeBomItemPage() {
   return (
     <ErpScreenScaffold
       title="Change BOM Item — PR03"
-      subtitle="Substitute RM/INT materials on an ACTIVE Stroke — creates a Change Request for L3 Manager approval"
+      subtitle="Substitute RM/INT materials on an ACTIVE Stroke. Dosage%, Material Type, Prodshade and Stroke Number are locked."
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Select Stroke">
         <div className="flex gap-3 flex-wrap items-end">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Company ID</label>
-            <input
-              className="border border-slate-300 rounded px-2 py-1.5 text-sm w-72 font-mono"
-              placeholder="Paste company UUID…"
-              value={companyId}
-              onChange={(e) => setCompanyId(e.target.value)}
+          <div className="w-64">
+            <TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={setCompanyId} label="Company" />
+          </div>
+          <div className="w-96">
+            <label className="text-xs text-slate-500 block mb-1">Stroke (APPROVED only)</label>
+            <ErpComboboxField
+              value={selectedStrokeId}
+              onChange={handleStrokeChange}
+              options={strokeOptions}
+              placeholder="-- Select stroke --"
+              emptyStateLabel="No APPROVED strokes for this company"
+              disabled={!companyId}
             />
           </div>
-          {strokes.length > 0 && (
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-slate-500">Stroke (APPROVED only)</label>
-              <select
-                className="border border-slate-300 rounded px-2 py-1.5 text-sm w-80"
-                value={selectedStrokeId}
-                onChange={handleStrokeChange}
-              >
-                <option value="">— Select stroke —</option>
-                {strokes.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    #{s.stroke_number} — {s.description ?? "No description"} ({s.material?.pace_code ?? "?"})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
           {strokesQ.isLoading && <p className="text-sm text-slate-400">Loading strokes…</p>}
-          {companyId.length > 10 && !strokesQ.isLoading && strokes.length === 0 && (
-            <p className="text-sm text-slate-400">No APPROVED strokes found for this company.</p>
-          )}
         </div>
       </ErpSectionCard>
 
-      {selectedStroke && (
-        <ErpSectionCard title={`RM Lines — Stroke #${selectedStroke.stroke_number}`}>
-          <p className="text-xs text-slate-500 mb-3">
-            Enter the new material UUID for lines you want to change. Leave blank to keep the current material.
-            Dosage percentages cannot be changed here.
-          </p>
-          {editedLines.length === 0 ? (
-            <p className="text-slate-400 text-sm py-4 text-center">This stroke has no RM lines.</p>
+      {selectedStrokeId && (
+        <ErpSectionCard title="RM / INT Lines — Current vs Proposed" className="overflow-x-visible">
+          {loadingLines ? (
+            <p className="text-slate-400 text-sm py-4 text-center">Loading…</p>
+          ) : changeLines.length === 0 ? (
+            <p className="text-slate-400 text-sm py-4 text-center">This stroke has no RM/INT lines.</p>
           ) : (
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
-                  <th className="text-left py-2 px-3 border-b">#</th>
-                  <th className="text-left py-2 px-3 border-b">Current Material</th>
-                  <th className="text-right py-2 px-3 border-b">Dosage %</th>
-                  <th className="text-left py-2 px-3 border-b">New Material UUID</th>
-                  <th className="text-left py-2 px-3 border-b">Has Alt.</th>
-                </tr>
-              </thead>
-              <tbody>
-                {editedLines.map((l, idx) => (
-                  <tr key={l.stroke_line_id} className={`border-b border-slate-100 ${l.changed ? "bg-sky-50" : ""}`}>
-                    <td className="py-2 px-3 text-slate-400">{idx + 1}</td>
-                    <td className="py-2 px-3">
-                      <span className="font-mono font-medium text-xs">{l.current_material_pace}</span>
-                      {l.current_material_name && (
-                        <span className="text-slate-400 ml-1 text-xs">— {l.current_material_name}</span>
-                      )}
-                    </td>
-                    <td className="py-2 px-3 text-right font-mono">{Number(l.dosage_pct).toFixed(2)}%</td>
-                    <td className="py-2 px-3">
-                      <input
-                        className="border border-slate-300 rounded px-2 py-1 text-xs font-mono w-64"
-                        placeholder="Paste new material UUID…"
-                        value={l.new_material_id}
-                        onChange={(e) => updateLine(idx, "new_material_id", e.target.value)}
-                      />
-                    </td>
-                    <td className="py-2 px-3">
-                      <input
-                        type="checkbox"
-                        checked={l.new_has_alternate}
-                        onChange={(e) => updateLine(idx, "new_has_alternate", e.target.checked)}
-                        className="accent-sky-600"
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <ChangeBomLinesTable
+                lines={changeLines}
+                setLines={setChangeLines}
+                materialsByType={lineMaterialsByType}
+                groups={groups}
+                onCreateGroup={openCreateGroupModal}
+                onAddMember={(groupId) => setMemberModal(groupId)}
+                editable
+              />
+              <div className="mt-4 flex justify-end">
+                <button
+                  className="bg-sky-600 hover:bg-sky-700 text-white text-sm px-5 py-2 rounded disabled:opacity-50"
+                  onClick={handleSubmit}
+                  disabled={submitMutation.isPending}
+                >
+                  {submitMutation.isPending ? "Submitting…" : "Submit Change Request"}
+                </button>
+              </div>
+            </>
           )}
-
-          <div className="mt-4 flex justify-end">
-            <button
-              className="bg-sky-600 hover:bg-sky-700 text-white text-sm px-5 py-2 rounded disabled:opacity-50"
-              onClick={handleSubmit}
-              disabled={submitMutation.isPending}
-            >
-              {submitMutation.isPending ? "Submitting…" : "Submit Change Request"}
-            </button>
-          </div>
         </ErpSectionCard>
       )}
+
+      <GroupCreateModal
+        open={Boolean(groupModal)}
+        groupForm={groupForm}
+        setGroupForm={setGroupForm}
+        onCancel={() => setGroupModal(null)}
+        onCreate={handleCreateGroup}
+      />
+
+      <MemberAddModal
+        open={Boolean(memberModal)}
+        memberMaterialId={memberMaterialId}
+        setMemberMaterialId={setMemberMaterialId}
+        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
+        onCancel={() => setMemberModal(null)}
+        onAdd={handleAddMember}
+      />
     </ErpScreenScaffold>
   );
 }

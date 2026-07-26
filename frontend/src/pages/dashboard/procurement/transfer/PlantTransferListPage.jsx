@@ -19,6 +19,7 @@ import ErpMasterListTemplate from "../../../../components/templates/ErpMasterLis
 import { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { createPTO, listPTOs } from "../procurementApi.js";
@@ -98,6 +99,13 @@ export default function PlantTransferListPage() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
   const [formData, setFormData] = useState(() => buildInitialForm(selectedCompanyId));
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => setRefreshToken((value) => value + 1),
+    },
+  });
 
   const companies = runtimeContext?.availableCompanies ?? [];
   const companyOptions = useMemo(

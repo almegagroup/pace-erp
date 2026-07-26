@@ -46,3 +46,4 @@ repo-context/
 .claud*
 .claude/
 .mcp.json
+.mcp.codex.local.json

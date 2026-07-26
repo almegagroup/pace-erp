@@ -11,6 +11,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import {
   createTransporter,
   deleteTransporter,
@@ -72,6 +73,13 @@ export default function TransporterMasterPage() {
   const rows = transporterQuery.data ?? [];
   const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
   const loading = transporterQuery.isLoading || companiesQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void Promise.all([transporterQuery.refetch(), companiesQuery.refetch()]),
+    },
+  });
 
   function flash(msg, isError = false) {
     clearTimeout(noticeTimer.current);
@@ -168,7 +176,7 @@ export default function TransporterMasterPage() {
 
   async function handleCreate() {
     if (!form.transporter_name.trim()) { flash("Transporter name is required.", true); return; }
-    if (form.gstMode === "WITH_GST" && !form.gst_number.trim()) { flash("GST number is required for a GST-registered transporter.", true); return; }
+    if (form.gstMode === "WITH_GST" && !form.gst_number.trim()) { flash("GST number is required. If this transporter has no GST, click 'Without GST' above.", true); return; }
     setSaving(true);
     try {
       const saved = await createTransporter({
@@ -179,7 +187,7 @@ export default function TransporterMasterPage() {
         address: form.address.trim() || null,
       });
       setForm({ ...EMPTY_CREATE });
-      flash(`Transporter created: ${saved?.transporter_code ?? "TRN-generated"}`);
+      flash(`Transporter created: ${saved?.data?.transporter_code ?? saved?.transporter_code ?? "—"}`);
       await Promise.all([transporterQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_TRANSPORTER_SAVE_FAILED"), true);

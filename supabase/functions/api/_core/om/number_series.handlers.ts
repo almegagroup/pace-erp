@@ -12,6 +12,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
 import { assertOmAdminContext, assertOmSaContext } from "./shared.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -71,6 +72,11 @@ export async function createNumberSeriesHandler(
 
     if (!companyId || !documentType || !prefix || !Number.isFinite(numberPadding) || numberPadding < 1) {
       return numberSeriesErrorResponse(req, ctx, "OM_NUMBER_SERIES_CREATE_FAILED", 400, "Invalid number series input");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return numberSeriesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const { data: existing, error: existingError } = await serviceRoleClient

@@ -193,7 +193,11 @@ async function fetchLiveRuntimeSnapshot() {
       erpUiMode: "blocking",
       erpUiLabel: "Refreshing workspace shell",
     }),
-    fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+    // ?refresh=1 bypasses the server-side menu snapshot cache. This call is the
+    // deliberate "give me the live shell" path, so it must not be served stale.
+    // Ordinary page navigation hits /api/me/menu without it and gets the cached
+    // copy (the snapshot rebuild costs ~7.3s, so it must not run per screen).
+    fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu?refresh=1`, {
       credentials: "include",
       erpUiMode: "blocking",
       erpUiLabel: "Refreshing workspace shell",
@@ -1805,6 +1809,7 @@ export default function MenuShell() {
           ref={contentRegionRef}
           tabIndex={-1}
           onFocus={() => setActiveZone("content")}
+          id="erp-content-scroll"
           aria-label="Active workspace content"
           className={`min-h-0 flex-1 overflow-y-auto bg-[#f2f5f8] outline-none ${workspaceMode ? "px-2 py-2" : "px-4 py-4"}`}
         >
@@ -1895,7 +1900,7 @@ export default function MenuShell() {
           position: "fixed",
           inset: 0,
           background: "rgba(15, 23, 42, 0.22)",
-          zIndex: 999998,
+          zIndex: 1003000,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",

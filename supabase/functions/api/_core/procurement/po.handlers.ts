@@ -12,6 +12,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type PurchaseOrderRow = Record<string, unknown>;
@@ -366,13 +367,17 @@ async function assertProcurementHeadRole(
   }
 }
 
-function getCompanyScope(
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
+async function getCompanyScope(
   ctx: ProcurementHandlerContext,
   requestedCompanyId?: string,
-): string {
+): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 function getPathSegments(req: Request): string[] {
@@ -604,6 +609,167 @@ async function getPrimaryMaterialCategoryId(materialId: string): Promise<string 
   return toTrimmedString(data?.group_id) || null;
 }
 
+async function getPrimaryMaterialCategoryIds(
+  materialIds: string[],
+): Promise<Map<string, string | null>> {
+  const uniqueMaterialIds = uniqueTrimmedStrings(materialIds);
+  const categoryByMaterialId = new Map<string, string | null>();
+
+  for (const materialId of uniqueMaterialIds) {
+    categoryByMaterialId.set(materialId, null);
+  }
+
+  if (uniqueMaterialIds.length === 0) {
+    return categoryByMaterialId;
+  }
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_category_group_member")
+    .select("material_id, group_id, is_primary")
+    .in("material_id", uniqueMaterialIds)
+    .order("material_id", { ascending: true })
+    .order("is_primary", { ascending: false });
+
+  if (error) {
+    console.error("PO_MATERIAL_CATEGORY_LOOKUP_FAILED", JSON.stringify(error));
+    throw new Error(`PROCUREMENT_MATERIAL_CATEGORY_LOOKUP_FAILED: ${error.message}`);
+  }
+
+  for (const row of ((data as Array<Record<string, unknown>> | null) ?? [])) {
+    const materialId = toTrimmedString(row.material_id);
+    if (!materialId || categoryByMaterialId.get(materialId)) {
+      continue;
+    }
+    categoryByMaterialId.set(materialId, toTrimmedString(row.group_id) || null);
+  }
+
+  return categoryByMaterialId;
+}
+
+async function getCostCenterIdsById(
+  costCenterIds: string[],
+): Promise<Set<string>> {
+  const uniqueIds = uniqueTrimmedStrings(costCenterIds);
+  if (uniqueIds.length === 0) {
+    return new Set();
+  }
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("cost_center_master")
+    .select("id")
+    .in("id", uniqueIds);
+
+  if (error) {
+    throw new Error("PROCUREMENT_COST_CENTER_LOOKUP_FAILED");
+  }
+
+  return new Set(
+    (((data as Array<Record<string, unknown>> | null) ?? []).map((row) =>
+      toTrimmedString(row.id)
+    )).filter(Boolean),
+  );
+}
+
+async function getApprovedAslRowsByMaterialIds(
+  vendorId: string,
+  materialIds: string[],
+): Promise<Map<string, Record<string, unknown>>> {
+  const uniqueMaterialIds = uniqueTrimmedStrings(materialIds);
+  if (!vendorId || uniqueMaterialIds.length === 0) {
+    return new Map();
+  }
+
+  const { data: aslRows, error: aslError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("vendor_material_info")
+    .select("*")
+    .eq("vendor_id", vendorId)
+    .in("material_id", uniqueMaterialIds);
+
+  if (aslError) {
+    throw new Error("PROCUREMENT_ASL_LOOKUP_FAILED");
+  }
+
+  const activeRows = ((aslRows as Record<string, unknown>[] | null) ?? []).filter((row) => {
+    const status = toUpperTrimmedString(row.status);
+    return status === "ACTIVE" || status === "APPROVED";
+  });
+
+  const vmiIds = uniqueTrimmedStrings(activeRows.map((row) => row.id));
+  const uomByVmiId = new Map<string, Array<{ uom_code: string; conversion_factor: number; is_default: boolean }>>();
+
+  if (vmiIds.length > 0) {
+    const { data: uomRows, error: uomError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_material_uom")
+      .select("vmi_id, uom_code, conversion_factor, is_default")
+      .in("vmi_id", vmiIds);
+
+    if (uomError) {
+      throw new Error("PROCUREMENT_ASL_LOOKUP_FAILED");
+    }
+
+    for (const row of ((uomRows as Array<Record<string, unknown>> | null) ?? [])) {
+      const vmiId = toTrimmedString(row.vmi_id);
+      if (!vmiId) {
+        continue;
+      }
+      const list = uomByVmiId.get(vmiId) ?? [];
+      list.push({
+        uom_code: toTrimmedString(row.uom_code),
+        conversion_factor: Number(row.conversion_factor ?? 0),
+        is_default: row.is_default === true,
+      });
+      uomByVmiId.set(vmiId, list);
+    }
+  }
+
+  const aslByMaterialId = new Map<string, Record<string, unknown>>();
+  for (const row of activeRows) {
+    const materialId = toTrimmedString(row.material_id);
+    const vmiId = toTrimmedString(row.id);
+    if (!materialId || aslByMaterialId.has(materialId)) {
+      continue;
+    }
+    aslByMaterialId.set(materialId, {
+      ...row,
+      uoms: uomByVmiId.get(vmiId) ?? [],
+    });
+  }
+
+  return aslByMaterialId;
+}
+
+async function getPaymentTermRowsByIds(
+  paymentTermIds: string[],
+): Promise<Map<string, Record<string, unknown>>> {
+  const uniqueIds = uniqueTrimmedStrings(paymentTermIds);
+  if (uniqueIds.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("payment_terms_master")
+    .select("*")
+    .in("id", uniqueIds);
+
+  if (error) {
+    throw new Error("PROCUREMENT_PAYMENT_TERM_LOOKUP_FAILED");
+  }
+
+  return new Map(
+    (((data as Array<Record<string, unknown>> | null) ?? [])
+      .map((row): [string, Record<string, unknown>] => [
+        toTrimmedString(row.id),
+        row,
+      ])
+      .filter(([id]) => Boolean(id))),
+  );
+}
+
 async function createCsnsForPo(
   po: PurchaseOrderRow,
   poLines: PurchaseOrderLineRow[],
@@ -613,53 +779,67 @@ async function createCsnsForPo(
     return;
   }
 
-  for (const line of poLines) {
-    const lineId = toTrimmedString(line.id);
-
-    const { data: existing } = await serviceRoleClient
+  const lineIds = uniqueTrimmedStrings(poLines.map((line) => line.id));
+  const { data: existingRows, error: existingError } = lineIds.length > 0
+    ? await serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
-      .select("id")
-      .eq("po_line_id", lineId)
-      .maybeSingle();
+      .select("po_line_id")
+      .in("po_line_id", lineIds)
+    : { data: [], error: null };
 
-    if (existing?.id) {
-      continue;
-    }
-
-    const csnNumber = await generateProcurementDocNumber("CSN");
-    const orderedQty = Number(line.ordered_qty ?? 0);
-    const materialCategoryId = await getPrimaryMaterialCategoryId(toTrimmedString(line.material_id));
-
-    const { error } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .insert({
-        csn_number: csnNumber,
-        csn_type: deriveCsnType(po),
-        status: "ORD",
-        company_id: po.company_id,
-        vendor_id: po.vendor_id,
-        material_id: line.material_id,
-        material_category_id: materialCategoryId,
-        po_id: po.id,
-        po_line_id: line.id,
-        po_qty: orderedQty,
-        po_uom_code: line.po_uom_code,
-        payment_term_id: po.payment_term_id,
-        lc_required: po.lc_required === true,
-        delivery_type: po.delivery_type ?? "STANDARD",
-        has_rebate: po.has_rebate === true,
-        rebate_remarks: po.rebate_remarks ?? null,
-        indent_required: po.indent_required === true,
-        port_of_discharge_id: po.destination_port_id ?? null,
-        created_by: createdBy,
-      });
-
-    if (error) {
-      throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
-    }
+  if (existingError) {
+    throw new Error("PROCUREMENT_CSN_LOOKUP_FAILED");
   }
+
+  const existingLineIds = new Set(
+    (((existingRows as Array<Record<string, unknown>> | null) ?? []).map((row) =>
+      toTrimmedString(row.po_line_id)
+    )).filter(Boolean),
+  );
+  const materialCategoryByMaterialId = await getPrimaryMaterialCategoryIds(
+    poLines.map((line) => toTrimmedString(line.material_id)),
+  );
+
+  await Promise.all(
+    poLines
+      .filter((line) => !existingLineIds.has(toTrimmedString(line.id)))
+      .map(async (line) => {
+        const csnNumber = await generateProcurementDocNumber("CSN");
+        const orderedQty = Number(line.ordered_qty ?? 0);
+        const materialId = toTrimmedString(line.material_id);
+        const materialCategoryId = materialCategoryByMaterialId.get(materialId) ?? null;
+
+        const { error } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("consignment_note")
+          .insert({
+            csn_number: csnNumber,
+            csn_type: deriveCsnType(po),
+            status: "ORD",
+            company_id: po.company_id,
+            vendor_id: po.vendor_id,
+            material_id: line.material_id,
+            material_category_id: materialCategoryId,
+            po_id: po.id,
+            po_line_id: line.id,
+            po_qty: orderedQty,
+            po_uom_code: line.po_uom_code,
+            payment_term_id: po.payment_term_id,
+            lc_required: po.lc_required === true,
+            delivery_type: po.delivery_type ?? "STANDARD",
+            has_rebate: po.has_rebate === true,
+            rebate_remarks: po.rebate_remarks ?? null,
+            indent_required: po.indent_required === true,
+            port_of_discharge_id: po.destination_port_id ?? null,
+            created_by: createdBy,
+          });
+
+        if (error) {
+          throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
+        }
+      }),
+  );
 }
 
 async function inactivateCsnsForPo(input: {
@@ -777,9 +957,17 @@ async function buildPoLinesForInsert(
   }
 
   const prepared: JsonRecord[] = [];
+  const lineRecords = rawLines.map((line) => ((line ?? {}) as JsonRecord));
+  const [validCostCenterIds, aslByMaterialId] = await Promise.all([
+    getCostCenterIdsById(lineRecords.map((line) => toTrimmedString(line.cost_center_id))),
+    getApprovedAslRowsByMaterialIds(
+      vendorId,
+      lineRecords.map((line) => toTrimmedString(line.material_id)),
+    ),
+  ]);
 
   for (let index = 0; index < rawLines.length; index += 1) {
-    const rawLine = (rawLines[index] ?? {}) as JsonRecord;
+    const rawLine = lineRecords[index];
     const materialId = toTrimmedString(rawLine.material_id);
     const costCenterId = toTrimmedString(rawLine.cost_center_id);
 
@@ -789,11 +977,11 @@ async function buildPoLinesForInsert(
     if (!costCenterId) {
       throw new Error("PROCUREMENT_COST_CENTER_REQUIRED");
     }
-    if (!(await getCostCenterRow(costCenterId))) {
+    if (!validCostCenterIds.has(costCenterId)) {
       throw new Error("PROCUREMENT_COST_CENTER_NOT_FOUND");
     }
 
-    const aslRow = await getApprovedAslRow(vendorId, materialId);
+    const aslRow = aslByMaterialId.get(materialId);
     if (!aslRow) {
       throw new Error("PROCUREMENT_ASL_REQUIRED");
     }
@@ -844,7 +1032,14 @@ export async function createPOHandler(
     assertProcurementReadRole(ctx);
 
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const vendorId = toTrimmedString(body.vendor_id);
     const vendorType = toUpperTrimmedString(body.vendor_type);
     const deliveryType = toUpperTrimmedString(body.delivery_type || "STANDARD");
@@ -912,22 +1107,23 @@ export async function createPOHandler(
     }
 
     const orderGroupId = toTrimmedString(groupData.id);
-    const purchaseOrders: JsonRecord[] = [];
+    const materialRecords = rawMaterials.map((rawMaterial) => ({
+      ...((rawMaterial ?? {}) as JsonRecord),
+      cost_center_id: costCenterId,
+    })) as JsonRecord[];
+    const preparedLines = await buildPoLinesForInsert(ctx, vendorId, materialRecords);
+    const paymentTermById = await getPaymentTermRowsByIds(
+      materialRecords.map((materialRecord) => toTrimmedString(materialRecord.payment_term_id)),
+    );
 
-    for (const rawMaterial of rawMaterials) {
-      const materialRecord = {
-        ...((rawMaterial ?? {}) as JsonRecord),
-        cost_center_id: costCenterId,
-      } as JsonRecord;
-      const [preparedLine] = await buildPoLinesForInsert(ctx, vendorId, [materialRecord]);
-      const poNumber = isOpeningPo
-        ? openingPoNumber as string
-        : await generateCompanyDocNumber(companyId, "PO");
+    // Validate every material up front, before any PO/line write starts, so a bad
+    // material can never leave earlier/later materials in the same batch half-created.
+    const validatedMaterials = materialRecords.map((materialRecord, index) => {
       const paymentTermId = toTrimmedString(materialRecord.payment_term_id);
       const freightTerm = toUpperTrimmedString(materialRecord.freight_term);
       const gstTerms = toUpperTrimmedString(materialRecord.gst_terms);
       const rebateRateUomBasis = toUpperTrimmedString(materialRecord.rebate_rate_uom_basis);
-      const paymentTerm = await getPaymentTermRow(paymentTermId);
+      const paymentTerm = paymentTermById.get(paymentTermId);
 
       if (!paymentTermId) {
         throw new Error("PROCUREMENT_PAYMENT_TERM_REQUIRED");
@@ -948,58 +1144,74 @@ export async function createPOHandler(
         throw new Error("PROCUREMENT_INVALID_REBATE_RATE_UOM_BASIS");
       }
 
-      const lcRequired = toUpperTrimmedString(paymentTerm.payment_method) === "LC";
+      return {
+        materialRecord,
+        preparedLine: preparedLines[index],
+        freightTerm,
+        gstTerms,
+        rebateRateUomBasis,
+        lcRequired: toUpperTrimmedString(paymentTerm.payment_method) === "LC",
+        paymentTermId: paymentTerm.id,
+      };
+    });
 
-      const { data: poData, error: poError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("purchase_order")
-        .insert({
-          po_number: poNumber,
-          is_opening_po: isOpeningPo,
-          po_date: poDate,
-          company_id: companyId,
-          vendor_id: vendorId,
-          vendor_type: vendorType,
-          incoterm,
-          freight_term: freightTerm,
-          payment_term_id: paymentTerm.id,
-          lc_required: lcRequired,
-          delivery_type: deliveryType,
-          gst_terms: gstTerms || null,
-          has_rebate: materialRecord.has_rebate === true,
-          rebate_remarks: toTrimmedString(materialRecord.rebate_remarks) || null,
-          rebate_rate: parseNullableNumber(materialRecord.rebate_rate),
-          rebate_rate_uom_basis: rebateRateUomBasis || null,
-          indent_required: false,
-          expected_delivery_date:
-            toTrimmedString(materialRecord.delivery_date || materialRecord.expected_delivery_date) ||
-            null,
-          status: "DRAFT",
-          remarks: toTrimmedString(materialRecord.remarks) || null,
-          order_group_id: orderGroupId,
-          created_by: ctx.auth_user_id,
-        })
-        .select("*")
-        .single();
+    const purchaseOrders = await Promise.all(
+      validatedMaterials.map(async ({ materialRecord, preparedLine, freightTerm, gstTerms, rebateRateUomBasis, lcRequired, paymentTermId }) => {
+        const poNumber = isOpeningPo
+          ? openingPoNumber as string
+          : await generateCompanyDocNumber(companyId, "PO");
 
-      if (poError || !poData) {
-        throw new Error("PROCUREMENT_PO_CREATE_FAILED");
-      }
+        const { data: poData, error: poError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("purchase_order")
+          .insert({
+            po_number: poNumber,
+            is_opening_po: isOpeningPo,
+            po_date: poDate,
+            company_id: companyId,
+            vendor_id: vendorId,
+            vendor_type: vendorType,
+            incoterm,
+            freight_term: freightTerm,
+            payment_term_id: paymentTermId,
+            lc_required: lcRequired,
+            delivery_type: deliveryType,
+            gst_terms: gstTerms || null,
+            has_rebate: materialRecord.has_rebate === true,
+            rebate_remarks: toTrimmedString(materialRecord.rebate_remarks) || null,
+            rebate_rate: parseNullableNumber(materialRecord.rebate_rate),
+            rebate_rate_uom_basis: rebateRateUomBasis || null,
+            indent_required: false,
+            expected_delivery_date:
+              toTrimmedString(materialRecord.delivery_date || materialRecord.expected_delivery_date) ||
+              null,
+            status: "DRAFT",
+            remarks: toTrimmedString(materialRecord.remarks) || null,
+            order_group_id: orderGroupId,
+            created_by: ctx.auth_user_id,
+          })
+          .select("*")
+          .single();
 
-      const poId = toTrimmedString(poData.id);
-      const { data: lineData, error: lineError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("purchase_order_line")
-        .insert({ ...preparedLine, po_id: poId })
-        .select("*")
-        .single();
+        if (poError || !poData) {
+          throw new Error("PROCUREMENT_PO_CREATE_FAILED");
+        }
 
-      if (lineError || !lineData) {
-        throw new Error("PROCUREMENT_PO_LINES_CREATE_FAILED");
-      }
+        const poId = toTrimmedString(poData.id);
+        const { data: lineData, error: lineError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("purchase_order_line")
+          .insert({ ...preparedLine, po_id: poId })
+          .select("*")
+          .single();
 
-      purchaseOrders.push({ ...poData, lines: [lineData] });
-    }
+        if (lineError || !lineData) {
+          throw new Error("PROCUREMENT_PO_LINES_CREATE_FAILED");
+        }
+
+        return { ...poData, lines: [lineData] };
+      }),
+    );
 
     const enrichedData = await enrichProcurementUserDisplays({
       order_group: groupData,
@@ -1015,9 +1227,11 @@ export async function createPOHandler(
     const status =
       code === "PROCUREMENT_VENDOR_NOT_FOUND" || code === "PROCUREMENT_PAYMENT_TERM_NOT_FOUND"
         ? 404
-        : code.includes("REQUIRED") || code.includes("INVALID")
-          ? 400
-          : 500;
+        : code === "COMPANY_SCOPE_VIOLATION"
+          ? 403
+          : code.includes("REQUIRED") || code.includes("INVALID")
+            ? 400
+            : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order create failed");
   }
 }
@@ -1143,7 +1357,7 @@ export async function listPOsHandler(
     assertProcurementReadRole(ctx);
 
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
     const statusFilter = toUpperTrimmedString(url.searchParams.get("status"));
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
@@ -1187,7 +1401,7 @@ export async function listPOsHandler(
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Purchase order list failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Purchase order list failed");
   }
 }
 
@@ -1199,7 +1413,7 @@ export async function getPOHandler(
     assertProcurementReadRole(ctx);
 
     const poId = getPoIdFromPath(req);
-    const companyId = getCompanyScope(ctx);
+    const companyId = await getCompanyScope(ctx);
     const po = await getPOById(poId, companyId);
 
     if (!po) {
@@ -1238,7 +1452,7 @@ export async function getPOHandler(
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_DETAIL_FAILED";
-    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : 500;
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order detail failed");
   }
 }
@@ -1252,7 +1466,14 @@ export async function updatePOHandler(
 
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1382,7 +1603,7 @@ export async function deletePOHandler(
     assertProcurementReadRole(ctx);
 
     const poId = getPoIdFromPath(req);
-    const companyId = getCompanyScope(ctx);
+    const companyId = await getCompanyScope(ctx);
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1419,7 +1640,7 @@ export async function deletePOHandler(
     return okResponse({ data: { id: poId, deleted: true } }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_DELETE_FAILED";
-    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code.includes("NOT_DRAFT") ? 422 : code.includes("BLOCKED") ? 400 : 500;
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("NOT_DRAFT") ? 422 : code.includes("BLOCKED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order delete failed");
   }
 }
@@ -1433,7 +1654,14 @@ export async function confirmPOHandler(
 
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1486,7 +1714,7 @@ export async function confirmPOHandler(
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_CONFIRM_FAILED";
-    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code.includes("BLOCKED") ? 422 : 500;
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("BLOCKED") ? 422 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order confirm failed");
   }
 }
@@ -1498,7 +1726,14 @@ export async function approvePOHandler(
   try {
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1548,7 +1783,7 @@ export async function approvePOHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_APPROVE_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("INVALID") ? 422
         : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order approval failed");
@@ -1567,7 +1802,14 @@ export async function rejectPOHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_REMARKS_REQUIRED", 400, "Remarks are required");
     }
 
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1614,7 +1856,7 @@ export async function rejectPOHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_REJECT_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("REQUIRED") ? 400
         : code.includes("INVALID") ? 422
         : 500;
@@ -1631,7 +1873,14 @@ export async function amendPOHandler(
 
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1817,11 +2066,13 @@ export async function amendPOHandler(
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" || code === "PROCUREMENT_PO_LINE_NOT_FOUND" || code === "PROCUREMENT_COST_CENTER_NOT_FOUND"
         ? 404
-        : code.includes("BLOCKED") || code.includes("INVALID")
-          ? 422
-          : code.includes("REQUIRED") || code.includes("NO_AMENDMENT")
-            ? 400
-            : 500;
+        : code === "COMPANY_SCOPE_VIOLATION"
+          ? 403
+          : code.includes("BLOCKED") || code.includes("INVALID")
+            ? 422
+            : code.includes("REQUIRED") || code.includes("NO_AMENDMENT")
+              ? 400
+              : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order amendment failed");
   }
 }
@@ -1833,7 +2084,14 @@ export async function approveAmendmentHandler(
   try {
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1910,7 +2168,7 @@ export async function approveAmendmentHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_AMEND_APPROVE_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("NO_PENDING") ? 422
         : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order amendment approval failed");
@@ -1931,7 +2189,14 @@ export async function cancelPOHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CANCELLATION_REASON_REQUIRED", 400, "Cancellation reason is required");
     }
 
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -2004,6 +2269,7 @@ export async function cancelPOHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_CANCEL_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
+        : code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("REQUIRED") || code.includes("BLOCKED")
           ? 400
           : 500;
@@ -2026,7 +2292,14 @@ export async function knockOffPOLineHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_KNOCK_OFF_REASON_REQUIRED", 400, "Knock-off reason is required");
     }
 
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -2103,7 +2376,7 @@ export async function knockOffPOLineHandler(
   } catch (err) {
     console.error("PO_LINE_KNOCK_OFF_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_LINE_KNOCK_OFF_FAILED";
-    const status = code === "PROCUREMENT_PO_NOT_FOUND" || code === "PROCUREMENT_PO_LINE_NOT_FOUND" ? 404 : code.includes("REQUIRED") ? 400 : 500;
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" || code === "PROCUREMENT_PO_LINE_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order line knock-off failed");
   }
 }
@@ -2122,7 +2395,14 @@ export async function knockOffPOHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_KNOCK_OFF_REASON_REQUIRED", 400, "Knock-off reason is required");
     }
 
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -2211,7 +2491,7 @@ export async function knockOffPOHandler(
   } catch (err) {
     console.error("PO_KNOCK_OFF_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_KNOCK_OFF_FAILED";
-    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code.includes("REQUIRED") ? 400 : 500;
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order knock-off failed");
   }
 }
@@ -2315,7 +2595,7 @@ export async function listPOOrderGroupsHandler(
     assertProcurementReadRole(ctx);
 
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
     const statusFilter = toUpperTrimmedString(url.searchParams.get("status"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
     const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
@@ -2434,7 +2714,7 @@ export async function listPOOrderGroupsHandler(
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Purchase order group list failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Purchase order group list failed");
   }
 }
 
@@ -2446,7 +2726,7 @@ export async function getPOOrderGroupHandler(
     assertProcurementReadRole(ctx);
 
     const groupId = getOrderGroupIdFromPath(req);
-    const companyId = getCompanyScope(ctx);
+    const companyId = await getCompanyScope(ctx);
     const group = await getOrderGroupById(groupId, companyId);
     if (!group) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND", 404, "Order group not found");
@@ -2457,12 +2737,39 @@ export async function getPOOrderGroupHandler(
       pos.map(async (po) => ({ ...po, lines: await getPOLines(toTrimmedString(po.id)) })),
     );
 
+    // Bulk-resolve material/cost-center/payment-term display names across
+    // every line in every PO in this group — never show raw UUIDs.
+    const allLines = posWithLines.flatMap((po) => po.lines);
+    const { lines: enrichedLines } = await enrichPoReferenceDisplays({ lines: allLines });
+    const enrichedLineById = new Map(
+      (enrichedLines ?? []).map((line) => [toTrimmedString(line.id), line]),
+    );
+    const posWithEnrichedLines = posWithLines.map((po) => ({
+      ...po,
+      lines: po.lines.map((line) => enrichedLineById.get(toTrimmedString(line.id)) ?? line),
+    }));
+
+    const groupVendorId = toTrimmedString(group.vendor_id);
+    const { data: vendorRow } = groupVendorId
+      ? await serviceRoleClient
+        .schema("erp_master")
+        .from("vendor_master")
+        .select("vendor_code, vendor_name")
+        .eq("id", groupVendorId)
+        .maybeSingle()
+      : { data: null };
+    const vendorDisplay = vendorRow ? formatCodeNameDisplay(vendorRow.vendor_code, vendorRow.vendor_name) : null;
+
     return okResponse({
-      data: await enrichProcurementUserDisplays({ ...group, purchase_orders: posWithLines }),
+      data: await enrichProcurementUserDisplays({
+        ...group,
+        vendor_display: vendorDisplay,
+        purchase_orders: posWithEnrichedLines,
+      }),
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_DETAIL_FAILED";
-    const status = code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404 : 500;
+    const status = code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order group detail failed");
   }
 }
@@ -2476,7 +2783,14 @@ export async function confirmPOOrderGroupHandler(
 
     const groupId = getOrderGroupIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const group = await getOrderGroupById(groupId, companyId);
     if (!group) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND", 404, "Order group not found");
@@ -2553,7 +2867,7 @@ export async function confirmPOOrderGroupHandler(
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_CONFIRM_FAILED";
-    const status = code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404 : code.includes("BLOCKED") ? 422 : 500;
+    const status = code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("BLOCKED") ? 422 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order group confirm failed");
   }
 }
@@ -2565,7 +2879,14 @@ export async function approvePOOrderGroupHandler(
   try {
     const groupId = getOrderGroupIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const group = await getOrderGroupById(groupId, companyId);
     if (!group) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND", 404, "Order group not found");
@@ -2641,7 +2962,7 @@ export async function approvePOOrderGroupHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_APPROVE_FAILED";
     const status =
       code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("INVALID") ? 422
         : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order group approval failed");
@@ -2660,7 +2981,14 @@ export async function rejectPOOrderGroupHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_REMARKS_REQUIRED", 400, "Remarks are required");
     }
 
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const group = await getOrderGroupById(groupId, companyId);
     if (!group) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND", 404, "Order group not found");
@@ -2726,10 +3054,43 @@ export async function rejectPOOrderGroupHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_REJECT_FAILED";
     const status =
       code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("REQUIRED") ? 400
         : code.includes("INVALID") ? 422
         : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order group rejection failed");
+  }
+}
+
+// §110 — reusable "UoM Quantity Picker" data source (GRN/PO line entry, Phase A/B).
+// Deliberately NOT reusing OM's listMaterialUomConversionsHandler
+// (assertManagerOrSARole) — L1/L2 procurement staff create GRN/PO, not just
+// managers, so a manager-only gate here would 403 the exact users this is for.
+export async function listMaterialUomConversionsForProcurementHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const materialId = (url.searchParams.get("material_id") ?? "").trim();
+    if (!materialId) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_UOM_CONVERSION_MATERIAL_REQUIRED", 400, "material_id is required.");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_uom_conversion")
+      .select("from_uom_code, to_uom_code, conversion_factor, variable_conversion")
+      .eq("material_id", materialId)
+      .eq("active", true);
+    if (error) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_UOM_CONVERSION_LOOKUP_FAILED", 500, error.message);
+    }
+
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_UOM_CONVERSION_LOOKUP_FAILED";
+    return procurementErrorResponse(req, ctx, code, 500, "UOM conversion lookup failed");
   }
 }

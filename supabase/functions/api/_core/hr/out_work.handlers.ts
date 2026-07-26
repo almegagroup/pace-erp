@@ -3,7 +3,7 @@ import { log } from "../../_lib/logger.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import {
   createWorkflowScopeContextMap,
-  loadActiveCompanyWorkContexts,
+  loadActiveCompanyWorkContextsByCompany,
   resolveDepartmentWorkflowScopeId,
 } from "../../_shared/workflow_scope.ts";
 import {
@@ -229,14 +229,16 @@ async function buildOutWorkCases(rows: OutWorkRequestRow[]) {
     rows.map((row) => row.parent_company_id),
   );
   const companyIds = [...new Set(rows.map((row) => row.parent_company_id).filter(Boolean))];
+  const companyWorkContextsByCompany = await loadActiveCompanyWorkContextsByCompany(
+    serviceRoleClient,
+    companyIds,
+  );
   const companyWorkContextMaps = new Map<string, ReturnType<typeof createWorkflowScopeContextMap>>();
 
   for (const companyId of companyIds) {
     companyWorkContextMaps.set(
       companyId,
-      createWorkflowScopeContextMap(
-        await loadActiveCompanyWorkContexts(serviceRoleClient, companyId),
-      ),
+      createWorkflowScopeContextMap(companyWorkContextsByCompany.get(companyId) ?? []),
     );
   }
 
@@ -1320,8 +1322,8 @@ export async function expandOutWorkToDateRecords(
 
   const dates = generateDateRange(owr.from_date, owr.to_date);
 
-  for (const date of dates) {
-    await serviceRoleClient
+  await Promise.all(dates.map((date) =>
+    serviceRoleClient
       .schema("erp_hr")
       .rpc("upsert_day_record_out_work", {
         p_company_id: owr.parent_company_id,
@@ -1330,8 +1332,8 @@ export async function expandOutWorkToDateRecords(
         p_out_work_request_id: owr.out_work_request_id,
         p_day_scope: owr.day_scope,
         p_departure_time: owr.office_departure_time ?? null,
-      });
-  }
+      })
+  ));
 }
 
 // ---------------------------------------------------------------------------

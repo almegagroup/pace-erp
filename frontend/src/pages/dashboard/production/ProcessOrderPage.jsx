@@ -161,8 +161,29 @@ export default function ProcessOrderPage() {
     if (!window.confirm("Start batch? This will generate a batch number.")) return;
     setSaving(true);
     try {
-      await startBatch(detailId);
-      toast("Batch started.");
+      const result = await startBatch(detailId);
+      qc.setQueryData(["proc-order-detail", detailId], (current) => (
+        current
+          ? {
+              ...current,
+              status: result?.status ?? "BATCH_STARTED",
+              batch_number: result?.batch_number ?? current.batch_number ?? null,
+            }
+          : current
+      ));
+      qc.setQueriesData({ queryKey: ["proc-orders"] }, (current) => {
+        if (!Array.isArray(current)) return current;
+        return current.map((row) => (
+          row?.id === detailId
+            ? {
+                ...row,
+                status: result?.status ?? "BATCH_STARTED",
+                batch_number: result?.batch_number ?? row.batch_number ?? null,
+              }
+            : row
+        ));
+      });
+      toast(`Batch ${result?.batch_number ?? "—"} started.`);
       qc.invalidateQueries({ queryKey: ["proc-order-detail", detailId] });
       qc.invalidateQueries({ queryKey: ["proc-orders"] });
     } catch (err) { toast(friendly(err.message), "error"); }

@@ -8,8 +8,9 @@
  * Authority: Frontend
  */
 
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import ScrollToTop from "./ScrollToTop.jsx";
 import { MenuProvider } from "../context/MenuProvider.jsx";
 import AuthBootstrap from "../auth/AuthBootstrap.jsx";
 import AuthResolver from "../admin/AuthResolver.jsx";
@@ -122,10 +123,12 @@ import GateEntryListPage from "../pages/dashboard/procurement/gate/GateEntryList
 import GateEntryCreatePage from "../pages/dashboard/procurement/gate/GateEntryCreatePage.jsx";
 import GateEntryDetailPage from "../pages/dashboard/procurement/gate/GateEntryDetailPage.jsx";
 import GateExitInboundDetailPage from "../pages/dashboard/procurement/gate/GateExitInboundDetailPage.jsx";
+import GateExitEntryPage from "../pages/dashboard/procurement/gate/GateExitEntryPage.jsx";
+import GateReportPage from "../pages/dashboard/procurement/gate/GateReportPage.jsx";
 import GRNListPage from "../pages/dashboard/procurement/grn/GRNListPage.jsx";
 import GRNDetailPage from "../pages/dashboard/procurement/grn/GRNDetailPage.jsx";
+import GRNPostFlow from "../pages/dashboard/procurement/grn/GRNPostFlow.jsx";
 import QAQueuePage from "../pages/dashboard/procurement/qa/QAQueuePage.jsx";
-import QADocumentPage from "../pages/dashboard/procurement/qa/QADocumentPage.jsx";
 import STOListPage from "../pages/dashboard/procurement/sto/STOListPage.jsx";
 import STOCreatePage from "../pages/dashboard/procurement/sto/STOCreatePage.jsx";
 import STOCreateOpeningPage from "../pages/dashboard/procurement/sto/STOCreateOpeningPage.jsx";
@@ -164,6 +167,7 @@ import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocum
 import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
 import OpeningStockListPage from "../pages/dashboard/procurement/opening-stock/OpeningStockListPage.jsx";
 import OpeningStockDetailPage from "../pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx";
+import OpeningStockApprovalPage from "../pages/dashboard/procurement/opening-stock/OpeningStockApprovalPage.jsx";
 
 // Gate-27: L3 Production pages
 import PlanFeedPage from "../pages/dashboard/production/PlanFeedPage.jsx";
@@ -183,11 +187,19 @@ import OrderListPage from "../pages/dashboard/production/OrderListPage.jsx";
 import BatchVariancePage from "../pages/dashboard/production/BatchVariancePage.jsx";
 import ReversalPage from "../pages/dashboard/production/ReversalPage.jsx";
 import ProductionQAQueuePage from "../pages/dashboard/production/QAQueuePage.jsx";
-import BatchReleasePage from "../pages/dashboard/production/BatchReleasePage.jsx";
+import BatchNumberReleasePage from "../pages/dashboard/production/BatchNumberReleasePage.jsx";
+import SfgResultRecordingPage from "../pages/dashboard/production/SfgResultRecordingPage.jsx";
+import FgStockBreakdownPage from "../pages/dashboard/production/FgStockBreakdownPage.jsx";
+import PartialBatchReversalPage from "../pages/dashboard/production/PartialBatchReversalPage.jsx";
+import ConversionCostPage from "../pages/dashboard/production/ConversionCostPage.jsx";
+import OldProcessPoPage from "../pages/dashboard/production/OldProcessPoPage.jsx";
+import OldPackingPoPage from "../pages/dashboard/production/OldPackingPoPage.jsx";
+import PartialReversalReportPage from "../pages/dashboard/production/PartialReversalReportPage.jsx";
 
 export default function AppRouter() {
   return (
     <BrowserRouter>
+      <ScrollToTop />
       <WorkspaceLockOverlay />
 
       <div id="app-shell">
@@ -552,8 +564,20 @@ export default function AppRouter() {
                     element={<GateExitInboundDetailPage />}
                   />
                   <Route
+                    path="procurement/gate-exit"
+                    element={<GateExitEntryPage />}
+                  />
+                  <Route
+                    path="procurement/gate-report"
+                    element={<GateReportPage />}
+                  />
+                  <Route
                     path="procurement/grns"
                     element={<GRNListPage />}
+                  />
+                  <Route
+                    path="procurement/grns/post"
+                    element={<GRNPostFlow />}
                   />
                   <Route
                     path="procurement/grns/:id"
@@ -562,10 +586,6 @@ export default function AppRouter() {
                   <Route
                     path="procurement/qa-queue"
                     element={<QAQueuePage />}
-                  />
-                  <Route
-                    path="procurement/qa-documents/:id"
-                    element={<QADocumentPage />}
                   />
                   <Route
                     path="procurement/stos"
@@ -712,6 +732,10 @@ export default function AppRouter() {
                     element={<OpeningStockDetailPage />}
                   />
                   <Route
+                    path="procurement/opening-stock/approval"
+                    element={<OpeningStockApprovalPage />}
+                  />
+                  <Route
                     path="procurement/physical-inventory"
                     element={<PIDocumentListPage />}
                   />
@@ -738,7 +762,14 @@ export default function AppRouter() {
                   <Route path="production/batch-variance" element={<BatchVariancePage />} />
                   <Route path="production/reversal" element={<ReversalPage />} />
                   <Route path="production/qa-queue" element={<ProductionQAQueuePage />} />
-                  <Route path="production/batch-release" element={<BatchReleasePage />} />
+                  <Route path="production/sfg-result-recording" element={<SfgResultRecordingPage />} />
+                  <Route path="production/batch-release" element={<BatchNumberReleasePage />} />
+                  <Route path="production/fg-stock-breakdown" element={<FgStockBreakdownPage />} />
+                  <Route path="production/partial-batch-reversal" element={<PartialBatchReversalPage />} />
+                  <Route path="production/partial-reversal-report" element={<PartialReversalReportPage />} />
+                  <Route path="production/conversion-cost" element={<ConversionCostPage />} />
+                  <Route path="production/old-process-po" element={<OldProcessPoPage />} />
+                  <Route path="production/old-packing-po" element={<OldPackingPoPage />} />
                 </Route>
               </Route>
 

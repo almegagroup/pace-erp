@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { getGateEntry, listGateEntries } from "../procurementApi.js";
+import { listGateEntries } from "../procurementApi.js";
 
 const LIMIT = 50;
 
@@ -19,6 +21,7 @@ function statusTone(status) {
     case "OPEN":
       return "bg-sky-100 text-sky-800";
     case "CANCELLED":
+    case "PRUNED":
       return "bg-rose-100 text-rose-800";
     default:
       return "bg-slate-100 text-slate-700";
@@ -27,8 +30,8 @@ function statusTone(status) {
 
 export default function GateEntryListPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
   const [companyId, setCompanyId] = useState("");
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -36,8 +39,6 @@ export default function GateEntryListPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
 
   const companyOptions = useMemo(
     () =>
@@ -62,73 +63,47 @@ export default function GateEntryListPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!companyId) return;
-      setLoading(true);
-      setError("");
-      try {
-        const listResult = await listGateEntries({
-          company_id: companyId,
-          status: status || undefined,
-          date_from: dateFrom || undefined,
-          date_to: dateTo || undefined,
-          limit: LIMIT,
-        });
-        const baseRows = Array.isArray(listResult?.items) ? listResult.items : [];
-        const hydrated = await Promise.all(
-          baseRows.map(async (row) => {
-            try {
-              const detail = await getGateEntry(row.id);
-              const lines = Array.isArray(detail?.lines) ? detail.lines : [];
-              const totalQty = lines.reduce((sum, line) => sum + Number(line.ge_qty ?? 0), 0);
-              return {
-                ...row,
-                num_lines: lines.length,
-                total_qty: Number(totalQty.toFixed(6)),
-              };
-            } catch {
-              return {
-                ...row,
-                num_lines: 0,
-                total_qty: 0,
-              };
-            }
-          })
-        );
-        if (!active) return;
-        setRows(hydrated);
-      } catch (loadError) {
-        if (!active) return;
-        setRows([]);
-        setError(loadError instanceof Error ? loadError.message : "GE_LIST_FAILED");
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companyId, dateFrom, dateTo, status]);
+  const offset = (page - 1) * LIMIT;
 
-  const filteredRows = useMemo(() => {
-    if (!debouncedSearch) return rows;
-    return rows.filter((row) =>
+  const { data: listResult, isLoading: loading, error: queryError } = useQuery({
+    queryKey: ["procurement", "ge-list", companyId, status, dateFrom, dateTo, page],
+    enabled: Boolean(companyId),
+    queryFn: () => listGateEntries({
+      company_id: companyId,
+      status: status || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      limit: LIMIT,
+      offset,
+    }),
+  });
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void queryClient.invalidateQueries({ queryKey: ["procurement", "ge-list"] }),
+    },
+  });
+
+  const allRows = Array.isArray(listResult?.items) ? listResult.items : [];
+  const serverTotal = listResult?.total ?? 0;
+  const error = queryError instanceof Error ? queryError.message : (queryError ? "GE_LIST_FAILED" : "");
+
+  const rows = useMemo(() => {
+    if (!debouncedSearch) return allRows;
+    return allRows.filter((row) =>
       [row.ge_number, row.vehicle_number, row.driver_name]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
         .includes(debouncedSearch)
     );
-  }, [debouncedSearch, rows]);
+  }, [debouncedSearch, allRows]);
 
-  const total = filteredRows.length;
+  const total = debouncedSearch ? rows.length : serverTotal;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
-  const pagedRows = filteredRows.slice((page - 1) * LIMIT, page * LIMIT);
-  const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
-  const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
+  const startIndex = total === 0 ? 0 : offset + 1;
+  const endIndex = total === 0 ? 0 : Math.min(offset + rows.length, total);
 
   function openCreate() {
     openScreen(OPERATION_SCREENS.PROC_GATE_ENTRY_CREATE.screen_code);
@@ -145,7 +120,7 @@ export default function GateEntryListPage() {
       eyebrow="Procurement"
       title="Gate Entries"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
+        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => queryClient.invalidateQueries({ queryKey: ["procurement", "ge-list"] }) },
         { key: "create", label: "Create GE", tone: "primary", onClick: openCreate },
       ]}
       notices={error ? [{ key: "ge-list-error", tone: "error", message: error }] : []}
@@ -158,17 +133,12 @@ export default function GateEntryListPage() {
               Company
               <select
                 value={companyId}
-                onChange={(event) => {
-                  setCompanyId(event.target.value);
-                  setPage(1);
-                }}
+                onChange={(event) => { setCompanyId(event.target.value); setPage(1); }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">Select company</option>
                 {companyOptions.map((entry) => (
-                  <option key={entry.value} value={entry.value}>
-                    {entry.label}
-                  </option>
+                  <option key={entry.value} value={entry.value}>{entry.label}</option>
                 ))}
               </select>
             </label>
@@ -176,27 +146,22 @@ export default function GateEntryListPage() {
               Status
               <select
                 value={status}
-                onChange={(event) => {
-                  setStatus(event.target.value);
-                  setPage(1);
-                }}
+                onChange={(event) => { setStatus(event.target.value); setPage(1); }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
-                {["OPEN", "GRN_POSTED", "CANCELLED"].map((entry) => (
-                  <option key={entry} value={entry}>
-                    {entry}
-                  </option>
+                {["OPEN", "GRN_POSTED", "CANCELLED", "PRUNED"].map((entry) => (
+                  <option key={entry} value={entry}>{entry}</option>
                 ))}
               </select>
             </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Date From
-              <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+              <input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); setPage(1); }} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
             </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Date To
-              <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+              <input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); setPage(1); }} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
             </label>
             <QuickFilterInput label="Search" value={search} onChange={setSearch} placeholder="GE number or vehicle" />
           </div>
@@ -204,7 +169,7 @@ export default function GateEntryListPage() {
       }}
       listSection={{
         eyebrow: "GE Register",
-        title: loading ? "Loading gate entries" : `${total} gate entry row${total === 1 ? "" : "s"}`,
+        title: loading ? "Loading gate entries..." : `${total} gate entr${total === 1 ? "y" : "ies"}`,
         children: (
           <div className="grid gap-3">
             <ErpPaginationStrip page={page} setPage={setPage} totalPages={totalPages} startIndex={startIndex} endIndex={endIndex} totalItems={total} />
@@ -226,11 +191,11 @@ export default function GateEntryListPage() {
                 { key: "num_lines", label: "Lines", width: "90px" },
                 { key: "total_qty", label: "Total Qty", width: "110px" },
               ]}
-              rows={pagedRows}
+              rows={rows}
               rowKey={(row) => row.id}
               onRowActivate={openDetail}
               getRowProps={(row) => ({
-                onDoubleClick: () => openDetail(row),
+                onClick: () => openDetail(row),
                 className: "cursor-pointer hover:bg-sky-50",
               })}
               emptyMessage={loading ? "Loading gate entries..." : "No gate entry matched the current filter."}

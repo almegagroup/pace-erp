@@ -28,23 +28,29 @@ import {
   listCsnFieldHistoryHandler,
   listCSNsHandler,
   listTrackerLayoutsHandler,
-  markCSNArrivedHandler,
-  markCSNInTransitHandler,
   previewDispatchQtyAdjustmentHandler,
   updateCSNHandler,
 } from "../_core/procurement/csn.handlers.ts";
 import {
   createGateEntryHandler,
   createGateExitInboundHandler,
+  gateReportHandler,
+  getGateEntryByNumberHandler,
   getGateEntryHandler,
   getGateExitInboundHandler,
   listGateEntriesHandler,
   listOpenCSNsForGEHandler,
+  listOpenPOsForGEHandler,
+  listOpenSTOsForGEHandler,
+  pruneGateEntryHandler,
   updateGateEntryHandler,
 } from "../_core/procurement/gate_entry.handlers.ts";
 import {
+  createAndPostGRNFromLineHandler,
   createGRNDraftHandler,
+  getGELinesForGRNHandler,
   getGRNHandler,
+  getMaterialVendorDocNamesHandler,
   listGRNsHandler,
   postGRNHandler,
   reverseGRNHandler,
@@ -82,11 +88,18 @@ import {
   addTestLineHandler,
   deleteTestLineHandler,
   getQADocumentHandler,
-  assignQAOfficerHandler,
   listQADocumentsHandler,
   submitUsageDecisionHandler,
   updateTestLineHandler,
 } from "../_core/procurement/inward_qa.handlers.ts";
+import {
+  createCategoryTestConfigHandler,
+  createTestMethodHandler,
+  deleteCategoryTestConfigHandler,
+  listCategoryTestConfigHandler,
+  listTestMethodsHandler,
+  updateCategoryTestConfigHandler,
+} from "../_core/procurement/qa_test_method.handlers.ts";
 import {
   addLCLineHandler,
   createLandedCostHandler,
@@ -111,10 +124,13 @@ import {
 import {
   addOpeningStockLineHandler,
   approveOpeningStockDocumentHandler,
+  batchUpdateOpeningStockLinesHandler,
   createOpeningStockDocumentHandler,
+  getOpeningStockDocumentByNumberHandler,
   getOpeningStockDocumentHandler,
   listOpeningStockDocumentsHandler,
   postOpeningStockDocumentHandler,
+  recalculateValuationHandler,
   removeOpeningStockLineHandler,
   submitOpeningStockDocumentHandler,
   updateOpeningStockLineHandler,
@@ -198,6 +214,7 @@ import {
   getPoFilterOptionsHandler,
   knockOffPOLineHandler,
   knockOffPOHandler,
+  listMaterialUomConversionsForProcurementHandler,
   listPOsHandler,
   listPOOrderGroupsHandler,
   rejectPOHandler,
@@ -371,6 +388,10 @@ export async function dispatchProcurementRoutes(
       return await createOpeningStockDocumentHandler(req, ctx);
     case "GET:/api/procurement/opening-stock":
       return await listOpeningStockDocumentsHandler(req, ctx);
+    case "GET:/api/procurement/opening-stock/by-number":
+      return await getOpeningStockDocumentByNumberHandler(req, ctx);
+    case "POST:/api/procurement/opening-stock/recalculate-valuation":
+      return await recalculateValuationHandler(req, ctx);
     case "POST:/api/procurement/physical-inventory":
       return await createPIDHandler(req, ctx);
     case "GET:/api/procurement/physical-inventory":
@@ -379,16 +400,38 @@ export async function dispatchProcurementRoutes(
       return await createGateEntryHandler(req, ctx);
     case "GET:/api/procurement/gate-entries":
       return await listGateEntriesHandler(req, ctx);
+    case "GET:/api/procurement/gate-report":
+      return await gateReportHandler(req, ctx);
     case "GET:/api/procurement/gate-entries/open-csns":
       return await listOpenCSNsForGEHandler(req, ctx);
+    case "GET:/api/procurement/gate-entries/open-pos":
+      return await listOpenPOsForGEHandler(req, ctx);
+    case "GET:/api/procurement/gate-entries/open-stos":
+      return await listOpenSTOsForGEHandler(req, ctx);
+    case "GET:/api/procurement/gate-entries/by-number":
+      return await getGateEntryByNumberHandler(req, ctx);
     case "POST:/api/procurement/gate-exits/inbound":
       return await createGateExitInboundHandler(req, ctx);
     case "GET:/api/procurement/qa-documents":
       return await listQADocumentsHandler(req, ctx);
+    case "GET:/api/procurement/qa-test-methods":
+      return await listTestMethodsHandler(req, ctx);
+    case "POST:/api/procurement/qa-test-methods":
+      return await createTestMethodHandler(req, ctx);
+    case "GET:/api/procurement/qa-category-test-config":
+      return await listCategoryTestConfigHandler(req, ctx);
+    case "POST:/api/procurement/qa-category-test-config":
+      return await createCategoryTestConfigHandler(req, ctx);
     case "POST:/api/procurement/grns":
       return await createGRNDraftHandler(req, ctx);
+    case "POST:/api/procurement/grns/from-line":
+      return await createAndPostGRNFromLineHandler(req, ctx);
     case "GET:/api/procurement/grns":
       return await listGRNsHandler(req, ctx);
+    case "GET:/api/procurement/grns/ge-lines":
+      return await getGELinesForGRNHandler(req, ctx);
+    case "GET:/api/procurement/grns/material-vendor-doc-names":
+      return await getMaterialVendorDocNamesHandler(req, ctx);
     case "POST:/api/procurement/invoice-verifications":
       return await createIVDraftHandler(req, ctx);
     case "GET:/api/procurement/invoice-verifications":
@@ -449,6 +492,8 @@ export async function dispatchProcurementRoutes(
       return await listPOOrderGroupsHandler(req, ctx);
     case "GET:/api/procurement/po-filter-options":
       return await getPoFilterOptionsHandler(req, ctx);
+    case "GET:/api/procurement/materials/uom-conversion":
+      return await listMaterialUomConversionsForProcurementHandler(req, ctx);
     default:
       break;
   }
@@ -500,14 +545,6 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/csns\/[^/]+\/history$/.test(pathname) && req.method === "GET") {
     return await listCsnFieldHistoryHandler(req, ctx);
-  }
-
-  if (/^\/api\/procurement\/csns\/[^/]+\/mark-in-transit$/.test(pathname) && req.method === "POST") {
-    return await markCSNInTransitHandler(req, ctx);
-  }
-
-  if (/^\/api\/procurement\/csns\/[^/]+\/mark-arrived$/.test(pathname) && req.method === "POST") {
-    return await markCSNArrivedHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/csns\/[^/]+\/transform-to-sto$/.test(pathname) && req.method === "POST") {
@@ -587,6 +624,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/opening-stock\/[^/]+\/lines$/.test(pathname) && req.method === "POST") {
     return await addOpeningStockLineHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/opening-stock\/[^/]+\/lines\/batch$/.test(pathname) && req.method === "PUT") {
+    return await batchUpdateOpeningStockLinesHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/opening-stock\/[^/]+\/lines\/[^/]+$/.test(pathname)) {
@@ -672,6 +713,10 @@ export async function dispatchProcurementRoutes(
     if (req.method === "DELETE") {
       return await deleteCHAHandler(req, ctx);
     }
+  }
+
+  if (/^\/api\/procurement\/gate-entries\/[^/]+\/prune$/.test(pathname) && req.method === "POST") {
+    return await pruneGateEntryHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/gate-entries\/[^/]+$/.test(pathname)) {
@@ -889,10 +934,6 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/qa-documents\/[^/]+\/assign$/.test(pathname) && req.method === "POST") {
-    return await assignQAOfficerHandler(req, ctx);
-  }
-
   if (/^\/api\/procurement\/qa-documents\/[^/]+\/test-lines$/.test(pathname) && req.method === "POST") {
     return await addTestLineHandler(req, ctx);
   }
@@ -908,6 +949,15 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/qa-documents\/[^/]+\/decision$/.test(pathname) && req.method === "POST") {
     return await submitUsageDecisionHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/qa-category-test-config\/[^/]+$/.test(pathname)) {
+    if (req.method === "PATCH") {
+      return await updateCategoryTestConfigHandler(req, ctx);
+    }
+    if (req.method === "DELETE") {
+      return await deleteCategoryTestConfigHandler(req, ctx);
+    }
   }
 
   if (/^\/api\/procurement\/purchase-orders\/[^/]+\/confirm$/.test(pathname) && req.method === "POST") {

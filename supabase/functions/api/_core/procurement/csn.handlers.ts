@@ -12,6 +12,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -373,11 +374,16 @@ async function getCsnById(id: string, companyId?: string): Promise<CsnRow | null
   return (data as CsnRow | null) ?? null;
 }
 
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
 async function getCompanyScopedCompanyId(
   ctx: ProcurementHandlerContext,
   bodyOrQueryCompanyId?: string,
 ): Promise<string> {
-  return toTrimmedString(bodyOrQueryCompanyId) || toTrimmedString(ctx.context.companyId);
+  const companyId = toTrimmedString(bodyOrQueryCompanyId) || toTrimmedString(ctx.context.companyId);
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 async function getAccessibleCompanyIds(ctx: ProcurementHandlerContext): Promise<string[]> {
@@ -1027,6 +1033,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       currency_code: toTrimmedString(poLine?.currency_code) || toTrimmedString(stoLine?.currency_code) || toTrimmedString(stoLine?.transfer_price_currency) || null,
       balance_qty: balanceQty,
       transporter_name: transporter?.transporter_name ?? row.transporter_name_freetext ?? row.domestic_transporter_freetext ?? null,
+      transporter_code: transporter?.transporter_code ?? null,
       cha_name: cha?.cha_name ?? row.cha_name_freetext ?? null,
       payment_term_name: paymentTerm?.name ?? null,
       payment_term_reference_type_code: referenceType?.code ?? null,
@@ -1209,7 +1216,7 @@ export async function listCSNsHandler(req: Request, ctx: ProcurementHandlerConte
     return okResponse({ data: data ?? [], total: count ?? 0 }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_CSN_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "CSN list failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "CSN list failed");
   }
 }
 
@@ -1272,6 +1279,13 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const csn = await getCsnById(id, companyId);
     if (!csn) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");
@@ -1304,6 +1318,16 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
 
     if (shouldRecalculate) {
       Object.assign(updates, await recalculateAndBuildUpdates(csn, updates));
+    }
+
+    // Auto ORD→TRN: when the ATD field transitions from empty to set, bump status.
+    const merged = { ...csn, ...updates };
+    const csnType = toUpperTrimmedString(merged.csn_type);
+    const atdField = csnType === "IMPORT" ? "bl_date" : "lr_date";
+    const prevAtd = toTrimmedString(csn[atdField as keyof CsnRow] as string);
+    const newAtd = toTrimmedString(updates[atdField] as string);
+    if (!prevAtd && newAtd && toUpperTrimmedString(csn.status) === CSN_STATUS.ORDERED) {
+      updates.status = CSN_STATUS.IN_TRANSIT;
     }
 
     updates.last_updated_at = new Date().toISOString();
@@ -1340,6 +1364,13 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const mother = await getCsnById(id, companyId);
     if (!mother) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "Mother CSN not found");
@@ -1554,101 +1585,11 @@ export async function deleteSubCSNHandler(req: Request, ctx: ProcurementHandlerC
     return okResponse({ data: { id: subId, deleted: true } }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_SUB_CSN_DELETE_FAILED";
-    const status = code === "PROCUREMENT_SUB_CSN_NOT_FOUND" ? 404 : code.includes("BLOCKED") ? 400 : 500;
+    const status = code === "PROCUREMENT_SUB_CSN_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("BLOCKED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Sub CSN delete failed");
   }
 }
 
-export async function markCSNInTransitHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
-  try {
-    const id = getIdFromPath(req);
-    const body = await parseBody(req);
-    const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
-    const csn = await getCsnById(id, companyId);
-    if (!csn) {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");
-    }
-    if (toUpperTrimmedString(csn.status) !== CSN_STATUS.ORDERED) {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_STATUS_INVALID", 400, "Only ORD CSN can be marked in transit");
-    }
-
-    const etdDate = toTrimmedString(body.actual_etd || body.etd || todayIsoDate());
-    const updates: JsonRecord = {
-      status: CSN_STATUS.IN_TRANSIT,
-      etd: etdDate,
-      last_updated_at: new Date().toISOString(),
-      last_updated_by: ctx.auth_user_id,
-    };
-    Object.assign(updates, await recalculateAndBuildUpdates(csn, updates));
-
-    const { data, error } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .update(updates)
-      .eq("id", id)
-      .select("*")
-      .single();
-
-    if (error || !data) {
-      throw new Error("PROCUREMENT_CSN_MARK_IN_TRANSIT_FAILED");
-    }
-
-    return okResponse({ data }, ctx.request_id, req);
-  } catch (err) {
-    const code = (err as Error).message || "PROCUREMENT_CSN_MARK_IN_TRANSIT_FAILED";
-    const status = code === "PROCUREMENT_CSN_NOT_FOUND" ? 404 : code.includes("INVALID") ? 400 : 500;
-    return procurementErrorResponse(req, ctx, code, status, "CSN mark in transit failed");
-  }
-}
-
-export async function markCSNArrivedHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
-  try {
-    const id = getIdFromPath(req);
-    const body = await parseBody(req);
-    const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
-    const csn = await getCsnById(id, companyId);
-    if (!csn) {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");
-    }
-    if (toUpperTrimmedString(csn.status) !== CSN_STATUS.IN_TRANSIT) {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_STATUS_INVALID", 400, "Only TRN CSN can be advanced");
-    }
-
-    const actualArrivalDate = toTrimmedString(body.actual_arrival_date || todayIsoDate());
-    const csnType = toUpperTrimmedString(csn.csn_type);
-    const updates: JsonRecord = {
-      status: CSN_STATUS.GATE_ENTRY_DONE,
-      last_updated_at: new Date().toISOString(),
-      last_updated_by: ctx.auth_user_id,
-    };
-
-    if (csnType === "IMPORT") {
-      updates.ata_at_port = actualArrivalDate;
-    } else {
-      updates.gate_entry_date = actualArrivalDate;
-    }
-
-    Object.assign(updates, await recalculateAndBuildUpdates(csn, updates));
-
-    const { data, error } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .update(updates)
-      .eq("id", id)
-      .select("*")
-      .single();
-
-    if (error || !data) {
-      throw new Error("PROCUREMENT_CSN_MARK_ARRIVED_FAILED");
-    }
-
-    return okResponse({ data }, ctx.request_id, req);
-  } catch (err) {
-    const code = (err as Error).message || "PROCUREMENT_CSN_MARK_ARRIVED_FAILED";
-    const status = code === "PROCUREMENT_CSN_NOT_FOUND" ? 404 : code.includes("INVALID") ? 400 : 500;
-    return procurementErrorResponse(req, ctx, code, status, "CSN mark arrived failed");
-  }
-}
 
 export async function getLCAlertCountHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
@@ -1672,7 +1613,7 @@ export async function getLCAlertCountHandler(req: Request, ctx: ProcurementHandl
     return okResponse({ data: { lc_alert: count ?? 0 } }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_LC_ALERT_COUNT_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "LC alert count failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "LC alert count failed");
   }
 }
 
@@ -1701,7 +1642,7 @@ export async function getLCAlertListHandler(req: Request, ctx: ProcurementHandle
     return okResponse({ data: await enrichTrackerRows((data as CsnRow[] | null) ?? []) }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_LC_ALERT_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "LC alert list failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "LC alert list failed");
   }
 }
 
@@ -1735,7 +1676,7 @@ export async function getVesselBookingAlertCountHandler(req: Request, ctx: Procu
     return okResponse({ data: { vessel_booking_alert: count } }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_VESSEL_ALERT_COUNT_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Vessel booking alert count failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Vessel booking alert count failed");
   }
 }
 
@@ -1771,7 +1712,7 @@ export async function getVesselBookingAlertListHandler(req: Request, ctx: Procur
     return okResponse({ data: filtered }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_VESSEL_ALERT_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Vessel booking alert list failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Vessel booking alert list failed");
   }
 }
 
@@ -1801,7 +1742,7 @@ export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHan
         let query: any = serviceRoleClient
           .schema("erp_procurement")
           .from("consignment_note")
-          .select("*")
+          .select("id, po_id")
           .eq("csn_type", "IMPORT")
           .is("vessel_booking_confirmed_date", null)
           .not("status", "in", '("GED","GRD","CAN","KOF")');
@@ -1811,9 +1752,25 @@ export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHan
         }
         const { data, error } = await query;
         if (error) throw new Error("PROCUREMENT_VESSEL_ALERT_COUNT_FAILED");
-        const enriched = await enrichTrackerRows((data as CsnRow[] | null) ?? []);
-        return enriched.filter((row) => {
-          const poDate = toTrimmedString(row.po_date);
+        // PERF: this branch needs exactly one field — po_date — and enrichTrackerRows sourced it
+        // solely from purchase_order (`po_date: po?.po_date ?? null`). Calling the full enrichment
+        // here cost 15 round trips (vendor, material, transporter, CHA, port, payment terms, GRN,
+        // gate entry, PO/STO lines, ...) to read that one field. One targeted lookup instead.
+        const rows = (data as CsnRow[] | null) ?? [];
+        const poIds = [...new Set(rows.map((row) => toTrimmedString(row.po_id)).filter(Boolean))];
+        if (poIds.length === 0) return 0;
+        const { data: poRows, error: poError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("purchase_order")
+          .select("id, po_date")
+          .in("id", poIds);
+        if (poError) throw new Error("PROCUREMENT_VESSEL_ALERT_COUNT_FAILED");
+        const poDateMap = new Map(
+          ((poRows as Array<Record<string, unknown>> | null) ?? [])
+            .map((po) => [toTrimmedString(po.id), toTrimmedString(po.po_date)]),
+        );
+        return rows.filter((row) => {
+          const poDate = poDateMap.get(toTrimmedString(row.po_id));
           return poDate && poDate <= threshold;
         }).length;
       })(),
@@ -1827,7 +1784,7 @@ export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHan
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_ALERT_COUNTS_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Alert counts lookup failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Alert counts lookup failed");
   }
 }
 
@@ -2031,6 +1988,13 @@ export async function previewDispatchQtyAdjustmentHandler(req: Request, ctx: Pro
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const newDispatchQty = parseNullableNumber(body.value ?? body.dispatch_qty);
     if (newDispatchQty == null || newDispatchQty < 0) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_DISPATCH_QTY_REQUIRED", 400, "dispatch_qty must be zero or greater");
@@ -2055,6 +2019,13 @@ export async function confirmDispatchQtyAdjustmentHandler(req: Request, ctx: Pro
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const action = toUpperTrimmedString(body.action || "SAVE_ONLY");
     const newDispatchQty = parseNullableNumber(body.value ?? body.dispatch_qty);
     const knockOffQty = parseNullableNumber(body.knock_off_qty) ?? 0;
@@ -2180,6 +2151,13 @@ export async function inlineUpdateCSNHandler(req: Request, ctx: ProcurementHandl
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     const csn = await getCsnById(id, companyId);
     if (!csn) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");

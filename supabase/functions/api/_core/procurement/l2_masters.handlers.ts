@@ -13,6 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { deriveCompanyFieldsFromGstProfile } from "../../_shared/gst_company_fields.ts";
 import { resolveGstProfileWithSource } from "../../_shared/gst_resolver.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -733,6 +734,11 @@ export async function upsertTransitTimeHandler(req: Request, ctx: ProcurementHan
     if (!(await ensureCompanyExists(companyId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_NOT_FOUND", 404, "Company not found");
     }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("port_plant_transit_master")
@@ -1031,6 +1037,11 @@ export async function updateDomesticLeadTimeHandler(req: Request, ctx: Procureme
       if (!(await ensureCompanyExists(companyId))) {
         return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_NOT_FOUND", 404, "Company not found");
       }
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
       updates.company_id = companyId;
     }
     if (body.transit_days !== undefined) updates.transit_days = parseNullableInt(body.transit_days) ?? 0;
@@ -1070,6 +1081,11 @@ export async function upsertDomesticLeadTimeHandler(req: Request, ctx: Procureme
     if (!(await ensureCompanyExists(companyId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_NOT_FOUND", 404, "Company not found");
     }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("lead_time_master_domestic")
@@ -1098,11 +1114,15 @@ export async function listTransportersHandler(req: Request, ctx: ProcurementHand
     const url = new URL(req.url);
     const direction = toUpperTrimmedString(url.searchParams.get("direction"));
     const activeParam = url.searchParams.get("is_active");
+    const search = toTrimmedString(url.searchParams.get("search"));
     let query = serviceRoleClient
       .schema("erp_master")
       .from("transporter_master")
-      .select("*")
+      .select("id, transporter_code, transporter_name, usage_direction, gst_number, active")
       .order("transporter_name", { ascending: true });
+    if (search) {
+      query = query.ilike("transporter_name", `%${search}%`);
+    }
     if (activeParam === "all") {
       // no filter
     } else if (activeParam === "false") {
@@ -1420,6 +1440,11 @@ export async function mapTransporterToCompanyHandler(req: Request, ctx: Procurem
     if (!(await ensureCompanyExists(companyId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_NOT_FOUND", 404, "Company not found");
     }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("transporter_company_map")
@@ -1536,10 +1561,20 @@ export async function mapCHAToPortHandler(req: Request, ctx: ProcurementHandlerC
     if (portIds.length === 0) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PORT_REQUIRED", 400, "At least one port is required");
     }
-    for (const portId of portIds) {
-      if (!(await ensurePortExists(portId))) {
-        return procurementErrorResponse(req, ctx, "PROCUREMENT_PORT_NOT_FOUND", 404, "Port not found");
-      }
+    const uniquePortIds = Array.from(new Set(portIds));
+    const { data: existingPorts, error: portLookupError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("port_master")
+      .select("id")
+      .in("id", uniquePortIds);
+    if (portLookupError) {
+      throw new Error("PROCUREMENT_CHA_PORT_MAP_FAILED");
+    }
+    const existingPortIds = new Set(
+      ((existingPorts ?? []) as Array<Record<string, unknown>>).map((row) => toTrimmedString(row.id)).filter(Boolean),
+    );
+    if (uniquePortIds.some((portId) => !existingPortIds.has(portId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PORT_NOT_FOUND", 404, "Port not found");
     }
     const rows = portIds.map((portId) => ({ cha_id: chaId, port_id: portId }));
     const { data, error } = await serviceRoleClient
@@ -1785,6 +1820,11 @@ export async function mapChaToCompanyHandler(req: Request, ctx: ProcurementHandl
     }
     if (!(await ensureCompanyExists(companyId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_NOT_FOUND", 404, "Company not found");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
     const { data, error } = await serviceRoleClient
       .schema("erp_master")

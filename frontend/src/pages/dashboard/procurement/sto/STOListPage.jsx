@@ -5,6 +5,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listSTOs } from "../procurementApi.js";
@@ -135,6 +136,18 @@ export default function STOListPage() {
   const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
 
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => setRefreshToken((value) => value + 1),
+    },
+  });
+
+  function openCreate() {
+    openScreen(OPERATION_SCREENS.PROC_STO_CREATE.screen_code);
+    navigate("/dashboard/procurement/stos/create");
+  }
+
   function openDetail(row) {
     openScreen(OPERATION_SCREENS.PROC_STO_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/stos/${encodeURIComponent(row.id)}`);
@@ -151,6 +164,7 @@ export default function STOListPage() {
           tone: "neutral",
           onClick: () => setRefreshToken((value) => value + 1),
         },
+        { key: "create", label: "New STO", tone: "primary", onClick: openCreate },
       ]}
       notices={error ? [{ key: "sto-list-error", tone: "error", message: error }] : []}
       filterSection={{

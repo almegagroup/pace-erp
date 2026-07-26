@@ -10,7 +10,9 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -91,10 +93,14 @@ function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline.
 }
 
-function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): string {
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
+async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
@@ -311,7 +317,7 @@ export async function createRTVHandler(
   try {
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     const vendorId = toTrimmedString(body.vendor_id);
     const grnId = toTrimmedString(body.grn_id);
     const settlementMode = toUpperTrimmedString(body.settlement_mode);
@@ -319,6 +325,11 @@ export async function createRTVHandler(
 
     if (!companyId || !vendorId || !grnId || !RTV_SETTLEMENT_MODES.has(settlementMode) || !RTV_REASON_CATEGORIES.has(reasonCategory)) {
       return rtvErrorResponse(req, ctx, "RTV_CREATE_INVALID", 400, "company_id, vendor_id, grn_id, settlement_mode, and reason_category are required.");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return rtvErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const grn = await getGrn(grnId);
@@ -355,7 +366,7 @@ export async function createRTVHandler(
     return okResponse(await hydrateRtv(String(rtv.id), ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "RTV_CREATE_FAILED";
-    const status = code === "GRN_NOT_FOUND" ? 404 : code === "RTV_SCOPE_VIOLATION" ? 403 : 500;
+    const status = code === "GRN_NOT_FOUND" ? 404 : code === "RTV_SCOPE_VIOLATION" || code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return rtvErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -367,7 +378,7 @@ export async function listRTVsHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
     const settlementMode = toUpperTrimmedString(url.searchParams.get("settlement_mode"));
@@ -393,7 +404,7 @@ export async function listRTVsHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "RTV_LIST_FAILED";
-    return rtvErrorResponse(req, ctx, code, 500, code);
+    return rtvErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 
@@ -505,6 +516,13 @@ export async function postRTVHandler(
 
     let totalDispatchQty = 0;
     let totalLineValue = 0;
+
+    // §106: one Material Document (MBLNR+MJAHR) for this whole RTV posting event; rtv_number
+    // becomes the reference. Shared by every line and by all three sub-postings
+    // (direct-path P344 out/in + the P122 vendor return).
+    const rtvMatDoc = await generateMaterialDocNumber(String(rtv.company_id));
+
+    // DEPENDENT: each RTV line consumes blocked/unrestricted stock and updates posting state that subsequent lines must read in order.
     for (const line of lines) {
       const companyId = String(rtv.company_id);
       const storageLocationId = toTrimmedString(line.storage_location_id);
@@ -552,6 +570,11 @@ export async function postRTVHandler(
             p_direction: "OUT",
             p_posted_by: ctx.auth_user_id,
             p_reversal_of_id: null,
+            p_material_doc_number: rtvMatDoc.docNumber,
+            p_material_doc_year: rtvMatDoc.docYear,
+            p_reference_document_number: rtv.rtv_number,
+            p_reference_document_type: "RTV",
+            p_reference_document_id: rtv.id ?? null,
           });
 
         if (blockOut.error || !Array.isArray(blockOut.data) || blockOut.data.length === 0) {
@@ -575,6 +598,11 @@ export async function postRTVHandler(
             p_direction: "IN",
             p_posted_by: ctx.auth_user_id,
             p_reversal_of_id: null,
+            p_material_doc_number: rtvMatDoc.docNumber,
+            p_material_doc_year: rtvMatDoc.docYear,
+            p_reference_document_number: rtv.rtv_number,
+            p_reference_document_type: "RTV",
+            p_reference_document_id: rtv.id ?? null,
           });
 
         if (blockIn.error || !Array.isArray(blockIn.data) || blockIn.data.length === 0) {
@@ -604,6 +632,11 @@ export async function postRTVHandler(
           p_direction: "OUT",
           p_posted_by: ctx.auth_user_id,
           p_reversal_of_id: null,
+          p_material_doc_number: rtvMatDoc.docNumber,
+          p_material_doc_year: rtvMatDoc.docYear,
+          p_reference_document_number: rtv.rtv_number,
+          p_reference_document_type: "RTV",
+          p_reference_document_id: rtv.id ?? null,
         });
 
       if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {
@@ -831,7 +864,7 @@ export async function listDebitNotesHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
@@ -876,14 +909,15 @@ export async function getDebitNoteHandler(
     if (error || !data) {
       return rtvErrorResponse(req, ctx, "DN_NOT_FOUND", 404, "Debit note not found.");
     }
-    if (getCompanyScope(ctx) && getCompanyScope(ctx) !== toTrimmedString(data.company_id)) {
+    const dnScopedCompanyId = await getCompanyScope(ctx);
+    if (dnScopedCompanyId && dnScopedCompanyId !== toTrimmedString(data.company_id)) {
       return rtvErrorResponse(req, ctx, "DN_SCOPE_VIOLATION", 403, "Debit note is outside company scope.");
     }
 
     return okResponse(data, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DN_FETCH_FAILED";
-    return rtvErrorResponse(req, ctx, code, 500, code);
+    return rtvErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 
@@ -1108,7 +1142,7 @@ export async function listExchangeRefsHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const rtvId = toTrimmedString(url.searchParams.get("rtv_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
@@ -1132,7 +1166,7 @@ export async function listExchangeRefsHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "EXR_LIST_FAILED";
-    return rtvErrorResponse(req, ctx, code, 500, code);
+    return rtvErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 

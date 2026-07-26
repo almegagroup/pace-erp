@@ -12,6 +12,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
 import { assertManagerOrSARole, assertOmAdminContext, assertOmSaContext } from "./shared.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -321,6 +322,11 @@ export async function unmapStorageLocationFromPlantHandler(
     if (storageLocationIds.length === 0 || !companyId) {
       return locationErrorResponse(req, ctx, "OM_LOCATION_UNMAP_FAILED", 400, "Missing required fields");
     }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return locationErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     const { error } = await serviceRoleClient
       .schema("erp_inventory")
@@ -353,6 +359,11 @@ export async function mapStorageLocationToPlantHandler(
     }
     if (!companyId) {
       return locationErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return locationErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const { data, error } = await serviceRoleClient

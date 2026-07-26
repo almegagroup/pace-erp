@@ -18,6 +18,100 @@
 
 ---
 
+## PACE ERP — Mandatory Rules (NON-NEGOTIABLE)
+
+এই rules সব Gate, সব page, সব screen এ apply হয়। কোনো Gate VERIFIED হওয়ার আগে এই rules চেক করতে হবে। Violation থাকলে VERIFIED দেওয়া যাবে না।
+
+---
+
+### R-00 — Session শুরুতে Constitution পড়ো
+**Rule:** প্রতিটা নতুন Claude session শুরুতে `CLAUDE.md` পড়তে হবে। এটা PACE ERP এর Constitution — project architecture, ACL chain, current state, workflow rules সব এখানে আছে। না পড়লে wrong assumption এ কাজ হবে।
+
+---
+
+### R-01 — কোনো Business Data UUID হিসেবে দেখাবে না
+**Rule:** UI তে কোথাও UUID দেখানো যাবে না। প্রতিটা foreign key এর human-readable value backend থেকে resolve করে পাঠাতে হবে।
+
+**Backend responsibility:** Handler এ সব FK resolve করতে হবে — bulk fetch করো (`.in()`), map বানাও, response এ name attach করো। Per-row serial call নয়।
+
+**Frontend responsibility:** `row.material_name` দেখাও, `row.material_id` নয়। Backend থেকে name না এলে `"—"` দেখাও — কখনো raw ID fallback করবে না।
+
+| Raw field | UI তে দেখাবে |
+|-----------|-------------|
+| `material_id` | `material_code — material_name` |
+| `vendor_id` | `vendor_code — vendor_name` |
+| `csn_id` | `csn_number` |
+| `po_id` | `po_number` |
+| `gate_entry_id` | `ge_number` |
+| `grn_id` | `grn_number` |
+| `storage_location_id` | `location_code — location_name` |
+| `*_by` / `*_staff_id` / `*_user_id` | `employee_code — full_name` অথবা field omit |
+| অন্য যেকোনো `*_id` FK | Corresponding code / number / name |
+
+---
+
+### R-02 — Back-and-forth Navigation এ Data Reload চলবে না
+**Rule:** API থেকে data fetch করে এমন প্রতিটা page অবশ্যই `useQuery` (React Query) use করবে। `useEffect` + `useState` দিয়ে API call করা forbidden।
+
+**কারণ:** `useEffect` প্রতিবার component mount হলে re-run করে। User অন্য page এ গিয়ে ফিরে আসলে আবার full fetch হয়, আবার wait করতে হয়। `useQuery` result cache করে রাখে — ফিরে আসলে instant দেখায়।
+
+**Mutation এর পরে:**
+- `queryClient.setQueryData(key, result)` — server response দিয়ে cache update করো
+- `queryClient.invalidateQueries(...)` — শুধু তখন যখন list stale হওয়া দরকার (যেমন নতুন item create এর পরে)
+
+**Refresh button:** `queryClient.invalidateQueries(...)` call করবে — never `setTick`, `setPage(p=>p)`, বা অন্য hack।
+
+---
+
+### R-03 — List Endpoint এ Accurate Display Data থাকবে
+**Rule:** List page কখনো per-row detail endpoint call করবে না। List এ দেখানোর জন্য যা যা দরকার — names, numbers, status, quantities — সব list endpoint থেকেই আসবে।
+
+**Backend:** List handler এ সব rows এর FK IDs collect করো, একটা bulk query তে সব resolve করো, map বানাও, প্রতিটা row এ attach করে return করো।
+
+---
+
+### R-04 — MCP vs Migration — সঠিক পথে কাজ করো
+**Rule:**
+- **Migration file** → Schema change, DDL (table create/alter, constraint add/drop, index, function/trigger), system design config (document number ranges, enum values, seed data যা code এর অংশ)
+- **MCP direct SQL** → Business/operational data change (user setup, work context assign, ACL snapshot regenerate, test data fix) — dev ও prod দুটোতেই আলাদাভাবে run করতে হয়
+
+**কারণ:** Migration file PR এর সাথে travel করে — prod deploy হলে automatically apply হয়। MCP change শুধু যে DB তে run করা হয় সেখানেই যায়।
+
+**ভুলের pattern:**
+- Schema change MCP দিয়ে করলে prod এ miss হয় → prod broken
+- Business data migration এ ঢোকালে unnecessary migration history pollute হয়
+
+---
+
+### R-05 — Report ও Heavy Query Pages এ SAP Selection Screen Pattern
+
+**Rule:** যেসব page এ user criteria না দিলে data load করা উচিত নয় — সেসব page এ criteria-first (SAP selection screen) pattern mandatory।
+
+**Pattern:**
+1. Page open হবে criteria form নিয়ে — কোনো data fetch হবে না
+2. User criteria fill করবে → **F8 / "Execute" button** চাপবে → তখনই data fetch হবে
+3. Results screen এ "Change Criteria" বা ESC চাপলে criteria form এ ফিরে যাবে
+4. State machine: `CRITERIA` → `RESULTS` → `CRITERIA`
+
+**কোন page এ লাগবে:**
+
+| Page type | উদাহরণ |
+|-----------|--------|
+| Stock reports | Stock Ledger, MMBE, Valuation |
+| Movement reports | Stock movement history |
+| Planning views | Procurement Planning, Production Planning |
+| Production PO lookup | ZCoR1/COID equivalent |
+| Physical Inventory list | PID document list |
+| Financial reports | Costing report, Period valuation |
+
+**Auto-load ঠিক আছে (criteria screen দরকার নেই):** GE Register, PO Register, GRN Register, CSN Register — এগুলো company-scoped + server-side paginated।
+
+**Implementation:** `ErpSelectionScreen` reusable component — full spec: `docs/PACE_ERP_UI_PATTERNS.md`
+
+---
+
+---
+
 ## Gate-11 - Foundation DB (erp_inventory schema)
 
 **Spec File:** OM-GATE-11-Foundation-DB-Spec.md
@@ -1279,8 +1373,8 @@ Non-gate bugfixes and UX improvements done directly by Claude (no Codex task).
 
 ---
 
-*Last Updated: 2026-06-19*
-*Next: Continue page-by-page review — OM03 onwards*
+*Last Updated: 2026-07-06*
+*Next: Apply migration 20260706070000 → verify Gate-27 Extension routes + pages → commit all untracked files*
 
 ---
 
@@ -1508,3 +1602,1272 @@ Full L3 Production domain for Liquid first (Admix, HPS, IWC):
 
 All DB, Backend, Frontend, ACL, and Snapshot steps complete. Production pages visible in sidebar for all ACL users across all 4 business companies.
 
+---
+
+## Gate-27 Extension — Pack BOM, Stroke Change Request, Production Workflow Pages
+
+**Started:** 2026-07-06
+**Completed:** 2026-07-06
+**Implemented by:** Claude (same session as Gate-27)
+**Status:** DONE — pending commit + verification
+
+### Scope
+
+Second implementation wave within Gate-27. Adds:
+- Pack BOM domain (create → approve → change request → approve change)
+- Stroke Change Request domain (material substitution on live strokes)
+- 17 dedicated production workflow pages (PR02–PR17) replacing inline actions in ProcessOrderPage/PackingOrderPage
+- SA Pack Code Master page
+
+### DB — Migration
+
+| Migration | Purpose | Status |
+|-----------|---------|--------|
+| `20260706070000_gate27_pack_bom_change_request.sql` | `erp_production.pack_bom`, `pack_bom_line`, `pack_bom_change_request`, `pack_bom_change_request_line` tables + `stroke_change_request`, `stroke_change_request_line` tables + `erp_master.fg_material_seq` sequence | ✅ Applied (MCP) |
+
+### Backend Files
+
+| File | File-ID | Handlers | Status |
+|------|---------|----------|--------|
+| `supabase/functions/api/_core/production/stroke_change_request.handlers.ts` | 27.3 | 5: list, get, create, approve, reject | DONE |
+| `supabase/functions/api/_core/production/pack_bom.handlers.ts` | 27.4 | 9: listPackBoms, getPackBom, createPackBom, approvePackBom, rejectPackBom, createPackBomChangeRequest, listPackBomChangeRequests, approvePackBomChangeRequest, rejectPackBomChangeRequest | DONE |
+| `supabase/functions/api/_core/production/pack_config.handlers.ts` | — | Modified: route additions for SAPackCodeMasterPage | DONE |
+| `supabase/functions/api/_routes/production.routes.ts` | — | ~20 new route cases added (stroke-change-requests, pack-boms, pack-bom-change-requests routes) | DONE |
+
+**Key business rules implemented:**
+- Pack BOM create: auto-ACTIVE if `bom_required = false` on pack_code_master (599/000/001); DRAFT otherwise
+- Pack BOM approve: Manager can edit PM lines before approving; atomically replaces lines
+- Pack BOM change request: one pending DRAFT allowed per BOM; approve applies ADD/REMOVE/EDIT changes atomically to live BOM lines
+- Stroke change request: one DRAFT per stroke; approve updates `stroke_line.material_id` directly
+
+### Frontend — SA Screen
+
+| File | File-ID | Purpose | Status |
+|------|---------|---------|--------|
+| `frontend/src/admin/sa/screens/SAPackCodeMasterPage.jsx` | 27.SA-02 | 2-tab SA admin: Tab 1 = Pack Code Catalog (toggle active/inactive), Tab 2 = Prodshade Pack Config (upsert + delete) | DONE |
+
+### Frontend — Production Pages (PR02–PR17)
+
+| File | File-ID | Purpose | Who Can Access | Status |
+|------|---------|---------|----------------|--------|
+| `frontend/src/pages/dashboard/production/StrokeApprovalPage.jsx` | 27.FE-PR02 | Manager reviews + approves/reverts DRAFT strokes | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ChangeBomItemPage.jsx` | 27.FE-PR03 | L1/L2 Manager creates material-substitution change request on ACTIVE stroke → DRAFT for L3 approval | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ChangeBomItemApprovalPage.jsx` | 27.FE-PR04 | L3 Manager approves/rejects stroke change requests; on approve live stroke lines updated | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/PackBomCreatePage.jsx` | 27.FE-PR05 | Create Pack BOM for FG SKU with PM lines; BOM status depends on pack_code bom_required flag | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/PackBomApprovalPage.jsx` | 27.FE-PR06 | L1 Manager reviews DRAFT Pack BOMs; can edit PM lines inline before approving | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ChangePackBomPage.jsx` | 27.FE-PR07 | Propose ADD/REMOVE/EDIT changes to ACTIVE Pack BOM → DRAFT change request for PR08 queue | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ChangePackBomApprovalPage.jsx` | 27.FE-PR08 | L1 Manager approves/rejects Pack BOM change requests; changes applied atomically on approval | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx` | 27.FE-PR09 | 2-tab create form: Tab 1 = Process PO (type, prodshade, stroke, qty, date), Tab 2 = Packing PO (linked to Process PO) | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ProductionPOEditPage.jsx` | 27.FE-PR10 | Edit Process PO qty adjustments + machine assignment when status = QA_APPROVED or BATCH_STARTED | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ProductionPOFinalPage.jsx` | 27.FE-PR11 | Enter actual quantities for Process PO or Packing PO (COR6-Final step) | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ProductionPOVerifyPage.jsx` | 27.FE-PR12 | QA confirms actuals vs batch paper + posts stock movements (COR6-Verify); also handles Correction Mode for VERIFIED POs | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/OrderListPage.jsx` | 27.FE-PR13 | Combined Process PO + Packing PO list (COID equivalent); 2 tabs, status chip filters | All ACL | DONE |
+| `frontend/src/pages/dashboard/production/BatchVariancePage.jsx` | 27.FE-PR14 | Report: planned qty vs actual qty variance per Process PO batch; colour-coded delta | All ACL | DONE |
+| `frontend/src/pages/dashboard/production/ReversalPage.jsx` | 27.FE-PR15 | Step-by-step reversal for any Process PO or Packing PO stage; explains what each reversal does | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/QAQueuePage.jsx` | 27.FE-PR16 | QA Approval Queue — lists STANDARD status Process POs; QA approves or rejects with reason | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/BatchReleasePage.jsx` | 27.FE-PR17 | Manager releases batch numbers for QA_APPROVED Process POs (calls startBatch endpoint) | Manager+ | DONE |
+
+### Navigation Wiring
+
+| File | Change | Status |
+|------|--------|--------|
+| `frontend/src/navigation/screens/adminScreens.js` | SA_PROD_PACK_CODE_MASTER screen entry added | DONE |
+| `frontend/src/navigation/screens/projects/operationModule/operationScreens.js` | New PROD_* screen codes for PR02–PR17 + SA pack code master | DONE |
+| `frontend/src/router/AppRouter.jsx` | Imports + Routes for all 17 new production pages + SAPackCodeMasterPage | DONE |
+| `frontend/src/pages/dashboard/production/prodApi.js` | New API functions: createStrokeChangeRequest, listStrokeChangeRequests, getStrokeChangeRequest, approveStrokeChangeRequest, rejectStrokeChangeRequest, createPackBom, listPackBoms, getPackBom, approvePackBom, rejectPackBom, createPackBomChangeRequest, listPackBomChangeRequests, approvePackBomChangeRequest, rejectPackBomChangeRequest | DONE |
+
+### ⚠️ Pending Actions
+
+- [ ] `production.routes.ts` — new routes reference new handlers but not verified end-to-end
+- [ ] All 17 new frontend pages — navigation wiring in AppRouter.jsx not confirmed
+- [ ] All untracked files need git commit
+- [ ] Verification pass by Claude needed before marking VERIFIED
+
+---
+
+## Session Polish — 2026-07-07/08 (Gate Entry Fixes + GE Prune)
+
+**Date:** 2026-07-07 → 2026-07-08
+**Implemented by:** Claude
+**Commits:** `cd5aa85` → `ecbb4dd`
+
+### Scope
+Gate Entry (GE) Register ও Detail page এর সব critical bugs fix। GE Prune feature নতুন implement। ErpDenseGrid keyboard navigation। Mandatory rules Constitution ও CLAUDE.md তে document।
+
+---
+
+### Bug Fixes
+
+| # | Bug | Root Cause | Fix | Files |
+|---|-----|-----------|-----|-------|
+| B-01 | GE Register এ row click কাজ করছিল না | `getRowProps` এ `onDoubleClick` ছিল, single click handler ছিল না | `onClick` দিয়ে replace | `GateEntryListPage.jsx` |
+| B-02 | Create GE button page refresh করত | `openCreate` navigate করত `/gate-entries` (same page) এ | `/gate-entries/create` এ navigate | `GateEntryListPage.jsx` |
+| B-03 | GE Register sidebar থেকে খুললে Create page দেখাত | AppRouter এ `/gate-entries` → `GateEntryCreatePage` ছিল (ভুল) | `/gate-entries` → `GateEntryListPage` | `AppRouter.jsx` |
+| B-04 | GE Detail এ Material UUID দেখাচ্ছিল | `hydrateGateEntry` material join করত না | `Promise.all` দিয়ে parallel material fetch, `material_code — material_name` attach | `gate_entry.handlers.ts` |
+| B-05 | GE Detail এ Gate Staff UUID দেখাচ্ছিল | UUID directly render হচ্ছিল | Field সরিয়ে Remarks দিয়ে replace | `GateEntryDetailPage.jsx` |
+| B-06 | GE List N+1 API call | প্রতি row এর জন্য `getGateEntry()` call হচ্ছিল | List handler এ bulk aggregate query | `gate_entry.handlers.ts` |
+| B-07 | Back-and-forth এ data reload | `useEffect` + `setState` pattern | `useQuery` তে convert (list ও detail দুটোই) | `GateEntryListPage.jsx`, `GateEntryDetailPage.jsx` |
+| B-08 | GE List status filter এ PRUNED ছিল না | New status যোগ হয়েছিল কিন্তু UI update হয়নি | PRUNED filter option ও badge যোগ | `GateEntryListPage.jsx` |
+
+---
+
+### New Feature — GE Prune
+
+**Design (Locked 2026-07-07):**
+- GE edit করা যাবে না — শুধু PRUNE করা যাবে
+- Prune করতে হলে সব linked GRN আগে REVERSED হতে হবে (system check)
+- Prune হলে: GE status → `PRUNED`, CSNs → `pre_ge_status` (ORD/TRN যেটা ছিল) এ restore
+- Serial number reuse হবে না
+
+**DB Migrations:**
+
+| Migration | Purpose |
+|-----------|---------|
+| `20260707200000_ge_pruned_status.sql` | `gate_entry.status` CHECK constraint এ `PRUNED` add |
+| `20260707200001_csn_pre_ge_status.sql` | `consignment_note.pre_ge_status` column — GE attach এর আগের status store করে |
+
+**Backend:**
+
+| Change | File |
+|--------|------|
+| `pruneGateEntryHandler` — POST `/:id/prune` | `gate_entry.handlers.ts` |
+| `upsertCsnArrival` — `pre_ge_status` save on GE create | `gate_entry.handlers.ts` |
+| `GE_HEADER_STATUSES` set এ `PRUNED` add | `gate_entry.handlers.ts` |
+| Prune route + ACL registry entry (WRITE) | `procurement.routes.ts`, `route-acl-registry.ts` |
+| `pruneGateEntry()` API function | `procurementApi.js` |
+
+**Frontend:**
+
+| Change | File |
+|--------|------|
+| "Prune GE" danger button (OPEN/GRN_POSTED status এ দেখায়) + confirmation modal | `GateEntryDetailPage.jsx` |
+| PRUNED → rose status tone | `GateEntryDetailPage.jsx`, `GateEntryListPage.jsx` |
+
+---
+
+### Infrastructure — ErpDenseGrid Keyboard Navigation
+
+**Change:** `ErpDenseGrid` তে proper keyboard navigation যোগ — সব list page এ automatically কাজ করবে।
+
+| Key | Action |
+|-----|--------|
+| ↑ Arrow | Previous row focus |
+| ↓ Arrow | Next row focus |
+| Enter | Row activate (`onRowActivate`) |
+
+**Implementation:** `tabIndex={0}` on `<tr>`, `useRef` array দিয়ে row refs track, ArrowUp/Down এ `el.focus()`, focused row `focus:bg-sky-50 focus:ring-sky-400` highlight।
+
+**File:** `frontend/src/components/data/ErpDenseGrid.jsx`
+
+---
+
+### Document Number Series — SAP-Style Ranges (Locked 2026-07-07)
+
+Migration: `20260707170858_document_number_series_ranges.sql`
+
+প্রতিটা doc type এর আলাদা number range — range দেখেই doc type বোঝা যায়, prefix দরকার নেই (SAP pattern)। Idempotent — existing correct range থাকলে update করে না।
+
+See CLAUDE.md Section 8 for full range table.
+
+---
+
+### Constitution & Rules Update
+
+| Document | Change |
+|----------|--------|
+| `docs/PACE_ERP_MASTER_CONSTITUTION.md` | PART 1B: Mandatory Development Rules যোগ (No UUID, useQuery, accurate list data, MCP vs Migration) |
+| `CLAUDE.md` | Section 8A: same rules SSOT হিসেবে |
+| `OM-IMPLEMENTATION-LOG.md` | R-00 to R-04 mandatory rules section (এই file এর শুরুতে) |
+
+---
+
+## Inward QA Page — Redesign + Live-Testing Bug Chain (2026-07-08/09) — ✅ COMPLETE, LIVE-VERIFIED
+
+**Spec File:** `OM-GATE-InwardQA-Redesign-Spec.md`
+**Supersedes/Extends:** Gate-13.6 (DB), Gate-16.5 (Backend), Gate-17.5 (Frontend) — all previously VERIFIED
+**Implemented by:** Claude directly (not Codex, per explicit user instruction)
+**Status:** Fully implemented **and live-verified end-to-end** on `dev.myerpdev.xyz` (Render `api.myerpdev.xyz`) — a real RELEASE usage decision was submitted successfully: GRN `200006` → QA `500001`, 5,000 KG CABLE TIE, `QUALITY_INSPECTION → UNRESTRICTED`, QA document reached status `DECIDED`, confirmed via direct DB query of `stock_ledger`/`stock_snapshot`. Dev DB fully migrated. **Prod migration deploy not yet done** (user has not requested it).
+
+### Files touched (final state, across the whole session)
+
+| File | Change |
+|---|---|
+| `supabase/migrations/20260708151037_qa_test_method_master.sql` | new — `erp_master.qa_test_method` |
+| `supabase/migrations/20260708151049_qa_category_test_config.sql` | new — `erp_master.qa_category_test_config` |
+| `supabase/migrations/20260708151105_inward_qa_redesign_alters.sql` | new — `test_method_id`/`lsl`/`usl` on test lines, `storage_location_id` on decision lines |
+| `supabase/migrations/20260708155451_reload_postgrest_after_qa_redesign_tables.sql` | new — PostgREST schema-cache reload for the two new tables |
+| `supabase/migrations/20260709025725_stock_document_item_number.sql` | new — SAP MKPF/MSEG `item_number` fix on the stock posting engine (see below) |
+| `supabase/functions/api/_core/procurement/inward_qa.handlers.ts` | rewritten (redesign) + 4 follow-up fixes (see chronology) |
+| `supabase/functions/api/_core/procurement/qa_test_method.handlers.ts` | new — test method + category config CRUD |
+| `supabase/functions/api/_routes/procurement.routes.ts` | new QA routes wired |
+| `supabase/functions/api/_acl/route-acl-registry.ts` | fixed `/usage-decision` → `/decision` path mismatch; registered new QA routes; dropped stale `/assign-officer` |
+| `frontend/src/pages/dashboard/procurement/procurementApi.js` | new QA fns; 204-response fix; console.error on every failed call |
+| `frontend/src/pages/dashboard/procurement/qa/QAQueuePage.jsx` | rewritten (expandable-row) + 5 follow-up fixes (see chronology) |
+| `frontend/src/pages/dashboard/procurement/qa/QADocumentPage.jsx` | deleted — merged into queue |
+| `frontend/src/pages/dashboard/procurement/DocumentFlowSection.jsx` | QA node → queue deep-link (`?qa_id=`) instead of a standalone detail route |
+| `frontend/src/navigation/screens/projects/operationModule/operationScreens.js` | `PROC_QA_DOCUMENT` screen removed |
+| `frontend/src/router/AppRouter.jsx` | `PROC_QA_DOCUMENT` route removed |
+| `CLAUDE.md` | new Section 8C (mandatory rule) + "Never Violate" bullet |
+| `docs/.../PACE_ERP_Operation_Management_SAP_Style_Discovery_and_Feasibility.md` | new Section 105 (item_number design) |
+
+### Commit-by-commit chronology
+
+| Commit | What |
+|---|---|
+| `6402535` | Main redesign: test method master, expandable-row UI, partial decisions, storage-location auto-inherit, DIRECTOR full authority |
+| `507fe3e` | Removed Assign-to-Me entirely (per user decision) — wrote text `userCode` into a `uuid` column, always 500'd; `tested_by`/`decided_by` already cover it |
+| `ddf212b` | PostgREST schema-cache reload for the two new tables; added Ctrl+S/Esc shortcuts to the expanded row |
+| `7504f4c` | Every DB error-check site now `console.error`/`console.warn`s the real Postgres error — `errorResponse()` deliberately collapses everything else to a generic `REQUEST_BLOCKED` for the client (Gate-2 enumeration-safe design), so real detail is server-log-only by design |
+| `a91ce0e` | **Root cause #1:** `route-acl-registry.ts` had the decision route registered as `/usage-decision` (never existed) instead of `/decision` — every submission was rejected by the ACL gate (`ROUTE_ACL_NOT_REGISTERED`) before ever reaching the handler. Also registered the new `qa-test-methods`/`qa-category-test-config` routes |
+| `31c7bec` | UX change (user request): Pass/Fail no longer shown live per result; Submit Decision evaluates all MCT results first, with **Continue Anyway** / **Change Result** on any failure |
+| `933c0fa` | `computePassFail()` — pure client-side mirror of the backend's LSL/USL comparison, so the submit-time gate doesn't wait on a save round-trip to know pass/fail |
+| `8c204fb` | **Root cause #2:** `fetchGrnContextForQa` assumed `grn_line_id` is always populated and joined `goods_receipt_line` by it — but `goods_receipt` is a flat one-row-per-line table for the from-line GRN creation flow, so `grn_line_id` is legitimately `NULL`. `String(null)` → literal `"null"` → Postgres `22P02` on every submit. Fixed to read `storage_location_id`/`uom_code`/`grn_rate` straight off `goods_receipt`; same fix applied to the frontend's Storage Location display (`grn.location_name` instead of `grn.lines[0]`) |
+| `d99c18c` | **Root cause #3:** `stock_document.document_number` had a bare `UNIQUE` constraint, but RELEASE/BLOCK/REJECT/FOR_REPROCESS each call `post_stock_movement()` twice (OUT + IN) under the same `qa_number` — second call always collided (`23505`) *after* the first had already committed, leaving 5,000 KG stuck outside every stock type. Temporary fix: per-caller document-number suffixing. Dev data corrected via a real `P322` reversal posting (not a raw table edit — `stock_ledger`/`stock_document` have a `backend_only` RLS policy blocking direct writes even via MCP; the `SECURITY DEFINER` RPC bypasses it correctly) |
+| `b6912db` | **Proper fix (per user decision, superseding the suffix workaround):** SAP MKPF/MSEG-style `item_number` column on `stock_document`, `UNIQUE(document_number, item_number)`, auto-assigned inside `post_stock_movement()` (both overloads). Zero caller changes needed anywhere — GRN/RTV/STO/Sales Order/Opening Stock/Physical Inventory all keep reusing their own document number and get correct items for free, including RTV's `isDirectPath` (3 calls, same `rtv_number`), fixed without touching `rtv.handlers.ts` |
+| `5f2fc34` | Locked the `item_number` design in `CLAUDE.md` (Section 8C) and the feasibility doc (Section 105) as a permanent architectural rule, not a one-off patch |
+
+### Design constraint locked for future work (spec §10.1)
+The future Stock Reclassification page (already out-of-scope for this gate) **must** insert a matching `inward_qa_decision_line` row whenever it moves `QUALITY_INSPECTION` stock that originated from an inward QA document — `remaining_qty` on this page is computed purely from decision-line sums, not a live ledger check, so bypassing that would leave a permanently orphaned "pending" row.
+
+### কী বদলাল (summary)
+1. **Test Method Master (নতুন)** — Company + Test Group (MCT/OTHR) level global reusable method pool + Company + Material Category + Method level LSL/USL config। MCT result mandatory, OTHR optional। Method নতুন category-তেও dropdown থেকে reuse করা যাবে।
+2. **Storage location fix** — QA আর manual storage location দেবে না; GRN থেকে auto-inherit, read-only।
+3. **Partial Usage Decision restore** — original Gate-13.6 DB design অনুযায়ী partial decision আবার allowed (`PENDING → IN_PROGRESS → DECIDED`), Gate-17.5 frontend-এর ভুল exact-sum requirement বাদ।
+4. **DIRECTOR role — full authority** (এই phase-এর জন্য) QA_ALLOWED_ROLES ও QA_MANAGER_ROLES দুটোতেই।
+5. **UI — CSN Tracker pattern** — expandable per-row panel, আলাদা detail-page navigation বাদ।
+6. **Pass/Fail gating** — submit-time bulk check, live per-result badge নেই, client-side instant computation।
+7. **Stock posting engine — SAP MKPF/MSEG `item_number`** — permanent, engine-level fix, whole ERP-wide (GRN/RTV/STO/Sales/Opening Stock/PI সবার জন্য)।
+
+### বাকি আছে
+- Prod migration deploy (dev-only এখন, user confirm করলে করা হবে)
+- Live browser smoke test আরও কিছু edge case-এ (partial decision-এর দ্বিতীয় batch, FOR_REPROCESS role-gated path) — user চাইলে করা যাবে
+
+**Next step:** Codex task brief বানিয়ে implementation শুরু করা।
+
+---
+
+## Session Polish — 2026-07-09 (GRN List Columns, Gate Exit Polish, ZGATE Report)
+
+**Date:** 2026-07-09
+**Implemented by:** Claude
+**Commits:** `99f36ff` (GRN list columns) → `964e406` (Gate Exit polish) → `2f16a2b` (ZGATE report)
+
+---
+
+### A — GRN List Page (PO05) Column Update ✅ DONE
+
+**What changed:** GRN List page (PO05) এ নতুন columns যোগ করা হয়েছে।
+
+**Before:** GRN Number, Material Name, Vendor, GRN Date, Status (5 columns)
+
+**After:** GRN Number, Material Code, Material Name, Vendor, Received Qty, Invoice No., GRN Date, Invoice Date, Transporter, LR Number, LR Date, Status (12 columns)
+
+**Backend changes (`grn.handlers.ts`):**
+- `listGRNsHandler` SELECT এ `invoice_number, invoice_date, transporter_id, lr_number, lr_date` যোগ
+- `transporterIds` bulk resolve — `.in()` query + `transporterMap`
+- Response এ `transporter_code`, `transporter_name`, `material_code` (renamed from `pace_code`) যোগ
+
+**Frontend changes (`GRNListPage.jsx`):**
+- 12-column grid — সব নতুন fields সহ
+
+| File | Change |
+|------|--------|
+| `supabase/functions/api/_core/procurement/grn.handlers.ts` | +5 SELECT fields, bulk transporter resolve |
+| `frontend/src/pages/dashboard/procurement/grn/GRNListPage.jsx` | 12-column grid |
+
+**Commit:** `99f36ff`
+
+---
+
+### B — Gate Exit Page Polish ✅ DONE
+
+**Changes:**
+1. **Layout:** Gate Exit section moved ABOVE Lines table (both editable + read-only view)
+2. **Detention warning:** Amber banner যখন exit_date − ge_date > 2 days
+3. **Remarks mandatory:** Detention situation এ remarks field mandatory + amber-styled
+4. **Tare weight validation:** Tare weight > gross weight হলে rose border + inline error + save blocked
+
+**Implementation details:**
+- `daysBetween(dateA, dateB)` helper function যোগ
+- `totalGrossWeight` useMemo (sum of all line gross_weight)
+- `tareExceedsGross` boolean validation
+- Save button disabled with clear message for both violations
+- `useMemo` import added
+
+| File | Change |
+|------|--------|
+| `frontend/src/pages/dashboard/procurement/gate/GateExitEntryPage.jsx` | Layout reorder, detention logic, tare validation |
+
+**Commit:** `964e406`
+
+---
+
+### C — Gate Entry Report (PO18 / ZGATE) ✅ IMPLEMENTED, ⚠️ ACL VISIBILITY UNRESOLVED
+
+**Tx Code:** PO18  
+**Screen Code:** `PROC_GATE_REPORT`  
+**Group:** GRP_ACL_RECEIVING  
+**SAP Equivalent:** ZGATE (custom gate entry register, line-level)
+
+**Design (SAP ZGATE columns):**
+GE Number, Company, Vendor, Material Code, Material Name, Qty, GRN No., GEX No., GE Date, GRN Date, GEX Date, Remarks, Gross Wt, Tare Wt, Net Wt (Calc), GEX−GE (days), GRN−GE (days)
+
+Days > 2 → rose-700 highlight।
+
+**Backend:**
+- `gateReportHandler` in `gate_entry.handlers.ts` — fetches `gate_entry` + `gate_entry_line` + `gate_exit_inbound` + `goods_receipt`; bulk resolves material/vendor/company; computes `days_ge_to_gex` and `days_ge_to_grn`; vendor filter post-resolve
+- Route: `GET /api/procurement/gate-report` → `procurement.routes.ts`
+- ACL registry: `PROC_GATE_REPORT` → `route-acl-registry.ts` (`skipAcl: false`, `action: "VIEW"`)
+
+**Frontend:**
+- `GateReportPage.jsx` — criteria bar (Company, Date From, Date To, GE Type, Status, Search) + 17-column report grid; auto-loads on company select
+- `getGateReport()` in `procurementApi.js`
+
+**Navigation:**
+- `PROC_GATE_REPORT` screen code → `operationScreens.js`
+- Import + Route → `AppRouter.jsx` (`procurement/gate-report`)
+
+**ACL chain setup (MCP direct SQL — correct per R-04):**
+1. `erp_menu.menu_master` → PROC_GATE_REPORT row inserted (universe=ACL, tx_code=PO18)
+2. `erp_menu.menu_tree` → display_order=4 under GRP_ACL_RECEIVING
+3. `acl.menu_master` → resource_code=PROC_GATE_REPORT
+4. `acl.capability_menu_actions` → linked to CAP_STORES
+5. `version_capability_menu_actions` → directly inserted for all active ACL versions (needed because `generate_acl_snapshot` uses versioned table, not live table)
+6. `acl.generate_acl_snapshot()` → all 4 companies
+7. `rebuild_acl_menu_snapshot()` → all ACL users × companies
+8. `erp_cache.session_menu_snapshot` → cleared (DELETE all rows)
+
+**⚠️ Rule Violation Note:**
+Migration file `20260708130000_gate_security_capability_split.sql` contains menu data inserts (erp_menu, acl.menu_master, capability_menu_actions). Per R-04, menu data = MCP direct SQL, not migration files. Violation acknowledged. No data harm (ON CONFLICT DO NOTHING on all inserts). DB state correct from MCP steps above.
+
+**⚠️ Unresolved — ZGATE not appearing in sidebar:**
+After all ACL chain steps + session cache clear + logout/login, PROC_GATE_REPORT still not visible in sidebar for ACL users. Root cause not identified before context ran out.
+
+**Likely next debugging steps:**
+- Confirm `erp_menu.menu_snapshot` rows exist for the user's company + work_context
+- Confirm `erp_cache.session_menu_snapshot` was actually empty when user logged in (may have been re-populated from old data before PROC_GATE_REPORT was in snapshot)
+- Check `precomputed_acl_view` has a row for user + PROC_GATE_REPORT
+- Re-run `rebuild_acl_menu_snapshot(user_id, company_id, work_context_id)` for the specific user being tested
+
+| File | Change |
+|------|--------|
+| `supabase/functions/api/_core/procurement/gate_entry.handlers.ts` | +`gateReportHandler`, +`daysBetween()` helper |
+| `supabase/functions/api/_routes/procurement.routes.ts` | +`GET /api/procurement/gate-report` route |
+| `supabase/functions/api/_acl/route-acl-registry.ts` | +PROC_GATE_REPORT ACL entry |
+| `frontend/src/pages/dashboard/procurement/procurementApi.js` | +`getGateReport()` |
+| `frontend/src/pages/dashboard/procurement/gate/GateReportPage.jsx` | New file — full report page |
+| `frontend/src/navigation/screens/projects/operationModule/operationScreens.js` | +PROC_GATE_REPORT screen code |
+| `frontend/src/router/AppRouter.jsx` | +import + route |
+| `supabase/migrations/20260708130000_gate_security_capability_split.sql` | New (rule violation — menu data in migration; harmless, ON CONFLICT DO NOTHING) |
+
+**Commit:** `2f16a2b`
+
+---
+
+## Session Polish — 2026-07-08/09 (Gate Exit Build, PO Create Bug Chain, Refresh Hotkey Rollout, GRN Rate Conversion Fix)
+
+**Date:** 2026-07-08 → 2026-07-09
+**Implemented by:** Claude
+**Commits:** `7bc5f32` → `5ffab2e` → `8a520e7` → `f8be332` → `d2e0aa4` → `b9064ad` → `c62836c`
+
+### Scope
+Gate Exit page built from scratch + ACL split (GRN-capable vs Gate-only/Security roles). PO Create page bug chain (403, cross-filter flicker, UOM latency, save-redirect, raw UUID) traced and fixed. ALT+R/F4 refresh hotkey wired across all 40 remaining Procurement pages. GRN pack-UOM → base-UOM rate conversion bug found and fixed (both posting and reversal paths), plus one live bad-data correction.
+
+---
+
+### A — Gate Exit Entry Page (Tx Code PO17) ✅ DONE
+
+**Tx Code:** PO17
+**Screen Code:** `PROC_GATE_EXIT`
+**Group:** GRP_ACL_RECEIVING
+
+**What it does:** GE Number lookup → readonly header/lines (reusing `hydrateGateEntry`) → Exit Date/Time entry (F4 shortcuts) + Tare Weight per line → Save.
+
+| File | Change |
+|------|--------|
+| `frontend/src/pages/dashboard/procurement/gate/GateExitEntryPage.jsx` | New file — GE lookup + exit entry form |
+| `supabase/functions/api/_core/procurement/gate_entry.handlers.ts` | +`getGateEntryByNumberHandler`; +vehicle-not-exited validation in `createGateEntryHandler` (blocks a new GE for a vehicle whose earlier GE hasn't been gate-exited yet) |
+| `supabase/functions/api/_routes/procurement.routes.ts` | +route wiring |
+| `supabase/functions/api/_acl/route-acl-registry.ts` | +`GET /api/procurement/gate-entries/by-number` → `PROC_GATE_EXIT`:VIEW |
+| `frontend/src/pages/dashboard/procurement/procurementApi.js` | +API functions |
+| `frontend/src/navigation/screens/projects/operationModule/operationScreens.js` | +`PROC_GATE_EXIT` screen code |
+| `frontend/src/router/AppRouter.jsx` | +import + route |
+| `supabase/migrations/20260708110000_gate_exit_entry_menu.sql` | New — `erp_menu.menu_master`/`menu_tree`, `acl.menu_master`, `CAP_PROC_RECEIVING` grant |
+
+**Commit:** `7bc5f32`
+
+---
+
+### B — ACL Capability Split: GRN-capable vs Gate-only/Security ✅ DONE
+
+**Design decision:** GRN-capable users (`CAP_PROC_RECEIVING`) can do everything — GE, Gate Exit, GRN, GE Prune. A narrower `CAP_PROC_GATE_SECURITY` capability was added for gate/security-only work contexts — Gate Entry List/Create + Gate Exit only, no GRN, no GE Prune.
+
+| Migration | Purpose |
+|-----------|---------|
+| `20260708150000_gate_security_capability_split.sql` | Creates `CAP_PROC_GATE_SECURITY`, grants it to all 11 roles (mirrors `CAP_PROC_RECEIVING`'s role list) |
+
+**Commit:** `5ffab2e`
+
+**⚠️ Pending:** which department/work-context actually gets `CAP_PROC_GATE_SECURITY` assigned was left open (user said "wait" on this sub-topic) — not yet assigned to any real work context.
+
+---
+
+### C — PO Create Bug Chain (5 bugs, 1 root-cause chain + 1 unrelated) ✅ ALL FIXED
+
+Reported via screenshots: PO Create 403, page reload/flicker on every field selection, UOM not appearing after Material+Vendor select, Save redirecting to home instead of the created record, raw UUID shown instead of Material name in PO Order Group Detail.
+
+| # | Bug | Root Cause | Fix | Commit |
+|---|-----|-----------|-----|--------|
+| C-01 | PO Create 403 for everyone (SA/GA excepted) | `acl.menu_master` never had a row for `PROC_PO_CREATE` — no role/capability could ever grant create/edit/delete/approve | Registered `PROC_PO_CREATE`, granted `CAP_PROC_BUYER` VIEW/WRITE/EDIT/DELETE/APPROVE | `5ffab2e` |
+| C-02 | Cross-filter dropdowns (vendor/material/company) blanked the whole form to a full-page loader on every selection | `filterOptionsQuery` re-keys on every selection; `isLoading` unconditionally gated render | `placeholderData: keepPreviousData` (React Query v5) + `loading` only blocks on first load — rolled out to `POCreatePage`, `POCreateOpeningPage`, `StoCreateFormPage`, `RTVCreatePage`, `IVCreatePage` | `5ffab2e` |
+| C-03 | Material UOM felt late/inconsistent | Combobox kept focus after selection (by design, for keyboard flow) but UOM lookup only ran on `onBlur` | Also fires immediately `onChange`, in addition to the existing blur fallback | `8a520e7` |
+| C-04 | Save redirected to home page instead of showing the created PO | `/dashboard/procurement/po-order-groups/:id` had no companion-route pairing in `routeIndex.js` → `RouteGuard` bounced it to `/` | Added companion route pairs for PO Order Group detail + PO Create/Create-Opening | `8a520e7` |
+| C-05 | PO Order Group Detail 500'd / failed to load when opened via the screen-stack | `useParams().id` came through as the literal string `":id"` (screen-stack window quirk) — missing the `routeId !== ":id"` + `getActiveScreenContext()` fallback guard already used elsewhere (`PODetailPage`, `STODetailPage`, `GRNDetailPage`) | Added the same guard to `POOrderGroupDetailPage.jsx`, `CSNDetailPage.jsx`, `GateExitInboundDetailPage.jsx` | `f8be332` |
+| C-06 | PO Order Group Detail showed raw Material UUID + fragile client-side Vendor lookup | Material column rendered `l.material_id` directly; Vendor title fell back to `group.vendor_id` when the 200-vendor client-side lookup missed | Backend bulk-resolves material/cost-center/payment-term via `enrichPoReferenceDisplays` + resolves `vendor_display` server-side; frontend renders `l.material_display`/`group.vendor_display`. Also added a Refresh action (page had none) | `d2e0aa4` |
+
+**Unrelated find during the C-05 audit (same class of bug, full registry sweep):** 6 more companion `*_CREATE` resources referenced by `route-acl-registry.ts` but never registered in `acl.menu_master` — `OM_CUSTOMER_CREATE`, `OM_MATERIAL_CREATE`, `PROC_IV_CREATE`, `PROC_RTV_CREATE`, `PROC_SO_CREATE`, `PROC_STO_CREATE` (this is why STO Approve 403'd even for DIRECTOR). Also `SA_OPENING_STOCK_LIST` was renamed to `PROC_OPENING_STOCK_LIST` by an earlier migration (`20260619000001`) but `route-acl-registry.ts` was never updated, and only VIEW/WRITE were ever granted (EDIT/DELETE/APPROVE missing). All fixed in `supabase/migrations/20260708160000_register_missing_create_resources.sql`, commit `f8be332`.
+
+---
+
+### D — ALT+R/F4 Refresh Hotkey — Procurement Module Rollout ✅ DONE
+
+**Root cause:** `useErpScreenHotkeys({ refresh: {...} })` registers a page into the global hotkey map consumed by ALT+R/F4; pages that never call it silently no-op the shortcut even though the UI hints "ALT+R OR F4 REFRESH" everywhere. Zero Procurement pages had it wired (42 non-Procurement pages already did).
+
+**Fix:** Wired into all 40 Procurement pages — PO, Gate, GRN, STO, RTV/Debit Note/Exchange Ref, Accounts (IV/Landed Cost/Blocked IV), Sales, CSN, QA Queue, PID, Opening Stock, Plant Transfer, and 7 Masters pages.
+
+**Bonus fix:** `SOListPage.jsx` and `SalesInvoiceListPage.jsx` had a Refresh button that was already broken before this — `onClick: () => setPage((current) => current)` is a same-value setState React bails out of, so it did nothing. Replaced with a `reloadTick` counter shared by both the button and the new hotkey.
+
+**Commit:** `b9064ad` (42 files changed)
+
+---
+
+### E — GRN Pack-UOM → Base-UOM Rate Conversion Bug ✅ FIXED (code + data)
+
+**How found:** User asked to pull Cable Tie's GRN from DB and verify the posted stock value by hand (1 packet = 100 NOS, packet price ₹34.5) — the posted value was 100× too high.
+
+**Root cause:** `goods_receipt.per_pack_qty` correctly converts `received_qty` (PO/transaction UOM, e.g. PKT) into `stockQty` (base UOM, e.g. NOS) for the **quantity** posted to `post_stock_movement`, but the **rate** (`grn_rate`, quoted per PKT) was posted as-is — not divided by the same `per_pack_qty` factor — inflating posted stock value by exactly that factor whenever a GRN's UOM differs from the material's base UOM.
+
+**Codebase-wide audit (user explicitly asked "why only GRN — don't all my modules need this same conversion?"):** confirmed `per_pack_qty`/`material_uom_conversion` is referenced ONLY in `grn.handlers.ts`. RTV, STO, Sales Order, PID, and Opening Stock all either work natively in base UOM or consume the existing weighted-average `valuation_rate` from `stock_snapshot` rather than deriving a fresh rate from a different UOM — so the bug is isolated to GRN's inbound receipt path, though its wrong output does propagate into the shared weighted average once posted.
+
+**Second bug found in the same audit:** GRN reversal used raw `received_qty` (PKT-denominated) and raw `grn_rate` directly, uncorrected — reversing an affected GRN would have moved the wrong (much smaller) quantity out of stock.
+
+**Code fix (`grn.handlers.ts`):**
+- `createAndPostGRNFromLineHandler` — new `baseUomRate = effectiveGrnRate / perPackQty` (when UOM mismatch), posted as `p_unit_value` instead of the raw `effectiveGrnRate`. `goods_receipt.grn_rate` column itself is left unchanged (still correctly shows the per-PKT rate for display/audit).
+- `reverseGRNHandler` (new-style branch) — mirrors the same conversion: `reversalStockQty = receivedQty * perPackQty`, `reversalBaseUomRate = grn.grn_rate / perPackQty`, both posted to the reversal `post_stock_movement` call.
+
+**Data correction (GRN 200006, Cable Tie, material `d498e4cd-0c3f-437a-8ad4-692981f54514`):**
+- `stock_ledger` is append-only (`stock_ledger_no_update`/`stock_ledger_no_delete` Postgres RULEs — confirmed via `pg_rules`) — historical wrong-value rows cannot be edited, left as-is.
+- `stock_snapshot` (mutable current-balance cache) corrected via direct MCP SQL: UNRESTRICTED row → quantity 5000 NOS (unchanged), `valuation_rate` 34.5 → **0.345**, `value` → **₹1,725** (was ~₹1,72,433).
+- **Side finding during correction:** 3 unrelated junk ledger entries (`P561`×2 IN, `P562` OUT — all wrongly posted in **KG** against this NOS-based material, net qty effect zero) had drifted the snapshot's weighted-average rate to `34.486605` before the fix, complicating the first correction attempt. Confirmed junk by user, left in the ledger (immutable history) but no longer affects current valuation now that `stock_snapshot` is corrected directly.
+- No dedicated "valuation adjustment" movement type exists in `movement_type_master` — this correction was a direct snapshot UPDATE, not a posted movement. Gap noted, not yet built (not requested).
+
+**Commit:** `c62836c`
+
+| File | Change |
+|------|--------|
+| `supabase/functions/api/_core/procurement/grn.handlers.ts` | +`baseUomRate` (creation path), +`baseUomCode`/`grnUomMismatch`/`grnPerPackQty`/`reversalStockQty`/`reversalBaseUomRate` (reversal path) |
+
+---
+
+## Session Polish — 2026-07-08/09 (API Latency Root-Cause Fix — Batch vs Sequential DB Loops)
+
+**Date:** 2026-07-08 → 2026-07-09
+**Implemented by:** Claude (investigation, audit direction, 5 handler fixes, all verification) + Codex CLI (initial PO batching pass, HR/Procurement/Admin/OM batching passes)
+**Commits:** `79cd103` → `a276c9c` → `7f8f38b` → `d7484d0`* → `92977f5` → `af7d8b7`
+**Reference:** `docs/Codex-Audit-Sequential-Loops.md` (full audit), `CLAUDE.md` §8B (locked rule)
+
+\* `d7484d0` is authored under a different session's commit message ("docs: lock Stock Reclassification...") — see part G below for why.
+
+### Scope
+User reported PO confirm and vendor-material list pages were slow, and asked whether it was just Render free-tier cold starts. It was not — traced to a widespread codebase pattern of `for`/`for...of` loops making one DB/RPC round-trip per row instead of batching. Fixed the worst offender first (PO confirm), then had Codex audit the entire ERP for the same pattern, locked a permanent classification rule in `CLAUDE.md`, and worked through the full audit list.
+
+---
+
+### A — Root Cause: Sequential Per-Row DB Loops, Not Hosting Tier
+
+Traced PO confirm slowness to `createCsnsForPo()` in `po.handlers.ts`: a `for` loop over PO lines doing 4 sequential DB round-trips per line (existing-CSN check → `generateProcurementDocNumber` RPC → material-category lookup → insert), plus similar sequential lookups in `buildPoLinesForInsert()` and the per-material PO creation loop in `createPOHandler()`. Confirmed the `generate_doc_number`/`generate_company_doc_number`/`generate_material_pace_code` RPCs all use a single atomic `UPDATE ... RETURNING` (not `SELECT MAX()` + separate write), so they are safe to call in parallel — this became the load-bearing fact for every batching decision that followed.
+
+### B — Full-ERP Audit (Codex CLI)
+
+Ran `codex exec` (audit-only, no code changes) to scan `supabase/functions` and `frontend/src` for every loop making one DB/API call per row instead of a set-based query. Found **~50 such loops** across Admin, HR, OM, Procurement, Production, and Session modules. Classified each as:
+- **INDEPENDENT** — one iteration's DB work doesn't depend on another's outcome → must batch (`.in()` reads, `Promise.all` independent writes)
+- **DEPENDENT** — stock/balance posting where order matters (RM/PM issue, GRN reversal, RTV/STO dispatch, opening stock, PI differences, QA usage-decision) → must stay sequential
+
+Output: `docs/Codex-Audit-Sequential-Loops.md` — file:line, round-trip count, INDEPENDENT/DEPENDENT classification, severity, per module.
+
+### C — CLAUDE.md §8B — Batch vs Sequential Loop Rule (LOCKED)
+
+Added as a permanent mandatory rule (not a blanket "batch everything" — that would have broken the DEPENDENT stock-posting loops): every new per-row loop must be classified before deciding sequential vs batched; DEPENDENT loops require a `// DEPENDENT: <why>` comment so they don't get "optimized" into a race condition later. Also locks the atomic `UPDATE ... RETURNING` pattern as mandatory for any future counter/doc-number function.
+
+### D — Fixes Applied
+
+| Commit | Module | What |
+|---|---|---|
+| `79cd103` | Procurement (`po.handlers.ts`) | Batched `createCsnsForPo` (existing-CSN + material-category lookups via `.in()`, doc-number+insert parallelized), `buildPoLinesForInsert` (cost-center + ASL/UOM batched), `createPOHandler` per-material loop (payment-term batched, header+line insert parallelized) |
+| `a276c9c` | HR (`leave.handlers.ts`, `out_work.handlers.ts`, `workflow_scope.ts`) | Work-context map now one `.in("company_id", ...)` across all companies instead of per-company; per-date leave/out-work RPC upserts parallelized after confirming (from the RPC's own SQL) neither maintains a running balance |
+| `7f8f38b` | OM, Procurement, Production, Session | `material.handlers.ts` bulk create/update/CSV-import; `sales_order.handlers.ts` invoice total recompute; `pack_bom.handlers.ts` + `stroke_change_request.handlers.ts` change-request apply; `session.admin_revoke.ts` cluster force-revoke; new migration `20260709120000_vendor_material_search_trgm_indexes.sql` (pg_trgm GIN indexes so existing leading-wildcard `ilike` search can use an index — no code change needed) |
+| `d7484d0`* | Procurement (remaining) | `l2_masters.handlers.ts`, `gate_entry.handlers.ts`, `invoice_verification.handlers.ts`, `sales_order.handlers.ts` (DC-line batch), `sto.handlers.ts` (CSN creation mirrors the `po.handlers.ts` pattern) batched; `// DEPENDENT:` comments added (zero logic change) to the ~10 confirmed stock-posting loops in `grn.handlers.ts`, `inward_qa.handlers.ts`, `opening_stock.handlers.ts`, `physical_inventory.handlers.ts`, `rtv.handlers.ts`, `sales_order.handlers.ts`, `sto.handlers.ts` |
+| `92977f5` | Admin (`SACapabilityGovernance.jsx`, `SAMaterialMaster.jsx`, `SAVendorMaster.jsx`) | Capability-matrix save, pack-content bulk removal, and material/vendor bulk activate-deactivate parallelized with `Promise.all` |
+| `af7d8b7` | OM (`material.handlers.ts`, `vendor.handlers.ts`, `vendor_material_info.handlers.ts`) | Bulk delete (materials + vendors) and CSV company-mapping import parallelized with per-id result ordering preserved; VMI UOM validation batched to one `.in()` query |
+
+### E — Atomicity Bug Found in `createPOHandler` (fixed before Codex's own commit)
+
+Codex's first pass parallelized per-material PO creation (`Promise.all` across all requested materials in an order-group), but the per-material validation (payment term / freight term / GST terms / rebate basis) ran *inside* each parallel task, alongside the DB writes. This meant a validation failure on material #2 no longer stopped material #3+ from being created (unlike the original sequential loop, which stopped immediately) — could leave an unpredictable partial set of POs in an order-group on failure. Fixed by moving all per-material validation into a synchronous pre-pass that runs to completion *before* any `Promise.all` write starts — a bad material now blocks the whole batch before anything is written, matching the atomicity the original sequential code implicitly had.
+
+### F — Compile Bug Found in Codex's STO Batching (caught by independent `deno check`)
+
+Codex's Procurement batch referenced a `getPaymentTermRowsByIds()` helper in `sto.handlers.ts` that only existed in `po.handlers.ts` — would have failed to load at deploy time. Codex's own self-check missed this (its sandbox couldn't resolve `@supabase/supabase-js` to run `deno check` at all). Caught by running `deno check` independently before committing; added the missing batched helper to `sto.handlers.ts` and reverified clean.
+
+### G — Git Index Race Condition (operational finding, not a code bug)
+
+Mid-session, discovered a **second Claude/Codex session was working on this same repo concurrently** (found via an unexpected commit `a91ce0e` fixing an unrelated Inward QA ACL route bug — see the QA Redesign chronology above). Later, staging 10 files for the Procurement batch (`git add` then `git commit`) raced against the other session's own `git commit`: since `.git/index` is a single shared file per working directory with no session isolation, the other session's plain `git commit` (run between this session's `add` and `commit`) picked up everything staged at that moment — including this session's 10 files — into their own commit `d7484d0` ("docs: lock Stock Reclassification..."). Content was verified byte-identical to what was intended (confirmed the `getPaymentTermRowsByIds` fix from part F was present in `HEAD`), so no work was lost — only the commit message/attribution is wrong for those 10 files. Did not rewrite history (no amend/rebase) since the other session was still active. **Risk for future sessions:** avoid `git add` + `git commit` as two separate tool calls when another agent may be committing in the same working tree around the same time; prefer committing immediately after staging, or confirm `git log` shows the expected commit right after.
+
+### Files changed (all commits, aggregate)
+
+| File | Change |
+|------|--------|
+| `CLAUDE.md` | +Section 8B (Batch vs Sequential Loop Rule) |
+| `docs/Codex-Audit-Sequential-Loops.md` | New — full-ERP audit, ~50 loops classified |
+| `supabase/functions/api/_core/procurement/po.handlers.ts` | CSN creation, PO-line prep, per-material PO creation batched; atomicity fix |
+| `supabase/functions/api/_shared/workflow_scope.ts` | +`loadActiveCompanyWorkContextsByCompany()` |
+| `supabase/functions/api/_core/hr/leave.handlers.ts`, `out_work.handlers.ts` | Work-context map + per-date RPC batched |
+| `supabase/functions/api/_core/om/material.handlers.ts` | Bulk create/update/CSV-import (name-dedup via in-memory index), delete, mapping import batched |
+| `supabase/functions/api/_core/om/vendor.handlers.ts` | Bulk delete batched |
+| `supabase/functions/api/_core/om/vendor_material_info.handlers.ts` | UOM validation batched; leading-wildcard search now index-backed (migration, no code change) |
+| `supabase/functions/api/_core/procurement/sales_order.handlers.ts` | Invoice total recompute + DC-line batch; `DEPENDENT` comment on issue-stock loop |
+| `supabase/functions/api/_core/production/pack_bom.handlers.ts`, `stroke_change_request.handlers.ts` | Change-request apply batched (dedupe-then-parallelize) |
+| `supabase/functions/api/_core/session/session.admin_revoke.ts` | Cluster force-revoke parallelized |
+| `supabase/functions/api/_core/procurement/l2_masters.handlers.ts`, `gate_entry.handlers.ts`, `invoice_verification.handlers.ts`, `sto.handlers.ts` | Batched; `sto.handlers.ts` also gained the missing `getPaymentTermRowsByIds()` helper |
+| `supabase/functions/api/_core/procurement/grn.handlers.ts`, `inward_qa.handlers.ts`, `opening_stock.handlers.ts`, `physical_inventory.handlers.ts`, `rtv.handlers.ts` | `DEPENDENT:` comments only, zero logic change |
+| `frontend/src/admin/sa/screens/SACapabilityGovernance.jsx`, `SAMaterialMaster.jsx`, `SAVendorMaster.jsx` | Bulk-action loops parallelized |
+| `supabase/migrations/20260709120000_vendor_material_search_trgm_indexes.sql` | New — pg_trgm GIN indexes, applied to dev |
+
+### বাকি আছে
+None — all 9 audit-derived tasks complete, verified (independent `deno check`/eslint on every touched file, logic review for order-sensitivity), and pushed to `origin/dev`.
+
+---
+
+*Last Updated: 2026-07-09*
+*Next: Assign `CAP_PROC_GATE_SECURITY` to a real work context; resolve PROC_GATE_REPORT sidebar visibility; continue QA Redesign (Codex task brief); Gate-27 design*
+
+---
+
+## Known Issues — Reported 2026-07-09, Fixed 2026-07-10
+
+User walkthrough of GE/Gate Exit/GRN/QA pages surfaced 10 issues (logged as-reported the same day). All 10 root-caused and fixed same session.
+
+**Root cause behind #1, #2, #6, #7, #8 (all one class of bug):** two silent-failure column-name bugs, same shape as the `material_code`→`pace_code` bug already fixed once in `grn.handlers.ts` on 2026-07-08 (commit `52ed354`) — but that fix never touched the sibling files that had copy-pasted the same wrong guess:
+- `gate_entry.handlers.ts`'s `hydrateGateEntry` queried `material_master.select("id, material_code, material_name")` — `material_code` doesn't exist (real column is `pace_code`). The Supabase client returns this as a query error, which was never checked (`mats.error` was silently dropped), so `matMap` stayed empty and every GE/Gate Exit line fell back to rendering the raw `material_id` UUID.
+- `grn.handlers.ts`'s `resolveStorageLocationName` (and the old-style per-line resolver) queried `storage_location_master.select("location_code, location_name")` — the real columns are `code`/`name` (confirmed via `information_schema.columns`). Same silent-failure pattern, so storage location never resolved on the GRN Detail page or the QA page (which reads the GRN's resolved location).
+- Bonus find during the audit: `planning.handlers.ts` (Gate-22 Procurement Planning View) had the identical `material_code` bug, except this one WASN'T silently swallowed — `error` was checked and thrown, so the entire Planning View 500'd whenever it had materials to resolve. Fixed as part of the same sweep.
+
+| # | Issue | Root cause | Fix | Files |
+|---|-------|-----------|-----|-------|
+| 1, 2 | Material shows raw UUID on GE Detail + Gate Exit pages | `hydrateGateEntry`'s wrong `material_code` column (see above) | Query `pace_code` instead; added `mats.error` check so a future column typo throws loudly instead of silently degrading to UUIDs; removed the `\|\| row.material_id` UUID-fallback in both pages' grid columns | `gate_entry.handlers.ts`, `GateEntryDetailPage.jsx`, `GateExitEntryPage.jsx` |
+| 3 | No confirmation popup after Gate Exit save | Never built — save just showed a text notice | Added the same success-modal pattern used by GE creation (`GateEntryCreatePage.jsx`'s `successGE`) — shows the new Exit Number, Enter/Esc to close and reset for the next lookup | `GateExitEntryPage.jsx` |
+| 4 | GRN's transporter field shows blank even though the linked CSN has one | `getGELinesForGRNHandler` returned `csn_transporter_id` but never resolved a name for it; `GRNPostFlow.jsx` initialized `transporterName` to `""` regardless, so the (correctly prefilled) `transporterId` rendered as an apparently-empty search box. Verified via DB: the ID itself was already carrying over correctly on every recent GRN — this was a display-only bug on the create form, not a data bug | Backend bulk-resolves `csn_transporter_name` alongside the id (`.in()` batch per CLAUDE.md §8B); frontend now seeds `transporterName` from it | `grn.handlers.ts`, `GRNPostFlow.jsx` |
+| 5 | ZGATE report missing Vehicle Number + Invoice Number | Columns simply never selected/mapped | Added `vehicle_number` to the `gate_entry` select, `invoice_number` to the per-line `goods_receipt` select, both threaded into `items[]` and the report grid + search filter | `gate_entry.handlers.ts` (`gateReportHandler`), `GateReportPage.jsx` |
+| 6 | QA page shows raw Storage Location UUID | `resolveStorageLocationName`'s wrong `location_code`/`location_name` columns (see above) | Query `code`/`name`, still returned to callers as `location_code`/`location_name` for API-shape compatibility | `grn.handlers.ts` |
+| 7, 8 | GRN Detail / GE / Gate Exit pages missing fields, not "picking up" data | Same two column bugs above — once material name and storage location actually resolve, `GRNDetailPage.jsx`'s existing Documents/Accounts/Transporter/Receipt cards (already wired to `detail.invoice_number`, `detail.transporter_name`, etc. from Gate-17.4) render correctly; no additional frontend change needed once the backend stopped silently returning nulls | (fixed by the #1/#2/#6 backend fixes) | — |
+| 9 | Document Flow history-card click doesn't show full detail | Investigated `DocumentFlowSection.jsx` + `document_flow.handlers.ts` end-to-end: card click correctly `openScreen()` + `navigate()`s to the target document's own detail page, which does its own full `useQuery` fetch (same pattern as every other detail page) — no distinct bug found in the flow component itself. The perceived "missing data" was the downstream symptom of the same #1/#2/#6/#7 field-resolution bugs on whichever detail page the card led to | (fixed by the #1/#2/#6 backend fixes) | — |
+| 10 | Multi-PO/multi-material GE: Gross Weight (and Gate Exit's derived Net Weight) repeated the header total on every line instead of splitting by received-qty proportion | `GateEntryCreatePage.jsx` sent the single vehicle-level `gross_weight` verbatim as every line's `gross_weight`. Downstream, `distributeNetWeight()` in `gate_entry.handlers.ts` (used at Gate Exit save) already splits proportionally by weight-basis (`gross_weight` if set, else qty) — but with every line's gross_weight identical, its weight-basis was equal across lines, so net weight came out as a flat even split instead of by quantity. One fix at the source resolves both | `GateEntryCreatePage.jsx` splits the header gross weight across `activeLines` by `ge_qty` ratio before sending to the backend (last line absorbs the rounding remainder so the split always sums back exactly); `distributeNetWeight()` needed no change — it now naturally produces a correct proportional net-weight split since its weight-basis input is no longer artificially equal | `GateEntryCreatePage.jsx` |
+
+**SAP confirmation for #10:** proceeded with the design already recorded when this was first logged — gross/tare/net weight captured once per vehicle/GE header (single weighbridge reading), then split proportionally by received-qty ratio for line-level display/costing. Not re-editable per line.
+
+**Commit:** `a8f0d98`
+
+---
+
+## Gate-27.1 - Pack Code Master / Production ACL Gap
+
+**Task Brief:** `docs/Operation Management/implementation-specs/CODEX-GATE27.1-PACKCODE-TASK-BRIEF.md`
+**Status:** DONE
+**Date:** 2026-07-10
+
+**Implemented:**
+- Registered the current `/api/production/*` route surface in `supabase/functions/api/_acl/route-acl-registry.ts`, including the new Pack Code create/edit and approved-prodshade endpoints.
+- Extended `supabase/functions/api/_routes/production.routes.ts` with `POST /api/production/pack-codes`, `PATCH /api/production/pack-codes/:id`, and `GET /api/production/prodshades` without changing the `dispatchProductionRoutes` signature.
+- Reworked `supabase/functions/api/_core/production/pack_config.handlers.ts` to add Pack Code create/edit, replace the broken config upsert with explicit check-then-write logic, add delete guards for existing Pack BOM / Packing PO usage, add approved-prodshade listing, and enrich config list rows with FG SKU strings.
+- Redesigned `frontend/src/admin/sa/screens/SAPackCodeMasterPage.jsx` to match the locked Tab 1 / Tab 2 brief: Pack Code add/edit drawer, prodshade combobox filtering, no raw UUID rendering on the screen, FG SKU column, selected-prodshade banner, and explicit query error states.
+- Added `createPackCode`, `updatePackCode`, and `listApprovedProdshades` to `frontend/src/pages/dashboard/production/prodApi.js`.
+- Extended `frontend/src/components/forms/ErpComboboxField.jsx` with a configurable empty-state message so Tab 2 can show the required "No approved prodshades yet..." guidance.
+- Added migration `supabase/migrations/20260710110000_gate27_production_acl_gap_fill.sql` for production ACL resource backfill plus the `prodshade_pack_config_dedup_idx` safety index.
+
+**Files touched:**
+- `supabase/functions/api/_acl/route-acl-registry.ts`
+- `supabase/functions/api/_routes/production.routes.ts`
+- `supabase/functions/api/_core/production/pack_config.handlers.ts`
+- `frontend/src/admin/sa/screens/SAPackCodeMasterPage.jsx`
+- `frontend/src/pages/dashboard/production/prodApi.js`
+- `frontend/src/components/forms/ErpComboboxField.jsx`
+- `supabase/migrations/20260710110000_gate27_production_acl_gap_fill.sql`
+
+**Verification run:**
+- Exact-route duplicate check on `route-acl-registry.ts`: passed (`277` exact route keys, no duplicates).
+- Raw UUID rendering grep on `SAPackCodeMasterPage.jsx`: passed (no remaining `material_id?.slice(...)` style UUID rendering).
+- Migration file read-back: completed; syntax visually checked, not applied.
+- `deno check` was run against the touched backend entrypoints, but the repo currently has pre-existing production-domain type errors outside this brief (for example in `batch_series.handlers.ts`, `pack_bom.handlers.ts`, `plan_feed.handlers.ts`, `process_order.handlers.ts`, `packing_order.handlers.ts`, and pipeline/shared typing files). The type/signature issues introduced in `pack_config.handlers.ts` were corrected; remaining `deno check` failures are pre-existing.
+- Frontend lint execution could not be completed in this sandbox because `npm` was not executable and direct `node` module resolution hit environment permission errors outside the workspace root.
+
+**Deviations / constraints:**
+- `listApprovedProdshadesHandler` accepts both `ACTIVE` and `APPROVED` stroke statuses. The brief says `ACTIVE`, but the checked-in production schema/handlers still use `DRAFT/APPROVED` for `stroke_master.status`; restricting to `ACTIVE` in this repo state would return an always-empty list.
+- The brief requested a live dev-DB query to enumerate missing `acl.menu_master` rows. No callable DB/MCP SQL tool was available in this session, so the migration was made idempotent and broad enough to safely backfill the referenced production resources when Claude applies it to dev.
+
+
+
+---
+
+## Gate-27.1 — Claude Verification Pass + Live Walkthrough Fixes (2026-07-10)
+
+**Verifier:** Claude (MCP dev DB + local deno/eslint + live preview)
+**Follows:** Codex commit `aade0f9`, Claude fix commits on `dev`
+
+Verified Codex's Gate-27.1 implementation and drove the page live. Found and fixed several issues Codex could not catch in its sandbox (no DB/MCP, no working `npm`/`deno`):
+
+### A — Migration ACL backfill bug (fixed before applying)
+Codex's migration re-inserted 20 production resources into `erp_menu.menu_master` with `ON CONFLICT (menu_code)` and fresh tx_codes (PR17/PR18). But all 20 were **already registered** there (real tx_codes OM08/OM09/OM10/PR00–PR17), `erp_menu.menu_master` has **no unique constraint on `menu_code`** (only on `tx_code`), and the reused PR17 would collide. Removed that whole block — only `acl.menu_master` had the real 20-row gap. Applied the corrected migration to dev via MCP, regenerated ACL + menu snapshots for all 9 DIRECTOR users × 4 companies.
+
+### B — `deno check` type error (fixed)
+Delete-safety-check cast an un-awaited query builder to `Promise<{count}>`. Removed the cast so it resolves like the rest of the codebase's `count`-via-`Promise.all` calls. (Remaining `deno check` failures are pre-existing codebase-wide `DbClient` typing gaps, not from this change.)
+
+### C — Migration filename ↔ remote timestamp mismatch (fixed)
+`apply_migration` recorded the migration remotely as `20260709191704`; local file was `20260710110000`. Renamed local to match so `supabase db push` won't complain (same class as CLAUDE.md's earlier "Migration Naming Fix").
+
+### D — React error #31 crash on drawers + notice (fixed)
+`SAPackCodeMasterPage.jsx` passed `DrawerBase`'s `actions` as an array of `{label, tone, onClick}` objects and `ErpScreenScaffold`'s `notice` as an object — both get rendered as raw React children → "Objects are not valid as a React child" (#31). `DrawerBase` renders `{actions}` directly (expects JSX), and `ErpScreenScaffold` expects `notice` to be a string / `notices` to be an array. Rewrote both drawer `actions` as JSX fragments (matching the working `POCreatePage.jsx` pattern) and switched `notice={obj}` → `notices={[{key,tone,message}]}`.
+
+### E — 🔴 ROOT CAUSE of the page-load 500: `erp_production` schema not exposed to PostgREST
+Even after the route-ACL fix, every `/api/production/*` call 500'd. Direct PostgREST probe returned `PGRST106: Invalid schema: erp_production` — **`erp_production` was missing from the project's Data-API "Exposed schemas" list**. Same class as the `erp_menu` PostgREST quirk already noted in CLAUDE.md §4A. `serviceRoleClient.schema("erp_production")` can't even route until the schema is exposed, regardless of grants.
+
+**Fix (dev):** added `erp_production` to Supabase Dashboard → Settings → API → Exposed schemas. Confirmed after: PGRST106 → 42501 (schema now routes; `anon` denied as expected), and `service_role` has USAGE + full table CRUD on all 17 `erp_production` tables.
+
+> ⚠️ **PROD DEPLOY CHECKLIST (must not forget):** `erp_production` schema exposure is a **Dashboard/platform config, NOT a migration** — it will NOT travel with `supabase db push`. Before/at prod go-live, add `erp_production` to the **prod** project's Exposed schemas list, or the entire production module (Pack Code, Stroke Master, Process PO, Packing PO, Batch Series, Segment Location) will 500 on every call.
+
+### F — Diagnostic logging added
+Added `console.error` at every DB-error throw site in `pack_config.handlers.ts` (matches the `vendor.handlers.ts` convention) so future `erp_production` failures surface the real Postgres error in Render logs instead of a bare 500.
+
+### G — 🔴 SYSTEMIC: PostgREST cannot embed across schemas — all 26 production cross-schema embeds broken
+Once `erp_production` was exposed, `GET /api/production/prodshades` still 500'd even with zero strokes (should be empty `[]`). Direct PostgREST probe pinned it: the handlers embed `material:erp_master.material_master!<fk>(...)` — a **cross-schema** embed (query table in `erp_production`, embedded table in `erp_master`). Both spellings fail:
+- `erp_master.material_master!fk` → `PGRST100` (parse error — schema-qualified embed target not allowed)
+- `material_master!fk` → `PGRST200` ("no relationship … in schema erp_production" — PostgREST embedding is schema-local; it won't follow a FK into another schema)
+
+Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id` resolves — same `erp_production` schema).
+
+**Scope (grep):** **26 cross-schema embeds across 8 files** — `stroke_master.handlers.ts` (4), `process_order.handlers.ts` (3), `packing_order.handlers.ts` (5), `pack_bom.handlers.ts` (4), `plan_feed.handlers.ts` (2), `stroke_change_request.handlers.ts` (3), `batch_series.handlers.ts` (1), `segment_location.handlers.ts` (4, embeds `erp_inventory.storage_location_master`). Every one 500s the moment its endpoint is hit. None were ever exercised because the schema was unexposed until 2026-07-10.
+
+**Fix pattern (CLAUDE.md §8A):** replace each cross-schema embed with a **two-query batch join** — query the `erp_production` table for the FK ids, then `.schema("erp_master").from(...).in("id", ids)` and join in-memory. (Single-table cross-schema reads via explicit `.schema("erp_master")` already work fine — it's only *embeds* that PostgREST can't do.)
+
+**Done in this pass (unblocks Pack Code Master):** rewrote `listApprovedProdshadesHandler` and `listPackConfigsHandler` in `pack_config.handlers.ts` to two-query batch joins (material embed removed, intra-schema `pack_code` embed kept).
+
+**Remaining (follow-up — Codex brief):** the other 24 embeds across 7 files. `stroke_master.handlers.ts` is being actively expanded by a concurrent session — coordinate / let that session fix its own file's embeds.
+---
+
+## Gate-27.2 - Cross-Schema Embed Removal Follow-Up
+
+**Task Brief:** `docs/Operation Management/implementation-specs/CODEX-GATE27.2-XSCHEMA-EMBED-TASK-BRIEF.md`
+**Status:** DONE
+**Date:** 2026-07-10
+
+**Implemented:**
+- Replaced all in-scope production cross-schema PostgREST embeds with batched two-query joins and reconstructed the original nested alias keys so frontend response shapes remain unchanged.
+- Left every same-schema embed in place (`pack_code`, `process_order`, `stroke`, `pack_bom`, `pack_bom_line`), and did not touch `stroke_master.handlers.ts` or `pack_config.handlers.ts` per brief.
+- Added `console.error(..., JSON.stringify(error))` before each new throw introduced by the cross-schema join path so PostgREST/Postgres failures are visible in logs.
+
+**Embeds fixed by file:**
+- `supabase/functions/api/_core/production/process_order.handlers.ts`
+  - `material:erp_master.material_master!material_id` in `fetchOrderLines`, `listProcessOrdersHandler`, `getProcessOrderHandler`
+- `supabase/functions/api/_core/production/packing_order.handlers.ts`
+  - `material:erp_master.material_master!material_id` in `listPackingOrdersHandler`, `getPackingOrderHandler`, `packing_order_line` fetch inside `getPackingOrderHandler`, `finalizePackingOrderHandler`, `reversePackingOrderHandler`
+- `supabase/functions/api/_core/production/pack_bom.handlers.ts`
+  - `sku:erp_master.material_master!sku_material_id` in `listPackBomsHandler`, `getPackBomHandler`, `listPackBomChangeRequestsHandler`
+  - `material:erp_master.material_master!material_id` in nested `pack_bom_line` fetch inside `getPackBomHandler`
+- `supabase/functions/api/_core/production/plan_feed.handlers.ts`
+  - `material:erp_master.material_master!material_id` in `listPlanFeedHandler`, `getPlanFeedHandler`
+- `supabase/functions/api/_core/production/stroke_change_request.handlers.ts`
+  - `material:erp_master.material_master!material_id` in nested `stroke_line` fetch inside `getStrokeChangeRequestHandler`
+  - `old_material:erp_master.material_master!old_material_id` and `new_material:erp_master.material_master!new_material_id` in `getStrokeChangeRequestHandler`
+- `supabase/functions/api/_core/production/batch_series.handlers.ts`
+  - `material:erp_master.material_master!prodshade_material_id` in `listBatchSeriesHandler`
+- `supabase/functions/api/_core/production/segment_location.handlers.ts`
+  - `rm_sloc`, `pm_sloc`, `shopfloor_sloc`, `fg_sloc` embeds from `erp_inventory.storage_location_master` in `listSegmentLocationsHandler`, replaced with one batched storage-location lookup keyed by the union of all four FK columns
+
+**Consumer field check:**
+- Re-checked consumer reads for the reconstructed aliases via repo grep. The response fields currently read by consumers remain present: `material.pace_code`, `material.material_name`, `material.base_uom_code`, `material.production_mode`, `sku.pace_code`, `sku.material_name`, `sku.pack_code`, `old_material.material_name`, `new_material.material_name`, and `*.code` for segment-location aliases.
+- No extra consumer-driven fields had to be added beyond the original embed column lists from the handlers.
+
+**Verification run:**
+- Cross-schema embed grep over the in-scope files is clean; remaining production cross-schema embeds are only in `stroke_master.handlers.ts`, which was intentionally left untouched.
+- `deno check` was run on each edited handler. After local cleanup of file-anchored query-builder/status-signature typing issues in these handlers, the remaining failures are only the known pre-existing shared typing errors in `supabase/functions/api/_shared/serviceRoleClient.ts`, `supabase/functions/api/_shared/canonical_access.ts`, and `supabase/functions/api/_pipeline/context.ts`.
+- Manual loop audit of the new code paths confirmed no new per-row awaited DB reads were introduced. Each related-table lookup is a single batched `.in(...)` fetch per target table per handler.
+
+**Files touched:**
+- `supabase/functions/api/_core/production/process_order.handlers.ts`
+- `supabase/functions/api/_core/production/packing_order.handlers.ts`
+- `supabase/functions/api/_core/production/pack_bom.handlers.ts`
+- `supabase/functions/api/_core/production/plan_feed.handlers.ts`
+- `supabase/functions/api/_core/production/stroke_change_request.handlers.ts`
+- `supabase/functions/api/_core/production/batch_series.handlers.ts`
+- `supabase/functions/api/_core/production/segment_location.handlers.ts`
+- `docs/Operation Management/implementation-specs/OM-IMPLEMENTATION-LOG.md`
+
+**Explicitly untouched:**
+- `supabase/functions/api/_core/production/stroke_master.handlers.ts`
+- `supabase/functions/api/_core/production/pack_config.handlers.ts`
+
+---
+
+## Gate-27.3 — Process PO Create 400 Fix (PR09)
+
+**Task Brief:** `docs/Operation Management/implementation-specs/CODEX-GATE27.3-PROCESSPO-CREATE-FIX-TASK-BRIEF.md`
+**Status:** DONE (Codex implemented, Claude verified)
+**Date:** 2026-07-11
+
+**Root cause (diagnosed by Claude):** `ProductionPOCreatePage.jsx` sent `prod_type` (backend `createProcessOrderHandler` reads `po_type`) and never sent `segment_code` (backend hard-requires `VALID_SEGMENTS`) → guaranteed `PROD_PO_INVALID` 400 on every Process PO create. Backend already accepts `prodshade_material_id`/`planned_qty_kg`/`stroke_master_id` aliases, so it is a pure frontend fix.
+
+**Implemented (Codex):** frontend-only, single file — added required Segment dropdown (ADMIX/HPS/IWC/POWDER/INT, manual because `production_mode` is NULL on all materials so it can't be auto-derived), `segment_code` in `EMPTY_PROCESS` + validation guard, changed create payload key `prod_type`→`po_type` and added `segment_code`, completed the file header with `Phase`/`Authority` (Constitution §9). Packing tab left out of scope (needs its own §83.4 PR09-Packing rebuild).
+
+**Claude verification pass:**
+- Diff exactly on-spec: 26 insertions / 2 deletions, Process-tab only. Field contract re-confirmed against `createProcessOrderHandler` — `po_type` + `segment_code` are exactly what it validates; the guaranteed 400 is resolved by construction.
+- ESLint clean (exit 0) on the touched file.
+- **Fixed 2 Codex encoding-corruption artifacts:** Codex's PowerShell write mangled two em-dashes (`—`→`â€"` mojibake) at the page title (line ~137) and the Packing-tab FO placeholder (line ~329) — both would render as UI garbage and line 329 violated "Packing tab untouched." Repaired both to clean `—` via a byte-safe node script; re-scan clean.
+- **Reverted 1 unrequested drift:** Codex reformatted the `ERRORS` object's column alignment (not requested in the brief) — restored to original.
+- Confirmed no backend / routes / `prodApi.js` / migration changes; Packing tab now byte-identical to pre-Codex.
+
+**Not yet proven clean end-to-end (data prerequisites — next):** a *live* zero-error Process PO create still needs (a) `production_segment_location_config` seeded for the test company, and (b) opening stock for the chosen stroke's RM lines (else Standard availability hard-block → 422 per §83.5). Both are MCP business-data jobs (dev + prod separately), tracked as the immediate next step before live verification.
+
+**Files:** `frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx`
+
+---
+
+## Gate-27.5 — QA Queue (PR16) field/display fix — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.5-QAQUEUE-FIELD-FIX-TASK-BRIEF.md` · **Codex-run during Claude downtime** · **Date:** 2026-07-11
+
+**Implemented (Codex):** `listProcessOrdersHandler` now batch-resolves `stroke_number` (from `stroke_master`) and `created_by_display` (via shared `resolveUserDisplayNames`), attached additively. `QAQueuePage.jsx` reads correct fields (`po_type`, `planned_qty`, `stroke_number`, `created_by_display`), all raw-UUID `.slice(0,8)` fallbacks removed, Dosage% shows interim `--`.
+
+**Claude verification:** field contract matches list handler; `resolveUserDisplayNames(ids)` signature confirmed (auth_user_id → code/name); both resolutions batched (`.in()`, §8B); no route/ACL/migration/`fetchOrderLines`/`getProcessOrder` change (on brief); no mojibake; handler `deno check` clean. Minor cosmetic: Codex used ASCII `--` for empty cells instead of `—` (followed the brief's mojibake-avoidance note) — left as-is.
+**Files:** `process_order.handlers.ts` (list only), `QAQueuePage.jsx`.
+
+---
+
+## Gate-27.4 — Reservation (reserve@Standard, clear@Prune) + availability netting + Prune endpoint — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.4-RESERVATION-PRUNE-TASK-BRIEF.md` · **Codex-run during Claude downtime** · **Date:** 2026-07-11
+
+**Implemented (Codex):**
+- Migration `20260711100000_gate27_reservation_document_and_prune.sql` — `erp_production.reservation_document` (generic 5-source, generated `balance_qty`, status CHECK, FKs, indexes, service_role grants) + `reservation_number_seq` + `process_order` prune columns + `CANCELLED` added to status CHECK. Idempotent.
+- `createProcessOrderHandler` — captures inserted lines (both stroke-prepopulate + manual paths via `.select()`), batch-inserts one OPEN reservation per line (storage location resolved from line override → segment config → NULL).
+- `checkStockAvailability` — subtracts OPEN/PARTIAL reservation `balance_qty` at interim material+company granularity (location-ready, commented).
+- New `pruneProcessOrderHandler` (STANDARD→CANCELLED, reason mandatory, cancels linked reservations) + route + `route-acl-registry` entry (`PROD_PO_EDIT/EDIT`, same as sibling process-order writes).
+
+**Claude verification:** migration **applied to Dev via MCP** and confirmed (table + prune cols + CANCELLED constraint present); scope exactly on brief (backend only, no Verify/Final/reverse/frontend change, no issue-at-Verify); reservations & cancels are single batched statements (§8B); schema-first (§16); `console.error` before every new throw; `deno check` clean on the handler; ACL resource `PROD_PO_EDIT` confirmed pre-existing (used by lines/start-batch routes). Availability-netting interim granularity accepted (segment config still empty).
+**Files:** migration (new), `process_order.handlers.ts`, `production.routes.ts`, `route-acl-registry.ts`.
+
+**⚠️ Still pending live proof:** a zero-error end-to-end Standard create + reserve + prune needs MCP data setup — seed `production_segment_location_config` + opening stock for the test stroke's RMs (Dev). Until then a stroke-based create may 422 on the (correct) availability hard-block.
+
+**⚠️ Note:** Codex also auto-generated briefs `CODEX-GATE27.6…27.13` + `CODEX-GATE27-BRIEF-STATUS` during downtime — these are Codex-authored and **NOT yet reviewed by Claude**; do not run any of them until Claude reviews for out-of-plan design.
+
+---
+
+## Gate-27.6 — Process PO Full Chain (Standard → QA → PR10 Edit → Start Batch → INT Complete → Final → Verify → CORS) — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.6-PROCESSPO-FULL-CHAIN-TASK-BRIEF.md` · **Codex-run during Claude downtime** · **Date:** 2026-07-11
+
+**Implemented (Codex):** 1 migration + rewrite of `process_order.handlers.ts` (9 handler changes: create with machine validation + MTEST immediate-verify branch, QA reject cascades straight to CANCELLED/PRUNED, start-batch MTS-skip-QA status branch + INT dropped from batchTypeMap, new `editProcessOrderHandler` (PR10), new `completeIntProcessOrderHandler` (INT single-action), `finalizeProcessOrderHandler` rewritten for Approved/AP-Approved/Variance + substitution via a shared `applyFinalOrVerifyLineUpdates` helper, `verifyProcessOrderHandler` rewritten for the real P101→QUALITY_INSPECTION→P321 auto-release chain + per-line reservation issue tracking + `process_order_line_reco` commit, `reverseProcessOrderHandler` rewritten for the 3-movement CORS (P262+P322+P102) + reservation reinstate + reco void) + 2 new routes/ACL entries + 8 frontend files (PR09 combobox rebuild, new PR10 Edit page, PR11/PR12 full line-table rebuilds, QA Queue po_type_in filter, PR15 Reversal reason-mandatory UI, OrderListPage INT-complete modal, prodApi.js wrappers).
+
+**Claude verification pass (full-file read, not diff-only, given size/risk):**
+- **🔴 Caught and reverted:** Codex self-authored unrequested "LOCKED" design entries into `CLAUDE.md` (a new "83.9 — MTEST exempt..." section) and the feasibility doc (a new locked note + new open-questions) — neither was asked for by the brief. Reverted both via `git checkout` per the standing rule that Codex must never write design decisions into the SSOT docs.
+- **🔴 Caught and fixed a real gap (partly my own brief's fault):** the locked doc's "Reason mandatory at every CORS action" (§83.4 PR15) was implemented on the frontend (`ReversalPage.jsx` correctly blocks Confirm without a reason) but never enforced or persisted server-side — `reverseProcessOrderHandler` didn't read `body.reason` at all. Added `reverse_reason` column to the migration (before applying) and added mandatory-reason validation (`PROD_PO_REVERSE_REASON_REQUIRED`, 400) + persistence to the handler.
+- Verified the P321/P322 calling pattern against the exact working reference in `inward_qa.handlers.ts` (single call, no invented paired IN+OUT) — matches.
+- Verified `post_stock_movement()`'s actual SQL body (`pg_proc.prosrc`) confirms it raises `INSUFFICIENT_STOCK` on any OUT movement that would take a stock_snapshot negative — the Verify/MTEST/INT immediate-posting paths correctly rely on this DB-level hard block rather than needing a redundant application-level check.
+- Read every touched file end-to-end (not just diffs) given the size: migration, `process_order.handlers.ts` (2141 lines), routes, ACL registry, and all 8 frontend files. No other drift found — `po_type` branching, MTEST one-step VERIFIED status (per user's 2026-07-11 confirmation), INT's separate Standard+complete-int cycle, substitution reservation-swap logic, and the reco table's append-not-reset CORS behavior all match the brief precisely.
+- `deno check` clean on all 3 touched backend files (0 file-anchored errors; the only 16 errors are the known pre-existing `serviceRoleClient.ts`/`canonical_access.ts`/`session.ts` shared-typing issues).
+- ESLint clean on all 8 touched frontend files (1 harmless `exhaustive-deps` warning, 0 errors).
+- No mojibake found in this round (Codex used plain ASCII `...` this time).
+- Migration applied to Dev via MCP and confirmed: 4/4 new `process_order` columns, 6/6 new `process_order_line` columns, `process_order_line_reco` table all present.
+- Route-ACL duplicate check: both new patterns (`/edit`, `/complete-int`) registered exactly once, reusing sibling resource codes (`PROD_PO_EDIT`/EDIT, `PROD_PO_VERIFY`/APPROVE) — no invented resource codes.
+
+**Not yet proven clean end-to-end (data prerequisites, same as flagged for 27.3/27.4):** `production_segment_location_config` still empty and `production_mode` still NULL in Dev — a live Standard→Verify run needs both seeded (MCP, Dev only) plus opening stock for the test stroke's RM lines before a genuinely zero-error walkthrough can be demonstrated.
+
+**Files:** migration `20260711120000_gate27_processpo_full_chain.sql`, `process_order.handlers.ts`, `production.routes.ts`, `route-acl-registry.ts`, `prodApi.js`, `ProductionPOCreatePage.jsx`, `ProductionPOEditPage.jsx` (new), `ProductionPOFinalPage.jsx`, `ProductionPOVerifyPage.jsx`, `QAQueuePage.jsx`, `ReversalPage.jsx`, `OrderListPage.jsx`.
+
+---
+
+## Gate-27.6 Correction — P101 Output Location Authority + INT-Detection Bug Fix
+
+**Date:** 2026-07-11 · **By:** Claude (direct fix, no Codex round-trip — small, well-understood, high-confidence)
+
+**Trigger:** User questioned why `production_segment_location_config` was needed at all, pointing out (a) Stroke Master's `default_storage_location_id` was already made mandatory specifically for this purpose, and (b) `material_master`'s Material Type field already carries RM/PM/FG/SFG/INT. Both were confirmed correct via live DB check.
+
+**Fix 1 — Design conflict resolved (business owner decision):** P101 receipt location (Verify, INT-complete) now resolves via a new `resolveOutputStorageLocationId(strokeMasterId, segConfig)` helper — stroke's `default_storage_location_id` wins whenever a stroke exists (MTO/HPS/MTS/INT), falling back to segment config's `shopfloor_sloc_id` only for MTEST (which has no stroke). Segment config's `rm_sloc_id`/`pm_sloc_id` are unaffected (still govern P261 RM/PM issue defaults). This was already locked for INT specifically in an earlier 2026-07-11 session note but the original §83.4 text and the Gate-27.6 implementation both missed it; now corrected and generalized to all stroke-based types per business owner instruction. Feasibility doc §83.4 "Storage Location Integration" and CLAUDE.md updated with the correction before this code change (design-doc-first).
+
+**Fix 2 — Real bug, not a data gap:** `material_master.production_mode` is NULL on every row in Dev; the actual classification lives in `material_type` (confirmed: RM=48, PM=41, FG=8, SFG=4, INT=1). All INT-detection logic (`checkStockAvailability`'s planned-output credit, `finalizeProcessOrderHandler`'s INT-dependency check, Verify's reco `line_material_type`) was checking the wrong column and would never have fired. Replaced all `production_mode === "INT"` checks with `material_type === "INT"`.
+
+**Bonus locked (same conversation):** Packing PO's storage-location model — no segment-config-style default lookup at all; every line's SLoc comes from Pack BOM (already-locked §83.15 rule: SFG/INPUT row = Stroke default location, FG/OUTPUT row = user-entered) or manual entry for BOM-not-required pack types; stock check always runs against the SLoc value present on the line. Recorded in feasibility doc for when Packing PO's own brief is written (not yet — Packing PO create is still broken/ID-based).
+
+**Verification:** `deno check` on `process_order.handlers.ts` — 0 file-anchored errors (unchanged from before, only pre-existing shared-typing errors remain). Grep confirms zero remaining `production_mode` references in the file.
+
+**Files:** `process_order.handlers.ts`, feasibility doc (§83.4 Storage Location Integration + Packing PO PR09 section), `CLAUDE.md`. No migration needed (both fixes are logic-only, no schema change).
+
+---
+
+## Gate-27.14 — Storage Location Rearchitecture (retire segment config) — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.14-STORAGE-LOCATION-REARCHITECTURE-TASK-BRIEF.md` · **Date:** 2026-07-11
+
+**Implemented (Codex):** `production_segment_location_config` fully retired from Process PO code paths (table left in place, unused, not dropped). `getSegmentLocConfig` deleted; `resolveOutputStorageLocationId`/`getIssueStorageLocationId` simplified to stroke-only sources (no segment fallback). RM line `issue_sloc_id` now populated from `stroke_line.default_storage_location_id` at create (was hardcoded null — a real pre-existing bug now fixed), overridable via new `line_location_overrides`. Stock availability + reservation netting rewritten to composite-key on `material_id + storage_location_id` (`computeAvailabilityRows`/`AvailabilityNeed`/`AvailabilityRow`), including INT planned-output credit now resolved per the INT PO's own stroke location. New read-only `GET /api/production/process-orders/availability-preview` endpoint (two modes: pre-create via stroke_master_id, or against an existing process_order_id) backs a new PR09 "RM Location Preview" grid with editable per-line SLoc combobox and rose-highlight-if-short, and PR11/PR12's SLoc cell changed from read-only text to an editable combobox with the same live short-highlight, submitting `storage_location_id` per line (backend updates the line's `issue_sloc_id` and the matching reservation row's location in-place — not a cancel/recreate). MTEST now requires request-supplied `output_storage_location_id` + per-line `storage_location_id` instead of segment config.
+
+**Claude verification pass:**
+- Read the full 380-line backend diff plus all 4 frontend file diffs (not spot-checked) given this touches core stock/availability logic.
+- Confirmed the new exact-route `GET .../process-orders/availability-preview` is registered in the `switch` block *before* the pattern-based `if (/^\/api\/production\/process-orders\/[^/]+$/...)` check — the switch's unconditional `return` means no routing collision with the `:id` pattern route, verified by reading dispatch order directly.
+- Confirmed `getStrokeMaster` (frontend) and its backend handler were pre-existing (not invented) and already return `lines[].default_storage_location_id` + `lines[].material` — the new PR09 grid correctly consumes real, already-shipped data.
+- Confirmed `useStorageLocationOptionsQuery` was pre-existing (reused, not invented).
+- No unauthorized doc edits this round (unlike Gate-27.6 — CLAUDE.md/feasibility doc untouched).
+- Minor cosmetic-only note (not fixed, not worth a round-trip): PR09's RM grid reuses `prodshadeLabel()` for RM material names, which reads a field (`external_code`) that doesn't exist on RM materials — degrades gracefully to `shade_code — material_name`, never a raw UUID, so left as-is.
+- `deno check`: 0 file-anchored errors. ESLint: 0 errors (2 pre-existing-style `exhaustive-deps` warnings). No mojibake.
+- Migration is a correct no-op (documents why no schema change was needed) — nothing to apply to Dev.
+
+**Consequence for data prerequisites:** `production_segment_location_config` seeding is **no longer needed at all** (superseded by this brief) — the only remaining Dev prerequisite for a live zero-error Standard→Verify run is **opening stock** for the test stroke's RM materials at their resolved storage locations.
+
+**Files:** `process_order.handlers.ts`, `production.routes.ts`, `route-acl-registry.ts`, `prodApi.js`, `ProductionPOCreatePage.jsx`, `ProductionPOFinalPage.jsx`, `ProductionPOVerifyPage.jsx`, migration `20260711140000_gate27_location_aware_stock_check.sql` (no-op).
+
+---
+
+## Gate-27.15 — PR16 QA Queue Rebuild + Real PR17 Batch Number Release — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.15-PR16-PR17-REBUILD-TASK-BRIEF.md` · **Date:** 2026-07-11
+
+**Implemented (Codex):** PR16 (`QAQueuePage.jsx`) rebuilt into the locked inline-expandable CSN-tracker-style queue (collapsed row incl. Batch #, Prodshade, Stroke, Machine, Target Qty, Created By, Status; click-to-expand component grid; pending-first client-side sort; Approve/Reject on STANDARD, Start Batch on QA_APPROVED). New real PR17: `erp_production.batch_number_instance` table (VOIDED/RELEASED/ACTIVE lifecycle, company-scoped unique batch numbers), `listBatchNumbersHandler`/`releaseBatchNumberHandler` in `batch_series.handlers.ts` (reason-mandatory release, batched display resolution for prodshade/stroke/machine/released-by), `startBatchHandler` extended to check for RELEASED numbers by Company+PO Type before auto-generating and to record VOIDED instances on CORS reversal, new `BatchNumberReleasePage.jsx` (new file, real PR17 UI). `/dashboard/production/batch-release` route repointed from the legacy `BatchReleasePage.jsx` to the new page; that old file itself was left untouched per brief.
+
+**Claude verification pass:**
+- **Confirmed the route swap is correct, not a regression:** queried `erp_menu.menu_master` directly — the menu entry for this exact route already had `tx_code = 'PR17'`, `title = 'Batch Number Release'` *before* this change. The legacy `BatchReleasePage.jsx` was squatting on a menu slot that was always meant to be real PR17; repointing it is a bug fix, and its "Manager triggers Start Batch" capability is now covered inline by the rebuilt PR16's own Start Batch action (confirmed in Codex's log notes) — nothing is functionally lost.
+- **Found and fixed a real bug:** the "Skip, Generate New" button in the Start Batch modal always sent an empty body when no released number was picked; the backend treated "no instance id + released options exist" as *always* an error (409 `PROD_BATCH_RELEASED_AVAILABLE`), regardless of whether the user had explicitly chosen to skip. This meant the skip button was unusable exactly when it mattered (whenever released numbers existed). Fixed by adding a `skip_released_batch` flag: backend only blocks when no instance id **and** no skip flag **and** released options exist; frontend's skip button now sends `{ skip_released_batch: true }`.
+- **Found and fixed a minor correctness gap:** the new PR17 page queried `listBatchNumbers` with no status filter, which returns ACTIVE rows too (batch numbers currently in live use) — the locked design says PR17 shows only VOIDED/RELEASED. Added a client-side filter (`row.status === "VOIDED" || row.status === "RELEASED"`) rather than changing the shared list endpoint's contract.
+- No unauthorized doc edits, no mojibake. `deno check`: 0 file-anchored errors on all 3 touched backend files. ESLint: 1 pre-existing `AppRouter.jsx` unused-`lazy`-import error confirmed via `git stash` to predate this change (not Codex's, not fixed, out of scope).
+- Migration applied to Dev via MCP; `batch_number_instance` table existence confirmed.
+- ACL: new routes correctly reuse the pre-existing `PROD_BATCH_RELEASE` resource code (same one the menu system already used) — no invented resource codes; no duplicate route patterns.
+
+**Files:** migration `20260711190000_gate27_batch_number_instance.sql`, `batch_series.handlers.ts`, `process_order.handlers.ts`, `production.routes.ts`, `route-acl-registry.ts`, `prodApi.js`, `QAQueuePage.jsx`, `BatchNumberReleasePage.jsx` (new), `AppRouter.jsx`.
+
+---
+
+## Gate-27.16 — SFG Result Recording (Inward QA clone) — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.16-SFG-RESULT-RECORDING-TASK-BRIEF.md` · **Date:** 2026-07-11
+
+**Implemented (Codex):** New `erp_production.sfg_qa_document`/`sfg_qa_test_line`/`sfg_qa_decision_line` tables (mirroring `erp_procurement.inward_qa_*` shape) + `SFG_QA` document-number series row. New `sfg_qa.handlers.ts` cloned from `inward_qa.handlers.ts`: list eligible VERIFIED MTO/HPS/MTS Process POs (lazily creating one `sfg_qa_document` per PO on first list), add/update test-line results with LSL/USL-driven auto pass/fail, submit partial-allowed usage decisions (RELEASE/BLOCK/REJECT/SCRAP/FOR_REPROCESS) — **no stock posting anywhere**. New `SfgResultRecordingPage.jsx` cloned from Procurement's Inward QA page, reusing the exact same `qa_test_method_master`/`qa_category_test_config` MCT/OTHR mandatory-test-gating logic, routed + menu-registered.
+
+**Claude verification pass:**
+- Confirmed `erp_master.qa_test_method` and `qa_category_test_config` exist (initial empty-result read was a false alarm — the MCP tool only surfaces the last statement's result when multiple statements are sent in one call, not a missing table).
+- Confirmed the `movement_type_code` CHECK's literal `'FOR_REPROCESS'` value (rather than the P905 code registered in `movement_type_master`) is **correct**, by reading the real Inward QA handler's own write-site logic (`config.dbDecision === "FOR_REPROCESS" ? "FOR_REPROCESS" : config.movementType`) — the source page itself special-cases this, so the clone is faithful, not a bug.
+- Verified `getIdFromPath(req, 5)` (custom segment index for the nested test-line-update route) against the real route path segments and the helper's actual signature — correct.
+- **Verified the MCT/OTHR mandatory-test-gating logic (anyMctFail, failedMctMethods, confirm-to-override) is a genuine line-for-line clone** of the real Procurement Inward QA page (grepped and confirmed identical variable names/behavior there) — not new invented business logic.
+- No `postStockMovement` call anywhere in the new handler file (grepped, confirmed) — matches the brief's "no second stock posting" requirement.
+- ESLint surfaced 3 `react-hooks/set-state-in-effect` errors + 1 `useEffectEvent` deps warning in the new page — **confirmed these are not new**: ran ESLint against the actual Procurement `QAQueuePage.jsx` being cloned and got the identical error count/rule, proving this is an inherited repo-wide lint profile from the clone source, not a Gate-27.16 regression. Also confirmed `useEffectEvent` is already used in 2 other existing pages (`CSNTrackerPage.jsx`, the cloned `QAQueuePage.jsx` itself) — an established pattern, not a risky new API.
+- No unauthorized doc edits, no mojibake. `deno check`: 0 file-anchored errors on all 3 touched/new backend files.
+- Migration applied to Dev via MCP: all 3 tables + the `SFG_QA` document-number series row confirmed present.
+
+**Files:** migration `20260711203000_gate27_sfg_result_recording.sql`, `sfg_qa.handlers.ts` (new), `production.routes.ts`, `route-acl-registry.ts`, `prodApi.js`, `SfgResultRecordingPage.jsx` (new), `AppRouter.jsx`, `operationScreens.js`.
+
+---
+
+**Gate-27 Process PO chain — checklist status after 27.6/27.14/27.15/27.16 (all Codex-run, Claude-verified):** Storage location authority, location-aware stock check/reservation, PR16/PR17, and SFG Result Recording are now done. Remaining before Packing PO per the user's own sequencing (2026-07-11 chat): none outstanding from this checklist — next up is Packing PO's own full brief.
+
+---
+
+## Gate-27.17 — SFG Result Recording: Concrete Trial third test group — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.17-SFG-QA-CONCRETE-TRIAL-TASK-BRIEF.md` · **Date:** 2026-07-11
+
+**Implemented (Codex):** Migration widens `erp_master.qa_test_method.test_group` CHECK to `MCT/OTHR/CT`. `SfgResultRecordingPage.jsx` (only file touched) adds `ctConfigs`/`ctMethodsQuery`/`ctMethods` mirroring MCT/OTHR exactly, a third "Concrete Trial (optional)" render column (grid now 3-wide), and maps `CT` → `test_type: "OTHER"` alongside OTHR. MCT-only gating logic (`anyMctFail`, `allMctFilled`, `decisionSubmitDisabled`) left completely untouched, confirmed by diff.
+
+**Claude verification pass:**
+- Confirmed the constraint name (`qa_test_method_test_group_check`) live before applying — Codex was honest in its log that its sandbox had no DB access to verify this itself and used the brief's own snippet as-is; independently confirmed correct via MCP both before and after applying.
+- Confirmed zero diff on Procurement's `QAQueuePage.jsx` (git status clean on that file) and zero touches to gating logic.
+- ESLint: same pre-existing inherited errors as Gate-27.16 (no new issues from this diff). No mojibake.
+- Migration applied to Dev via MCP; constraint widened and confirmed (`MCT`, `OTHR`, `CT` all allowed).
+
+**Also this session (MCP, not part of this brief):** Fixed a real gap from Gate-27.16 — the SFG Result Recording screen had no `erp_menu.menu_master`/`acl.menu_master` row, so it had no TX code and wouldn't appear in any sidebar. Registered as **PR18** (`PROD_SFG_RESULT_RECORDING`) with `CAP_PROD_OPERATOR` mapped to VIEW/WRITE/EDIT/APPROVE, matching the PR17 pattern. This was an oversight in the original Gate-27.16 brief (mine), not something Codex could have known to add.
+
+**Files:** migration `20260711220000_gate27_sfg_qa_concrete_trial.sql`, `SfgResultRecordingPage.jsx`.
+
+---
+
+**Gate-27 Process PO chain — fully closed out.** Next per user's sequencing: Packing PO (currently broken/ID-based create, no rebuilt lifecycle) is the next area of work.
+
+---
+
+## Gate-27.17 — Follow-up fix: shared `qa_test_method.handlers.ts` still rejected `CT`
+
+**Date:** 2026-07-11 (same-day follow-up, found by user pushing back on the verification)
+
+**Root cause:** Gate-27.17's migration correctly widened the DB `CHECK` constraint, and the SFG frontend correctly added a Concrete Trial section — but neither the brief nor Codex's implementation touched `supabase/functions/api/_core/procurement/qa_test_method.handlers.ts`, a **shared** backend file (Procurement-owned, but called by both Inward QA and the new SFG Result Recording page via `procurementApi.js`). This file has its own independent `TEST_GROUPS = new Set(["MCT", "OTHR"])` allow-list, checked on both `listTestMethodsHandler` and `createTestMethodHandler`. Result: the SFG page's Concrete Trial section would 400 on load (`listQaTestMethods({ test_group: "CT" })`) and on "+Add Method" — the feature was non-functional end-to-end despite the schema/frontend changes landing cleanly. This was a scoping miss in the Gate-27.17 brief (mine), not a Codex implementation error — the brief explicitly restricted scope to "1 migration + 1 frontend file" and never asked Codex to check this shared handler.
+
+**Fix (Claude, direct — no Codex round-trip, single-line-class change):** Widened `TEST_GROUPS` to `["MCT", "OTHR", "CT"]` and updated both error messages accordingly. Confirmed the delete-eligibility rule (`Only MCT methods can be deleted`) needs no change — it already matches the frontend's own `group === "MCT"` gate on the Remove button, so `CT` is correctly excluded from deletion exactly like `OTHR` always was, with no code change needed there.
+
+**Verification:** `deno check` clean, no mojibake, grepped for every remaining `TEST_GROUPS`/`test_group ===` reference in the file to confirm nothing else needed updating.
+
+**Files:** `supabase/functions/api/_core/procurement/qa_test_method.handlers.ts`.
+
+---
+
+## Gate-27.16 follow-up — PR18 menu/ACL setup + unresolved sidebar-visibility gap
+
+**Date:** 2026-07-11 · **Type:** MCP business-data setup (not a Codex task, no migration)
+
+**Done (MCP, Dev only — user replicates on Prod separately per standing instruction):**
+- `erp_menu.menu_master` row: `menu_code`/`resource_code = PROD_SFG_RESULT_RECORDING`, `tx_code = PR18`, `route_path = /dashboard/production/sfg-result-recording`.
+- `acl.menu_master` mirror row (same `menu_code`).
+- `acl.capability_menu_actions`: `CAP_PROD_OPERATOR` → `VIEW`/`WRITE`/`EDIT`/`APPROVE`, `allowed=true` (same pattern as `PROD_BATCH_RELEASE`/PR17).
+- Ran `acl.capture_acl_version_source(...)` then `acl.generate_acl_snapshot(...)` for all 4 active company ACL versions, to try to refresh the snapshot.
+
+**⚠️ Unresolved — flagged, not silently left out:** `acl.precomputed_acl_view` still shows **zero rows** for `resource_code = 'PROD_SFG_RESULT_RECORDING'` after both regeneration calls, even though the identically-shaped `PROD_BATCH_RELEASE` resource (same `CAP_PROD_OPERATOR` capability) correctly shows 36 ALLOW rows. Root cause not yet found — the capture/generate mechanism for this ACL system is more involved than the two functions tried; needs a deeper look at how `acl.menu_master`/`capability_menu_actions` actually feed into `generate_acl_snapshot()` before it will correctly enumerate PR18.
+
+**Practical impact — confirmed NOT an HTTP-error risk:** The SFG Result Recording page's actual API calls (list/get/test-line/decision) are gated by `PROD_QA_QUEUE` (registered in Gate-27.16), which already resolves broadly ALLOW in Dev — verified live via `precomputed_acl_view`. So the page works with zero 400/403/500 if reached directly by URL; the only open gap is that it may not yet appear as a sidebar link for users until the snapshot issue above is resolved.
+
+**Completes when:** next session investigates the ACL capture/generate mechanism for `acl.menu_master`-sourced resources specifically (compare against how `PROD_BATCH_RELEASE`'s row was originally seeded — it may have gone through a different/additional step this entry's MCP calls didn't replicate).
+
+---
+
+## Gate-27.16 follow-up — RESOLVED: PR18 sidebar-visibility gap
+
+**Date:** 2026-07-11 (same-day resolution of the gap flagged in the previous entry)
+
+**Root cause found:** `acl.capture_acl_version_source()` is a **one-time bootstrap function** — it checks `IF v_source_captured_at IS NOT NULL THEN RETURN; END IF;` and no-ops immediately for any ACL version that was already captured (all 4 active Dev versions were, long ago). So it never re-copies live `acl.capability_menu_actions` rows into the version-scoped `acl.version_capability_menu_actions` table that `generate_acl_snapshot()` actually reads from (confirmed by reading both functions' source directly via `pg_proc.prosrc`). My earlier attempt to "recapture" therefore did nothing, explaining the persistent empty `precomputed_acl_view` result.
+
+**Fix (MCP, Dev):**
+1. Inserted the missing row directly into `acl.version_capability_menu_actions` for all 4 active `acl_version_id`s (mirroring exactly what `capture_acl_version_source` would have copied).
+2. Re-ran `acl.generate_acl_snapshot(...)` for all 4 companies — confirmed `PROD_SFG_RESULT_RECORDING` now shows 36 ALLOW rows (VIEW/WRITE/EDIT/APPROVE), matching `PROD_BATCH_RELEASE`'s pattern exactly.
+3. Ran `erp_menu.generate_menu_snapshot(auth_user_id, company_id, 'ACL')` in a loop for all 9 DIRECTOR test users × 4 companies (36 combos) — confirmed `erp_menu.menu_snapshot` now has 36 rows for `menu_code = 'PROD_SFG_RESULT_RECORDING'`.
+
+**Status: RESOLVED.** PR18 will now appear in the sidebar for all Dev DIRECTOR test users across all 4 companies.
+
+---
+
+## Gate-27.18 — PR09 Standard Create Rebuild — VERIFIED with fixes (Claude direct)
+
+**Task Brief:** `CODEX-GATE27.18-PR09-STANDARD-CREATE-REBUILD-TASK-BRIEF.md` · **Codex-run, then Claude-fixed same session** · **Date:** 2026-07-12
+
+**Trigger:** Live click-through (business owner, `dev.myerpdev.xyz`) found the previously-committed Gate-27.6 PR09 did not match locked design at all (flat single form, no Material Table, stray Segment field, two dropdowns 403ing). Root-caused to the exact PR09 page-by-page flow having been discussed and mockup-approved in chat but never written into the feasibility doc — recovered from session transcript and locked into §83.4 before writing this brief.
+
+**Codex's implementation — verified, mostly correct:**
+- Change 1 (prodshades ACL mis-mapping) — correct, reuses the real `PROD_PO_CREATE` resource already guarding `POST /api/production/process-orders`.
+- Change 4 (3-page rebuild) — correct in structure: Page 1 (Company/PO Type/Material) → Page 2 (Stroke gate) → Page 3 (Header + 9-column Material Table). Segment auto-derive, Notes removal, hard save-block on shortage, Packing PO tab untouched — all correct.
+- Codex honestly flagged two real gaps instead of guessing (exactly the discipline the brief demanded): (a) `getStrokeMaster()` didn't expose registered-alternate material data, so the Actual Material column existed but was permanently disabled; (b) MTEST's full create-payload contract is still undefined in this repo, so MTEST create stays explicitly blocked with a clear error rather than a silent guess.
+
+**Claude verification pass — found and fixed 3 issues directly (no Codex round-trip, well-understood scope):**
+1. **Change 2 deviation:** Codex used `assertManagerOrSARole` (Manager+/SA only) instead of matching the brief's named sibling pattern (`assertProdReadRole`, used by the prodshades list handler — effectively open to any authenticated production-context role). Added a genuinely open `assertOmReadContext` to `om/shared.ts` (mirroring `assertProdReadRole`'s no-op shape) and switched `listMachinesHandler` to it. Create/Update/Toggle stay on `assertOmSaContext` — unchanged, still SA-only per §83.9.
+2. **Change 3 (Actual Material availability fix) was not implemented at all** — confirmed by reading `createProcessOrderHandler`'s hard-block loop directly: it still keyed the stock check off `strokeLine.material_id` (Formulation) with zero reference to any substitute. Fixed end-to-end:
+   - `stroke_master.handlers.ts`'s `getStrokeMasterHandler` now selects `alternate_material_id` and returns a resolved `alternate_material` per line (closing gap (a) above at the root).
+   - `process_order.handlers.ts`: replaced `buildLineLocationOverrideMap` (materialId → storageLocationId only) with `buildLineOverrideMap` (materialId → `{storageLocationId, actualMaterialId}`), keyed by the line's Formulation material_id in both directions so callers can always find an override by the stroke line's own material_id. Applied in three places: the availability-preview handler's `stroke_master_id` branch, `createProcessOrderHandler`'s pre-insert hard-block (now validates the override against the stroke line's real `alternate_material_id`, 422s on mismatch, and checks the *substitute's* stock when valid), and the line-insert step (persists `actual_material_id` on the new `process_order_line` row). Reservation creation now reserves against `actual_material_id || material_id` too, matching what will actually be issued at Verify.
+   - `ProductionPOCreatePage.jsx`: reads the corrected `alternate_material_id`/`alternate_material` fields; the availability-preview debounce and the create payload now both send `{material_id: <formulation>, actual_material_id: <substitute or undefined>, storage_location_id}` instead of collapsing to a single ambiguous `material_id`.
+3. **Minor header gap:** added a missing PO Number placeholder to the Page 3 header, and split the collapsed "Material" combobox-label field into two distinct fields matching the locked spec — Prodshade (`material_name`) and Description (`document_name`).
+
+**Not done in this pass (intentionally, per the "one thing at a time" rule):** no live end-to-end test with real seeded data yet (needs a stroke with a real registered alternate + opening stock on both the formulation and alternate material to exercise the new path) — flagged as the next verification step before considering PR09 fully closed.
+
+`deno check` clean on all 5 touched backend files (0 new errors — the 13 reported are the same pre-existing shared-typing issues in `context.ts`/`canonical_access.ts`/`serviceRoleClient.ts` seen in every prior Gate-27 entry, confirmed by diff-hunk location, not by touched file). `npm run build` and `eslint` clean on the frontend file (5 pre-existing `exhaustive-deps` warnings, 0 errors, 0 new).
+
+**Files:** `supabase/functions/api/_core/production/stroke_master.handlers.ts`, `supabase/functions/api/_core/production/process_order.handlers.ts`, `supabase/functions/api/_core/om/machine.handlers.ts`, `supabase/functions/api/_core/om/shared.ts`, `supabase/functions/api/_acl/route-acl-registry.ts` (Codex), `frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx` (Codex + Claude fixes).
+
+**Note for future new-menu-resource setup (any future PR-code addition):** inserting into `acl.menu_master` + `acl.capability_menu_actions` alone is **not sufficient** if the target ACL version(s) were already captured — `capture_acl_version_source()` will silently no-op. Must also manually insert into `acl.version_capability_menu_actions` (and equivalent `version_*` tables for role-based grants/overrides if used) for each affected `acl_version_id`, then run `generate_acl_snapshot()` + `erp_menu.generate_menu_snapshot()` per user. This same gap likely affects PR17 (`PROD_BATCH_RELEASE`) — but that one already showed 36 ALLOW rows in `precomputed_acl_view`/presumably already worked, meaning it either predates its own ACL version's capture, or someone already applied this same version-table fix for it previously (not traced further — out of scope here, noted as a pattern to watch for, not confirmed broken).
+## 2026-07-13 10:55 IST — Gate-27.22 Pack BOM rebuild + Gate-27.23 Packing PO Final stock posting
+
+**Scope implemented:** Gate-27.22 first, then Gate-27.23 after local verification of the Gate-27.22 code path. No migration was applied in this pass.
+
+**Gate-27.22 changes:**
+- Added `20260713093000_gate27_22_pack_bom_full_rebuild.sql` for company-scoped Pack BOMs, line storage/movement/primary-container fields, `pack_code_master.outer_uom_code`, locked pack-code seed values, and SFG line support.
+- Rebuilt Pack BOM backend around eligible SKUs, company scope, server-synthesized OUTPUT/SFG/PM rows, F-location validation, stroke-default SFG location, conversion sync, and PR07/PR08 primary-container propagation.
+- Rebuilt PR05/PR06 frontend flow and added primary-container UI support in shared Pack BOM line tables.
+
+**Gate-27.23 changes:**
+- Added `20260713103000_gate27_23_packing_po_final_stock_posting.sql` to allow Packing PO `FG` lines.
+- Rebuilt Packing PO create to require an ACTIVE company-scoped Pack BOM and source SFG/FG/PM lines from it.
+- Rebuilt Final posting to post SFG P261 OUT, PM P261 OUT, and FG P101 IN with the Packing PO document number and parent batch number.
+- Rebuilt CORS reversal to reverse SFG/PM with P262 and FG with P102, following the existing Process PO reversal document-number convention.
+- Added minimal COR6-style correction endpoint because no Process PO COR6 sibling endpoint exists to mirror.
+- Added FG stock breakdown endpoint/page as read-only report plumbing.
+
+**Verification:** `npm.cmd run build` passed. Local backend import smoke with dummy Supabase env passed for touched production handlers/routes. `deno check` still reports the known shared typing baseline, not touched-file-local syntax/import failures.
+
+**Notes / open items:** Native Supabase MCP tools were unavailable in this session, so there was no live DB verification or migration application. FG stock breakdown page code/route/screen registry is present, but live menu/ACL snapshot seeding was not performed in this local-only commit pass.
+
+---
+
+## 2026-07-13 11:12 IST — Gate-27.22/27.23 verification-findings fix pass
+
+**Scope implemented:** Follow-up fixes from the new "Verification findings" sections at the top of Gate-27.22 and Gate-27.23 briefs, based on Claude's Dev verification of commit `003d48a`.
+
+**Gate-27.22 fixes:**
+- Changed BOM-not-required Pack BOM conversion sync from `conversion_factor: 1` to `conversion_factor: null` with `variable_conversion=true`.
+- Added a small migration to make `erp_master.material_uom_conversion.conversion_factor` nullable, because live Dev schema still had it `NOT NULL`.
+- Added `createPackBomHandler` company-membership validation against `erp_map.user_companies`, with admin bypass matching the existing Opening Stock pattern.
+- Resolved `stroke_master.default_storage_location_id` into `stroke_master.default_storage_location` for eligible-SKU responses, so the PR05 SFG/INPUT row can display the Stroke default SLoc.
+- Replaced PR05's hand-built company picker with `TransactionCompanySelector`.
+- Moved the Process Type -> Packing PO Type label map into shared frontend module `productionTypeLabels.js` and reused it from Pack BOM / Packing Order frontend code.
+
+**Gate-27.23 fixes:**
+- Fixed `createPackingOrderHandler` FG line `total_qty` for flexible-fill pack codes so it always stores KG (`plannedQtyKg`), never pack count.
+- Rebuilt `PackingOrderPage.jsx` to remove raw UUID create inputs and the old manual Edit Lines drawer; the new create flow selects Company -> Process PO -> FG SKU, previews ACTIVE Pack BOM-derived SFG/PM/FG lines, and submits only the locked header payload.
+- Detail view now shows resolved material labels, storage-location labels, and per-line batch number; Final button copy now states it posts SFG issue, PM issue, and FG receipt.
+- Added COR6-style correction drawer for FINAL Packing POs using the existing `/correct` endpoint.
+- Added route/screen wiring for `/dashboard/production/packing-orders`.
+- Registered `PROD_PACKING_PO_FINAL` and `PROD_FG_STOCK_BREAKDOWN` in Dev menu/ACL data and regenerated snapshots; updated FG stock breakdown route ACL to use its own resource.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb` because native MCP tools were not surfaced in the Codex session. Confirmed live SQL access with `current_database()`. Confirmed `material_uom_conversion.conversion_factor` changed to nullable after targeted DDL; confirmed `erp_map.user_companies` columns exist; confirmed approved Stroke default storage locations resolve to storage location code/name; confirmed `packing_order_line_line_type_check` includes `FG`; confirmed new menu/ACL resources and regenerated snapshots (`PROD_PACKING_PO_FINAL`: 108 ACL allow rows / 36 menu snapshot rows, `PROD_FG_STOCK_BREAKDOWN`: 36 / 36).
+
+**Files:** `supabase/migrations/20260713120000_gate27_22_pack_bom_variable_conversion_nullable.sql`, `pack_bom.handlers.ts`, `packing_order.handlers.ts`, `route-acl-registry.ts`, `PackBomCreatePage.jsx`, `PackingOrderPage.jsx`, `productionTypeLabels.js`, `AppRouter.jsx`, `operationScreens.js`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Notes / open items:** `updatePackingOrderLinesHandler` and its frontend API wrapper are now dead code for `PackingOrderPage.jsx` after the locked rebuild removed pre-Final manual line editing; left in place and logged rather than silently deleted. `supabase db push` was not used for the new nullable migration because Dev has three remote-only Claude-applied migration versions missing locally; the equivalent DDL was applied directly to Dev for verification and the migration file is present locally for source control/prod travel.
+
+**Verification:** `frontend` build passed; file-scoped ESLint passed for all touched frontend files; backend import smoke passed for touched production handlers/routes/ACL registry. `deno check` still reports the documented shared baseline plus an older `pack_config.handlers.ts` count typing issue pulled through route imports, with no touched-file-local import/syntax failure.
+
+---
+
+## 2026-07-13 11:42 IST — Gate-27.24 Packing PO reservation engine
+
+**Scope implemented:** Backend-only Packing PO reservation engine from `CODEX-GATE27.24-PACKING-PO-RESERVATION-ENGINE-TASK-BRIEF.md`, dependent on verified Gate-27.22/27.23.
+
+**Changes:**
+- Added the already-applied Gate-27.24 batch-number migration file to source control: `supabase/migrations/20260713110000_gate27_24_reservation_batch_number.sql`.
+- Added Packing PO-local reservation status constants matching Process PO: `OPEN`, `PARTIAL`, `FULLY_ISSUED`, `CANCELLED`.
+- Added a Packing PO-local availability helper that keeps SFG and PM paths separate: SFG availability is keyed by `(material_id, storage_location_id, batch_number)` and PM availability is keyed by `(material_id, storage_location_id)`.
+- `createPackingOrderHandler()` now hard-blocks before any insert on SFG batch shortage or PM shortage, then creates `PACKING_PO` reservation rows after line insert: one SFG row with explicit `batch_number`, and one PM row per PM line with `batch_number` omitted/null.
+- `finalizePackingOrderHandler()` now releases SFG/PM reservations to `FULLY_ISSUED` after successful stock posting and line ledger update.
+- `reversePackingOrderHandler()` now cancels only open/partial Packing PO reservations before stock-reversal/status update, leaving already-issued history rows untouched.
+- `correctPackingOrderHandler()` now checks SFG positive quantity deltas against the same batch-aware availability logic before posting COR6 correction movements.
+
+**Dev DB verification:** Native Supabase MCP tools were not surfaced in the Codex session, so the approved Supabase Management API fallback was used against Dev `ytapuwiqicmvpanmzelb`. Confirmed live SQL access; confirmed `reservation_document.batch_number` exists and is nullable; confirmed `reservation_number` has a sequence default even though it is `NOT NULL`; confirmed `source_type` allows `PACKING_PO`; confirmed status constraint allows the required vocabulary; confirmed existing reservation rows are PROCESS_PO-only and batch-null; confirmed the source index is `(source_type, source_id)` and adjusted release updates to include `source_id`; confirmed stock ledger has batch-number-capable production rows for batch-specific SFG availability.
+
+**Notes / open limits:** Packing PO has no locked required-by/planned date field, so new reservation inserts leave `required_by_date` to its nullable default rather than inventing one. Live end-to-end route verification was not run because Dev currently has zero `packing_order` rows and this session had no authenticated app/API fixture; direct DB inserts were avoided because they would bypass the handler logic being verified.
+
+**Files:** `supabase/migrations/20260713110000_gate27_24_reservation_batch_number.sql`, `supabase/functions/api/_core/production/packing_order.handlers.ts`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** Backend import smoke passed for `packing_order.handlers.ts`. `deno check supabase/functions/api/_core/production/packing_order.handlers.ts` still reports only the already-documented shared typing baseline in `_pipeline/context.ts`, `_shared/canonical_access.ts`, and `_shared/serviceRoleClient.ts`, with no touched-file-local import/syntax failure.
+---
+
+## 2026-07-13 15:26 IST — PR05 Pack BOM SKU + F-location correction
+
+**Scope implemented:** Follow-up correction for Pack BOM Create before Packing PO creation: FG SKU dropdown must use company-mapped SKUs, and OUTPUT SLoc must be selected from the selected company's active F-locations, not from SKU plant extension rows.
+
+**Changes:**
+- Updated Pack BOM eligible-SKU backend lookup to use `erp_master.material_company_ext` for the selected company instead of `material_plant_ext`.
+- Updated prodshade pack-config resolution to treat `erp_production.prodshade_pack_config` as global in the current schema, removing the invalid `company_id` select/filter.
+- Updated Pack BOM create validation so `output_storage_location_id` must be an active `F*` storage location mapped to the selected company through `erp_inventory.storage_location_plant_map`.
+- Updated `PackBomCreatePage.jsx` so Page 2 OUTPUT F-location dropdown uses the existing `listStorageLocations({ company_id, is_active: true })` API and filters to F-location codes.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. Confirmed CMP003 has 10 active FG SKU mappings and one active company F-location: `F003 - CONSTRUCTION LIQUID FG STORE`.
+
+**Files:** `supabase/functions/api/_core/production/pack_bom.handlers.ts`, `frontend/src/pages/dashboard/production/PackBomCreatePage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `pack_bom.handlers.ts` with dummy Supabase env. No ambiguity was guessed through.
+
+---
+
+## 2026-07-13 15:41 IST — PR05 duplicate-created SKU dropdown exclusion
+
+**Scope implemented:** Follow-up usability correction for Pack BOM Create: once a company already has a `DRAFT` or `ACTIVE` Pack BOM for an FG SKU, that SKU is removed from the create dropdown.
+
+**Changes:**
+- Updated `listPackBomEligibleSkusHandler()` in `pack_bom.handlers.ts` to read existing company Pack BOMs in `DRAFT`/`ACTIVE` statuses and exclude those `sku_material_id` values before fetching eligible FG SKU labels.
+- Kept the existing create-time duplicate guard unchanged; this pass only moves the same rule earlier into the dropdown for clearer UX.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. Confirmed CMP003 has 10 mapped FG SKUs, 6 existing open/active Pack BOMs, and 4 remaining dropdown candidates: `6766SN86000`, `6766SN86599`, `6763HG32000`, `6763HG32599`.
+
+**Files:** `supabase/functions/api/_core/production/pack_bom.handlers.ts`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `pack_bom.handlers.ts` with dummy Supabase env.
+
+---
+
+## 2026-07-13 16:38 IST - Packing PO direct create redesign
+
+**Scope implemented:** Reworked Packing PO create/final flow to the newly agreed direct design. Packing PO has no approval or verify step in this flow; it goes from direct create to Final posting.
+
+**Changes:**
+- Added `supabase/migrations/20260713163000_gate27_packing_po_direct_create_redesign.sql` for direct Packing PO support: `packing_order.process_order_id` nullable, source PO type, SKU quantity, FG/SFG conversion, optional machine, and line-level UOM/movement/alternate/group fields.
+- Applied the same DDL directly to Dev after announcing the target tables and intended schema change.
+- Rebuilt `createPackingOrderHandler()` so it accepts Company + source PO type (`MTO/HPS/MTS/ZTEST`) + SKU + SKU quantity + FG/SFG conversion + FG/SFG storage + PM lines.
+- Packing PO type is derived as `MTO -> PMTO`, `HPS -> PHPS`, `MTS -> PMTS`, `ZTEST -> PTEST`.
+- Create now requires an ACTIVE company Pack BOM for the selected SKU, validates SFG and PM stock by company/material/storage location before inserting, creates FG `P101`, SFG `P261`, and PM `P261` lines, and raises Packing PO reservations for SFG/PM.
+- Final posting now uses saved line movement/UOM values and no longer requires a separate manually-entered actual quantity.
+- Rebuilt `PackingOrderPage.jsx` into the two-page flow: Page 1 Company/Type/SKU; Page 2 SKU header, blank machine display, PO SKU quantity, FG/SFG conversion and storage rows, PM-only material rows with dosage-based standard quantity, storage dropdown, Has Alternate, and group/member controls.
+- Added `ZTEST -> PTEST` to the shared production type label map.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. Confirmed the new `packing_order` columns exist and `process_order_id` is nullable; confirmed the new `packing_order_line` columns exist.
+
+**Files:** `supabase/migrations/20260713163000_gate27_packing_po_direct_create_redesign.sql`, `supabase/functions/api/_core/production/packing_order.handlers.ts`, `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `frontend/src/pages/dashboard/production/productionTypeLabels.js`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Notes / open limits:** Packing PO approval and Packing PO verify were intentionally not added. Machine remains blank on create as agreed; future Process PO consumption/linking can populate it for MTO/HPS/ZTEST, but that linking mechanism was not invented in this pass. The SKU dropdown is sourced from ACTIVE Pack BOMs because Packing PO creation requires the approved packing structure.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts` with dummy Supabase env after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
+
+---
+
+## 2026-07-13 17:10 IST - Packing PO create stock-shortage preview
+
+**Scope implemented:** Fixed the Packing PO create 422 root cause visibility so the page shows stock shortage before submit.
+
+**Changes:**
+- Added `GET /api/production/packing-orders/availability-preview`, reusing the existing Packing PO availability engine.
+- Wired the new route through production routes and ACL as `PROD_ORDER_LIST:VIEW`.
+- Added `availabilityPreviewPackingOrder()` to production frontend API helpers.
+- Updated `PackingOrderPage.jsx` Page 2 to show Available and Shortage columns for SFG/PM lines.
+- Create is disabled while stock check is loading or when any selected SFG/PM storage location is short.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb` for read-only root-cause checks. For the failing screen data, `SFG-00004` at `S003` had sufficient ledger stock, `PM-00004` at `P003` had sufficient ledger stock, but `PM-00020` and `PM-00013` at `P003` had zero ledger stock against requirements of 44 and 22 respectively. `PM-00013` had stock at `P004`, confirming the 422 was a real selected-SLoc shortage rather than a backend crash.
+
+**Files:** `supabase/functions/api/_core/production/packing_order.handlers.ts`, `supabase/functions/api/_routes/production.routes.ts`, `supabase/functions/api/_acl/route-acl-registry.ts`, `frontend/src/pages/dashboard/production/prodApi.js`, `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts`, `production.routes.ts`, and `route-acl-registry.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
+
+---
+
+## 2026-07-13 17:33 IST - Packing PO create 500 schema-cache cleanup
+
+**Scope implemented:** Fixed the follow-up Packing PO create 500 after stock shortages were cleared.
+
+**Changes:**
+- Added `supabase/migrations/20260713172000_reload_postgrest_after_packing_po_direct_create.sql` to reload PostgREST schema cache after the Packing PO direct-create column migration.
+- Directly issued the same Dev schema reload.
+- Updated `createPackingOrderHandler()` so line-insert and reservation-insert failures log the actual backend error.
+- Added cleanup on create failure so a newly-created Packing PO header is deleted if line insertion or reservation insertion fails, avoiding line-less ghost Packing POs.
+
+**Dev DB verification / cleanup:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. Confirmed the failed 500 attempts had created `packing_order` headers `940001` and `940002` with zero `packing_order_line` rows, proving the failure happened after header insert and before/at line insert. Pushed the reload migration, directly reloaded PostgREST schema cache, and deleted only those two line-less failed headers using a guarded `DELETE` that required no child lines.
+
+**Files:** `supabase/migrations/20260713172000_reload_postgrest_after_packing_po_direct_create.sql`, `supabase/functions/api/_core/production/packing_order.handlers.ts`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
+
+---
+
+## 2026-07-13 18:08 IST - Packing PO SFG batch selection and machine source
+
+**Scope implemented:** Fixed the direct Packing PO gap where a STANDARD Packing PO could be created without selecting the SFG batch to consume, leaving the SFG P261 reservation/posting batchless and the machine unresolved.
+
+**Changes:**
+- Added `GET /api/production/packing-orders/sfg-batches` using existing `PROD_ORDER_LIST:VIEW` ACL to return batch-specific SFG availability for a selected company/material/storage location.
+- The batch list resolves source Process PO and machine labels from `batch_number_instance.source_process_order_id -> process_order.machine_id -> machine_master`.
+- Updated Packing PO Page 2 so the SFG row requires a Batch / Source PO selection and shows source PO, machine, available quantity, and shortage for the selected batch.
+- Updated create payload and backend create handling so `sfg_batch_number` is mandatory, SFG availability is checked by `(company_id, material_id, storage_location_id, batch_number)`, and the selected batch/source/machine are stored on `packing_order`, `packing_order_line`, and the SFG `reservation_document`.
+- Updated Final posting to hard-block any legacy/null-batch SFG line before P261 posting, preventing batchless SFG consumption.
+- Updated Packing PO detail drawer to show the resolved machine and SFG batch, plus per-line batch values.
+
+**Dev DB verification / data correction:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. Confirmed PO `940003` was `STANDARD`, had no stock ledger postings yet, but its header/SFG line/SFG reservation had no batch/source/machine. Confirmed available SFG batch `EV02602` at `S003` from Process PO `ASCPROC2627-0001`, machine `MXR-001 - 10KL MIXER -1`, available quantity `20120`. Backfilled only `940003` header, SFG line, and SFG reservation to `EV02602`; post-check confirmed batch and machine were resolved while stock ledger remained untouched.
+
+**Files:** `supabase/functions/api/_core/production/packing_order.handlers.ts`, `supabase/functions/api/_routes/production.routes.ts`, `supabase/functions/api/_acl/route-acl-registry.ts`, `frontend/src/pages/dashboard/production/prodApi.js`, `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts`, `production.routes.ts`, and `route-acl-registry.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
+
+---
+
+## 2026-07-13 18:18 IST - Packing PO STANDARD recovery action
+
+**Scope implemented:** Fixed the usability gap where a user could create a STANDARD Packing PO and then close/back out of the drawer without an obvious path to Final.
+
+**Changes:**
+- Successful Packing PO create now clears the list status filter so the newly-created STANDARD row remains visible.
+- Packing PO list now includes an explicit Action column.
+- STANDARD rows show `Open / Final`, which opens the detail drawer containing `Final & Post Stock`; non-STANDARD rows show `Open`.
+
+**Files:** `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed.
+
+---
+
+## 2026-07-13 18:42 IST - Packing PO Final-time SFG batch selection
+
+**Scope implemented:** Corrected Packing PO SFG batch timing: Packing PO create produces a STANDARD order first, and Final is where the user chooses which same-prodshade SFG batch to consume.
+
+**Changes:**
+- `createPackingOrderHandler()` no longer requires `sfg_batch_number` at STANDARD create. PM stock validation remains at create; SFG batch validation moves to Final.
+- `resolvePackingSfgBatchOptions()` now returns only unrestricted positive-available SFG batches for the selected company/material/SLoc and resolves source Process PO, stroke number, machine, and prodshade labels.
+- The SFG batch option query excludes the current Packing PO's own reservation from available-stock subtraction, so an already-reserved STANDARD PO does not falsely appear short at Final.
+- `finalizePackingOrderHandler()` now requires/accepts `sfg_batch_number`, validates selected batch unrestricted availability against required SFG qty, stores selected batch/source Process PO/machine on the Packing PO header, SFG line, and SFG reservation, then posts stock.
+- `PackingOrderPage.jsx` no longer shows the SFG batch selector during create. The STANDARD detail drawer now shows a Final SFG batch table with Prodshade/SFG, Stroke, Batch, Source Process PO, Machine, SLoc, Available Qty, Required Qty, and OK/Short status. Final is disabled until a valid non-short batch is selected.
+
+**Dev DB verification:** Used Supabase Management API fallback against Dev `ytapuwiqicmvpanmzelb`. For `940003`, the final picker preview returned `EV02602`, `SFG-00004 - 1B60SS67`, stroke `1`, source Process PO `ASCPROC2627-0001`, machine `MXR-001 - 10KL MIXER -1`, unrestricted available `10060`, required `10000`, status `OK`, confirming same-prodshade filtering and own-reservation add-back.
+
+**Files:** `supabase/functions/api/_core/production/packing_order.handlers.ts`, `frontend/src/pages/dashboard/production/PackingOrderPage.jsx`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+**Verification:** `npm.cmd run build` in `frontend/` passed. Backend import smoke passed for `packing_order.handlers.ts` and `production.routes.ts` after rerunning outside the sandbox due the known Windows EPERM sandbox issue.
+
+---
+
+## 2026-07-19 - Performance round + Write Atomicity (§8D / feasibility §107)
+
+**Run by:** Claude (not Codex). Two separate threads of work in one session.
+
+### A. Performance (commits `a4df6ea`, `83195e6`, `5900c28`, `06eb77d`, `23830bc`, `026c7f0`)
+
+Region is fixed (DB Mumbai, Prod API Singapore, Dev API Oregon), so the only lever is
+round-trip count.
+
+| | before | after |
+|---|---|---|
+| `/api/me/menu` | ~7.3 s | **~1.0 s** |
+| pipeline `context` | 492 ms | **0 µs** (cache hit) |
+| pipeline total | ~1000 ms | **~270 ms** |
+| per request | 1.47-1.79 s | **1.08-1.30 s** |
+
+- `menu.handler.ts` rebuilt the snapshot on **every** read with no staleness check. Now
+  read-first, rebuild only on miss (`MENU_SNAPSHOT_CACHE_TTL_SECONDS`, `0` restores old
+  behaviour, `?refresh=1` forces).
+- `_pipeline/context.ts` memoized (key = authUser+role+company+workContext+workspaceMode+3
+  headers, TTL 30 s, RESOLVED only, 500-entry bound, admin bypass).
+- Four heavy read handlers: `alerts/counts` called `enrichTrackerRows` (15 lookups) purely to
+  read **one field** (`po_date`, sourced solely from `purchase_order`) -> 15 round trips to 1;
+  `production/process-orders` four mutually-independent lookups collapsed into one parallel
+  round (§8B INDEPENDENT); `fg-stock-breakdown` param-only lookups moved alongside the genuine
+  dependency chain.
+
+**Key measured fact:** Dev tables are tiny (CSN 9 rows, process_order 9, stock_ledger 189), so
+"slow SQL" is essentially never the cause — count `.from(`/`.rpc(` first.
+
+**Corrected a wrong premise** (was written into CLAUDE.md by me, now fixed): the "~934 ms
+browser queueing = 36 requests vs the 6-connection limit" claim is **invalid** — the server
+negotiates **h2** (verified via Node `tls.connect` ALPN), so requests multiplex over one
+connection. `curl -w %{http_version}` is useless here: this machine's libcurl has no HTTP/2
+support and always reports 1.1. Remaining work paused until after go-live at business owner's
+direction.
+
+### B. Write Atomicity (commits `42e00ae`, `fb3df1a`, `e1389da`, `80fd918`)
+
+Raised by the business owner: an interrupted POST could leave half-posted stock. Audit of all
+12 posting handlers confirmed the structural exposure — multi-step writes, no transaction,
+postings first and terminal status last, no idempotency check.
+
+- **Step 1** - global fetch wrapper now distinguishes a network-layer failure on a *mutating*
+  request from a real HTTP error, and tells the user to refresh and verify rather than retry.
+  Sets no `.code` on purpose: pages render `friendly(err.code) || err.message` where
+  `friendly` is `ERRORS[code] ?? code`, so an unmapped code would have been shown verbatim.
+- **Step 2** - `erp_inventory.posting_source_registry` + `stock_health_check()`
+  (migration `20260719120000`). Registry-driven: an unregistered or untagged posting **FAILs**,
+  so new modules cannot be silently omitted. Stock-layer-only invariants were **not enough** —
+  a partial posting leaves the stock layer internally consistent.
+- **Step 3** - idempotency guards on Process PO Verify and Packing PO Final. Opening Stock,
+  Inward QA and GRN were already protected.
+
+**Two traps caught during step 3, both of which would have silently voided the fix:** the
+Verify guard must sit *after* `totalRmValue` accumulates (it feeds `sfgCostPerKg`, so an
+early skip understates SFG cost on retry), and Packing PO's line query was not selecting
+`stock_ledger_id` at all.
+
+**Still open:** Verify's three post-loop postings (their ledger ids are persisted only in the
+final status update), the other 7 handlers, and step 4 (one plpgsql call per write — buys
+rollback and collapses ~31 round trips to 1). Step 4 is explicitly **post-go-live**.
+
+**Verification:** `deno check` clean on every touched handler; frontend eslint + production
+build clean; `stock_health_check()` returns 12 OK on Dev, and was deliberately made to FAIL
+(tagged one stock_document against the lone FINAL process order -> `partial_posting__PROC_PO`
+FAIL count 1) then reverted, because a check never seen to fail is not a check. Migration
+integrity `in_sync = true` after reconciling the MCP timestamp per §8A.
+
+**Files:** `supabase/functions/api/_core/auth/menu.handler.ts`,
+`supabase/functions/api/_pipeline/context.ts`,
+`supabase/functions/api/_core/procurement/csn.handlers.ts`,
+`supabase/functions/api/_core/production/process_order.handlers.ts`,
+`supabase/functions/api/_core/production/packing_order.handlers.ts`,
+`supabase/migrations/20260719120000_posting_source_registry_and_health_check.sql`,
+`scripts/stock-health-check.sql`, `frontend/src/main.jsx`,
+`frontend/src/utils/errorMessages.js`, `CLAUDE.md`, feasibility §107.

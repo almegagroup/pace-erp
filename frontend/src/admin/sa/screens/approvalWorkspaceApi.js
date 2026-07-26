@@ -1,3 +1,5 @@
+import { resolveErrorMessage } from "../../../utils/errorMessages.js";
+
 export async function readJsonSafe(response) {
   try {
     return await response.clone().json();
@@ -26,8 +28,9 @@ async function fetchJson(path, options = {}, fallbackCode = "REQUEST_FAILED") {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    const error = new Error(describeApiError(json, fallbackCode));
-    error.code = json?.code ?? fallbackCode ?? "REQUEST_FAILED";
+    const code = json?.code ?? fallbackCode ?? "REQUEST_FAILED";
+    const error = new Error(resolveErrorMessage(code, json?.message, response.status));
+    error.code = code;
     error.requestId = json?.request_id ?? null;
     error.decisionTrace = json?.decision_trace ?? null;
     error.publicMessage = json?.message ?? null;

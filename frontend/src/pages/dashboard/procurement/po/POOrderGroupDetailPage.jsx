@@ -3,9 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openScreen, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
@@ -31,28 +31,33 @@ function getStatusTone(status) {
 }
 
 export default function POOrderGroupDetailPage() {
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const navigate = useNavigate();
   const { shellProfile } = useMenu();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
   const groupQuery = useQuery({
     queryKey: ["procurement", "po-order-group-detail", id],
     enabled: Boolean(id),
     queryFn: () => getPOOrderGroup(id),
   });
   const group = groupQuery.data ?? null;
-  const vendors = vendorQuery.vendors;
-  const loading = groupQuery.isLoading || vendorQuery.isLoading;
+  const loading = groupQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: groupQuery.isFetching,
+      perform: () => void groupQuery.refetch(),
+    },
+  });
 
   const canApprove = PO_APPROVER_ROLES.has(shellProfile?.roleCode);
   useEffect(() => {
-    setError(groupQuery.error?.message || vendorQuery.error?.message || "");
-  }, [groupQuery.error?.message, vendorQuery.error?.message]);
-
-  const vendorMap = useMemo(() => new Map(vendors.map((entry) => [entry.id, entry])), [vendors]);
+    setError(groupQuery.error?.message || "");
+  }, [groupQuery.error?.message]);
 
   async function runAction(action, successMessage) {
     setSaving(true);
@@ -61,7 +66,7 @@ export default function POOrderGroupDetailPage() {
     try {
       await action();
       setNotice(successMessage);
-      await Promise.all([groupQuery.refetch(), vendorQuery.refetch()]);
+      await groupQuery.refetch();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_PO_ORDER_GROUP_ACTION_FAILED");
     } finally {
@@ -129,6 +134,13 @@ export default function POOrderGroupDetailPage() {
             }
           },
         },
+        {
+          key: "refresh",
+          label: groupQuery.isFetching ? "Refreshing..." : "Refresh",
+          tone: "neutral",
+          onClick: () => void groupQuery.refetch(),
+          disabled: groupQuery.isFetching,
+        },
         ...(group?.status === "DRAFT" ? [{ key: "confirm", label: saving ? "Sending..." : "Confirm Order", tone: "primary", onClick: () => void handleConfirm(), disabled: saving }] : []),
         ...(group?.status === "PENDING_APPROVAL" && canApprove
           ? [
@@ -144,7 +156,7 @@ export default function POOrderGroupDetailPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          <ErpSectionCard eyebrow="Order" title={`Vendor: ${vendorMap.get(group.vendor_id)?.vendor_name || group.vendor_id}`}>
+          <ErpSectionCard eyebrow="Order" title={`Vendor: ${group.vendor_display || "—"}`}>
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
               <ErpFieldPreview label="Status" value={group.status} tone={getStatusTone(group.status)} />
               <ErpFieldPreview label="Created" value={(group.created_at || "").slice(0, 10)} />
@@ -163,7 +175,7 @@ export default function POOrderGroupDetailPage() {
                 {
                   key: "material",
                   label: "Material",
-                  render: (po) => (po.lines ?? []).map((l) => l.material_id).join(", ") || "-",
+                  render: (po) => (po.lines ?? []).map((l) => l.material_display || "—").join(", ") || "-",
                 },
                 {
                   key: "qty",

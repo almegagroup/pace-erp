@@ -10,7 +10,10 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -116,6 +119,11 @@ async function postStockMovement(params: {
   direction: "IN" | "OUT";
   postedBy: string;
   reversalOfId?: string;
+  // §106: Material Document identity (MBLNR+MJAHR) for the posting event; the PT/transfer
+  // business number (documentNumber) is carried as the reference.
+  matDoc?: MaterialDocumentRef;
+  referenceDocumentType?: string;
+  referenceDocumentId?: string | null;
 }): Promise<{ stockDocumentId: string; stockLedgerId: string }> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
@@ -134,6 +142,11 @@ async function postStockMovement(params: {
       p_direction: params.direction,
       p_posted_by: params.postedBy,
       p_reversal_of_id: params.reversalOfId ?? null,
+      p_material_doc_number: params.matDoc?.docNumber ?? null,
+      p_material_doc_year: params.matDoc?.docYear ?? null,
+      p_reference_document_number: params.matDoc ? params.documentNumber : null,
+      p_reference_document_type: params.matDoc ? (params.referenceDocumentType ?? "PT") : null,
+      p_reference_document_id: params.referenceDocumentId ?? null,
     });
   if (error || !Array.isArray(data) || data.length === 0) {
     throw new Error("PTO_STOCK_POSTING_FAILED");
@@ -462,6 +475,11 @@ export async function oneStepTransferHandler(
     }
 
     const valuationRate = Number(snapshot.valuation_rate ?? 0);
+    // §106: one Material Document for the whole one-step transfer event, minted from the
+    // SOURCE company's series and shared by both legs — matching SAP, where a cross-company
+    // stock transfer produces ONE material document spanning both plants (separate
+    // accounting documents per company code are a Layer-3 concern, not this one).
+    const ptoMatDoc = await generateMaterialDocNumber(String(pto.source_company_id));
     const issuePosting = await postStockMovement({
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P301",
@@ -474,6 +492,8 @@ export async function oneStepTransferHandler(
       stockTypeCode: "UNRESTRICTED",
       direction: "OUT",
       postedBy: ctx.auth_user_id,
+      matDoc: ptoMatDoc,
+      referenceDocumentId: ptoId,
     });
     const receiptPosting = await postStockMovement({
       documentNumber: String(pto.pto_number),
@@ -487,6 +507,8 @@ export async function oneStepTransferHandler(
       stockTypeCode: "UNRESTRICTED",
       direction: "IN",
       postedBy: ctx.auth_user_id,
+      matDoc: ptoMatDoc,
+      referenceDocumentId: ptoId,
     });
 
     const updated = await updatePto(ptoId, {
@@ -536,6 +558,8 @@ export async function issueTransferHandler(
     }
 
     const valuationRate = Number(snapshot.valuation_rate ?? 0);
+    // §106: one Material Document for this issue-to-transit event (both legs).
+    const issueMatDoc = await generateMaterialDocNumber(String(pto.source_company_id));
     const unrestrictedPosting = await postStockMovement({
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P303",
@@ -548,6 +572,8 @@ export async function issueTransferHandler(
       stockTypeCode: "UNRESTRICTED",
       direction: "OUT",
       postedBy: ctx.auth_user_id,
+      matDoc: issueMatDoc,
+      referenceDocumentId: ptoId,
     });
     await postStockMovement({
       documentNumber: String(pto.pto_number),
@@ -561,6 +587,8 @@ export async function issueTransferHandler(
       stockTypeCode: "IN_TRANSIT",
       direction: "IN",
       postedBy: ctx.auth_user_id,
+      matDoc: issueMatDoc,
+      referenceDocumentId: ptoId,
     });
 
     const updated = await updatePto(ptoId, {
@@ -597,6 +625,9 @@ export async function receiveTransferHandler(
 
     const quantity = Number(pto.transfer_qty ?? 0);
     const valuationRate = Number(pto.valuation_rate ?? 0);
+    // §106: one Material Document for this transit-receipt event (both legs), minted from
+    // the source company's series — see oneStepTransferHandler for the cross-company note.
+    const receiveMatDoc = await generateMaterialDocNumber(String(pto.source_company_id));
     await postStockMovement({
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P305",
@@ -609,6 +640,8 @@ export async function receiveTransferHandler(
       stockTypeCode: "IN_TRANSIT",
       direction: "OUT",
       postedBy: ctx.auth_user_id,
+      matDoc: receiveMatDoc,
+      referenceDocumentId: ptoId,
     });
     const receiptPosting = await postStockMovement({
       documentNumber: String(pto.pto_number),
@@ -622,6 +655,8 @@ export async function receiveTransferHandler(
       stockTypeCode: "UNRESTRICTED",
       direction: "IN",
       postedBy: ctx.auth_user_id,
+      matDoc: receiveMatDoc,
+      referenceDocumentId: ptoId,
     });
 
     const updated = await updatePto(ptoId, {
@@ -686,6 +721,11 @@ export async function storageLocationTransferHandler(
     if (!companyId || !sourceSlocId || !targetSlocId || !materialId || !transferQty || !uomCode) {
       return ptoErrorResponse(req, ctx, "PTO_SLOC_TRANSFER_INVALID", 400, "Missing required SLOC transfer fields.");
     }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return ptoErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if (sourceSlocId === targetSlocId) {
       return ptoErrorResponse(req, ctx, "PTO_SAME_SLOC", 400, "Source and target storage locations must differ.");
     }
@@ -702,6 +742,9 @@ export async function storageLocationTransferHandler(
 
     const valuationRate = Number(snapshot.valuation_rate ?? 0);
     const documentNumber = await generateProcurementDocNumber("PT");
+    // §106: one Material Document for this storage-location transfer event (both legs);
+    // the PT business number becomes the reference.
+    const slocMatDoc = await generateMaterialDocNumber(companyId);
     const sourcePosting = await postStockMovement({
       documentNumber,
       movementTypeCode: "P311",
@@ -714,6 +757,7 @@ export async function storageLocationTransferHandler(
       stockTypeCode: "UNRESTRICTED",
       direction: "OUT",
       postedBy: ctx.auth_user_id,
+      matDoc: slocMatDoc,
     });
     const targetPosting = await postStockMovement({
       documentNumber,
@@ -727,6 +771,7 @@ export async function storageLocationTransferHandler(
       stockTypeCode: "UNRESTRICTED",
       direction: "IN",
       postedBy: ctx.auth_user_id,
+      matDoc: slocMatDoc,
     });
 
     return okResponse(

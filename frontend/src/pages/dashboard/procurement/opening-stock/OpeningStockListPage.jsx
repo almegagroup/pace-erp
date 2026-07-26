@@ -7,10 +7,12 @@
  * Authority: Frontend
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
+import { useMenu } from "../../../../context/useMenu.js";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, {
@@ -24,6 +26,9 @@ import {
 import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 
 const STATUS_OPTIONS = ["", "DRAFT", "SUBMITTED", "APPROVED", "POSTED"];
+const CURRENCY_OPTIONS = ["INR", "USD"];
+const MATERIAL_TYPE_OPTIONS = ["RM", "PM", "INT", "SFG", "FG"];
+const PO_TYPE_OPTIONS = ["MTO", "HPS", "MTS", "MTEST"];
 
 function formatDate(value) {
   if (!value) return "-";
@@ -32,11 +37,18 @@ function formatDate(value) {
 }
 
 export default function OpeningStockListPage() {
-  const navigate = useNavigate();
-  const [filters, setFilters] = useState({ company_id: "", status: "" });
+  const { runtimeContext } = useMenu();
+  const runtimeCompanyId = useMemo(
+    () => resolveDefaultTransactionCompanyId(runtimeContext),
+    [runtimeContext],
+  );
+  const [filters, setFilters] = useState({ company_id: runtimeCompanyId, status: "" });
   const [form, setForm] = useState({
-    company_id: "",
+    company_id: runtimeCompanyId,
     cut_off_date: "",
+    currency_code: "INR",
+    material_type: "RM",
+    po_type: "",
     notes: "",
   });
   const [saving, setSaving] = useState(false);
@@ -47,15 +59,36 @@ export default function OpeningStockListPage() {
     queryKey: ["procurement", "opening-stock-documents", filters],
     queryFn: () => listOpeningStockDocuments(filters),
   });
-  const companies = Array.isArray(companiesQuery.data)
-    ? companiesQuery.data
-    : [];
+  const companies = useMemo(
+    () => (Array.isArray(companiesQuery.data) ? companiesQuery.data : []),
+    [companiesQuery.data],
+  );
   const rows = Array.isArray(documentQuery.data?.items)
     ? documentQuery.data.items
     : Array.isArray(documentQuery.data)
     ? documentQuery.data
     : [];
   const loading = documentQuery.isLoading || companiesQuery.isLoading;
+
+  useEffect(() => {
+    setFilters((current) => (
+      current.company_id === runtimeCompanyId
+        ? current
+        : { ...current, company_id: runtimeCompanyId }
+    ));
+    setForm((current) => (
+      current.company_id === runtimeCompanyId
+        ? current
+        : { ...current, company_id: runtimeCompanyId }
+    ));
+  }, [runtimeCompanyId]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void Promise.all([documentQuery.refetch(), companiesQuery.refetch()]),
+    },
+  });
 
   const companyOptions = useMemo(
     () =>
@@ -76,15 +109,20 @@ export default function OpeningStockListPage() {
       ),
     [companies],
   );
-
   const queryError =
     documentQuery.error?.message ||
     companiesQuery.error?.message ||
     "";
+  const requiresPoType = form.material_type === "SFG" || form.material_type === "FG";
 
   async function handleCreateDocument() {
-    if (!form.company_id || !form.cut_off_date) {
-      setError("Company and cut-off date are required.");
+    if (!form.company_id || !form.cut_off_date || !form.material_type) {
+      setError("Company, cut-off date, and material type are required.");
+      return;
+    }
+
+    if (requiresPoType && !form.po_type) {
+      setError("PO Type is required for SFG/FG opening stock documents.");
       return;
     }
 
@@ -95,14 +133,23 @@ export default function OpeningStockListPage() {
       const created = await createOpeningStockDocument({
         company_id: form.company_id,
         cut_off_date: form.cut_off_date,
+        currency_code: form.currency_code,
+        material_type: form.material_type,
+        po_type: requiresPoType ? form.po_type : null,
         notes: form.notes.trim() || null,
       });
       setNotice(`Opening stock document ${created.document_number ?? "created"} is ready in DRAFT.`);
-      setForm((current) => ({ ...current, notes: "" }));
+      setForm((current) => ({
+        ...current,
+        cut_off_date: "",
+        currency_code: "INR",
+        material_type: "RM",
+        po_type: "",
+        notes: "",
+      }));
       await Promise.all([documentQuery.refetch(), companiesQuery.refetch()]);
       if (created?.id) {
-        openScreen("PROC_OPENING_STOCK_DETAIL");
-        navigate(`/dashboard/procurement/opening-stock/${created.id}`);
+        openScreen("PROC_OPENING_STOCK_DETAIL", { context: { id: created.id } });
       }
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OPENING_STOCK_DOCUMENT_CREATE_FAILED");
@@ -246,8 +293,7 @@ export default function OpeningStockListPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          openScreen("PROC_OPENING_STOCK_DETAIL");
-                          navigate(`/dashboard/procurement/opening-stock/${row.id}`);
+                          openScreen("PROC_OPENING_STOCK_DETAIL", { context: { id: row.id } });
                         }}
                         className="border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
                       >
@@ -280,14 +326,71 @@ export default function OpeningStockListPage() {
                   ))}
                 </select>
               </ErpDenseFormRow>
-              <ErpDenseFormRow label="Cut-off Date" required>
-                <input
-                  type="date"
-                  value={form.cut_off_date}
-                  onChange={(event) => setForm((current) => ({ ...current, cut_off_date: event.target.value }))}
-                  className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                />
-              </ErpDenseFormRow>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ErpDenseFormRow label="Cut-off Date" required>
+                  <input
+                    type="date"
+                    value={form.cut_off_date}
+                    onChange={(event) => setForm((current) => ({ ...current, cut_off_date: event.target.value }))}
+                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Currency" required>
+                  <select
+                    value={form.currency_code}
+                    onChange={(event) => setForm((current) => ({ ...current, currency_code: event.target.value }))}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    {CURRENCY_OPTIONS.map((currencyCode) => (
+                      <option key={currencyCode} value={currencyCode}>
+                        {currencyCode}
+                      </option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ErpDenseFormRow label="Material Type" required>
+                  <select
+                    value={form.material_type}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        material_type: event.target.value,
+                        po_type: event.target.value === "SFG" || event.target.value === "FG"
+                          ? current.po_type
+                          : "",
+                      }))}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    {MATERIAL_TYPE_OPTIONS.map((materialType) => (
+                      <option key={materialType} value={materialType}>
+                        {materialType}
+                      </option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+                {requiresPoType ? (
+                  <ErpDenseFormRow label="PO Type" required>
+                    <select
+                      value={form.po_type}
+                      onChange={(event) => setForm((current) => ({ ...current, po_type: event.target.value }))}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    >
+                      <option value="">Select PO Type</option>
+                      {PO_TYPE_OPTIONS.map((poType) => (
+                        <option key={poType} value={poType}>
+                          {poType}
+                        </option>
+                      ))}
+                    </select>
+                  </ErpDenseFormRow>
+                ) : (
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">
+                    PO Type is used only for SFG/FG opening stock documents.
+                  </div>
+                )}
+              </div>
               <ErpDenseFormRow label="Notes">
                 <textarea
                   value={form.notes}
@@ -296,7 +399,7 @@ export default function OpeningStockListPage() {
                 />
               </ErpDenseFormRow>
               <div className="rounded border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                One document per company + cut-off date combination.
+                One document per company + cut-off date + material scope combination. Currency is stored once at document level.
               </div>
             </div>
           </ErpSectionCard>

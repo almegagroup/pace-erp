@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import {
   deleteImportLeadTime,
   deleteDomesticLeadTime,
@@ -68,6 +69,19 @@ export default function ImportLeadTimeMasterPage() {
     companiesQuery.isLoading ||
     importVendorQuery.isLoading ||
     domesticVendorQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () =>
+        void Promise.all([
+          leadTimeQuery.refetch(),
+          companiesQuery.refetch(),
+          importVendorQuery.refetch(),
+          domesticVendorQuery.refetch(),
+        ]),
+    },
+  });
 
   function flash(msg, isError = false) {
     clearTimeout(noticeTimer.current);

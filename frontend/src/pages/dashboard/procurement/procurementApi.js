@@ -1,3 +1,5 @@
+import { resolveErrorMessage } from "../../../utils/errorMessages.js";
+
 async function readJsonSafe(response) {
   try {
     return await response.clone().json();
@@ -22,10 +24,27 @@ async function fetchProcurement(method, path, body, params) {
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
+
+  if (response.status === 204) {
+    if (!response.ok) {
+      throw new Error("PROCUREMENT_REQUEST_FAILED");
+    }
+    return null;
+  }
+
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    throw new Error(json?.code ?? "PROCUREMENT_REQUEST_FAILED");
+    const code = json?.code ?? "PROCUREMENT_REQUEST_FAILED";
+    // The UI-facing message is deliberately generic for 5xx/unmapped codes (see
+    // resolveErrorMessage) so end users don't see raw backend errors. Log the real
+    // response here so it's still visible in the browser console during development.
+    console.error(`[PROCUREMENT_API_ERROR] ${method} ${path} -> ${response.status} ${code}: ${json?.message ?? "(no message body)"}`, json);
+    const error = new Error(resolveErrorMessage(code, json?.message, response.status));
+    error.code = code;
+    error.status = response.status;
+    error.backendMessage = json?.message ?? null;
+    throw error;
   }
 
   const payload = json.data;
@@ -66,6 +85,10 @@ export function togglePaymentTerm(payload) {
 
 export function getPoFilterOptions(params) {
   return fetchProcurement("GET", "/api/procurement/po-filter-options", undefined, params);
+}
+
+export function listMaterialUomConversionsForProcurement(materialId) {
+  return fetchProcurement("GET", "/api/procurement/materials/uom-conversion", undefined, { material_id: materialId });
 }
 
 export function listReferenceDateTypes(params) {
@@ -355,14 +378,6 @@ export function deleteSubCSN(id, subId) {
   );
 }
 
-export function markCSNInTransit(id, data) {
-  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/mark-in-transit`, data);
-}
-
-export function markCSNArrived(id, data) {
-  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/mark-arrived`, data);
-}
-
 export function getAllAlertCounts(params) {
   return fetchProcurement("GET", "/api/procurement/alerts/counts", undefined, params);
 }
@@ -407,12 +422,24 @@ export function inlineUpdateCSN(id, data) {
   return fetchProcurement("PUT", `/api/procurement/tracker/${encodeURIComponent(id)}/inline`, data);
 }
 
-export function listGateEntries(params) {
+export function listGateEntries({ company_id, status, date_from, date_to, limit = 50, offset = 0 } = {}) {
+  const params = { company_id, status, date_from, date_to, limit, offset };
+  Object.keys(params).forEach((k) => params[k] === undefined && delete params[k]);
   return fetchProcurement("GET", "/api/procurement/gate-entries", undefined, params);
 }
 
 export function getGateEntry(id) {
   return fetchProcurement("GET", `/api/procurement/gate-entries/${encodeURIComponent(id)}`);
+}
+
+export function getGateEntryByNumber(geNumber) {
+  return fetchProcurement("GET", "/api/procurement/gate-entries/by-number", undefined, { ge_number: geNumber });
+}
+
+export function getGateReport(params) {
+  const p = { ...params };
+  Object.keys(p).forEach((k) => (p[k] === undefined || p[k] === "") && delete p[k]);
+  return fetchProcurement("GET", "/api/procurement/gate-report", undefined, p);
 }
 
 export function createGateEntry(data) {
@@ -423,8 +450,20 @@ export function updateGateEntry(id, data) {
   return fetchProcurement("PUT", `/api/procurement/gate-entries/${encodeURIComponent(id)}`, data);
 }
 
+export function pruneGateEntry(id) {
+  return fetchProcurement("POST", `/api/procurement/gate-entries/${encodeURIComponent(id)}/prune`);
+}
+
 export function listOpenCSNsForGE(params) {
   return fetchProcurement("GET", "/api/procurement/gate-entries/open-csns", undefined, params);
+}
+
+export function listOpenPOsForGE(params) {
+  return fetchProcurement("GET", "/api/procurement/gate-entries/open-pos", undefined, params);
+}
+
+export function listOpenSTOsForGE(params) {
+  return fetchProcurement("GET", "/api/procurement/gate-entries/open-stos", undefined, params);
 }
 
 export function createGateExitInbound(data) {
@@ -443,16 +482,19 @@ export function getGRN(id) {
   return fetchProcurement("GET", `/api/procurement/grns/${encodeURIComponent(id)}`);
 }
 
-export function createGRNDraft(data) {
-  return fetchProcurement("POST", "/api/procurement/grns", data);
+export function getGELinesForGRN(geNumber) {
+  return fetchProcurement("GET", "/api/procurement/grns/ge-lines", undefined, { ge_number: geNumber });
 }
 
-export function updateGRNDraft(id, data) {
-  return fetchProcurement("PUT", `/api/procurement/grns/${encodeURIComponent(id)}`, data);
+export function createAndPostGRNFromLine(data) {
+  return fetchProcurement("POST", "/api/procurement/grns/from-line", data);
 }
 
-export function postGRN(id) {
-  return fetchProcurement("POST", `/api/procurement/grns/${encodeURIComponent(id)}/post`);
+export function getMaterialVendorDocNames(materialId, vendorId) {
+  return fetchProcurement("GET", "/api/procurement/grns/material-vendor-doc-names", undefined, {
+    material_id: materialId,
+    vendor_id: vendorId,
+  });
 }
 
 export function reverseGRN(id, data) {
@@ -465,10 +507,6 @@ export function listQADocuments(params) {
 
 export function getQADocument(id) {
   return fetchProcurement("GET", `/api/procurement/qa-documents/${encodeURIComponent(id)}`);
-}
-
-export function assignQAOfficer(id, data) {
-  return fetchProcurement("POST", `/api/procurement/qa-documents/${encodeURIComponent(id)}/assign`, data);
 }
 
 export function addQATestLine(id, data) {
@@ -492,6 +530,30 @@ export function deleteQATestLine(id, lineId) {
 
 export function submitUsageDecision(id, data) {
   return fetchProcurement("POST", `/api/procurement/qa-documents/${encodeURIComponent(id)}/decision`, data);
+}
+
+export function listQaTestMethods(params) {
+  return fetchProcurement("GET", "/api/procurement/qa-test-methods", undefined, params);
+}
+
+export function createQaTestMethod(payload) {
+  return fetchProcurement("POST", "/api/procurement/qa-test-methods", payload);
+}
+
+export function listQaCategoryTestConfig(params) {
+  return fetchProcurement("GET", "/api/procurement/qa-category-test-config", undefined, params);
+}
+
+export function createQaCategoryTestConfig(payload) {
+  return fetchProcurement("POST", "/api/procurement/qa-category-test-config", payload);
+}
+
+export function updateQaCategoryTestConfig(id, payload) {
+  return fetchProcurement("PATCH", `/api/procurement/qa-category-test-config/${encodeURIComponent(id)}`, payload);
+}
+
+export function deleteQaCategoryTestConfig(id) {
+  return fetchProcurement("DELETE", `/api/procurement/qa-category-test-config/${encodeURIComponent(id)}`);
 }
 
 export function listSTOs(params) {
@@ -819,8 +881,18 @@ export function getOpeningStockDocument(id) {
   return fetchProcurement("GET", `/api/procurement/opening-stock/${encodeURIComponent(id)}`);
 }
 
+export function getOpeningStockDocumentByNumber(documentNumber) {
+  return fetchProcurement("GET", "/api/procurement/opening-stock/by-number", undefined, {
+    document_number: documentNumber,
+  });
+}
+
 export function addOpeningStockLine(id, data) {
   return fetchProcurement("POST", `/api/procurement/opening-stock/${encodeURIComponent(id)}/lines`, data);
+}
+
+export function batchUpdateOpeningStockLines(id, data) {
+  return fetchProcurement("PUT", `/api/procurement/opening-stock/${encodeURIComponent(id)}/lines/batch`, data);
 }
 
 export function updateOpeningStockLine(id, lineId, data) {
@@ -848,6 +920,10 @@ export function approveOpeningStockDocument(id) {
 
 export function postOpeningStockDocument(id) {
   return fetchProcurement("POST", `/api/procurement/opening-stock/${encodeURIComponent(id)}/post`);
+}
+
+export function recalculateValuation(data) {
+  return fetchProcurement("POST", "/api/procurement/opening-stock/recalculate-valuation", data);
 }
 
 export function listPIDocuments(params) {

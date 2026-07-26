@@ -12,6 +12,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import {
   createCHA,
   deleteCHA,
@@ -100,6 +101,13 @@ export default function CHAMasterPage() {
   const allPorts = portQuery.data?.allPorts ?? [];
   const loading = chaQuery.isLoading || companiesQuery.isLoading;
   const portsLoading = portQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void Promise.all([chaQuery.refetch(), companiesQuery.refetch(), portQuery.refetch()]),
+    },
+  });
 
   function flash(msg, isError = false) {
     clearTimeout(noticeTimer.current);

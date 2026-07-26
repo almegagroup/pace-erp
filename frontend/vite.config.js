@@ -79,6 +79,8 @@ export default defineConfig({
   },
 
   server: {
+    port: Number(process.env.PORT) || 5173,
+    strictPort: false,
     proxy: {
       "/api": {
         target: "https://pace-erp-api-dev.onrender.com",

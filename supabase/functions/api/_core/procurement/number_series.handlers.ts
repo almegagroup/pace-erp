@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -203,6 +204,11 @@ export async function createCompanySeriesHandler(
 
     if (!companyId || !COMPANY_DOC_TYPES.has(documentType) || !prefix) {
       return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_CREATE_INVALID", 400, "company_id, document_type (PO/STO), and prefix are required.");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return numberSeriesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const { data, error } = await serviceRoleClient

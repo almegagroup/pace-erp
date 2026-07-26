@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
@@ -74,6 +74,9 @@ export default function IVCreatePage() {
       );
       return details.filter(Boolean);
     },
+    // Changing vendor/company re-keys this query — keep the previous GRN
+    // list on screen instead of blanking the whole form while it refetches.
+    placeholderData: keepPreviousData,
   });
 
   useEffect(() => {
@@ -110,7 +113,7 @@ export default function IVCreatePage() {
   const loading =
     vendorQuery.isLoading ||
     materialQuery.isLoading ||
-    grnQuery.isLoading;
+    (grnQuery.isLoading && !grnQuery.data);
 
   useEffect(() => {
     if (!form.vendor_id) {

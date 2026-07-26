@@ -23,6 +23,29 @@ import {
 } from "../../_shared/acl_runtime.ts";
 
 /* =========================================================
+ * PERF: session menu snapshot cache TTL
+ *
+ * How long a already-built session_menu_snapshot may be served without
+ * rebuilding it. Set to 0 to disable the cache entirely and restore the
+ * original "rebuild on every read" behaviour — that is the rollback switch,
+ * flippable as an env var with no code change or redeploy of logic.
+ *
+ * Company/work-context switches and re-logins bypass this structurally (they
+ * produce a different cache key), so the TTL only bounds how long an
+ * admin-side ACL/menu-registry change takes to appear.
+ * ========================================================= */
+
+const MENU_SNAPSHOT_CACHE_TTL_SECONDS = (() => {
+  const raw = typeof Deno !== "undefined"
+    ? Deno.env.get("MENU_SNAPSHOT_CACHE_TTL_SECONDS")
+    : process.env.MENU_SNAPSHOT_CACHE_TTL_SECONDS;
+  const parsed = Number(raw);
+  // Default 300s (5 min): the menu changes only on deliberate admin action, so
+  // this trades a few minutes of staleness for removing a ~7.3s rebuild per screen.
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 300;
+})();
+
+/* =========================================================
  * Types
  * ========================================================= */
 
@@ -100,49 +123,105 @@ console.log("MENU_CONTEXT", {
   let data: unknown[] = [];
 
   try {
-    if (resolvedContext.isAdmin) {
-      await rebuildAdminSessionMenuSnapshot(db, auth_user_id, session_id);
-    } else if (universe === "GLOBAL_ACL") {
-      await rebuildGlobalAclMenuSnapshot(db, auth_user_id, session_id);
-    } else if (resolvedContext.companyId && resolvedWorkContextId) {
-      await rebuildAclSessionMenuSnapshot(
-        db,
-        auth_user_id,
-        resolvedContext.companyId,
-        resolvedWorkContextId,
-        session_id,
+    // ------------------------------------------------------------------
+    // PERF: read the cached session snapshot FIRST.
+    //
+    // This handler used to rebuild the snapshot on EVERY menu read, with no
+    // cache check. rebuildAclSessionMenuSnapshot alone costs ~6 DB round trips
+    // plus a full rebuild_acl_menu_snapshot RPC, and /api/me/menu was measured
+    // at ~7.3s — the single most expensive call in the app, paid on every screen.
+    //
+    // The menu only changes when an admin changes ACL grants or the menu
+    // registry, so serving a cached copy for a short TTL is safe. The two cases
+    // that MUST invalidate immediately both do so structurally, not by time:
+    //   • company / work-context switch → different cache key → miss → rebuild
+    //   • logout / re-login             → new session_id      → miss → rebuild
+    // The only bounded staleness is an admin-side ACL/menu change, which is
+    // already a deliberate action requiring a snapshot regen today.
+    //
+    // MENU_SNAPSHOT_CACHE_TTL_SECONDS=0 restores the exact previous behaviour
+    // (always rebuild) without a code change — that is the rollback switch.
+    // ------------------------------------------------------------------
+    const buildSnapshotQuery = () => {
+      let q = db
+        .schema("erp_cache")
+        .from("session_menu_snapshot")
+        .select("menu_json, snapshot_version, company_id, work_context_id, created_at")
+        .eq("session_id", session_id)
+        .eq("universe", universe);
+
+      // ACL → company + work_context mandatory
+      // GLOBAL_ACL → no company filter (company_id is NULL in snapshot)
+      // SA → no filters (already handled by universe)
+      if (!resolvedContext.isAdmin && universe === "ACL") {
+        q = q
+          .eq("company_id", resolvedContext.companyId)
+          .eq("work_context_id", resolvedWorkContextId);
+      }
+
+      return q;
+    };
+
+    if (!resolvedContext.isAdmin && universe === "ACL" && !resolvedContext.companyId) {
+      return errorResponse(
+        "INVALID_CONTEXT",
+        "companyId missing for non-admin",
+        request_id,
+        "NONE",
+        500
       );
     }
 
     const t0 = performance.now();
 
-    let query = db
-      .schema("erp_cache")
-      .from("session_menu_snapshot")
-      .select("menu_json, snapshot_version, company_id, work_context_id")
-      .eq("session_id", session_id)
-      .eq("universe", universe);
+    let row: Record<string, unknown> | null = null;
+    let servedFromCache = false;
 
-    // ACL → company + work_context mandatory
-    // GLOBAL_ACL → no company filter (company_id is NULL in snapshot)
-    // SA → no filters (already handled by universe)
-    if (!resolvedContext.isAdmin && universe === "ACL") {
-      if (!resolvedContext.companyId) {
-        return errorResponse(
-          "INVALID_CONTEXT",
-          "companyId missing for non-admin",
-          request_id,
-          "NONE",
-          500
-        );
+    // Explicit escape hatch: `?refresh=1` always rebuilds, so the UI can force a
+    // genuinely live menu (e.g. MenuShell's "Refreshing workspace shell") and an
+    // admin can see an ACL/menu change immediately without waiting out the TTL.
+    const forceRefresh = new URL(req.url).searchParams.get("refresh") === "1";
+
+    if (MENU_SNAPSHOT_CACHE_TTL_SECONDS > 0 && !forceRefresh) {
+      const { data: cached } = await buildSnapshotQuery().maybeSingle();
+      const cachedAt = cached?.created_at ? Date.parse(String(cached.created_at)) : NaN;
+      const isFresh =
+        Number.isFinite(cachedAt) &&
+        Date.now() - cachedAt < MENU_SNAPSHOT_CACHE_TTL_SECONDS * 1000;
+
+      if (cached && isFresh) {
+        row = cached as Record<string, unknown>;
+        servedFromCache = true;
       }
-
-      query = query
-        .eq("company_id", resolvedContext.companyId)
-        .eq("work_context_id", resolvedWorkContextId);
     }
 
-    const { data: row, error } = await query.maybeSingle();
+    if (!row) {
+      if (resolvedContext.isAdmin) {
+        await rebuildAdminSessionMenuSnapshot(db, auth_user_id, session_id);
+      } else if (universe === "GLOBAL_ACL") {
+        await rebuildGlobalAclMenuSnapshot(db, auth_user_id, session_id);
+      } else if (resolvedContext.companyId && resolvedWorkContextId) {
+        await rebuildAclSessionMenuSnapshot(
+          db,
+          auth_user_id,
+          resolvedContext.companyId,
+          resolvedWorkContextId,
+          session_id,
+        );
+      }
+    }
+
+    const { data: freshRow, error } = row
+      ? { data: row, error: null }
+      : await buildSnapshotQuery().maybeSingle();
+    row = freshRow as Record<string, unknown> | null;
+
+    console.log("SNAPSHOT_CACHE", {
+      request_id,
+      served_from_cache: servedFromCache,
+      force_refresh: forceRefresh,
+      ttl_seconds: MENU_SNAPSHOT_CACHE_TTL_SECONDS,
+    });
 
     const duration =
       Math.round((performance.now() - t0) * 100) / 100;

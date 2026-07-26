@@ -415,9 +415,18 @@ async function resolveProtectedRouteAclMeta(
   throw new Error("ROUTE_ACL_NOT_REGISTERED");
 }
 
+/**
+ * PERF: optional out-param the caller fills a `Server-Timing` header from. Pure instrumentation —
+ * runPipeline's own control flow and return values are untouched, so a caller that passes nothing
+ * behaves exactly as before. Written as an out-param (not a return value) precisely because
+ * runPipeline has many early-return paths; this way no return statement had to be modified.
+ */
+export type PipelineTimings = Record<string, number>;
+
 export async function runPipeline(
   req: Request,
-  requestId: string
+  requestId: string,
+  timings?: PipelineTimings
 ): Promise<Response> {
 
   // --------------------------------------------------
@@ -505,6 +514,20 @@ export async function runPipeline(
     const tSession0 = performance.now();
 
 sessionResult = await stepSession(req, requestId);
+
+// PERF (Step 0): the pipeline's DB steps are pure network cost — every query is an
+// indexed sub-ms lookup, but each one is a Singapore->Mumbai (prod) / Oregon->Mumbai (dev)
+// round trip. Log per-step elapsed so we can see the real split before optimising.
+// Logging only — no behaviour change.
+const msSession = Math.round(performance.now() - tSession0);
+if (timings) timings.session = msSession;
+log({
+  level: "OBSERVABILITY",
+  request_id: requestId,
+  gate_id: "10.5",
+  event: "PIPELINE_STEP_TIMING",
+  meta: { step: "SESSION", ms: msSession },
+});
 
 if (!sessionResult) {
   return errorResponse(
@@ -632,6 +655,17 @@ contextResult = await stepContext(req, {
   workspaceMode: activeSession.workspaceMode ?? null,
 });
 
+// PERF (Step 0) — see the SESSION timing note above.
+const msContext = Math.round(performance.now() - tContext0);
+if (timings) timings.context = msContext;
+log({
+  level: "OBSERVABILITY",
+  request_id: requestId,
+  gate_id: "10.5",
+  event: "PIPELINE_STEP_TIMING",
+  meta: { step: "CONTEXT", ms: msContext },
+});
+
     if (contextResult.status === "UNRESOLVED") {
       return errorResponse(
         "CONTEXT_UNRESOLVED",
@@ -710,6 +744,17 @@ const tAcl0 = performance.now();
         action: aclRouteMeta.action,
       },
     });
+    // PERF (Step 0) — see the SESSION timing note above.
+    const msAcl = Math.round(performance.now() - tAcl0);
+    if (timings) timings.acl = msAcl;
+    log({
+      level: "OBSERVABILITY",
+      request_id: requestId,
+      gate_id: "10.5",
+      event: "PIPELINE_STEP_TIMING",
+      meta: { step: "ACL", ms: msAcl },
+    });
+
     if (acl.decision === "DENY") {
       return errorResponse(
         acl.reason,

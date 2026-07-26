@@ -14,6 +14,7 @@ import { useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   changeMaterialStatus,
@@ -26,7 +27,6 @@ import {
   updateMaterial,
 } from "../omApi.js";
 import {
-  useCompaniesForOmQuery,
   useUomsQuery,
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -42,7 +42,16 @@ function getAllowedStatusTargets(status) {
   return transitions[String(status || "").toUpperCase()] ?? [];
 }
 
+// §110-adjacent ACL fix (2026-07-25): mirrors backend's assertManagerOrSARole
+// exactly (see supabase/functions/api/_core/om/shared.ts) — the write actions
+// on this page must be invisible to anyone the backend would 403 anyway, not
+// just SA. Below this set (e.g. SCM's L1_MANAGER/L4_USER test users), the
+// page is a true read-only duplicate of the SA Material Master.
+const MANAGER_OR_SA_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
+
 export default function MaterialDetailPage() {
+  const { shellProfile, runtimeContext } = useMenu();
+  const canEdit = MANAGER_OR_SA_ROLES.has(shellProfile?.roleCode);
   const [searchParams] = useSearchParams();
   const context = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchId = searchParams.get("id");
@@ -61,7 +70,6 @@ export default function MaterialDetailPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const uomQuery = useUomsQuery({ is_active: true });
-  const companiesQuery = useCompaniesForOmQuery();
   const detailQuery = useQuery({
     queryKey: ["om", "material-detail", id],
     queryFn: async () => {
@@ -92,7 +100,7 @@ export default function MaterialDetailPage() {
   );
   const material = detailQuery.data?.material ?? null;
   const uoms = Array.isArray(uomQuery.data?.data) ? uomQuery.data.data : [];
-  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyExtensions = detailQuery.data?.companyExtensions ?? [];
   const plantExtensions = detailQuery.data?.plantExtensions ?? [];
   const approvedVendors = approvedVendorsQuery.data ?? [];
@@ -100,8 +108,7 @@ export default function MaterialDetailPage() {
   const approvedVendorsLoading = approvedVendorsQuery.isLoading || vendorOptionsQuery.isLoading;
   const loading =
     detailQuery.isLoading ||
-    uomQuery.isLoading ||
-    companiesQuery.isLoading;
+    uomQuery.isLoading;
 
   useEffect(() => {
     if (!searchId && context.id) {
@@ -125,12 +132,11 @@ export default function MaterialDetailPage() {
     setError(
       detailQuery.error?.message ||
       uomQuery.error?.message ||
-      companiesQuery.error?.message ||
       approvedVendorsQuery.error?.message ||
       vendorOptionsQuery.error?.message ||
       ""
     );
-  }, [approvedVendorsQuery.error, companiesQuery.error, detailQuery.error, uomQuery.error, vendorOptionsQuery.error]);
+  }, [approvedVendorsQuery.error, detailQuery.error, uomQuery.error, vendorOptionsQuery.error]);
 
   function setField(key, value) { setForm((prev) => ({ ...prev, [key]: value })); }
 
@@ -211,8 +217,10 @@ export default function MaterialDetailPage() {
       title="Material Detail"
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
-        { key: "edit", label: editMode ? "Cancel Edit" : "Edit", tone: "neutral", onClick: () => setEditMode((v) => !v), disabled: loading || !material },
-        { key: "save", label: saving ? "Saving..." : "Save", tone: "primary", onClick: () => void handleSave(), disabled: saving || !editMode },
+        ...(canEdit ? [
+          { key: "edit", label: editMode ? "Cancel Edit" : "Edit", tone: "neutral", onClick: () => setEditMode((v) => !v), disabled: loading || !material },
+          { key: "save", label: saving ? "Saving..." : "Save", tone: "primary", onClick: () => void handleSave(), disabled: saving || !editMode },
+        ] : []),
       ]}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
@@ -267,7 +275,9 @@ export default function MaterialDetailPage() {
           {/* ── Lifecycle ── */}
           <ErpSectionCard eyebrow="Lifecycle" title="Status actions">
             <div className="flex flex-wrap gap-2">
-              {allowedTargets.length === 0 ? (
+              {!canEdit ? (
+                <div className="text-sm text-slate-500">Read-only — status changes require Manager or SA access.</div>
+              ) : allowedTargets.length === 0 ? (
                 <div className="text-sm text-slate-500">No status change is allowed from the current state.</div>
               ) : allowedTargets.map((t) => (
                 <button key={t} type="button" onClick={() => void handleStatusChange(t)} disabled={saving}
@@ -281,27 +291,31 @@ export default function MaterialDetailPage() {
           {/* ── Company Extensions ── */}
           <ErpSectionCard eyebrow="Company Extensions" title="Extend material to companies">
             <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-              <div className="grid gap-3">
-                <ErpDenseFormRow label="Company" required>
-                  <select value={companyExtForm.company_id} onChange={(e) => setCompanyExtForm((p) => ({ ...p, company_id: e.target.value }))} className={SELECT_CLS}>
-                    <option value="">Select company</option>
-                    {companyOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                  </select>
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Procurement Allowed">
-                  <label className="flex h-8 items-center gap-2 text-sm text-slate-900">
-                    <input type="checkbox" checked={companyExtForm.procurement_allowed} onChange={(e) => setCompanyExtForm((p) => ({ ...p, procurement_allowed: e.target.checked }))} />
-                    Procurement allowed
-                  </label>
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="HSN Override">
-                  <input value={companyExtForm.hsn_override} onChange={(e) => setCompanyExtForm((p) => ({ ...p, hsn_override: e.target.value }))} className={INPUT_CLS} />
-                </ErpDenseFormRow>
-                <button type="button" onClick={() => void handleCompanyExtSave()} disabled={saving}
-                  className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900">
-                  {saving ? "Saving..." : "Extend to Company"}
-                </button>
-              </div>
+              {canEdit ? (
+                <div className="grid gap-3">
+                  <ErpDenseFormRow label="Company" required>
+                    <select value={companyExtForm.company_id} onChange={(e) => setCompanyExtForm((p) => ({ ...p, company_id: e.target.value }))} className={SELECT_CLS}>
+                      <option value="">Select company</option>
+                      {companyOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                    </select>
+                  </ErpDenseFormRow>
+                  <ErpDenseFormRow label="Procurement Allowed">
+                    <label className="flex h-8 items-center gap-2 text-sm text-slate-900">
+                      <input type="checkbox" checked={companyExtForm.procurement_allowed} onChange={(e) => setCompanyExtForm((p) => ({ ...p, procurement_allowed: e.target.checked }))} />
+                      Procurement allowed
+                    </label>
+                  </ErpDenseFormRow>
+                  <ErpDenseFormRow label="HSN Override">
+                    <input value={companyExtForm.hsn_override} onChange={(e) => setCompanyExtForm((p) => ({ ...p, hsn_override: e.target.value }))} className={INPUT_CLS} />
+                  </ErpDenseFormRow>
+                  <button type="button" onClick={() => void handleCompanyExtSave()} disabled={saving}
+                    className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900">
+                    {saving ? "Saving..." : "Extend to Company"}
+                  </button>
+                </div>
+              ) : (
+                <div className="text-sm text-slate-500">Read-only — company extensions require Manager or SA access.</div>
+              )}
               <ErpDenseGrid
                 columns={[
                   { key: "company", label: "Company", render: (row) => row.companies ? `${row.companies.company_code} | ${row.companies.company_name}` : companyMap.get(row.company_id)?.company_name ?? row.company_id },
@@ -320,36 +334,40 @@ export default function MaterialDetailPage() {
           {/* ── Company Extensions (Planning Params) ── */}
           <ErpSectionCard eyebrow="Company Extensions" title="Extend material to company">
             <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-              <div className="grid gap-3">
-                <ErpDenseFormRow label="Company" required>
-                  <select
-                    value={plantExtForm.company_id}
-                    onChange={(e) => setPlantExtForm((p) => ({ ...p, company_id: e.target.value }))}
-                    className={SELECT_CLS}
-                  >
-                    <option value="">Select company</option>
-                    {companyOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                  </select>
-                </ErpDenseFormRow>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <ErpDenseFormRow label="Safety Stock">
-                    <input type="number" min="0" step="any" value={plantExtForm.safety_stock} onChange={(e) => setPlantExtForm((p) => ({ ...p, safety_stock: e.target.value }))} className={INPUT_CLS} />
+              {canEdit ? (
+                <div className="grid gap-3">
+                  <ErpDenseFormRow label="Company" required>
+                    <select
+                      value={plantExtForm.company_id}
+                      onChange={(e) => setPlantExtForm((p) => ({ ...p, company_id: e.target.value }))}
+                      className={SELECT_CLS}
+                    >
+                      <option value="">Select company</option>
+                      {companyOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                    </select>
                   </ErpDenseFormRow>
-                  <ErpDenseFormRow label="Reorder Point">
-                    <input type="number" min="0" step="any" value={plantExtForm.reorder_point} onChange={(e) => setPlantExtForm((p) => ({ ...p, reorder_point: e.target.value }))} className={INPUT_CLS} />
-                  </ErpDenseFormRow>
-                  <ErpDenseFormRow label="Min Order Qty">
-                    <input type="number" min="0" step="any" value={plantExtForm.min_order_qty} onChange={(e) => setPlantExtForm((p) => ({ ...p, min_order_qty: e.target.value }))} className={INPUT_CLS} />
-                  </ErpDenseFormRow>
-                  <ErpDenseFormRow label="Lead Time Days">
-                    <input type="number" min="0" step="1" value={plantExtForm.lead_time_days} onChange={(e) => setPlantExtForm((p) => ({ ...p, lead_time_days: e.target.value }))} className={INPUT_CLS} />
-                  </ErpDenseFormRow>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <ErpDenseFormRow label="Safety Stock">
+                      <input type="number" min="0" step="any" value={plantExtForm.safety_stock} onChange={(e) => setPlantExtForm((p) => ({ ...p, safety_stock: e.target.value }))} className={INPUT_CLS} />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Reorder Point">
+                      <input type="number" min="0" step="any" value={plantExtForm.reorder_point} onChange={(e) => setPlantExtForm((p) => ({ ...p, reorder_point: e.target.value }))} className={INPUT_CLS} />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Min Order Qty">
+                      <input type="number" min="0" step="any" value={plantExtForm.min_order_qty} onChange={(e) => setPlantExtForm((p) => ({ ...p, min_order_qty: e.target.value }))} className={INPUT_CLS} />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Lead Time Days">
+                      <input type="number" min="0" step="1" value={plantExtForm.lead_time_days} onChange={(e) => setPlantExtForm((p) => ({ ...p, lead_time_days: e.target.value }))} className={INPUT_CLS} />
+                    </ErpDenseFormRow>
+                  </div>
+                  <button type="button" onClick={() => void handlePlantExtSave()} disabled={saving}
+                    className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900">
+                    {saving ? "Saving..." : "Save Extension"}
+                  </button>
                 </div>
-                <button type="button" onClick={() => void handlePlantExtSave()} disabled={saving}
-                  className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900">
-                  {saving ? "Saving..." : "Save Extension"}
-                </button>
-              </div>
+              ) : (
+                <div className="text-sm text-slate-500">Read-only — plant extensions require Manager or SA access.</div>
+              )}
               <ErpDenseGrid
                 columns={[
                   { key: "company", label: "Company", render: (row) => row.companies ? `${row.companies.company_code}` : companyMap.get(row.company_id)?.company_code ?? row.company_id },

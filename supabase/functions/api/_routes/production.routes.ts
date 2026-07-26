@@ -16,11 +16,16 @@ import {
   createStrokeMasterHandler,
   updateStrokeMasterHandler,
   approveStrokeMasterHandler,
+  rejectStrokeMasterHandler,
+  deactivateStrokeMasterHandler,
   revertStrokeMasterHandler,
 } from "../_core/production/stroke_master.handlers.ts";
 import {
   listPackCodesHandler,
+  createPackCodeHandler,
+  updatePackCodeHandler,
   togglePackCodeHandler,
+  listApprovedProdshadesHandler,
   listPackConfigsHandler,
   upsertPackConfigHandler,
   deletePackConfigHandler,
@@ -29,11 +34,23 @@ import {
   listBatchSeriesHandler,
   createBatchSeriesHandler,
   updateBatchSeriesHandler,
+  listBatchNumbersHandler,
+  releaseBatchNumberHandler,
 } from "../_core/production/batch_series.handlers.ts";
 import {
   listSegmentLocationsHandler,
   upsertSegmentLocationHandler,
 } from "../_core/production/segment_location.handlers.ts";
+import {
+  listConversionRatesHandler,
+  createConversionRateHandler,
+  getDerivedOpeningRateHandler,
+} from "../_core/production/conversion_cost.handlers.ts";
+import {
+  createOldProcessPoHandler,
+  listOldProcessPoBatchesHandler,
+  createOldPackingPoHandler,
+} from "../_core/production/opening_genealogy.handlers.ts";
 import {
   listPlanFeedHandler,
   getPlanFeedHandler,
@@ -41,27 +58,42 @@ import {
   updatePlanFeedHandler,
   cancelPlanFeedHandler,
   planFeedSummaryHandler,
+  listFoAllocationsHandler,
+  upsertFoAllocationHandler,
+  listUnmappedStockHandler,
+  checkOrderedStrokeHandler,
+  listStrokeOptionsHandler,
+  findPlanFeedByNumberHandler,
 } from "../_core/production/plan_feed.handlers.ts";
 import {
   listProcessOrdersHandler,
   getProcessOrderHandler,
+  availabilityPreviewProcessOrderHandler,
   createProcessOrderHandler,
   updateProcessOrderLinesHandler,
+  editProcessOrderHandler,
   qaApproveProcessOrderHandler,
   qaRejectProcessOrderHandler,
   startBatchHandler,
+  completeIntProcessOrderHandler,
   finalizeProcessOrderHandler,
   verifyProcessOrderHandler,
   reverseProcessOrderHandler,
+  pruneProcessOrderHandler,
 } from "../_core/production/process_order.handlers.ts";
 import {
   listPackingOrdersHandler,
   getPackingOrderHandler,
+  availabilityPreviewPackingOrderHandler,
+  listPackingSfgBatchOptionsHandler,
   createPackingOrderHandler,
   updatePackingOrderLinesHandler,
-  linkFoHandler,
   finalizePackingOrderHandler,
   reversePackingOrderHandler,
+  correctPackingOrderHandler,
+  editPackingOrderHandler,
+  cancelPackingOrderHandler,
+  fgStockBreakdownHandler,
 } from "../_core/production/packing_order.handlers.ts";
 import {
   listStrokeChangeRequestsHandler,
@@ -71,6 +103,7 @@ import {
   rejectStrokeChangeRequestHandler,
 } from "../_core/production/stroke_change_request.handlers.ts";
 import {
+  listPackBomEligibleSkusHandler,
   listPackBomsHandler,
   getPackBomHandler,
   createPackBomHandler,
@@ -78,9 +111,27 @@ import {
   rejectPackBomHandler,
   createPackBomChangeRequestHandler,
   listPackBomChangeRequestsHandler,
+  getPackBomChangeRequestHandler,
   approvePackBomChangeRequestHandler,
   rejectPackBomChangeRequestHandler,
 } from "../_core/production/pack_bom.handlers.ts";
+import {
+  listSfgQaDocumentsHandler,
+  getSfgQaDocumentHandler,
+  addSfgQaTestLineHandler,
+  updateSfgQaTestLineHandler,
+  submitSfgQaDecisionHandler,
+} from "../_core/production/sfg_qa.handlers.ts";
+import {
+  listPartialReversalProdshadesHandler,
+  resolvePartialReversalBatchHandler,
+  listPartialReversalStockLinesHandler,
+  listSalvageBatchOptionsHandler,
+  getPartialReversalDetailHandler,
+  createPartialBatchReversalHandler,
+  listPartialBatchReversalsHandler,
+  getPartialBatchReversalHandler,
+} from "../_core/production/partial_reversal.handlers.ts";
 
 export async function dispatchProductionRoutes(
   routeKey: string,
@@ -102,8 +153,14 @@ export async function dispatchProductionRoutes(
     // Pack Codes (SA config)
     case "GET:/api/production/pack-codes":
       return await listPackCodesHandler(req, ctx);
+    case "POST:/api/production/pack-codes":
+      return await createPackCodeHandler(req, ctx);
     case "POST:/api/production/pack-codes/toggle":
       return await togglePackCodeHandler(req, ctx);
+
+    // Approved Prodshades
+    case "GET:/api/production/prodshades":
+      return await listApprovedProdshadesHandler(req, ctx);
 
     // Pack Configs (per prodshade)
     case "GET:/api/production/pack-configs":
@@ -116,12 +173,31 @@ export async function dispatchProductionRoutes(
       return await listBatchSeriesHandler(req, ctx);
     case "POST:/api/production/batch-series":
       return await createBatchSeriesHandler(req, ctx);
+    case "GET:/api/production/batch-numbers":
+      return await listBatchNumbersHandler(req, ctx);
 
     // Segment Location Config
     case "GET:/api/production/segment-locations":
       return await listSegmentLocationsHandler(req, ctx);
     case "POST:/api/production/segment-locations":
       return await upsertSegmentLocationHandler(req, ctx);
+
+    // Conversion Cost Config (Accounts ACL — §104.8, per-KG conversion rate, valid_from dated)
+    case "GET:/api/production/conversion-rates":
+      return await listConversionRatesHandler(req, ctx);
+    case "POST:/api/production/conversion-rates":
+      return await createConversionRateHandler(req, ctx);
+    // §104.8 — suggested opening rate for a produced material (stroke-derived), used by IN05
+    case "GET:/api/production/derived-opening-rate":
+      return await getDerivedOpeningRateHandler(req, ctx);
+
+    // Opening Genealogy (§104.9) — PR22 Old Process PO + PR23 Old Packing PO (no stock movement)
+    case "POST:/api/production/old-process-po":
+      return await createOldProcessPoHandler(req, ctx);
+    case "GET:/api/production/old-process-po/batches":
+      return await listOldProcessPoBatchesHandler(req, ctx);
+    case "POST:/api/production/old-packing-po":
+      return await createOldPackingPoHandler(req, ctx);
 
     // Stroke Masters
     case "GET:/api/production/stroke-masters":
@@ -136,18 +212,38 @@ export async function dispatchProductionRoutes(
       return await createPlanFeedHandler(req, ctx);
     case "GET:/api/production/plan-feed/summary":
       return await planFeedSummaryHandler(req, ctx);
+    case "GET:/api/production/plan-feed/unmapped-stock":
+      return await listUnmappedStockHandler(req, ctx);
+    case "GET:/api/production/plan-feed/check-stroke":
+      return await checkOrderedStrokeHandler(req, ctx);
+    case "GET:/api/production/plan-feed/stroke-options":
+      return await listStrokeOptionsHandler(req, ctx);
+    case "GET:/api/production/plan-feed/find":
+      return await findPlanFeedByNumberHandler(req, ctx);
 
     // Process Orders
     case "GET:/api/production/process-orders":
       return await listProcessOrdersHandler(req, ctx);
+    case "GET:/api/production/process-orders/availability-preview":
+      return await availabilityPreviewProcessOrderHandler(req, ctx);
     case "POST:/api/production/process-orders":
       return await createProcessOrderHandler(req, ctx);
 
     // Packing Orders
     case "GET:/api/production/packing-orders":
       return await listPackingOrdersHandler(req, ctx);
+    case "GET:/api/production/packing-orders/availability-preview":
+      return await availabilityPreviewPackingOrderHandler(req, ctx);
+    case "GET:/api/production/packing-orders/sfg-batches":
+      return await listPackingSfgBatchOptionsHandler(req, ctx);
     case "POST:/api/production/packing-orders":
       return await createPackingOrderHandler(req, ctx);
+    case "GET:/api/production/fg-stock-breakdown":
+      return await fgStockBreakdownHandler(req, ctx);
+
+    // SFG QA Result Recording
+    case "GET:/api/production/sfg-qa-documents":
+      return await listSfgQaDocumentsHandler(req, ctx);
 
     // Stroke Change Requests (PR03/PR04)
     case "GET:/api/production/stroke-change-requests":
@@ -156,6 +252,8 @@ export async function dispatchProductionRoutes(
       return await createStrokeChangeRequestHandler(req, ctx);
 
     // Pack BOMs (PR05/PR06)
+    case "GET:/api/production/pack-boms/eligible-skus":
+      return await listPackBomEligibleSkusHandler(req, ctx);
     case "GET:/api/production/pack-boms":
       return await listPackBomsHandler(req, ctx);
     case "POST:/api/production/pack-boms":
@@ -164,6 +262,22 @@ export async function dispatchProductionRoutes(
     // Pack BOM Change Requests (PR07/PR08)
     case "GET:/api/production/pack-bom-change-requests":
       return await listPackBomChangeRequestsHandler(req, ctx);
+
+    // Partial Batch Reversal (PR19) + Partial Reversal Report (PR20)
+    case "GET:/api/production/partial-reversals/prodshades":
+      return await listPartialReversalProdshadesHandler(req, ctx);
+    case "GET:/api/production/partial-reversals/resolve-batch":
+      return await resolvePartialReversalBatchHandler(req, ctx);
+    case "GET:/api/production/partial-reversals/stock-lines":
+      return await listPartialReversalStockLinesHandler(req, ctx);
+    case "GET:/api/production/partial-reversals/salvage-batches":
+      return await listSalvageBatchOptionsHandler(req, ctx);
+    case "GET:/api/production/partial-reversals/detail":
+      return await getPartialReversalDetailHandler(req, ctx);
+    case "POST:/api/production/partial-reversals":
+      return await createPartialBatchReversalHandler(req, ctx);
+    case "GET:/api/production/partial-reversals":
+      return await listPartialBatchReversalsHandler(req, ctx);
   }
 
   // ── PARAMETERIZED ROUTES ───────────────────────────────────────────────────
@@ -173,9 +287,17 @@ export async function dispatchProductionRoutes(
     return await deletePackConfigHandler(req, ctx);
   }
 
+  // Pack Codes /:id
+  if (/^\/api\/production\/pack-codes\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updatePackCodeHandler(req, ctx);
+  }
+
   // Batch Series /:id
   if (/^\/api\/production\/batch-series\/[^/]+$/.test(pathname) && req.method === "PATCH") {
     return await updateBatchSeriesHandler(req, ctx);
+  }
+  if (/^\/api\/production\/batch-numbers\/[^/]+\/release$/.test(pathname) && req.method === "POST") {
+    return await releaseBatchNumberHandler(req, ctx);
   }
 
   // Stroke Masters /:id
@@ -189,6 +311,12 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/stroke-masters\/[^/]+\/revert$/.test(pathname) && req.method === "POST") {
     return await revertStrokeMasterHandler(req, ctx);
   }
+  if (/^\/api\/production\/stroke-masters\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
+    return await rejectStrokeMasterHandler(req, ctx);
+  }
+  if (/^\/api\/production\/stroke-masters\/[^/]+\/deactivate$/.test(pathname) && req.method === "POST") {
+    return await deactivateStrokeMasterHandler(req, ctx);
+  }
 
   // Plan Feed /:id actions
   if (/^\/api\/production\/plan-feed\/[^/]+$/.test(pathname)) {
@@ -198,6 +326,10 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/plan-feed\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
     return await cancelPlanFeedHandler(req, ctx);
   }
+  if (/^\/api\/production\/plan-feed\/[^/]+\/allocations$/.test(pathname)) {
+    if (req.method === "GET") return await listFoAllocationsHandler(req, ctx);
+    if (req.method === "POST") return await upsertFoAllocationHandler(req, ctx);
+  }
 
   // Process Orders /:id actions
   if (/^\/api\/production\/process-orders\/[^/]+$/.test(pathname)) {
@@ -206,11 +338,17 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/process-orders\/[^/]+\/lines$/.test(pathname) && req.method === "PATCH") {
     return await updateProcessOrderLinesHandler(req, ctx);
   }
+  if (/^\/api\/production\/process-orders\/[^/]+\/edit$/.test(pathname) && req.method === "PATCH") {
+    return await editProcessOrderHandler(req, ctx);
+  }
   if (/^\/api\/production\/process-orders\/[^/]+\/qa-approve$/.test(pathname) && req.method === "POST") {
     return await qaApproveProcessOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/process-orders\/[^/]+\/qa-reject$/.test(pathname) && req.method === "POST") {
     return await qaRejectProcessOrderHandler(req, ctx);
+  }
+  if (/^\/api\/production\/process-orders\/[^/]+\/complete-int$/.test(pathname) && req.method === "POST") {
+    return await completeIntProcessOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/process-orders\/[^/]+\/start-batch$/.test(pathname) && req.method === "POST") {
     return await startBatchHandler(req, ctx);
@@ -224,6 +362,23 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/process-orders\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
     return await reverseProcessOrderHandler(req, ctx);
   }
+  if (/^\/api\/production\/process-orders\/[^/]+\/prune$/.test(pathname) && req.method === "POST") {
+    return await pruneProcessOrderHandler(req, ctx);
+  }
+
+  // SFG QA /:id actions
+  if (/^\/api\/production\/sfg-qa-documents\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getSfgQaDocumentHandler(req, ctx);
+  }
+  if (/^\/api\/production\/sfg-qa-documents\/[^/]+\/test-lines$/.test(pathname) && req.method === "POST") {
+    return await addSfgQaTestLineHandler(req, ctx);
+  }
+  if (/^\/api\/production\/sfg-qa-documents\/[^/]+\/test-lines\/[^/]+$/.test(pathname) && req.method === "PUT") {
+    return await updateSfgQaTestLineHandler(req, ctx);
+  }
+  if (/^\/api\/production\/sfg-qa-documents\/[^/]+\/decision$/.test(pathname) && req.method === "POST") {
+    return await submitSfgQaDecisionHandler(req, ctx);
+  }
 
   // Packing Orders /:id actions
   if (/^\/api\/production\/packing-orders\/[^/]+$/.test(pathname)) {
@@ -232,14 +387,20 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/packing-orders\/[^/]+\/lines$/.test(pathname) && req.method === "PATCH") {
     return await updatePackingOrderLinesHandler(req, ctx);
   }
-  if (/^\/api\/production\/packing-orders\/[^/]+\/link-fo$/.test(pathname) && req.method === "POST") {
-    return await linkFoHandler(req, ctx);
+  if (/^\/api\/production\/packing-orders\/[^/]+\/edit$/.test(pathname) && req.method === "PATCH") {
+    return await editPackingOrderHandler(req, ctx);
+  }
+  if (/^\/api\/production\/packing-orders\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+    return await cancelPackingOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/packing-orders\/[^/]+\/finalize$/.test(pathname) && req.method === "POST") {
     return await finalizePackingOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/packing-orders\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
     return await reversePackingOrderHandler(req, ctx);
+  }
+  if (/^\/api\/production\/packing-orders\/[^/]+\/correct$/.test(pathname) && req.method === "POST") {
+    return await correctPackingOrderHandler(req, ctx);
   }
 
   // Stroke Change Requests /:id actions (PR03/PR04)
@@ -267,7 +428,15 @@ export async function dispatchProductionRoutes(
     return await createPackBomChangeRequestHandler(req, ctx);
   }
 
+  // Partial Batch Reversal /:id (PR20 expand)
+  if (/^\/api\/production\/partial-reversals\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getPartialBatchReversalHandler(req, ctx);
+  }
+
   // Pack BOM Change Requests /:id actions (PR07/PR08)
+  if (/^\/api\/production\/pack-bom-change-requests\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getPackBomChangeRequestHandler(req, ctx);
+  }
   if (/^\/api\/production\/pack-bom-change-requests\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
     return await approvePackBomChangeRequestHandler(req, ctx);
   }

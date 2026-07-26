@@ -1,0 +1,54 @@
+-- ============================================================================
+-- PACE ERP — Stock Health Check  (রোজকার নিরাপত্তা জাল)
+--
+-- চালাও: এই লাইনটা Supabase SQL Editor-এ paste করো।
+--
+--     SELECT * FROM erp_inventory.stock_health_check();
+--
+-- কখন: go-live-এর দিন থেকে **প্রতিদিন কাজ শেষে**, dev ও prod আলাদা করে।
+-- কী দেখবে: severity কলাম।
+--     OK   → ঠিক আছে
+--     INFO → জানার জন্য, ভুল নয়
+--     FAIL → **থামো।** কারণ না বোঝা পর্যন্ত আর কোনো posting কোরো না।
+--
+-- কেন দরকার: stock posting গুলো এক transaction-এ নয় (CLAUDE.md 8D) — মাঝপথে
+-- server crash/deploy হলে অর্ধেক posting বসে থাকতে পারে। সেটা নিঃশব্দে বসে
+-- থাকলে মাস পরে PID-তে ধরা পড়বে, ততদিনে কারণ খুঁজে পাওয়া যাবে না।
+-- ============================================================================
+
+SELECT * FROM erp_inventory.stock_health_check();
+
+
+-- ============================================================================
+-- নতুন posting module যোগ করলে কী করতে হবে
+--
+-- **script ছোঁয়ার দরকার নেই** — registry-তে এক লাইন INSERT, ব্যস। check নিজে
+-- registry পড়ে, তাই নতুন module আপনাআপনি ঢাকা পড়ে। আর register করতে ভুলে গেলে
+-- `unregistered_posting_source` বা `untagged_posting` check **FAIL** করবে —
+-- অর্থাৎ নীরবে বাদ পড়ার কোনো পথ নেই। (frontend-এর screenRegistry +
+-- validateScreenRegistry ঠিক এই idiom।)
+--
+--   INSERT INTO erp_inventory.posting_source_registry
+--     (reference_document_type, label, source_schema, source_table,
+--      status_column, suspect_statuses, notes)
+--   VALUES
+--     ('STO', 'Stock Transfer Order', 'erp_procurement', 'stock_transfer_order',
+--      'status', ARRAY['DRAFT'], 'কেন এই status suspect, এক লাইনে লেখো');
+--
+-- ⚠️ `suspect_statuses` = যে status গুলোতে posting থাকা **অস্বাভাবিক** —
+--    অর্থাৎ handler ওই status-এ posting *শুরু* করে, শেষ করে অন্য status-এ।
+--    এটা terminal status **নয়**। REVERSED/CANCELLED-ও terminal নয় কিন্তু
+--    সম্পূর্ণ বৈধ (CORS reversal-এর পর posting থাকবেই) — সেগুলো এখানে দিলে
+--    মিথ্যা FAIL আসবে।
+--
+-- বর্তমানে registered (2026-07-19): PROC_PO, PACK_PO, GRN, OS, QA — go-live-এ
+-- যেগুলো রোজ চলবে। বাকিগুলো (RTV, STO, PID, PTO, Sales, PR19...) go-live-এর
+-- পরে যোগ হবে; ততদিন ওদের posting `untagged_posting` হিসেবে FAIL দেখাবে —
+-- ইচ্ছাকৃত, যাতে বাকি কাজটা চোখের সামনে থাকে।
+--
+-- ⚠️ STO-তে register করার আগে ওর ledger-link আগে ঠিক করতে হবে — ওই table-এ
+--    কোনো stock reference column-ই নেই (8D দেখো)।
+-- ============================================================================
+
+-- registry দেখতে:
+--   SELECT * FROM erp_inventory.posting_source_registry ORDER BY reference_document_type;

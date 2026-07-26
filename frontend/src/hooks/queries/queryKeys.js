@@ -2,6 +2,14 @@ import { cleanQueryParams } from "./queryUtils.js";
 
 export const queryKeys = {
   admin: {
+    // PERF: `admin.companies` and `om.companies` are DELIBERATELY the same key. Both
+    // useAdminCompaniesQuery and useCompaniesForOmQuery call the identical function
+    // (listCompaniesForOm -> GET /api/admin/companies), but they used to sit under different
+    // keys, so React Query treated them as two unrelated queries: no dedup, no shared cache,
+    // and /api/admin/companies was fetched twice (measured 4x on a live page load). Sharing the
+    // key makes it one cached fetch. Keep them identical — do not "tidy" them apart.
+    // NOTE: procurement.companies is a genuinely DIFFERENT endpoint
+    // (GET /api/procurement/companies) and correctly stays separate.
     companies: () => ["admin", "companies"],
     projects: (params = {}) => ["admin", "projects", cleanQueryParams(params)],
   },
@@ -14,7 +22,8 @@ export const queryKeys = {
     costCenters: (params = {}) => ["om", "cost-centers", cleanQueryParams(params)],
     uoms: (params = {}) => ["om", "uoms", cleanQueryParams(params)],
     parentCustomers: (params = {}) => ["om", "parent-customers", cleanQueryParams(params)],
-    companies: () => ["om", "companies"],
+    // Same key as admin.companies on purpose — same function, same endpoint. See the note there.
+    companies: () => ["admin", "companies"],
   },
   procurement: {
     companies: () => ["procurement", "companies"],

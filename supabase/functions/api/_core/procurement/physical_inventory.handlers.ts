@@ -10,6 +10,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -735,6 +736,12 @@ export async function postDifferencesHandler(
     const items = await fetchPIItems(documentId);
     const locationScope = await getStorageLocationScope(String(document.storage_location_id));
 
+    // §106: one Material Document (MBLNR+MJAHR) for this whole difference-posting event;
+    // the PI document number becomes the reference (SAP keeps the physical-inventory
+    // document IBLNR separate from the material document it generates — same split here).
+    const piMatDoc = await generateMaterialDocNumber(String(locationScope.company_id));
+
+    // DEPENDENT: each PI item posts a stock difference and releases its block row, so later iterations rely on prior committed inventory state.
     for (const item of items) {
       const physicalQty = parseNullableNumber(item.physical_qty);
       if (physicalQty === null) {
@@ -764,6 +771,11 @@ export async function postDifferencesHandler(
             p_direction: differenceQty > 0 ? "IN" : "OUT",
             p_posted_by: ctx.auth_user_id,
             p_reversal_of_id: null,
+            p_material_doc_number: piMatDoc.docNumber,
+            p_material_doc_year: piMatDoc.docYear,
+            p_reference_document_number: document.document_number,
+            p_reference_document_type: "PI",
+            p_reference_document_id: document.id ?? null,
           });
 
         if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {

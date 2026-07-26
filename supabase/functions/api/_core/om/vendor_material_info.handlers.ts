@@ -71,15 +71,22 @@ async function getMaterialRow(materialId: string): Promise<Record<string, unknow
   return (data as Record<string, unknown> | null) ?? null;
 }
 
-async function ensureUomExists(code: string): Promise<boolean> {
+async function loadExistingUomCodes(codes: string[]): Promise<Set<string>> {
+  if (codes.length === 0) {
+    return new Set();
+  }
+
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("uom_master")
     .select("code")
-    .eq("code", code)
-    .maybeSingle();
+    .in("code", codes);
 
-  return !error && Boolean(data?.code);
+  if (error) {
+    return new Set();
+  }
+
+  return new Set((data ?? []).map((row: Record<string, unknown>) => String(row.code ?? "").toUpperCase()).filter(Boolean));
 }
 
 async function getVmiRow(
@@ -340,8 +347,9 @@ export async function createVendorMaterialInfoHandler(
     if (uomList.length === 0) {
       return vmiErrorResponse(req, ctx, "OM_INVALID_UOM", 400, "At least one UOM is required");
     }
+    const existingUomCodes = await loadExistingUomCodes([...new Set(uomList.map((row) => row.uom_code))]);
     for (const row of uomList) {
-      if (!(await ensureUomExists(row.uom_code))) {
+      if (!existingUomCodes.has(row.uom_code)) {
         return vmiErrorResponse(req, ctx, "OM_INVALID_UOM", 400, `Invalid UOM: ${row.uom_code}`);
       }
     }
@@ -562,8 +570,9 @@ export async function updateVendorMaterialInfoHandler(
       if (uomList.length === 0) {
         return vmiErrorResponse(req, ctx, "OM_INVALID_UOM", 400, "At least one UOM is required");
       }
+      const existingUomCodes = await loadExistingUomCodes([...new Set(uomList.map((row) => row.uom_code))]);
       for (const row of uomList) {
-        if (!(await ensureUomExists(row.uom_code))) {
+        if (!existingUomCodes.has(row.uom_code)) {
           return vmiErrorResponse(req, ctx, "OM_INVALID_UOM", 400, `Invalid UOM: ${row.uom_code}`);
         }
       }

@@ -40,6 +40,7 @@ import {
 } from "./navigation/screenStackEngine.js";
 import { restoreNavigationStack } from "./navigation/navigationPersistence.js";
 import { isPublicRoute } from "./router/publicRoutes.js";
+import { AMBIGUOUS_WRITE_MESSAGE, isNetworkFailure } from "./utils/errorMessages.js";
 
 const CLIENT_SHELL_REFRESH_KEY = "__PACE_CLIENT_SHELL_REFRESHED__";
 
@@ -233,6 +234,39 @@ globalThis.fetch = async (...args) => {
     }
 
     return res;
+  } catch (err) {
+    /* -------------------------------------------------------
+     * AMBIGUOUS WRITE (no HTTP response ever arrived)
+     *
+     * fetch() only rejects when the request never produced a response — connection
+     * dropped, timed out, server restarted mid-flight. Real HTTP errors (4xx/5xx)
+     * resolve normally and are handled by each api module's resolveErrorMessage().
+     *
+     * For GET/HEAD this is harmless: nothing changed, retry freely — rethrow as-is.
+     *
+     * For a mutating method the outcome is genuinely UNKNOWN. The server keeps running
+     * after the browser disconnects, so the write has most likely already completed.
+     * Our stock postings are not one transaction (CLAUDE.md 8C), and no handler skips
+     * already-posted lines, so a blind retry double-posts and orphans the first
+     * posting's ledger link. We therefore relabel it so the UI tells the user to VERIFY
+     * before retrying instead of offering a plain "try again".
+     * ------------------------------------------------------- */
+    const isMutating =
+      normalizedRequestMethod !== "GET" && normalizedRequestMethod !== "HEAD";
+
+    if (isApiRequest && isMutating && isNetworkFailure(err)) {
+      const ambiguous = new Error(AMBIGUOUS_WRITE_MESSAGE, { cause: err });
+      // Deliberately NO `.code`. Pages commonly render `friendly(err.code) || err.message`,
+      // and their local `friendly()` is `ERRORS[code] ?? code` — an unmapped code would be
+      // shown to the user verbatim as raw text. Leaving code undefined makes that expression
+      // fall through to `.message`, which is the sentence we actually want displayed.
+      // `.ambiguousWrite` is the machine-readable marker instead.
+      ambiguous.ambiguousWrite = true;
+      ambiguous.requestMethod = normalizedRequestMethod;
+      throw ambiguous;
+    }
+
+    throw err;
   } finally {
     if (activityToken) {
       finishNetworkActivity(activityToken, { ok });

@@ -12,6 +12,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
 import { assertManagerOrSARole } from "./shared.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -368,10 +369,7 @@ export async function deleteVendorsHandler(
       return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "ids array required");
     }
 
-    const deleted: string[] = [];
-    const errors: { id: string; error: string }[] = [];
-
-    for (const id of ids) {
+    const outcomes = await Promise.all(ids.map(async (id) => {
       const { error } = await serviceRoleClient
         .schema("erp_master")
         .from("vendor_master")
@@ -380,11 +378,14 @@ export async function deleteVendorsHandler(
 
       if (error) {
         const code = error.code === "23503" ? "OM_VENDOR_HAS_DEPENDENCIES" : "OM_VENDOR_DELETE_FAILED";
-        errors.push({ id, error: code });
-      } else {
-        deleted.push(id);
+        return { id, deleted: false, error: code };
       }
-    }
+
+      return { id, deleted: true };
+    }));
+
+    const deleted = outcomes.filter((outcome) => outcome.deleted).map((outcome) => outcome.id);
+    const errors = outcomes.filter((outcome) => !outcome.deleted).map((outcome) => ({ id: outcome.id, error: outcome.error! }));
 
     return okResponse({ deleted, errors }, ctx.request_id, req);
   } catch (err) {
@@ -785,6 +786,11 @@ export async function mapVendorToCompanyHandler(
     }
     if (!(await ensureCompanyExists(companyId))) {
       return vendorErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return vendorErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const { data, error } = await serviceRoleClient

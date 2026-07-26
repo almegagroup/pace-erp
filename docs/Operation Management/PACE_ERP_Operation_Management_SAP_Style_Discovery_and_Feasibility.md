@@ -2550,6 +2550,52 @@ After opening stock is posted on 1 July 2026:
 
 ---
 
+### 29.5 — IN05/IN06 Opening Stock Page Redesign (LOCKED — 2026-07-12, business owner override of the original Gate-19 UI)
+
+**Why this exists:** the original Gate-19 UI (single card, one Single/Bulk toggle, no company-scoping check, hardcoded BDT currency) wasted screen space and had no dedicated approval step distinct from data entry — business owner redesigned it end to end, modeled visually on the Process PO Create Page 3 dense-table pattern (`ProductionPOCreatePage.jsx`: a plain HTML `<table>` inside a `rounded-lg border border-slate-200 bg-white` card, `bg-slate-50 text-xs uppercase` header row, `border-b border-slate-100 px-3 py-2` cells — not `ErpDenseGrid`).
+
+**IN05 — Opening Stock (entry, existing page redesigned):**
+- Page 1 (unchanged): Company (resolved from `ctx.context.companyId`, not a free company picker — see company-scoping rule below), Cut-off Date.
+- Page 2 (redesigned): the dense table replaces the old bulky single/bulk cards. Single Entry / Bulk Entry toggle buttons stay (already correct), but the Bulk grid itself becomes a compact row-based table with columns, in order: **Sl No, Material Type, Material Name, Pace Code (auto), Storage Location (choose, no location-type restriction), Status (stock type), Base UOM (auto, read-only), Counted Stock, Zero Stock (checkbox), Rate (optional), Total Value, Action.** Column widths: Material Name wide; Storage Location/Status/Counted Stock comparatively narrow (matches the Process PO table's own proportions — Formulation Material wide, Dosage%/Storage Location/Movement Type narrow).
+- **No pagination on this entry page** (supersedes the 2026-07-12 earlier version of this same page which added 10-row pagination to the bulk grid — that pagination is removed; all rows show at once, scrollable within the table card).
+- Add Row, Submit For Approval, Back To List, Refresh — unchanged actions.
+- Currency: no currency master or `companies.currency_code` exists anywhere in the schema (confirmed via direct DB check, 2026-07-12) — the "BDT" symbol was a hardcoded `Intl.NumberFormat("en-BD", {currency:"BDT"})` call in the frontend only. **Resolved (2026-07-12) by matching the already-established PO/CSN/STO pattern** (`POCreatePage.jsx`/`csn.handlers.ts`): a plain hardcoded frontend constant `CURRENCY_OPTIONS = ["INR", "USD"]`, default `"INR"`, rendered as a `<select>` — no currency master, no FX conversion, just a `currency_code` TEXT column stored on `opening_stock_document` (document-level here, not per-line like PO — Opening Stock has one currency per document) and displayed downstream exactly like CSN tracker already displays a PO line's stored `currency_code`.
+
+**IN06 — Opening Stock Approval (new page, next available IN-series code — confirmed via direct DB check against `erp_menu.menu_master`, IN01–IN05 already taken):**
+- Page 1: Document Number only (global unique per `erp_procurement.generate_doc_number`, no company disambiguation needed) → Enter.
+- Page 2: full line detail, **paginated 25 rows/page** (unlike IN05's entry page, which has none). Every field the creator entered is editable here too (row-select, edit inline). Pagination state stays alive across page navigation — corrections on any page accumulate in local state and all save together in one batch action, not one row per save. Only after that batch-save succeeds does the **Approve** button become the action that posts the document to the stock ledger (same `postOpeningStockDocumentHandler`/P561/P563/P565 engine already built for Gate-19 — this redesign does not change the posting engine itself, only the entry/approval UX in front of it).
+
+**Company-scoping ACL rule (applies to both IN05 create/submit and IN06 approve — CORRECTED 2026-07-13, supersedes the original same-day lock below).**
+
+The original 2026-07-12 lock required `company_id === ctx.context.companyId` (the single "currently active work context" company) — this was wrong. There is no company-switcher anywhere in this app; every other create flow (e.g. Process PO's own Company dropdown, `useCompaniesForOmQuery`) already lets a user freely pick from **any** company they're assigned to via `erp_map.user_companies`, with no "active session company" concept to match against. A DIRECTOR with 4 companies (confirmed live: P0004 has 4 rows in `erp_acl.user_work_contexts`, one per company) must be able to create/approve for any of the 4 directly — forcing a single active company broke this for a role that's supposed to have the broadest access in the system.
+
+**Corrected rule:** `assertOpeningStockCompanyScope()` now checks whether `erp_map.user_companies` has a row for `(auth_user_id, company_id)` — i.e. "is this a company you're assigned to at all," not "is this your one active company." SA/GA still bypass entirely. IN05's Company field is a real `<select>` (via the same `useCompaniesQuery` already used for the list page's own company filter), not a locked/auto-resolved display — it defaults to the user's current session company but is fully editable.
+
+~~Original 2026-07-12 text (kept for doc history, no longer applies): "The pipeline already resolves `ctx.context.companyId`... force/validate `company_id === ctx.context.companyId`... reject with a clear 403 if a user tries to create for a company outside their resolved context."~~
+
+**Ledger storage (confirms the existing Gate-19 posting engine, unchanged by this redesign):** on Approve/Post, each `opening_stock_line` posts through `erp_inventory.post_stock_movement()` (P561 Unrestricted / P563 QA / P565 Blocked per stock type), writing one `stock_ledger` row per line — `company_id`, `storage_location_id`, `material_id`, `stock_type_code`, `movement_type_code`, `direction = 'IN'`, `quantity`, `base_uom_code`, `value` (= quantity × `rate_per_unit`, `0` if rate left blank), `valuation_rate` (= `rate_per_unit`), `posting_date`/`document_date` (= the document's `cut_off_date`) — under one shared `stock_document.document_number` (the opening stock document's own number), with the engine's own `item_number` auto-increment distinguishing each line (§8C). `opening_stock_line.posted_stock_document_id` is written back per line as the audit trail. Nothing about this posting mechanism changes in this redesign — only the entry/approval screens in front of it.
+
+**Addendum (2026-07-12, same evening) — Batch Number for SFG/FG lines was already locked in §83.7 but never carried into this page's own spec.** §83.7's "Batch Number Persistence Mechanism" already says Opening Stock needs **manual** batch entry when the material is SFG/FG (HPS/MTO) — no live Process PO exists at go-live to derive one from. This redesign's Change 1 column list omitted it. Corrected here:
+- Add a **Batch Number** column to IN05's entry table (between Base UOM and Counted Stock), a plain text input. Visible/enabled only for rows where the selected material's `material_type` is `SFG` or `FG` — disabled/blank (`—`) for RM/PM/INT, exactly like the UOM column's existing disabled-state pattern.
+- Not database-enforced as mandatory (the page cannot cheaply distinguish an MTO/HPS Prodshade's SFG/FG from an MTS one from `material_type` alone), but the UI must label it clearly: *"Required for MTO/HPS Prodshades — leave blank if this is an MTS (IWC/Powder) item; MTS batch integration is not yet supported here."* This matches the already-standing MTS/INT/MTEST exclusion from Gate-27.19's batch-persistence wiring — do not extend batch handling to MTS in this brief.
+- Schema: `erp_procurement.opening_stock_line.batch_number TEXT NULL` (migration `20260712220000_gate19_3_opening_stock_batch_number.sql`, already applied to Dev).
+- `postOpeningStockDocumentHandler`'s `post_stock_movement()` RPC call must pass `p_batch_number: line.batch_number || null` (the parameter Gate-27.19 already added to both function overloads — also already applied to Dev as of 2026-07-12).
+- IN06's approval page shows/edits this same column, same visibility rule.
+
+**🔴 PENDING (2026-07-12, not locked) — how opening-stock-origin SFG/FG batches get an AP Reco basis.** Business owner explicitly rejected treating these as zero-variance/no-Reco (they need real Reco when dispatched later, same as live-produced batches) — but also has a different mechanism in mind than the one first proposed (a nested RM/PM Actual+AP-Approved entry table under the Opening Stock batch line, written directly into `process_order_line_reco` with no `process_order_id`). Business owner will provide the alternate idea — **do not implement any RM/PM-Reco-capture mechanism for Opening Stock until this is re-locked.** The Batch Number field itself (above) is locked and can be built now; only the "what happens to Reco for this batch" mechanism is pending.
+
+**LOCKED (2026-07-12, same evening) — IN05 Page 1 gains Material Type + conditional PO Type, gating which entry-grid opens:**
+
+Page 1 becomes: Company, Cut-off Date, **Material Type** (dropdown — the same `material_master.material_type` enum: RM, PM, INT, SFG, FG), then conditionally:
+- If Material Type = **SFG or FG** → a second new dropdown, **PO Type** (MTO, HPS, MTS, MTEST — the same enum Process PO already uses).
+  - PO Type = **MTO or HPS** → do **not** open the normal entry grid. Show a placeholder screen: *"Will open after implementation"* — this whole path is blocked on the still-PENDING RM/PM-Reco mechanism above. Do not build a fake/simplified version of it in the meantime.
+  - PO Type = **MTS or MTEST** → opens the **normal entry grid already built** (Change 1's dense table, including the Batch Number column, which is locked and usable regardless of the pending Reco question — MTS/MTEST batches don't feed the same Reco mechanism per §83.7's own MTO/HPS-only scoping anyway).
+- If Material Type = **RM, PM, or INT** → no PO Type prompt, goes straight to the normal entry grid already built (no Batch Number column shown — matches the existing RM/PM/INT-never-carries-batch rule).
+
+**Why this shape:** the business owner needs to keep moving on RM/PM/INT (and MTS/MTEST SFG/FG) opening stock right now — those must not be blocked waiting on the MTO/HPS Reco design. Scoping Material Type (and PO Type) at document-creation time, not per-line, lets one document always render one consistent grid shape instead of mixing simple and advanced rows in the same table.
+
+---
+
 ## Section 30 — Legacy Open PO Migration Strategy
 
 ### 30.1 Why Legacy PO Migration is Critical
@@ -6905,7 +6951,7 @@ FO arrives → Process PO + Packing PO created (Standard phase)
     ↓
 Standard → QA Online Approval → Start Batch → Final → Verify
     ↓
-P261 (RM from R003) + P261 (PM from P003) + P231 (FG → S003)
+P261 (RM from R003) + P261 (PM from P003) + P101 (FG → S003)
     ↓
 S003 → F003 Transfer (per Packing PO qty)
     ↓
@@ -6934,7 +6980,7 @@ Produce in advance (no FO needed)
     ↓
 Standard → QA Online Approval → Start Batch → Final → Verify
     ↓
-P261 (RM from R003) + P261 (PM from P003) + P231 (FG → S003)
+P261 (RM from R003) + P261 (PM from P003) + P101 (FG → S003)
     ↓
 S003 → F003 Transfer (per Packing PO qty) → FG stock builds in F003
     ↓
@@ -6966,7 +7012,7 @@ Standard (Process PO only — no Packing PO at this stage)
     ↓
 Start Batch → Final → Verify  [no QA Online Approval]
     ↓
-P261 (RM from R003) + P261 (PM from P003) + P231 (FG → S003)
+P261 (RM from R003) + P261 (PM from P003) + P101 (FG → S003)
     ↓
 S003 → F003 Transfer → FG liquid stock builds in F003
     ↓
@@ -7068,6 +7114,8 @@ material_uom_conversion row     = Base UOM → Conversion UOM, with Conversion F
 
 material_master.shade_code / pack_code — NOT used in this flow (left as-is, unused columns per 2026-06-30 discussion)
 ```
+
+**`external_code` / `external_sku` — reporting-only fields, never a business-logic dependency (LOCKED — 2026-07-11):** `material_master.external_code` is populated **only** by the Prod+Shade flow above (SFG/INT records at Stroke Master creation). It is **not** populated for RM/PM materials as a rule (a handful of RM rows may carry an incidental value from data migration/import — this is not systematic and must never be relied upon). No current backend handler, availability check, reservation, or posting logic may key off `external_code`/`external_sku` for RM/PM materials, and no UI label for an RM/PM material should assume it is present. These two columns exist purely so a **future report** can look up/display a material by its external/customer-facing code when one happens to exist — today, tomorrow, or never, depending on when that data gets populated has zero effect on any workflow. Where an RM/PM material label is needed anywhere in the app, use `pace_code — material_name` (the pattern `materialLabel()` already uses in the Production Final/Verify pages), never `external_code`.
 
 ---
 
@@ -7415,6 +7463,23 @@ Dosage% is not shown (no dosage change allowed in Change BOM Item flow).
 
 ---
 
+#### Default Storage Location (Output) — Mandatory Field Rule (LOCKED — 2026-07-11)
+
+**Applies to:** Stroke Master header field `default_storage_location_id`, on both PR01 (Create/Edit at DRAFT) and PR02 (Approval — Manager edits header at DRAFT).
+
+| Rule | Detail |
+|---|---|
+| Mandatory | Cannot Save/Approve with this field blank — for both SFG and INT material_type strokes |
+| Validation UI | Blank field shown with red border/error state; Save button blocked until filled |
+| Backend enforcement | `createStrokeMasterHandler` / `updateStrokeMasterHandler` reject with an error code if blank — frontend validation is not sufficient on its own |
+| **Auto-prefill from prior entry** | If the selected Prodshade material (existing SFG/INT material_id) already has at least one other `stroke_master` row for the same company (any status), the new Stroke's Default Storage Location auto-fills from that prior entry's value |
+| **Override allowed** | Auto-prefilled value is a suggestion only — user can change it before saving |
+| New Prodshade (not-yet-existing material) | No prior entry exists — field starts blank, still mandatory, no auto-prefill possible |
+
+> **Why this exists:** Discovered 2026-07-11 during live testing — the field was added to the schema (Section 8B backlog item) but never made mandatory, so most existing strokes ended up with a NULL Default Storage Location, which silently breaks downstream Verify-phase FG receipt posting (P101 needs a valid storage location). Auto-prefill from a prior Stroke on the same Prodshade reduces repetitive data entry — most strokes on the same Prodshade land in the same shopfloor location.
+
+---
+
 ### 83.4 — Process PO and Packing PO (Two-Order Model)
 
 **Updated: 2026-06-11**
@@ -7448,7 +7513,7 @@ Dosage% is not shown (no dosage change allowed in Change BOM Item flow).
 
 - Covers formulation/stroke-based RM production only
 - Consumes RM components (NO PM — packing is always separate)
-- FO number = informal reference at creation (optional) — formal FO link is on Packing PO
+- ~~FO number = informal reference at creation (optional)~~ **Corrected 2026-07-11: Process PO header does NOT carry any FO reference field, informal or otherwise** — FO link exists only on Packing PO (formal, post-Verify)
 - Created at: Standard phase
 
 #### Packing PO
@@ -7457,7 +7522,7 @@ Dosage% is not shown (no dosage change allowed in Change BOM Item flow).
 - Linked to Process PO by explicit link (mandatory)
 - PM items: added manually (Admix/PMTO) or auto-populated from Pack BOM (Hypershot/IWC/Powder)
 - SO number = reference field — SO links to **FO** (not directly to Packing PO)
-- Goods movements: P261 (SFG + PM issue) + P231 (FG receipt) at Final save. Reversal via P262 (COR6 Correction) or CORS.
+- Goods movements: P261 (SFG + PM issue) + P101 (FG receipt) at Final save. Reversal via P262 (COR6 Correction) or CORS.
 
 **Packing PO creation timing (by type):**
 
@@ -7487,7 +7552,7 @@ Standard phase:
 Final phase:
   Process PO: data entry only — no movements yet
   Packing PO: terminal step — movements posted at Final save
-    → P261 (SFG from S003, batch-specific) + P261 (PM from pm_sloc) + P231 (FG → F003)
+    → P261 (SFG from S003, batch-specific) + P261 (PM from pm_sloc) + P101 (FG → F003)
 
 Verify phase (Process PO only — Packing PO has no Verify):
   Process PO verified → P261 (RM consumed) + P101 (SFG → S003)
@@ -7502,7 +7567,7 @@ Standard phase:
   1. Process PO created only (no Packing PO at this stage)
 
 Final → Verify:
-  P261 (RM consumed) + P231 (FG → S003) → S003 → F003
+  P261 (RM consumed) + P101 (FG → S003) → S003 → F003
 
 When dispatch needed:
   Packing PO created as per requirement → linked to Process PO
@@ -7550,7 +7615,7 @@ Step 3: Create new Packing PO → per barrel = actual total qty (e.g. 230 KG)
 | When | Action |
 |---|---|
 | Any stage (Standard / Final / Verify) | Delink existing Packing PO → **PRUNE** → create new Packing PO → relink |
-| Stock postings exist (PM consumed / P231 posted) | System auto-reverses all postings before PRUNE |
+| Stock postings exist (PM consumed / P101 posted) | System auto-reverses all postings before PRUNE |
 | Process PO | Always stable — never changed when pack type changes |
 | Authorization | Manager level (L3+) required for pack type change after Verify |
 | Audit trail | Mandatory — who changed, when, old pack type, new pack type |
@@ -7618,6 +7683,8 @@ Step 5: Save
 **INT Process PO:** simple cycle only (no QA approval, no batch number — see 83.5)
 **MTEST:** one-step cycle — fully manual (see 83.4 PO Types)
 
+> **Confirmed 2026-07-11:** MTEST is single-action like INT — no separate Standard/Final/Verify stages, one page/one save completes it. Unlike INT, MTEST **does** get a batch number (company-level series, generated at that single save — per 83.7). No stroke, no BOM for MTEST either way — RM lines entered fully manually.
+
 **Process PO Status Flow (MTO/HPS):**
 
 ```
@@ -7635,7 +7702,7 @@ VERIFIED (PR12 — stock movements posted)
 ```
 
 **PR10 Edit** available only at: **QA_APPROVED** status only (before Start Batch)
-**Pruning** available at: STANDARD (before QA submit), QA_APPROVED via PR10 (before Start Batch) — reservation cancelled on prune
+**Pruning (corrected — LOCKED 2026-07-12, resolves a same-doc conflict with the dedicated "PO Prune" rule below):** Prune is **STANDARD-only**, matching the later 2026-07-04 "PO Prune" lock — this line's earlier "QA_APPROVED via PR10" phrasing was stale/imprecise and is struck. **PR10 does not carry a Prune action.** To cancel a QA_APPROVED (or later) PO entirely: run **CORS** first (returns it to STANDARD, cancelling reservations / voiding the batch as applicable), then Prune from STANDARD if the PO should not be reused.
 
 ---
 
@@ -7652,6 +7719,61 @@ VERIFIED (PR12 — stock movements posted)
 | Batch Number | ❌ Not yet generated |
 | Stock movement | ❌ None |
 | RM Reservation | ✅ Unrestricted stock only (no In-Transit, no QA) |
+
+---
+
+#### PR09 — Standard Create: Page-by-Page UI Spec (LOCKED — 2026-07-11, applies to MTO/HPS/MTS)
+
+> **Why this subsection exists:** this exact page-by-page flow was confirmed in chat (including two mockup rounds, `process_po_standard_flow_mockup` and `_v2`) but was never transcribed into this doc — a real doc-first-workflow miss. Recovered verbatim from session transcript on 2026-07-11 after the built PR09 page was found not to match (missing Material Table entirely, an unrequested "Segment" field, no gated 3-page flow).
+
+**Order-family selector (LOCKED — 2026-07-12, resolves an ambiguity found while mocking up Page 1):** this create page genuinely serves both Process PO and Packing PO (per the SAP Equivalent Mapping table's "PR09/PR11/PR12/PR15 serve both" note), but the two families' actual input fields are entirely different (Process PO: Stroke/Machine/Batch Size/Material Table; Packing PO: Pack Code/Fill Qty/Number of Packs/PM items per §83.4's own Packing PO section) — they cannot share one PO Type dropdown. Resolution: a **Process PO / Packing PO selector comes first** (the live app's existing tab pattern is directionally correct here), and only then does the family-specific PO Type dropdown + flow described below appear. This subsection specs the **Process PO** side only (MTO/HPS/MTS/MTEST/INT); Packing PO's own Standard flow is separate, not yet designed at this page-by-page level, and is the next full brief after this Process PO fix per the locked sequencing.
+
+**Page 1 — Company / PO Type / Material (Process PO side):**
+- Company — dropdown if multi-company user, locked/auto if single-company
+- PO Type — MTO / HPS / MTS / MTEST / INT
+- Material — dropdown, filtered by PO Type (approved SFG/INT for MTO/HPS/MTS/INT; SFG/INT/SKU for MTEST since it's an ad-hoc test batch on any item)
+- → Enter/Next
+
+**Page 2 — Stroke gate:**
+- MTO/HPS/MTS — Stroke list for that Material+PO Type, **mandatory select** (even if only one Stroke exists, user must click it — no auto-select), cannot proceed without selecting
+- MTEST — Stroke list shown only if one exists for that material (optional, can skip)
+- SKU (MTEST-only path) — no Stroke concept, goes straight to Page 3
+
+**Page 3 — Header + Material Table:**
+
+Header fields (all carried over from Page 1/2 are read-only):
+| Field | Source / State |
+|---|---|
+| PO Number | Blank — generated on save |
+| Company, PO Type | Read-only, from Page 1 |
+| **Prodshade** | Read-only, from Page 1 — displays the selected material's `material_master.material_name` |
+| **Description** | Read-only, from Page 1 — displays the selected material's `material_master.document_name` (per §83.15's per-production-type mapping, `material_name`/`document_name` hold SKU vs human-readable text in swapped roles for MTO/HPS vs MTS — these two header fields always read the same two columns regardless of which semantic content lands in which for that type) |
+| Stroke Number | Read-only, from Page 2 |
+| **Machine** | Dropdown, company-mapped (Name + Code), **mandatory** for MTO/HPS/MTS/INT (see 83.9 MTEST exception) |
+| **Batch Size** | Input — this is the Standard/Planned Qty |
+| Batch Number | Blank ("—") — not generated until Start Batch |
+| Status | Badge — STANDARD (later reflects QA/FINAL/VERIFIED/edited/pruned states) |
+| Output reference block | Material Code / Name / Description / External Code / Storage Location (user-visible reference only) / Movement Type = **P101** |
+| Notes | **Not needed** — explicitly dropped |
+| FO Number | **Not on this header at all** — superseded by the later 2026-07-11 correction that Process PO carries no FO reference, formal or informal (FO link lives only on Packing PO) |
+| **Segment** (`segment_code`) | Backend-required classification field (`VALID_SEGMENTS` = ADMIX/HPS/IWC/POWDER/INT, stored on `process_order` for reco/context purposes) but **must never be a manually-typed user-facing dropdown** — auto-derive from PO Type (MTO→ADMIX, HPS→HPS, INT→INT; MTS→ user picks only because IWC vs POWDER is genuinely ambiguous from PO Type alone). Never discussed as a visible field anywhere in the session — its current appearance as a blank mandatory combobox on the live page is a pure implementation leak, not a design element |
+
+Material Table (RM/INT lines, Standard-phase column behavior):
+| # | Column | Standard-phase behavior |
+|---|---|---|
+| 1 | # | Row number |
+| 2 | Material Type (RM/INT) | Read-only |
+| 3 | Formulation Material | Read-only, from Stroke |
+| 4 | Dosage % | Read-only, from Stroke |
+| 5 | Actual Material | Editable dropdown, registered-alternate-only, default blank ("(same)") |
+| 6 | Storage Location | Editable — default from the Stroke line's own `default_storage_location_id` (not segment config — see 83.4 Storage Location Integration correction), override allowed |
+| 7 | Standard Qty | Read-only, auto = Dosage% × Batch Size |
+| 8 | Movement Type | Read-only, always 261 |
+| 9 | **Available Stock** | `Unrestricted@location − Σ(other POs' OPEN/PARTIAL reservation @ same location)` — **row turns red and Save is blocked** if Available < Standard Qty for any line (added in mockup v2, 2026-07-11, per the already-locked stock-check-severity rule) |
+
+No **+ Add Row** at Standard (RM edit not allowed at Standard — quantities come from formulation source; new-row addition is Final/Verify only). No Actual Qty / Approved / AP Approved / Variance columns at Standard (Final/Verify only). The output (Prodshade) row does **not** appear in this table — it is shown only in the header's output reference block.
+
+Save behavior: if any line's Available Stock < Standard Qty, block save with a message; otherwise save succeeds, PO Number generates, and the PO proceeds to → QA Queue (PR16) for MTO/HPS (or BATCH_STARTED directly for MTS, per the PO-type branching already locked elsewhere in this section).
 
 ---
 
@@ -7679,7 +7801,8 @@ QA Reject  → Status = QA_REJECTED → PRUNED immediately (no edit, no reuse)
 
 CSN Tracker-style expandable queue. Same page, role-based buttons via work context capability.
 
-- **Collapsed row:** PO Number | Prodshade | Stroke | Machine | Target Qty | Created By | Status
+- **Collapsed row:** PO Number | **Batch #** | Prodshade | Stroke | Machine | Target Qty | Created By | Status
+  - Batch # shows "—" at QA_PENDING/QA_APPROVED (not generated yet), populates once Start Batch runs (BATCH_STARTED). Same value repeated above the expanded component grid for consistency. *(added 2026-07-11 — not in the original 2026-07-03 column list)*
 - **Expanded row:** Full component grid — Formulation Material | Dosage% | Actual Material | Dosage% | Planned Qty (all read-only)
 
 Role-based actions (same screen, different capabilities):
@@ -7692,6 +7815,8 @@ Role-based actions (same screen, different capabilities):
 | PRODUCTION_START | QA_APPROVED | [Start Batch] |
 
 Reject flow: QA enters reason → PO immediately PRUNED → disappears from active queue.
+
+**Sort order (confirmed 2026-07-11):** Pending/newest requests sink toward the top; Approved/Rejected historical rows sink down — both QA and Production always see the latest pending item first without scrolling. (created_at descending, pending-status rows prioritized over resolved ones.)
 
 ---
 
@@ -7750,7 +7875,7 @@ QA matches entered actuals against physical batch paper
 | Actual qty edit | ✅ Allowed — QA can correct Final entries |
 | New item add | ✅ Allowed |
 | Wrong formulation discovered | QA does NOT save → instructs user to prune Final → prune Standard → create new PO |
-| Stock movement | ✅ Happens here — P261 (RM consumed) + PM consumed + P231 (FG receipt) |
+| Stock movement | ✅ Happens here — P261 (RM consumed) + PM consumed + P101 (FG receipt) |
 
 ---
 
@@ -7834,7 +7959,7 @@ Production (at Final) or QA (at Verify) can add materials not present in the ori
 
 **Stock movements (at Verify, not Final):**
 - P261 posts **full Actual Qty** for each INPUT line — Stock Layer is never filtered by AP approval status.
-- P231 posts **full Actual Output** for OUTPUT line.
+- P101 posts **full Actual Output** for OUTPUT line.
 - AP Approved columns are Reco Layer only — they never affect stock postings.
 
 **Verify phase (QA):**
@@ -7931,8 +8056,31 @@ Process PO inherits all 4 locations from its segment at creation time.
 ```
 P261 → RM consumed FROM rm_sloc (e.g. R003 for Liquid)
 P261 → PM consumed FROM pm_sloc (e.g. P003 for Liquid)
-101  → SFG receipt  TO   shopfloor_sloc (e.g. S003)
+101  → SFG receipt  TO   stroke_master.default_storage_location_id (NOT segment config's shopfloor_sloc — see correction below)
 ```
+
+**Correction — SFG/FG output (P101) location authority (LOCKED — 2026-07-11, business owner override):** The output/receipt location for P101 (SFG receipt at Verify, and the equivalent INT/MTEST completion receipt) is **`stroke_master.default_storage_location_id`** — NOT `production_segment_location_config.shopfloor_sloc_id`. This was already locked for INT specifically earlier the same day ("INT... output storage location = Stroke's own default_storage_location_id" — see §83.3's Default Storage Location mandatory-field lock, whose own stated rationale is exactly this P101 posting need) but this original 2026-06-11 section was never updated to match, and it was missed for MTO/HPS/MTS in the Gate-27.6 implementation as a result. The business owner has now confirmed the same rule applies uniformly across **MTO/HPS/MTS/INT/MTEST** — every stroke has a mandatory default output location (per §83.3), so that is always the correct and simplest source of truth, no segment-level config needed for this specific value.
+
+**What segment config still governs (unchanged):** `rm_sloc_id`/`pm_sloc_id` still default the P261 RM/PM issue location (per-line override still allowed at Standard, unchanged). `shopfloor_sloc_id` and `fg_sloc_id` remain relevant only for the separate S003→F003 transfer step below (not yet implemented) — they are no longer read for the P101 receipt posting itself.
+
+**101 → Quality Inspection hold (LOCKED — 2026-07-11):**
+
+`movement_type_master` defines P101's default target as `QUALITY_INSPECTION`, not `UNRESTRICTED` — matching GRN's Inward QA pattern (vendor receipt → QI hold → QA usage decision → Unrestricted). This DOES apply to MTO/HPS/MTS SFG output. It does **not** apply to:
+- **INT** — P101 posts straight to Unrestricted (no QI hold)
+- **MTEST** — P101 posts straight to Unrestricted (no QI hold)
+- **Packing PO's FG (SKU) receipt** — posts straight to Unrestricted (no QI hold)
+
+**Release mechanism for MTO/HPS/MTS:** No separate QA-release screen — the Verify (PR12) action itself is performed by QA, so QI → Unrestricted release happens automatically within the same Verify transaction. **However, a separate "SFG Result Recording" page is still needed** to log the lab/quality test result for that batch (distinct from the qty-verify action itself).
+
+**Usage Decision movement type = P321 (LOCKED — 2026-07-11):** The auto-release is posted as `movement_type_master` code **P321 "QA → Unrestricted"** — the same Usage-Decision "Release" code GRN's Inward QA already uses. So a MTO/HPS/MTS Verify posts three ledger entries in one transaction: P261 (RM/PM/INT issue) → P101 (SFG receipt, IN to QUALITY_INSPECTION) → **P321** (QI → Unrestricted, immediate auto-release). INT/MTEST skip P321 entirely since their P101 targets Unrestricted directly.
+
+> **Deferred (not designed yet):** QA may later want to take a *partial* qty from that same batch and route it to Blocked instead of Unrestricted (e.g. `P323 "QA → Blocked"` or a post-release `P344`) — acknowledged as a future capability, does not change the P321 auto-release design above.
+
+> **Confirmed 2026-07-11:** SFG Result Recording is an **exact identical mechanism to the existing Inward QA page** — same `qa_test_method_master` / `qa_category_test_config` infrastructure, same UI/workflow pattern — only the context changes (SFG batch from Process PO Verify, instead of vendor GRN). Build it as a direct clone of Inward QA's mechanism, not a fresh design.
+>
+> **TX Code: PR18** (LOCKED 2026-07-11) — registered in `erp_menu.menu_master`/`acl.menu_master` as `PROD_SFG_RESULT_RECORDING`, route `/dashboard/production/sfg-result-recording`.
+>
+> **Third test category — "Concrete Trial" (LOCKED — 2026-07-11):** Alongside the existing MCT (mandatory) and OTHR (optional) groups, SFG Result Recording adds a **third group, "Concrete Trial" (`CT`)** — optional, same behavior as OTHR (does not gate decision submission, no pass/fail-blocks-release logic). Uses the exact same shared `qa_test_method`/`qa_category_test_config` category-driven method-template mechanism already used for MCT/OTHR (same tables, same company + material_category scoping). **Scoped to the SFG Result Recording page only** — Procurement's Inward QA page (RM/PM materials) is not touched and its own frontend hardcodes only MCT/OTHR sections, so a new `test_group` value being allowed at the schema level has no visible effect there.
 
 **P261 Issue Location — Default Chain:**
 
@@ -7987,26 +8135,41 @@ Material + Batch Number + Packing PO ref + FO ref (NULL or populated) + Qty + Lo
 | PR16 | ZQA01 | QA Approval Queue | QA + Production |
 | PR17 | — | Batch Number Release | Manager |
 
-> **TX Code scope:** PR09 / PR11 / PR12 / PR15 serve **both Process PO and Packing PO** — PO Type field (PMTO/PHPS/PMTS/PTEST) drives behavior. PR10, PR16, PR17 are **Process PO only** — Packing PO has no QA Approval step and no Batch Number.
+> **TX Code scope:** PR09 / PR11 / PR12 / PR15 serve **both Process PO and Packing PO** — PO Type field (PMTO/PHPS/PMTS/PTEST) drives behavior. PR10, PR16, PR17 are **Process PO only for now** — see the 2026-07-12 correction below for the Packing PO edit deferral.
 >
-> **PR10 Edit availability:** Only when status = QA_APPROVED. QA_REJECTED → straight PRUNE, PR10 not available.
+> ~~**PR10 Edit availability:** Only when status = QA_APPROVED. QA_REJECTED → straight PRUNE, PR10 not available.~~ **Superseded 2026-07-12 — see below.**
 
-**PR10 (ZCoR2) — Edit Rules (LOCKED — 2026-07-04):**
+**PR10 (ZCoR2) — Edit Rules — SECOND CORRECTION (LOCKED — 2026-07-12, business owner override, supersedes the entire 2026-07-04/07-12(first correction) block below):**
+
+The edit window moves to **before** the QA gate instead of after it — struck-through rules retained for history, not deleted, per doc convention.
+
+~~Available at: QA_APPROVED only — closes the moment Start Batch is clicked~~
+~~RM Qty change ✅ Only this~~
+~~SLoc change ❌ Blocked — set at Standard, editable at Final/Verify~~
+
+**New rule (2026-07-12):**
 
 | Rule | Detail |
 |---|---|
-| Available at | QA_APPROVED and BATCH_STARTED — closes after Final is saved (VERIFIED = no PR10) |
-| Status after edit | **Stays QA_APPROVED / BATCH_STARTED** — no re-approval needed |
-| **RM Qty change** | ✅ **Only this** — Standard Qty auto-recalculates, reservation document auto-updates |
-| **Machine assignment** | ✅ **Only this** — can change machine while batch is approved/started |
+| Scope (this brief) | **Process PO only, MTO/HPS only.** MTS/INT and Packing PO are deferred — see below, not dropped. |
+| Available at | **STANDARD status, before QA approval** — closes the moment QA approves (transition to QA_APPROVED). For MTS/INT (no QA gate) and for Packing PO (no QA gate), the equivalent rule is "before Final" — documented now, implemented later (see Deferred). |
+| Page 1 | **PO Number only** — no Company field needed. Confirmed via direct DB check: `erp_procurement.document_number_series` has no `company_id` column at all (`doc_type`, `last_number`, `pad_width`, `starting_number` only) — `po_number` is a single global counter per doc_type, no cross-company collision possible. → Enter. Validates PO Type is MTO/HPS and status is STANDARD; if not, show a clear blocking message (do not silently proceed). |
+| Page 2 | Same Material Table shown as PR09's own Standard page, most fields read-only, these editable: |
+| **Machine** | ✅ Editable |
+| **Batch Qty (header Standard Qty)** | ✅ Editable — recalculates every RM line's Standard Qty (Dosage% × new Batch Qty) live, and updates each line's reservation Required Qty to match |
+| **Storage Location (per line)** | ✅ Editable **(reverses the earlier "blocked" rule)** |
+| **Alternate/Actual Material (per line)** | ✅ Editable, only for lines whose Formulation Material has a registered alternate (`stroke_line.alternate_material_id`) — never an arbitrary/unregistered material. Reservation swap (old material CANCELLED, new OPEN, same qty) applies exactly as it does elsewhere. |
+| **Stock/availability re-check** | ✅ **Required on save** — same hard-block severity as Standard's own rule (§83.5): if the new Batch Qty or the substituted Actual Material leaves any line short of Available stock, block save with a clear message, do not allow saving into a shortage. |
 | Stroke change | ❌ Blocked |
-| Alternate material | ❌ Blocked — handled at Final via Actual Material column |
-| SLoc change | ❌ Blocked — set at Standard, editable at Final/Verify |
-| RM add / prune | ❌ Blocked — do this at Standard phase |
-| Planned output qty | ❌ Blocked |
+| RM add / prune | ❌ Blocked — do this at Standard (PR09) instead |
 | PO Type / Prodshade | ❌ Blocked |
+| Status after edit | Stays **STANDARD** — no side effect; QA reviews whatever values are current when PR16 is opened |
 
-> PR10 is intentionally minimal — only qty and machine. Keeping it simple avoids complexity and conflicts with Final phase entries.
+**Deferred (documented now, business owner explicit decision 2026-07-12 — mandatory future work, not dropped):**
+- **MTS/INT edit window** ("before Final") — MTS/INT are already deferred project-wide for batch mechanics (Gate-27 costing/batch session, 2026-07-12); implement PR10's MTS/INT half alongside that future session.
+- **Packing PO edit (PR10's Packing-PO half)** ("before Final", since Packing PO has no QA gate) — explicitly deferred to land together with Packing PO's own Standard→Final rebuild (already next in the locked sequencing per CLAUDE.md), not bolted onto the current legacy `updatePackingOrderLinesHandler`.
+
+**Implementation note:** do not reuse the existing `updateProcessOrderLinesHandler` (full line delete+reinsert, powers the legacy generic `ProcessOrderPage.jsx`) — that predates the Gate-27 TX-code rebuild and permits far more than PR10's narrow scope (add/remove lines, no stock re-check). Build PR10 as its own dedicated handler + page, matching the PR09/PR11/PR12 pattern.
 
 **COR6 specific decisions (LOCKED — 2026-06-11):**
 - Activity confirmation (machine time, labor time) → **deferred to Section 104**
@@ -8144,10 +8307,13 @@ Search key = **Company + PO Type** (NOT Prodshade — Prodshade was wrong, that'
 | Previous Prodshade | Prodshade of the voided PO |
 | Previous Stroke | Stroke number of the voided PO |
 | Machine Name | Machine assigned on the voided PO |
+| **Status** | VOIDED / RELEASED — row stays in the list after release, doesn't disappear *(added 2026-07-11)* |
+| **Released By** | Blank until released, then the releasing Manager's name *(added 2026-07-11)* |
+| **Reason** | Blank until released, then the mandatory reason text *(added 2026-07-11)* |
 
-**Action:** Row select → **[Release]** button → **Reason mandatory (text field)** → Batch number: VOIDED → **RELEASED**
+**Action:** Row select (only VOIDED rows are selectable) → **[Release]** button → modal opens, **Reason mandatory (text field)** → Confirm → Batch number: VOIDED → **RELEASED**, row updates in place (Status/Released By/Reason populate) rather than disappearing.
 
-> Released batch numbers appear in Start Batch drawer for same Company + PO Type. Once assigned to a new PO (RELEASED + ACTIVE), they no longer appear in the drawer.
+> Released batch numbers appear in Start Batch drawer for same Company + PO Type. Once assigned to a new PO (RELEASED + ACTIVE), they no longer appear in the drawer (but this PR17 table keeps showing them as RELEASED history).
 
 ---
 
@@ -8220,6 +8386,14 @@ Step 3: Before Final phase — INT must be complete
 
 > In-Transit and QA stock are excluded at PO creation — physically not available yet. Only unrestricted stock (+ INT planned output for INT materials) counts for reservation.
 
+**Stock check severity per stage (LOCKED — 2026-07-11) — deliberately stricter than SAP default:**
+
+| Stage | Check | Severity |
+|---|---|---|
+| **Standard (PO Create)** | Available (Unrestricted @ location − open reservations) vs Standard Qty, per line | **Hard block** — cannot save if any line is short (SAP's own default here is a soft warning that still allows save; we chose stricter to avoid unnecessary Process Orders being created for material that isn't actually available) |
+| **Final** | INT-only: linked INT material's Process PO must be VERIFIED (not just planned) | Hard block for INT shortfall only — no general RM/PM stock re-check (already physically consumed on the shop floor by Final) |
+| **Verify (P261 posting)** | DB/ledger-level — no negative stock allowed | **Hard block**, matches SAP's real enforcement point (Goods Issue) — this is non-negotiable regardless of what passed at Standard |
+
 ---
 
 #### Material Reservation Mechanism (LOCKED — 2026-06-30)
@@ -8247,13 +8421,23 @@ Process PO Standard Save → system creates a **Reservation Document** per compo
 **Available Stock formula (display on PR09 component line grid):**
 
 ```
-Available = stock_snapshot(UNRESTRICTED, material, plant)
-          − SUM(open_reservations.balance_qty WHERE material = X AND plant = Y)
+Available = stock_snapshot(UNRESTRICTED, material, plant, storage_location)
+          − SUM(open_reservations.balance_qty WHERE material = X AND plant = Y AND storage_location = Z)
 ```
 
-Open reservations = all OPEN + PARTIAL reservation documents across ALL Process POs for that material+plant. Sources include:
-1. Process PO Standard save reservations
-2. Delivery schedule / dispatch pick window reservations (future — same table, same formula)
+> Reservation is keyed by **material + plant + storage location** (not just material + plant) — it nets against the Unrestricted balance of the exact location being picked from.
+
+**"material" in this formula = Actual Material when one is substituted, never the Formulation Material (LOCKED — 2026-07-12).** Substitution exists precisely because the Formulation Material may not be available at the plant — checking that material's own (possibly-zero) stock instead of the substitute's real stock would either falsely block a save that should succeed, or worse, miss a genuine shortage on the material actually being consumed. This applies everywhere availability is evaluated against a line that has an `actual_material_id` set — PR09 create-time preview, PR10 edit-time preview, and any other stock-check surface for that line (Final's general checks are data-entry-only per the locked severity table, but this still governs anywhere a live availability number is shown or a hard block is evaluated). **Bug confirmed in current code:** `checkStockAvailability`/`computeAvailabilityRows` in `process_order.handlers.ts` never reads `actual_material_id` — it always keys off the line's Formulation `material_id`. Stock *posting* (P261) already correctly uses `actual_material_id` when present — only the availability-check path needs this fix.
+
+**Reservation sources (LOCKED — 2026-07-11) — all five, resolved:**
+
+| Source | Reserve starts | Reserve ends (released) |
+|---|---|---|
+| Process PO | Standard save | Verify (P261 issue) |
+| Packing PO | Standard-equivalent save | Final (P261 issue) |
+| Sales Order | Dispatch Instruction created | P601 (GI for Dispatch) posted |
+| STO (Plant Transfer Order) | Dispatch Instruction created (same document type reused from Sales) | P601 posted |
+| Location Transfer (P311) | Transfer created | Transfer posted |
 
 **Reservation lifecycle:**
 
@@ -8265,6 +8449,24 @@ BOM qty change (PR10 Edit)  → Reservation Document Required Qty updated
 ```
 
 **No movement types P250/P251** — RESERVED stock_type in stock_type_master is reserved for physical warehouse segregation use cases (e.g. QA-hold override, physical bin separation), NOT for production order reservations.
+
+---
+
+#### Packing PO Reservation — Batch-Specific SFG Line (LOCKED — 2026-07-13)
+
+The "Packing PO" row in the reservation-sources table above (Standard-equivalent save → released at Final) was resolved in principle on 2026-07-11 but the mechanism itself was never designed until this session, once the Pack BOM + batch/document-number granularity work (§83.15) made the gap concrete.
+
+**PM lines — no change from the general model.** Reserved by `(material_id, storage_location_id)` exactly like Process PO's RM/PM reservation — a generic, non-batch pool. Nothing Packing-PO-specific here.
+
+**SFG line — reservation must be batch-specific, a genuinely new dimension.** Process PO's RM/PM reservation is never batch-specific because it consumes generic stock *to create* a new batch. A Packing PO instead draws SFG from one *specific, already-existing* Process PO batch (`packing_order.process_order_id` → that PO's `batch_number`) — reserving by `(material_id, storage_location_id)` alone would let a Packing PO silently reserve against the wrong batch when the same Prodshade material has multiple batches sitting at the same location. `reservation_document` therefore needs a `batch_number` column (added — see §8's migration `20260713110000_gate27_24_reservation_batch_number.sql`) and the SFG line's reservation row must always set it; PM reservation rows leave it `NULL`.
+
+**Availability check for the SFG line must also filter by `batch_number`.** The existing `computeAvailabilityRows`/`checkStockAvailability` pattern (Unrestricted `stock_ledger` sum minus open `reservation_document.balance_qty`, both keyed by material+location) must, for a batch-specific reservation, additionally filter both the ledger sum and the reservation subtraction by that specific `batch_number` — otherwise a Packing PO could show "available" stock that actually belongs to a sibling batch of the same material at the same location.
+
+**Multiple Packing POs sharing one batch must correctly compete for the same finite balance.** Per §83.14/§83.15's already-locked "balance barrel = separate Packing PO" pattern, two (or more) Packing POs routinely draw from the same Process PO batch. The batch-aware availability check above must sum *all* open SFG reservations for that `batch_number` (across every Packing PO drawing from it, not just the one being created) when computing what's left — otherwise a second Packing PO could over-reserve a batch that the first has already mostly consumed.
+
+**Lifecycle is shorter than Process PO's.** Two states only: OPEN at Packing PO create (there is no separate "Standard" step distinct from create, and no QA gate in between, per the already-locked "Packing PO has no Verify" rule) → CLOSED at Final (when the SFG P261 issue actually posts, per §83.15's 3-movement Final posting).
+
+**COR6 (post-Final correction, §83.15) needs its own fresh batch-level check that Process PO's own COR6 never needed.** Process PO's COR6 (VERIFIED-status correction, §83.4) posts a raw ledger movement with no reservation-engine involvement at all — safe, because RM/PM's negative-stock protection operates at the same (material+location) granularity the correction itself operates at. Packing PO's COR6 is different: `stock_snapshot` never splits by batch (§83.15's already-confirmed engine gap — one blended running total per material+location, all batches combined), so the ledger's own generic negative-stock guard **cannot** catch a batch-specific overdraw — a correction could silently push one specific batch negative while the material+location total still reads positive (borrowed from a sibling batch). Any qty increase via COR6 on a Packing PO's SFG line must run the same batch-aware availability check described above before posting the delta, not just rely on `post_stock_movement()`'s own generic guard.
 
 ---
 
@@ -8315,6 +8517,51 @@ BOM qty change (PR10 Edit)  → Reservation Document Required Qty updated
 **AP Reconciliation:** Always references Formulation Material column — what the stroke/BOM called for.
 **Actual consumption / costing:** References Actual Material column — what was physically issued.
 
+**Two-layer model (LOCKED — 2026-07-11) — corrects an earlier three-way split:**
+
+| Layer | Material | Qty | Purpose |
+|---|---|---|---|
+| **Stock/Physical** | Actual (X1 if substituted, else X) | **Actual Qty** (full, matches P261 posting) | PACE's own inventory truth — never filtered by approval status |
+| **AP Reco = Costing** (what's billed/recognized to APL) | **Formulation** (X, always — substitution has no effect here) | **AP Approved Qty** (from the Yes/No/Partial toggle) | What Asian Paints is billed/recognizes — never the raw actual |
+
+> **Costing is not a separate third layer** — it *is* AP Reco, since "costing" in this business means "what gets costed/billed to APL." Both use Formulation Material + AP Approved Qty, not Actual Material + Actual Qty.
+
+**The gap between the two layers is PACE's own exposure, never passed to APL:**
+Whatever PACE physically issued/produced (Stock Layer: Actual Material + Actual Qty) minus what APL is billed for (Reco/Costing Layer: Formulation Material + AP Approved Qty) — covering both a potential material-substitution cost difference and a quantity variance — is entirely PACE's own cost to absorb. **Rate/valuation mechanics for this gap are NOT yet locked** — ties directly into the open Section 104.7 costing scenarios (unapproved deviation, small separable excess) — a dedicated Section 104 costing session is still required to decide how this gets booked (loss vs deferred/Salvage vs something else).
+
+**`erp_production.process_order_line_reco` — the Reco/Costing layer's storage (LOCKED — 2026-07-11):**
+
+Stock movements alone cannot carry the Reco/Costing layer — `stock_ledger` only knows what physically moved (Actual Material, Actual Qty), it has no concept of "Approved" or "AP Approved Qty" at all. So this data needs its own table. One data-entry action (Verify / COR6 Correction) writes to **both universes at once** — Actual → `stock_ledger`, AP Approved → this table — never two separate entries.
+
+**Write timing (LOCKED — 2026-07-11): `process_order_line_reco` is only written at Verify, never at Final.** Final is Production's draft entry (Actual Qty, Approved toggle) — those values live as live/draft columns on `process_order_line` itself and are still fully editable by QA at Verify. Only when QA saves Verify (stock actually posts, P261/P101/P321) does the data become "official" and get committed into `process_order_line_reco`. The Final page's header auto-sum (Actual Output / AP Approved / Variance) reads live off `process_order_line`'s draft columns while still at Final/BATCH_STARTED-Final status — it only starts reading from `process_order_line_reco` once the PO reaches VERIFIED.
+
+**Fully denormalized (COID-style flat list) — no joins required for Reco/Costing reporting:**
+
+| Column | Purpose |
+|---|---|
+| `company_id`, `po_number`, `batch_number`, `po_type`, `prodshade_material_id`, `stroke_number`, `machine_id`, `segment_code`, `batch_started_at`, `verified_at` | Batch/PO context, duplicated onto every line row |
+| `process_order_id`, `process_order_line_id` | Traceability FKs only — not relied on for queries |
+| `material_id` | Formulation Material (never changes) |
+| `line_material_type` | RM / INT |
+| `dosage_pct` | Formulation dosage% (blank for added lines) |
+| `actual_material_id` | Substitute material, NULL = same as formulation |
+| `storage_location_id` | Issue location |
+| `standard_qty` | Std Qty |
+| `actual_qty` | **Net** Actual — Final entry + all subsequent COR6 corrections summed |
+| `approved_status` | YES / NO / PARTIAL |
+| `ap_approved_qty` | **Net** AP Approved Qty |
+| `variance_qty` | actual_qty − ap_approved_qty |
+| `is_formulation_line` | true = original Stroke/BOM line, false = added at Final/Verify |
+| `is_voided` | false = current attempt (default). Set true by CORS — see below |
+| `voided_at` | Set by CORS, NULL otherwise |
+| `last_updated_at`, `last_updated_by` | Audit |
+
+No dedicated OUTPUT row — Actual Output / AP Approved Qty (Output) / Variance (Output) are always `SUM()` of this table's INPUT rows **where `is_voided = false`** for that `process_order_id`, computed live (matches the Final/Verify header design above).
+
+**Feeds directly into the 104.7 cross-PO derivation formula:** "ratio of qty drawn ÷ batch total" — when a Packing PO draws a partial qty from a batch, multiplying that ratio against this table's `ap_approved_qty` per RM/INT line gives the recognized component cost for that specific dispatch, with no re-derivation needed.
+
+**CORS behavior = append, not reset-in-place (LOCKED — 2026-07-11):** When a VERIFIED (or FINAL) Process PO is CORS'd back to STANDARD, existing `process_order_line_reco` rows for that PO are **not cleared or deleted** — they're marked `is_voided = true` / `voided_at = now()`, preserving that attempt's Actual/AP-Approved/Variance numbers as history. When the PO is re-run and reaches Final/Verify again, **new rows are inserted** for that fresh attempt (`is_voided = false`). Reco/Costing reporting always filters `is_voided = false` for current truth; audit/trace queries can see every prior voided attempt. Matches the same "nothing is truly deleted" principle already locked for Prune, soft-reject Change Requests, and RELEASED batch numbers.
+
 ---
 
 #### Packing PO — Lifecycle Design (LOCKED — 2026-07-05)
@@ -8334,7 +8581,7 @@ STANDARD → FINAL (terminal — movements happen here)
 | STANDARD | Production | Create, freely editable |
 | FINAL | Production | Actual qty entry → movements posted on save |
 | COR6 Correction | QA only | Append corrections (P261/P262), no approval, status stays FINAL |
-| CORS → STANDARD | Production / Manager | Full reversal, reason mandatory |
+| ~~CORS → STANDARD~~ **CORS → REVERSED (terminal, LOCKED 2026-07-21)** | Production / Manager | Full reversal, reason mandatory. The `→ STANDARD` in this row predates the actual build and was never implemented — the real code (`reversePackingOrderHandler`) sets status to `REVERSED`, permanently. A reversed Packing PO's `po_number` is dead; redo means creating a brand-new Packing PO. See §83.4.1-addendum-2 for the full reasoning (business owner confirmed this matches SAP's own PO-vs-batch-number distinction) and Process PO's parallel lock. |
 
 **No QA Approval. No Batch Number. No Verify phase.**
 
@@ -8369,6 +8616,8 @@ PO Type = PMTO / PHPS / PMTS / PTEST triggers Packing PO behavior.
 | SLoc | S003 (editable) |
 | Movement Type | P261 |
 
+**Packing PO storage-location + stock-check authority (LOCKED — 2026-07-11):** Packing PO does not use any segment-config-style default-location lookup at all. Every line's SLoc comes straight from Pack BOM (SFG/INPUT row's location = that Prodshade's Stroke Master Default Storage Location, per the already-locked §83.15 Pack BOM rule; FG/OUTPUT row's location = whatever was user-entered when the Pack BOM was set up) or, for BOM-not-required pack types (599/000/001), whatever the user manually enters at Standard. **Stock availability check always runs against exactly the SLoc value present on that line at that moment** — there is no separate company/segment default chain for Packing PO, unlike Process PO's RM/PM issue locations.
+
 **INPUT — PM lines:**
 
 | Pack Code | PM at Standard | Final entry |
@@ -8392,7 +8641,7 @@ PO Type = PMTO / PHPS / PMTS / PTEST triggers Packing PO behavior.
 |---|---|
 | FG SKU | Auto from Pack Code + Prodshade |
 | Std Qty | = Total Packing Qty (KG) |
-| Movement Type | P231 |
+| Movement Type | P101 |
 
 ---
 
@@ -8428,7 +8677,7 @@ PO Type = PMTO / PHPS / PMTS / PTEST triggers Packing PO behavior.
 | Actual Output | Editable by Production |
 | AP Approved Output | SUM(all INPUT AP Approved Qty) — auto-calculated |
 | Variance | Actual Output − AP Approved Output |
-| Movement Type | P231 |
+| Movement Type | P101 |
 
 **AP Approved Rules (same as Process PO):**
 
@@ -8445,7 +8694,9 @@ PO Type = PMTO / PHPS / PMTS / PTEST triggers Packing PO behavior.
 |---|---|---|
 | P261 | SFG (actual qty, from selected batch) | S003 → consumed |
 | P261 | Each PM line (actual qty) | pm_sloc → consumed |
-| P231 | FG (actual output qty) | → F003 |
+| P101 | FG (actual output qty) | → F003 |
+
+> **⚠️ Correction (2026-07-21) — this 2026-07-05 table was never implemented and is superseded by §83.4.1-addendum below.** The Gate-27.19 build (`finalizePackingOrderHandler`/`correctPackingOrderHandler`) shipped Actual Qty only — no AP-Approved concept existed anywhere on `packing_order_line` until this session. The "Yes→Std, No→0" rule above also **contradicts** the live, already-tested rule Process PO's Verify/Final pages actually run (`computeRowValues()`): No→AP Approved=Std (deviation stays PACE's own cost), Partial→manual, Yes(override)→AP Approved=Actual (fully billable despite the deviation). §83.4.1-addendum implements that live rule, PM-lines-only (SFG/Output never get an approval workflow — output is always accepted as actual), plus a new `packing_order_line_reco` table mirroring `process_order_line_reco`.
 
 ---
 
@@ -8547,47 +8798,47 @@ AP billing: full 10 MT A rate → differential → Reco
 
 ### 83.7 — Batch Number and Batch-wise FG Tracking
 
-**Updated: 2026-06-10 — LOCKED**
+**Updated: 2026-07-11 — LOCKED (corrects 2026-06-10 version, business owner override)**
 
-#### Batch Number Generation Rules (LOCKED — 2026-06-10)
+#### Batch Number Generation Rules (LOCKED — 2026-07-11)
 
 | Operation Type | Sequence Level | Generated by | Format |
 |---|---|---|---|
 | MTO (Admix) | **Company level** — all Prodshades share one series | System — at "Start Batch" click | SA-configured Prefix + sequential count |
-| HPS (Hypershot) | **Per Prodshade** — each Prodshade has own series | System — at "Start Batch" click | SA-configured Prefix + sequential count per Prodshade |
-| IWC | **Per Prodshade** — each Prodshade has own series | System — at "Start Batch" click | SA-configured Prefix + sequential count per Prodshade |
-| Powder | N/A | **Manual entry** — user enters at Final | No system generation |
+| HPS (Hypershot) | **Company level** — all Prodshades share one series | System — at "Start Batch" click | SA-configured Prefix + sequential count |
+| MTS (IWC + Powder, unified) | **Per Prodshade** — each Prodshade has own series | System — at "Start Batch" click | SA-configured Prefix + sequential count per Prodshade |
 | MTEST | **Company level** | System — at PO save | SA-configured Custom Prefix + sequential count |
 
-**Batch number reset:** Per financial year — each series resets at year start.
+> **2026-07-11 correction:** HPS moves from per-Prodshade to company-level — MTO/HPS/MTEST are now all company-level, none are Prodshade-scoped. IWC and Powder are unified under one "MTS" batch type, per-Prodshade — Powder no longer gets manual-entry-only batch numbers, it now shares the same system-generated per-Prodshade series as IWC.
+
+**Batch number reset:** ❌ No financial-year reset. Each series is a plain running counter that **wraps 99999 → 1** on overflow. (Supersedes the 2026-06-10 "resets per financial year" rule — the `fy_reset` column/field has been dropped entirely as it was never actually implemented and was misleading.)
 
 **SA Configuration Page — Batch Number Setup:**
 
 SA configures per company:
 - MTO: Prefix (text field) + Start Count *(one entry per company)*
-- HPS: Per Prodshade → Prefix (text field) + Start Count *(one row per Prodshade)*
-- IWC: Per Prodshade → Prefix (text field) + Start Count *(one row per Prodshade)*
+- HPS: Prefix (text field) + Start Count *(one entry per company)*
+- MTS: Per Prodshade → Prefix (text field) + Start Count *(one row per Prodshade)*
 - MTEST: Prefix (text field) + Start Count *(one entry per company)*
-- Powder: no config — user manual entry
 
 Example:
 ```
-MTO  (company level)   → Prefix: BM | Start: 1967  → BM1967, BM1968...
-HPS  Prodshade A       → Prefix: HA | Start: 001   → HA001, HA002...
-HPS  Prodshade B       → Prefix: HB | Start: 001   → HB001, HB002...
-IWC  Prodshade X       → Prefix: IX | Start: 001   → IX001, IX002...
-IWC  Prodshade Y       → Prefix: IY | Start: 001   → IY001, IY002...
-MTEST (company level)  → Prefix: MT | Start: 001   → MT001, MT002...
-Powder                 → no config — user manual entry
+MTO   (company level)  → Prefix: BM | Start: 1967  → BM01968, BM01969...
+HPS   (company level)  → Prefix: HP | Start: 214   → HP00215, HP00216...
+MTS   Prodshade X      → Prefix: IX | Start: 001   → IX00002, IX00003...
+MTS   Prodshade Y      → Prefix: IY | Start: 001   → IY00002, IY00003...
+MTEST (company level)  → Prefix: MT | Start: 001   → MT00002, MT00003...
 ```
+Format is 5-digit zero-padded count (`00001`–`99999`), wrapping back to `00001` after `99999`.
 
 **When batch number is generated:**
 
 | Type | When |
 |---|---|
-| MTO / HPS / IWC | Production clicks "Start Batch" button (post-QA approval) |
+| MTO / HPS / MTS | Production clicks "Start Batch" button (post-QA approval, except MTS which has no QA step) |
 | MTEST | At PO save (simplified one-step cycle, no QA approval) |
-| Powder | User enters manually at Final |
+
+**Prerequisite:** A batch series must exist for the specific (Company, Batch Type) or (Company, Batch Type, Prodshade) combination before "Start Batch" can succeed for MTS — same prerequisite pattern as Prodshade Pack Config (83.3). SA must configure a new Prodshade's MTS series before Production can run its first batch.
 
 **Batch-wise FG Stock Tracking (LOCKED — 2026-06-08):**
 
@@ -8611,6 +8862,86 @@ Batch: BM1966 | SKU: 6763PH94000 | Qty: 9,000 KG (1 TNK) | Cost: Y/KG
 ```
 
 **FG stock = one lot per batch** — multiple lots of same SKU can exist simultaneously.
+
+---
+
+#### Batch Number Persistence Mechanism (LOCKED — 2026-07-12)
+
+**Why this exists:** everything above in §83.7 describes batch numbers conceptually, but a direct DB check found the stock posting engine has no way to actually carry one. `erp_inventory.stock_ledger.batch_id` (UUID) exists but has no FK, no writer anywhere in the codebase, and 0 of 21 live rows populated — dead weight. `erp_inventory.post_stock_movement()` (both overloads) has no batch parameter at all in its signature. This section locks the fix, scoped to **MTO/HPS only** for now (MTS/INT/MTEST batch-persistence deferred to their own future session, matching the MTS-not-yet-batch-manageable note elsewhere in this doc).
+
+**Schema:**
+- `erp_inventory.stock_ledger`: drop the dead `batch_id` (UUID) column, add `batch_number TEXT NULL` — nullable, since RM/PM/INT movements never carry one (RM/PM use GRN-lot tracking, a separate mechanism; INT has no batch per §83.5).
+- `erp_production.packing_order`: add `batch_number TEXT NULL`. This is a denormalized copy of the linked Process PO's `batch_number` — **populated only at the moment the Packing PO's own Final step actually issues SFG (P261) from that batch**, not at Packing PO creation time and not eagerly propagated when the Process PO's Start Batch fires. (Admix/HPS create the Packing PO at Standard, before any batch exists yet — the column stays NULL until Final actually consumes a batch.)
+
+**Function:** `post_stock_movement()` (both overloads — with and without `p_plant_id`) gets one new parameter, appended last, with a default: `p_batch_number TEXT DEFAULT NULL`. This is fully backward-compatible by construction — every existing caller (GRN, RTV, STO, Sales Order, Opening Stock, PI, and every other call site not listed below) needs zero code changes; omitting the argument resolves to `NULL` exactly as today. Only the specific call sites below need to start passing it explicitly. Matches the same non-breaking extension pattern already used for `item_number` in Section 105.
+
+**Who passes `p_batch_number` (MTO/HPS scope only):**
+
+| Posting call site | Movement | Batch source |
+|---|---|---|
+| Process PO Verify | P101 (SFG receipt) | `process_order.batch_number` (system-generated) |
+| Process PO CORS | P262, P322, P102 | same batch being reversed |
+| Packing PO Final | P261 (SFG issue) + P101 (FG receipt) | `process_order.batch_number`, carried via the link — this is also the moment `packing_order.batch_number` itself gets set |
+| Packing PO reversal | P262, P102 | same batch |
+| Opening Stock (P561/P563/P565) | — | **manual entry** when the material is SFG/FG (HPS/MTO) — no live Process PO exists at go-live to derive one from; RM/PM opening stock is unaffected, no batch |
+| PID surplus/deficit (P703/P704) | — | **not manual** — when counting a location that already has recorded SFG/FG stock, the existing `batch_number` already on `stock_ledger` is what's being counted/adjusted, shown to the counter rather than typed fresh. Manual entry only applies to the edge case of an unexpected/unrecorded batch found as a surplus. |
+
+**Explicitly not in scope:** RM/PM issue (P261 on the input side), INT (P101), and anything under MTS — none of these carry `batch_number`, no change to their call sites.
+
+**Batch-number origin is untracked and irrelevant downstream:** whether a `stock_ledger.batch_number` value came from manual Opening Stock entry or system-generated Production, there is no origin flag anywhere — every batch is treated identically by every later process (PID, dispatch, Reco). This is a deliberate simplicity choice, not an oversight.
+
+---
+
+#### PR19 — Partial Batch Reversal + PR20 — Partial Reversal Report (LOCKED — 2026-07-12, MTO/HPS scope only)
+
+**Why this exists:** CORS (PR15) only does full-batch reversal. Excess/return/salvage scenarios need to reverse a *partial* quantity of an already-VERIFIED batch, proportionally, using the already-locked Reversal Basis math (§104.7: `Reversal Ratio = Reversal Qty ÷ Actual Total Output`, applied separately to Actual and to AP Approved qty). This single mechanism **absorbs and replaces** the earlier "salvage-blend granular RM decomposition / New Row" design floated for a receiving-batch — that idea is dropped. There is no separate insertion into a receiving batch's own Material Table; everything happens through this reversal, with an optional tag identifying which batch the recovered material is intended for.
+
+**PR19 — Page 1 (Identify):**
+- Company (resolved/dropdown)
+- PO Type (MTO/HPS — MTS excluded from this whole mechanism for now)
+- Prodshade
+- Batch Number
+- → Enter
+
+**PR19 — Page 2 (pick a stock line):**
+A list of matching stock lines, single-select (radio, one row only):
+
+| Storage Location | Material Type (SFG/FG-SKU) | Prodshade Code/SKU | Description | Batch Number | Available in Pack | Available in Base UOM |
+
+Filter rules: only rows with non-zero available qty, and **only UNRESTRICTED stock** — returned FG lands in BLOCKED first, and BLOCKED→QA-release-to-Unrestricted is a separate, still-undesigned mechanism (not this page).
+
+**PR19 — Page 3 (header + reverse qty + line detail):**
+- Header: all details of the selected row.
+- **Reverse Qty** — user-entered. Hard validation: cannot exceed the Available qty shown on Page 2 for that exact batch/location/material.
+- **Salvage Batch Number** (optional) — a dropdown listing other batches of the same PO Type/Prodshade family that are currently BATCH_STARTED (QA_APPROVED + Start Batch clicked) but not yet FINAL. Selecting one tags the recovered RM/PM as intended for that specific batch (traceability only — per §83.6's "batch records which batches were mixed in" — the receiving batch does not get any new line inserted into its own Material Table; it just consumes the now-normal RM/PM stock at its own Final as usual). Leaving this blank just returns the material to general Unrestricted stock.
+- **Line-level detail, if the selected row is SFG:** the Prodshade's RM/INT table shown **read-only**, Actual/AP-Approved/Variance computed proportionally per the Reversal Ratio formula — nothing here is editable.
+- **Line-level detail, if the selected row is SKU (packed FG):** shows RM **and** PM together, with a **per-line checkbox** (default checked) — unchecking a line excludes it from reversal (it stays "consumed", never comes back to stock). This checkbox is the entire mechanism for distinguishing reusable packaging (barrel, IBC — leave checked) from single-use consumables (label, tape, seal — uncheck) — **no new `material_master` flag, purely manual every time, confirmed explicitly** (the earlier idea of a stored "reusable" flag on Material Master is dropped). The SFG row itself has this checkbox permanently inactive/unchecked — see the movement sequence below for why.
+
+**Movement sequence (LOCKED):** no new movement type codes — reuses exactly what CORS already uses (P261/P262, P101/P102), just posted for the partial reversal quantity instead of the full batch quantity.
+
+*SFG row selected (Process PO level only):*
+1. SFG: **P102** (dissolves the reverse-qty out of S003)
+2. RM/INT: **P262** (returns to each material's original 261 issue location, proportionally)
+
+*SKU row selected (both Packing PO and Process PO layers unwind in one transaction):*
+1. SKU/FG: **P102** (dissolves the reverse-qty out of F003)
+2. SFG: **P262** (reverses the *original* Packing-PO-Final P261 that had issued this SFG into packing — brings it back into existence at S003)
+3. SFG: **P261 again, immediately** (re-issues that same SFG — this is the reversal's own trace-down step into RM/INT, not the original packing consumption). Steps 2+3 together are deliberate, not a no-op: net SFG balance is unchanged, but the ledger now has two distinguishable entries — one *reversal of the original* and one *belonging to this reversal* — instead of silently skipping the SFG layer.
+4. RM/INT (derived from the original Process PO batch's own Actual RM Ratio): **P262**, proportional
+5. PM (from the original Packing PO, checkbox-checked lines only): **P262**, proportional. Unchecked lines get no movement at all — they stay recorded as consumed.
+
+**PR20 — Partial Reversal Report:** CSN-tracker-style expandable list. Collapsed row = one reversal transaction (header, with Salvage Batch Number if tagged). Expand = full granular line-level detail (every RM/PM/SFG/SKU movement posted in that transaction, with quantities and movement types).
+
+---
+
+#### Customer Return + Pack-Type-Change Reversal — BLOCKED on Dispatch design (2026-07-12, mandatory future item, do not drop)
+
+**Why this is blocked, not designed:** while stress-testing PR19 against two worked examples (a tanker batch with a partial-qty return, a barrel batch with a partial-count return), it became clear the Return Receipt flow cannot be designed correctly without first knowing the Dispatch module's own structure — a return references *what was dispatched* (which Dispatch Instruction, which SKU/batch/qty was sent, to which customer), and per CLAUDE.md §9's Layer table, L5 — Dispatch & Returns is only ~51% designed and explicitly flagged "🔴 Partial — Formal L5 session required." Designing Return Receipt on top of an undesigned Dispatch layer risks the same doc-first-workflow miss already seen once with PR09 (chat-approved detail never written into the doc, Codex builds the wrong thing). **Business owner decision (2026-07-12): do not design Return Receipt until Dispatch (L5) itself has its formal session. Both of the following remain mandatory future work, not optional/dropped:**
+
+1. **Return Receipt + QA Usage Decision for returns.** A pre-existing, complete, never-yet-used movement-type family already exists in `erp_inventory.movement_type_master` and can be reused as-is once designed: `P651` (Customer Return Receipt, IN, →BLOCKED, ref=DISPATCH_INSTRUCTION), `P652` (P651 reversal), `P653` (Return → Unrestricted), `P654` (reversal), `P655` (Return → QA/QUALITY_INSPECTION), `P656` (reversal), `P657` (Return → Blocked/Confirm), `P658` (reversal) — analogous in shape to Inward QA's own GRN usage-decision mechanism. No page or handler exists for any of it yet (confirmed via grep — zero hits for "return.receipt"/"ReturnReceipt" anywhere in `frontend/src/pages/dashboard/production/` or `supabase/functions/api/_core/production/`).
+2. **Pack-type-change reversal for returned goods (repack, e.g. tanker → barrel).** Stress-testing PR19 surfaced a genuine open question that must be resolved in this future session: PR19's SKU-row sequence (locked above) always dissolves a returned SKU all the way down to RM/PM (steps 2+3 deliberately re-issue P261 to trace down) — meaning today there is no way to stop at the SFG layer and hand it straight to a *new* Packing PO of a different pack type without first running a brand-new Process PO (Standard→QA→Start Batch→Final→Verify) from the recovered RM. Whether that full-cycle re-production is actually correct/desired (e.g. for quality-control reasons) or whether a distinct "stop at SFG" variant of the reversal is needed for the repack case specifically is **not decided** — must be resolved when this item is designed, not assumed either way.
+
+**Sequencing:** Dispatch (L5) formal session → Return Receipt + QA Usage Decision design → Pack-type-change reversal design (likely a thin variant/extension of PR19, not a fresh mechanism). Do not attempt any of these three out of order.
 
 ---
 
@@ -8654,6 +8985,8 @@ User reviews → confirms → movement posted
 - Machine master is SA-controlled master data
 - Plant users see only machines assigned to their plant
 - At Process PO creation: machine field is mandatory, cannot save without selection
+
+**MTEST exception (LOCKED — 2026-07-11):** `MTEST` does not require machine assignment — `machine_id` stays optional/null for MTEST. Machine is mandatory for `MTO`, `HPS`, `MTS`, and `INT` only. (Already implemented correctly in `process_order.handlers.ts`'s `REQUIRED_MACHINE_TYPES = new Set(["MTO", "HPS", "MTS", "INT"])` as part of Gate-27.6 — this note just records the decision in the SSOT doc after a concurrent `git checkout` during that same Gate-27.6 verification pass wiped an earlier attempt to record it.)
 
 ---
 
@@ -8928,6 +9261,8 @@ Pack Code | Variant   | Fill Size(s)     | BOM Required | Actions
 | `PR07` | Change Pack BOM | Procurement |
 | `PR08` | Change Pack BOM Approval | L1 Manager Procurement |
 
+**Company scope — corrected 2026-07-11:** Pack BOM is **company-wise**, not global (supersedes the earlier assumption that it was SKU-only/company-agnostic). Reason: the OUTPUT (SKU) line's Storage Location is company-specific (`storage_location_plant_map`), so one global BOM per SKU can't carry a single storage-location value across multiple companies packing the same SKU. Procurement selects Company from their own accessible-company list (same `TransactionCompanySelector` pattern as Stroke Master — dropdown for multi-company users, locked for single-company). `pack_bom` needs a `company_id` column; unique key becomes (company_id, sku_material_id) instead of sku_material_id alone. Prodshade Pack Config (OM08 Tab 2 — which pack codes are valid for a Prodshade) stays global/company-agnostic — only Pack BOM itself (PR05-08, the actual recipe) is company-scoped.
+
 **Lifecycle:**
 ```
 PR05 Create → DRAFT
@@ -8950,6 +9285,7 @@ PR08 Approve → BOM lines live update
 
 | Field | Notes |
 |---|---|
+| **Company** | Procurement selects from their accessible-company list (added 2026-07-11 — see company-scope correction above) |
 | FG SKU | Select from Material Master (material_type = FG, SA-linked only) |
 | Material Type | Auto = FG (display only — Pack BOM always for FG) |
 | PO Type | Auto-derived from SKU (display only — no separate field) |
@@ -8958,7 +9294,16 @@ PR08 Approve → BOM lines live update
 
 No Stroke Number. No Dosage%. No Conversion UOM / Factor. No Prod+Shade manual entry.
 
-**Lines — SAP OUTPUT/INPUT model:**
+**OUTPUT/INPUT rows — mandatory, auto-populated, never removable (LOCKED — 2026-07-11):**
+
+Regardless of BOM Required Yes/No, these two rows always exist (only PM lines are optional/zero for 599/000/001):
+
+| Row | Fields |
+|---|---|
+| **OUTPUT (SKU)** | Material Code/Name/Description (auto) · Qty = 1 (BOM Required=Yes) / blank (599/000/001) · UOM = outer pack unit · **Storage Location — user enters** (first place this gets set for the SKU, company-specific) · Movement Type = **P101** |
+| **INPUT (SFG/Prodshade)** | Material Code/Name/Description (auto, derived from the SKU's own `shade_code`+`pack_code` matched against `prodshade_pack_config` → the linked Prodshade material) · Qty = UOM-conversion-derived KG (BOM Required=Yes) / blank (599/000/001) · UOM = KG · Storage Location — **read-only**, pulled from that Prodshade's Stroke Master Default Storage Location for this company (mandatory field, per 83.3) · Movement Type = **P261** |
+
+**Lines — SAP OUTPUT/INPUT model (PM lines, in addition to the two mandatory rows above):**
 
 | Type | Material | Qty | UOM | Editable |
 |---|---|---|---|---|
@@ -9037,6 +9382,57 @@ Submit → Change Request created → enters PR08 queue
 **599 / 000 / 001 post-ACTIVE edits:** Procurement can edit directly (no PR07/PR08 flow — same logic as auto-ACTIVE on creation).
 
 **Packing is NEVER part of Stroke/RM definition.**
+
+---
+
+#### Pack BOM — Full Design Lock, Session 2 (LOCKED — 2026-07-13)
+
+Resolves: SKU sourcing/company mapping, OUTPUT/INPUT storage location, UOM conversion placement and auto-sync, multi-layer packaging, and FG batch/lot granularity for reporting and future Dispatch. Corrects the 2026-07-11 lock's "OUTPUT row Storage Location is user-entered" line (below).
+
+**PR05 Page 1 flow (mirrors the PR09/Process PO pattern):**
+```
+Company (TransactionCompanySelector)
+  → Type: MTO / HPS / MTS / MTEST
+    → Packing PO Type auto-resolves: PMTO / PHPS / PMTS / PTEST
+      → FG SKU dropdown, filtered by:
+          (a) company-mapped — SKU has a material_plant_ext row for this company
+          (b) type-matched — SKU's underlying Prodshade has a stroke_master row
+              for this company with po_type = selected Type
+```
+
+**SKU ↔ Company mapping mechanism:** reuses the *existing* generic Material Detail Page "Plant Extension" tab (`extendMaterialToPlantHandler` → `erp_master.material_plant_ext`) — the same mechanism already used for RM/PM. No new endpoint. This is an explicit, manual step per company (SA/Manager goes to the FG SKU's own Material Detail page and adds each company) — it is **not** auto-inherited from the underlying Prodshade's own plant extensions, since the two are independent scopes (a Prodshade can be plant-extended to a company without every one of its packed SKUs being sellable there yet).
+
+**OUTPUT (FG) row Storage Location — corrected from the 2026-07-11 lock:**
+Not free/manual entry. User picks from that SKU's own **F-prefixed** (`F001`/`F002`/`F003`...) `material_plant_ext` rows for the selected company — this is the same "Finished Goods Store" F0xx location family already defined in §83.1 (2026-06-11, "F003 stock record" / "FO link and Stock Location"). If exactly one F-location is mapped for that SKU+company, auto-select it (no dropdown shown); if more than one, show a dropdown restricted to just the F-prefixed options. INPUT (SFG) row Storage Location is unchanged from the 2026-07-11 lock — still read-only, pulled from that Prodshade's Stroke Master Default Storage Location for this company (an S0xx shop-floor code, mandatory per §83.3).
+
+This also **replaces the older, vaguer "S003 → F003 Transfer" step** used in the §83.2 production-cycle diagrams (2026-06-11) — that transfer *is* Packing PO Final's own posting, not a separate movement: P261 (SFG issue, from the automatic S0xx Stroke-default location) + P101 (FG receipt, into the user-picked F0xx location), both within the same Final transaction. No separate transfer movement type is needed.
+
+**Base UOM for every FG SKU = KG, always.** Verified in code (`pack_config.handlers.ts`'s `ensureFgMaterialForConfig`, hardcoded `base_uom_code: "KG"`) — no exception, including for flexible-fill 599/000/001 SKUs (their outer unit — Barrel/Tanker — is a transactional/dispatch UOM, never the Base UOM; see stock-posting note below).
+
+**UOM Conversion factor placement:** lives on the FG SKU's own `erp_master.material_uom_conversion` (Material Master's UOM Conversion tab) — **never** on `pack_code_master`, because the outer-pack-unit→KG ratio is density/product-specific (a "1 Ltr bottle" pack code applies to many SKUs, each a different weight), not pack-code-specific. The system has **no multi-hop/chain conversion resolution anywhere** — confirmed the same single-hop pattern already used by `stroke_master.conversion_uom_code` + `conversion_factor` (one direct factor, no chaining logic exists in code). Any real-world multi-layer conversion (e.g. Carton→Bottle→Litre→KG) must be pre-collapsed by whoever enters it into one net direct factor (outer-pack-UOM → KG).
+
+**`pack_code_master` gap — flagged, not yet built:** needs a new `outer_uom_code` column (one fixed code per pack code — BTL/JAR/CTN/IBC/BBL/DRUM/PKT/TANKER etc.) so Pack BOM's OUTPUT row and the SKU's own `material_uom_conversion.from_uom_code` can reference the same code unambiguously. This column only ever holds the **outermost/dispatch unit**, regardless of how many inner packaging layers exist inside (e.g. 20×1KG pouches packed into one 20KG bag — pack_code_master for that pack code stores only `outer_uom_code = "BAG"`). Inner layers are never modeled in `pack_code_master` — they are captured purely as ordinary Pack BOM PM lines (the Pouch is just a PM material, its own base UOM = EA/count, no UOM-hierarchy concept needed for it).
+
+**Pack BOM → Material Master conversion auto-sync (new mechanism, not yet built):**
+- `BOM Required=Yes` → PR06 Approve auto-writes a **fixed** `material_uom_conversion` row on the SKU (`variable_conversion=false`); factor is derived directly from that Pack BOM's own SFG INPUT qty (OUTPUT qty is always 1 for these types) — e.g. 20 KG SFG per bag → BAG→KG factor = 20. No separate manual conversion entry needed.
+- New PM-line flag **"Is Primary Container?"** (Yes/No) on Pack BOM's PM lines — Yes-flagged lines (Pouch, inner bottle — anything that directly holds/measures product) also get an auto-derived secondary conversion row (factor = SFG INPUT qty ÷ that PM line's qty, e.g. 20 KG ÷ 20 Pouch = 1 KG/Pouch). No-flagged lines (Label, Cap) never get one — they don't carry product weight.
+- `BOM Required=No` (599/000/001) → PR05 auto-ACTIVE writes only a **`variable_conversion=true`** flag row on the SKU, with **no fixed factor value**. The real per-instance ratio (e.g. 230 KG this barrel, 115 KG that one) lives solely on that specific Packing PO's own `fill_qty_per_pack`/`num_packs` columns (already exist on `packing_order`) — it is never centralized/overwritten on the material master, matching SAP's Batch-Specific Unit of Measure (BSUoM) pattern.
+- BOM Required Yes/No lookup, for all of the above: `material_master` carries no own column for this — join `material_master.pack_code` → `erp_production.pack_code_master.pack_code` → `bom_required` (verified working against live Dev data, 2026-07-13).
+
+**FG batch/lot identity for stock movements and reporting (MTO/HPS/MTEST scope — MTS has no variable-fill issue, out of scope here):**
+- `stock_ledger.batch_number` stays = the parent **Process PO's** batch_number, unchanged for every Packing PO drawn from it — required for AP/QA recognizability (the batch number is the externally-recognized product identity); it can never be swapped for a Packing PO number, even when multiple Packing POs share the same source batch with different fill quantities.
+- Granular per-fill-group distinguishing (e.g. 2 barrels @230 KG vs 1 balance barrel @115 KG, both from the same Process-PO batch) uses the Packing PO's own `po_number` as the lot key. ~~via `stock_document.document_number`~~ **CORRECTED 2026-07-19 — see §83.15.1: §106 repurposed `document_number` for the Material Document number, so the lot now lives in `stock_ledger.source_lot_ref`.** No new number series is needed — `stock_ledger.batch_number` (product identity) and `stock_document.document_number` (specific packing run) are two independent, already-existing keys that together give full granularity.
+- **Real gap found (2026-07-13):** `stock_snapshot` never splits by batch — both `post_stock_movement()` overloads (`20260709025725_stock_document_item_number.sql`, `20260712013000_gate27_batch_number_persistence.sql`) hardcode `batch_id IS NULL` in the snapshot lookup/upsert, so there is only **one blended running total** per (company, location, material, stock_type); no per-batch balance is cached anywhere in the engine. **Decision: leave as-is for now** — derive any per-batch balance on demand by summing `stock_ledger` rows filtered by `batch_number`. Extending `stock_snapshot` to also split by batch would be a core §8C engine change touching RM/PM/SFG/INT posting too; deferred until a real performance need is observed, since it is an isolated, backward-compatible change to make later.
+- **FG stock breakdown report** (the PACE equivalent of SAP's MMBE/ZMB51 for batch-managed FG): query `stock_ledger` (P101 IN rows) JOIN `stock_document` (on `source_lot_ref`, falling back to `reference_document_number` then `document_number` for older rows) JOIN `packing_order` (on `po_number`, to pull `num_packs`/`fill_qty_per_pack`), grouped by `batch_number` with drill-down to individual Packing PO rows. This exact shape was already envisioned back in §83.1 (2026-06-30, "F003 Stock Record — Container Count" table) — this session re-derived and confirmed the concrete join path from first principles; no contradiction, just execution detail. The **same query/table is designed to double as the future Dispatch (L5) selection UI** (user picks which barrel-group/Packing-PO-lot to dispatch, by count) — build once as a reusable component, reuse in both places. Tracking the remaining balance of a specific Packing-PO-group after a *partial* dispatch (e.g. 1 of 2 barrels from one PO already sent out) is deferred to the formal L5 design session; the underlying linkage (`batch_number` + `document_number`) is already schema-compatible with that need.
+- **Packing PO Final — 3-movement posting (LOCKED — 2026-07-13, closes a real gap):** verified against current `packing_order.handlers.ts` that Final today posts **only** PM issue (P261) — no SFG issue and no FG receipt are posted at all, meaning FG stock has never actually been created by any Packing PO Final run to date. Locked fix: Final must post all three in one transaction — **SFG issue (P261, OUT)** from the Pack BOM INPUT row's S0xx location, **PM issue (P261, OUT)** per PM line from the Pack BOM's own line location, and **FG receipt (P101, IN)** into the Pack BOM OUTPUT row's F0xx location (§83.15's already-locked movement-type assignment, just never wired into Final's actual posting code). All three share `document_number = packing_order.po_number` (unchanged, already correct in the existing code) and `batch_number = the parent Process PO's batch_number` (via the Gate-27.19 batch-aware `post_stock_movement()` overload — not currently used anywhere in this file).
+- **Packing PO CORS reversal — matching 3-movement reversal (LOCKED — 2026-07-13):** reversal must undo all three of the above, not just PM. ~~(today's `reversePackingOrderHandler` only reverses PM)~~ **NO LONGER TRUE — verified 2026-07-19: `reversePackingOrderHandler` reverses all three (`lineType === 'FG' ? 'P102' : 'P262'`). This was fixed at some point after the note was written; do not re-open it as a gap.** SFG issue reverses via **P262** (existing P261↔P262 pairing, same code already used for PM's own reversal today). FG receipt reverses via **P102** (existing P101↔P102 pairing, per §83.4's 2026-07-11 "reuses P101/P102" lock). Each reversal is tied back to its original posting via `reversalOfId` (the stored `stock_ledger_id` on that line), not by re-deriving qty independently.
+- **SO↔FO chain status:** FO↔Packing PO link already exists in schema (`packing_order.plan_feed_id` → `erp_production.plan_feed`, which holds `fo_number`, per §83.18's Plan Feed page). **SO↔FO does not exist yet** — `erp_procurement.sales_order_line` has no `fo_id`/`fo_number` column; that table is still the legacy pre-Gate-27 L2 Sales schema. Once that link is added (as part of the formal Dispatch/L5 session), the same batch+Packing-PO breakdown report extends upward: SO → FO → linked Packing PO(s) → batch/fill-group balance, with no new mechanism beyond that one FK.
+
+**PID for FG batches — still not formally designed.** Deferred together with Opening Stock (MTO/HPS/MTEST), per the existing "PENDING" note above. This session only sketched a *direction*, not a lock: count/enter at the batch level (what a counter can actually see on a drum label); book quantity for comparison = on-demand `stock_ledger` sum for that batch_number (not from `stock_snapshot`, which doesn't split by batch); any variance posts tagged to that same batch_number, with no need to attribute it to a specific Packing PO at count time. Revisit and formally lock this at the same session as Opening Stock (MTO/HPS/MTEST) and PID design.
+
+**Non-Fixed pack code (599/000/001) — reconfirmed:** no PR06 approval, ever. PR05 save goes straight to ACTIVE and is immediately usable by Packing PO. (Originally locked 2026-06-30; this session reconfirmed it holds unchanged under the company-wise scope and conversion auto-sync changes above.)
+
+**Packing PO has no Verify step — reconfirmed.** Matches the existing lock (CLAUDE.md's "Sequencing locked 2026-07-11" note, and §83.4's "Verify phase (Process PO only — Packing PO has no Verify)" line). Packing PO's lifecycle is Create(Standard) → Final only. §83.4's TX-code scope note ("PR09/PR11/PR12/PR15 serve both Process PO and Packing PO") is superseded for PR12 specifically — **PR12/Verify is Process-PO-only**; if a "Packing PO Verify" page/route already exists anywhere in code, it should be repurposed under a different name rather than deleted (its handler shape may still be useful elsewhere). Post-Final corrections for Packing PO use the same COR6 (add/edit lines) + CORS (full reversal) pattern family already established for Process PO — there is no Verify-stage correction mode for Packing PO because there is no Verify stage.
 
 ---
 
@@ -9146,7 +9542,7 @@ Pack Code | Fill Size(s)       | Actions
 
 ### 83.18 — Plan Feed Page
 
-**LOCKED — 2026-06-11**
+**LOCKED — 2026-06-11.** ~~Superseded 2026-07-23 — the original 3-field-set design below predates real usage (Dev has 0 `plan_feed` rows) and turned out to be missing the whole allocation/status/master-linkage layer.~~ **See §83.18-REVISED below for the current locked design.** Kept here for history — do not implement against this version.
 
 ---
 
@@ -9222,6 +9618,71 @@ Overview of all plan entries. Rows are sorted by Order Date and Scheduled Delive
 
 ---
 
+### 83.18-REVISED — Plan Feed Page Full Redesign
+
+**LOCKED — 2026-07-23 (business owner session, supersedes 83.18 above).**
+
+#### Purpose (re-confirmed)
+
+Plan Feed (FO) is the earliest signal in the whole production chain — it is where PACE first learns what Asian Paints (or any FG customer) has ordered, before any production starts. It is fundamentally an **order-visibility + status page**, not just a data-entry form: "what did the customer order, and what state is it in right now" (production done? dispatched?).
+
+**FO vs SO (recap, unchanged from original §83.1 lock):** FO arrives early and drives production (Process PO/Packing PO get created against it). SO arrives 1–2 days before dispatch — in ~99% of cases it just confirms the same qty/SKU the FO already carried; it is a late-stage commercial confirmation, not a separate demand signal. FO is what unlocks production; SO is what (eventually, in the Dispatch design) authorizes shipment.
+
+#### Master data prerequisites
+
+- **`erp_master.customer_master` gets a new nullable `fo_customer_type` column** (`MTO_HPS`, `ZTEST`, `MTS`) — same customer master RM/PM Sales already uses (confirmed: one shared Party master, not a separate one for FO). Named `fo_` to avoid colliding with the table's existing unrelated `customer_type` column (DOMESTIC/EXPORT-style commercial classification, live data) — caught by a duplicate-column DB error on first migration attempt. RM/PM Sales customers keep `fo_customer_type = NULL`. On Plan Feed's Create tab, selecting a PO Type (MTO/HPS/MTS/MTEST) filters the Party dropdown to matching `fo_customer_type` (MTO and HPS share one type value since they use the same customer pool).
+- **`plan_feed.party_id` and `plan_feed.material_id`** (both already existed as unused columns) become the actual source of truth — Party and SKU are proper dropdowns (customer_master / material_master), not free text. Selecting a Party auto-displays its `delivery_address`/`billing_address` (read-only, from the master — never re-typed).
+- **Company resolution** reuses the existing `TransactionCompanySelector` component (same one Process PO/Packing PO/Pack BOM already use) — single-company users get it auto-resolved with no dropdown; multi-company (GLOBAL_ACL MULTI) users get a required dropdown. Replaces today's raw-text Company ID input (R-01 violation).
+- **FO Edit's "find FO" step** stops being a raw-UUID-paste field — becomes a proper search/list picker (R-01).
+
+#### Ordered Stroke / Actual Stroke
+
+- **Ordered Stroke** — a manual field (`plan_feed.ordered_stroke_number`, text), filled in later by Production (not at FO creation by Sales/Commercial). Typing a value triggers a live existence check against `stroke_master` (scoped by company + the FO's own Prodshade-derived material) and tells the user whether that Stroke already exists or still needs to be created.
+- **Actual Stroke** — read-only, never typed. Derived live from every Packing PO allocated to this FO → that Packing PO's Process PO → its Stroke. If multiple allocated Packing POs were produced from different Strokes, each is shown on its own line (never blended into one value) — this is how a deviation between planned and actual formulation becomes visible at the FO level.
+
+#### FO ↔ Packing PO mapping — quantity-level allocation (replaces the single-FK design)
+
+The original design (`packing_order.plan_feed_id`, a single FK — one Packing PO belongs to at most one FO) does not cover the required flexibility. Locked replacement:
+
+**New table `erp_production.plan_feed_packing_order_allocation`** — many-to-many between `plan_feed` and `packing_order`, carrying its own `allocated_qty_kg`. One row per (FO, Packing PO) pair; increasing/decreasing an allocation updates that row's qty rather than inserting a new one. `packing_order.plan_feed_id` is retired entirely (dropped) — it cannot express partial/multi-FO allocation.
+
+**Rules (all confirmed, business owner examples used barrels/KG throughout):**
+- One Packing PO can be **fully** allocated to one FO, **partially** allocated to one FO with the remainder going to a different FO (or staying unallocated), or **not allocated at all** (PACE's own free/balance stock).
+- Any existing allocation's qty can be **increased or decreased at any time** — the only hard rule: the sum of all allocations against one Packing PO can never exceed that Packing PO's own actual qty. No time-based restriction (can reduce today, increase again tomorrow).
+- **Full or partial unmap** — reducing an allocation to zero deletes the allocation row (equivalent to full unmap for that PO).
+- **Material mismatch is a soft warning, never a hard block** — if the Packing PO's material does not match the FO's SKU/material, show a warning ("material differs from this FO's SKU — map anyway?") and proceed on confirm. Reason: rare but legitimate cross-SKU dispatch decisions exist and must not be blocked outright.
+- **Unmapped/free-stock helper** — when creating a new FO for a given SKU, show the SKU's existing unallocated Packing PO stock (qty with no allocation, or the unallocated remainder of a partially-allocated one) as a live query (`Σ actual_qty_kg − Σ allocated_qty_kg` per Packing PO, summed for that material) — helps Production see "X KG already sitting free, only need to make (ordered − X) more." This is a live query, not a cached counter — the moment an allocation is reduced/removed, the freed qty reappears here automatically with no extra bookkeeping.
+
+#### FO Cancel
+
+- Per-row Cancel action on the FO. On cancel: **all of that FO's allocation rows are deleted** (Packing POs become unallocated/free again, available for re-allocation to a different FO later) and the FO's own status becomes `CANCELLED`.
+- **The Packing PO itself is never cancelled or altered** by this action — only the allocation link disappears. This mirrors the already-existing principle elsewhere in the system that reversing a link never reverses the underlying production.
+
+#### Field edit-lock rules (replaces the old "any Packing PO exists → whole FO locked" rule)
+
+| Field | Lock rule |
+|---|---|
+| FO Number | Locked forever from creation — never editable (already true in code today, no change needed) |
+| SKU / Material, Description | Locked once **any** allocation exists against this FO |
+| Party, Ordered Qty (KG), Pack Qty, Order Date, Scheduled Delivery Date, Ordered Stroke | **Always editable**, allocations or not |
+
+The old blanket `PROD_PLAN_FEED_LOCKED` (any linked Packing PO → entire FO uneditable) is removed — it directly conflicted with the allocation flexibility above (you cannot dynamically map/unmap against a record you can no longer touch).
+
+#### Tab 3 — Total Table (Summary), revised
+
+Two independent derived status badges per row (never combined into one status) — because "how much is produced" and "how much is dispatched" are different concerns for different teams:
+
+- **Production status** (from `Σ allocated_qty_kg` vs `ordered_qty_kg`): Unmapped → Partially Mapped → Fully Mapped
+- **Dispatch status** (from dispatched qty, once Dispatch/L5 exists, vs allocated/mapped qty): Undispatched → Partially Dispatched → Fully Dispatched
+
+Columns: FO #, Party, SKU, Ordered Qty (KG), Pack Qty, Mapped Qty (KG + pack/barrel count), Production status badge, Dispatched Qty (KG + count), Dispatch status badge, Pending Qty, Dispatch Dates (one line per distinct dispatch event — an FO can be dispatched across several separate events on different dates), Scheduled Delivery Date.
+
+**Sort:** rows still needing action (not Fully Dispatched) sort to the top by nearest Scheduled Delivery Date first; Fully Dispatched rows sink to the bottom, most-recent-dispatch-date first within that group.
+
+**Note:** the Dispatch-status/Dispatch-Dates columns are placeholders until the formal Dispatch (L5) session defines where dispatch events actually get recorded — implement the Production-status half now, wire the Dispatch half in once that schema exists.
+
+---
+
 ### Round-3 Summary — Admix/Liquid Decisions Locked
 
 | Decision | Locked Value |
@@ -9244,7 +9705,7 @@ Overview of all plan entries. Rows are sorted by Order Date and Scheduled Delive
 | Stock types (final Phase-1) | UNRESTRICTED, QUALITY_INSPECTION, BLOCKED, IN_TRANSIT, FOR_REPROCESS |
 | FG SKU structure | Product(4) + Shade(4) + Pack(3) = 11 chars. All FG types use same structure. |
 | FG master maintenance | Powder/Hypershot/IWC: SA upfront. Admix: deferred to SOD — decided at Process Order + Dispatch design. |
-| New movement types needed | P231/P232 (FG Receipt/Reversal), P267/P268 (Issue FOR_REPROCESS to Production/Reversal) |
+| New movement types needed | ~~P231/P232 (FG Receipt/Reversal)~~ **Corrected 2026-07-11: no new codes — FG Receipt/Reversal reuses existing P101/P102** (same as Process PO's SFG receipt), P267/P268 (Issue FOR_REPROCESS to Production/Reversal) still needed |
 
 ---
 
@@ -9270,7 +9731,7 @@ Overview of all plan entries. Rows are sorted by Order Date and Scheduled Delive
 - Material master: ✅ shade_code, pack_code, external_sku, production_mode all exist (Gate-12)
 - L2 Procurement (RM/PM): ✅ 100% ready — no changes needed for Liquid RM/PM procurement
 - FOR_REPROCESS movements P901–P906: ✅ exist (Gate-11)
-- **Missing:** P231/P232 (FG Receipt/Reversal from Production), P267/P268 (FOR_REPROCESS → Production Issue/Reversal) — to be added in Gate-27
+- **Missing:** ~~P231/P232 (FG Receipt/Reversal from Production)~~ **Corrected 2026-07-11: reuses existing P101/P102, no new codes needed**, P267/P268 (FOR_REPROCESS → Production Issue/Reversal) — still to be added in Gate-27
 
 **SAP Module mapping for PACE ERP (confirmed 2026-06-02):**
 MM + SD + PP + QM + WM + FI/CO + LE — adapted, not cloned. No PM, no PS, no full MRP in Phase-1.
@@ -10846,6 +11307,22 @@ Procurement → fills tracking details retroactively
 - Tracker entry → STO auto-updates
 - Single source — enter anywhere, syncs everywhere
 
+**GRN → CSN sync-back — exact field mapping, IMPORT vs DOMESTIC (LOCKED — 2026-07-21, corrects a real gap found this session):**
+
+GRN's post-flow form (Stores) captures Transporter, LR number/date, BL number/date, and BOE number/date together, on every GRN regardless of vendor type — but the sync-back into `consignment_note` was found to only copy a subset, so Stores' entry silently never reached the CSN Tracker for two fields. Corrected mapping (both directions apply automatically at GRN post, no manual Tracker entry needed):
+
+| CSN Type | GRN field (Stores enters) | CSN Tracker field it syncs to |
+|---|---|---|
+| Both | `transporter_id` | IMPORT → `transporter_id`; DOMESTIC → `domestic_transporter_id` |
+| DOMESTIC | `lr_number` / `lr_date` | `lr_number` / `lr_date` (unchanged — already correct) |
+| IMPORT | `lr_number` / `lr_date` | `lr_number_port_to_plant` / `post_clearance_lr_date` — **was previously not synced at all** |
+| IMPORT | `bl_number` / `bl_date` | `bl_number` / `bl_date` (unchanged — already correct) |
+| IMPORT | `boe_number` / `boe_date` | `boe_number` / `boe_date` — **was previously not synced at all** |
+
+Rationale for the IMPORT LR mapping: GRN only has one generic LR number/date pair (Stores doesn't distinguish Import vs Domestic when filling the form) — for an IMPORT shipment that LR is physically the port-to-plant truck leg (post-customs-clearance), which CSN already models as separate columns (`lr_number_port_to_plant`, `post_clearance_lr_date`) distinct from Domestic's `lr_number`/`lr_date`. No new GRN field was needed, only the sync-back target.
+
+Fix applied in `grn.handlers.ts`'s CSN sync-back block (the same `if (csnId) { ... }` guard already used for the existing bl_number/bl_date/transporter_id sync) — purely additive, no schema change.
+
 ---
 
 ### 88.10 — Single Window Tracker View
@@ -10893,6 +11370,8 @@ Receiving company Stores + Accounts → open STO visible automatically
 | STO types | Consignment distribution + Independent inter-plant transfer |
 | Both types | Same workflow |
 | LR delayed | Procurement enters later in STO → flows to tracker |
+
+**⚠️ সংশোধন (2026-07-25, business owner confirmed):** এই section-এর flow diagram-এ INTER_PLANT-এর জন্য কোনো CSN step দেখানো নেই (সরাসরি STO → GE → GRN)। কিন্তু বাস্তবে (Gate-27-পূর্ব STO approval workflow build, ২৫ জুন) `confirmSTOHandler`/`approveSTOHandler`-এ **INTER_PLANT STO-র প্রতিটা line-এর জন্যও CSN তৈরি হয়** (§88.11-এর `CSN (LOCAL)` ধাপ, যা এই section-এ শুধু CONSIGNMENT_DISTRIBUTION-এর জন্য লেখা ছিল বলে ধরে নিয়েছিলাম INTER_PLANT-এ প্রযোজ্য না)। **এটা bug না, business owner-এর নিজের আগের decision** — INTER_PLANT STO-ও CSN তৈরি করবে, CSN Tracker-এ ঢুকবে, ঠিক CONSIGNMENT_DISTRIBUTION-এর মতোই। উপরের diagram-এ GE-এর ঠিক আগে একটা CSN (LOCAL) ধাপ যোগ করে পড়তে হবে — code-ই সঠিক, এই doc-এর diagram-টা stale ছিল।
 
 ---
 
@@ -13402,6 +13881,387 @@ The following topics need formal discovery and locking:
 - [ ] Financial year close — WAR reset rules
 - [ ] AP rate disputes — system handling
 
+**Added while building Gate-27 (2026-07-11) — surfaced by locked mechanics that didn't exist when this list was first written:**
+- [ ] `process_order_line_reco` is append-not-reset on CORS (voided rows kept, `is_voided=true`) — should Scenario 3/4 deviation analysis ever look at voided attempts, or only the current non-voided attempt?
+- [ ] INT materials never reach AP/dispatch (internally consumed) — does INT get any AP Reco layer at all, or WAR-only costing with zero Reco rows? Needs an explicit yes/no, not an assumption.
+- [ ] Machine (Gate-27.6, now mandatory on `MTO`/`HPS`/`MTS`/`INT`) is currently pure traceability, no costing weight (matches 83.9 "no capacity/usage intelligence") — confirm this stays true, i.e. machine never enters any cost-allocation formula.
+
+**Added 2026-07-12 (Opening Stock kickoff) — confirms and details the already-listed "AP Monthly Rate entry workflow and UI" item:**
+- [ ] Concrete shape confirmed by business owner: a Material × Month rate table — one rate per material per calendar month (business owner named April/May/June/July as the first four months needing entry). Consumed at both dispatch time (104.4's Sales Order Costing) and Reco time (104.5's Rate Variance).
+- [ ] ~~Direct DB check (2026-07-12): neither a WAR engine nor any running rate column exists yet … no DB function computes a weighted-average rate anywhere … there is no live "current WAR" being read by anything today.~~
+      **⛔ THIS CLAIM IS WRONG — corrected 2026-07-17 (verified in code + live data).** A weighted-average
+      engine **does** exist and **is** running: `erp_inventory.post_stock_movement()` maintains
+      `stock_snapshot.valuation_rate` per (company, storage_location, material, stock_type) —
+      on IN it recomputes `value/qty` (true weighted average), on OUT it consumes at the existing
+      rate and leaves the rate unchanged (correct moving-average behaviour). Live proof on Dev
+      CMP003: TIPA 85% = ₹180.000000, **Tartaric Acid = ₹74.617315** (a blended fraction — only
+      possible if averaging is actually happening), Citric Acid = ₹27, DYN R 80 = ₹15.
+      The claim was probably about `material_master` (which indeed has no price column, only
+      `valuation_class`/`valuation_method`) and got over-generalised. **This mattered:** it made
+      §104 look like "build a costing engine from scratch" when the engine is already built and
+      correct — the real gap is far narrower (see §104.8).
+- [ ] Direct consequence for Opening Stock (Gate-19, already live): its `rate_per_unit` field is hard-required by `post_stock_movement()`'s `p_unit_value` (see `opening_stock.handlers.ts`), but the business owner does not have real rates yet for the RM/PM being loaded now. Posting with a placeholder (e.g. `0`) is safe **today** only because nothing downstream reads/computes WAR yet — once the WAR engine from this section is actually built, whoever designs it must decide how already-posted Opening Stock rows with placeholder valuation get corrected (retroactive `stock_ledger` row edit? a dedicated valuation-adjustment posting type? something else?). Do not assume this is free — no such correction mechanism exists in the codebase today.
+
+---
+
+### 104.8 — PACE Internal Cost Build-Up: RMC + PMC + Conversion (LOCKED — 2026-07-17)
+
+Business owner's actual costing model, stated verbatim: *"RMC, then per KG cost. PMC — suppose
+230 KG pack, so PMC ÷ 230 = per-KG cost. Then conversion cost, some ₹1.95/KG some ₹2.50/KG.
+Total per-KG cost, then × pack size = FG cost."* Everything normalises to **per KG**, then
+multiplies by pack size.
+
+**The two-stage build-up (LOCKED):**
+
+| Stage | Posting | Value per KG |
+|---|---|---|
+| Process PO **Verify** | SFG receipt (P101) | **RMC/KG + Conversion/KG** |
+| Packing PO **Final** | FG receipt (P101) | **SFG rate + PMC/KG** (PMC/KG = Σ PM value ÷ fill qty) |
+| — | FG cost per pack | Total/KG × `fill_qty_per_pack` |
+
+Conversion sits at the **SFG stage**, not at packing (business owner: *"SFG-er jonno RMC + per-kg
+conversion cost"*). Consequence — and the reason for the choice: bulk SFG sitting in S003 is then
+valued at its true cost, not at RM-only.
+
+**Conversion-rate config key (LOCKED):** **Segment-level default with a Prodshade-level override.**
+Business owner: *"[segment-level], but MTS-er abar IWC-er conversion cost r Powder-er different
+Prodshade-er conversion cost alada hote pare."* So:
+- `(company, segment_code, prodshade_material_id = NULL)` → the segment default (e.g. ADMIX = ₹1.95/KG)
+- `(company, segment_code, prodshade_material_id = X)` → override for that Prodshade (MTS: IWC vs
+  Powder; and individual Powder Prodshades)
+- **Resolution rule: Prodshade-specific first, else segment default** (specific beats general).
+
+**Page ownership — Accounts ACL, NOT SA (CORRECTED 2026-07-18, business owner override).** The
+conversion-rate config page was first built as an SA screen (§104-5, tx OM11). Business owner
+corrected it: *"SA-r pokkhe jana somvob noy kokhon ki rate asche"* — SA cannot know when a rate
+changes; setting the rate is an **Accounts function**. So the page moves out of the SA universe into
+the **ACL universe under the Accounts menu** (`GRP_ACL_ACCOUNTS`, tx_code **AC04**, resource
+`ACC_CONVERSION_COST`). Consequences for the page (all LOCKED 2026-07-18):
+- **Company** comes from the user's **work company**, resolved automatically — a multi-company user
+  gets a dropdown, a single-company user is auto-selected (standard ACL company-scoping, not a raw
+  all-companies SA list).
+- **Prodshade options are sourced from that company's Batch Number Series** (the real production
+  Prodshades), not the full material master. Rationale (business owner): *"batch series theke prodshade
+  ber korbe … MTS-er different product-e different conversion rate hote pare"* — a company-level
+  (segment-default) rate is enough for MTO/HPS/MTEST, but **MTS must be settable per Prodshade**
+  because different MTS products carry different conversion rates. The (company, segment, prodshade)
+  key already supports this; the page just exposes the per-Prodshade override with Prodshades drawn
+  from the company's MTS batch series.
+- No approval workflow — Accounts enters the dated row directly (append-only, as above).
+- **PR22/PR23 (Old Process/Packing PO, §104.9) follow the same principle — NOT SA-only.** They belong
+  to the **Production ACL** menu (`GRP_ACL_PRODUCTION`, alongside every other PR page), tx_code
+  `PR22`/`PR23`. (Supersedes §104.9.1's earlier "ACL locked SA-only" line.)
+
+**Rate changes over time — `valid_from` dating (LOCKED 2026-07-17).** Business owner: the company
+periodically raises/lowers the conversion cost, and *"se janei na koto diner jonno valid"* — the
+user does not know in advance how long a rate will last, so they must not be asked for an end date.
+
+| Rule | Detail |
+|---|---|
+| **Only `valid_from` is stored** | The config row carries `valid_from date` and the rate. There is **no `valid_to` column.** |
+| **`valid_to` is derived, never stored** | For display it is computed as *(next row's `valid_from` − 1 day)*; the newest row shows "current". This is exactly the behaviour the business owner asked for (*"ager tar valid_to ta automatic next valid_from date -1 hoye jabe"*) but with **no auto-update machinery** — because nothing is stored, **gaps and overlaps are mathematically impossible**. Storing `valid_to` would require an update-the-previous-row step that can fail and leave a gap or an overlap. |
+| **Changing a rate** | Insert a **new row with a new `valid_from`**. Old rows are **never edited or deleted** — full rate history is preserved (same "nothing is ever truly deleted" principle as batch numbers and Prune). |
+| **Resolution is by `posting_date`** | `WHERE valid_from <= posting_date ORDER BY valid_from DESC LIMIT 1`. A **back-dated posting automatically picks the rate that was valid then** (e.g. entering a 20-Jul batch in August gets July's rate). Late-added historical rates also slot in correctly with no fix-up. |
+| **No rate ⇒ hard block** | If no rate is valid for the posting date, the posting **fails** rather than posting at zero/wrong cost — that history could never be corrected afterwards (see go-live note below). |
+| **Rate used is stored on the batch** | The resolved rate is recorded on the Process PO so the costing of any batch is auditable without re-deriving it. |
+
+**INT (Intermediate) valuation — dual-source, RMC-only for now (LOCKED — 2026-07-18).** Business
+owner challenged an earlier "INT is out of scope" call and was right: **INT is not a separate
+production type for costing — it is an *input* to MTO.** Live check: 5 MTO strokes consume
+`INT-00001` (Caustic Soda Lye). Leaving the INT output unvalued puts a hole straight through the
+SFG/FG cost chain above. Rules:
+
+| Source | How INT gets its rate |
+|---|---|
+| **Direct purchase** | The GRN's own landed rate — already correct, nothing to build. |
+| **In-house production** | `INT rate/KG = Σ(RM issue qty × that RM's rate) ÷ output qty` — i.e. the issued RM's real value, exactly as the business owner stated (*"Issued RM dosage % × oi RM gulor rate"*). |
+
+Both sources blend naturally in `stock_snapshot`'s weighted average, which is correct — an MTO batch
+then consumes INT at the true combined cost. **The bug being fixed:** `completeIntProcessOrderHandler`
+posts the in-house output (P101) at `unit_value: 0`, which drags that blend toward zero and silently
+understates RMC → SFG → FG for every MTO batch using it. Masked today only because all INT stock so
+far came from Opening Stock (P561 @ ₹10); the first in-house INT PO would expose it.
+
+**Conversion on INT — optional and data-driven (LOCKED — 2026-07-18).** Business owner: *"amader kono
+INT-r akhono obdi kono conversion cost nei, kintu ami sure noy … future e je je INT material asbe,
+tader kono conversion rate asbe kina."* Rather than force a decision now, INT resolves the **same**
+`conversion_cost_config` used by SFG, but with the opposite missing-rate behaviour:
+
+| | SFG (MTO/HPS/MTS) | **INT** |
+|---|---|---|
+| Rate configured | add it | add it |
+| **No rate configured** | 🔴 **hard block** (`PROD_PO_CONVERSION_RATE_MISSING`) | ✅ **treat as 0, proceed** |
+
+Rationale for the asymmetry: SFG conversion is known to exist, so a missing rate is a config error
+worth blocking on; INT conversion does not exist today, so a missing rate legitimately means zero.
+Consequence — **today INT costs RMC only with zero config; if a future INT ever needs conversion, the
+business adds one dated row on the AC04 Conversion Cost page (segment `INT`, optionally a
+per-INT-material override) and it takes effect with no code change, migration or deploy.**
+
+**Opening INT rate — auto-suggest from the Stroke, override allowed (LOCKED — 2026-07-18).** Because
+opening stock is loaded RM-first, by the time the INT line is entered every input rate is already in
+`stock_snapshot`, so the system can compute the same figure it will use for in-house production:
+`Σ(dosage% × that RM's current rate)` (e.g. INT-00001 = 52% Water + 48% Caustic Flakes). IN05 today
+takes `rate_per_unit` as a pure manual entry with no derivation — it will show this **suggested** rate
+plus its per-RM breakup, with the field still **editable**: a *purchased* opening INT must be entered
+at its purchase price, where the stroke-derived figure does not apply. Suggesting (not forcing) also
+prevents the real risk of a hand-typed opening rate differing from the formula, which would make the
+weighted average jump on the first in-house INT PO after go-live.
+
+**Opening-stock load ORDER matters (LOCKED — 2026-07-18).** The cost build-up is bottom-up, so
+opening stock must be entered in the same order or the derived rates have nothing to stand on:
+
+```
+1. RM + PM opening   → real purchase / landed rate
+2. INT opening       → stroke-derived (in-house) or purchase rate
+3. SFG opening       → RMC + conversion
+4. FG opening        → SFG + PMC
+```
+
+This is a required input to the still-pending **Opening Stock (RM+PM+FG) go-live session** — that
+session was scoped as RM+PM+FG, but INT and SFG sit in the same chain and must be included.
+
+**What a rate change does NOT do (LOCKED):** it does **not** retroactively revalue stock already
+produced. Batches posted before the change keep their original value — that is correct accounting
+(they really were made at the old cost), and the snapshot's moving average blends old and new stock
+naturally as new batches arrive. Deliberate revaluation of existing inventory (SAP's MR21 price
+change) is a **separate, explicit mechanism and is not being built now**; if Accounts ever needs a
+mid-period restatement, that is its own design.
+
+**What already exists (verified live 2026-07-17) vs what is actually missing:**
+
+| Needed | Status |
+|---|---|
+| Weighted-average valuation engine | ✅ built + running (`post_stock_movement` → `stock_snapshot.valuation_rate`) — see the §104.6 correction |
+| RM rates | ✅ live (Opening Stock P561 + GRN both post real `unit_value`; 59/59 opening rows valued) |
+| PM rates | ✅ live (Barrel ₹10, Label ₹9.89) |
+| RM consumption per batch | ✅ `process_order_line_reco` |
+| Pack size | ✅ `packing_order.fill_qty_per_pack` |
+| **Conversion rate/KG** | ✅ **built (2026-07-18, 104-1)** — `erp_production.conversion_cost_config` + `resolve_conversion_rate()` (migration `20260718090000`). *Table still empty in Dev — needs real rows via 104-5 page or MCP seed before any Verify can post.* |
+| **Roll-up wiring** | ✅ **built (2026-07-18, 104-2/104-3/104-4)** — Process PO Verify, Packing PO Final, and all reversals now pass real rates. MTS/INT/MTEST output paths still pass 0 (deliberately out of this MTO/HPS/Admix-scoped pass). |
+
+**Worked example — real Dev data, batch `EV02602` / Packing PO `940005` (22 barrels, 5,060 KG, fill 230):**
+
+| Step | Computation | Result |
+|---|---|---|
+| RMC/KG | ₹1,00,605 ÷ 10,060 KG | ₹10.0005 |
+| PMC/pack | Barrel ₹10 + Label ₹9.89 | ₹19.89 |
+| PMC/KG | ₹19.89 ÷ 230 | ₹0.0865 |
+| Conversion/KG | (config, illustrative) | ₹1.95 |
+| **SFG value/KG** | 10.0005 + 1.95 | **₹11.9505** |
+| **FG value/KG** | 11.9505 + 0.0865 | **₹12.0370** |
+| **FG cost / barrel** | 12.0370 × 230 | **₹2,768.51** |
+
+All 12 RM lines of that batch resolve to a real rate (0 lines missing a rate), so the chain is
+computable today the moment the wiring passes rates instead of zeros.
+
+**Engine mechanic that makes this safe (verified in the function body):** on **OUT**,
+`post_stock_movement()` reduces the snapshot by `qty × existing snapshot rate` and **ignores**
+`p_unit_value` for the snapshot — `p_unit_value` only sets the recorded `stock_document.value` /
+`stock_ledger.value`. So passing the real rate on RM/PM issues **fixes the ledger record without
+changing any snapshot arithmetic** (zero risk to existing balances). On **IN**, `p_unit_value`
+*does* drive the weighted average — which is exactly how the SFG/FG receipt cost gets set.
+
+**Implementation scope (small — not a costing engine build):**
+1. `erp_production.conversion_cost_config` — company + segment + nullable prodshade + `valid_from`
+   → rate/KG (no `valid_to`; partial unique indexes so there is exactly one row per
+   segment-default/Prodshade-override **per `valid_from`**).
+2. Resolver helper (Prodshade override → segment default).
+3. Process PO Verify: RM/INT issue at snapshot rate; SFG receipt at `(Σ RM value ÷ output qty) + conversion`.
+4. Packing PO Final: SFG + PM issue at snapshot rate; FG receipt at `(SFG value + Σ PM value) ÷ output qty`.
+5. Reversals (CORS / PR19) at the same rates, so value unwinds symmetrically.
+6. SA config page for the conversion table (`valid_from` rows; `valid_to` shown as derived).
+7. **§104.9 — Opening genealogy:** `PR22` Old Process PO + `PR23` Old Packing PO pages/handlers;
+   `'OPENING'` added to the `source_txn_type` CHECK; the no-stock-movement guard; the
+   Opening-Stock reconciliation validation; PR19 relaxed to accept `reversalOfId = NULL` for
+   opening-origin lines.
+
+**⚠️ Reversal-valuation trap (discovered + fixed 2026-07-18, item 5):** the "Engine mechanic"
+paragraph above is only half the story for reversals. On **IN**, `post_stock_movement()` recomputes
+the weighted average from `p_unit_value` — so an **IN reversal leg posted at `unit_value: 0` silently
+dilutes the restored material's rate toward zero** (P262 RM/PM restore, P321 QI restore, PR19's
+SFG/RM/PM P262 legs). A reversal must therefore restore/remove at the **original leg's own posted
+rate**, not 0 and not the current snapshot rate. Implementation: each production handler's
+`resolveStockDocumentIdsByLedgerIds` was widened to `resolveStockLedgerRefsByLedgerIds`, returning
+`{docId, rate}` from one batched `stock_ledger` read (`valuation_rate` of the original leg); every
+reversal/correction leg now passes that rate as `unitValue`. OUT reversal legs (P102/P322/P261) carry
+it too for ledger-value symmetry, though the snapshot ignores `p_unit_value` on OUT. Covers Process PO
+CORS reverse, Packing PO reverse + COR6 correct, and PR19 partial reversal (both SFG-row and SKU-row
+branches). commits `0edb16b` (104-2), `757dbf2` (104-3/104-4).
+
+**Implementation status (2026-07-18): items 1–7 ✅ ALL DONE.** Item 6 shipped as the **Accounts ACL**
+page (AC04, not SA — see the ownership correction above). Item 7 (§104.9) shipped as PR22/PR23 under
+the **Production ACL**, including two behaviours that only surfaced during implementation:
+- **PR19's `buildRmIntPreview` filtered `source_txn_type='PRODUCTION'` only**, so an opening batch
+  would have returned **no RM/INT lines at all**. `'OPENING'` rows are original consumption and are
+  now included (the negative PARTIAL_REVERSAL/RETURN credit rows stay excluded).
+- **Opening-origin reversal legs need a rate, not just a NULL pointer.** §104.9 locked
+  `reversalOfId = NULL`; but since `post_stock_movement()` recomputes the weighted average from
+  `p_unit_value` on IN, posting those legs at 0 would dilute the restored material's rate toward
+  zero. They now post at the material's **current** unrestricted rate (`resolveLegRef()`).
+
+Live end-to-end verification on the deployed app ⏳ still pending (business-owner login required —
+verified so far by typecheck + build + DB inspection only).
+
+**Go-live criticality (business owner raised 2026-07-17):** this is a **1 July go-live blocker**,
+unlike the FI/Accounting document layer (§104 Phase-3, genuinely additive and safe to defer).
+Reason: a movement posted today with `value = 0` can **never** be given correct accounting later —
+weighted average is path-dependent and cannot be reconstructed retroactively. Dev data is all
+throwaway so nothing is lost yet, but from the moment real production movements start flowing with
+zeros, that history is permanently uncostable. Sequence: live verification → Return (§83.6) →
+**this** → (post-go-live) FI document layer.
+
+---
+
+### 104.9 — Opening Stock Genealogy for MTO/HPS Batches ("Opening Process PO") (LOCKED — 2026-07-17)
+
+**The problem.** At go-live the SFG sitting in S003 and the FG sitting in F003 were produced
+*before* the system existed. Their rate can be entered (Opening Stock's `rate_per_unit` already
+works — 59/59 opening rows are valued), but they have **no Process PO, no `process_order_line`, no
+reco rows and no P261 history**. Business owner ruled that a breakup is nonetheless **required**:
+*"break up lagbe, karon oder dispatch, oder salvage jekono kichu hote pare, takhon to amader costing
+reco te lagbe"* — scope is **MTO/HPS only**.
+
+**Why "just store a breakup" is not enough.** PR19, the Reco layer and the future Return flow are
+all built *on top of `process_order`*: PR19 finds a batch via `process_order WHERE status='VERIFIED'
+AND batch_number=…`, reads RM/INT from `process_order_line_reco WHERE process_order_id=…`, and
+returns each RM by reversing that line's original P261 `stock_document`. An opening batch has none
+of those, so today PR19 simply reports `PR19_BATCH_NOT_FOUND` (it fails safe, but blindly).
+
+**Decision — synthetic "Old" orders (LOCKED).** Each opening MTO/HPS batch gets order documents
+shaped exactly like produced ones, so **every downstream consumer works unchanged, with no
+special-casing**.
+
+**⚠️ Correction (2026-07-17, caught by the business owner):** an earlier draft of this section said
+only a *Process PO* is created. That is **wrong for FG**. PR19's SKU-row reversal reads
+`packing_order` (for `actual_qty_kg`, the PM ratio denominator) **and** `packing_order_line`
+(FG/SFG/PM lines) **in addition to** the Process PO (for the batch-wide RM ratio). So:
+
+| Opening batch type | Documents needed |
+|---|---|
+| **SFG** (bulk in S003) | Old **Process PO** only |
+| **FG** (packed, in F003) | Old **Process PO** (RM → SFG genealogy) **+** Old **Packing PO** (SFG + PM → FG) |
+
+For an opening FG batch the SFG never existed in our system (it was already packed pre-go-live), so
+*both* orders are pure paper — no SFG movement, no PM movement. Only the FG's own P561 opening
+posting is a real stock event.
+
+| Object | What is written |
+|---|---|
+| `process_order` | `status = 'VERIFIED'`, `po_type = MTO/HPS`, `batch_number` = the entered batch, `actual_qty` = the batch's output qty |
+| `process_order_line` | the RM/INT breakup lines |
+| `process_order_line_reco` | costing rows with **`source_txn_type = 'OPENING'`** (new enum value — added to the §106.6 CHECK constraint) |
+| `packing_order` (FG only) | `status = 'FINAL'`, linked to the Process PO batch, `actual_qty_kg`, `num_packs`, `fill_qty_per_pack` |
+| `packing_order_line` (FG only) | FG + SFG + PM lines |
+| **RM / PM / SFG stock movements** | ⛔ **NONE** — see the guard below |
+| SFG/FG receipt | the Opening Stock P561 posting itself |
+
+**⭐ The critical guard (business owner: *"RM PM er opening stock theke add or deduct jeno na hoy
+seta dekhte hobe"*).** The synthetic PO's RM/PM lines must **never call
+`post_stock_movement()`** — they exist only in `process_order_line` / `process_order_line_reco` as a
+*genealogy and costing record*, never as a stock record. `stock_ledger_id` stays NULL on those
+lines, and RM/PM opening balances are untouched. That RM was consumed **outside** this system; it
+must not be issued from, or added to, our stock.
+
+**Movement types (no new codes — §83.4 rule holds):**
+
+| Event | Movement | Stock effect |
+|---|---|---|
+| RM / PM opening | `P561` IN | balance up |
+| **SFG opening** (with batch_number) | `P561` IN | balance up |
+| **FG opening** (with batch + pack info) | `P561` IN | balance up |
+| **Synthetic PO's RM/PM lines** | **none** | ⛔ nothing moves |
+| Salvage — SFG dissolved | `P102` OUT | SFG down |
+| Salvage — RM/PM recovered | `P262` IN | RM/PM **up** |
+| Then consumed by the new Process PO | `P261` OUT | RM/PM down |
+
+**Why recovering RM into stock is not phantom stock.** Business owner's own rule closes this:
+*"amader reversal er rules holo, RM in then natun PO te RM out"* — PR19 brings the RM back in
+(physically true: dissolving the batch really does return material), and the replacement Process PO
+immediately consumes it out again. Net effect is correct; the SFG's value leaves and the RM's value
+enters, balancing.
+
+**The one concession — `reversalOfId` may be NULL for opening-origin batches (LOCKED).** PR19
+normally points each RM return at the original P261's `stock_document`. An opening batch has no
+original P261, so for these the reversal pointer is NULL. `post_stock_movement()` already accepts
+`p_reversal_of_id = NULL`; PR19 must be relaxed to tolerate it **only** for opening-origin lines
+(it currently throws `PR19_REVERSAL_SOURCE_NOT_FOUND`).
+
+**Breakup data source — auto-derive, editable (LOCKED).** Every MTO/HPS Prodshade has a Stroke
+(with dosage %) and a Pack BOM, so the breakup can be **derived with zero data entry**:
+RM = `dosage% × batch qty`; PM = Pack BOM × pack count. It is then **editable**, because the
+business owner requires real deviations to be captured (*"setao dhora porbe, amra sei vabei
+banabo"*) — so `approved_status` / `ap_approved_qty` / `variance_qty` populate exactly as they do
+for a produced batch. **Honest caveat:** where the user does *not* override, the figure is the
+Stroke **standard**, not the true historical actual (which exists nowhere in this system) — anyone
+reading an `OPENING` reco row must treat it as standard-derived unless it was edited.
+
+**Scope note:** MTO/HPS only. MTS/INT/MTEST opening batches are out of scope here (MTS/INT batch
+handling is already deferred per §83.7's "MTO/HPS-scoped only" lock).
+
+---
+
+#### 104.9.1 — Pages: PR22 "Old Process PO" + PR23 "Old Packing PO" (LOCKED — 2026-07-17)
+
+**Precedent (already in the system — this is not a new idea).** The project already solved this
+exact go-live problem for procurement and uses an "Old / Legacy" page family:
+
+| TX | Menu code | Title | Route |
+|---|---|---|---|
+| `PO14` | `PROC_PO_CREATE_OPENING` | **Old Purchase Order** | `/dashboard/procurement/purchase-orders/create-opening` |
+| `PO16` | `PROC_STO_CREATE_OPENING` | **Legacy Stock Transfer Order** | `/dashboard/procurement/stos/create-opening` |
+
+The production equivalents follow the same naming and shape. `PR00`–`PR21` are taken (PR21 = FG
+Stock Breakdown), so the next free codes are used:
+
+| TX | Menu code | Title | Route | Purpose |
+|---|---|---|---|---|
+| **PR22** | `PROD_OLD_PROCESS_PO` | **Old Process PO** | `/dashboard/production/old-process-po` | Genealogy for an opening **SFG** batch, and for the parent batch of an opening **FG** |
+| **PR23** | `PROD_OLD_PACKING_PO` | **Old Packing PO** | `/dashboard/production/old-packing-po` | Genealogy for an opening **FG** batch (PM lines + SFG link) |
+
+**PR22 — Old Process PO**
+
+| Section | Fields |
+|---|---|
+| Header | Company, PO Type (**MTO / HPS only**), Prodshade, **Batch Number**, Stroke, Machine, Actual Output Qty |
+| RM/INT lines | **Auto-derived** from the Stroke (`dosage% × output qty`), then **editable**: Actual Qty, Approved (Yes/No/Partial), AP Approved Qty, Variance Qty |
+| On Save | `process_order` (status **VERIFIED**) + `process_order_line` + `process_order_line_reco` (`source_txn_type='OPENING'`) |
+| Stock effect | ⛔ **none** — `post_stock_movement()` is never called; `stock_ledger_id` stays NULL |
+
+**PR23 — Old Packing PO**
+
+| Section | Fields |
+|---|---|
+| Header | Company, Packing PO Type, **parent Old Process PO batch** (dropdown of PR22 batches), SKU, Pack Code, Num Packs, Fill Qty/Pack, Actual Qty KG |
+| PM lines | **Auto-derived** from the Pack BOM, then **editable** |
+| On Save | `packing_order` (status **FINAL**) + `packing_order_line` (FG + SFG + PM) |
+| Stock effect | ⛔ **none** |
+
+**Where the real stock comes from.** Not from these pages. The physical balance and its value are
+posted by the existing **Opening Stock page (`IN05`)**, which writes the SFG/FG `P561` **with the
+batch number** and the `rate_per_unit`. PR22/PR23 only attach the paper genealogy on top.
+
+**Linkage = `batch_number`.** PR19/Reco/Return find a batch by `batch_number`, so the Opening Stock
+line's batch number and the PR22 batch number must be identical. There is no FK between them — the
+batch number *is* the join.
+
+**Orphan risk + required mitigation (LOCKED).** Because the stock (IN05) and the genealogy
+(PR22/PR23) are entered on separate pages, a batch can end up with stock but no genealogy (page
+skipped, or a batch-number typo) — and it would then be un-salvageable and un-recostable, exactly
+the failure this whole section exists to prevent. PO14/PO16 have no such safety, but here it
+matters because costing depends on it. Therefore **PR22/PR23 must validate against Opening Stock on
+save**: the batch number must already exist as a posted opening SFG/FG line for that company, and
+the quantity must reconcile. Save is **blocked** otherwise.
+
+**Sequence:** Opening Stock (IN05) first → then PR22 (→ PR23 for FG).
+
+**ACL — decided, confirm before implementation.** Locked as **SA-only**, matching the rest of the
+go-live data-load family (`IN05` Opening Stock, `PO14` Old Purchase Order, `PO16` Legacy STO), since
+this is a one-time migration exercise rather than day-to-day production work. If the business owner
+would rather have the production/costing team (`CAP_PROD_OPERATOR`) enter the RM breakup — which is
+production knowledge, not SA knowledge — this is a one-line capability change; flag it before
+building.
+
 ---
 
 ### 104.7 — Production AP Reco Model (LOCKED — 2026-07-04)
@@ -13414,7 +14274,7 @@ The following topics need formal discovery and locking:
 
 ```
 Stock Layer  — always 100% physical actual. P261 consumes actual RM qty.
-               P231 receives actual FG/SFG qty. Never filtered or adjusted
+               P101 receives actual FG/SFG qty. Never filtered or adjusted
                based on AP approval status.
 
 Reco Layer   — entirely separate. Only AP-approved portion flows into Reco.
@@ -13552,3 +14412,1112 @@ Minor excess held in FOR_REPROCESS (not dispatched today). Deferred recognition 
 - [ ] Scenario 3 — settlement/write-off policy for unapproved, non-separable variance
 - [ ] Salvage/Excess stock blending workflow and valuation (Scenario 4 mechanism)
 
+---
+
+## Section 105 — Stock Posting Engine: document_number / item_number Design (LOCKED — 2026-07-09)
+
+### Problem discovered (via Inward QA usage-decision live testing)
+
+`erp_inventory.stock_document.document_number` had a bare `UNIQUE` constraint. Several
+callers of `erp_inventory.post_stock_movement()` legitimately call it **more than once**
+under the same business document number — e.g.:
+- Inward QA's RELEASE/BLOCK/REJECT/FOR_REPROCESS usage decision: one `OUT` call from
+  `QUALITY_INSPECTION` + one `IN` call to the target stock type, both using `qa_number`.
+- Inward QA partial decisions: multiple decision-line batches over time, all under the
+  same `qa_number`.
+- RTV's `isDirectPath` (Gate-16.7): block-out + block-in + return-to-vendor, three calls,
+  all under the same `rtv_number`.
+
+Every second-or-later call collided (`23505 duplicate key`) and failed **after the first
+call had already committed** — leaving stock moved out of its source stock type with no
+matching credit into the target (a real, silent stock-integrity gap). This went
+undetected because the Inward QA path had two earlier, independent bugs
+(`plantId` undefined; then a GRN-shape assumption crash) that always prevented execution
+from ever reaching the second `post_stock_movement()` call until both were fixed in the
+same session — see `OM-GATE-InwardQA-Redesign-Spec.md` and the Inward QA implementation
+log entries for 2026-07-08/09.
+
+### Root cause
+
+The schema modeled `stock_document` as if one document_number = exactly one movement —
+there was no SAP-style separation between a document **header** and its **items**.
+
+### Decision: adopt SAP MKPF/MSEG structure (LOCKED)
+
+`erp_inventory.stock_document` now has an `item_number` column. The business document
+number (`qa_number`, `grn_number`, `rtv_number`, `so_number`, etc. — always the caller's
+own business document, never a separately-generated material-document number) stays the
+document **header** identity, exactly as every handler already treats it. Each
+`post_stock_movement()` call is one **item** under that header, mirroring SAP's
+MKPF (header, document number) / MSEG (item, item number 0001, 0002, ...) split.
+
+**Mechanics (`post_stock_movement()`, both overloads — with and without `p_plant_id`):**
+- Constraint is `UNIQUE (document_number, item_number)`, not `UNIQUE (document_number)`.
+- The function locks existing rows for that `document_number` (`FOR UPDATE`) and computes
+  `item_number := MAX(item_number) + 1` (defaulting to 1 for a brand-new document number)
+  — entirely internal to the RPC.
+- **No caller anywhere in the codebase needed to change.** GRN, RTV, STO, Sales Order,
+  Opening Stock, and Physical Inventory all keep reusing their own document number across
+  multiple movement calls exactly as before, and now get correct non-colliding items for
+  free — including the RTV `isDirectPath` triple-call, fixed without touching
+  `rtv.handlers.ts`.
+
+### Why this over the alternative (per-caller document-number suffixing)
+
+A narrower fix (suffix each call's document number, e.g. `qa_number-1-OUT`) was
+implemented first and works, but is a workaround scoped to one caller and leaves the same
+latent bug live in every other handler that calls `post_stock_movement()` more than once
+per document. The engine-level `item_number` fix was chosen instead specifically so every
+current and future caller is correct by construction — this is now the permanent design,
+not a QA-specific patch.
+
+### Implementation reference
+- Migration: `supabase/migrations/20260709025725_stock_document_item_number.sql`
+- Verified live: two calls under one test document number correctly received
+  `item_number` 1 and 2; the test posting was reversed afterward (net effect zero).
+
+---
+
+## Section 106 — SAP Material Document Architecture + Document Numbering Foundation (LOCKED — 2026-07-17)
+
+> **Status:** LOCKED (business owner approved 2026-07-17, "exact SAP equivalent, 25-year
+> horizon"). Implementation is **staged** (§106.8); **Phase 1 is DONE + verified live** —
+> see §106.10. Supersedes the
+> one specific decision in **Section 105** that "the business document number stays the
+> document header identity … never a separately-generated material-document number."
+> Section 105's header+line (MKPF/MSEG) *structure* stays fully valid and unchanged —
+> only the **source of the header number** changes (see 106.3). Everything else in §105
+> (item_number mechanics, `UNIQUE(document_number, item_number)`, multi-call safety) is
+> retained.
+
+### 106.1 — Why this exists (three converging drivers)
+
+Discovered during the 2026-07-16/17 Return + FG-costing design discussion (Admix Tanker→Barrel
+worked example). Three independent problems all trace to the same root — we collapsed SAP's
+multi-document model into a single business-number-as-stock-document model:
+
+1. **Event ambiguity (proven, live).** Packing PO `940005`'s `document_number` holds **6
+   items spanning 3 different posting events** (a first Final attempt at 06:09, its reversal
+   at 06:14, the real Final at 06:35) — all under one `document_number`, distinguishable only
+   by timestamp. There is no clean "one document = one atomic posting event" grouping the way
+   SAP's MBLNR gives. After go-live, with thousands of corrections/reversals/returns, this
+   becomes unauditable.
+2. **Range exhaustion.** Business-doc bands in `document_number_series` are narrow
+   (`PROC_PO` 930001–939999, `PACK_PO` 940001–949999 = only 9,999 each). At real
+   Packing-PO volume these exhaust within a few years and spill into the neighbouring
+   doc-type's range, breaking the "range identifies doc type" convention.
+3. **Return / Reco distinguishability.** A customer return that re-credits stock against an
+   existing batch cannot be told apart from the original production in the Reco/Costing layer,
+   because `process_order_line_reco` carries no movement type, no document number, no
+   transaction-type marker, and no reference — see §106.6.
+
+Business owner directive (2026-07-16/17): build the **exact SAP equivalent**, not a cheap
+copy, targeting a **25-year** operating horizon — but keep our own deliberate business
+touches layered on top of the full SAP model, not as substitutions for it.
+
+### 106.2 — The three SAP document layers (target model)
+
+| Layer | SAP name / key | What it is | Reset policy |
+|---|---|---|---|
+| **L1 — Logistics/Operational** | Purchase Order (EBELN), Sales Order (VBELN), Production Order (AUFNR), Delivery | The "work/order/movement-trigger" documents | **Continuous** in SAP |
+| **L2 — Material Document** | MKPF (header) + MSEG (item), key **MBLNR + MJAHR** | One per goods-movement *event*; header + line items | **Year-scoped** (resets each FY) |
+| **L3 — Accounting / Costing** | FI doc (BELNR + GJAHR), CO doc, Billing | The financial/recognition books | **Year-scoped** (resets each FY) |
+
+**Our reset policy (SAP base + explicit business additions).** We keep every SAP year-scoped
+document year-scoped, and *additionally* year-scope three L1 documents that SAP leaves
+continuous — a deliberate Indian-practice business decision (FY-prefixed PO/SO/STO aids
+vendor communication, filing, and GST reconciliation), documented here as a conscious
+deviation, not an accident:
+
+| Reset = **Year-scoped (number + FY, composite identity)** | Reset = **Continuous (never resets, wide range)** |
+|---|---|
+| Material Document (L2) — SAP standard | Process PO, Packing PO (Production Orders = AUFNR) |
+| Accounting / FI Document (L3) — SAP standard | GRN, Gate Entry, Gate Exit |
+| Costing / Reco Document (L3) — SAP standard | CSN, RTV, QA, Opening Stock |
+| Sales Invoice, Dispatch Invoice — SAP standard | Delivery / Dispatch Challan (challan only, not the invoice) |
+| Debit Note, Credit Note — SAP standard | STO's *movement* documents (the STO order header itself is year-scoped, see below) |
+| **Purchase Order** — ➕ our business decision | Physical Inventory (PID) count + difference postings |
+| **Stock Transfer Order (STO)** — ➕ our business decision | all other operational/logistics documents |
+| **Sales Order** — ➕ our business decision | |
+
+> **Locked by me (schema authority, per memory `feedback_no_db_schema_confirmation`):**
+> Process PO and Packing PO are **Production Orders (AUFNR-equivalent) → continuous**, not
+> year-scoped. They are not Purchase/Sales/Transfer orders. If the business owner wants them
+> FY-scoped too, that is a one-line change to the policy table — flag before implementation.
+
+### 106.3 — What changes about the document number itself
+
+**Today:** `stock_document.document_number` = the caller's **business** number (`940005`,
+`grn_number`, `qa_number`, `ASCPROC…`). Reference columns exist but sit NULL.
+
+**Target (SAP MBLNR model):**
+- `stock_document` gets a **dedicated Material Document number** from its own year-scoped
+  series, plus a **`document_year`** (FY) column. Composite identity becomes
+  **(material_doc_number, document_year)** — mirrors MBLNR + MJAHR.
+- The **business** number (po_number / grn_number / return number / …) moves into the
+  already-existing **`reference_document_number` + `reference_document_type` + `reference_document_id`**
+  columns. Nothing about the business document is lost — it becomes the *reference*, exactly
+  as SAP stores EBELN/AUFNR on MSEG.
+- **One posting EVENT = one Material Document** (header) with N items (§105's `item_number`
+  unchanged). A **reversal, a correction, a return** each become **their own new Material
+  Document**, never more items piled onto the original — resolving the `940005` ambiguity.
+- Reversal linkage: existing `reversal_document_id` (→ `stock_document.id`) is retained; a
+  companion **`reversal_document_year`** is added so the pointer is a valid composite
+  reference under year-scoping (SAP's SMBLN + SJAHR).
+
+### 106.4 — Numbering engine: reuse what already exists (do NOT build new)
+
+Three numbering systems exist today; the audit (2026-07-17) found the SAP-correct engine is
+**already built but unused**:
+
+| System | Mechanism | Scope | Status |
+|---|---|---|---|
+| **A** | `erp_procurement.document_number_series` + `generate_doc_number(doc_type)` | global continuous, no FY | ✅ in use (GRN, QA, Process/Packing PO, RTV, OS…) |
+| **B** | `erp_procurement.company_doc_number_series` + `generate_company_doc_number(company, doc_type)` | company + **FY-scoped**, prefix | ✅ in use (PO, STO) |
+| **C** | `erp_inventory.number_series_master` + `number_series_counter` + `generate_doc_number(company, section, doc_type)` | **fully configurable**: `financial_year_reset`, `include_fy_in_number`, `fy_start_month`, prefix/suffix/separator/padding | ⚠️ **built, schema-complete, but table is empty / never wired** |
+
+**Decision:** promote **System C** to the single canonical numbering engine. It already has
+every switch SAP needs (per-series FY-reset on/off, FY-in-number on/off, configurable FY
+start month for April–March). The Material Document series, the Reco/Costing series, and the
+financial-document series all become rows in `number_series_master` with
+`financial_year_reset = true`. Continuous series become rows with
+`financial_year_reset = false` and a wide range. Systems A and B are progressively folded
+into C (B's PO/STO config maps 1:1 onto C's prefix + FY fields), so we end with **one**
+numbering engine instead of three divergent ones.
+
+FY basis: **April–March** (business owner confirmed 2026-07-17) → `fy_start_month = 4`.
+
+### 106.5 — What we already have vs what must change (audit, 2026-07-17)
+
+**✅ Already correct — no change:**
+- Header+line structure (`stock_document` + `item_number`, §105) — this is the MKPF/MSEG split.
+- `reference_document_type/id/number` columns — exist (just need to start being populated).
+- `reversal_document_id` link.
+- `stock_ledger`, movement-type master, the posting engine skeleton.
+- PO / STO FY-numbering (System B) — matches our policy already.
+- The year-scoping engine itself (System C) — built, just idle.
+
+**🟡 Small changes:**
+- Move **Sales Order** from continuous (System A) into the FY-scoped engine.
+- Widen the narrow continuous bands (PROC_PO/PACK_PO 9,999 → wide range) as they migrate to System C.
+
+**🔴 Real work (three items):**
+1. **Add the Material Document layer** — new year-scoped series in System C; add `document_year`
+   (+ `reversal_document_year`) to `stock_document`; `post_stock_movement()` generates the
+   MatDoc number/year internally and writes the business number into `reference_*`. One
+   posting event = one MatDoc.
+2. **Move business numbers to reference** — every caller that today passes its business number
+   as `documentNumber` instead passes it as `referenceDocumentNumber` (+ type). Mechanical,
+   but touches every stock-posting handler (Process PO, Packing PO, GRN, QA, RTV, STO, PID,
+   Opening Stock, Sales/Dispatch, PR19).
+3. **Restructure the Reco/Costing table** — see §106.6.
+
+**Bottom line:** this is **not** a ground-up rebuild. The stock-engine skeleton and even the
+year-scoping engine already exist; the effort is mostly *wiring what exists correctly* plus
+one new numbered layer and one table restructure.
+
+### 106.6 — Reco / Costing layer restructure (`process_order_line_reco`)
+
+Today the Reco table (Section 83.4 lock) is a flat costing record with `po_number`,
+`batch_number`, `line_material_type`, `actual_qty`, `ap_approved_qty`, `variance_qty`,
+`is_voided` — but **no document number, no movement type, no transaction-type marker, no
+reference**. So a return/reversal Reco entry cannot be distinguished from the original
+production entry, and SUM()-based costing would silently mix them.
+
+Restructure (adds, no destructive change):
+- **`reco_document_number` + `reco_document_year`** — its own year-scoped Costing-document
+  identity (L3), from System C.
+- **`source_txn_type`** — `PRODUCTION` | `RETURN` | `PARTIAL_REVERSAL` | `COR6_CORRECTION` —
+  which event produced this row.
+- **`reference_document_number` + `reference_document_type`** — the triggering business doc
+  (Process PO / Return Receipt / PR19 reversal doc).
+- Return/reversal rows carry **credit (negative) actual/ap/variance** so net costing =
+  SUM() naturally reconciles production − returns, and reporting can split by
+  `source_txn_type` / reference.
+
+This directly serves the Return-costing worked example (§83.6) and the §104.7 cross-PO
+derivation formula, and is the reason the Reco layer must exist separately from
+`stock_ledger` (which has no Approved/AP-Approved concept).
+
+### 106.7 — 25-year range sizing — ✅ DONE (2026-07-17)
+
+- **Year-scoped series** (Material Document, Reco, Financial, PO/SO/STO): never exhaust — they
+  reset every FY. A 7–8 digit within-year counter (≥ 9,999,999/FY) covers even ~10k
+  movements/day. `include_fy_in_number = true` so the printed number carries the FY (e.g.
+  `26-27`), and (number + FY) is the composite key.
+- **Continuous series** (Production Orders, GRN, Gate, RTV, QA, OS…): sized for the full
+  horizon — 25 yr × ~10k/day ≈ 91M, so a **10-digit** range per doc type with generous
+  non-overlapping bands. This is the SAP EBELN/AUFNR sizing philosophy and directly fixes the
+  9,999-band exhaustion.
+
+**Implemented 2026-07-17 (MCP data config on Dev — must be re-run on prod at deploy):** all
+21 `document_number_series` rows widened from 6-digit to **10-digit**, `pad_width = 10`, each
+band ~100M capacity. **Leading digits deliberately preserved** so the "range identifies doc
+type" convention survives unchanged (`93xxxxxxxx` is still Process PO — see the CLAUDE.md §8
+table for the full mapping). Old 6-digit numbers already issued remain as historical data;
+no collision is possible (different width).
+
+⚠️ **Non-obvious mechanic:** `generate_doc_number()` only honours `starting_number` when
+`last_number = 0` (`SET last_number = CASE WHEN last_number = 0 THEN starting_number ELSE
+last_number + 1 END`). Changing `starting_number` alone on an in-use series does nothing —
+`last_number` must be reset to 0 in the same statement, which is what the widening did.
+Verified live: PROC_PO's next two numbers came out `9300000001` / `9300000002`, GRN's
+`2000000001`; test counters were reset afterwards.
+
+### 106.8 — Sequencing (locked ordering, not yet built)
+
+This is a **core §8C engine change touching every module** — it must be its own dedicated
+design-freeze + Codex brief, **not** bolted onto the Return/PR19 work. The in-progress
+Return + pack-type-change design (§83.6) is **paused behind this**, because Return, FG
+Costing, Reco, and the MB52-style report all stand on this numbering foundation. Order:
+1. Finalize this Section 106 → lock → update CLAUDE.md §8 / §8C / §8-numbering.
+2. Implement Material Document layer + System-C promotion + reference-column migration (Dev
+   first — only 189 `stock_document` rows and 30 business docs exist, so data migration is
+   trivial and the cost is near-zero **now**, before 1 July go-live).
+3. Reco restructure.
+4. **Then** resume Return / pack-type-change design on top of the new foundation.
+
+### 106.9 — Open items
+- Process PO / Packing PO reset policy: locked here as **continuous** (Production Orders);
+  confirm with business owner before implementation (106.2 note).
+- Whether Systems A and B are fully retired into C in one migration or phased — implementation
+  detail, decide at brief-writing time.
+- Exact Material-Document series banding vs. a single global MatDoc series — **decided:** one
+  **company-scoped, year-reset** MATDOC series (§106.10), not per-plant/per-transaction.
+
+### 106.10 — Implementation progress
+
+**Phase 1 — Material Document numbering foundation — ✅ DONE + verified live (2026-07-17):**
+- MATDOC series created in `erp_inventory.number_series_master` for all 4 companies:
+  company-scoped, `financial_year_reset = true`, `fy_start_month = 4` (April–March),
+  `include_fy_in_number = false` (year kept separate, MJAHR-style), 8-digit padding. (MCP
+  data config — must be re-run on prod at deploy, per §8A; company UUIDs differ.)
+- New generator `erp_inventory.generate_material_doc_number(p_company_id)` returns
+  `(doc_number text, doc_year text)` — the two-part MBLNR/MJAHR key. Reuses the existing
+  atomic, FY-aware `number_series_counter` engine. Migration:
+  `supabase/migrations/20260717120000_gate27_106_material_document_number_generator.sql`.
+- Verified: 3 calls (CMP003) → `00000001/2/3`, FY `2026-27`; independent per-company
+  counter (CMP005 started at 1); test counters reset to 0 afterward (no real MatDoc issued).
+- **Non-breaking:** `post_stock_movement()` and every caller are untouched — this phase only
+  adds the numbering source everything else will call.
+
+**Phase 2 — Engine cutover — ✅ CODE COMPLETE (2026-07-17), pending live verification:**
+
+- *Step A (schema, non-breaking):* `document_year` (NOT NULL DEFAULT `''`) +
+  `reversal_document_year` added to `stock_document`; item uniqueness widened to
+  `(document_number, document_year, item_number)`. All 189 existing rows verified at
+  `document_year=''` — behaviour identical to §105. Migration
+  `20260717123000_gate27_106_phase2a_stock_document_year_columns.sql`.
+- *Step B (engine, backward-compatible):* `post_stock_movement()` (main overload; the dead
+  plant overload is untouched — zero callers) gained five OPTIONAL params:
+  `p_material_doc_number`, `p_material_doc_year`, `p_reference_document_number/type/id`.
+  New-style callers get MBLNR+MJAHR identity with the business number in
+  `reference_document_*`; callers that pass no MatDoc behave exactly as §105.
+  `item_number` is now scoped per `(document_number, document_year)`. The old 15-arg
+  overload was DROPped first (CREATE OR REPLACE cannot change arity; leaving both would
+  make calls ambiguous). Migration `20260717124500_gate27_106_phase2b_post_stock_movement_matdoc.sql`.
+  **Verified live**: old-style call → `document_year=''`, reference NULL; new-style call →
+  MatDoc number + `2026-27` + business number in reference. All test postings were then
+  fully cleaned up.
+- *Step C (caller migration) — all 11 modules done:* Opening Stock, GRN, STO, Inward QA,
+  RTV, Sales Order, Physical Inventory, PTO, Process PO, Packing PO, PR19. Each mints one
+  MatDoc per posting event via the new shared helper
+  `supabase/functions/api/_shared/materialDocument.ts` (`generateMaterialDocNumber`).
+  `deno check`: zero new errors on every file (pre-existing counts unchanged).
+
+**Findings worth keeping from Phase 2:**
+- `stock_ledger` is genuinely append-only — it carries `stock_ledger_no_delete` /
+  `stock_ledger_no_update` (`ON ... DO INSTEAD NOTHING`) rewrite rules, so DELETE/UPDATE
+  silently no-op. This is SAP-correct (material documents are immutable) and means every
+  correction must be a new reversing posting, never an edit.
+- The `"-REV"` document-number suffix hack (GRN reverse, Process PO CORS, Packing PO
+  reverse) is now **gone** — a reversal is its own Material Document, linked by
+  `reversal_document_id` (+ `reversal_document_year`) and by reference.
+- `correctPackingOrderHandler` posted corrections via `Promise.all`. That was only safe
+  because it reused the PO's already-existing `document_number`. Under a brand-new MatDoc
+  the first insert has nothing for the `FOR UPDATE` item_number lock to lock, so parallel
+  calls would race — converted to a sequential loop (§8B DEPENDENT).
+
+**Still open on Phase 2:** live end-to-end verification per module (needs real postings
+through the deployed app — Claude cannot log in), and the optional back-migration of the
+189 legacy `document_year=''` rows (they remain valid and readable as-is; no functional
+need to convert them).
+
+**Phase 3 — Reco restructure — ✅ CODE COMPLETE (2026-07-17), pending live verification:**
+
+- *Schema* (`process_order_line_reco`): `reco_document_number` + `reco_document_year` (the L3
+  costing-document identity, BELNR+GJAHR equivalent), `source_txn_type`
+  (`PRODUCTION|RETURN|PARTIAL_REVERSAL|COR6_CORRECTION`, CHECK-constrained, DEFAULT
+  `'PRODUCTION'`), `reference_document_number` + `reference_document_type`, plus indexes on
+  source_txn_type / reco document / reference. All 86 existing rows verified backfilled to
+  `PRODUCTION` (0 null). Migration `20260717140000_gate27_106_phase3_reco_restructure.sql`.
+- *Numbering generalised:* `erp_inventory.generate_year_scoped_doc_number(company, doc_type)`
+  now holds the FY logic for **all** year-scoped types; `generate_material_doc_number()` was
+  rewritten to delegate to it, so the fiscal-year calculation exists in exactly one place and
+  cannot drift between MATDOC / RECO / future FI/Invoice types. New year-scoped `RECO` series
+  (April-FY, 8-digit) for all 4 companies (MCP data config — re-run on prod at deploy).
+  Migration `20260717141000_gate27_106_phase3_generic_year_scoped_doc_number.sql`.
+  Helper: `generateRecoDocNumber()` in `_shared/materialDocument.ts`.
+- *Writers:* Process PO **Verify** stamps its reco rows with a Reco document,
+  `source_txn_type='PRODUCTION'` and the `PROC_PO` reference. **PR19** now also writes
+  **NEGATIVE (credit)** RM/INT reco rows tagged `PARTIAL_REVERSAL` under their own Reco
+  document, referencing the `PARTIAL_REV` business number — previously PR19 unwound the Stock
+  layer but left the Costing layer still billing the full original consumption to APL.
+
+**Correctness fix found while building Phase 3 (important):** `buildRmIntPreview()` reads
+RM/INT from `process_order_line_reco` and MUST filter `source_txn_type='PRODUCTION'`. Without
+it, once credit rows exist, a *second* reversal on the same batch would read the *first*
+reversal's own negative rows back as if they were original consumption and compute a wrong,
+already-netted proportional base. Filter added.
+
+**Verified live:** both generators produce correct per-company FY `2026-27` counters (MATDOC
+delegation intact — its 11 callers unaffected — and RECO new), counters reset afterwards; the
+net-costing rule was simulated against real batch `EV02602`: production Actual 10,060.5 −
+10% credit 1,006.05 = net 9,054.45, with AP (10,000.5 → 9,000.45) and Variance (60 → 54)
+netting correctly and `source_txn_type` cleanly isolating each side. `deno check` clean.
+
+**Still open on Phase 3:** live end-to-end verification (a real Verify + a real PR19 through
+the deployed app). Also note the two other `source_txn_type` values — `RETURN` and
+`COR6_CORRECTION` — are defined in the CHECK constraint but have **no writer yet**: `RETURN`
+lands with the §83.6 Return design (the very thing this phase unblocks), and
+`COR6_CORRECTION` should be wired when Process PO's COR6 correction path is revisited.
+
+
+---
+
+## Section 107 — Write Atomicity: Partial Postings, Retry Safety, Health Check (2026-07-19)
+
+**পটভূমি:** business owner প্রশ্ন তোলেন — "POST চলছে, network down, তখন কী হবে? অর্ধেক কাজ
+হবে অর্ধেক হবে না, ফলে পুরো ERP-র গরবর।" প্রশ্নটা সঠিক ছিল, আর §105-এর ঘটনা (Inward QA-তে
+stock একদিক থেকে বেরিয়ে গিয়ে আর credit হয়নি) ছিল ঠিক এই শ্রেণিরই।
+
+### 107.1 — সমস্যার প্রকৃত আকার (কোড পড়ে যাচাই করা)
+
+প্রতিটা stock-posting handler **multi-step লেখে TypeScript থেকে, round trip করে করে**, কোনো
+transaction ছাড়া। Process PO Verify-তে প্রতি RM line-এ **৩টা ধারাবাহিক round trip** (P261 RPC →
+`process_order_line` update → `reservation_document` update)। ৮ লাইনের PO = **~৩১টা round trip**,
+প্রত্যেকটা আলাদা commit।
+
+**১২টা posting handler-ই একই ছাঁচে** — grn, inward_qa, opening_stock, physical_inventory, pto,
+rtv, sales_order, sto, opening_genealogy, packing_order, partial_reversal, process_order:
+- **আগে posting, শেষে status** — মাঝপথে মরলে status অপরিবর্তিত থাকে, তাই entry guard আবার পাস করে
+- ফলে retry-তে ইতিমধ্যে posted line **আবার post হয়**, আর `stock_ledger_id` overwrite হয়ে
+  **প্রথম posting অনাথ** হয়ে যায় — পরে CORS শুধু দ্বিতীয়টা ফেরাবে, প্রথমটা stock-এ থেকে যাবে
+
+### 107.2 — ⚠️ ভুল mental model (সংশোধন)
+
+"network down = অর্ধেক কাজ" — **এটাই প্রধান পথ নয়**। Browser disconnect হলে server থামে না,
+কাজ **শেষ করেই ফেলে**; user শুধু উত্তর পায় না। তাই সবচেয়ে সম্ভাব্য ঘটনা **"পুরো কাজ, তারপর
+user আবার Save চেপে দ্বিগুণ"**। সত্যিকারের অর্ধেক-posting হতে server crash / deploy / DB
+connection ছিঁড়ে যাওয়া লাগবে ঠিক ওই মুহূর্তে — সম্ভব, কিন্তু বিরল।
+
+**এটা গুরুত্বপূর্ণ, কারণ এতে সবচেয়ে সস্তা দাওয়াই-ই সবচেয়ে সম্ভাব্য বিপদটা ঢাকে।**
+
+### 107.3 — চার ধাপের সমাধান
+
+| ধাপ | কাজ | কখন | কী ঢাকে |
+|---|---|---|---|
+| ১ ✅ | Ambiguous-failure guard (frontend) | DONE | user-এর অন্ধ retry |
+| ২ ✅ | Registry-চালিত health check | DONE | অন্ধত্ব — কিছু ঘটলে সেদিনই জানা |
+| ৩ ✅ | Idempotency guard, ৫টা রোজ-চলা handler | DONE | server-দিকে দ্বিগুণ posting |
+| ৪ 🔵 | plpgsql transaction | **go-live-এর পরে** | অর্ধেক posting (আসল নিরাময়) |
+
+### 107.4 — ধাপ ২: কেন registry, কেন তালিকা নয়
+
+প্রথম চেষ্টায় শুধু stock-layer invariant লেখা হয়েছিল (snapshot↔ledger, negative, orphan)।
+**সেগুলো partial posting ধরেই না** — কারণ partial posting-এ stock layer **নিজের ভিতরে নিখুঁতই
+থাকে**; গরমিলটা stock ও business layer-**এর মাঝে**। তাই source document জানা বাধ্যতামূলক।
+
+হাতে লেখা "১২টা table"-এর তালিকাও চলবে না — নতুন module এলে ১৩ নম্বরটা চুপচাপ বাদ পড়বে আর
+আমরা ভুল করে নিরাপদ ভাববো, যা **check না থাকার চেয়েও খারাপ**।
+
+**সমাধান:** `erp_inventory.posting_source_registry` + `erp_inventory.stock_health_check()` —
+registry-তে **নেই** এমন type বা tag-**ই নেই** এমন posting দেখলে **FAIL**। নতুন module হয়
+registry-তে এক লাইন INSERT করবে, নয়তো check চিৎকার করবে। **নীরবে বাদ পড়ার পথ নেই।**
+(frontend-এর `screenRegistry` + `validateScreenRegistry` ঠিক এই idiom।)
+
+**`suspect_statuses` = যে status-এ posting থাকা অস্বাভাবিক** (handler যেখান থেকে posting *শুরু*
+করে) — **terminal status নয়**। REVERSED/CANCELLED terminal নয় কিন্তু বৈধ (CORS-এর পর posting
+থাকবেই); ওগুলো দিলে মিথ্যা FAIL আসবে।
+
+### 107.5 — Business row → posting: সর্বজনীন convention নেই (আলাদা gap)
+
+চার রকম column নাম চালু: `stock_ledger_id` / `stock_document_id` /
+`posted_stock_document_id` / `issue_+receipt_stock_document_id` — আর
+**`stock_transfer_order`/`_line`-এ কিছুই নেই**, অর্থাৎ STO-র posting আজ business row থেকে খুঁজেই
+পাওয়া যায় না। **STO-কে registry/guard-এ আনার আগে ওর link column যোগ করতে হবে।**
+
+উল্টো দিকটা (posting → business row) ঠিক আছে: `stock_document.reference_document_type/_id`
+§106 Phase 2-তেই চালু হয়েছে এবং handler গুলো মান পাঠায়।
+
+### 107.6 — ধাপ ৩-এর দুটো ফাঁদ (নতুন handler-এ guard বসানোর আগে মিলিয়ে দেখো)
+
+1. **Accumulator:** Process PO Verify-তে guard `totalRmValue` জমার **পরে** বসাতে হয়েছে। ওই
+   যোগফল loop-এর পরে `sfgCostPerKg` হিসাব করে — loop-এর শুরুতে skip করলে **প্রতিটা retry-তে
+   SFG cost কম দেখাত**, অর্থাৎ corruption ঠেকাতে গিয়ে costing bug ঢুকত।
+2. **Select:** Packing PO-র line query-তে `stock_ledger_id` select-**ই হতো না**। Guard বসালে
+   সবসময় `undefined` পড়ত — **কখনো চলত না অথচ ঠিক আছে বলে মনে হত**।
+
+তিনটে handler আগে থেকেই সুরক্ষিত ছিল: Opening Stock (`posted_stock_document_id` skip),
+Inward QA (পরিমাণ-ভিত্তিক, পুরো decided হলে 409), GRN (`GRN_ALREADY_EXISTS`)।
+
+### 107.7 — এখনো খোলা
+
+- **Verify-র loop-পরবর্তী ৩টা posting** (FG receipt, QI out, QI release) guard-বিহীন — ওদের
+  ledger id শুধু **একদম শেষের update-এ** status-এর সাথে লেখা হয়, তাই মাঝপথে মরলে চিহ্নই থাকে না।
+  ধাপ ৪-এ সমাধান হবে।
+- **বাকি ৭টা handler** (RTV, STO, PID, PTO, Sales, PR19, opening_genealogy) — go-live-এর পরে।
+- **ধাপ ৪ (plpgsql transaction)** — §8B-তে নিয়মটা আগে থেকেই লেখা। **বোনাস: ~৩১ round trip → ১,
+  ~৭s → ~০.৫s** — integrity আর performance একই কাজে সমাধান হয়। নিজস্ব design session লাগবে;
+  **go-live-এর ঠিক আগে কোরো না** — stock engine-এ হাত দেওয়া মানে যে বিপদ ঠেকাতে চাইছি সেটাই
+  ডেকে আনা।
+
+**রোজকার অভ্যাস (go-live-এর দিন থেকে):**
+`SELECT * FROM erp_inventory.stock_health_check();` — dev ও prod আলাদা করে, `FAIL` এলে থামো।
+
+### 107.8 — `post_document`: এক transaction, আর যেভাবে scale-এ নিজে টিকে থাকে (DESIGN, 2026-07-19)
+
+**কেন আলাদা design লাগল:** প্রথমে ঠিক হয়েছিল handler ধরে ধরে plpgsql-এ সরানো হবে। business owner
+আপত্তি করেন — **"পরে আরও module ঢুকবে, তখন maintain হবে কী করে? সবসময় তো বলব না check করো।"**
+আপত্তিটা যথার্থ: handler-ভিত্তিক সমাধানে নিয়মটা **মানুষের স্মৃতিতে** থাকে, তাই ১৩ নম্বর module-এ
+ভাঙে আর কেউ ধরিয়ে না দিলে ধরাই পড়ে না।
+
+#### 107.8.1 — তিন স্তর
+
+| স্তর | কী | অবস্থা |
+|---|---|---|
+| ১ | **নিরাপদ পথ সহজ** — একটাই `post_document` | 🔵 এই design |
+| ২ | **অনিরাপদ পথ বন্ধ** — `REVOKE EXECUTE` | 🔵 baseline ০ হলে |
+| ৩ | **ship-এর আগে ধরা** — CI guard | ✅ DONE (`d8f37fc`) |
+
+#### 107.8.2 — ⚠️ যে গর্তটা প্রথম নকশায় ছিল
+
+"প্রতি module-এ ছোট wrapper" (পাঠযোগ্যতার জন্য পছন্দ) — কিন্তু তাতে একটা ফাঁক থেকে যায়:
+
+```
+post_document(...)        ← movement transaction-এ  ✅
+তারপর TS-এ .update(...)   ← business write বাইরে    ❌  আবার অর্ধেক কাজ
+```
+
+CI guard এটা **ধরে না** — নিষিদ্ধ function তো ডাকা হয়নি। অর্থাৎ *"business write গুলো ভিতরে
+রাখতে হবে"* আবার স্মৃতির উপর। **এটাই বাতিল করার কারণ।**
+
+#### 107.8.3 — সমাধান: registry-তে `completion_function`
+
+| অংশ | কে করে | কেন |
+|---|---|---|
+| Movement | **common gate** (generic) | সবার এক |
+| Business write | **module-এর নিজস্ব plpgsql function** | পাঠযোগ্য, DSL নয় |
+| **দুটোর জোড়া** | **`posting_source_registry.completion_function`** | মনে রাখার দরকার নেই |
+
+`post_document` নিজেই ওই function-কে **একই transaction-এর ভিতরে** ডাকে।
+
+#### 107.8.4 — চুক্তি (contract)
+
+```sql
+erp_inventory.post_document(
+  p_reference_document_type text,   -- registry key; অচেনা হলে RAISE
+  p_reference_document_id   uuid,
+  p_movements               jsonb,  -- ordered array; ক্রম DEPENDENT (§8B)
+  p_context                 jsonb DEFAULT '{}'::jsonb
+) RETURNS jsonb
+```
+
+`p_movements[]` — `post_stock_movement`-এর প্যারামিটারগুলোরই আয়না, **প্লাস `line_ref`**:
+
+```json
+{ "line_ref": "<caller-এর নিজের key, যেমন process_order_line.id>",
+  "document_number": "...", "movement_type_code": "P261", "direction": "OUT",
+  "company_id": "...", "storage_location_id": "...", "material_id": "...",
+  "quantity": 100, "base_uom_code": "KG", "unit_value": 12.5,
+  "stock_type_code": "UNRESTRICTED", "batch_number": null, "reversal_of_id": null }
+```
+
+**`line_ref` অপরিহার্য** — ফেরত আসা ledger id গুলো business row-এর সাথে মেলানোর একমাত্র সূত্র।
+
+Returns:
+
+```json
+{ "postings": [ { "line_ref": "...", "stock_ledger_id": "...",
+                  "stock_document_id": "...", "valuation_rate": 12.5 } ],
+  "material_doc_number": "...", "material_doc_year": "..." }
+```
+
+**Completion function:**
+
+```sql
+<schema>.<fn>(p_reference_document_id uuid, p_postings jsonb, p_context jsonb) RETURNS void
+```
+
+`post_document` সব movement বসানোর **পরে**, একই transaction-এ, `EXECUTE format('SELECT %I.%I($1,$2,$3)', ...)`
+দিয়ে ডাকে। ওখানেই `stock_ledger_id` লেখা, `issued_qty` বাড়ানো, status বদল — সব।
+
+#### 107.8.5 — Error / rollback
+
+- `post_document` **কোনো exception ধরবে না** — যেকোনো ব্যর্থতা মানে **পুরো transaction rollback**।
+  এটাই পুরো কাজের মূল কথা; ভিতরে `EXCEPTION WHEN OTHERS` লিখলে সেটাই নষ্ট হয়।
+- Movement গুলো **array-ক্রমে** প্রয়োগ হবে (negative-stock guard ক্রমনির্ভর — §8B DEPENDENT)।
+- `reference_document_type` registry-তে না থাকলে **সাথে সাথে RAISE** — post করার আগেই।
+- **Idempotency এখানে নয়।** কিছু flow ইচ্ছাকৃতভাবে একই document-এ বারবার post করে
+  (Inward QA-র partial decision, COR6 correction)। তাই "আগে post হয়েছে কিনা" — সেটা caller/
+  completion function-এর দায়িত্ব, §8D ধাপ ৩-এর guard গুলোর মতো।
+
+#### 107.8.6 — scale-এ নিজে টিকে থাকে যেভাবে
+
+| নতুন module যা করলে | কী হবে |
+|---|---|
+| সরাসরি `post_stock_movement` ডাকল | **Build FAIL** (CI guard) |
+| Registry-তে ঢুকল না | **Health check FAIL** |
+| Registry-তে ঢুকল, `completion_function` দিল না | **Registry অসম্পূর্ণ → FAIL** |
+| Business write transaction-এর বাইরে রাখল | **ledger id-ই পাবে না — কাজ করবে না** |
+
+শেষেরটা সবচেয়ে শক্ত enforcement: **ভুল পথ চুপচাপ ভুল ফল দেয় না, একেবারে চলেই না।**
+কাউকে কিছু মনে রাখতে হয় না — **registry-তে এক লাইন**, ঠিক যেমন নতুন page registry-তে।
+
+#### 107.8.7 — সহাবস্থান ও ক্রম
+
+1. `post_document` + registry-তে `completion_function` column
+2. **Process PO Verify** প্রথমে — সবচেয়ে জটিল (~৩১ round trip), তাই সবচেয়ে বড় প্রমাণ ও লাভ
+3. তারপর Packing PO Final → GRN → Opening Stock → Inward QA (রোজ-চলা ৫টা)
+4. **প্রতিটার পরে** CI guard-এর baseline নামাও (নাহলে guard নিজেই FAIL করবে — ইচ্ছাকৃত)
+5. বাকি ৭টা (RTV, STO, PID, PTO, Sales, PR19, opening_genealogy)
+6. Baseline ০ → **`REVOKE EXECUTE ON post_stock_movement FROM service_role`** = স্তর ২ সম্পূর্ণ
+
+পুরনো path **ধাপ ৬ পর্যন্ত পাশে থাকবে**, তাই যেকোনো ধাপে থামা যায়; থামলে শুধু ওই handler গুলো
+পুরনো আচরণে থাকে, কিছু ভাঙে না।
+
+#### 107.8.8 — যাচাই (প্রতিটা handler-এর পরে)
+
+- MCP দিয়ে **আসল posting** চালানো (UI/login লাগে না)
+- `stock_ledger` / `stock_snapshot` মিলিয়ে দেখা
+- **ইচ্ছাকৃতভাবে মাঝপথে ব্যর্থ করে rollback সত্যিই হয় কিনা** — বর্তমান কোডে এই পরীক্ষাটাই করা যায় না
+- `SELECT * FROM erp_inventory.stock_health_check();`
+
+---
+
+### 83.15.1 — FG Lot Identity: `source_lot_ref` (LOCKED — 2026-07-19)
+
+**কেন লাগল:** business owner প্রশ্ন করেন — *"একই Process PO-তে দুটো Packing PO, দুটোতে per barrel
+আলাদা হলে এখনকার design-এ বোঝার উপায় কী?"* বাস্তব উদাহরণ: batch `EV02602` → PO `940003`
+(২০০ কেজি/ব্যারেল) আর PO `940005` (২৩০ কেজি/ব্যারেল)। **batch একা যথেষ্ট নয়** — ব্যারেল গুনতে
+হলে লট চাই।
+
+#### কেন `document_number` দিয়ে আর হয় না
+
+§83.15 (2026-07-13) লিখেছিল লট = `stock_document.document_number` = Packing PO নম্বর। **§106
+Phase 2 (2026-07-17) সেটা ভেঙে দিয়েছে** — এখন `document_number` = Material Document নম্বর
+(`00000001`), আর business নম্বর সরে গেছে `reference_document_number`-এ।
+
+**ফলাফল:** PR21-এর join নীরবে ভাঙা অবস্থায় deployed ছিল। ১৭ জুলাইয়ের পর কোনো Packing PO Final
+হয়নি বলে ধরা পড়েনি — প্রথম Final-এই ব্যারেল সংখ্যা উধাও হত। (একই কারণে reference tagging-ও
+১৯ জুলাইয়ের আগে কখনো চলেনি।)
+
+#### সমাধান: `stock_ledger.source_lot_ref` + `stock_document.source_lot_ref`
+
+`batch_number` **অপরিবর্তিত** থাকে (= parent Process PO-র batch) — §83.15-এর AP/QA lock অক্ষত।
+লট তার **পাশে** বসে, বদলে নয়।
+
+**মান সবসময় derived, কোনো handler কখনো পাঠায় না** — trigger
+`erp_inventory.derive_source_lot_ref()` (BEFORE INSERT on `stock_ledger`):
+
+| ঘটনা | লট আসে |
+|---|---|
+| FG receipt (`PACK_PO` + `P101` + `IN`) | Packing PO নম্বর |
+| Reversal / COR6 / PR19 | **মূল posting থেকে নকল** (`reversal_document_id` ধরে) |
+| caller যা পাঠায় | **উপেক্ষিত** |
+
+**কেন trigger, কেন `post_stock_movement` বদলাইনি:** ওটা ৬,২৭০ অক্ষরের, সবচেয়ে সংবেদনশীল
+function — কয়েক লাইনের জন্য পুরোটা replace করা অকারণ ঝুঁকি। trigger **যেকোনো path** ঢাকে
+(`post_stock_movement`, `post_document`, ভবিষ্যতের যা-ই), তাই bypass করা যায় না।
+
+**PR19 ও COR6-এ কোনো কোড লাগেনি** — ওরা আগে থেকেই `reversalOfId` পাঠায়, তাই লট আপনাআপনি
+অনুসরণ করে। এটা না থাকলে partial reversal-এ লট তার পুরো মূল qty দেখাত, আর পাশে একটা ভাসমান
+ঋণাত্মক row থাকত — batch মোট ঠিক, অথচ প্রতিটা লট ভুল।
+
+#### 🔴 L5 Dispatch-এর জন্য বাধ্যতামূলক শর্ত
+
+**Dispatch-এ OUT posting-এ কোন লট থেকে যাচ্ছে সেটা লিখতেই হবে।** আজ dispatch-এর reference হবে
+Sales Order — Packing PO নয় — তাই trigger-এর নিয়ম ২ ওখানে খাটবে না, user-কে লট **বাছতে হবে**।
+
+না করলে: ৫ ব্যারেল গেলে system জানবে না কোন লট থেকে, আর **লট-স্তরের হিসাব চিরতরে ভুল** হয়ে
+যাবে — পিছিয়ে হিসাব করা অসম্ভব, কারণ তথ্যটাই কোথাও থাকে না।
+
+**Dispatch design-এর সময় constraint চালু করতে হবে:** batch-tracked material-এর OUT posting-এ
+`source_lot_ref` NULL হলে **DB reject করবে**। এখন চালু করা যায়নি — কোনো handler এখনো লট পাঠায়
+না, তাই সব posting সাথে সাথে fail করত।
+
+**Column আগেই বানানো হয়েছে ইচ্ছাকৃতভাবে** — dispatch তৈরির *আগে*, যাতে শর্তটা গোড়া থেকেই ঢোকে,
+পরে retrofit করতে না হয় (ততদিনে অজানা-লট dispatch data ঢুকে যাবে)।
+
+**Migrations:** `20260719200000` (column), `20260719210000` (trigger)।
+
+---
+
+### 83.4.1 — PR10 Packing PO Edit + Cancel (LOCKED — 2026-07-19)
+
+**পটভূমি:** PR10-এর Packing PO edit এতদিন **half-done** ছিল — শুধু PM line-এর storage location
+বদলানো যেত, num_packs read-only ছিল, cancel-এর পথই ছিল না (§6-এর "Packing PO's PR10 half
+deferred" নোট অনুযায়ী ইচ্ছাকৃত)। business owner testing-এ আটকে গিয়ে ঠিক করতে বলেন।
+
+**🔴 আসল বিপদ (কোডে যাচাই):** legacy `updatePackingOrderLinesHandler` num_packs আপডেট করত
+**কিন্তু reservation ছুঁত না**। STANDARD Packing PO তৈরির সময় দুটো reservation বসে:
+- **SFG** — `required_qty = qty_per_pack × num_packs` (batch এখনো NULL, Final-এ বাছা হয়)
+- **PM** (প্রতি line) — `required_qty = qty_per_pack × num_packs`
+
+num_packs বদলে reservation বাসি থেকে গেলে বাকি PO-তে ভুল "কম stock" দেখাত — নীরব gap।
+
+**Business owner সিদ্ধান্ত (2026-07-19), তিনটি:**
+1. **Fill Qty/pack (ব্যারেল সাইজ) editable** — num_packs-এর পাশাপাশি
+2. **Cancel-এ reason বাধ্যতামূলক**
+3. **Manual (bomRequired=false) হলেও PM line গুলো scale হবে** — num_packs/fill বদলালে PM-ও
+   তার per-pack হার ধরে বদলাবে (Process PO-র RM dosage scaling-এর হুবহু সমতুল্য)
+
+**Recompute সূত্র (float-drift-মুক্ত, `qty_per_pack` line-এই সংরক্ষিত):**
+- প্রতি line: `total_qty = qty_per_pack × new_num_packs`
+- **bomRequired=false** (599/000/001): fill বদলালে FG+SFG line-এর `qty_per_pack = new_fill`
+  (কারণ ওখানে sfgQtyPerPack = fill_qty); PM fill-নিরপেক্ষ (ব্যারেল-প্রতি, KG-প্রতি নয়)
+- **bomRequired=true** (fixed Pack BOM): SFG per-pack BOM-চালিত, fill user-lever **নয়** —
+  তখন শুধু num_packs editable, fill field দেখাবে না
+- `total_qty_kg = sfgQtyPerPack × num_packs` header-এ
+
+**Edit handler (dedicated, `editPackingOrderHandler` — legacy-তে bolt করা নিষিদ্ধ, §6 lock):**
+- Guard: **STANDARD only** (Final হলে COR6/reverse-এর পথ)। সব pack type।
+- Recompute করে → **SFG + PM reservation-এর `required_qty` আপডেট** → PM availability re-check
+  (§83.5 hard-block; SFG batch এখনো বাছা হয়নি বলে SFG check Final-এ)
+- PM line storage location + actual/alternate material (Process PO-র মতো) — অপরিবর্তিত রাখা
+
+**Cancel handler (dedicated, `cancelPackingOrderHandler`):**
+- Guard: **STANDARD only**, reason বাধ্যতামূলক
+- SFG + PM reservation সব **CANCELLED** → PO status **CANCELLED**
+- কোনো stock movement নেই (STANDARD-এ কিছু post হয়নি), তাই শুধু reservation release + status
+
+**➕ Create-এ batch-blind SFG hygiene check (LOCKED 2026-07-19, business owner):** Packing PO Create-এ এতদিন PM availability check হতো কিন্তু SFG হতো না — কারণ SFG batch Final-এ বাছা হয়, তাই batch-specific check তখন অসম্ভব। কিন্তু তাতে user একই SFG-র বিরুদ্ধে stock ছাড়িয়ে বহু impossible Packing PO বানিয়ে ফেলতে পারত (লাইভ প্রমাণ: SFG-00004-এ 15,000 on-hand, 14,600 আগেই reserved, free মাত্র 400 — তবু আরেকটা 10,000 কেজির PO বানানো যেত)। এখন Create-এ একটা **batch-blind hard block**: `computeSfgTotalFree()` = মোট Unrestricted − সব open SFG reservation; নতুন PO-র SFG দরকার ওই free-র বেশি হলে `PROD_PACK_SFG_SHORTAGE` (422)। এটা batch-specific check-এর **বদলি নয়** — Final-এ ওই নির্দিষ্ট batch-এর check অপরিবর্তিত থাকে (guarantee)। Create = hygiene (মোট free), Final = guarantee (batch)। §83.5-এর পুরনো "SFG NOT checked at Standard" line তখন batch-specific check ভেবে লেখা হয়েছিল; এই batch-blind total check আলাদা স্তর, তাই lock ভাঙা নয়, যোগ করা।
+
+**Frontend PR10 Packing tab:** Num Packs + Fill Qty input (bomRequired অনুযায়ী fill দেখাবে/লুকাবে),
+PM line sloc + alternate, আর **Cancel button + reason modal**।
+
+---
+
+### §83.4.1-addendum — Packing PO PM-line AP Reco (LOCKED — 2026-07-21)
+
+**পটভূমি:** Packing PO-র COR6 correction (এবং normal Final)-এ কখনো কোনো AP Approved ধারণা
+ছিল না — শুধু `actual_qty` (physical layer) store হতো। business owner প্রশ্ন তুললেন: alternate
+PM material use হলে বা Final-এ নতুন PM line add হলে, পরে Reco হওয়ার সময় AP Approved qty
+আসবে কোথা থেকে? সরাসরি কোড check করে confirm হলো — কিছুই ছিল না। Process PO-র নিজের
+`process_order_line_reco` (§104 lock, 2026-07-11) সম্পূর্ণভাবে Process-PO-scoped, কখনো
+Packing PO-র জন্য implement হয়নি। একই সময় দেখা গেল, উপরের §PR11 Final section-এর 2026-07-05
+draft table ("Yes→Std, No→0") কখনো code-এ যায়নি, আর Process PO-র **আসলে চলমান** rule
+(`computeRowValues()`, Verify+Final দুই পেজেই identical) তার **উল্টো** — সেই ভুল-ধরে-রাখা draft
+বাদ দিয়ে **live code-ভিত্তিক** rule-টাই এখানে mirror করা হলো।
+
+**Scope — PM lines only:** SFG আর FG(Output) line কখনো approval দরকার এমন deviate করে না
+(output সবসময় actual হিসেবেই মানা হয়) — তাই এই mechanism শুধু PM line-এ।
+
+**Approved rule (live code থেকে mirror করা, ভুল draft table থেকে না):**
+- `autoYes` যখন Actual == Std (±0.0001) — Approved auto-লক "YES", AP Approved = Actual, Variance = 0
+- ভিন্ন হলে ইউজার বেছে নেয়:
+  - **NO** → AP Approved = Std (deviation টা PACE-এর নিজের cost, APL বিল হবে না)
+  - **PARTIAL** → AP Approved = manual entry, Variance = Actual − AP Approved
+  - **YES** (override করে, deviation থাকা সত্ত্বেও) → AP Approved = Actual (পুরোটাই billable)
+- একটা নতুন ad-hoc PM line (Final-এ "+ Add PM Row" দিয়ে যোগ করা, Pack BOM-এ ছিল না)-এর Std
+  সবসময় 0 — তাই কখনো auto-match হয় না, Approved বেছে নেওয়া বাধ্যতামূলক।
+
+**Schema (migration `20260721070000`):**
+- `packing_order_line`-এ ৩টা নতুন column: `approved_status`, `ap_approved_qty`, `variance_qty`
+  (nullable, PM-only — SFG/FG row-এ ব্যবহার হয় না)
+- নতুন table `erp_production.packing_order_line_reco` — `process_order_line_reco`-র হুবহু
+  mirror (append-only, `is_voided`, `reco_document_number`+`reco_document_year`), কিন্তু
+  PM-only আর Packing PO-scoped column (`sku_material_id`, `packing_order_id`,
+  `packing_order_line_id`)।
+
+**লেখা কখন হয় (SUM()-reconciled, PR19-র credit-row pattern-এর সাথে symmetric):**
+- **Final** → প্রতিটা PM line-এর জন্য একটা row, `source_txn_type='PRODUCTION'` (Process PO
+  Verify-র মতোই — deviation না থাকলেও সব line-এর row যায়, Process PO-র `lines.map()`
+  ঠিক যেমন করে)
+- **COR6 correction** → পুরনো row কখনো edit/void হয় না (Process PO-র কোনো COR6 নেই বলে
+  mirror করার কিছু নেই সেখানে; এর বদলে PR19 partial reversal-এর negative-credit-row
+  pattern mirror করা হলো) — প্রতিটা correction delta-র জন্য একটা **নতুন** row append হয়
+  (`source_txn_type='COR6_CORRECTION'`, `actual_qty=delta` — cumulative না)। তাই সবসময়
+  SUM(non-voided rows) = সঠিক cumulative Actual/AP-Approved/Variance।
+
+**Costing অপরিবর্তিত থাকে:** §104-3-এর FG cost formula ((SFG value + ΣPM value) ÷ FG qty)
+সবসময় physical Actual দিয়েই চলে — AP Approved শুধু আলাদা Reco/billing layer, stock/costing-এ
+কখনো ছোঁয় না (§104-এর already-locked two-layer principle অনুযায়ী)।
+
+**Frontend (PR11 Final tab):** PM line-এ এখন Actual Qty (editable, আগে ছিলই না —
+আসলে total_qty-তেই লক ছিল), Actual Material picker (alternate থাকলে), Approved
+dropdown, AP Approved, Variance — সব Process PO-র Input table-এর মতোই। "+ Add PM Row"
+বাটন দিয়ে নতুন ad-hoc line (material + storage location + qty + Approved)। COR6
+correction mode-এও একই column-গুলো, delta-র উপর প্রযোজ্য।
+
+**Files:** `supabase/functions/api/_core/production/packing_order.handlers.ts`
+(`computePmApprovalFields`, `finalizePackingOrderHandler`, `correctPackingOrderHandler`),
+`frontend/src/pages/dashboard/production/ProductionPOFinalPage.jsx`
+(`computePmValues`, `PackingPoFinalTab`), migration `20260721070000_packing_order_line_reco.sql`।
+
+---
+
+### §83.4.1-addendum-2 — Reverse (CORS) = PO number permanently dead; batch number reuse is a separate, already-built mechanism (LOCKED — 2026-07-21)
+
+**প্রশ্ন উঠেছিল:** business owner SAP-এর real behavior reference করে challenge করলেন — SAP-এ CORS একটা confirmation reverse করে, পুরো order মরে যায় না, আবার confirm করা যায়। আমাদের code-এ (`reverseProcessOrderHandler`/`reversePackingOrderHandler`) reverse করলে status `REVERSED` (terminal) হয়ে যায়, আর কখনো ফেরে না — এটা তো আগের doc-এর "CORS → STANDARD" (Packing PO, §83.4-এর lifecycle table) আর "Reversal: Step-by-step from any stage back to beginning" (Process PO, CLAUDE.md §83.4) লাইনগুলোর সাথেও মেলে না।
+
+**যাচাই করে যা পাওয়া গেল:** ওই দুটো doc লাইন কখনো code-এ implement হয়নি — stale draft, অন্য অনেক জায়গার মতোই। কিন্তু codebase-এ **already একটা সম্পূর্ণ, আলাদা, আরও ভালো মেকানিজম বানানো আছে** যা এই একই দরকার মেটায় — batch number-এর নিজস্ব ৩-state lifecycle (`erp_production.batch_number_instance`, Gate-27.19):
+
+```
+ACTIVE ──(CORS reverse, automatic)──▶ VOIDED ──(manager/SA "Release", reason mandatory)──▶ RELEASED
+                                                                                                │
+                                                          নতুন Process PO-র Start Batch ◀────────┘
+                                                          (activateReleasedBatchNumberInstance) → ACTIVE (নতুন PO-র সাথে)
+```
+
+**LOCKED সিদ্ধান্ত (business owner, 2026-07-21):**
+1. **PO number (Process PO বা Packing PO, দুটোই) reverse হলে permanently dead** — কখনো `STANDARD`/`FINAL`-এ ফেরে না, একই PO-তে redo করা যায় না। Redo করতে হলে **নতুন PO** বানাতে হবে (নতুন po_number)।
+2. **Batch number আলাদা জিনিস, dead হয় না** — Process PO reverse হলে ওর batch_number স্বয়ংক্রিয়ভাবে `VOIDED` হয় (ইতিমধ্যে কোড করা, `upsertBatchNumberInstanceForProcessOrder` with `status: "VOIDED"`), তারপর manager/SA ইচ্ছে করলে manually `RELEASED` করে দিতে পারে, আর একটা **নতুন** Process PO সেই একই batch number Start Batch-এর সময় তুলে নিতে পারে।
+3. **Packing PO-র নিজস্ব কোনো batch number নেই** (ও Process PO-র batch থেকে SFG টানে), তাই এই release/reuse mechanism শুধু Process PO-স্কোপড। Packing PO reverse হলে শুধু PO number-টাই dead হয়, batch number ওর হাতে নেই যে release করার প্রশ্ন আসবে।
+4. **কারণ যা এই সিদ্ধান্তকে সমর্থন করে:** PO number = "কোন attempt/transaction" identify করে (এক-বারই, dead হলে শেষ)। Batch number = "কোন material lot" identify করে (QA/genealogy-র জন্য গুরুত্বপূর্ণ, পুনরায় ব্যবহারযোগ্য)। এই দুটো আলাদা রাখাই SAP-এর real practice — order number আর batch/lot number কখনো এক জিনিস হিসেবে treat হয় না।
+
+**Doc correction:** §83.4-এর Packing PO lifecycle table-এর "CORS → STANDARD" row আর CLAUDE.md-এর "Reversal: Step-by-step from any stage back to beginning" লাইন — দুটোই এই lock-এর সাথে সংশোধন করা হলো (struck-through + correction note, delete না করে)।
+
+**কোনো code change লাগেনি** — বর্তমান কোড (terminal REVERSED + batch_number_instance lifecycle) already এই locked design-এর সাথেই মেলে। যা লাগছিল সেটা শুধু doc-কে code-এর সাথে মিলিয়ে নেওয়া।
+
+---
+
+## Section 108 — MTS/IWC (Liquid) Discovery Session: Volume Input, Reco Skip, Reservation Choice (LOCKED — 2026-07-24)
+
+**পটভূমি:** Gate-27-এর MTO/HPS chain বন্ধ হয়ে যাওয়ার পর MTS (IWC + Powder, §83.7-এ unified) নিয়ে existing setup-এর সাথে live code চেক করে একটা gap-analysis session হলো। প্রতিটা claim code/DB-এর against verify করে হয়েছে (কয়েকবার আমার নিজের ভুল ধারণা ধরা পড়েছে — নিচের প্রতিটা item-এই সেই যাচাইয়ের রেফারেন্স আছে)। ফলাফল তিনটা list — এখনই implement করার (A), শুধু data/config লাগবে এমন prerequisite (B), আর এখনো design-ready না তাই সরিয়ে রাখা (C)।
+
+### 108.1 — কেন এই session লাগল
+
+IWC (MTS)-এর Process PO **Liter-এ চলে** (ব্যবসায়িক ভাষা — "1600 Ltr banano holo"), কিন্তু Stroke/BOM/RM সব **KG-তে** — MTO/HPS-এর কোনো volume/mass সমস্যা কখনো ছিল না, তাই এই conversion layer টা প্রথমবার সামনে এলো। এর পাশাপাশি MTS-এর তিনটা mechanism, যেগুলো আসলে MTO/HPS-থেকে টেনে আনা হয়েছিল, ভুল ধরে নেওয়া হয়েছিল:
+- reco (`process_order_line_reco`/`packing_order_line_reco`) — MTS-এর জন্য লেখা হচ্ছে, কিন্তু MTS-এর কোনো Approved/AP-Approved workflow নেই (§108.2-এ বিস্তারিত)
+- SFG reservation — earlier tasks #38/#39-এ deliberately "batch-blind" করা হয়েছিল MTO/HPS-এর pattern দেখে ধরে নিয়ে; business owner challenge করলেন এটা ভুল — pack size fixed হওয়া আর কোন batch থেকে SFG টানা হবে সেটা user-এর choice হওয়া, দুটো আলাদা জিনিস
+
+### 108.2 — List A: এখনই implement
+
+| # | Item | কেন |
+|---|---|---|
+| 1 | ~~`uom_master`-এ `LTR` row~~ **✅ ইতিমধ্যে আছে** — 2026-07-24 MCP verify: `code='L', name='Litre', uom_type='VOLUME'` (আর `ML`/Millilitre ও আছে)। কোনো কাজ লাগবে না, List A থেকে বাদ। | — |
+| 2 | ~~FG SKU-র `material_uom_conversion` (KG↔LTR)~~ **✅ mechanism ইতিমধ্যেই fully generic** — 2026-07-24 verify: `material_uom_conversion` আজও কোনো material-এ `BOT→L` conversion row রাখে, কোনো নতুন column/logic লাগে না। বাস্তব IWC SKU তৈরি হলে তার KG↔L factor row বসানো **শুধু data-entry**, তাই এটা **List B-তে সরানো হলো** (নিচে দেখো)। | — |
+| 3 | ✅ **DONE (2026-07-24)** — Process PO Create, Page 3: MTS-এর জন্য Batch Qty input **Liter-এ** (derived KG পাশে read-only দেখায়), RM calculation-এর আগে KG-এ convert। **Source যা প্রথমে ভুল ধরেছিলাম:** প্রথমে নতুন `material_uom_conversion`-based endpoint বানিয়েছিলাম, পরে ধরা পড়ল **`stroke_master.base_uom_code`/`conversion_uom_code`/`conversion_factor` (§83.3-এ 2026-06-এই locked, "Conversion Factor = KG per Litre") এই exact কাজের জন্য আগে থেকেই আছে** — কখনো কোনো কোডে read/apply হয়নি, শুধু write+display হতো (StrokeMasterPage.jsx)। এই session-এ প্রথমবার wire করা হলো — `processStep 3`-এ ইতিমধ্যেই `strokeDetailQ` loaded থাকে (Stroke Step 2-তেই select হয়), তাই নতুন কোনো endpoint লাগেনি, নতুন যা বানানো হয়েছিল তা সরিয়ে ফেলা হলো। | User Liter-এ ভাবে ("1600 Ltr"), কিন্তু RM lines/Stroke dosage% সব KG-ভিত্তিক — conversion না হলে RM qty ভুল বসবে |
+| 4 | ✅ **DONE (2026-07-24)** — Prodshade Pack Config (`PackConfigPage.jsx`)-এ MTS Prodshade-এর fill size input **Liter-এ** (derived KG পাশে দেখায়), item 3-এর একই source (`stroke_master.conversion_factor`, ওই Prodshade-এর APPROVED Stroke lookup করে) — `pack_code_master`-এ কোনো conversion বসানো হয়নি, কারণ এটা density/Prodshade-ভিত্তিক জিনিস, pack-code-ভিত্তিক নয় | পুরনো ভুল স্বীকার (this session-এ প্রথমে ধরে নিয়েছিলাম pack config সবসময় KG-তেই থাকবে — IWC-এর 1L/5L/50L ইত্যাদি pack size ব্যবসায়িক ভাষায় সবসময় Liter-এ বলা হয়, KG দিয়ে user কে ভাবাতে চাওয়া ভুল) |
+| 5 | ✅ **DONE (2026-07-24)** — Process PO Verify — MTS-এর জন্য `process_order_line_reco` insert **skip** (reco doc number generation-ও skip, series-এ অব্যবহৃত number না বসার জন্য) | MTS-এর কোনো Approved/Unapproved deviation workflow নেই (এই ধারণা MTO/HPS থেকে টানা হয়েছিল, MTS-এ প্রযোজ্য নয়) — reco row লিখলে একটা অর্থহীন/অব্যবহৃত row জমে যাবে, ভবিষ্যতে ভুলভাবে report-এ ঢুকতে পারে |
+| 6 | ✅ **DONE (2026-07-24)** — Packing PO Final ও COR6 correction দুই জায়গাতেই — PMTS-এর জন্য `packing_order_line_reco` insert **skip** | একই কারণ, Packing PO-র পাশে |
+| 7 | ✅ **DONE (2026-07-24)** — Approved/AP-Approved Qty UI — MTS/PMTS-এ **hide** (`ProductionPOFinalPage.jsx`-এ existing `isBatchBlind`-এর মতো নতুন `hideRmApproval`/`hidePmApproval` flag, Process PO Final-এর Input+Output table এবং Packing PO Final-এর PM table দুটোতেই) | item 5/6-এর UI-side — না থাকা field দেখানো user-কে বিভ্রান্ত করবে |
+| 8 | ✅ **DONE (2026-07-24)** — Packing PO SFG reservation — PMTS-এর জন্য "batch-blind" **উল্টানো**, user নিজে batch choose করবে (PMTO/PHPS-এর মতোই dropdown+shortage check)। `isBatchBlindPackingType()` (`packing_order.handlers.ts`) এখন শুধু `PTEST` return করে; frontend `ProductionPOFinalPage.jsx`-এর `isBatchBlind` একইভাবে সংশোধন। নতুন কোনো logic লাগেনি — PMTO/PHPS-এর existing batch-selection/reservation path (Final + COR6) generic-ই ছিল, শুধু PMTS-কে ওই gate থেকে বের করে দেওয়া হলো | tasks #38/#39 (2026-07-এর আগের session)-এ ভুলভাবে ধরে নেওয়া হয়েছিল pack-size-fixed হওয়া মানেই batch-selection-ও অপ্রয়োজনীয় — business owner-এর challenge-এ ধরা পড়ল এই দুটো স্বতন্ত্র সিদ্ধান্ত। **PTEST (MTEST)-এর batch-blind অবস্থা অপরিবর্তিত থাকছে** — user শুধু PMTS-এর কথা বলেছেন, MTEST আলাদা |
+
+**Files (item 5-8, প্রত্যাশিত — implement করার সময় নিশ্চিত করে নেওয়া):** `supabase/functions/api/_core/production/process_order.handlers.ts` (reco insert ~line 3116/3325), `supabase/functions/api/_core/production/packing_order.handlers.ts` (`isBatchBlindPackingType` ~line 208, reco insert ~line 2191/2561), `frontend/src/pages/dashboard/production/ProductionPOFinalPage.jsx` (`isBatchBlind` ~line 171)।
+
+### 108.3 — List B: data/config prerequisite (code নয়, migration/MCP এর পরে business data)
+
+1. AC04 (Conversion Cost Config) — MTS/IWC-এর real conversion rate বসানো
+2. Prodshade Pack Config — বাস্তব 1L/5L/10L/20L/50L ইত্যাদি fill size গুলো তৈরি করা (List A #3 বানানোর পরে)
+3. Pack BOM — প্রতিটা pack size-এর জন্য আলাদা BOM row তৈরি করা
+4. FG SKU-র `material_uom_conversion` (KG↔L) row — বাস্তব IWC SKU তৈরি হলে তার জন্য এই row বসানো (mechanism আজই generic, শুধু data লাগবে — §108.2 item 2-এর সংশোধন)
+
+### 108.4 — List C: এখনো design-ready না, ভবিষ্যতের dedicated session-এ
+
+| Item | কেন এখন না |
+|---|---|
+| PID (Physical Inventory) → FG/SFG extension | আজ `PI_MATERIAL_TYPES = {"RM","PM","INT"}` (verify করা, `physical_inventory.handlers.ts`) — FG/SFG পুরো বাদ। MI04-এর dispatch-UOM-count pattern reference হিসেবে আলোচনা হয়েছে এই session-এ, কিন্তু formal L7 session লাগবে |
+| MTS Quarterly Reco mechanism | dispatch-triggered, formulation-based (dosage% × Dispatched Qty), quarterly-aggregated, কোনো Approved-Qty concept নেই — MTO/HPS-এর reco থেকে সম্পূর্ণ আলাদা মেকানিজম, **Dispatch (L5)-এর উপর নির্ভরশীল**, তার আগে design করা যাবে না |
+| MTS-এর জন্য Dispatch/SO | formal L5 session-এর scope, এখনো শুরু হয়নি |
+| MTS Repack | undesigned — MTS-এর CORS আছে (কাজ করে, কোনো gap নেই), কিন্তু "repack" নামের আলাদা কোনো feature নেই |
+| **FOR_REPROCESS / Damaged FG Salvage-Rework** (নতুন এই session-এ উঠেছে) | ২০০ ব্যাগ FG-এর ১৫টা damaged হলে অন্য চলতি batch-এ salvage করে মিশিয়ে দেওয়ার scenario — ⚠️ **এই session-এ আমি প্রথমে ভুলভাবে "BLOCKED stock + receiving batch-এর RM line-এ Alternate Material substitution (PR10 pattern)" প্রস্তাব করেছিলাম, যাচাই না করেই।** পরে ধরা পড়ল **§83.6 "FG Reuse, Return and Reprocess"-এ (2026-06-08, আগে থেকেই LOCKED) এই একদম এই scenario-র জন্য আলাদা, আরও সঠিক design আগে থেকেই আছে**: dedicated `FOR_REPROCESS` stock type (BLOCKED নয়), consumption হয় Process PO-তে **additional RM line যোগ করে** (existing formulation RM-এর জায়গায় substitute না করে), movement type P267/P268 (CLAUDE.md-এ "Missing movement types" হিসেবে flagged, এখনো build হয়নি)। **তাই এই item-এর জন্য নতুন design লাগবে না, বরং §83.6-এর already-locked design-টাই বাস্তবায়ন (P267/P268 movement type + FOR_REPROCESS stock-type wiring) করতে হবে** — যা এখনো করা হয়নি। MTS-স্পেসিফিক প্রশ্ন (batch-per-Prodshade numbering, MTS-এ PR19 না থাকা তাই partial-reversal precedent থেকে আলাদা করে বানাতে হবে) দেখার সময় §83.6-এর সাথে মিলিয়ে দেখতে হবে যে ওটা MTO/HPS/MTS তিনটার জন্যই generic কিনা। Dedicated FOR_REPROCESS session-এ শুরু করার আগে এই reconciliation note-টা প্রথমে পড়তে হবে। |
+| PR22/PR23 (Opening Genealogy) MTS-এ না থাকা | এটা gap **নয়** — already সঠিক ও closed (MTS-এর কোনো production-time reco layer নেই যে PR22/23 feed করবে) |
+
+---
+
+## Section 109 — Opening Rate Correction: "Recalculate" Mechanism (2026-07-24 — মূল সিদ্ধান্ত LOCKED, cascade-scope OPEN)
+
+### 109.1 — পটভূমি (recap)
+
+Commercial team সময়মতো real WAR দিতে পারবে না (go-live cutover অনুযায়ী)। তাই RM/PM-এর Opening Rate শুরুতে **provisional** বসবে, পরে যখন real rate আসবে (target: **31 July-এর closing WAR**), সেটা দিয়ে সংশোধন করতে হবে। UX: একটাই editable Opening Rate field + একটা "Recalculate" button, প্রতি material-এ **একবার** use হবে (§104.9-এর ধারাবাহিকতা, business owner-এর confirm করা design intent — CLAUDE.md-এর পূর্বের note)।
+
+### 109.2 — Mechanism LOCKED (2026-07-24, business owner-এর সরাসরি a/b/c উত্তর)
+
+| প্রশ্ন | উত্তর |
+|---|---|
+| (a) Opening থেকে আজ পর্যন্ত সব posting নতুন rate দিয়ে **replay** হবে (`post_stock_movement()` আবার কল করে, original chronological order-এ)? | **✅ Yes** |
+| (b) নাকি সরাসরি `stock_snapshot`-এ গিয়ে current balance-টা এক ধাক্কায় সংশোধন (shortcut adjustment entry)? | **❌ No** — এই lighter approach বাতিল |
+| (c) মাঝখানে PR19 (salvage/partial reversal)-এর মতো posting থাকলে সেগুলোও replay-এর আওতায় আসবে? | **✅ Yes** |
+
+মানে: **heavy, নির্ভুল replay**-ই চাওয়া হয়েছে — GRN, Process PO Verify, Packing PO Final, PR19, COR6, CORS — সবকিছু যা ওই material-এর `stock_ledger`-এ posting করেছে opening-এর পর থেকে, **সবই** replay-এর scope-এ থাকবে, কোনো shortcut নয়।
+
+### 109.3 — টেকনিক্যাল বাস্তবতা: append-only ledger-এর সাথে "replay" কীভাবে সম্ভব
+
+**§8C/§8D-এ locked rule:** `stock_ledger` append-only — `stock_ledger_no_delete`/`stock_ledger_no_update` rule আছে, কোনো historical row **কখনো edit/delete করা যায় না**। তাই "replay" মানে literal অর্থে পুরনো row বদলানো **নয়** — এটা সম্ভবই না।
+
+তাহলে "replay" বাস্তবে কী হবে: পুরনো prior-এর মতোই (CORS/COR6/PR19 — সবখানেই এই একই pattern) **নতুন correction posting-এর একটা সিরিজ** তৈরি হবে, প্রতিটা historical event-এর জন্য একটা করে, chronological order-এ apply করে, যাতে শেষে `stock_snapshot`-এর current balance+rate ঠিক সেই মানেই পৌঁছায় যেটা opening rate সঠিক হলে হতো। পুরনো row-গুলো audit trail-এ **অক্ষত থেকে যাবে** (যেমন আজও থাকে), correction-গুলো তার **উপরে** বসবে — ঠিক reversal/correction-এর existing idiom-এর মতোই, নতুন কিছু আবিষ্কার নয়।
+
+### 109.4 — Cascade scope LOCKED (2026-07-24, business owner সরাসরি সিদ্ধান্ত): RM → SFG → FG পুরো cascade
+
+`post_stock_movement()`-এর WAR নিয়ম — IN movement-এ rate blend হয়, OUT movement rate **অপরিবর্তিত রেখে** current rate-এই মাল বের করে। মানে RM-এর Opening Rate ভুল থাকলে সেই RM থেকে যত **OUT** (Process PO Verify P261) হয়েছে সবই ভুল rate-এ "value removed" হিসাব করেছে, তার উপর §104-2 SFG cost বসেছে, তার উপর §104-3 FG cost বসেছে — **business owner সিদ্ধান্ত নিয়েছেন এই পুরো chain-টাই automatically সংশোধন হবে, শুধু RM-এর নিজের rate ঠিক করে downstream-কে "manual review"-এ ছেড়ে দেওয়া হবে না।**
+
+### 109.5 — Implementation plan: ৩ ধাপ (single build এ পুরোটা নয় — §107.8-এর post_document staged-rollout-এর মতোই discipline)
+
+কারণ পুরো cascade একবারে বানানো risky (stock engine-এর গভীরে হাত, বড় blast radius) — §8D-এর নিজের সতর্কবার্তার সাথেও মেলে ("stock engine-এ হাত দেওয়া মানে যে বিপদ ঠেকাতে চাইছি সেটাই ডেকে আনা")। তাই ৩ ধাপে ভাগ করা হলো, প্রতিটা ধাপ নিজে থেকেই সম্পূর্ণ ও testable:
+
+**ধাপ ১ — ✅ DONE (2026-07-24) — Core simulation engine + শুধু root material (RM/PM)-এর নিজের সংশোধন:**
+- ✅ নতুন table `erp_inventory.valuation_correction_log` — audit trail (আগে যেমন CORS/COR6/PR19-এর জন্য কখনো history edit হয়নি, নতুন posting-ই হয়েছে, এখানেও সেই idiom)। Migration `20260724100000_valuation_correction_recalculate.sql`।
+- ✅ নতুন function `erp_inventory.recalculate_valuation(company, material, storage_location, stock_type, new_opening_rate, actor, reason)` — opening থেকে আজ পর্যন্ত সেই material-এর প্রতিটা `stock_ledger` row chronologically walk করে, IN row-এ blend recompute করে (GRN-এর নিজের rate অপরিবর্তিত, শুধু blended average বদলায়), OUT row-এ "corrected value removed" বনাম "originally recorded value removed" তুলনা করে একটা **impacted_rows list** বানায় (এটাই ধাপ ২/৩-এর input হবে)। Live Dev data (Tartaric Acid, opening 594@₹10 + GRN 1000@₹113, current blended ₹74.617315) দিয়ে rolled-back transaction-এ হাতে-হিসাব করে verify করা — গণিত ঠিক, rollback পরিষ্কার (০ residual row)।
+- ✅ `stock_snapshot.valuation_rate` আপডেট হয় simulation-এর ফলাফল দিয়ে (row-lock করে, `post_stock_movement()`-এর concurrency pattern অনুসরণ করে) — qty mismatch হলে hard-block (`VALUATION_RECALC_QTY_MISMATCH`)।
+- ✅ Backend: `recalculateValuationHandler` (`opening_stock.handlers.ts`, manager/SA gated) + route `POST /api/procurement/opening-stock/recalculate-valuation` + ACL (`PROC_OPENING_STOCK_APPROVAL`, action `APPROVE` — post-এর মতোই sensitive)।
+- ✅ Frontend: IN05 (`OpeningStockDetailPage.jsx`)-এ POSTED document-এর line table-এ একটা নতুন "Corrected Rate" column (per-line inline input, আলাদা click/form লাগে না) + নিচে একটাই shared Reason field + একটাই **"Recalculate All"** button — যত line-এ rate ভরা আছে সবগুলো এক ক্লিকে parallel-এ submit হয় (§8B — প্রতিটা আলাদা material/snapshot, independent, তাই batch call, sequential loop নয়)। Result section-এ প্রতিটা line-এর old→new rate + impacted count আলাদা করে দেখায়।
+- ✅ **One-time-use lock, business owner follow-up (2026-07-24):** প্রথম UX draft-এ per-line click+confirm ছিল, যা বার বার করতে হতো — সংশোধন করে bulk table বানানো হলো। সাথে সাথে server-side **hard lock**-ও বসানো হলো (migration `20260724110000_valuation_recalc_one_time_guard.sql`): `recalculate_valuation()` এখন প্রথমেই `valuation_correction_log`-এ আগের কোনো row আছে কিনা check করে — থাকলে `VALUATION_RECALC_ALREADY_DONE` দিয়ে আটকায়। Rolled-back transaction-এ দ্বিতীয়বার call করে verify করা — সঠিকভাবে block হয়, কোনো residual row থাকে না। UI-তে already-recalculated line "Recalculated" badge দেখায় (input-এর জায়গায়), re-click করার উপায় নেই — future "reopen" mechanism deliberately এখনো design করা হয়নি।
+- ✅ Correction-এর পর ওই line-এর `opening_stock_line.rate_per_unit`-ও sync হয় নতুন rate দিয়ে (handler-এ), তাই পরের বার document খুললে "Current" column-এ সঠিক/সংশোধিত rate-ই দেখায়, পুরনো ভুল entry নয়।
+**ধাপ ২ ও ৩ — ✅ DONE (2026-07-24), business owner-এর সরাসরি challenge-এ:** ধাপ ১-এর পর প্রশ্ন উঠল — "recalculate to automatic hobe, user er hat e kono calculation thakbena, system sob overwrite kore sothik answer bosabe।" এটাই আসল target ছিল, ধাপ ১ ছিল শুধু ভিতরের ইঞ্জিন, cascade-টাই বাকি ছিল। এখন সম্পূর্ণ **এক ক্লিকে RM/PM → SFG → FG পুরো automatic**:
+
+- ✅ `recalculate_valuation()` (single-material, opening-row-only) **generalized** করে `erp_inventory.recalculate_valuation_at_row(target_ledger_id, ...)` বানানো হলো — যেকোনো ledger row-কে target করতে পারে, opening row শুধু একটা special case (target = material-এর first row)। কারণ: SFG-এর "opening" বলে কিছু নেই, ওর নিজের প্রতিটা production batch-এর receipt-ই একটা আলাদা correctable event — mid-stream row correct করার ক্ষমতা লাগেই। One-time-use lock এখন `target_ledger_id`-এর উপর (আগে material-এর উপর ছিল, যা এখন ভুল — একটা material বহুবার বহু আলাদা event-এ correct হতে পারে)। Migration `20260724120000_valuation_recalc_cascade_engine.sql`।
+- ✅ **নতুন real gap ধরা পড়ল আর ঠিক করা হলো:** একটা Process PO-তে সাধারণত অনেকগুলো RM line থাকে — যদি সেই PO-র ২টা RM material-এর rate একই action-এ correct করা হয় (এই feature-এর আসল trigger — "commercial theke ekbar e kaeykta material er rate ashe"), single-pair recompute function ব্যবহার করলে যেটা প্রথমে পৌঁছাবে সেটাই SFG-কে correct করে দিত, দ্বিতীয়টা one-time-lock-এ block হয়ে **নীরবেই বাদ পড়ে যেত** — SFG-এর cost ২টার একটার ভিত্তিতেই ভুলভাবে বসত। সমাধান: `recompute_sfg_cost_for_line`/`recompute_fg_cost_for_line` (single-pair) বাতিল করে `recompute_sfg_cost`/`recompute_fg_cost` (jsonb array-ভিত্তিক, multi-line) — cascade orchestrator একই PO-কে touch করা সব correction একসাথে জমিয়ে **একবারে** recompute করে। Migration `20260724130000_valuation_recalc_multi_line_cost.sql`।
+- ✅ Backend orchestrator (`recalculateValuationHandler`, `opening_stock.handlers.ts`) — level-by-level BFS: ধাপ ০ (user-এর দেওয়া সব RM/PM line, sequential), তারপর প্রতি ধাপে impacted rows-কে downstream Process PO/Packing PO দিয়ে group করে, group-ভিত্তিক multi-line recompute চালিয়ে next level-এর target বানায়, `impacted_rows` খালি না হওয়া পর্যন্ত loop চলে। Frontend আর line-প্রতি আলাদা call করে না (parallel Promise.all বাতিল — এটাই ঠিক ওই convergence bug ডেকে আনত) — এখন একটাই batch call, সব RM/PM line + এক reason নিয়ে।
+- ✅ Live Dev data দিয়ে verify: PO 930002 (real VERIFIED Process PO, Tartaric Acid RM issue qty 25, ভুল rate ₹0 → corrected ₹73.87) → `recompute_sfg_cost` দিয়ে SFG rate বের করা (₹2.1347, RMC+conversion ₹1.95 মিলে হাতে-হিসাব-মিলানো) → `recalculate_valuation_at_row` দিয়ে সেই SFG-এর নিজের snapshot (QUALITY_INSPECTION, qty 20816.85) সংশোধন — সবই rolled-back transaction-এ, ০ residual state। Multi-line convergence-ও আলাদাভাবে verify করা (২টা RM line একসাথে দিয়ে, হাতে-হিসাব-মিলানো)।
+- ⚠️ **সংশোধন (2026-07-24, business owner-এর challenge-এ ধরা পড়ল):** আমি ভুল করে বলেছিলাম "Dev-এ real ৩-level chain নেই, কোনো SFG real Packing PO দিয়ে consume হয়নি" — যাচাই না করেই। ব্যবসায়িক মালিক সরাসরি বললেন "keno bollo hoyni, dekho check kore" — broad query করে দেখা গেল **real ৩টা Packing PO** (৭be9910b, ৫e37b23b, ১৭৭bec98) সত্যিই একই SFG material consume করেছে PO 930008 (real VERIFIED Process PO, RMC ₹10.00 + conversion ₹1.95 = SFG ₹11.95/kg, আগেই live-verified) থেকে। এই ভুলটা হয়েছিল কারণ আমি শুধু **একটা নির্দিষ্ট** batch_number match চেক করেছিলাম, পুরো `packing_order_line` table-এ broad search করিনি — নিজের claim যাচাই না করেই "নেই" বলে দিয়েছিলাম, এই session-এর নিজের discipline-এর বিরুদ্ধেই।
+- ✅ **এই আসল ৩-level chain দিয়ে পুরো cascade চালিয়ে একটা real, নতুন bug ধরা পড়ল আর সাথে সাথে ঠিক হলো:** RM ঠিক করার পর SFG-এর নিজের QI receipt (`fg_stock_ledger_id`) ঠিক করা হলো, কিন্তু তার impacted row হিসেবে যা এলো সেটা ছিল **P321 QI-release-এর OUT-from-QI leg** — এটা `process_order_line`-ও না, `packing_order_line`-ও না, তাই cascade একে **leaf** ধরে থেমে যেত। বাস্তবে P321-এর IN-to-UNRESTRICTED sibling leg (`process_order.qi_release_stock_ledger_id`, আলাদা `stock_document_id`, যেহেতু `post_document` প্রতি direction-এ আলাদা document বানায়) **একই rate দিয়ে সংশোধন করা প্রয়োজন** — নাহলে Packing PO আসলে যে UNRESTRICTED snapshot থেকে SFG টানে, সেটাই অসংশোধিত থেকে যেত, cascade মাঝপথে থেমে যেত। Fix: `findDownstreamGroup()`-এ তৃতীয় case — impacted row-এর নিজের `reference_document_type='PROC_PO'`/`reference_document_id` (§106 tagging, already returned by `recalculate_valuation_at_row`) দিয়ে সেই PO-র `qi_release_stock_ledger_id` খুঁজে, **একই corrected_rate pass-through করে** (নতুন recompute নয়, শুধু stock_type বদল)।
+- ✅ **সম্পূর্ণ ৪-স্তরের real chain rolled-back transaction-এ verify করা:** RM (a04acb54, ₹10→₹8) → SFG receipt recompute (₹10.666, RMC+conversion হাতে-মিলানো) → SFG QI snapshot সংশোধন → **QI-release passthrough** (নতুন fix) → SFG UNRESTRICTED snapshot সংশোধন (₹5.317) → এখান থেকে **সত্যিই দুটো real Packing PO** (৭be9910b, ৫e37b23b) impacted হিসেবে বেরিয়ে এলো (তৃতীয়টা, ১৭৭bec98, chronologically এই correction point-এর আগে বলে এই নির্দিষ্ট correction-এ touch হয়নি — এটা সঠিক আচরণ) → দুটো Packing PO-র FG cost recompute (₹3.59, ₹3.588), **এবং তারপর সরাসরি apply করেও verify করা** (শুধু হিসাব না, `recalculate_valuation_at_row` দিয়ে দুটো FG-র নিজের snapshot-ও সংশোধন হলো — দ্বিতীয়টার old_rate ঠিক প্রথমটার new_rate-এর সমান এল, blending ঠিকমতো হচ্ছে তার প্রমাণ) — পুরো chain কোনো error ছাড়াই, ০ residual state (rollback)। **এটাই প্রথম real, সম্পূর্ণ ৪-স্তরের (RM→SFG-QI→SFG-UNRESTRICTED→FG) end-to-end verification, শুধু ২-level নয়।**
+- ✅ **PM/INT coverage note (2026-07-24):** RM আর FG দুই প্রান্তই এখন real data দিয়ে প্রমাণিত। PM আর INT-ও **একই code path** ব্যবহার করে (`findDownstreamGroup()` line_type/material_type আলাদা করে দেখে না, শুধু `stock_ledger_id` match করে) — তাই structurally একই কাজ করার কথা, কিন্তু Dev-এ কোনো real PM বা in-house INT production না থাকায় আলাদাভাবে verify করা যায়নি।
+- ✅ **Derived Opening Rate suggestion — Recalculate-এও যোগ করা হলো (2026-07-24, business owner-এর correction-এ):** প্রথমে ভুল বলেছিলাম যে opening-এ কেনা/manual INT সরাসরি typed rate পায় (dosage-derivation ছাড়া) — আসলে §104-7-এর derived-opening-rate endpoint **SFG আর INT দুটোর জন্যই** কাজ করে (শুধু SFG-এর জন্য না), Opening entry-র সময় Stroke dosage% × RM-এর current rate থেকে suggestion দেখায় (editable, কেনা হলে override করা যায়)। এই একই suggestion এখন Recalculate-এর bulk table-এও SFG/INT line-এ দেখায় (RM-এর সদ্য-সংশোধিত rate দিয়ে recompute করে) — `useQueries` দিয়ে প্রতিটা SFG/INT line-এর জন্য আলাদা derived-rate query, "Suggest X (from dosage)" লিংক ক্লিক করলে Corrected Rate ঘরে বসে যায়।
+- ⏳ বাকি: শুধু live end-to-end verification deployed app-এ (business owner login লাগবে) — কোড ও গণিত এখন real data দিয়ে সম্পূর্ণ verify হয়ে গেছে।
+
+**শিক্ষা (এই session-এর নিজের established discipline, আবার লঙ্ঘন হয়েছিল):** "নেই" বলার আগে broad query চালাও, নির্দিষ্ট একটা path চেক করেই সিদ্ধান্ত নিও না।
+
+---
+
+## Section 110 — SAP-Identical Multi-UoM (Base/Purchase/Sales-Dispatch) — LOCKED (2026-07-24)
+
+### 110.1 — পটভূমি
+
+Recalculate-এর discussion থেকে উঠে এলো একটা বড় প্রশ্ন: FG stock বর্তমানে শুধু KG-তেই দেখা যায় — বাস্তবে dispatch/receiving সবসময় pack unit-এ (bag/bottle/carton) হয়, KG-তে না। Business owner-এর real SAP অভিজ্ঞতা (MB52/MIGO/VL01N reference) থেকে challenge: **"user 3 te UoM hisabe stock dekhte r use korte chaibe r parbe"** — Base UoM (KG), Middle UoM (Bottle), Dispatch/Receiving UoM (Carton) — SAP-এ যেভাবে হয় ঠিক সেভাবেই, কোনো পার্থক্য ছাড়া।
+
+### 110.2 — Design Principle (LOCKED)
+
+- **ভিতরে (stock_ledger/stock_snapshot/costing/WAR): সবসময় base UoM (KG)** — অপরিবর্তিত, এটাই SAP-ও করে (Base Unit of Measure সব valuation-এর ভিত্তি)।
+- **প্রতিটা transaction entry screen-এ (GRN, PO, ভবিষ্যতের Dispatch, Physical Inventory)**: user-কে সেই material-এর জন্য define করা সব alternate UoM-এর একটা dropdown দেখানো হবে + quantity input, একটা designated default unit দিয়ে pre-select করা থাকবে। User চাইলে অন্য unit বেছে entry করতে পারবে (base UoM-সহ)। Entry submit হওয়ার সাথে সাথেই conversion factor দিয়ে base UoM-এ convert হয়ে যাবে — posting/stock layer কখনো জানবে না user কোন unit-এ টাইপ করেছিল।
+- **Stock report-এ (MB52-স্টাইল)**: current balance-এর পাশে derived alternate-unit quantity-ও দেখানো যাবে (read-only, conversion factor দিয়ে হিসাব করা)।
+
+### 110.3 — যা verify করে পাওয়া গেল ইতিমধ্যেই আছে (schema-তে নতুন কিছু লাগবে না)
+
+| উপাদান | কোথায় | অবস্থা |
+|---|---|---|
+| FG-এর dispatch/outer unit designation | `erp_production.pack_code_master.outer_uom_code` — প্রতিটা pack code-এর জন্য সঠিক ভাবে বসানো আছে (BTL/PKT/BAG/JAR/BBL/IBC/KG) | ✅ সম্পূর্ণ, verify করা — `material_master.pack_code → pack_code_master.outer_uom_code` join দিয়ে যেকোনো FG SKU-র dispatch unit বের করা যায়, **নতুন column লাগে না** |
+| Unit-এ না KG-তে বিল হবে | `pack_code_master.billing_uom` (PER_UNIT/PER_KG) | ✅ আছে |
+| RM/PM-এর purchase/issue unit designation | `material_master.purchase_uom_code`/`issue_uom_code` | ⚠️ Column আছে, কিন্তু মাত্র ৩টা material-এ বসানো আছে (৯২টার মধ্যে RM+PM) |
+| Conversion factor storage (যেকোনো unit, যেকোনো material) | `erp_master.material_uom_conversion` — generic, একাধিক row নিতে পারে (single-hop, pre-collapsed factor — chain না, এটা SAP-ও তাই করে) | ✅ সম্পূর্ণ, কাজ করছে (Pack BOM auto-sync দিয়ে verify করা) |
+| PO line entry-তে UoM picker | **PO Create (POCreatePage.jsx)-এ ইতিমধ্যেই আছে** — `checkApprovedAsl()` ASL (Approved Source List)/vendor-material-info-এর নিজস্ব `uoms` list থেকে UOM dropdown দেখায় (`vendor_material_info` টেবিলের নিজস্ব conversion_factor, `material_uom_conversion`-এর থেকে **আলাদা mechanism** — vendor যে unit-এ deliver করে সেটাই এখানকার উৎস), `line.uom_code`-এই `ordered_qty` store হয় (base UoM-এ না) | ✅ ইতিমধ্যেই সম্পূর্ণ, retrofit লাগবে না |
+| GRN entry-তে UoM conversion | **GRNPostFlow.jsx-এ ইতিমধ্যেই আছে** — PO uom_code ≠ base_uom_code হলে "Per-pack qty" field দেখায় (`material_uom_conversion` থেকে conversion factor auto-suggest, "Material master" ব্যাজ; ওখানে row না থাকলে "Suggested" ব্যাজ দিয়ে manual entry), stock qty = received_qty × per_pack_qty হিসাব করে base UoM-এ posting করে | ✅ ইতিমধ্যেই সম্পূর্ণ, retrofit লাগবে না |
+| Opening Stock (IN05) entry-তে UoM picker | `OpeningStockDetailPage.jsx`-এর single/edit/bulk তিনটে entry path-ই সবসময় `quantity`-কে base UoM (KG) ধরে নিত — `entered_uom_code: baseUom` (bulk-এ) hardcoded ছিল, কোনো dropdown-ই ছিল না | ❌ ছিল, **এখন ফিক্সড (নিচে দেখো)** |
+| Stock report-এ alternate-unit display | কোনো report-ই `material_uom_conversion` ব্যবহার করে না | ❌ সম্পূর্ণ অনুপস্থিত |
+
+> **⚠️ সংশোধন (2026-07-24, নিজের ভুল ধরা পড়ল Phase B শুরু করতে গিয়ে):** এই section-এর প্রথম সংস্করণে লেখা ছিল "GRN/PO/সব জায়গায় সবসময় শুধু base UoM-তেই entry হয় — সম্পূর্ণ অনুপস্থিত"। **এটা ভুল ছিল, code না পড়েই লেখা হয়েছিল।** বাস্তবে PO Create আর GRN Post দুটোরই নিজস্ব, আলাদা, কাজ-করা multi-UoM mechanism আছে (উপরের টেবিলে বিস্তারিত) — এগুলো আরেকটা generic picker দিয়ে replace করলে সেটা downgrade হতো (ASL-এর vendor-specific UOM list, GRN-এর discrepancy-aware per-pack-qty badge — দুটোই হারাতো)। তাই Phase B-এর আসল target বদলে **Opening Stock (IN05)** করা হলো, যেটা সত্যিই কোনো picker ছাড়াই ছিল। **শিক্ষা (এই session-এর নিজের established discipline, আবারও প্রযোজ্য):** "কোথাও নেই" লেখার আগে actual code পড়ে যাচাই করো, নাহলে doc-ই ভুল দিক দেখিয়ে দেয়।
+
+### 110.4 — Data gap-এর জন্য সিদ্ধান্ত: Graceful fallback, বাধ্যতামূলক bulk data-entry নয় (LOCKED)
+
+`purchase_uom_code`/`issue_uom_code` বেশিরভাগ material-এ নেই — এটা পূরণ করা একটা বড়, ধীর, ভুল-প্রবণ manual data-entry কাজ (প্রতিটা material-এর real conversion factor জানতে হবে, যেটা Claude-এর অনুমান করার বিষয় না)। **সিদ্ধান্ত: UoM picker কোনো material-এর জন্য alternate unit না পেলে শুধু base UoM (KG) দেখাবে (dropdown-ই আসবে না)** — এটাই আজকের আচরণ, কিছু ভাঙবে না। যখনই business কোনো material-এর জন্য alternate unit চালু করতে চাইবে, Material Master-এর (এখন-ঠিক-হওয়া) UOM Conversion tab-এ গিয়ে বসিয়ে দিলেই সেই material পরের বার থেকে picker-এ দেখাবে — কোনো code change লাগবে না প্রতিবার। SAP নিজেও এভাবেই কাজ করে — প্রতিটা material-এর alternate unit থাকা বাধ্যতামূলক না।
+
+### 110.5 — Phased Plan of Action (LOCKED, Phase B-এর target সংশোধিত 2026-07-24)
+
+| ধাপ | কাজ | নির্ভরতা | অবস্থা |
+|---|---|---|---|
+| **A** | Reusable "UoM Quantity Picker" — নতুন procurement-domain read-gated endpoint (`GET /api/procurement/materials/uom-conversion`, `assertProcurementReadRole` — OM-এর manager-only endpoint reuse করা হয়নি, L1/L2 procurement staff-ও GRN/PO/Opening Stock বানায়) + generic frontend component `UomQuantityInput.jsx` (qty input + UoM dropdown, base UoM-এ auto-convert করে ফেরত দেয়, alternate unit না থাকলে dropdown-ই আসে না) | কিছুই না | ✅ DONE (commit `4144059`) |
+| **B** | ~~GRN + PO line quantity entry-তে~~ **Opening Stock (IN05)-এ ধাপ A বসানো** — GRN/PO-র নিজস্ব mechanism ইতিমধ্যেই সম্পূর্ণ (§110.3 সংশোধনী দেখো), তাই আসল gap ছিল IN05, single/edit/bulk তিনটে entry path-ই। Backend-এর `opening_stock_line.entered_uom_code`/`entered_quantity` column দুটো **আগে থেকেই ছিল** কিন্তু frontend কখনো real value পাঠাতো না (bulk-এ hardcoded base UOM, single/edit-এ পাঠাতোই না) — এখন `UomQuantityInput`-এর `onChange(baseQty, {enteredQty, enteredUomCode})` সরাসরি এই দুটো column-এ যায়, audit trail-এর জন্য Lines টেবিলে নতুন "Entered As" column-ও যোগ হলো | ধাপ A | ✅ DONE (2026-07-24) |
+| **C** | Stock report-এ alternate-unit derived column — target ছিল FG Stock Breakdown, কিন্তু সেটা ইতিমধ্যেই per-Packing-PO `num_packs`/`fill_qty_per_pack` দেখায় (আলাদা mechanism, যথেষ্ট)। আসল MB52-সমতুল্য (raw `material_id`/`storage_location_id` দেখাতো, কোনো alt-unit ছিল না) হলো `CurrentStockPage.jsx`/`getCurrentStockHandler` — user-এর মূল অভিযোগ ("AWP 20 KG bag" example) এখানেই প্রযোজ্য। `stock_snapshot` row-এর material_id/storage_location_id বাল্ক resolve করে material name/code + location name/code (§8A rule, একই pass-এ ফিক্স হলো) + `material_uom_conversion` থেকে alt_uom_code/alt_quantity যোগ করা হলো | ধাপ A | ✅ DONE (2026-07-24) |
+| **D** | Physical Inventory (PID) — dispatch-UoM-এ count করা (MI04-এর মতো, business owner-এর নিজের SAP অভিজ্ঞতা থেকে reference করা) | ধাপ A, **PID নিজেই এখনো "L7 formal session required"** | 🔵 PID-এর formal session-এ বানাতে হবে, এই component-ই reuse করে — design আলাদা হবে না |
+| **E** | Dispatch (L5) — user bag/bottle-এ dispatch entry করবে, system KG-তে convert করে stock কমাবে | ধাপ A, **Dispatch নিজেই এখনো "L5 formal session required"** | 🔵 L5-এর formal session-এ বানাতে হবে, এই component-ই reuse করে |
+
+**গুরুত্বপূর্ণ:** ধাপ D আর E যখন formal session-এ design হবে, তখন যেন এই ধাপ A-এর component-টাই reuse করা হয় (নতুন আলাদা UoM-picker আবিষ্কার না করে) — এটাই "কোনোদিন আর এই প্রশ্ন না আসা"-র নিশ্চয়তা।
+
+---
+
+## Section 111 — WAR Landed-Cost Gap Discovery + Priority Sequencing (2026-07-25, DEFERRED — not a go-live blocker)
+
+### 111.1 — পটভূমি
+
+Dispatch-এর formal session শুরু করার আগে business owner WAR (Weighted Average Rate) নিয়ে একটা review চাইলেন — "Dispatch-এর আগে WAR নিয়ে design-এ কী কী বাকি সেটা একবার দেখে নিতে হবে।" এই review থেকে code-verified কয়েকটা real gap বেরিয়ে এলো, যেগুলো এই section-এ লক করা হলো।
+
+### 111.2 — WAR engine নিজে সঠিক (verified, কোনো সমস্যা নেই)
+
+`post_stock_movement()`-এর exact ফর্মুলা (migration `20260712013000`, IN branch):
+```
+নতুন Qty   = আগের Qty + আসা Qty
+নতুন Value = আগের Value + (আসা Qty × আসার Rate)
+নতুন Rate  = নতুন Value ÷ নতুন Qty
+```
+OUT branch rate বদলায় না (`v_new_rate := v_old_rate`) — শুধু আগের rate দিয়ে value কমে। Opening entry-কে আলাদা কিছু হিসেবে treat করা হয় না, এটা শুধু "প্রথম IN" (snapshot না থাকলে)। এটাই standard moving-weighted-average, business owner-এর নিজের বর্ণনা ("Opening Qty×Rate + Inward Qty×Rate সব যোগ, Total Qty দিয়ে ভাগ") এর সাথে ঠিক মেলে — শুধু list-ভিত্তিক না, event-by-event running/cumulative।
+
+### 111.3 — যা আজ WAR-এ ঢোকে, যা ঢোকে না (সব code-verified)
+
+| উপাদান | আজ WAR-এ যায়? | কোথায় capture হয় |
+|---|---|---|
+| PO rate (`po_rate`) | ✅ হ্যাঁ — এটাই একমাত্র উৎস | PO Create |
+| Invoice rate (`invoice_rate`) | ❌ **না** — GRN-এ capture হয়, DB-তে save হয়, কিন্তু `effectiveGrnRate`/`baseUomRate` হিসাবে কখনো ব্যবহার হয় না (`grn.handlers.ts` লাইন ৬৫৮-৬৬০ verified) | GRN Post |
+| GST% (`gst_pct`) | ❌ না (ইচ্ছাকৃতভাবে ঠিকই আছে — নিচে ১১১.৪ দেখো) | GRN Post |
+| Landed Cost (Freight/Insurance/Customs Duty/CHA/Loading/Unloading/Port/Other) | ❌ **না** — `landed_cost`/`landed_cost_line` টেবিল+পেজ (`/dashboard/procurement/accounts/landed-costs`) সম্পূর্ণ বানানো আছে, কিন্তু `postLandedCostHandler` শুধু status DRAFT→POSTED করে, `stock_snapshot` কোথাও ছোঁয় না | Landed Cost page (Accounts) |
+| Debit Note (RTV-linked) | আংশিক — RTV-এর ফেরত qty-র জন্য landed cost proportionally apportion করে (qty ratio, freight FOR হলে বাদ), কিন্তু এটা শুধু vendor-claim number, WAR-কে ছোঁয় না | RTV flow |
+| Reject/RTV-এর stock reversal | ✅ সঠিক — current WAR rate দিয়েই reverse হয় (§104-4-এর reversal-symmetry rule মতো) | RTV flow |
+
+**সবচেয়ে গুরুত্বপূর্ণ finding:** Landed Cost-এর apportionment logic (qty-ratio ভাগ, cost_type-ভিত্তিক, freight-term-aware) **ইতিমধ্যেই বানানো আছে** (Debit Note-এর জন্য) — WAR-এ feed করার সময় এই logic নতুন করে বানাতে হবে না, reuse করতে হবে।
+
+### 111.4 — GST কখনোই WAR-এ ঢোকা উচিত না (accounting principle, business owner-কে জানানো হয়েছে)
+
+Domestic GST আর বেশিরভাগ import IGST — creditable (Input Tax Credit, GST liability-র বিরুদ্ধে claim হয়) — তাই এটা "cost" না, inventory valuation-এ ঢোকা উচিত না। শুধু non-creditable duty (BCD) landed cost-এর অংশ হওয়া উচিত। **আজকের সিস্টেম কাকতালীয়ভাবে এটাই করছে** (GST কখনো WAR স্পর্শ করে না) — এখানে fix করার কিছু নেই। ⚠️ Business owner-কে বলা হয়েছে exact ITC-eligibility rule material/HSN-ভেদে exception থাকতে পারে, CA-র সাথে confirm করে নিতে।
+
+Bundled rate (Basic+Freight+GST একসাথে quote করা vendor)-এর ক্ষেত্রে: GST invoice আইনত সবসময় GST আলাদা দেখাতে বাধ্য (mandatory tax invoice format) — তাই real invoice হাতে এলে GST% জানা যাবেই, `gst_pct` ফিল্ড থেকে ex-GST rate বের করা সম্ভব (`Basic = Total ÷ (1+GST%/100)`) — কিন্তু এই back-calculated rate-ও আজ WAR-এ যায় না (একই ১১১.৩-এর gap)।
+
+### 111.5 — Import landed-cost buildup (business owner-এর ব্যাখ্যা, ভবিষ্যতের ডিজাইনের জন্য রেকর্ড করা)
+
+**Type 1 — Full import (PACE নিজে করে):** PO Basic Rate (Dollar/Euro/INR) + Duty + Shipping Line + CFS + CHA + Transporter + Unloading।
+**Type 2 — Consignor Port-পর্যন্ত deliver করে (INR-এ):** Consignor-এর bundled Port-rate + Transporter + Unloading (transporter-এর GST থাকতেও পারে, না-ও পারে)।
+**Exchange rate:** BOE (Bill of Entry) হাতে এলেই জানা যায় — PO date-এর rate না। আজ `boe_number`/`boe_date` GRN-এ capture হয়, কিন্তু কোনো exchange-rate ফিল্ড নেই।
+
+### 111.6 — মূল architectural আবিষ্কার: কোনো component-ই "সবসময় একই সময়ে আসে" এমন না
+
+প্রথমে ভাবা হয়েছিল একটা ২-bucket ভাগ চলবে (invoice_rate/GST = GRN-এর সময়েই জানা যায়, landed cost = পরে জানা যায়) — **এটা ভুল প্রমাণিত হলো।** Business owner নিশ্চিত করলেন Bulk RM (domestic)-এর invoice-ও অনেক পরে আসে। তাই বাস্তবতা হলো: basic rate, GST breakdown, Duty, CHA, Transporter, Unloading — **প্রতিটাই স্বাধীনভাবে, আলাদা আলাদা সময়ে জানা যায়**, কোনো পরিষ্কার bucket-ভাগ নেই।
+
+**সরাসরি consequence:** একটা single GRN-এর rate ৩-৪ বার (বা বেশি) বদলাতে হতে পারে, সময়ের সাথে সাথে। §109-এর Recalculate engine-এর **one-time-use lock** (`target_ledger_id`-ভিত্তিক) এই ব্যবহারের জন্য **অনুপযুক্ত** — এটা Opening Stock-এর জন্য ঠিক ছিল (একবারই ভুল হয়, একবারই ঠিক হয়) কিন্তু GRN landed-cost correction-এর জন্য না।
+
+**সম্ভাব্য সমাধান (এখনো lock হয়নি, Step 4-এ decide করতে হবে):** "নতুন absolute rate বসাও" মডেলের বদলে **"এই GRN-এ ₹X নতুন value যোগ করো"** — additive/incremental মডেল, কারণ কোনো মুহূর্তেই "চূড়ান্ত rate" জানা যায় না, শুধু "নতুন এক component যোগ হলো" জানা যায়।
+
+### 111.7 — Locked Priority Sequencing (2026-07-25, business owner)
+
+```
+1. Dispatch (L5)
+2. Costing / AP Reco
+3. Accounts Module — GRN-পরবর্তী: Invoice Acknowledgement, Debit/Credit Note,
+   Reject, Return — এই সবগুলোর সঠিক re-design (আজ যা আছে তা সঠিক design না,
+   business owner-এর নিজের কথায়)
+4. WAR Implementation — Accounts Module-এর data WAR-এ feed করা, Recalculate-কে
+   repeatable/additive করা, তারপর retroactive catch-up চালানো
+```
+
+**সিদ্ধান্ত: এখন (go-live-এর আগে) WAR/Landed-Cost নিয়ে কোনো design বা code কাজ না।** যা আজ আছে (PO-rate-only WAR) তাতেই go-live করবে। ⚠️ **Accounts-কে আজ থেকেই existing Landed Cost পেজ ব্যবহার শুরু করতে বলা হয়েছে** — এটা তাদের normal bookkeeping-এর অংশ (Debit Note/GST-এর জন্য এমনিতেও লাগবে), WAR-wiring-এর জন্য অপেক্ষা করার দরকার নেই। এতে Step 4 শুরু হওয়ার সময় data আগে থেকেই থাকবে, কোনো backfill scramble লাগবে না।
+
+### 111.8 — Deferred হওয়ার blast-radius (কেন এটা নিরাপদ, verified)
+
+- Stock qty/movement — সবসময় সঠিক থাকে (WAR অসম্পূর্ণ থাকলেও ভাঙে না)
+- AP billing/Reco (§104.7) — WAR-নির্ভর না, `AP Approved Qty × AP Monthly Rate` দিয়ে চলে (আলাদা layer, আগেই lock করা)
+- Dispatch — WAR-নির্ভর না
+- **যা প্রভাবিত হয়:** PACE-এর নিজের internal cost report (RMC/SFG/FG cost) কিছুদিন understated থাকবে — §109 Recalculate দিয়ে পরে সংশোধনযোগ্য
+- **Dispatch আগে হয়ে যাওয়ার প্রভাব:** Step 4-এ correction চালানোর সময় কিছু FG ইতিমধ্যে dispatch হয়ে গেছে (physically নেই) — কিন্তু `recalculate_valuation_at_row`-এর `impacted_rows` OUT-direction leg-কেও ধরে, তাই ledger-এ রেকর্ড করা value retroactively ঠিক হয়ে যায় (physically ফেরানোর দরকার নেই)। AP billing প্রভাবিত হয় না (আলাদা layer), শুধু PACE-এর নিজের margin/COGS report Step 4-এর পরে refresh করতে হবে।
+
+### 111.9 — Step 4 (WAR Implementation)-এর জন্য এখন থেকেই মনে রাখতে হবে (না করলে তখন আবার আটকে যাবে)
+
+1. **One-time-use lock repeatable/additive-এ বদলাতে হবে** (§111.6) — নাহলে জমা করা multi-bill data কাজে লাগানো যাবে না।
+2. **Batch-controlled catch-up** — Aug 1 থেকে জমে থাকা সব GRN একসাথে replay করলে scale/performance কেমন হবে, এখনো প্রমাণিত না (শুধু একটা real chain-এ verified)। Vendor/month ধরে ধরে চালানোর পরিকল্পনা রাখা ভালো।
+3. **Debit Note-এর apportionment logic reuse করা** — নতুন allocation logic বানাতে হবে না, `createDebitNoteHandler`-এর qty-ratio + cost_type + freight-term-aware logic-টাই WAR-এর দিকেও পাঠাতে হবে।
+4. **এখনো lock হয়নি (Step 3/4-এ decide করতে হবে):** landed cost multi-material allocation basis (qty vs value ratio, per cost_type), CSN/PO-linked landed cost-এর scope (multi-GRN allocation-এর জন্য junction table লাগবে কিনা, নাকি বাস্তবে ব্যবহারই হয় না), exchange-rate capture mechanism (BOE-ভিত্তিক)।
+
+---
+
+## Section 112 — Company-Scope Data Leak: Discovery + Permanent Enforcement Design (2026-07-25, LOCKED, GO-LIVE BLOCKER)
+
+### 112.1 — পটভূমি
+
+ACL role/department restructure (Section-এর বাইরে, session worksheet-এ ট্র্যাক করা) করার সময় dev test user-দের প্রথমবার real single/multi-company scope দেওয়া হলো (আগে সবাই DIRECTOR ছিল, সব company)। P0003 (single-company user) লগইন করে Production PO Create (PR09)-এ Company dropdown-এ **৪টা company** দেখতে পেল, যদিও তার নিজের `erp_map.user_companies`-এ মাত্র ১টা row। এটাই প্রথম সূত্র — investigation করে দেখা গেল এটা একটা isolated UI bug না, একটা **systemic company-scope enforcement gap**।
+
+### 112.2 — মূল আবিষ্কার: তিন ধরনের leak shape, একই root cause
+
+**Shape 1 — Create action (body-তে নতুন company_id আসে):**
+নতুন record তৈরির handler body থেকে `company_id` নিয়ে সরাসরি insert করে — caller-এর `erp_map.user_companies`-এর সাথে মেলানো হয় না।
+
+**Shape 2 — Act-on-existing action (body-তে company_id নেই, `:id` দিয়ে fetch):**
+Finalize/Verify/Reverse/QA-Approve/Batch-Release ধরনের handler একটা existing record `:id` দিয়ে fetch করে, action করে — কিন্তু fetched record-এর নিজের `company_id` caller-এর scope-এ আছে কিনা কখনো চেক হয় না। এটা Shape 1-এর চেক দিয়ে ধরা পড়বে না, কারণ body-তে company_id-ই থাকে না — আলাদা check-shape লাগে (fetch করার পরে record-এর company_id verify করা)।
+
+**Shape 3 — Plain read (GET/detail by id, কোনো action ছাড়াই):**
+"শুধু দেখা"-ও leak হতে পারে যদি detail/GET endpoint fetched record-এর company_id caller-এর scope-এর সাথে না মেলায়। **এই shape এখনো audit হয়নি** — Section 112.4-এর audit শুধু write handler-এ scope করা হয়েছিল, read-only detail endpoint-এ এখনো নিশ্চিত করা বাকি।
+
+### 112.3 — Root cause: কোনো generic/mandatory gate নেই, প্রতিটা handler-এর নিজের discretion
+
+`_pipeline/context.ts`-এর `stepContext()` **সেশনের active company** (`ctx.context.companyId`, header/session থেকে) resolve+validate করে — কিন্তু এটা POST/PATCH body-র ভেতরের `company_id` field স্পর্শই করে না। প্রতিটা handler-কে নিজে থেকে আলাদা করে caller-এর company scope চেক করতে হয় — আর বেশিরভাগ handler এটা করেনি।
+
+**Live code audit-এ (2026-07-25) পাওয়া গেছে:**
+
+| Handler | company-scope check আছে? |
+|---|---|
+| `createProcessOrderHandler` | ❌ নেই |
+| `finalizeProcessOrderHandler` | ❌ নেই |
+| `verifyProcessOrderHandler` | ❌ নেই |
+| `qaApproveProcessOrderHandler` / `qaRejectProcessOrderHandler` | ❌ নেই |
+| `reverseProcessOrderHandler` | ❌ নেই |
+| `editPackingOrderHandler` / `finalizePackingOrderHandler` / `reversePackingOrderHandler` / `correctPackingOrderHandler` / `cancelPackingOrderHandler` | ❌ নেই |
+| `createOldProcessPoHandler` / `createOldPackingPoHandler` | ❌ নেই |
+| `createConversionRateHandler` | ❌ নেই |
+| `releaseBatchNumberHandler` | ❌ নেই |
+| `mapVendorToCompanyHandler` / `mapCustomerToCompanyHandler` | ❌ নেই |
+| `extendMaterialToCompanyHandler` / `extendMaterialToPlantHandler` | ❌ নেই |
+| **`createPackingOrderHandler`** | ✅ আছে (`assertPackingCompanyScope`) |
+| **`createPartialBatchReversalHandler`** | ✅ আছে (`assertPartialReversalCompanyScope`) |
+| `listProcessOrdersHandler` (GET list) | ✅ আছে (`PROD_PO_COMPANY_SCOPE_VIOLATION`) |
+
+শুধু **২টা write handler** ঠিকভাবে করেছে — প্রমাণ করে এই pattern এই codebase-এ আগে থেকেই জানা/সম্ভব, কিন্তু consistently apply হয়নি।
+
+**⚠️ এই table অসম্পূর্ণ ছিল (২০২৬-০৭-২৫ implementation-এর সময় ধরা পড়ে) — শুধু Production module manually audit করা হয়েছিল।** `scripts/company-scope-guard.mjs` (§112.6) চালিয়ে systematic scan করার পর দেখা গেল একই leak Procurement module-এও ব্যাপকভাবে ছিল (PO, CSN, RTV, STO, Sales Order, Gate Entry, Invoice Verification, Landed Cost ইত্যাদি, মোট আরও ২১টা ফাইল) — বিস্তারিত ও চূড়ান্ত ৩০-ফাইলের তালিকা §112.6/§112.7-এ।
+
+**Frontend-এর নিজের একটা leak-ও পাওয়া গেছে, একই ধরনের:** `ProductionPOCreatePage.jsx`, `OldProcessPoPage.jsx`, `OldPackingPoPage.jsx`, `ConversionCostPage.jsx`, `ProductionPOFinalPage.jsx`, `ProductionPOVerifyPage.jsx`, `QAQueuePage.jsx` (production), `ReversalPage.jsx`, `BatchNumberReleasePage.jsx`, `VendorDetailPage.jsx`, `CustomerDetailPage.jsx`, `MaterialDetailPage.jsx` — সবগুলো Company dropdown-এ `TransactionCompanySelector` (যেটা user-scoped `runtimeContext.availableCompanies` থেকে data নেয়) ব্যবহার না করে `useCompaniesForOmQuery()` (যেটা unscoped `GET /api/admin/companies` কল করে) ব্যবহার করছে। SA-only পেজ (`admin/sa/screens/**`) এর ব্যতিক্রম, সেগুলোর জন্য এটা bug না।
+
+### 112.4 — কেন এতদিন ধরা পড়েনি
+
+Dev-এর সব ৯টা test user আগে **DIRECTOR** ছিল (সব company, সব access) — DIRECTOR-এর জন্য "wrong company" বলে কিছুই নেই, তাই এই bug কখনো exercise-ই হয়নি। ACL restructure সেশনে প্রথমবার real single/multi-company-scoped role দিয়ে test করা শুরু হলো — তখনই প্রথম প্রকাশ পেল। এটা কোনো একক ভুলের ফল না — **negative path (wrong-company access) কখনো test করা হয়নি**, কারণ test setup-ই সেটা allow করত না।
+
+### 112.5 — Locked permanent-fix design
+
+**একটাই generic helper, তিনটা call-shape:**
+
+```
+assertCompanyScope(ctx, companyId): Promise<void>
+```
+- SA/GA bypass (existing `isAdminBypass(ctx)` pattern অনুযায়ী)
+- `erp_map.user_companies` টেবিলে `auth_user_id = ctx.auth_user_id AND company_id = companyId` row আছে কিনা চেক করে
+- না থাকলে throw (403-class error)
+
+**Multi-company সঠিকভাবে কাজ করে (verified against live `assertPackingCompanyScope` code):** `erp_map.user_companies`-এ প্রতি company-র জন্য আলাদা row থাকে, তাই multi-company user-এর (P0004/P0006/P0007/P0008) জন্য এই check স্বয়ংক্রিয়ভাবে "caller-এর company-set-এর মধ্যে আছে কিনা" ধরনের হয়ে যায় — আলাদা special-case কোড লাগে না। single company হোক বা একাধিক, একই logic।
+
+**তিন জায়গায় call করতে হবে (shape ভিন্ন, helper একই):**
+1. **Create handler:** insert করার আগে, body-র `company_id` দিয়ে call
+2. **Act-on-existing handler:** record fetch করার পরে, **fetched record-এর নিজের** `company_id` দিয়ে call
+3. **Read/detail handler:** fetch করার পরে, একইভাবে fetched record-এর `company_id` দিয়ে call (এটাই তো "দেখতে পারা"-র leak বন্ধ করবে)
+
+### 112.6 — CI enforcement ✅ IMPLEMENTED (2026-07-25)
+
+§8D-তে `stock-posting-guard.mjs`-এর জন্য যে ratchet pattern locked হয়েছিল, সেই একই idiom এখানে বসানো হয়েছে।
+
+**`scripts/company-scope-guard.mjs`** — `_core/**/*.handlers.ts` স্ক্যান করে, যেখানে `body.company_id` literal থাকে সেখানে একই ফাইলে অন্তত একটা `assert*CompanyScope(...)` call (generic regex `\bassert\w*CompanyScope\s*\(` — shared `assertCompanyScope` হোক বা কোনো per-file local variant যেমন `assertPackingCompanyScope`/`assertPackBomCompanyScope`/`assertPartialReversalCompanyScope`/`assertOpeningStockCompanyScope`) আছে কিনা চেক করে; না থাকলে build **fail**। এটা শুধু **Shape 1** (Create action, body.company_id) ধরে — সবচেয়ে বেশি occurrence পাওয়া গিয়েছিল বলে সবচেয়ে নির্ভরযোগ্যভাবে regex দিয়ে ধরা যায়; Shape 2 (act-on-existing, fetched record-এর company_id) আর Shape 3 (plain read) ফাইল-ভিত্তিক regex দিয়ে নির্ভরযোগ্যভাবে আলাদা করা যায় না (company_id column reference read-only/display context-এও থাকে) — সেগুলো নতুন handler লেখার সময় এই section-এর discipline দিয়েই ধরতে হবে, code review-এ active গ্রেপ করে।
+
+**প্রথমবার চালিয়ে যা পাওয়া গেল (বড় আবিষ্কার):** ১১২.৩-এর audit table শুধু Production module-এর handler কভার করেছিল। Script চালিয়ে দেখা গেল **আরও ২১টা handler file** (Production-এর বাকি কয়েকটা + প্রায় পুরো **Procurement module** — PO, CSN, Gate Entry, RTV, STO, Sales Order, Invoice Verification, Landed Cost, L2 masters, QA Test Method, Number Series — আর OM-এর কয়েকটা SA-only master) একই body.company_id-না-check-করা shape-এ ছিল। বিশেষভাবে বিপজ্জনক: `gate_entry.handlers.ts`, `invoice_verification.handlers.ts`, `landed_cost.handlers.ts`, `rtv.handlers.ts`, `sales_order.handlers.ts`, `sto.handlers.ts`, `csn.handlers.ts`, `po.handlers.ts`-এ একটা function ছিল নাম **`getCompanyScope(ctx, requestedCompanyId)`** যেটা দেখতে scope-enforcement-এর মতো লাগে কিন্তু আসলে শুধু fallback resolver (`requestedCompanyId || ctx.context.companyId`) — caller-এর `erp_map.user_companies`-এর সাথে কোনো verification-ই করে না। এই নামকরণটাই misleading ছিল বলে এতদিন কারো চোখে পড়েনি। Business owner-কে এই আবিষ্কার জানানো হয় এবং **এখনই সব ২১টা ফাইল ঠিক করার সিদ্ধান্ত নেওয়া হয়** (এই একই session-এ)।
+
+**চূড়ান্ত ফল: baseline শূন্য, guard পাস করে।** মোট **৩০টা handler file**-এ `assertCompanyScope(ctx, companyId)` (বা file-local সমতুল্য) বসানো হয়েছে — Production (৯), OM (৪, সব SA-gated হলেও defense-in-depth হিসেবে), Procurement (১৭)। `node scripts/company-scope-guard.mjs` → `0 without a scope guard`।
+
+### 112.6a — HR-এর "Parent Company" scope — যাচাই করে দেখা গেছে design অনুযায়ীই সঠিক, gap না
+
+প্রাথমিকভাবে `erp_map.user_parent_companies` (HR-এর নিজস্ব tenant-boundary — CLAUDE.md-এ locked "Parent Company = HR only") এই একই class-এর leak-এর ঝুঁকিতে আছে বলে flag করা হয়েছিল। Business owner concrete example (Arka/CMP003, CMP005 Head-Office approver) দিয়ে challenge করার পর কোড সরাসরি পড়ে (`getParentCompanyScope()`, `process_decision.handler.ts`) **যাচাই করা হয়েছে design সঠিক**: approve করার জন্য approver-এর **Work Company** access লাগে requester-এর **Parent Company**-তে — এই দুটো independent scope dimension ইচ্ছাকৃতভাবেই আলাদা রাখা, ভুল করে গুলিয়ে যায়নি। তাই HR-এ Section 112.2-এর মতো leak নেই — এটা confirmed-correct-by-design, gap নয়। (HR module-এর অন্য কোনো handler-এ সত্যিকারের Shape 1/2/3 leak থাকতে পারে কিনা সেটা এই session-এ audit করা হয়নি, কারণ HR পুরোপুরি out-of-scope রাখা হয়েছিল — সেটা আলাদা প্রশ্ন, এই approve-flow-এর প্রশ্নটাই ছিল মূল উদ্বেগ, আর সেটা resolved।)
+
+### 112.7 — Implementation ✅ COMPLETE (2026-07-25)
+
+1. ✅ Read/detail (GET by :id) endpoint-এর Shape 3 leak audit করা হয়েছে — production module-এ পাওয়া প্রতিটা (`getProcessOrderHandler`, `getPackingOrderHandler`, availability-preview/list endpoint-গুলো) ঠিক করা হয়েছে; কিছু list endpoint-এ (`listPackingOrdersHandler`, `listBatchSeriesHandler`, `listConversionRatesHandler`) company_id filter খালি থাকলে caller-এর নিজের company-set-এ scope করার fix-ও যোগ করা হয়েছে (§112.2 Shape 3-এর আরেকটা রূপ — filter খালি রাখলে সব company leak হওয়া)।
+2. ✅ Generic `assertCompanyScope()` helper — `supabase/functions/api/_shared/companyScope.ts`। SA/GA/admin bypass, নাহলে `erp_map.user_companies`-এ row আছে কিনা চেক করে, নাহলে throw।
+3. ✅ প্রতিটা audited handler-এ সঠিক shape (Create/Act-on-existing/Read) অনুযায়ী call বসানো হয়েছে — মূল audit table-এর সব + guard script-এ ধরা পড়া বাড়তি ২১টা ফাইল, মোট ৩০টা handler file।
+4. ✅ `scripts/company-scope-guard.mjs` CI guard — baseline শূন্য (§112.6)।
+5. ✅ Frontend-এর ১২+১টা (মূল audit-এ ১২টা লেখা ছিল, বাস্তবে fix করার সময় আরও ৩টা related page — `FgStockBreakdownPage.jsx`, `PackBomApprovalPage.jsx`, `OrderListPage.jsx` — একই anti-pattern-এ পাওয়া গেছে, মোট ১৫টা) page `useCompaniesForOmQuery()` (unscoped `GET /api/admin/companies`) থেকে `useMenu()`-এর `runtimeContext.availableCompanies` (session-scoped)-এ swap করা হয়েছে। প্যাটার্ন `ProductionPOCreatePage.jsx`-এ প্রথম প্রয়োগ করা হয়েছিল।
+6. 🔵 Dev-এ live verify (single-company test user দিয়ে অন্য company-র record touch করলে 403) — কোড-level verification (deno check + eslint, সব ফাইলে ০টা নতুন error) হয়েছে; deployed-app-এ click-through যাচাই বাকি, business owner-এর login লাগবে।
+7. 🔵 Prod deploy checklist — schema/data নয়, pure code change, তাই normal deploy pipeline দিয়েই prod-এ যাবে; আলাদা কোনো MCP/migration step লাগবে না।
+
+**Verification method note:** এই session-এ CLAUDE.md-এর "No Localhost Preview" rule অনুযায়ী browser দিয়ে live click-through করা হয়নি (app login-gated, dev creds নেই) — verification হয়েছে (ক) `deno check` প্রতিটা touched backend file-এ, git-stash দিয়ে before/after error-count তুলনা করে নিশ্চিত করা হয়েছে কোনো নতুন TypeScript error ঢোকেনি (pre-existing `DbQueryBuilder` typing noise ছাড়া), (খ) `eslint` প্রতিটা touched frontend file-এ, (গ) `node scripts/company-scope-guard.mjs` পাস করা (baseline শূন্য)। Deployed app-এ single-company user দিয়ে আসল 403 click-through — 112.7 ধাপ ৬-এ flag করা আছে, এখনো বাকি।
+
+### 112.8 — ⚠️ "112.7 COMPLETE" দাবিটা ভুল ছিল — একই class-এর leak Inventory report page review করতে গিয়ে আবার পাওয়া গেছে (2026-07-26, FIXED)
+
+**যা ঘটেছিল:** পরের session-এ Inventory report page (`CurrentStockPage.jsx`) review করতে গিয়ে দেখা গেল Company ID/Material ID raw text input — ওখান থেকেই সন্দেহ হয়ে backend handler (`stock_reports.handlers.ts`) চেক করে পাওয়া গেল **company_id সম্পূর্ণ unguarded**, কোনো scope check-ই নেই। Business owner সরাসরি ধরিয়ে দেন: "তোমাকে তো বললাম সব ঠিক করতে, তুমি miss করলে কী করে?" — এই challenge-এর জবাবে systematic re-audit করে দেখা গেল **112.7-এর "COMPLETE" দাবিটা ভুল ছিল**।
+
+**Root cause (কেন miss হয়েছিল):** `company-scope-guard.mjs`-এর প্রথম সংস্করণ **শুধু Shape 1** (`body.company_id`, POST/PATCH) regex দিয়ে ধরত — নিজের doc-comment-এই লেখা ছিল "Shape 3 (plain read) reliably আলাদা করা যায় না" বলে বাদ দেওয়া হয়েছিল। `stock_reports.handlers.ts`-এর তিনটা handler (`getStockLedgerReportHandler`, `getCurrentStockHandler`, `getStockValuationHandler`) company_id নেয় শুধু GET query string (`url.searchParams.get(...)`) থেকে — তাই guard কখনো ধরেনি, আর ফাইলটা মূল audit table-এও ছিল না (সেটা Production+OM+প্রাথমিক Procurement-ভিত্তিক ছিল, প্রতিটা Procurement handler file আলাদা করে audit করা হয়নি)।
+
+**যা পাওয়া গেছে (এবার সম্পূর্ণ codebase-wide grep দিয়ে, শুধু একটা ফাইল না):**
+- `stock_reports.handlers.ts`-এর ৩টা handler — company_id খালি রাখলে **সব ৪ company-র পুরো stock ledger/current stock/valuation** একসাথে, অথবা অন্য company-র UUID দিলে সেই company-র পুরো data — কোনো check ছাড়াই।
+- একটা **আরও বড়, systemic root cause**: `getCompanyScope(ctx, requestedCompanyId)` নামে একটা misleadingly-named helper function **১০টা আলাদা procurement handler file**-এ (`po.handlers.ts`, `gate_entry.handlers.ts`, `grn.handlers.ts`, `invoice_verification.handlers.ts`, `landed_cost.handlers.ts`, `sto.handlers.ts`, `sales_order.handlers.ts`, `rtv.handlers.ts`, `planning.handlers.ts`, `csn.handlers.ts`-এর `getCompanyScopedCompanyId`) copy-paste হয়ে ছিল — নামে "Scope" থাকলেও আসলে **`requestedCompanyId || ctx.context.companyId` শুধু fallback resolve করত, কখনো validate করত না**। `po.handlers.ts`-এর মতো বড় ফাইলে ১৭টা call site-এর মধ্যে ১২টায় আগের session-এ পাশে আলাদা `assertCompanyScope()` call বসানো হয়েছিল (মূল audit table-এর pattern মিলিয়ে), কিন্তু **৫টা call site পুরোপুরি miss হয়ে গিয়েছিল** কারণ সেগুলো ঠিক audit table-এর নাম-মেলা pattern-এ ছিল না (GET list handler, বা no-arg session-company ব্যবহার)।
+- `inward_qa.handlers.ts`-এর `listQADocumentsHandler` — query company_id present থাকলে সরাসরি ব্যবহার হতো, `getCompanyScope(ctx)` (session-এর নিজের company) কে সম্পূর্ণ bypass করে।
+
+**সমাধান (root-cause fix, call-site patch না):** প্রতিটা ফাইলের local `getCompanyScope`/`getCompanyScopedCompanyId` helper-**কেই** async করে ভেতরে `assertCompanyScope(ctx, companyId)` call বসানো হয়েছে — এতে সেই ফাইলের **প্রতিটা** call site (আগের যেগুলো miss হয়েছিল, আর ভবিষ্যতে যোগ হবে সেগুলোও) একসাথে protected হয়ে গেছে, একটা একটা করে call site খুঁজে-খুঁজে patch করার বদলে। `stock_reports.handlers.ts`-এর জন্য নতুন `resolveCompanyScope()` helper (company_id খালি থাকলে caller-এর নিজের company-set-এ scope করে, list handler-এর জন্য — `listProcessOrdersHandler`-এর `allowedCompanyIds` pattern-এর অনুরূপ)। প্রতিটা handler-এর catch block-এও `COMPANY_SCOPE_VIOLATION` → HTTP 403 mapping যোগ করা হয়েছে।
+
+**CI guard নিজেও প্রসারিত করা হয়েছে (এটাই আসল, স্থায়ী fix):** `company-scope-guard.mjs` এখন Shape 1 **আর** Shape 3 দুটোই ধরে (`body.company_id` এবং `searchParams.get("company_id")` — একই file-level heuristic, কারণ এখন প্রতিটা local helper-ই নিজের ভেতরে `assertCompanyScope` ডাকে বলে heuristic নিরাপদে কাজ করে)। Legitimate exception (SA/GA-only admin/* ফাইল, ২৬টা — verified `ctx.context.isAdmin === true` gate; আর HR-এর ২টা ফাইল — আলাদা tenant-boundary, §112.6a-তে already-tracked, out-of-scope) স্পষ্ট reason-সহ `BASELINE`-এ যোগ করা হয়েছে, silent skip না।
+
+**যাচাই:** প্রতিটা touched file-এ `deno check` (git-stash before/after, ০টা নতুন error), guard script পাস (`0 without a scope guard`, ৬৪টা ফাইল scan করে), frontend `CurrentStockPage.jsx`-এ raw UUID input সরিয়ে `TransactionCompanySelector`/material combobox বসানো হয়েছে + eslint pass।
+
+**শিক্ষা (নিজের ভুল থেকে):** "সব ঠিক করা হয়েছে" বলার আগে **নিজের নিজের tool-এর সীমাবদ্ধতা** (guard script-এর নিজের doc-comment-এই লেখা ছিল "Shape 3 ধরা যায় না") থেকে conclusion টানা উচিত ছিল — সেটা যে সত্যিই বাকি আছে সেটা re-check না করেই "COMPLETE" লেখা ভুল ছিল। এখন থেকে কোনো audit-এর "সম্পূর্ণ" দাবি করার আগে যে tool দিয়ে audit হয়েছে তার নিজের সীমাবদ্ধতা section আলাদাভাবে চেক করা — যদি সেই সীমাবদ্ধতার আওতায় কিছু থেকে থাকে, সেটা এখনো unverified, "COMPLETE" না।
+
+---

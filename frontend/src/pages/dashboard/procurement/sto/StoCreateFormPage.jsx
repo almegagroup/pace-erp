@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueries } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueries } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -205,11 +205,16 @@ export default function StoCreateFormPage({ openingMode = false }) {
 
   const companies = useMemo(() => runtimeContext?.availableCompanies ?? [], [runtimeContext?.availableCompanies]);
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
-  const materialQuery = useMaterialOptionsQuery({
-    material_type: materialType || undefined,
-    limit: 200,
-    offset: 0,
-  });
+  const materialQuery = useMaterialOptionsQuery(
+    {
+      material_type: materialType || undefined,
+      limit: 200,
+      offset: 0,
+    },
+    // material_type changing the queryKey shouldn't blank the whole page —
+    // keep the previous list on screen while the new one loads.
+    { placeholderData: keepPreviousData }
+  );
   const sendingCostCenterQuery = useCostCentersQuery(
     { company_id: form.sending_company_id, active: true },
     { enabled: Boolean(form.sending_company_id) }
@@ -298,7 +303,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
   });
 
   const loading =
-    materialQuery.isLoading ||
+    (materialQuery.isLoading && !materialQuery.data) ||
     paymentTermQuery.isLoading ||
     (Boolean(form.sending_company_id) && sendingCostCenterQuery.isLoading) ||
     (Boolean(form.receiving_company_id) && receivingCostCenterQuery.isLoading);

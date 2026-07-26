@@ -17,6 +17,7 @@ import {
   upsertTransitTime,
 } from "../procurementApi.js";
 import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 
 const TRANSIT_MODE_OPTIONS = ["ROAD", "RAIL", "MULTI-MODAL"];
 const EMPTY_FORM = { port_id: "", company_id: "", transit_days: "", mode: "ROAD", remarks: "" };
@@ -59,6 +60,13 @@ export default function PortTransitMasterPage() {
   const ports = transitQuery.data?.ports ?? [];
   const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
   const loading = transitQuery.isLoading || companiesQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void Promise.all([transitQuery.refetch(), companiesQuery.refetch()]),
+    },
+  });
 
   const portMap = Object.fromEntries(ports.map((p) => [p.id, p]));
   const companyMap = Object.fromEntries(companies.map((c) => [c.id, c]));

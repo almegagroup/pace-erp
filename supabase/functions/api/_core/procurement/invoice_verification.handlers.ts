@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -86,10 +87,14 @@ function assertAccountsRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline/ACL layer.
 }
 
-function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): string {
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
+async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
@@ -266,13 +271,18 @@ export async function createIVDraftHandler(
   try {
     assertAccountsRole(ctx);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     const vendorId = toTrimmedString(body.vendor_id);
     const vendorInvoiceNumber = toTrimmedString(body.vendor_invoice_number);
     const vendorInvoiceDate = toTrimmedString(body.vendor_invoice_date);
 
     if (!companyId || !vendorId || !vendorInvoiceNumber || !vendorInvoiceDate) {
       return ivErrorResponse(req, ctx, "IV_CREATE_INVALID", 400, "company_id, vendor_id, vendor_invoice_number, and vendor_invoice_date are required.");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return ivErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const hasDuplicatePostedVendorInvoice = await hasPostedVendorInvoiceDuplicate(vendorId, vendorInvoiceNumber);
@@ -308,7 +318,7 @@ export async function createIVDraftHandler(
     return okResponse(responsePayload, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "IV_CREATE_FAILED";
-    return ivErrorResponse(req, ctx, code, 500, code);
+    return ivErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 
@@ -319,7 +329,7 @@ export async function listIVsHandler(
   try {
     assertAccountsRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
@@ -347,7 +357,7 @@ export async function listIVsHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "IV_LIST_FAILED";
-    return ivErrorResponse(req, ctx, code, 500, code);
+    return ivErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 
@@ -515,6 +525,17 @@ export async function runMatchHandler(
     let anyBlocked = false;
     let totalTaxableValue = 0;
     let totalGstAmount = 0;
+    const lineComputations: Array<{
+      id: string;
+      taxableValue: number;
+      rateVariancePct: number;
+      matchStatus: string;
+      gstType: string;
+      cgstAmount: number;
+      sgstAmount: number;
+      igstAmount: number;
+      gstMatchFlag: boolean;
+    }> = [];
 
     for (const line of lines) {
       const poRate = parsePositiveNumber(line.po_rate) ?? 0;
@@ -546,28 +567,42 @@ export async function runMatchHandler(
       if (matchStatus === "BLOCKED") {
         anyBlocked = true;
       }
-
-      const { error: lineUpdateError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("invoice_verification_line")
-        .update({
-          taxable_value: taxableValue,
-          rate_variance_pct: rateVariancePct,
-          match_status: matchStatus,
-          gst_type: gstType,
-          cgst_amount: cgstAmount,
-          sgst_amount: sgstAmount,
-          igst_amount: igstAmount,
-          gst_match_flag: gstMatchFlag,
-        })
-        .eq("id", String(line.id));
-
-      if (lineUpdateError) {
-        return ivErrorResponse(req, ctx, "IV_MATCH_LINE_UPDATE_FAILED", 500, "Unable to update IV match results.");
-      }
-
+      lineComputations.push({
+        id: String(line.id),
+        taxableValue,
+        rateVariancePct,
+        matchStatus,
+        gstType,
+        cgstAmount,
+        sgstAmount,
+        igstAmount,
+        gstMatchFlag,
+      });
       totalTaxableValue += taxableValue;
       totalGstAmount += cgstAmount + sgstAmount + igstAmount;
+    }
+
+    const lineUpdateErrors = await Promise.all(
+      lineComputations.map(async (lineComputation) => {
+        const { error: lineUpdateError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("invoice_verification_line")
+          .update({
+            taxable_value: lineComputation.taxableValue,
+            rate_variance_pct: lineComputation.rateVariancePct,
+            match_status: lineComputation.matchStatus,
+            gst_type: lineComputation.gstType,
+            cgst_amount: lineComputation.cgstAmount,
+            sgst_amount: lineComputation.sgstAmount,
+            igst_amount: lineComputation.igstAmount,
+            gst_match_flag: lineComputation.gstMatchFlag,
+          })
+          .eq("id", lineComputation.id);
+        return lineUpdateError;
+      }),
+    );
+    if (lineUpdateErrors.some(Boolean)) {
+      return ivErrorResponse(req, ctx, "IV_MATCH_LINE_UPDATE_FAILED", 500, "Unable to update IV match results.");
     }
 
     const headerStatus = anyBlocked ? "BLOCKED" : "MATCHED";
@@ -642,7 +677,7 @@ export async function listBlockedIVsHandler(
   try {
     assertAccountsRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
 
     let query = serviceRoleClient
@@ -665,6 +700,6 @@ export async function listBlockedIVsHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "IV_BLOCKED_LIST_FAILED";
-    return ivErrorResponse(req, ctx, code, 500, code);
+    return ivErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }

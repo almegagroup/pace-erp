@@ -11,6 +11,7 @@ import {
   useMaterialOptionsQuery,
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { addIVLine, getGRN, getIV, postIV, removeIVLine, runIVMatch } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
@@ -72,6 +73,13 @@ export default function IVDetailPage() {
   const vendors = vendorQuery.vendors;
   const materials = materialQuery.materials;
   const loading = detailQuery.isLoading || vendorQuery.isLoading || materialQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void detailQuery.refetch(),
+    },
+  });
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),

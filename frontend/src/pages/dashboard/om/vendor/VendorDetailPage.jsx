@@ -15,6 +15,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
+import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   addVendorPaymentTerms,
@@ -31,7 +32,6 @@ import {
   upsertVendorEmails,
 } from "../omApi.js";
 import {
-  useCompaniesForOmQuery,
   useMaterialOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 
@@ -46,7 +46,12 @@ function getAllowedStatusTargets(status) {
   return transitions[String(status || "").toUpperCase()] ?? [];
 }
 
+// Mirrors backend's assertManagerOrSARole exactly (supabase/functions/api/_core/om/shared.ts).
+const MANAGER_OR_SA_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
+
 export default function VendorDetailPage() {
+  const { shellProfile, runtimeContext } = useMenu();
+  const canEdit = MANAGER_OR_SA_ROLES.has(shellProfile?.roleCode);
   const [searchParams] = useSearchParams();
   const context = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchId = searchParams.get("id");
@@ -61,7 +66,6 @@ export default function VendorDetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const companiesQuery = useCompaniesForOmQuery();
   const detailQuery = useQuery({
     queryKey: ["om", "vendor-detail", id],
     queryFn: async () => {
@@ -97,13 +101,13 @@ export default function VendorDetailPage() {
     { enabled: Boolean(showApprovedMaterials) }
   );
   const vendor = detailQuery.data?.vendor ?? null;
-  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const companies = runtimeContext?.availableCompanies ?? [];
   const companyMaps = detailQuery.data?.companyMaps ?? [];
   const paymentTerms = paymentTermsQuery.data ?? [];
   const aslRows = approvedMaterialsQuery.data ?? [];
   const materialDirectory = materialOptionsQuery.materials;
   const aslLoading = approvedMaterialsQuery.isLoading || materialOptionsQuery.isLoading;
-  const loading = detailQuery.isLoading || companiesQuery.isLoading;
+  const loading = detailQuery.isLoading;
 
   useEffect(() => {
     if (!searchId && context.id) {
@@ -143,13 +147,12 @@ export default function VendorDetailPage() {
   useEffect(() => {
     setError(
       detailQuery.error?.message ||
-      companiesQuery.error?.message ||
       paymentTermsQuery.error?.message ||
       approvedMaterialsQuery.error?.message ||
       materialOptionsQuery.error?.message ||
       ""
     );
-  }, [approvedMaterialsQuery.error, companiesQuery.error, detailQuery.error, materialOptionsQuery.error, paymentTermsQuery.error]);
+  }, [approvedMaterialsQuery.error, detailQuery.error, materialOptionsQuery.error, paymentTermsQuery.error]);
 
   async function handleLoadPaymentTerms(companyId) {
     if (!vendor?.id || !companyId) return;
@@ -246,8 +249,10 @@ export default function VendorDetailPage() {
       title="Vendor Detail"
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
-        { key: "edit", label: editMode ? "Cancel Edit" : "Edit", tone: "neutral", onClick: () => setEditMode((v) => !v), disabled: loading || !vendor },
-        { key: "save", label: saving ? "Saving..." : "Save", tone: "primary", onClick: () => void handleSave(), disabled: saving || !editMode },
+        ...(canEdit ? [
+          { key: "edit", label: editMode ? "Cancel Edit" : "Edit", tone: "neutral", onClick: () => setEditMode((v) => !v), disabled: loading || !vendor },
+          { key: "save", label: saving ? "Saving..." : "Save", tone: "primary", onClick: () => void handleSave(), disabled: saving || !editMode },
+        ] : []),
       ]}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
@@ -403,12 +408,14 @@ export default function VendorDetailPage() {
           </ErpSectionCard>
 
           {/* ── Contacts & Emails ── */}
-          <VendorContactsEmailsCard vendorId={vendor.id} />
+          <VendorContactsEmailsCard vendorId={vendor.id} canEdit={canEdit} />
 
           {/* ── Lifecycle ── */}
           <ErpSectionCard eyebrow="Lifecycle" title="Status actions">
             <div className="flex flex-wrap gap-2">
-              {allowedTargets.length === 0 ? (
+              {!canEdit ? (
+                <div className="text-sm text-slate-500">Read-only — status changes require Manager or SA access.</div>
+              ) : allowedTargets.length === 0 ? (
                 <div className="text-sm text-slate-500">No status change is allowed from the current state.</div>
               ) : allowedTargets.map((t) => (
                 <button key={t} type="button" onClick={() => void handleStatusChange(t)} disabled={saving}
@@ -422,18 +429,22 @@ export default function VendorDetailPage() {
           {/* ── Company Mapping ── */}
           <ErpSectionCard eyebrow="Company Mapping" title="Map vendor to companies">
             <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-              <div className="grid gap-3">
-                <ErpDenseFormRow label="Company" required>
-                  <select value={mapCompanyId} onChange={(e) => setMapCompanyId(e.target.value)} className={SELECT_CLS}>
-                    <option value="">Select company</option>
-                    {companyOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                  </select>
-                </ErpDenseFormRow>
-                <button type="button" onClick={() => void handleCompanyMapSave()} disabled={saving}
-                  className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900">
-                  {saving ? "Saving..." : "Map to Company"}
-                </button>
-              </div>
+              {canEdit ? (
+                <div className="grid gap-3">
+                  <ErpDenseFormRow label="Company" required>
+                    <select value={mapCompanyId} onChange={(e) => setMapCompanyId(e.target.value)} className={SELECT_CLS}>
+                      <option value="">Select company</option>
+                      {companyOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                    </select>
+                  </ErpDenseFormRow>
+                  <button type="button" onClick={() => void handleCompanyMapSave()} disabled={saving}
+                    className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900">
+                    {saving ? "Saving..." : "Map to Company"}
+                  </button>
+                </div>
+              ) : (
+                <div className="text-sm text-slate-500">Read-only — company mapping requires Manager or SA access.</div>
+              )}
               <ErpDenseGrid
                 columns={[
                   { key: "company", label: "Company", render: (row) => row.companies ? `${row.companies.company_code} | ${row.companies.company_name}` : companyMap.get(row.company_id)?.company_name ?? row.company_id },
@@ -464,19 +475,25 @@ export default function VendorDetailPage() {
                     {companyOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                   </select>
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="Payment Days">
-                  <input type="number" min="0" value={termsForm.payment_days} onChange={(e) => setTermsForm((p) => ({ ...p, payment_days: e.target.value }))} className={INPUT_CLS} />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Payment Method">
-                  <input value={termsForm.payment_method} onChange={(e) => setTermsForm((p) => ({ ...p, payment_method: e.target.value }))} className={INPUT_CLS} />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Notes">
-                  <textarea rows={3} value={termsForm.notes} onChange={(e) => setTermsForm((p) => ({ ...p, notes: e.target.value }))} className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <button type="button" onClick={() => void handleAddPaymentTerms()} disabled={saving}
-                  className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900">
-                  Add Payment Terms
-                </button>
+                {canEdit ? (
+                  <>
+                    <ErpDenseFormRow label="Payment Days">
+                      <input type="number" min="0" value={termsForm.payment_days} onChange={(e) => setTermsForm((p) => ({ ...p, payment_days: e.target.value }))} className={INPUT_CLS} />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Payment Method">
+                      <input value={termsForm.payment_method} onChange={(e) => setTermsForm((p) => ({ ...p, payment_method: e.target.value }))} className={INPUT_CLS} />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Notes">
+                      <textarea rows={3} value={termsForm.notes} onChange={(e) => setTermsForm((p) => ({ ...p, notes: e.target.value }))} className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                    </ErpDenseFormRow>
+                    <button type="button" onClick={() => void handleAddPaymentTerms()} disabled={saving}
+                      className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900">
+                      Add Payment Terms
+                    </button>
+                  </>
+                ) : (
+                  <div className="text-sm text-slate-500">Read-only — adding payment terms requires Manager or SA access.</div>
+                )}
               </div>
               <ErpDenseGrid
                 columns={[
@@ -535,7 +552,7 @@ export default function VendorDetailPage() {
   );
 }
 
-function VendorContactsEmailsCard({ vendorId }) {
+function VendorContactsEmailsCard({ vendorId, canEdit }) {
   const [contacts, setContacts] = useState([]);
   const [emails, setEmails] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -619,48 +636,48 @@ function VendorContactsEmailsCard({ vendorId }) {
           <div>
             <div className="mb-2 flex items-center justify-between">
               <h4 className="text-xs font-semibold uppercase tracking-[0.07em] text-slate-600">Contacts</h4>
-              <button type="button" onClick={addContact} className="border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">+ Add</button>
+              {canEdit && <button type="button" onClick={addContact} className="border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">+ Add</button>}
             </div>
             <div className="grid gap-2">
               {contacts.map((c, idx) => (
                 <div key={idx} className="grid gap-1 border border-slate-100 p-2">
-                  <input value={c.contact_name ?? ""} onChange={(e) => updateContact(idx, { contact_name: e.target.value })} placeholder="Name" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500" />
-                  <input value={c.phone ?? ""} onChange={(e) => updateContact(idx, { phone: e.target.value })} placeholder="Phone" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500" />
-                  <input value={c.designation ?? ""} onChange={(e) => updateContact(idx, { designation: e.target.value })} placeholder="Designation" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500" />
+                  <input disabled={!canEdit} value={c.contact_name ?? ""} onChange={(e) => updateContact(idx, { contact_name: e.target.value })} placeholder="Name" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-50" />
+                  <input disabled={!canEdit} value={c.phone ?? ""} onChange={(e) => updateContact(idx, { phone: e.target.value })} placeholder="Phone" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-50" />
+                  <input disabled={!canEdit} value={c.designation ?? ""} onChange={(e) => updateContact(idx, { designation: e.target.value })} placeholder="Designation" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-50" />
                   <div className="flex items-center justify-between">
                     <label className="flex items-center gap-1 text-[11px] text-slate-600">
-                      <input type="checkbox" checked={Boolean(c.is_primary)} onChange={(e) => updateContact(idx, { is_primary: e.target.checked })} /> Primary
+                      <input type="checkbox" disabled={!canEdit} checked={Boolean(c.is_primary)} onChange={(e) => updateContact(idx, { is_primary: e.target.checked })} /> Primary
                     </label>
-                    <button type="button" onClick={() => removeContact(idx)} className="text-[11px] font-semibold text-rose-600">Remove</button>
+                    {canEdit && <button type="button" onClick={() => removeContact(idx)} className="text-[11px] font-semibold text-rose-600">Remove</button>}
                   </div>
                 </div>
               ))}
               {contacts.length === 0 && <p className="text-xs text-slate-400">No contacts yet.</p>}
             </div>
-            <button type="button" disabled={saving} onClick={() => void saveContacts()} className="mt-2 w-full border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:opacity-50">Save Contacts</button>
+            {canEdit && <button type="button" disabled={saving} onClick={() => void saveContacts()} className="mt-2 w-full border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:opacity-50">Save Contacts</button>}
           </div>
 
           <div>
             <div className="mb-2 flex items-center justify-between">
               <h4 className="text-xs font-semibold uppercase tracking-[0.07em] text-slate-600">Emails</h4>
-              <button type="button" onClick={addEmail} className="border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">+ Add</button>
+              {canEdit && <button type="button" onClick={addEmail} className="border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">+ Add</button>}
             </div>
             <div className="grid gap-2">
               {emails.map((e, idx) => (
                 <div key={idx} className="grid gap-1 border border-slate-100 p-2">
-                  <input value={e.email ?? ""} onChange={(ev) => updateEmail(idx, { email: ev.target.value })} placeholder="Email" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500" />
-                  <input value={e.label ?? ""} onChange={(ev) => updateEmail(idx, { label: ev.target.value })} placeholder="Label (e.g. Billing)" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500" />
+                  <input disabled={!canEdit} value={e.email ?? ""} onChange={(ev) => updateEmail(idx, { email: ev.target.value })} placeholder="Email" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-50" />
+                  <input disabled={!canEdit} value={e.label ?? ""} onChange={(ev) => updateEmail(idx, { label: ev.target.value })} placeholder="Label (e.g. Billing)" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-50" />
                   <div className="flex items-center justify-between">
                     <label className="flex items-center gap-1 text-[11px] text-slate-600">
-                      <input type="checkbox" checked={Boolean(e.is_primary)} onChange={(ev) => updateEmail(idx, { is_primary: ev.target.checked })} /> Primary
+                      <input type="checkbox" disabled={!canEdit} checked={Boolean(e.is_primary)} onChange={(ev) => updateEmail(idx, { is_primary: ev.target.checked })} /> Primary
                     </label>
-                    <button type="button" onClick={() => removeEmail(idx)} className="text-[11px] font-semibold text-rose-600">Remove</button>
+                    {canEdit && <button type="button" onClick={() => removeEmail(idx)} className="text-[11px] font-semibold text-rose-600">Remove</button>}
                   </div>
                 </div>
               ))}
               {emails.length === 0 && <p className="text-xs text-slate-400">No emails yet.</p>}
             </div>
-            <button type="button" disabled={saving} onClick={() => void saveEmails()} className="mt-2 w-full border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:opacity-50">Save Emails</button>
+            {canEdit && <button type="button" disabled={saving} onClick={() => void saveEmails()} className="mt-2 w-full border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:opacity-50">Save Emails</button>}
           </div>
         </div>
       )}

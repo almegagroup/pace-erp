@@ -13,6 +13,7 @@ import {
   useMaterialOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
@@ -139,6 +140,13 @@ export default function STODetailPage() {
   const materials = materialQuery.materials;
   const paymentTerms = paymentTermQuery.paymentTerms;
   const loading = detailQuery.isLoading || materialQuery.isLoading || paymentTermQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void detailQuery.refetch(),
+    },
+  });
 
   const sendingCostCenterQuery = useCostCentersQuery(
     { company_id: detail?.sending_company_id || "", active: true },

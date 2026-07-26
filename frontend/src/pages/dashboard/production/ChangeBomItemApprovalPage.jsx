@@ -2,20 +2,28 @@
  * File-ID: 27.FE-PR04
  * File-Path: frontend/src/pages/dashboard/production/ChangeBomItemApprovalPage.jsx
  * Gate: 27 | Domain: PRODUCTION
- * Purpose: L3 Manager reviews DRAFT Stroke Change Requests and approves or rejects them.
- *          On approval, the live stroke lines are updated immediately.
+ * Purpose: L3 Manager reviews DRAFT Stroke Change Requests, edits the
+ *          Proposed column if needed, and approves or rejects them. Approve
+ *          applies live to stroke_line immediately (per 83.3 PR04, LOCKED
+ *          2026-06-30). Expandable inline row (same pattern as PR02 Stroke
+ *          Approval) — DrawerBase's descriptor-array `actions` prop crashes
+ *          with React error #31, so this page avoids DrawerBase entirely.
  */
 
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
+import { useMenu } from "../../../context/useMenu.js";
 import {
   listStrokeChangeRequests,
   getStrokeChangeRequest,
   approveStrokeChangeRequest,
   rejectStrokeChangeRequest,
 } from "./prodApi.js";
+import { listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember } from "../om/omApi.js";
+import { ChangeBomLinesTable, GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 
 const STATUS_COLORS = {
   DRAFT:    "bg-amber-100 text-amber-800",
@@ -24,23 +32,41 @@ const STATUS_COLORS = {
 };
 
 const ERRORS = {
-  PROD_SCR_NOT_DRAFT:           "Only DRAFT change requests can be actioned.",
-  PROD_SCR_REASON_REQUIRED:     "A rejection reason is required.",
-  PROD_MANAGER_OR_SA_REQUIRED:  "Manager or SA access required.",
+  PROD_SCR_NOT_DRAFT:          "Only DRAFT change requests can be actioned.",
+  PROD_SCR_REASON_REQUIRED:    "A rejection reason is required.",
+  PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 
 export default function ChangeBomItemApprovalPage() {
   const qc = useQueryClient();
+  const { runtimeContext } = useMenu();
+  const availableCompanies = buildTransactionCompanyList(runtimeContext);
+  const companyLabelById = new Map(availableCompanies.map((c) => [c.id, `${c.company_code} — ${c.company_name}`]));
   const [companyId, setCompanyId] = useState("");
-  const [statusFilter, setStatusFilter] = useState("DRAFT");
+  const [companyInitialized, setCompanyInitialized] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("");
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [expandedId, setExpandedId] = useState("");
   const [detail, setDetail] = useState(null);
+  const [editLines, setEditLines] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [rejectMode, setRejectMode] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+
+  const [groupModal, setGroupModal] = useState(null);
+  const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
+  const [memberModal, setMemberModal] = useState(null);
+  const [memberMaterialId, setMemberMaterialId] = useState("");
+
+  React.useEffect(() => {
+    if (companyInitialized) return;
+    const defaultId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (!defaultId) return;
+    setCompanyId(defaultId);
+    setCompanyInitialized(true);
+  }, [companyInitialized, runtimeContext]);
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -57,87 +83,131 @@ export default function ChangeBomItemApprovalPage() {
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
 
-  async function openDetail(id) {
+  const groupsQ = useQuery({ queryKey: ["om-material-groups"], queryFn: () => listMaterialCategoryGroups(), select: (d) => d?.data ?? [] });
+  const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 500 }), select: (d) => d?.data ?? [] });
+  const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 500 }), select: (d) => d?.data ?? [] });
+  const groups = groupsQ.data ?? [];
+  const lineMaterialsByType = { RM: rmMaterialsQ.data ?? [], INT: intMaterialsQ.data ?? [] };
+
+  const requests = crQ.data ?? [];
+
+  async function toggleExpand(row) {
+    if (expandedId === row.id) {
+      setExpandedId("");
+      setDetail(null);
+      setEditLines(null);
+      return;
+    }
+    setExpandedId(row.id);
     setDetail(null);
+    setEditLines(null);
     setRejectMode(false);
     setRejectReason("");
     setDetailLoading(true);
-    setDrawerOpen(true);
     try {
-      const d = await getStrokeChangeRequest(id);
+      const d = await getStrokeChangeRequest(row.id);
       setDetail(d);
+      const strokeLineMap = new Map((d.stroke?.lines ?? []).map((l) => [l.id, l]));
+      setEditLines((d.change_lines ?? []).map((cl) => {
+        const sl = strokeLineMap.get(cl.stroke_line_id) ?? {};
+        return {
+          stroke_line_id: cl.stroke_line_id,
+          line_material_type: sl.line_material_type ?? "RM",
+          current_material_id: cl.old_material_id,
+          current_group_id: cl.old_group_id ?? "",
+          dosage_pct: sl.dosage_pct ?? 0,
+          new_material_id: cl.new_material_id,
+          new_has_alternate: Boolean(cl.new_has_alternate),
+          new_group_id: cl.new_group_id ?? "",
+        };
+      }));
     } catch {
       toast("Failed to load change request detail.", "error");
-      setDrawerOpen(false);
+      setExpandedId("");
     } finally {
       setDetailLoading(false);
     }
   }
 
-  async function handleApprove() {
-    if (!detail) return;
+  function openCreateGroupModal(onCreated) {
+    setGroupForm({ group_name: "", description: "" });
+    setGroupModal({ onCreated });
+  }
+
+  async function handleCreateGroup() {
+    if (!groupForm.group_name.trim()) { toast("Group name required.", "error"); return; }
+    try {
+      const res = await createMaterialCategoryGroup(groupForm);
+      const newGroup = res?.data ?? res;
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Material group created.");
+      groupModal?.onCreated?.(newGroup.id);
+      setGroupModal(null);
+    } catch (err) { toast(friendly(err.code) || err.message, "error"); }
+  }
+
+  async function handleAddMember() {
+    if (!memberMaterialId) { toast("Select a material first.", "error"); return; }
+    try {
+      await addMaterialCategoryMember({ group_id: memberModal, material_id: memberMaterialId });
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Member added.");
+      setMemberModal(null);
+      setMemberMaterialId("");
+    } catch (err) { toast(friendly(err.code) || err.message, "error"); }
+  }
+
+  async function invalidate() {
+    await qc.invalidateQueries({ queryKey: ["stroke-change-requests"] });
+  }
+
+  async function handleApprove(row) {
+    if (!editLines) return;
     setSaving(true);
     try {
-      await approveStrokeChangeRequest(detail.id, {});
+      await approveStrokeChangeRequest(row.id, {
+        lines: editLines.map((l) => ({
+          stroke_line_id: l.stroke_line_id,
+          new_material_id: l.new_material_id,
+          new_has_alternate: l.new_has_alternate,
+          new_group_id: l.new_has_alternate ? (l.new_group_id || null) : null,
+        })),
+      });
       toast("Change request approved — stroke updated.");
-      setDrawerOpen(false);
-      qc.invalidateQueries({ queryKey: ["stroke-change-requests"] });
+      setExpandedId("");
+      await invalidate();
     } catch (err) {
-      toast(friendly(err.message), "error");
+      toast(friendly(err.code) || err.message, "error");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleReject() {
-    if (!detail || !rejectReason.trim()) {
-      toast("Enter a reject reason.", "error");
-      return;
-    }
+  async function handleReject(row) {
+    if (!rejectReason.trim()) { toast("Enter a reject reason.", "error"); return; }
     setSaving(true);
     try {
-      await rejectStrokeChangeRequest(detail.id, { reason: rejectReason.trim() });
+      await rejectStrokeChangeRequest(row.id, { reason: rejectReason.trim() });
       toast("Change request rejected.");
-      setDrawerOpen(false);
-      qc.invalidateQueries({ queryKey: ["stroke-change-requests"] });
+      setExpandedId("");
+      await invalidate();
     } catch (err) {
-      toast(friendly(err.message), "error");
+      toast(friendly(err.code) || err.message, "error");
     } finally {
       setSaving(false);
     }
   }
-
-  const requests = crQ.data ?? [];
-
-  const drawerActions = detail?.status === "DRAFT"
-    ? rejectMode
-      ? [
-          { label: "Confirm Reject", tone: "danger", onClick: handleReject, disabled: saving },
-          { label: "Cancel", tone: "neutral", onClick: () => setRejectMode(false) },
-        ]
-      : [
-          { label: "Approve", tone: "primary", onClick: handleApprove, disabled: saving },
-          { label: "Reject…", tone: "neutral", onClick: () => setRejectMode(true) },
-          { label: "Close", tone: "neutral", onClick: () => setDrawerOpen(false) },
-        ]
-    : [{ label: "Close", tone: "neutral", onClick: () => setDrawerOpen(false) }];
 
   return (
     <ErpScreenScaffold
       title="Change BOM Item Approval — PR04"
-      subtitle="L3 Manager reviews and approves or rejects Stroke Change Requests"
+      subtitle="L3 Manager reviews DRAFT change requests, may edit the Proposed column, then approves or rejects."
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
-        <div className="flex gap-3 flex-wrap">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Company ID</label>
-            <input
-              className="border border-slate-300 rounded px-2 py-1 text-sm w-64 font-mono"
-              placeholder="Filter by company…"
-              value={companyId}
-              onChange={(e) => setCompanyId(e.target.value)}
-            />
+        <div className="flex gap-3 flex-wrap items-end">
+          <div className="w-64">
+            <TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={setCompanyId} label="Company" />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs text-slate-500">Status</label>
@@ -164,6 +234,8 @@ export default function ChangeBomItemApprovalPage() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+                <th className="text-left py-2 px-3 border-b w-8"></th>
+                <th className="text-left py-2 px-3 border-b">Company</th>
                 <th className="text-left py-2 px-3 border-b">Stroke #</th>
                 <th className="text-left py-2 px-3 border-b">Description</th>
                 <th className="text-left py-2 px-3 border-b">Requested By</th>
@@ -173,127 +245,152 @@ export default function ChangeBomItemApprovalPage() {
             </thead>
             <tbody>
               {requests.map((r) => (
-                <tr
-                  key={r.id}
-                  className="hover:bg-sky-50 cursor-pointer border-b border-slate-100 transition-colors"
-                  onClick={() => openDetail(r.id)}
-                >
-                  <td className="py-2 px-3 font-mono font-semibold">#{r.stroke?.stroke_number ?? "?"}</td>
-                  <td className="py-2 px-3 text-slate-500">{r.stroke?.description ?? "—"}</td>
-                  <td className="py-2 px-3 text-slate-400 text-xs font-mono">{r.created_by?.slice(0, 8)}…</td>
-                  <td className="py-2 px-3 text-slate-400 text-xs">{r.created_at?.slice(0, 10)}</td>
-                  <td className="py-2 px-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[r.status] ?? ""}`}>
-                      {r.status}
-                    </span>
-                  </td>
-                </tr>
+                <React.Fragment key={r.id}>
+                  <tr
+                    className="hover:bg-sky-50 cursor-pointer border-b border-slate-100 transition-colors"
+                    onClick={() => toggleExpand(r)}
+                  >
+                    <td className="py-2 px-3 text-slate-400">{expandedId === r.id ? "▲" : "▼"}</td>
+                    <td className="py-2 px-3 text-slate-500">{companyLabelById.get(r.company_id) ?? "—"}</td>
+                    <td className="py-2 px-3 font-mono font-semibold">#{r.stroke?.stroke_number ?? "?"}</td>
+                    <td className="py-2 px-3 text-slate-500">{r.stroke?.description ?? "—"}</td>
+                    <td className="py-2 px-3 text-slate-500">{r.created_by_display ?? "—"}</td>
+                    <td className="py-2 px-3 text-slate-400 text-xs">{r.created_at?.slice(0, 10)}</td>
+                    <td className="py-2 px-3">
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[r.status] ?? ""}`}>
+                        {r.status}
+                      </span>
+                    </td>
+                  </tr>
+                  {expandedId === r.id && (
+                    <tr className="border-b border-slate-200 bg-slate-50/60">
+                      <td colSpan={7} className="p-4">
+                        {detailLoading ? (
+                          <p className="text-slate-400 text-sm py-4 text-center">Loading…</p>
+                        ) : detail && editLines ? (
+                          <div className="flex flex-col gap-4">
+                            <div className="grid grid-cols-3 gap-3 text-sm">
+                              <div>
+                                <span className="text-slate-400 text-xs block mb-0.5">Stroke</span>
+                                <p className="font-mono font-semibold">#{detail.stroke?.stroke_number ?? "?"}</p>
+                              </div>
+                              <div>
+                                <span className="text-slate-400 text-xs block mb-0.5">Description</span>
+                                <p className="font-medium">{detail.stroke?.description ?? "—"}</p>
+                              </div>
+                              <div>
+                                <span className="text-slate-400 text-xs block mb-0.5">Requested By</span>
+                                <p className="font-medium">{detail.created_by_display ?? "—"} · {detail.created_at?.slice(0, 10)}</p>
+                              </div>
+                              {detail.approved_by_display && (
+                                <div>
+                                  <span className="text-slate-400 text-xs block mb-0.5">Approved By</span>
+                                  <p className="font-medium">{detail.approved_by_display} · {detail.approved_at?.slice(0, 10)}</p>
+                                </div>
+                              )}
+                              {detail.reject_reason && (
+                                <div className="col-span-3 bg-rose-50 border border-rose-200 rounded p-2 text-rose-700 text-sm">
+                                  <strong>Reject reason:</strong> {detail.reject_reason}
+                                </div>
+                              )}
+                            </div>
+
+                            <div>
+                              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">
+                                RM / INT Lines — Current vs Proposed
+                              </p>
+                              <ChangeBomLinesTable
+                                lines={editLines}
+                                setLines={setEditLines}
+                                materialsByType={lineMaterialsByType}
+                                groups={groups}
+                                onCreateGroup={openCreateGroupModal}
+                                onAddMember={(groupId) => setMemberModal(groupId)}
+                                editable={r.status === "DRAFT"}
+                              />
+                            </div>
+
+                            {rejectMode && (
+                              <div className="flex flex-col gap-1">
+                                <label className="text-xs font-semibold text-slate-600">Rejection Reason</label>
+                                <textarea
+                                  className="border border-slate-300 rounded px-2 py-1.5 text-sm w-full h-20 resize-none"
+                                  placeholder="Explain why this change request is being rejected…"
+                                  value={rejectReason}
+                                  onChange={(e) => setRejectReason(e.target.value)}
+                                />
+                              </div>
+                            )}
+
+                            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                              <button type="button" className="h-8 border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setExpandedId("")}>
+                                Close
+                              </button>
+                              {r.status === "DRAFT" && (
+                                rejectMode ? (
+                                  <>
+                                    <button type="button" className="h-8 border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setRejectMode(false)}>
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={saving}
+                                      className="h-8 border border-rose-600 bg-white px-4 text-sm font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                                      onClick={() => handleReject(r)}
+                                    >
+                                      Confirm Reject
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={saving}
+                                      className="h-8 border border-rose-600 bg-white px-4 text-sm font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                                      onClick={() => setRejectMode(true)}
+                                    >
+                                      Reject…
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={saving}
+                                      className="h-8 border border-sky-600 bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+                                      onClick={() => handleApprove(r)}
+                                    >
+                                      Approve
+                                    </button>
+                                  </>
+                                )
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
         )}
       </ErpSectionCard>
 
-      <DrawerBase
-        visible={drawerOpen}
-        title={detail ? `Change Request — Stroke #${detail.stroke?.stroke_number ?? "?"}` : "Loading…"}
-        onClose={() => setDrawerOpen(false)}
-        width="min(680px, calc(100vw - 24px))"
-        actions={drawerActions}
-      >
-        {detailLoading ? (
-          <p className="text-slate-400 text-sm p-6 text-center">Loading…</p>
-        ) : detail ? (
-          <div className="p-4 flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Stroke</span>
-                <p className="font-mono font-semibold">#{detail.stroke?.stroke_number ?? "?"}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Status</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[detail.status] ?? ""}`}>
-                  {detail.status}
-                </span>
-              </div>
-              <div className="col-span-2">
-                <span className="text-slate-400 text-xs block mb-0.5">Description</span>
-                <p>{detail.stroke?.description ?? "—"}</p>
-              </div>
-              {detail.reject_reason && (
-                <div className="col-span-2 bg-rose-50 border border-rose-200 rounded p-2 text-rose-700 text-sm">
-                  <strong>Reject reason:</strong> {detail.reject_reason}
-                </div>
-              )}
-            </div>
+      <GroupCreateModal
+        open={Boolean(groupModal)}
+        groupForm={groupForm}
+        setGroupForm={setGroupForm}
+        onCancel={() => setGroupModal(null)}
+        onCreate={handleCreateGroup}
+      />
 
-            {rejectMode && (
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-semibold text-slate-600">Rejection Reason</label>
-                <textarea
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm w-full h-20 resize-none"
-                  placeholder="Explain why this change request is being rejected…"
-                  value={rejectReason}
-                  onChange={(e) => setRejectReason(e.target.value)}
-                />
-              </div>
-            )}
-
-            <div>
-              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">
-                Proposed Changes ({(detail.change_lines ?? []).length} lines)
-              </p>
-              {(detail.change_lines ?? []).length === 0 ? (
-                <p className="text-slate-400 text-sm">No change lines recorded.</p>
-              ) : (
-                <table className="w-full text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 uppercase tracking-wide">
-                      <th className="text-left py-1.5 px-2 border-b">#</th>
-                      <th className="text-left py-1.5 px-2 border-b">Current Material</th>
-                      <th className="text-left py-1.5 px-2 border-b">→ Proposed</th>
-                      <th className="text-left py-1.5 px-2 border-b">Has Alt.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.change_lines.map((l, i) => {
-                      const changed = l.old_material_id !== l.new_material_id;
-                      return (
-                        <tr key={l.id ?? i} className={`border-b border-slate-100 ${changed ? "bg-sky-50" : ""}`}>
-                          <td className="py-1.5 px-2 text-slate-400">{i + 1}</td>
-                          <td className="py-1.5 px-2">
-                            <span className="font-mono">{l.old_material?.pace_code ?? l.old_material_id?.slice(0, 8) ?? "—"}</span>
-                            {l.old_material?.material_name && (
-                              <span className="text-slate-400 ml-1">— {l.old_material.material_name}</span>
-                            )}
-                          </td>
-                          <td className="py-1.5 px-2">
-                            {changed ? (
-                              <span className="text-sky-700 font-semibold font-mono">
-                                {l.new_material?.pace_code ?? l.new_material_id?.slice(0, 8) ?? "?"}
-                                {l.new_material?.material_name ? ` — ${l.new_material.material_name}` : ""}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400">Unchanged</span>
-                            )}
-                          </td>
-                          <td className="py-1.5 px-2">
-                            {l.new_has_alternate !== l.old_has_alternate ? (
-                              <span className="text-sky-700 font-semibold">{l.new_has_alternate ? "Yes" : "No"}</span>
-                            ) : (
-                              <span className="text-slate-400">{l.new_has_alternate ? "Yes" : "No"}</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        ) : null}
-      </DrawerBase>
+      <MemberAddModal
+        open={Boolean(memberModal)}
+        memberMaterialId={memberMaterialId}
+        setMemberMaterialId={setMemberMaterialId}
+        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
+        onCancel={() => setMemberModal(null)}
+        onAdd={handleAddMember}
+      />
     </ErpScreenScaffold>
   );
 }

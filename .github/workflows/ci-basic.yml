@@ -23,6 +23,11 @@ jobs:
           test -d docs
           test -d .github
 
+      # Fails if any handler posts stock outside a single transaction (CLAUDE.md 8D).
+      # Ratchet: the baseline inside the script is a ceiling that may only come down.
+      - name: Stock posting guard
+        run: node scripts/stock-posting-guard.mjs
+
       - name: Block accidental deploy
         run: |
           echo "CI OK. No deploy steps allowed at Gate-0 / Gate-1."

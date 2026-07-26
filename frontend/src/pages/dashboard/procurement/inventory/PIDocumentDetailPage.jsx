@@ -9,6 +9,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
@@ -108,6 +109,18 @@ export default function PIDocumentDetailPage() {
     detailQuery.isLoading ||
     materialQuery.isLoading ||
     locationQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () =>
+        void Promise.all([
+          detailQuery.refetch(),
+          materialQuery.refetch(),
+          locationQuery.refetch(),
+        ]),
+    },
+  });
 
   const items = Array.isArray(detail?.items) ? detail.items : [];
   const materialOptions = useMemo(

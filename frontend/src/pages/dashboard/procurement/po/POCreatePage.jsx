@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -226,6 +226,11 @@ export default function POCreatePage() {
         vendor_id: form.vendor_id || undefined,
         material_id: primaryMaterialId || undefined,
       }),
+    // Cross-filtering (company/vendor/material) changes the queryKey on every
+    // selection. Without this, each selection would blank the whole form back
+    // to the "Loading procurement master data..." placeholder instead of just
+    // refreshing the dropdown options in place.
+    placeholderData: keepPreviousData,
   });
   const costCenterQuery = useCostCentersQuery(
     { company_id: form.company_id, active: true },
@@ -388,15 +393,16 @@ export default function POCreatePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.vendor_id]);
 
-  async function checkApprovedAsl(index) {
+  async function checkApprovedAsl(index, materialIdOverride) {
     const line = lines[index];
-    if (!form.vendor_id || !line?.material_id) {
+    const materialId = materialIdOverride ?? line?.material_id;
+    if (!form.vendor_id || !materialId) {
       return;
     }
     try {
       // Exact vendor+material pair lookup (per 85.2.4 hard-block rule) —
       // not the search-only list endpoint, which ignores vendor_id/material_id.
-      const vmi = (await getVendorMaterialInfo({ vendor_id: form.vendor_id, material_id: line.material_id }))?.data;
+      const vmi = (await getVendorMaterialInfo({ vendor_id: form.vendor_id, material_id: materialId }))?.data;
       const isActive = String(vmi?.status || "").toUpperCase() === "ACTIVE";
       if (!isActive) {
         updateLine(index, {
@@ -516,9 +522,9 @@ export default function POCreatePage() {
   const activeLineForDrawer = lineMoreIndex != null ? lines[lineMoreIndex] : null;
   const loading =
     paymentTermQuery.isLoading ||
-    filterOptionsQuery.isLoading ||
+    (filterOptionsQuery.isLoading && !filterOptionsQuery.data) ||
     (Boolean(form.company_id) && costCenterQuery.isLoading);
-  const initialFilterLoaded = filterOptionsQuery.isFetched;
+  const initialFilterLoaded = Boolean(filterOptionsQuery.data) || filterOptionsQuery.isFetched;
 
   const lineColumns = [
     {
@@ -528,7 +534,13 @@ export default function POCreatePage() {
       render: (_row, index) => (
         <ErpComboboxField
           value={lines[index].material_id}
-          onChange={(value) => updateLine(index, { material_id: value, aslWarning: "", aslChecked: false })}
+          onChange={(value) => {
+            updateLine(index, { material_id: value, aslWarning: "", aslChecked: false });
+            // Fire the VMI/UOM lookup immediately instead of waiting for blur —
+            // the combobox deliberately keeps focus on the field after a
+            // selection, so onBlur alone left UOM feeling delayed.
+            void checkApprovedAsl(index, value);
+          }}
           options={materialOptions}
           blankLabel="Select material"
           inputProps={{ onBlur: () => void checkApprovedAsl(index) }}

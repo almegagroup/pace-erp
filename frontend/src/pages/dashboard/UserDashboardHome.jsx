@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -10,9 +10,11 @@ import { openRoute } from "../../navigation/screenStackEngine.js";
 import { useMenu } from "../../context/useMenu.js";
 import { openErpCommandPalette } from "../../store/erpCommandPalette.js";
 import {
-  listLeaveApprovalInbox,
-  listOutWorkApprovalInbox,
-} from "./hr/hrApi.js";
+  useLeaveApprovalInboxQuery,
+  useOutWorkApprovalInboxQuery,
+} from "../../hooks/queries/useHrMasterQueries.js";
+import { queryClient } from "../../hooks/queries/queryClient.js";
+import { queryKeys } from "../../hooks/queries/queryKeys.js";
 
 function canOpenApprovalInbox(menuSnapshot) {
   const rows = Array.isArray(menuSnapshot) ? menuSnapshot : [];
@@ -34,24 +36,6 @@ function hasRoute(menuSnapshot, routePath) {
 
 function findFirstRoute(menuSnapshot, routePaths = []) {
   return routePaths.find((routePath) => hasRoute(menuSnapshot, routePath)) ?? "";
-}
-
-async function loadApprovalSummary(canViewApprovalInbox) {
-  if (!canViewApprovalInbox) {
-    return { approvalsToday: 0 };
-  }
-
-  const [leaveRows, outWorkRows] = await Promise.allSettled([
-    listLeaveApprovalInbox(),
-    listOutWorkApprovalInbox(),
-  ]);
-
-  const leaveCount =
-    leaveRows.status === "fulfilled" ? (leaveRows.value?.length ?? 0) : 0;
-  const outWorkCount =
-    outWorkRows.status === "fulfilled" ? (outWorkRows.value?.length ?? 0) : 0;
-
-  return { approvalsToday: leaveCount + outWorkCount };
 }
 
 function normalizeMenuRows(menu) {
@@ -179,9 +163,6 @@ export default function UserDashboardHome() {
   const topActionRefs = useRef([]);
   const taskRefs = useRef([]);
   const { menu, runtimeContext, shellProfile } = useMenu();
-  const [approvalSummary, setApprovalSummary] = useState({
-    approvalsToday: 0,
-  });
   const canViewApprovalInbox = useMemo(() => canOpenApprovalInbox(menu), [menu]);
   const priorityRoute = useMemo(
     () =>
@@ -212,43 +193,35 @@ export default function UserDashboardHome() {
     [menu],
   );
 
+  // PERF (§8A): this used to be a useEffect + setState that called the two approval-inbox
+  // endpoints directly, re-firing on mount, on `focus`, AND on `visibilitychange` (both wired to
+  // the same handler, so returning to the tab fired it twice). With no cache and no dedup that
+  // was 6 requests — measured on a live page load, ~17s of the total wait, on screens that have
+  // nothing to do with HR approvals.
+  //
+  // Now it uses the existing useQuery hooks, so React Query dedupes them, honours the global
+  // 60s staleTime, and — because the QueryClient sets refetchOnWindowFocus:false — the focus and
+  // visibilitychange storms disappear entirely. The workflow-changed event is kept, but it now
+  // invalidates the cache (one refetch, shared) instead of firing raw calls.
+  const leaveInboxQuery = useLeaveApprovalInboxQuery({ enabled: canViewApprovalInbox });
+  const outWorkInboxQuery = useOutWorkApprovalInboxQuery({ enabled: canViewApprovalInbox });
+
+  const approvalSummary = useMemo(() => {
+    if (!canViewApprovalInbox) return { approvalsToday: 0 };
+    const leaveCount = Array.isArray(leaveInboxQuery.data) ? leaveInboxQuery.data.length : 0;
+    const outWorkCount = Array.isArray(outWorkInboxQuery.data) ? outWorkInboxQuery.data.length : 0;
+    return { approvalsToday: leaveCount + outWorkCount };
+  }, [canViewApprovalInbox, leaveInboxQuery.data, outWorkInboxQuery.data]);
+
   useEffect(() => {
-    let alive = true;
-
-    async function refreshApprovalSummary() {
-      try {
-        const nextSummary = await loadApprovalSummary(canViewApprovalInbox);
-        if (alive) {
-          setApprovalSummary(nextSummary);
-        }
-      } catch {
-        if (alive) {
-          setApprovalSummary({ approvalsToday: 0 });
-        }
-      }
-    }
-
-    void refreshApprovalSummary();
-
-    function handleFocus() {
-      void refreshApprovalSummary();
-    }
-
     function handleWorkflowChange() {
-      void refreshApprovalSummary();
+      queryClient.invalidateQueries({ queryKey: queryKeys.hr.leaveApprovalInbox() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.hr.outWorkApprovalInbox() });
     }
 
-    window.addEventListener("focus", handleFocus);
     window.addEventListener("erp:workflow-changed", handleWorkflowChange);
-    document.addEventListener("visibilitychange", handleFocus);
-
-    return () => {
-      alive = false;
-      window.removeEventListener("focus", handleFocus);
-      window.removeEventListener("erp:workflow-changed", handleWorkflowChange);
-      document.removeEventListener("visibilitychange", handleFocus);
-    };
-  }, [canViewApprovalInbox]);
+    return () => window.removeEventListener("erp:workflow-changed", handleWorkflowChange);
+  }, []);
 
   const normalizedMenu = useMemo(() => normalizeMenuRows(menu), [menu]);
   const groupedWorkspaces = useMemo(

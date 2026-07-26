@@ -291,13 +291,13 @@ function MaterialMasterTab({ uoms }) {
     setSaving(true);
     setError("");
     let failed = 0;
-    for (const id of selectedIds) {
+    await Promise.all(Array.from(selectedIds).map(async (id) => {
       try {
         await changeMaterialStatus({ id, new_status: "ACTIVE" });
       } catch {
         failed++;
       }
-    }
+    }));
     setSaving(false);
     setSelectedIds(new Set());
     if (failed > 0) setError(`${failed} row(s) could not be activated.`);
@@ -310,13 +310,13 @@ function MaterialMasterTab({ uoms }) {
     setSaving(true);
     setError("");
     let failed = 0;
-    for (const id of selectedIds) {
+    await Promise.all(Array.from(selectedIds).map(async (id) => {
       try {
         await changeMaterialStatus({ id, new_status: "INACTIVE" });
       } catch {
         failed++;
       }
-    }
+    }));
     setSaving(false);
     setSelectedIds(new Set());
     if (failed > 0) setError(`${failed} row(s) could not be deactivated.`);
@@ -1093,11 +1093,15 @@ function UomConversionsTab({ uoms }) {
       setMaterials(rows);
       setTotal(Number(result?.total ?? 0));
 
-      // load conversions for all materials with alt UOM set
-      const withAlt = rows.filter((m) => m.purchase_uom_code || m.issue_uom_code);
-      if (withAlt.length > 0) {
+      // Load conversions for every listed material, not just ones with an alt
+      // purchase/issue UOM — FG SKUs never set those fields, but Pack BOM
+      // approval auto-writes their own outer-unit->KG conversion row directly
+      // into this same table (pack_bom.handlers.ts's syncPackBomConversions).
+      // Without this, those rows exist correctly in the DB but were never
+      // visible anywhere in the UI — this was the only real gap.
+      if (rows.length > 0) {
         const results = await Promise.all(
-          withAlt.map((m) => listMaterialUomConversions(m.id).then((r) => ({ id: m.id, data: r?.data ?? [] })))
+          rows.map((m) => listMaterialUomConversions(m.id).then((r) => ({ id: m.id, data: r?.data ?? [] })))
         );
         const convMap = {};
         const factMap = {};
@@ -1213,13 +1217,14 @@ function UomConversionsTab({ uoms }) {
               <th className="px-3 py-2 font-semibold text-slate-600">Alt UOM 2</th>
               <th className="px-3 py-2 font-semibold text-slate-600">1 Alt2 = ? Alt1</th>
               <th className="px-3 py-2 font-semibold text-slate-600"></th>
+              <th className="px-3 py-2 font-semibold text-slate-600">Other Conversions (auto-synced, read-only)</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={10} className="px-3 py-6 text-center text-slate-400">Loading materials...</td></tr>
+              <tr><td colSpan={11} className="px-3 py-6 text-center text-slate-400">Loading materials...</td></tr>
             ) : materials.length === 0 ? (
-              <tr><td colSpan={10} className="px-3 py-6 text-center text-slate-400">No materials matched the filter.</td></tr>
+              <tr><td colSpan={11} className="px-3 py-6 text-center text-slate-400">No materials matched the filter.</td></tr>
             ) : materials.map((mat) => {
               // purchase_uom_code/issue_uom_code default to base_uom_code when no
               // real alternate is set — only treat them as an "alt" UOM (needing a
@@ -1305,6 +1310,28 @@ function UomConversionsTab({ uoms }) {
                         {conv2 ? (isSaving2 ? "..." : "Update") : (isSaving2 ? "..." : "Save")}
                       </button>
                     ) : null}
+                  </td>
+
+                  {/* Other conversions — e.g. Pack BOM's auto-synced outer-unit->KG row for
+                      FG SKUs (pack_bom.handlers.ts's syncPackBomConversions). Read-only here:
+                      editing would fight the sync, which is the source of truth for these. */}
+                  <td className="px-3 py-2 text-slate-600">
+                    {(() => {
+                      const others = (conversions[mat.id] ?? []).filter(
+                        (row) => row.from_uom_code !== alt1 && row.from_uom_code !== alt2,
+                      );
+                      if (others.length === 0) return <span className="text-slate-200">—</span>;
+                      return (
+                        <div className="flex flex-col gap-0.5">
+                          {others.map((row) => (
+                            <span key={row.id} className="font-mono text-[11px]">
+                              {row.from_uom_code} → {row.to_uom_code} ={" "}
+                              {row.variable_conversion ? "variable" : Number(row.conversion_factor)}
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </td>
                 </tr>
               );

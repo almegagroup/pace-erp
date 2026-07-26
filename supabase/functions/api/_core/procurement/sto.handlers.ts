@@ -11,7 +11,9 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -228,10 +230,16 @@ async function assertStoApproverRole(
   }
 }
 
-function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): string {
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured. Only
+// used for the caller's OWN acting/sending company — never for a STO's
+// receiving_company_id, which is legitimately a different counterparty.
+async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
@@ -479,6 +487,27 @@ async function getPaymentTermRow(paymentTermId: string): Promise<JsonRecord | nu
   return (data as JsonRecord | null) ?? null;
 }
 
+async function getPaymentTermRowsByIds(paymentTermIds: string[]): Promise<Map<string, JsonRecord>> {
+  const uniqueIds = [...new Set(paymentTermIds.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (uniqueIds.length === 0) return map;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("payment_terms_master")
+    .select("*")
+    .in("id", uniqueIds);
+
+  if (error) {
+    throw new Error("PROCUREMENT_PAYMENT_TERM_LOOKUP_FAILED");
+  }
+
+  for (const row of ((data as JsonRecord[] | null) ?? [])) {
+    map.set(toTrimmedString(row.id), row);
+  }
+  return map;
+}
+
 async function getCostCenterRow(costCenterId: string): Promise<JsonRecord | null> {
   if (!costCenterId) return null;
   const { data, error } = await serviceRoleClient
@@ -627,19 +656,18 @@ async function insertStoApprovalLog(input: {
   }
 }
 
-async function buildCsnForInterPlantStoLine(input: {
+function buildCsnForInterPlantStoLine(input: {
   sto: StoRow;
   line: StoLineRow;
+  csnNumber: string;
   actionedBy: string;
   deliveryType: string;
   sendingCompanyHasGst: boolean;
-}): Promise<JsonRecord> {
+  lcRequired: boolean;
+}): JsonRecord {
   const paymentTermId = toTrimmedString(input.line.payment_term_id);
-  const paymentTerm = paymentTermId ? await getPaymentTermRow(paymentTermId) : null;
-  const lcRequired = toUpperTrimmedString(paymentTerm?.payment_method) === "LC";
-
   return {
-    csn_number: await generateProcurementDocNumber("CSN"),
+    csn_number: input.csnNumber,
     csn_type: input.sendingCompanyHasGst ? "DOMESTIC" : "IMPORT",
     delivery_type: DELIVERY_TYPES.has(input.deliveryType) ? input.deliveryType : "STANDARD",
     status: "ORD",
@@ -654,7 +682,7 @@ async function buildCsnForInterPlantStoLine(input: {
     dispatch_qty: 0,
     po_uom_code: input.line.uom_code,
     payment_term_id: paymentTermId || null,
-    lc_required: lcRequired,
+    lc_required: input.lcRequired,
     has_rebate: input.line.has_rebate === true,
     rebate_remarks: input.line.rebate_remarks ?? null,
     created_by: input.actionedBy,
@@ -676,43 +704,62 @@ async function createCsnForSto(
   const sendingCompany = await getCompanyRow(toTrimmedString(sto.sending_company_id));
   const sendingCompanyHasGst = Boolean(toTrimmedString(sendingCompany?.gst_number));
   const deliveryType = toUpperTrimmedString(deliveryTypeInput || sto.delivery_type || "STANDARD") || "STANDARD";
-
-  for (const line of stoLines) {
-    const orderedQty = Number(line.quantity ?? 0);
-    const existingCsnQuery = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .select("id")
-      .eq("sto_id", toTrimmedString(sto.id))
-      .eq("material_id", toTrimmedString(line.material_id))
-      .eq("po_uom_code", toTrimmedString(line.uom_code))
-      .eq("po_qty", orderedQty)
-      .maybeSingle();
-
-    if (existingCsnQuery.error) {
-      throw new Error("PROCUREMENT_CSN_LOOKUP_FAILED");
-    }
-    if (existingCsnQuery.data?.id) {
-      continue;
-    }
-
-    const payload = await buildCsnForInterPlantStoLine({
-      sto,
-      line,
-      actionedBy,
-      deliveryType,
-      sendingCompanyHasGst,
-    });
-
-    const { error } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .insert(payload);
-
-    if (error) {
-      throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
-    }
+  const stoId = toTrimmedString(sto.id);
+  const paymentTermById = await getPaymentTermRowsByIds(
+    stoLines.map((line) => toTrimmedString(line.payment_term_id)),
+  );
+  const lineKeys = stoLines.map((line) => ({
+    line,
+    key: JSON.stringify([
+      toTrimmedString(line.material_id),
+      toTrimmedString(line.uom_code),
+      Number(line.quantity ?? 0),
+    ]),
+  }));
+  const { data: existingRows, error: existingError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .select("material_id, po_uom_code, po_qty")
+    .eq("sto_id", stoId);
+  if (existingError) {
+    throw new Error("PROCUREMENT_CSN_LOOKUP_FAILED");
   }
+  const existingKeys = new Set(
+    ((existingRows as JsonRecord[] | null) ?? []).map((row) =>
+      JSON.stringify([
+        toTrimmedString(row.material_id),
+        toTrimmedString(row.po_uom_code),
+        Number(row.po_qty ?? 0),
+      ])
+    ),
+  );
+
+  await Promise.all(
+    lineKeys
+      .filter(({ key }) => !existingKeys.has(key))
+      .map(async ({ line }) => {
+        const paymentTermId = toTrimmedString(line.payment_term_id);
+        const paymentTerm = paymentTermId ? paymentTermById.get(paymentTermId) ?? null : null;
+        const payload = buildCsnForInterPlantStoLine({
+          sto,
+          line,
+          csnNumber: await generateProcurementDocNumber("CSN"),
+          actionedBy,
+          deliveryType,
+          sendingCompanyHasGst,
+          lcRequired: toUpperTrimmedString(paymentTerm?.payment_method) === "LC",
+        });
+
+        const { error } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("consignment_note")
+          .insert(payload);
+
+        if (error) {
+          throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
+        }
+      }),
+  );
 }
 
 async function inactivateLinkedCsnsForSto(input: {
@@ -777,6 +824,7 @@ async function buildConsignmentStoFromSubCsns(input: {
   let sto: StoRow | null = null;
   let nextLineNumber = 1;
 
+  // DEPENDENT: this transform incrementally creates one STO header and line ordering from prior CSN-linked state, so iteration order is significant.
   for (const csnId of input.csnIds) {
     const subCsn = await getSubCsnById(csnId, input.sendingCompanyId);
     const motherCsnId = toTrimmedString(subCsn.mother_csn_id);
@@ -910,7 +958,7 @@ export async function createSTOHandler(
     const body = await parseBody(req);
     const isOpeningSto = body.is_opening_sto === true;
     const stoType = toUpperTrimmedString(body.sto_type);
-    const sendingCompanyId = getCompanyScope(ctx, toTrimmedString(body.sending_company_id));
+    const sendingCompanyId = await getCompanyScope(ctx, toTrimmedString(body.sending_company_id));
     const receivingCompanyId = toTrimmedString(body.receiving_company_id);
     const sendingCostCenterId = toTrimmedString(body.sending_cost_center_id);
     const receivingCostCenterId = toTrimmedString(body.receiving_cost_center_id);
@@ -1053,6 +1101,55 @@ export async function createSTOHandler(
   }
 }
 
+// STO carries no material-type restriction of its own (unlike Sales Order's RM/PM-only
+// gate) -- it moves any material between companies. The "RM/PM Sale" combined page (SO +
+// STO tabs) needs an RM/PM-only view of STOs for that presentation, so this filters the
+// already-fetched header rows down to ones whose every line is one of the allowed types.
+async function filterStosByMaterialTypes(stos: StoRow[], allowedTypes: string[]): Promise<StoRow[]> {
+  const stoIds = stos.map((sto) => String(sto.id));
+  if (stoIds.length === 0) return [];
+
+  const { data: lineRows, error: lineError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("stock_transfer_order_line")
+    .select("sto_id, material_id")
+    .in("sto_id", stoIds);
+  if (lineError) {
+    throw new Error("STO_LINE_FETCH_FAILED");
+  }
+  const lines = (lineRows ?? []) as { sto_id: string; material_id: string }[];
+  const materialIds = [...new Set(lines.map((l) => String(l.material_id)))];
+
+  const materialTypeMap = new Map<string, string>();
+  if (materialIds.length > 0) {
+    const { data: materialRows, error: materialError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .select("id, material_type")
+      .in("id", materialIds);
+    if (materialError) {
+      throw new Error("STO_MATERIAL_FETCH_FAILED");
+    }
+    for (const m of (materialRows ?? []) as { id: string; material_type: string | null }[]) {
+      materialTypeMap.set(String(m.id), toUpperTrimmedString(m.material_type));
+    }
+  }
+
+  const linesBySto = new Map<string, string[]>();
+  for (const line of lines) {
+    const key = String(line.sto_id);
+    const arr = linesBySto.get(key) ?? [];
+    arr.push(String(line.material_id));
+    linesBySto.set(key, arr);
+  }
+
+  return stos.filter((sto) => {
+    const lineMaterialIds = linesBySto.get(String(sto.id)) ?? [];
+    if (lineMaterialIds.length === 0) return false;
+    return lineMaterialIds.every((id) => allowedTypes.includes(materialTypeMap.get(id) ?? ""));
+  });
+}
+
 export async function listSTOsHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -1060,9 +1157,10 @@ export async function listSTOsHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const stoType = toUpperTrimmedString(url.searchParams.get("sto_type"));
+    const materialScope = toUpperTrimmedString(url.searchParams.get("material_scope"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
 
     let query = serviceRoleClient
@@ -1087,7 +1185,12 @@ export async function listSTOsHandler(
       return stoErrorResponse(req, ctx, "STO_LIST_FAILED", 500, "Unable to list STOs.");
     }
 
-    return okResponse({ items: data ?? [] }, ctx.request_id, req);
+    let items = (data ?? []) as StoRow[];
+    if (materialScope === "RM_PM" && items.length > 0) {
+      items = await filterStosByMaterialTypes(items, ["RM", "PM"]);
+    }
+
+    return okResponse({ items }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_LIST_FAILED";
     return stoErrorResponse(req, ctx, code, 500, code);
@@ -1119,7 +1222,7 @@ export async function getLastStoPaymentTermHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const sendingCompanyId = getCompanyScope(ctx, url.searchParams.get("sending_company_id") ?? undefined);
+    const sendingCompanyId = await getCompanyScope(ctx, url.searchParams.get("sending_company_id") ?? undefined);
     const receivingCompanyId = toTrimmedString(url.searchParams.get("receiving_company_id"));
 
     if (!sendingCompanyId || !receivingCompanyId) {
@@ -1174,9 +1277,10 @@ export async function updateSTOHandler(
 
     if (Array.isArray(body.lines)) {
       const lines = body.lines as JsonRecord[];
-      for (const line of lines) {
+      const nowIso = new Date().toISOString();
+      const lineUpdateErrors = await Promise.all(lines.map(async (line) => {
         const lineId = toTrimmedString(line.id);
-        if (!lineId) continue;
+        if (!lineId) return null;
         const quantity = parsePositiveNumber(line.quantity);
         const receivedQty = parseNullableNumber(line.received_qty) ?? 0;
         const balanceQty = quantity !== null ? Number((quantity - receivedQty).toFixed(6)) : undefined;
@@ -1208,7 +1312,7 @@ export async function updateSTOHandler(
           rebate_remarks: line.rebate_remarks !== undefined ? (toTrimmedString(line.rebate_remarks) || null) : undefined,
           expected_delivery_date: line.expected_delivery_date !== undefined ? (toTrimmedString(line.expected_delivery_date) || null) : undefined,
           balance_qty: balanceQty,
-          last_updated_at: new Date().toISOString(),
+          last_updated_at: nowIso,
         };
         const { error: lineError } = await serviceRoleClient
           .schema("erp_procurement")
@@ -1216,9 +1320,10 @@ export async function updateSTOHandler(
           .update(linePatch)
           .eq("id", lineId)
           .eq("sto_id", stoId);
-        if (lineError) {
-          return stoErrorResponse(req, ctx, "STO_LINE_UPDATE_FAILED", 500, "Unable to update STO line.");
-        }
+        return lineError;
+      }));
+      if (lineUpdateErrors.some(Boolean)) {
+        return stoErrorResponse(req, ctx, "STO_LINE_UPDATE_FAILED", 500, "Unable to update STO line.");
       }
     }
 
@@ -1294,7 +1399,12 @@ export async function transformSubCSNToSTOHandler(
     assertProcurementReadRole(ctx);
     const csnId = getIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return stoErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     const subCsn = await getSubCsnById(csnId, companyId);
 
     if (!toTrimmedString(subCsn.mother_csn_id)) {
@@ -1806,6 +1916,11 @@ export async function dispatchSTOHandler(
     const dispatchedLineResults: Array<{ line: StoLineRow; stockDocumentId: string }> = [];
     let totalDispatchQty = 0;
 
+    // §106: one Material Document (MBLNR+MJAHR) for the whole dispatch event; the STO
+    // business number becomes the reference. Shared by every line's ledger item.
+    const stoMatDoc = await generateMaterialDocNumber(String(sto.sending_company_id));
+
+    // DEPENDENT: each STO dispatch line posts stock and updates dispatch totals that the following lines must observe in sequence.
     for (const line of lines) {
       const snapshot = await getSnapshotForLine(String(sto.sending_company_id), line);
       const requiredQty = parsePositiveNumber(line.quantity) ?? 0;
@@ -1845,6 +1960,11 @@ export async function dispatchSTOHandler(
           p_direction: "OUT",
           p_posted_by: ctx.auth_user_id,
           p_reversal_of_id: null,
+          p_material_doc_number: stoMatDoc.docNumber,
+          p_material_doc_year: stoMatDoc.docYear,
+          p_reference_document_number: sto.sto_number,
+          p_reference_document_type: "STO",
+          p_reference_document_id: sto.id ?? null,
         });
 
       if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {
@@ -2065,6 +2185,7 @@ export async function confirmSTOReceiptHandler(
       return stoErrorResponse(req, ctx, "STO_RECEIPT_LINE_FETCH_FAILED", 500, "Unable to fetch STO GRN lines.");
     }
 
+    // DEPENDENT: each linked GRN line rolls received quantity into STO balances, so later iterations must read prior committed totals.
     for (const grnLine of grnLines ?? []) {
       const stoLineId = toTrimmedString((grnLine as JsonRecord).sto_line_id);
       if (!stoLineId) continue;

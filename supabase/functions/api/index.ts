@@ -11,7 +11,7 @@
 import { log } from "./_lib/logger.ts";
 import { generateRequestId } from "./_lib/request_id.ts";
 import { handleHealth } from "./_core/health.ts";
-import { runPipeline } from "./_pipeline/runner.ts";
+import { runPipeline, type PipelineTimings } from "./_pipeline/runner.ts";
 import { applySecurityHeaders } from "./_security/security_headers.ts";
 import { applyCSP } from "./_security/csp.ts";
 import { applyCORS,handlePreflight } from "./_pipeline/cors.ts";
@@ -59,11 +59,32 @@ if (url.pathname !== "/health") {
  log({ level: "INFO", request_id: requestId, gate_id: "1A", event: "pipeline_start" });
 
 try {
-  const res = await runPipeline(req, requestId);
+  // PERF: collect per-step pipeline timings and surface them as a standard `Server-Timing`
+  // response header, so any request's cost breakdown is visible directly in the browser
+  // DevTools Network → Timing panel. No extra DB call, no extra round trip — the numbers are
+  // already being measured for the observability log; this just also returns them.
+  const timings: PipelineTimings = {};
+  const tTotal0 = performance.now();
+  const res = await runPipeline(req, requestId, timings);
+  timings.total = Math.round(performance.now() - tTotal0);
+
+  const serverTiming = Object.entries(timings)
+    .map(([name, ms]) => `${name};dur=${ms}`)
+    .join(", ");
+  const timedRes = serverTiming
+    ? new Response(res.body, {
+        status: res.status,
+        headers: (() => {
+          const h = new Headers(res.headers);
+          h.set("Server-Timing", serverTiming);
+          return h;
+        })(),
+      })
+    : res;
 
   return applyCSP(
     applySecurityHeaders(
-      applyCORS(req, res),   // ✅ ONLY res
+      applyCORS(req, timedRes),   // ✅ ONLY res
       requestId
     )
   );

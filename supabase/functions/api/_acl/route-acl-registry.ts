@@ -45,19 +45,31 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/purchase-orders":            { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "WRITE" },
   "GET:/api/procurement/po-order-groups":             { skipAcl: false, resourceCode: "PROC_PO_ORDER_APPROVALS", action: "VIEW" },
   "GET:/api/procurement/po-filter-options":           { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"  },
+  "GET:/api/procurement/materials/uom-conversion":    { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"  },
 
   // ── Procurement: Gate Entry ───────────────────────────────────────────────
   "GET:/api/procurement/gate-entries":                { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_LIST",   action: "VIEW"  },
   "POST:/api/procurement/gate-entries":               { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "WRITE" },
   "GET:/api/procurement/gate-entries/open-csns":      { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "VIEW"  },
+  "GET:/api/procurement/gate-entries/open-pos":       { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "VIEW"  },
+  "GET:/api/procurement/gate-entries/open-stos":      { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "VIEW"  },
+  "GET:/api/procurement/gate-entries/by-number":      { skipAcl: false, resourceCode: "PROC_GATE_EXIT",         action: "VIEW"  },
   "POST:/api/procurement/gate-exits/inbound":         { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "WRITE" },
+  "GET:/api/procurement/gate-report":                 { skipAcl: false, resourceCode: "PROC_GATE_REPORT",       action: "VIEW"  },
 
   // ── Procurement: GRN ─────────────────────────────────────────────────────
-  "GET:/api/procurement/grns":                        { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
-  "POST:/api/procurement/grns":                       { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "WRITE" },
+  "GET:/api/procurement/grns":                              { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
+  "POST:/api/procurement/grns":                             { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "WRITE" },
+  "GET:/api/procurement/grns/ge-lines":                     { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
+  "POST:/api/procurement/grns/from-line":                   { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "WRITE" },
+  "GET:/api/procurement/grns/material-vendor-doc-names":    { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
 
   // ── Procurement: Inward QA ────────────────────────────────────────────────
   "GET:/api/procurement/qa-documents":                { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "VIEW"  },
+  "GET:/api/procurement/qa-test-methods":             { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "VIEW"  },
+  "POST:/api/procurement/qa-test-methods":            { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "WRITE" },
+  "GET:/api/procurement/qa-category-test-config":     { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "VIEW"  },
+  "POST:/api/procurement/qa-category-test-config":    { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "WRITE" },
 
   // ── Procurement: Invoice Verification ────────────────────────────────────
   "GET:/api/procurement/invoice-verifications":         { skipAcl: false, resourceCode: "PROC_IV_LIST",   action: "VIEW"  },
@@ -97,8 +109,10 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/physical-inventory":         { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "WRITE" },
 
   // ── Procurement: Opening Stock ────────────────────────────────────────────
-  "GET:/api/procurement/opening-stock":               { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "VIEW"  },
-  "POST:/api/procurement/opening-stock":              { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "WRITE" },
+  "GET:/api/procurement/opening-stock":               { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW"  },
+  "POST:/api/procurement/opening-stock":              { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "WRITE" },
+  "GET:/api/procurement/opening-stock/by-number":     { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "VIEW"  },
+  "POST:/api/procurement/opening-stock/recalculate-valuation": { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "APPROVE" },
 
   // ── Procurement: Reports ──────────────────────────────────────────────────
   "GET:/api/procurement/planning":                    { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
@@ -162,6 +176,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "DELETE:/api/om/material/category-group/member":    { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
   "GET:/api/om/material/uom-conversions":             { skipAcl: false, resourceCode: "OM_MATERIAL_LIST",   action: "VIEW"  },
   "POST:/api/om/material/uom-conversion":             { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+  "PATCH:/api/om/material/uom-conversion":            { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
   "POST:/api/om/material/status":                     { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "EDIT"  },
   "POST:/api/om/material/extend-company":             { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
   "POST:/api/om/material/extend-plant":               { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
@@ -241,6 +256,59 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/om/machine/toggle":                      { skipAcl: true },
   "GET:/api/om/number-series":                        { skipAcl: true },
   "POST:/api/om/number-series":                       { skipAcl: true },
+
+  // ── Production ───────────────────────────────────────────────────────────
+  "GET:/api/production/pack-codes":                  { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  "POST:/api/production/pack-codes":                 { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "WRITE" },
+  "POST:/api/production/pack-codes/toggle":          { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "EDIT" },
+  "GET:/api/production/prodshades":                  { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  "GET:/api/production/pack-configs":                { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "VIEW" },
+  "POST:/api/production/pack-configs":               { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "WRITE" },
+  "GET:/api/production/batch-series":                { skipAcl: false, resourceCode: "SA_PROD_BATCH_SERIES", action: "VIEW" },
+  "POST:/api/production/batch-series":               { skipAcl: false, resourceCode: "SA_PROD_BATCH_SERIES", action: "WRITE" },
+  "GET:/api/production/batch-numbers":               { skipAcl: false, resourceCode: "PROD_BATCH_RELEASE", action: "VIEW" },
+  "GET:/api/production/segment-locations":           { skipAcl: false, resourceCode: "SA_PROD_SEGMENT_LOCATIONS", action: "VIEW" },
+  "POST:/api/production/segment-locations":          { skipAcl: false, resourceCode: "SA_PROD_SEGMENT_LOCATIONS", action: "WRITE" },
+  "GET:/api/production/conversion-rates":            { skipAcl: false, resourceCode: "ACC_CONVERSION_COST", action: "VIEW" },
+  "POST:/api/production/conversion-rates":           { skipAcl: false, resourceCode: "ACC_CONVERSION_COST", action: "WRITE" },
+  // §104.8 stroke-derived opening-rate suggestion — consumed by IN05 Opening Stock, so it rides
+  // that page's own resource rather than the Accounts one.
+  "GET:/api/production/derived-opening-rate":        { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW" },
+  "GET:/api/production/stroke-masters":              { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "VIEW" },
+  "POST:/api/production/stroke-masters":             { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "WRITE" },
+  "GET:/api/production/plan-feed":                   { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  "POST:/api/production/plan-feed":                  { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "WRITE" },
+  "GET:/api/production/plan-feed/summary":           { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  "GET:/api/production/plan-feed/unmapped-stock":    { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  "GET:/api/production/plan-feed/check-stroke":      { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  "GET:/api/production/plan-feed/stroke-options":    { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  "GET:/api/production/plan-feed/find":               { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  "GET:/api/production/process-orders":              { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
+  "GET:/api/production/process-orders/availability-preview": { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
+  "POST:/api/production/process-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+    "GET:/api/production/packing-orders":              { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
+    "GET:/api/production/packing-orders/availability-preview": { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
+    "GET:/api/production/packing-orders/sfg-batches":  { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
+    "POST:/api/production/packing-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+  "GET:/api/production/fg-stock-breakdown":           { skipAcl: false, resourceCode: "PROD_FG_STOCK_BREAKDOWN", action: "VIEW" },
+  "GET:/api/production/sfg-qa-documents":            { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "VIEW" },
+  "GET:/api/production/stroke-change-requests":      { skipAcl: false, resourceCode: "PROD_CHANGE_BOM_ITEM_APPROVAL", action: "VIEW" },
+  "POST:/api/production/stroke-change-requests":     { skipAcl: false, resourceCode: "PROD_CHANGE_BOM_ITEM", action: "WRITE" },
+  "GET:/api/production/pack-boms/eligible-skus":     { skipAcl: false, resourceCode: "PROD_PACK_BOM_CREATE", action: "VIEW" },
+  "GET:/api/production/pack-boms":                   { skipAcl: false, resourceCode: "PROD_PACK_BOM_CREATE", action: "VIEW" },
+  "POST:/api/production/pack-boms":                  { skipAcl: false, resourceCode: "PROD_PACK_BOM_CREATE", action: "WRITE" },
+  "GET:/api/production/pack-bom-change-requests":    { skipAcl: false, resourceCode: "PROD_CHANGE_PACK_BOM_APPROVAL", action: "VIEW" },
+  "GET:/api/production/partial-reversals/prodshades":     { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "VIEW" },
+  "GET:/api/production/partial-reversals/resolve-batch":  { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "VIEW" },
+  "GET:/api/production/partial-reversals/stock-lines":    { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "VIEW" },
+  "GET:/api/production/partial-reversals/salvage-batches": { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "VIEW" },
+  "GET:/api/production/partial-reversals/detail":         { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "VIEW" },
+  "POST:/api/production/partial-reversals":               { skipAcl: false, resourceCode: "PROD_PARTIAL_BATCH_REVERSAL", action: "WRITE" },
+  "GET:/api/production/partial-reversals":                { skipAcl: false, resourceCode: "PROD_PARTIAL_REVERSAL_REPORT", action: "VIEW" },
+  // §104.9 Opening Genealogy — Production ACL (PR22/PR23)
+  "POST:/api/production/old-process-po":                  { skipAcl: false, resourceCode: "PROD_OLD_PROCESS_PO", action: "WRITE" },
+  "GET:/api/production/old-process-po/batches":           { skipAcl: false, resourceCode: "PROD_OLD_PACKING_PO", action: "VIEW" },
+  "POST:/api/production/old-packing-po":                  { skipAcl: false, resourceCode: "PROD_OLD_PACKING_PO", action: "WRITE" },
 
   // ── Admin: All routes — SA/GA only, ACL enforced in stepAcl (skipAcl here) ─
   "GET:/api/admin/system-health":                          { skipAcl: true },
@@ -408,14 +476,6 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { GET: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" } },
   },
   {
-    pattern: /^\/api\/procurement\/csns\/[^/]+\/mark-in-transit$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
-  },
-  {
-    pattern: /^\/api\/procurement\/csns\/[^/]+\/mark-arrived$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
-  },
-  {
     pattern: /^\/api\/procurement\/csns\/[^/]+\/transform-to-sto$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "WRITE" } },
   },
@@ -437,6 +497,12 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
 
   // ── Gate Entry ───────────────────────────────────────────────────────────
+  {
+    pattern: /^\/api\/procurement\/gate-entries\/[^/]+\/prune$/,
+    methods: {
+      POST: { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "WRITE" },
+    },
+  },
   {
     pattern: /^\/api\/procurement\/gate-entries\/[^/]+$/,
     methods: {
@@ -472,10 +538,6 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { GET: { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "VIEW" } },
   },
   {
-    pattern: /^\/api\/procurement\/qa-documents\/[^/]+\/assign-officer$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "EDIT" } },
-  },
-  {
     pattern: /^\/api\/procurement\/qa-documents\/[^/]+\/test-lines$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "WRITE" } },
   },
@@ -487,8 +549,18 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     },
   },
   {
-    pattern: /^\/api\/procurement\/qa-documents\/[^/]+\/usage-decision$/,
+    // NOTE: actual handler route is /decision (see procurement.routes.ts) — this was
+    // previously registered as /usage-decision, a path that has never existed, which
+    // silently blocked every QA usage-decision submission with ROUTE_ACL_NOT_REGISTERED.
+    pattern: /^\/api\/procurement\/qa-documents\/[^/]+\/decision$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/qa-category-test-config\/[^/]+$/,
+    methods: {
+      PATCH:  { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "EDIT"   },
+      DELETE: { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "DELETE" },
+    },
   },
 
   // ── Invoice Verification ──────────────────────────────────────────────────
@@ -710,30 +782,34 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   // ── Opening Stock ──────────────────────────────────────────────────────────
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+$/,
-    methods: { GET: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "VIEW" } },
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW" } },
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/lines$/,
-    methods: { POST: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "WRITE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/lines\/batch$/,
+    methods: { PUT: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "EDIT" } },
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/lines\/[^/]+$/,
     methods: {
-      PUT:    { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "EDIT"   },
-      DELETE: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "DELETE" },
+      PUT:    { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "EDIT"   },
+      DELETE: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "DELETE" },
     },
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/submit$/,
-    methods: { POST: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "WRITE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/approve$/,
-    methods: { POST: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "APPROVE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "APPROVE" } },
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/post$/,
-    methods: { POST: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "APPROVE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "APPROVE" } },
   },
 
   // ── L2 Masters (parametric) ────────────────────────────────────────────────
@@ -818,6 +894,195 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { DELETE: { skipAcl: true } },
   },
 
+  // ── Production (parametric) ────────────────────────────────────────────────
+  {
+    pattern: /^\/api\/production\/pack-codes\/[^/]+$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/pack-configs\/[^/]+$/,
+    methods: { DELETE: { skipAcl: false, resourceCode: "SA_OM_PACK_CODE_MASTER", action: "DELETE" } },
+  },
+  {
+    pattern: /^\/api\/production\/batch-series\/[^/]+$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "SA_PROD_BATCH_SERIES", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/batch-numbers\/[^/]+\/release$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_BATCH_RELEASE", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/production\/stroke-masters\/[^/]+$/,
+    methods: {
+      GET:   { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "VIEW" },
+      PATCH: { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/production\/stroke-masters\/[^/]+\/approve$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_STROKE_APPROVAL", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/stroke-masters\/[^/]+\/revert$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_STROKE_APPROVAL", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/stroke-masters\/[^/]+\/reject$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_STROKE_APPROVAL", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/stroke-masters\/[^/]+\/deactivate$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/plan-feed\/[^/]+$/,
+    methods: {
+      GET:   { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+      PATCH: { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/production\/plan-feed\/[^/]+\/cancel$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/plan-feed\/[^/]+\/allocations$/,
+    methods: {
+      GET:  { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+      POST: { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/lines$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/edit$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/qa-approve$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/qa-reject$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/start-batch$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_BATCH_RELEASE", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/finalize$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_FINAL", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/verify$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_VERIFY", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/complete-int$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_VERIFY", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/reverse$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_REVERSAL", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/prune$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+\/test-lines$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+\/test-lines\/[^/]+$/,
+    methods: {
+      PUT: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+\/decision$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/packing-orders\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/production\/packing-orders\/[^/]+\/lines$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/packing-orders\/[^/]+\/edit$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/packing-orders\/[^/]+\/cancel$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/packing-orders\/[^/]+\/finalize$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_FINAL", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/production\/packing-orders\/[^/]+\/reverse$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_REVERSAL", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/packing-orders\/[^/]+\/correct$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PACKING_PO_FINAL", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/production\/partial-reversals\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROD_PARTIAL_REVERSAL_REPORT", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/production\/stroke-change-requests\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROD_CHANGE_BOM_ITEM_APPROVAL", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/production\/stroke-change-requests\/[^/]+\/approve$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_CHANGE_BOM_ITEM_APPROVAL", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/stroke-change-requests\/[^/]+\/reject$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_CHANGE_BOM_ITEM_APPROVAL", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/pack-boms\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROD_PACK_BOM_CREATE", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/production\/pack-boms\/[^/]+\/approve$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PACK_BOM_APPROVAL", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/pack-boms\/[^/]+\/reject$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PACK_BOM_APPROVAL", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/pack-boms\/[^/]+\/change-request$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_CHANGE_PACK_BOM", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/production\/pack-bom-change-requests\/[^/]+\/approve$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_CHANGE_PACK_BOM_APPROVAL", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/pack-bom-change-requests\/[^/]+\/reject$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_CHANGE_PACK_BOM_APPROVAL", action: "APPROVE" } },
+  },
+
   // ── OM: Material (parametric) ──────────────────────────────────────────────
   {
     pattern: /^\/api\/om\/material$/,
@@ -826,8 +1091,9 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/om\/material\/uom-conversion[s]?$/,
     methods: {
-      GET:  { skipAcl: false, resourceCode: "OM_MATERIAL_LIST",   action: "VIEW"  },
-      POST: { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+      GET:   { skipAcl: false, resourceCode: "OM_MATERIAL_LIST",   action: "VIEW"  },
+      POST:  { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+      PATCH: { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
     },
   },
   {

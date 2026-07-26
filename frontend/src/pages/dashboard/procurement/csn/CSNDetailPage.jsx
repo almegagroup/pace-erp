@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -7,14 +7,13 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openActionPrompt } from "../../../../store/actionPrompt.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   getCSN,
   listCSNs,
   listPorts,
-  markCSNArrived,
-  markCSNInTransit,
+  listTransporters,
   updateCSN,
 } from "../procurementApi.js";
 
@@ -66,6 +65,96 @@ function buildForm(detail) {
   };
 }
 
+function buildTransporterDisplay(detail) {
+  const code = detail?.transporter_code;
+  const name = detail?.transporter_name;
+  if (code && name) return `${code} — ${name}`;
+  if (name) return name;
+  return "";
+}
+
+function TransporterSearchField({ value, displayValue, onChange }) {
+  const [search, setSearch] = useState(displayValue || "");
+  const [results, setResults] = useState([]);
+  const [open, setOpen] = useState(false);
+  const debounceRef = useRef(null);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    setSearch(displayValue || "");
+  }, [displayValue]);
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+        if (!value) setSearch("");
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [value]);
+
+  function handleInput(e) {
+    const q = e.target.value;
+    setSearch(q);
+    setOpen(true);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await listTransporters({ search: q, limit: 20 });
+        setResults(Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []);
+      } catch {
+        setResults([]);
+      }
+    }, 300);
+  }
+
+  function handleSelect(row) {
+    const label = `${row.transporter_code} — ${row.transporter_name}`;
+    setSearch(label);
+    setOpen(false);
+    onChange(row.id, row.transporter_name);
+  }
+
+  function handleClear() {
+    setSearch("");
+    setResults([]);
+    setOpen(false);
+    onChange("", "");
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div className="flex gap-1">
+        <input
+          value={search}
+          onChange={handleInput}
+          onFocus={() => { setOpen(true); if (!search) handleInput({ target: { value: "" } }); }}
+          placeholder="Search transporter..."
+          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+        />
+        {value ? (
+          <button type="button" onClick={handleClear} className="h-8 px-2 border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 text-xs">✕</button>
+        ) : null}
+      </div>
+      {open && results.length > 0 ? (
+        <ul className="absolute z-30 left-0 right-0 top-full mt-0.5 border border-slate-300 bg-white shadow-lg max-h-48 overflow-y-auto">
+          {results.map((row) => (
+            <li
+              key={row.id}
+              onMouseDown={() => handleSelect(row)}
+              className="cursor-pointer px-3 py-1.5 text-sm hover:bg-sky-50"
+            >
+              {row.transporter_code} — {row.transporter_name}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function toPayload(form) {
   const payload = {};
   Object.entries(form).forEach(([key, value]) => {
@@ -107,7 +196,9 @@ function getCsnDisplayLabel(row) {
 }
 
 export default function CSNDetailPage() {
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
   const [detail, setDetail] = useState(null);
   const [relatedCsns, setRelatedCsns] = useState([]);
@@ -118,6 +209,8 @@ export default function CSNDetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [domesticTransporterDisplay, setDomesticTransporterDisplay] = useState("");
+  const [importTransporterDisplay, setImportTransporterDisplay] = useState("");
 
   const subCsns = useMemo(
     () => relatedCsns.filter((row) => row.mother_csn_id === detail?.id),
@@ -142,6 +235,8 @@ export default function CSNDetailPage() {
       const data = fetched?.data ?? fetched;
       setDetail(data);
       setForm(buildForm(data));
+      setDomesticTransporterDisplay(buildTransporterDisplay(data));
+      setImportTransporterDisplay(buildTransporterDisplay(data));
 
       const scopedCompanyId = data?.company_id || runtimeContext?.selectedCompanyId || "";
       const siblingRows = data?.po_id
@@ -172,6 +267,13 @@ export default function CSNDetailPage() {
     }).catch(() => {});
   }, [loadDetail]);
 
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void loadDetail(),
+    },
+  });
+
   function patchField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
   }
@@ -197,52 +299,6 @@ export default function CSNDetailPage() {
     }
   }
 
-  async function handleMarkInTransit() {
-    if (!detail?.id || !detail?.company_id) {
-      return;
-    }
-    const actualEtd = await openActionPrompt({ eyebrow: "CSN", title: "Mark In Transit", label: "Actual ETD (YYYY-MM-DD)", defaultValue: form.etd || "", placeholder: "YYYY-MM-DD" });
-    if (actualEtd === null) return;
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      await markCSNInTransit(detail.id, {
-        company_id: detail.company_id,
-        actual_etd: actualEtd || undefined,
-      });
-      setNotice("CSN marked in transit.");
-      await loadDetail();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_CSN_MARK_IN_TRANSIT_FAILED");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleMarkArrived() {
-    if (!detail?.id || !detail?.company_id) {
-      return;
-    }
-    const arrivalDate = await openActionPrompt({ eyebrow: "CSN", title: "Mark Arrived", label: "Arrival date (YYYY-MM-DD)", placeholder: "YYYY-MM-DD" });
-    if (arrivalDate === null) return;
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      await markCSNArrived(detail.id, {
-        company_id: detail.company_id,
-        actual_arrival_date: arrivalDate || undefined,
-      });
-      setNotice("CSN marked arrived.");
-      await loadDetail();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_CSN_MARK_ARRIVED_FAILED");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   return (
     <ErpScreenScaffold
       eyebrow="Procurement"
@@ -254,12 +310,6 @@ export default function CSNDetailPage() {
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         { key: "save", label: saving ? "Saving..." : "Save CSN", tone: "primary", onClick: () => void handleSave(), disabled: saving || loading || !detail },
-        ...(detail?.status === "ORD"
-          ? [{ key: "mark-transit", label: "Mark In Transit", tone: "neutral", onClick: () => void handleMarkInTransit(), disabled: saving }]
-          : []),
-        ...(detail?.status === "TRN"
-          ? [{ key: "mark-arrived", label: "Mark Arrived", tone: "neutral", onClick: () => void handleMarkArrived(), disabled: saving }]
-          : []),
       ]}
     >
       {loading || !detail ? (
@@ -379,11 +429,15 @@ export default function CSNDetailPage() {
                 <ErpDenseFormRow label="LR Number">
                   <input value={form.lr_number} onChange={(event) => patchField("lr_number", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="Transporter ID">
-                  <input value={form.domestic_transporter_id} onChange={(event) => patchField("domestic_transporter_id", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Transporter Name">
-                  <input value={form.domestic_transporter_freetext} onChange={(event) => patchField("domestic_transporter_freetext", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+                <ErpDenseFormRow label="Transporter">
+                  <TransporterSearchField
+                    value={form.domestic_transporter_id}
+                    displayValue={domesticTransporterDisplay}
+                    onChange={(id, name) => {
+                      patchField("domestic_transporter_id", id);
+                      patchField("domestic_transporter_freetext", name);
+                    }}
+                  />
                 </ErpDenseFormRow>
               </div>
             </ErpSectionCard>

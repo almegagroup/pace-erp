@@ -1,40 +1,49 @@
 /*
  * File-ID: 27.FE-PR06
  * File-Path: frontend/src/pages/dashboard/production/PackBomApprovalPage.jsx
- * Gate: 27 | Domain: PRODUCTION
- * Purpose: L1 Manager Procurement approves Pack BOMs with BOM Required = Yes.
- *          Can edit PM lines before approving. Reject returns BOM to DRAFT for revision.
+ * Gate: 27.22 | Domain: PRODUCTION
+ * Purpose: Review company-scoped Pack BOMs and approve DRAFT BOMs.
  */
 
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import DrawerBase from "../../../components/layer/DrawerBase.jsx";
-import { listPackBoms, getPackBom, approvePackBom, rejectPackBom } from "./prodApi.js";
+import { useMenu } from "../../../context/useMenu.js";
+import { approvePackBom, getPackBom, listPackBoms, rejectPackBom } from "./prodApi.js";
+import { addMaterialCategoryMember, createMaterialCategoryGroup, listMaterialCategoryGroups, listMaterials } from "../om/omApi.js";
+import { GroupCreateModal, MemberAddModal, PackBomLinesTable } from "./strokeShared.jsx";
 
 const STATUS_COLORS = {
-  DRAFT:  "bg-amber-100 text-amber-800",
+  DRAFT: "bg-amber-100 text-amber-800",
   ACTIVE: "bg-emerald-100 text-emerald-800",
 };
 
 const ERRORS = {
-  PROD_BOM_NOT_DRAFT:          "Only DRAFT Pack BOMs can be approved.",
-  PROD_BOM_REASON_REQUIRED:    "A rejection reason is required.",
+  PROD_BOM_NOT_DRAFT: "Only DRAFT Pack BOMs can be approved.",
+  PROD_BOM_REASON_REQUIRED: "A rejection reason is required.",
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
 };
 function friendly(code) { return ERRORS[code] ?? code; }
+function materialLabel(material) { return [material?.pace_code, material?.material_name].filter(Boolean).join(" - "); }
+function companyLabel(company) { return [company?.company_code, company?.company_name].filter(Boolean).join(" - "); }
+function slocLabel(location) { return [location?.code, location?.name].filter(Boolean).join(" - "); }
 
 export default function PackBomApprovalPage() {
   const qc = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState("DRAFT");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [companyFilter, setCompanyFilter] = useState("");
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [expandedId, setExpandedId] = useState("");
   const [detail, setDetail] = useState(null);
   const [editedLines, setEditedLines] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [rejectMode, setRejectMode] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const [groupModal, setGroupModal] = useState(null);
+  const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
+  const [memberModal, setMemberModal] = useState(null);
+  const [memberMaterialId, setMemberMaterialId] = useState("");
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -42,138 +51,180 @@ export default function PackBomApprovalPage() {
   }
 
   const bomsQ = useQuery({
-    queryKey: ["pack-boms-approval", statusFilter],
-    queryFn: () => listPackBoms({ status: statusFilter || undefined }),
+    queryKey: ["pack-boms-approval", statusFilter, companyFilter],
+    queryFn: () => listPackBoms({ status: statusFilter || undefined, company_id: companyFilter || undefined }),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
+  const { runtimeContext } = useMenu();
+  const pmMaterialsQ = useQuery({
+    queryKey: ["om-materials", "PM"],
+    queryFn: () => listMaterials({ material_type: "PM", limit: 500 }),
+    select: (d) => d?.data ?? [],
+  });
+  const groupsQ = useQuery({
+    queryKey: ["om-material-groups"],
+    queryFn: () => listMaterialCategoryGroups(),
+    select: (d) => d?.data ?? [],
+  });
 
-  async function openDetail(id) {
+  const boms = bomsQ.data ?? [];
+  const companies = runtimeContext?.availableCompanies ?? [];
+  const pmMaterials = pmMaterialsQ.data ?? [];
+  const groups = groupsQ.data ?? [];
+
+  async function toggleExpand(row) {
+    if (expandedId === row.id) {
+      setExpandedId("");
+      setDetail(null);
+      setEditedLines([]);
+      return;
+    }
+    setExpandedId(row.id);
     setDetail(null);
     setEditedLines([]);
     setRejectMode(false);
     setRejectReason("");
     setDetailLoading(true);
-    setDrawerOpen(true);
     try {
-      const d = await getPackBom(id);
+      const d = await getPackBom(row.id);
       setDetail(d);
-      setEditedLines(
-        (d.lines ?? [])
-          .filter((l) => l.line_type === "INPUT")
-          .map((l) => ({
-            id: l.id,
-            line_type: "INPUT",
-            material_id: l.material_id ?? "",
-            material_pace: l.material?.pace_code ?? "",
-            qty: String(l.qty ?? ""),
-            uom_code: l.uom_code ?? "KG",
-            has_alternate: Boolean(l.has_alternate),
-          }))
-      );
+      setEditedLines((d.lines ?? []).filter((line) => line.line_type === "INPUT").map((line) => ({
+        _key: line.id,
+        material_id: line.material_id ?? "",
+        qty: String(line.qty ?? ""),
+        uom_code: line.uom_code ?? "",
+        has_alternate: Boolean(line.material_group_id),
+        material_group_id: line.material_group_id ?? "",
+        is_primary_container: Boolean(line.is_primary_container),
+      })));
     } catch {
       toast("Failed to load Pack BOM detail.", "error");
-      setDrawerOpen(false);
+      setExpandedId("");
     } finally {
       setDetailLoading(false);
     }
   }
 
-  function updateEditedLine(idx, field, value) {
-    setEditedLines((prev) =>
-      prev.map((l, i) => i === idx ? { ...l, [field]: value } : l)
-    );
+  function openCreateGroupModal(onCreated) {
+    setGroupForm({ group_name: "", description: "" });
+    setGroupModal({ onCreated });
   }
 
-  async function handleApprove() {
+  async function handleCreateGroup() {
+    if (!groupForm.group_name.trim()) { toast("Group name required.", "error"); return; }
+    try {
+      const res = await createMaterialCategoryGroup(groupForm);
+      const newGroup = res?.data ?? res;
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Material group created.");
+      groupModal?.onCreated?.(newGroup.id);
+      setGroupModal(null);
+    } catch (err) { toast(friendly(err.code) || err.message, "error"); }
+  }
+
+  async function handleAddMember() {
+    if (!memberMaterialId) { toast("Select a material first.", "error"); return; }
+    try {
+      await addMaterialCategoryMember({ group_id: memberModal, material_id: memberMaterialId });
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Member added.");
+      setMemberModal(null);
+      setMemberMaterialId("");
+    } catch (err) { toast(friendly(err.code) || err.message, "error"); }
+  }
+
+  async function invalidate() {
+    await qc.invalidateQueries({ queryKey: ["pack-boms-approval"] });
+  }
+
+  async function handleApprove(row) {
     if (!detail) return;
     setSaving(true);
     try {
-      const linesToSend = [
-        { line_type: "OUTPUT", material_id: detail.sku_material_id, qty: 1, uom_code: "KG", has_alternate: false },
-        ...editedLines.map((l) => ({
-          line_type: "INPUT",
-          material_id: l.material_id,
-          qty: Number(l.qty),
-          uom_code: l.uom_code,
-          has_alternate: l.has_alternate,
-        })),
-      ];
-      await approvePackBom(detail.id, { lines: linesToSend });
+      const mandatoryLines = (detail.lines ?? []).filter((line) => line.line_type !== "INPUT").map((line) => ({
+        line_type: line.line_type,
+        material_id: line.material_id,
+        qty: line.qty,
+        uom_code: line.uom_code,
+        storage_location_id: line.storage_location_id,
+        movement_type_code: line.movement_type_code,
+        has_alternate: false,
+        material_group_id: null,
+        is_primary_container: false,
+      }));
+      const pmLines = editedLines.map((line) => ({
+        line_type: "INPUT",
+        material_id: line.material_id,
+        qty: Number(line.qty),
+        uom_code: line.uom_code,
+        movement_type_code: "P261",
+        has_alternate: line.has_alternate,
+        material_group_id: line.has_alternate ? (line.material_group_id || null) : null,
+        is_primary_container: Boolean(line.is_primary_container),
+      }));
+      await approvePackBom(row.id, { lines: [...mandatoryLines, ...pmLines] });
       toast("Pack BOM approved and activated.");
-      setDrawerOpen(false);
-      qc.invalidateQueries({ queryKey: ["pack-boms-approval"] });
+      setExpandedId("");
+      await invalidate();
     } catch (err) {
-      toast(friendly(err.message), "error");
+      toast(friendly(err.code) || err.message, "error");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleReject() {
-    if (!detail || !rejectReason.trim()) {
-      toast("Enter a reject reason.", "error");
-      return;
-    }
+  async function handleReject(row) {
+    if (!rejectReason.trim()) { toast("Enter a reject reason.", "error"); return; }
     setSaving(true);
     try {
-      await rejectPackBom(detail.id, { reason: rejectReason.trim() });
-      toast("Pack BOM rejected — returned to Procurement for revision.");
-      setDrawerOpen(false);
-      qc.invalidateQueries({ queryKey: ["pack-boms-approval"] });
+      await rejectPackBom(row.id, { reason: rejectReason.trim() });
+      toast("Pack BOM rejected.");
+      setExpandedId("");
+      await invalidate();
     } catch (err) {
-      toast(friendly(err.message), "error");
+      toast(friendly(err.code) || err.message, "error");
     } finally {
       setSaving(false);
     }
   }
-
-  const boms = bomsQ.data ?? [];
-
-  const drawerActions = detail?.status === "DRAFT"
-    ? rejectMode
-      ? [
-          { label: "Confirm Reject", tone: "danger", onClick: handleReject, disabled: saving },
-          { label: "Cancel", tone: "neutral", onClick: () => setRejectMode(false) },
-        ]
-      : [
-          { label: "Approve", tone: "primary", onClick: handleApprove, disabled: saving },
-          { label: "Reject…", tone: "neutral", onClick: () => setRejectMode(true) },
-          { label: "Close", tone: "neutral", onClick: () => setDrawerOpen(false) },
-        ]
-    : [{ label: "Close", tone: "neutral", onClick: () => setDrawerOpen(false) }];
 
   return (
     <ErpScreenScaffold
-      title="Pack BOM Approval — PR06"
-      subtitle="L1 Manager Procurement reviews and approves Pack BOM submissions"
+      title="Pack BOM Approval - PR06"
+      subtitle="Review company-scoped Pack BOM submissions"
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
-        <div className="flex gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Status</label>
-            <select
-              className="border border-slate-300 rounded px-2 py-1 text-sm"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
+        <div className="flex flex-wrap gap-3">
+          <label className="flex flex-col gap-1 w-64 text-xs text-slate-500">
+            Company
+            <select className="border border-slate-300 rounded px-2 py-1 text-sm" value={companyFilter} onChange={(e) => setCompanyFilter(e.target.value)}>
+              <option value="">All</option>
+              {companies.map((company) => <option key={company.id} value={company.id}>{companyLabel(company)}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 w-40 text-xs text-slate-500">
+            Status
+            <select className="border border-slate-300 rounded px-2 py-1 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">All</option>
               <option value="DRAFT">Draft</option>
               <option value="ACTIVE">Active</option>
             </select>
-          </div>
+          </label>
         </div>
       </ErpSectionCard>
 
       <ErpSectionCard title={`Pack BOMs (${boms.length})`}>
         {bomsQ.isLoading ? (
-          <p className="text-slate-500 text-sm py-4 text-center">Loading…</p>
+          <p className="text-slate-500 text-sm py-4 text-center">Loading...</p>
         ) : boms.length === 0 ? (
           <p className="text-slate-400 text-sm py-4 text-center">No Pack BOMs found.</p>
         ) : (
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+                <th className="text-left py-2 px-3 border-b w-8"></th>
+                <th className="text-left py-2 px-3 border-b">Company</th>
                 <th className="text-left py-2 px-3 border-b">SKU Code</th>
                 <th className="text-left py-2 px-3 border-b">SKU Name</th>
                 <th className="text-left py-2 px-3 border-b">Pack Code</th>
@@ -183,139 +234,118 @@ export default function PackBomApprovalPage() {
               </tr>
             </thead>
             <tbody>
-              {boms.map((b) => (
-                <tr
-                  key={b.id}
-                  className="hover:bg-sky-50 cursor-pointer border-b border-slate-100 transition-colors"
-                  onClick={() => openDetail(b.id)}
-                >
-                  <td className="py-2 px-3 font-mono font-medium">{b.sku?.pace_code ?? "—"}</td>
-                  <td className="py-2 px-3 text-slate-500">{b.sku?.material_name ?? "—"}</td>
-                  <td className="py-2 px-3 text-slate-500">{b.sku?.pack_code ?? "—"}</td>
-                  <td className="py-2 px-3 text-slate-400 text-xs font-mono">{b.created_by?.slice(0, 8)}…</td>
-                  <td className="py-2 px-3 text-slate-400 text-xs">{b.created_at?.slice(0, 10)}</td>
-                  <td className="py-2 px-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[b.status] ?? "bg-slate-100 text-slate-600"}`}>
-                      {b.status}
-                    </span>
-                  </td>
-                </tr>
+              {boms.map((bom) => (
+                <React.Fragment key={bom.id}>
+                  <tr className="hover:bg-sky-50 cursor-pointer border-b border-slate-100" onClick={() => toggleExpand(bom)}>
+                    <td className="py-2 px-3 text-slate-400">{expandedId === bom.id ? "UP" : "DOWN"}</td>
+                    <td className="py-2 px-3 text-slate-500">{companyLabel(bom.company) || "-"}</td>
+                    <td className="py-2 px-3 font-mono font-medium">{bom.sku?.pace_code ?? "-"}</td>
+                    <td className="py-2 px-3 text-slate-500">{bom.sku?.material_name ?? "-"}</td>
+                    <td className="py-2 px-3 text-slate-500">{bom.sku?.pack_code ?? "-"}</td>
+                    <td className="py-2 px-3 text-slate-500">{bom.created_by_display ?? "-"}</td>
+                    <td className="py-2 px-3 text-slate-400 text-xs">{bom.created_at?.slice(0, 10)}</td>
+                    <td className="py-2 px-3">
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[bom.status] ?? "bg-slate-100 text-slate-600"}`}>{bom.status}</span>
+                    </td>
+                  </tr>
+                  {expandedId === bom.id && (
+                    <tr className="border-b border-slate-200 bg-slate-50/60">
+                      <td colSpan={8} className="p-4">
+                        {detailLoading ? (
+                          <p className="text-slate-400 text-sm py-4 text-center">Loading...</p>
+                        ) : detail ? (
+                          <div className="flex flex-col gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+                              <div><span className="text-slate-400 text-xs block">Company</span><p>{companyLabel(detail.company)}</p></div>
+                              <div><span className="text-slate-400 text-xs block">SKU</span><p className="font-mono font-semibold">{detail.sku?.pace_code ?? "-"}</p></div>
+                              <div><span className="text-slate-400 text-xs block">Material Name</span><p>{detail.sku?.material_name ?? "-"}</p></div>
+                              <div><span className="text-slate-400 text-xs block">Pack Code</span><p className="font-mono">{detail.sku?.pack_code ?? "-"}</p></div>
+                            </div>
+
+                            <div className="rounded border border-slate-200 bg-white overflow-x-auto">
+                              <table className="w-full text-xs">
+                                <thead className="bg-slate-50">
+                                  <tr>
+                                    <th className="text-left p-2">Type</th>
+                                    <th className="text-left p-2">Material</th>
+                                    <th className="text-right p-2">Qty</th>
+                                    <th className="text-left p-2">UOM</th>
+                                    <th className="text-left p-2">Storage Location</th>
+                                    <th className="text-left p-2">Movement</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(detail.lines ?? []).filter((line) => line.line_type !== "INPUT").map((line) => (
+                                    <tr key={line.id} className="border-t">
+                                      <td className="p-2 font-semibold">{line.line_type}</td>
+                                      <td className="p-2">{materialLabel(line.material)}</td>
+                                      <td className="p-2 text-right font-mono">{line.qty ?? "Calculated"}</td>
+                                      <td className="p-2">{line.uom_code ?? "-"}</td>
+                                      <td className="p-2">{slocLabel(line.storage_location) || "-"}</td>
+                                      <td className="p-2 font-mono">{line.movement_type_code ?? "-"}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+
+                            <div>
+                              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">PM Input Lines</p>
+                              <PackBomLinesTable
+                                lines={editedLines}
+                                setLines={setEditedLines}
+                                materials={pmMaterials}
+                                groups={groups}
+                                onCreateGroup={openCreateGroupModal}
+                                onAddMember={(groupId) => setMemberModal(groupId)}
+                                disabled={bom.status !== "DRAFT"}
+                              />
+                            </div>
+
+                            {rejectMode && (
+                              <label className="flex flex-col gap-1 text-xs font-semibold text-slate-600">
+                                Rejection Reason
+                                <textarea className="border border-slate-300 rounded px-2 py-1.5 text-sm w-full h-20 resize-none" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
+                              </label>
+                            )}
+
+                            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                              <button type="button" className="h-8 border border-slate-300 bg-white px-4 text-sm" onClick={() => setExpandedId("")}>Close</button>
+                              {bom.status === "DRAFT" && (
+                                rejectMode ? (
+                                  <>
+                                    <button type="button" className="h-8 border border-slate-300 bg-white px-4 text-sm" onClick={() => setRejectMode(false)}>Cancel</button>
+                                    <button type="button" disabled={saving} className="h-8 border border-rose-600 bg-white px-4 text-sm font-semibold text-rose-600 disabled:opacity-50" onClick={() => handleReject(bom)}>Confirm Reject</button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button type="button" disabled={saving} className="h-8 border border-rose-600 bg-white px-4 text-sm font-semibold text-rose-600 disabled:opacity-50" onClick={() => setRejectMode(true)}>Reject</button>
+                                    <button type="button" disabled={saving} className="h-8 border border-sky-600 bg-sky-600 px-4 text-sm font-semibold text-white disabled:opacity-50" onClick={() => handleApprove(bom)}>Approve</button>
+                                  </>
+                                )
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
         )}
       </ErpSectionCard>
 
-      <DrawerBase
-        visible={drawerOpen}
-        title={detail ? `Pack BOM — ${detail.sku?.pace_code ?? "?"}` : "Loading…"}
-        onClose={() => setDrawerOpen(false)}
-        width="min(700px, calc(100vw - 24px))"
-        actions={drawerActions}
-      >
-        {detailLoading ? (
-          <p className="text-slate-400 text-sm p-6 text-center">Loading…</p>
-        ) : detail ? (
-          <div className="p-4 flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">SKU</span>
-                <p className="font-mono font-semibold">{detail.sku?.pace_code ?? "—"}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Status</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[detail.status] ?? "bg-slate-100 text-slate-600"}`}>
-                  {detail.status}
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Material Name</span>
-                <p>{detail.sku?.material_name ?? "—"}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Pack Code</span>
-                <p className="font-mono">{detail.sku?.pack_code ?? "—"}</p>
-              </div>
-              {detail.reject_reason && (
-                <div className="col-span-2 bg-amber-50 border border-amber-200 rounded p-2 text-amber-700 text-xs">
-                  <strong>Previous rejection:</strong> {detail.reject_reason}
-                </div>
-              )}
-            </div>
-
-            {rejectMode && (
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-semibold text-slate-600">Rejection Reason</label>
-                <textarea
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm w-full h-20 resize-none"
-                  placeholder="Explain why this Pack BOM is being rejected…"
-                  value={rejectReason}
-                  onChange={(e) => setRejectReason(e.target.value)}
-                />
-              </div>
-            )}
-
-            <div>
-              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">PM Input Lines (editable)</p>
-              {editedLines.length === 0 ? (
-                <p className="text-slate-400 text-sm">No PM lines.</p>
-              ) : (
-                <table className="w-full text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 uppercase tracking-wide">
-                      <th className="text-left py-1.5 px-2 border-b">#</th>
-                      <th className="text-left py-1.5 px-2 border-b">Material</th>
-                      <th className="text-right py-1.5 px-2 border-b">Qty</th>
-                      <th className="text-left py-1.5 px-2 border-b">UOM</th>
-                      <th className="text-left py-1.5 px-2 border-b">Has Alt.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {editedLines.map((l, i) => (
-                      <tr key={l.id ?? i} className="border-b border-slate-100">
-                        <td className="py-1.5 px-2 text-slate-400">{i + 1}</td>
-                        <td className="py-1.5 px-2">
-                          <input
-                            className="border border-slate-300 rounded px-1.5 py-0.5 text-xs font-mono w-52"
-                            value={l.material_id}
-                            onChange={(e) => updateEditedLine(i, "material_id", e.target.value)}
-                          />
-                          {l.material_pace && <span className="text-slate-400 ml-1">{l.material_pace}</span>}
-                        </td>
-                        <td className="py-1.5 px-2">
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.001"
-                            className="border border-slate-300 rounded px-1.5 py-0.5 text-xs text-right w-20"
-                            value={l.qty}
-                            onChange={(e) => updateEditedLine(i, "qty", e.target.value)}
-                          />
-                        </td>
-                        <td className="py-1.5 px-2">
-                          <input
-                            className="border border-slate-300 rounded px-1.5 py-0.5 text-xs w-14 uppercase"
-                            value={l.uom_code}
-                            onChange={(e) => updateEditedLine(i, "uom_code", e.target.value.toUpperCase())}
-                          />
-                        </td>
-                        <td className="py-1.5 px-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={l.has_alternate}
-                            onChange={(e) => updateEditedLine(i, "has_alternate", e.target.checked)}
-                            className="accent-sky-600"
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        ) : null}
-      </DrawerBase>
+      <GroupCreateModal open={Boolean(groupModal)} groupForm={groupForm} setGroupForm={setGroupForm} onCancel={() => setGroupModal(null)} onCreate={handleCreateGroup} />
+      <MemberAddModal
+        open={Boolean(memberModal)}
+        memberMaterialId={memberMaterialId}
+        setMemberMaterialId={setMemberMaterialId}
+        materialOptions={pmMaterials.map((material) => ({ value: material.id, label: materialLabel(material) }))}
+        onCancel={() => setMemberModal(null)}
+        onAdd={handleAddMember}
+      />
     </ErpScreenScaffold>
   );
 }

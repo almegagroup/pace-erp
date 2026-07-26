@@ -11,6 +11,7 @@ import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import {
   createPaymentTerm,
   createReferenceDateType,
@@ -53,6 +54,13 @@ export default function PaymentTermsMasterPage() {
   const terms = termQuery.paymentTerms;
   const refTypes = refTypeQuery.data ?? [];
   const loading = termQuery.isLoading || refTypeQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void Promise.all([termQuery.refetch(), refTypeQuery.refetch()]),
+    },
+  });
 
   // Payment Terms
   const [editId, setEditId]         = useState(null);
