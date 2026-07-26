@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -92,10 +93,14 @@ function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline.
 }
 
-function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): string {
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
+async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
@@ -894,7 +899,7 @@ export async function listGRNsHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
@@ -998,7 +1003,8 @@ export async function listGRNsHandler(
     return okResponse({ items: enriched }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GRN_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, message, 500, message);
+    const status = message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return procurementErrorResponse(req, ctx, message, status, message);
   }
 }
 

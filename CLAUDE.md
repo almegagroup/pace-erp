@@ -249,19 +249,25 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 >
 > **go-live: 1 July 2026 (Liquid — Admix/Hypershot/IWC)।**
 >
-> **✅ Company-scope data leak — CODE-LEVEL FIX COMPLETE (2026-07-25), feasibility doc
-> Section 112 পড়ো।** ACL role restructure-এর সময় ধরা পড়েছিল — অনেক write handler
-> caller-এর `erp_map.user_companies` scope-এর সাথে `company_id` মিলিয়ে দেখত না। Generic
-> `assertCompanyScope()` (`_shared/companyScope.ts`) বানিয়ে **৩০টা backend handler file**-এ
-> বসানো হয়েছে (মূল audit-এ ছিল শুধু Production; `scripts/company-scope-guard.mjs` (নতুন CI
-> ratchet, baseline শূন্য) চালিয়ে দেখা গেল প্রায় পুরো Procurement module-ও একই leak-এ ছিল —
-> PO, CSN, RTV, STO, Sales Order, Gate Entry, Invoice Verification, Landed Cost সহ আরও ২১টা
-> ফাইল, একই session-এ সব ঠিক করা হয়েছে)। Frontend-এর ১৫টা page-ও unscoped company dropdown
-> থেকে session-scoped `TransactionCompanySelector`/`runtimeContext.availableCompanies`-এ
-> swap করা হয়েছে। **যাচাই:** প্রতিটা touched file-এ `deno check`/`eslint` (০টা নতুন error,
-> git-stash দিয়ে before/after তুলনা করা) + guard script pass। **বাকি:** deployed app-এ
-> single-company user দিয়ে live 403 click-through (business owner-এর login লাগবে, §112.7
-> ধাপ ৬) — এটা go-live-blocking নয় (কোড-level fix সম্পূর্ণ, শুধু final confirmation বাকি)।
+> **✅ Company-scope data leak — CODE-LEVEL FIX COMPLETE (2026-07-25, **corrected 2026-07-26
+> after a real miss — feasibility doc §112.8**)।** ACL role restructure-এর সময় ধরা পড়েছিল —
+> অনেক handler caller-এর `erp_map.user_companies` scope-এর সাথে `company_id` মিলিয়ে দেখত না।
+> Generic `assertCompanyScope()` (`_shared/companyScope.ts`) বানিয়ে backend handler file-এ
+> বসানো হয়েছে। **২৬ জুলাই — "COMPLETE" দাবিটা ভুল প্রমাণিত হলো:** Inventory report page
+> review করতে গিয়ে `stock_reports.handlers.ts` সম্পূর্ণ unguarded পাওয়া গেল, আর তার পিছনে
+> একটা বড় systemic root cause — misleadingly-named `getCompanyScope()` helper **১০টা
+> procurement file**-এ শুধু fallback resolve করত, কখনো validate করত না (কারণ প্রথম CI guard
+> শুধু Shape 1 (`body.company_id`) ধরত, Shape 3 (GET query string) ইচ্ছাকৃতভাবে বাদ ছিল)।
+> এবার প্রতিটা local helper-কেই root-cause fix করা হয়েছে (প্রতিটা call site আলাদা patch না)
+> আর **guard script নিজেও Shape 3 ধরার জন্য প্রসারিত** করা হয়েছে (এখন ৬৪টা ফাইল scan করে,
+> baseline শূন্য, legitimate exception (SA/GA-only admin + HR-এর আলাদা tenant-boundary)
+> স্পষ্ট reason-সহ tracked)। Frontend-এর ১৫টা page + `CurrentStockPage.jsx`-এর raw-UUID
+> input-ও session-scoped selector-এ swap করা হয়েছে। **যাচাই:** প্রতিটা touched file-এ
+> `deno check`/`eslint` (git-stash before/after, ০টা নতুন error) + guard script pass।
+> **বাকি:** deployed app-এ single-company user দিয়ে live 403 click-through (business
+> owner-এর login লাগবে) — go-live-blocking নয়, শুধু final confirmation বাকি। **শিক্ষা:**
+> কোনো audit "সম্পূর্ণ" বলার আগে সেই audit-এ ব্যবহৃত tool/script-এর নিজের সীমাবদ্ধতা section
+> আলাদাভাবে যাচাই করা — নাহলে ঠিক এই ভুলটাই আবার হবে।
 >
 > (আগে এখানে লেখা ছিল "এই মুহূর্তে go-live-blocking কিছু খোলা নেই" — সেটা এখন আর সত্যি না,
 > উপরের ব্লকারটা নতুন। বাকি ২টা আইটেম (§104, §8D/§8-PERF) 2026-07-19 পর্যন্ত সত্যিই বন্ধ ছিল:

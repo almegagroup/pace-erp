@@ -87,10 +87,14 @@ function assertAccountsRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline/ACL layer.
 }
 
-function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): string {
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
+async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
@@ -267,7 +271,7 @@ export async function createIVDraftHandler(
   try {
     assertAccountsRole(ctx);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     const vendorId = toTrimmedString(body.vendor_id);
     const vendorInvoiceNumber = toTrimmedString(body.vendor_invoice_number);
     const vendorInvoiceDate = toTrimmedString(body.vendor_invoice_date);
@@ -314,7 +318,7 @@ export async function createIVDraftHandler(
     return okResponse(responsePayload, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "IV_CREATE_FAILED";
-    return ivErrorResponse(req, ctx, code, 500, code);
+    return ivErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 
@@ -325,7 +329,7 @@ export async function listIVsHandler(
   try {
     assertAccountsRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
@@ -353,7 +357,7 @@ export async function listIVsHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "IV_LIST_FAILED";
-    return ivErrorResponse(req, ctx, code, 500, code);
+    return ivErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 
@@ -673,7 +677,7 @@ export async function listBlockedIVsHandler(
   try {
     assertAccountsRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
 
     let query = serviceRoleClient
@@ -696,6 +700,6 @@ export async function listBlockedIVsHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "IV_BLOCKED_LIST_FAILED";
-    return ivErrorResponse(req, ctx, code, 500, code);
+    return ivErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }

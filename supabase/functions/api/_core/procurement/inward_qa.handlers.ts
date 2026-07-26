@@ -12,6 +12,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -339,7 +340,15 @@ export async function listQADocumentsHandler(
     const url = new URL(req.url);
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const grnId = toTrimmedString(url.searchParams.get("grn_id"));
-    const companyId = toTrimmedString(url.searchParams.get("company_id")) || getCompanyScope(ctx);
+    const requestedCompanyId = toTrimmedString(url.searchParams.get("company_id"));
+    if (requestedCompanyId) {
+      try {
+        await assertCompanyScope(ctx, requestedCompanyId);
+      } catch {
+        return qaErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
+    const companyId = requestedCompanyId || getCompanyScope(ctx);
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 200);

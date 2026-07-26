@@ -90,10 +90,14 @@ function assertAccountsRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline/ACL layer.
 }
 
-function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): string {
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
+async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
@@ -164,7 +168,7 @@ export async function createLandedCostHandler(
   try {
     assertAccountsRole(ctx);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     const vendorId = toTrimmedString(body.vendor_id);
     const grnId = toTrimmedString(body.grn_id) || null;
     const csnId = toTrimmedString(body.csn_id) || null;
@@ -208,7 +212,7 @@ export async function createLandedCostHandler(
     return okResponse(await hydrateLandedCost(String(data.id), ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "LC_CREATE_FAILED";
-    return lcErrorResponse(req, ctx, code, 500, code);
+    return lcErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 
@@ -219,7 +223,7 @@ export async function listLandedCostsHandler(
   try {
     assertAccountsRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const grnId = toTrimmedString(url.searchParams.get("grn_id"));
     const csnId = toTrimmedString(url.searchParams.get("csn_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
@@ -245,7 +249,7 @@ export async function listLandedCostsHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "LC_LIST_FAILED";
-    return lcErrorResponse(req, ctx, code, 500, code);
+    return lcErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 

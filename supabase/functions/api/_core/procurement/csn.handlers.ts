@@ -374,11 +374,16 @@ async function getCsnById(id: string, companyId?: string): Promise<CsnRow | null
   return (data as CsnRow | null) ?? null;
 }
 
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
 async function getCompanyScopedCompanyId(
   ctx: ProcurementHandlerContext,
   bodyOrQueryCompanyId?: string,
 ): Promise<string> {
-  return toTrimmedString(bodyOrQueryCompanyId) || toTrimmedString(ctx.context.companyId);
+  const companyId = toTrimmedString(bodyOrQueryCompanyId) || toTrimmedString(ctx.context.companyId);
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 async function getAccessibleCompanyIds(ctx: ProcurementHandlerContext): Promise<string[]> {
@@ -1211,7 +1216,7 @@ export async function listCSNsHandler(req: Request, ctx: ProcurementHandlerConte
     return okResponse({ data: data ?? [], total: count ?? 0 }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_CSN_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "CSN list failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "CSN list failed");
   }
 }
 
@@ -1580,7 +1585,7 @@ export async function deleteSubCSNHandler(req: Request, ctx: ProcurementHandlerC
     return okResponse({ data: { id: subId, deleted: true } }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_SUB_CSN_DELETE_FAILED";
-    const status = code === "PROCUREMENT_SUB_CSN_NOT_FOUND" ? 404 : code.includes("BLOCKED") ? 400 : 500;
+    const status = code === "PROCUREMENT_SUB_CSN_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("BLOCKED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Sub CSN delete failed");
   }
 }
@@ -1608,7 +1613,7 @@ export async function getLCAlertCountHandler(req: Request, ctx: ProcurementHandl
     return okResponse({ data: { lc_alert: count ?? 0 } }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_LC_ALERT_COUNT_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "LC alert count failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "LC alert count failed");
   }
 }
 
@@ -1637,7 +1642,7 @@ export async function getLCAlertListHandler(req: Request, ctx: ProcurementHandle
     return okResponse({ data: await enrichTrackerRows((data as CsnRow[] | null) ?? []) }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_LC_ALERT_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "LC alert list failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "LC alert list failed");
   }
 }
 
@@ -1671,7 +1676,7 @@ export async function getVesselBookingAlertCountHandler(req: Request, ctx: Procu
     return okResponse({ data: { vessel_booking_alert: count } }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_VESSEL_ALERT_COUNT_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Vessel booking alert count failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Vessel booking alert count failed");
   }
 }
 
@@ -1707,7 +1712,7 @@ export async function getVesselBookingAlertListHandler(req: Request, ctx: Procur
     return okResponse({ data: filtered }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_VESSEL_ALERT_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Vessel booking alert list failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Vessel booking alert list failed");
   }
 }
 
@@ -1779,7 +1784,7 @@ export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHan
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_ALERT_COUNTS_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Alert counts lookup failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Alert counts lookup failed");
   }
 }
 

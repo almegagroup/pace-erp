@@ -367,13 +367,17 @@ async function assertProcurementHeadRole(
   }
 }
 
-function getCompanyScope(
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
+async function getCompanyScope(
   ctx: ProcurementHandlerContext,
   requestedCompanyId?: string,
-): string {
+): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 function getPathSegments(req: Request): string[] {
@@ -1028,7 +1032,7 @@ export async function createPOHandler(
     assertProcurementReadRole(ctx);
 
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -1223,9 +1227,11 @@ export async function createPOHandler(
     const status =
       code === "PROCUREMENT_VENDOR_NOT_FOUND" || code === "PROCUREMENT_PAYMENT_TERM_NOT_FOUND"
         ? 404
-        : code.includes("REQUIRED") || code.includes("INVALID")
-          ? 400
-          : 500;
+        : code === "COMPANY_SCOPE_VIOLATION"
+          ? 403
+          : code.includes("REQUIRED") || code.includes("INVALID")
+            ? 400
+            : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order create failed");
   }
 }
@@ -1351,7 +1357,7 @@ export async function listPOsHandler(
     assertProcurementReadRole(ctx);
 
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
     const statusFilter = toUpperTrimmedString(url.searchParams.get("status"));
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
@@ -1395,7 +1401,7 @@ export async function listPOsHandler(
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Purchase order list failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Purchase order list failed");
   }
 }
 
@@ -1407,7 +1413,7 @@ export async function getPOHandler(
     assertProcurementReadRole(ctx);
 
     const poId = getPoIdFromPath(req);
-    const companyId = getCompanyScope(ctx);
+    const companyId = await getCompanyScope(ctx);
     const po = await getPOById(poId, companyId);
 
     if (!po) {
@@ -1446,7 +1452,7 @@ export async function getPOHandler(
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_DETAIL_FAILED";
-    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : 500;
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order detail failed");
   }
 }
@@ -1460,7 +1466,7 @@ export async function updatePOHandler(
 
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -1597,7 +1603,7 @@ export async function deletePOHandler(
     assertProcurementReadRole(ctx);
 
     const poId = getPoIdFromPath(req);
-    const companyId = getCompanyScope(ctx);
+    const companyId = await getCompanyScope(ctx);
     const po = await getPOById(poId, companyId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1634,7 +1640,7 @@ export async function deletePOHandler(
     return okResponse({ data: { id: poId, deleted: true } }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_DELETE_FAILED";
-    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code.includes("NOT_DRAFT") ? 422 : code.includes("BLOCKED") ? 400 : 500;
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("NOT_DRAFT") ? 422 : code.includes("BLOCKED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order delete failed");
   }
 }
@@ -1648,7 +1654,7 @@ export async function confirmPOHandler(
 
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -1708,7 +1714,7 @@ export async function confirmPOHandler(
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_CONFIRM_FAILED";
-    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code.includes("BLOCKED") ? 422 : 500;
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("BLOCKED") ? 422 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order confirm failed");
   }
 }
@@ -1720,7 +1726,7 @@ export async function approvePOHandler(
   try {
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -1777,7 +1783,7 @@ export async function approvePOHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_APPROVE_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("INVALID") ? 422
         : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order approval failed");
@@ -1796,7 +1802,7 @@ export async function rejectPOHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_REMARKS_REQUIRED", 400, "Remarks are required");
     }
 
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -1850,7 +1856,7 @@ export async function rejectPOHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_REJECT_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("REQUIRED") ? 400
         : code.includes("INVALID") ? 422
         : 500;
@@ -1867,7 +1873,7 @@ export async function amendPOHandler(
 
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -2060,11 +2066,13 @@ export async function amendPOHandler(
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" || code === "PROCUREMENT_PO_LINE_NOT_FOUND" || code === "PROCUREMENT_COST_CENTER_NOT_FOUND"
         ? 404
-        : code.includes("BLOCKED") || code.includes("INVALID")
-          ? 422
-          : code.includes("REQUIRED") || code.includes("NO_AMENDMENT")
-            ? 400
-            : 500;
+        : code === "COMPANY_SCOPE_VIOLATION"
+          ? 403
+          : code.includes("BLOCKED") || code.includes("INVALID")
+            ? 422
+            : code.includes("REQUIRED") || code.includes("NO_AMENDMENT")
+              ? 400
+              : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order amendment failed");
   }
 }
@@ -2076,7 +2084,7 @@ export async function approveAmendmentHandler(
   try {
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -2160,7 +2168,7 @@ export async function approveAmendmentHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_AMEND_APPROVE_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("NO_PENDING") ? 422
         : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order amendment approval failed");
@@ -2181,7 +2189,7 @@ export async function cancelPOHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CANCELLATION_REASON_REQUIRED", 400, "Cancellation reason is required");
     }
 
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -2261,6 +2269,7 @@ export async function cancelPOHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_CANCEL_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
+        : code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("REQUIRED") || code.includes("BLOCKED")
           ? 400
           : 500;
@@ -2283,7 +2292,7 @@ export async function knockOffPOLineHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_KNOCK_OFF_REASON_REQUIRED", 400, "Knock-off reason is required");
     }
 
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -2367,7 +2376,7 @@ export async function knockOffPOLineHandler(
   } catch (err) {
     console.error("PO_LINE_KNOCK_OFF_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_LINE_KNOCK_OFF_FAILED";
-    const status = code === "PROCUREMENT_PO_NOT_FOUND" || code === "PROCUREMENT_PO_LINE_NOT_FOUND" ? 404 : code.includes("REQUIRED") ? 400 : 500;
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" || code === "PROCUREMENT_PO_LINE_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order line knock-off failed");
   }
 }
@@ -2386,7 +2395,7 @@ export async function knockOffPOHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_KNOCK_OFF_REASON_REQUIRED", 400, "Knock-off reason is required");
     }
 
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -2482,7 +2491,7 @@ export async function knockOffPOHandler(
   } catch (err) {
     console.error("PO_KNOCK_OFF_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_KNOCK_OFF_FAILED";
-    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code.includes("REQUIRED") ? 400 : 500;
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order knock-off failed");
   }
 }
@@ -2586,7 +2595,7 @@ export async function listPOOrderGroupsHandler(
     assertProcurementReadRole(ctx);
 
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
     const statusFilter = toUpperTrimmedString(url.searchParams.get("status"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
     const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
@@ -2705,7 +2714,7 @@ export async function listPOOrderGroupsHandler(
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Purchase order group list failed");
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Purchase order group list failed");
   }
 }
 
@@ -2717,7 +2726,7 @@ export async function getPOOrderGroupHandler(
     assertProcurementReadRole(ctx);
 
     const groupId = getOrderGroupIdFromPath(req);
-    const companyId = getCompanyScope(ctx);
+    const companyId = await getCompanyScope(ctx);
     const group = await getOrderGroupById(groupId, companyId);
     if (!group) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND", 404, "Order group not found");
@@ -2760,7 +2769,7 @@ export async function getPOOrderGroupHandler(
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_DETAIL_FAILED";
-    const status = code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404 : 500;
+    const status = code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order group detail failed");
   }
 }
@@ -2774,7 +2783,7 @@ export async function confirmPOOrderGroupHandler(
 
     const groupId = getOrderGroupIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -2858,7 +2867,7 @@ export async function confirmPOOrderGroupHandler(
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_CONFIRM_FAILED";
-    const status = code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404 : code.includes("BLOCKED") ? 422 : 500;
+    const status = code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("BLOCKED") ? 422 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order group confirm failed");
   }
 }
@@ -2870,7 +2879,7 @@ export async function approvePOOrderGroupHandler(
   try {
     const groupId = getOrderGroupIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -2953,7 +2962,7 @@ export async function approvePOOrderGroupHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_APPROVE_FAILED";
     const status =
       code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("INVALID") ? 422
         : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order group approval failed");
@@ -2972,7 +2981,7 @@ export async function rejectPOOrderGroupHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_REMARKS_REQUIRED", 400, "Remarks are required");
     }
 
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -3045,7 +3054,7 @@ export async function rejectPOOrderGroupHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_REJECT_FAILED";
     const status =
       code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION" ? 403
         : code.includes("REQUIRED") ? 400
         : code.includes("INVALID") ? 422
         : 500;

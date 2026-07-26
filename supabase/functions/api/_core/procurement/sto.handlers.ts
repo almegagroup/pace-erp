@@ -230,10 +230,16 @@ async function assertStoApproverRole(
   }
 }
 
-function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): string {
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured. Only
+// used for the caller's OWN acting/sending company — never for a STO's
+// receiving_company_id, which is legitimately a different counterparty.
+async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
@@ -952,7 +958,7 @@ export async function createSTOHandler(
     const body = await parseBody(req);
     const isOpeningSto = body.is_opening_sto === true;
     const stoType = toUpperTrimmedString(body.sto_type);
-    const sendingCompanyId = getCompanyScope(ctx, toTrimmedString(body.sending_company_id));
+    const sendingCompanyId = await getCompanyScope(ctx, toTrimmedString(body.sending_company_id));
     const receivingCompanyId = toTrimmedString(body.receiving_company_id);
     const sendingCostCenterId = toTrimmedString(body.sending_cost_center_id);
     const receivingCostCenterId = toTrimmedString(body.receiving_cost_center_id);
@@ -1151,7 +1157,7 @@ export async function listSTOsHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const stoType = toUpperTrimmedString(url.searchParams.get("sto_type"));
     const materialScope = toUpperTrimmedString(url.searchParams.get("material_scope"));
@@ -1216,7 +1222,7 @@ export async function getLastStoPaymentTermHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const sendingCompanyId = getCompanyScope(ctx, url.searchParams.get("sending_company_id") ?? undefined);
+    const sendingCompanyId = await getCompanyScope(ctx, url.searchParams.get("sending_company_id") ?? undefined);
     const receivingCompanyId = toTrimmedString(url.searchParams.get("receiving_company_id"));
 
     if (!sendingCompanyId || !receivingCompanyId) {
@@ -1393,7 +1399,7 @@ export async function transformSubCSNToSTOHandler(
     assertProcurementReadRole(ctx);
     const csnId = getIdFromPath(req);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     try {
       await assertCompanyScope(ctx, companyId);
     } catch {

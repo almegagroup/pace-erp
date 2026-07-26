@@ -10,6 +10,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -67,6 +68,37 @@ function normalizeStockTypeFilter(value: string): string {
   return value.toUpperCase() === "QA" ? "QUALITY_INSPECTION" : value;
 }
 
+// §112 (Shape 3 — plain read) — these report handlers take company_id from a
+// GET query string with zero validation before this fix: an empty company_id
+// returned every company's stock, and an explicit foreign company_id returned
+// that company's stock unchecked. Mirrors the allowedCompanyIds pattern
+// already used in process_order/packing_order listXHandler: SA/GA/admin see
+// everything; everyone else gets scoped to their own erp_map.user_companies,
+// and an explicit out-of-scope company_id throws COMPANY_SCOPE_VIOLATION.
+async function resolveCompanyScope(
+  ctx: StockReportHandlerContext,
+  requestedCompanyId: string,
+): Promise<{ companyId: string; allowedCompanyIds: string[] | null }> {
+  const companyId = toTrimmedString(requestedCompanyId);
+  if (companyId) {
+    await assertCompanyScope(ctx, companyId);
+    return { companyId, allowedCompanyIds: null };
+  }
+  if (ctx.context.isAdmin === true || ctx.roleCode === "SA" || ctx.roleCode === "GA") {
+    return { companyId, allowedCompanyIds: null };
+  }
+  const { data: userCompanies, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id);
+  if (error) {
+    throw new Error("COMPANY_SCOPE_LOOKUP_FAILED");
+  }
+  const allowedCompanyIds = ((userCompanies ?? []) as JsonRecord[]).map((row) => String(row.company_id ?? ""));
+  return { companyId, allowedCompanyIds };
+}
+
 export async function getStockLedgerReportHandler(
   req: Request,
   ctx: StockReportHandlerContext,
@@ -76,7 +108,6 @@ export async function getStockLedgerReportHandler(
 
     const url = new URL(req.url);
     const materialId = toTrimmedString(url.searchParams.get("material_id"));
-    const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const limit = Math.min(parsePositiveInt(url.searchParams.get("limit"), 200), 500);
@@ -92,6 +123,11 @@ export async function getStockLedgerReportHandler(
       );
     }
 
+    const { companyId, allowedCompanyIds } = await resolveCompanyScope(
+      ctx,
+      url.searchParams.get("company_id") ?? "",
+    );
+
     let query = serviceRoleClient
       .schema("erp_inventory")
       .from("stock_ledger")
@@ -102,6 +138,8 @@ export async function getStockLedgerReportHandler(
 
     if (companyId) {
       query = query.eq("company_id", companyId);
+    } else if (allowedCompanyIds) {
+      query = query.in("company_id", allowedCompanyIds);
     }
     if (dateFrom) {
       query = query.gte("posting_date", dateFrom);
@@ -140,7 +178,7 @@ export async function getStockLedgerReportHandler(
     );
   } catch (error) {
     const code = error instanceof Error ? error.message : "STOCK_LEDGER_FETCH_FAILED";
-    return reportErrorResponse(req, ctx, code, 500, "Unable to fetch stock ledger report.");
+    return reportErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Unable to fetch stock ledger report.");
   }
 }
 
@@ -152,12 +190,16 @@ export async function getCurrentStockHandler(
     assertProcurementReadRole(ctx);
 
     const url = new URL(req.url);
-    const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const materialId = toTrimmedString(url.searchParams.get("material_id"));
     const stockTypeCode = normalizeStockTypeFilter(
       toTrimmedString(url.searchParams.get("stock_type_code")),
     );
     const showZero = toTrimmedString(url.searchParams.get("show_zero")).toLowerCase() === "true";
+
+    const { companyId, allowedCompanyIds } = await resolveCompanyScope(
+      ctx,
+      url.searchParams.get("company_id") ?? "",
+    );
 
     let query = serviceRoleClient
       .schema("erp_inventory")
@@ -168,6 +210,8 @@ export async function getCurrentStockHandler(
 
     if (companyId) {
       query = query.eq("company_id", companyId);
+    } else if (allowedCompanyIds) {
+      query = query.in("company_id", allowedCompanyIds);
     }
     if (materialId) {
       query = query.eq("material_id", materialId);
@@ -285,7 +329,7 @@ export async function getCurrentStockHandler(
     );
   } catch (error) {
     const code = error instanceof Error ? error.message : "CURRENT_STOCK_FETCH_FAILED";
-    return reportErrorResponse(req, ctx, code, 500, "Unable to fetch current stock.");
+    return reportErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Unable to fetch current stock.");
   }
 }
 
@@ -297,8 +341,12 @@ export async function getStockValuationHandler(
     assertProcurementReadRole(ctx);
 
     const url = new URL(req.url);
-    const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const materialId = toTrimmedString(url.searchParams.get("material_id"));
+
+    const { companyId, allowedCompanyIds } = await resolveCompanyScope(
+      ctx,
+      url.searchParams.get("company_id") ?? "",
+    );
 
     let query = serviceRoleClient
       .schema("erp_inventory")
@@ -308,6 +356,8 @@ export async function getStockValuationHandler(
 
     if (companyId) {
       query = query.eq("company_id", companyId);
+    } else if (allowedCompanyIds) {
+      query = query.in("company_id", allowedCompanyIds);
     }
     if (materialId) {
       query = query.eq("material_id", materialId);
@@ -377,6 +427,6 @@ export async function getStockValuationHandler(
     );
   } catch (error) {
     const code = error instanceof Error ? error.message : "STOCK_VALUATION_FETCH_FAILED";
-    return reportErrorResponse(req, ctx, code, 500, "Unable to fetch stock valuation.");
+    return reportErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Unable to fetch stock valuation.");
   }
 }

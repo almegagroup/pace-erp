@@ -11,10 +11,13 @@
 import { useState } from "react";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { getCurrentStock } from "../procurementApi.js";
 
 function formatNumber(value, decimals) {
@@ -42,7 +45,12 @@ function stockTypeTone(stockTypeCode) {
 }
 
 export default function CurrentStockPage() {
-  useMenu();
+  const { runtimeContext } = useMenu();
+  const materialQ = useMaterialOptionsQuery({ status: "ACTIVE", limit: 500 });
+  const materialOptions = (materialQ.materials ?? []).map((material) => ({
+    value: material.id,
+    label: `${material.pace_code ?? "—"} — ${material.material_name ?? ""}`,
+  }));
   const [companyId, setCompanyId] = useState("");
   const [materialId, setMaterialId] = useState("");
   const [stockTypeCode, setStockTypeCode] = useState("");
@@ -90,20 +98,19 @@ export default function CurrentStockPage() {
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Filters" title="Snapshot filters">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <ErpDenseFormRow label="Company ID">
-              <input
-                type="text"
-                value={companyId}
-                onChange={(event) => setCompanyId(event.target.value)}
-                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-              />
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="Material ID">
-              <input
-                type="text"
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={setCompanyId}
+              label="Company"
+            />
+            <ErpDenseFormRow label="Material">
+              <ErpComboboxField
                 value={materialId}
-                onChange={(event) => setMaterialId(event.target.value)}
-                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                onChange={setMaterialId}
+                options={materialOptions}
+                blankLabel="All materials"
+                inputClassName="px-2 py-1 text-sm"
               />
             </ErpDenseFormRow>
             <ErpDenseFormRow label="Stock Type">

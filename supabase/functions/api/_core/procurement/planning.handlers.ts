@@ -10,6 +10,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -77,13 +78,17 @@ function normalizeQty(value: unknown): number {
   return Number(safeValue.toFixed(6));
 }
 
-function getCompanyScope(
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
+async function getCompanyScope(
   ctx: ProcurementHandlerContext,
   requestedCompanyId?: string,
-): string {
+): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 function planningErrorResponse(
@@ -124,7 +129,7 @@ export async function getProcurementPlanningHandler(
     assertProcurementReadRole(ctx);
 
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
     const materialIdFilter = toTrimmedString(url.searchParams.get("material_id") ?? "");
     const shortageOnly = url.searchParams.get("shortage_only") === "true";
     const limit = parsePositiveInt(url.searchParams.get("limit"), 200);
@@ -408,7 +413,7 @@ export async function getProcurementPlanningHandler(
       req,
       ctx,
       code,
-      500,
+      code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500,
       "Procurement planning fetch failed",
     );
   }

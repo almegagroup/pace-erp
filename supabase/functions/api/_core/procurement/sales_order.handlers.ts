@@ -91,10 +91,14 @@ function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline/ACL layer.
 }
 
-function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): string {
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
+async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
@@ -423,7 +427,7 @@ export async function createSOHandler(
   try {
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     const customerId = toTrimmedString(body.customer_id);
     const customerPoNumber = toTrimmedString(body.customer_po_number);
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
@@ -514,7 +518,7 @@ export async function createSOHandler(
   } catch (error) {
     const code = error instanceof Error ? error.message : "SO_CREATE_FAILED";
     const message = code === "ONLY_RM_PM_ALLOWED" ? "Only RM/PM materials allowed in Sales Order" : code;
-    const status = code === "MATERIAL_NOT_FOUND" ? 404 : code === "ONLY_RM_PM_ALLOWED" ? 400 : 500;
+    const status = code === "MATERIAL_NOT_FOUND" ? 404 : code === "ONLY_RM_PM_ALLOWED" ? 400 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return salesErrorResponse(req, ctx, code, status, message);
   }
 }
@@ -526,7 +530,7 @@ export async function listSOsHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const customerId = toTrimmedString(url.searchParams.get("customer_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
@@ -554,7 +558,7 @@ export async function listSOsHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SO_LIST_FAILED";
-    return salesErrorResponse(req, ctx, code, 500, code);
+    return salesErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 
@@ -1007,7 +1011,7 @@ export async function createSalesInvoiceHandler(
       return salesErrorResponse(req, ctx, "SALES_INVOICE_DC_TYPE_INVALID", 400, "Only SALES delivery challans can create sales invoices.");
     }
 
-    const companyId = getCompanyScope(ctx, String(dc.selling_company_id));
+    const companyId = await getCompanyScope(ctx, String(dc.selling_company_id));
     if (companyId && companyId !== toTrimmedString(dc.selling_company_id)) {
       return salesErrorResponse(req, ctx, "SALES_INVOICE_SCOPE_VIOLATION", 403, "Delivery challan is outside current company scope.");
     }
@@ -1109,7 +1113,7 @@ export async function createSalesInvoiceHandler(
     return okResponse(await hydrateSalesInvoice(String(invoice.id), ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SALES_INVOICE_CREATE_FAILED";
-    const status = ["DC_NOT_FOUND"].includes(code) ? 404 : ["SALES_INVOICE_SCOPE_VIOLATION"].includes(code) ? 403 : 500;
+    const status = ["DC_NOT_FOUND"].includes(code) ? 404 : ["SALES_INVOICE_SCOPE_VIOLATION", "COMPANY_SCOPE_VIOLATION"].includes(code) ? 403 : 500;
     return salesErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -1121,7 +1125,7 @@ export async function listSalesInvoicesHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const customerId = toTrimmedString(url.searchParams.get("customer_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
@@ -1149,7 +1153,7 @@ export async function listSalesInvoicesHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SALES_INVOICE_LIST_FAILED";
-    return salesErrorResponse(req, ctx, code, 500, code);
+    return salesErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 

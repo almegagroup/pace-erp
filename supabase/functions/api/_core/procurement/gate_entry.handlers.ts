@@ -88,10 +88,14 @@ function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline.
 }
 
-function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): string {
+// §112 — must validate, not just resolve a fallback: an explicitly-requested
+// companyId that is NOT one of the caller's own erp_map.user_companies rows
+// throws COMPANY_SCOPE_VIOLATION rather than being silently honoured.
+async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  const companyId = toTrimmedString(requestedCompanyId);
-  return companyId || scopedCompanyId;
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
 }
 
 function daysBetween(a: string | null, b: string | null): number | null {
@@ -317,7 +321,7 @@ export async function createGateEntryHandler(
   try {
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
-    const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     const geDate = toTrimmedString(body.entry_date ?? body.ge_date) || todayIsoDate();
     const vehicleNumber = toTrimmedString(body.vehicle_number);
     const gateStaffId = toTrimmedString(body.gate_staff_id) || ctx.auth_user_id;
@@ -473,7 +477,7 @@ export async function createGateEntryHandler(
     return okResponse(await hydrateGateEntry(String(gateEntry.id)), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GE_CREATE_FAILED";
-    const status = message.includes("NOT_FOUND") ? 404 : message.includes("REQUIRED") || message.includes("INVALID") ? 400 : 500;
+    const status = message.includes("NOT_FOUND") ? 404 : message === "COMPANY_SCOPE_VIOLATION" ? 403 : message.includes("REQUIRED") || message.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, message, status, message);
   }
 }
@@ -485,7 +489,7 @@ export async function listGateEntriesHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
@@ -538,7 +542,7 @@ export async function listGateEntriesHandler(
     return okResponse({ items, total: count ?? items.length, limit, offset }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GE_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, message, 500, message);
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
   }
 }
 
@@ -717,7 +721,7 @@ export async function listOpenCSNsForGEHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
 
     const { data, error } = await serviceRoleClient
       .schema("erp_procurement")
@@ -751,7 +755,7 @@ export async function listOpenCSNsForGEHandler(
     return okResponse({ items }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "CSN_OPEN_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, message, 500, message);
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
   }
 }
 
@@ -762,7 +766,7 @@ export async function listOpenPOsForGEHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
 
     const { data: pos, error: posError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -817,7 +821,7 @@ export async function listOpenPOsForGEHandler(
     return okResponse({ items: result }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "PO_OPEN_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, message, 500, message);
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
   }
 }
 
@@ -833,7 +837,7 @@ export async function listOpenSTOsForGEHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
 
     const { data: stos, error: stosError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -888,7 +892,7 @@ export async function listOpenSTOsForGEHandler(
     return okResponse({ items: result }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "STO_OPEN_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, message, 500, message);
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
   }
 }
 
@@ -1087,7 +1091,7 @@ export async function pruneGateEntryHandler(
     return okResponse(await hydrateGateEntry(gateEntryId), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GE_PRUNE_FAILED";
-    return procurementErrorResponse(req, ctx, message, 500, message);
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
   }
 }
 
@@ -1123,7 +1127,7 @@ export async function getGateExitInboundHandler(
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "GEX_FETCH_FAILED";
-    return procurementErrorResponse(req, ctx, message, 500, message);
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
   }
 }
 
@@ -1134,7 +1138,7 @@ export async function gateReportHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const geType = toUpperTrimmedString(url.searchParams.get("ge_type"));
@@ -1280,6 +1284,6 @@ export async function gateReportHandler(
     return okResponse({ items, total: items.length }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GATE_REPORT_FAILED";
-    return procurementErrorResponse(req, ctx, message, 500, message);
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
   }
 }
