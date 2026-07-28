@@ -83,7 +83,7 @@ Status: ✅ Decided + implemented in prod (2026-07-28, ACL v8)
 
 ## Group 2 — Procurement Masters
 
-Status: ✅ Fully decided + implemented in prod (2026-07-28, ACL v13).
+Status: ✅ Fully decided + implemented in prod (2026-07-28, ACL v14).
 
 | tx_code | Page | SCM | Stores | Logistics | Director |
 |---|---|---|---|---|---|
@@ -91,8 +91,18 @@ Status: ✅ Fully decided + implemented in prod (2026-07-28, ACL v13).
 | PM02 | Ports | V C E D | | | V |
 | PM03 | Port Transit Times | V C E D | | | V |
 | PM05 | Lead Times (Import + Domestic) | V C E D | | | V |
-| PM06 | Transporters | V C E D | V C E | V C E | V C E D |
+| PM06 | Transporters | V C E D | V C E | V C E | V |
 | PM07 | Customs House Agents | V C E D | | | V |
+
+**PM06 correction (2026-07-28, ACL v14):** Director corrected from full
+power (V C E D) down to View-only, matching the Director-view-only pattern
+now used consistently across the rest of Group 2. New `CAP_PROC_TRANSPORTER_VIEW`
+(VIEW only) created and DIRECTOR work contexts moved onto it (both CMP003
+and CMP006), off the full `CAP_PROC_TRANSPORTER` capability (which now
+applies to SUPPLY CHAIN only). Pure ACL data change — no code involved, since
+Director having/not-having Delete was always going to be enforced correctly
+by the existing route-acl-registry gate once the redundant rank check was
+removed for PM06 (already done). Verified via `precomputed_acl_view`.
 
 **Revised decision (2026-07-28, supersedes the earlier "view-only, rank-gated"
 note below for PM01/02/03/05/07):** business owner gave SCM full authority
