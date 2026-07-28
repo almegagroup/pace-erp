@@ -43,7 +43,11 @@ export function buildRouteIndex(menuSnapshot) {
   if (!Array.isArray(menuSnapshot)) return routes;
 
   for (const item of menuSnapshot) {
-    if (item?.route_path) {
+    // is_visible=false rows are now included in the snapshot on purpose (so
+    // the sidebar/palette can render them greyed-out instead of omitting
+    // them) — they must NOT be treated as authorized routes here. undefined
+    // still counts as visible (SA/legacy rows never carry the flag).
+    if (item?.route_path && item.is_visible !== false) {
       routes.add(item.route_path);
     }
   }

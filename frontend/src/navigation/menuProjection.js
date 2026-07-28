@@ -2,8 +2,18 @@ function getMenuOrder(item) {
   return item?.tree_display_order ?? item?.display_order ?? 0;
 }
 
+// Enabled items sort before disabled ones (business owner, 2026-07-28) — a
+// group counts as "disabled" the same way a page does: is_visible=false
+// (a group is only visible if it has at least one accessible child, see
+// erp_menu.generate_menu_snapshot). undefined/true both mean enabled, so
+// SA/legacy rows without the flag are unaffected.
+function getAccessTier(item) {
+  return item?.is_visible === false ? 1 : 0;
+}
+
 export function compareMenuItems(left, right) {
   return (
+    getAccessTier(left) - getAccessTier(right) ||
     getMenuOrder(left) - getMenuOrder(right) ||
     String(left?.title ?? "").localeCompare(String(right?.title ?? ""), "en", {
       numeric: true,
