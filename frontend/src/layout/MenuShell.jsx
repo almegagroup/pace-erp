@@ -77,6 +77,43 @@ function moveFocus(refs, nextIndex) {
   }
 }
 
+// A menu/drawer node is disabled (no VIEW permission) when the backend
+// explicitly marks it is_visible=false. Undefined/true both mean enabled —
+// undefined covers SA/legacy rows that never carry the flag.
+function isNodeEnabled(node) {
+  return node?.item?.is_visible !== false;
+}
+
+// Keyboard roving-focus must SKIP disabled nodes entirely (business owner,
+// 2026-07-27 — stricter than the Command Palette's "focusable but inert"
+// pattern). Wraps around; returns -1 only if every node in the list is
+// disabled, so callers can no-op instead of looping forever.
+function findNextEnabledIndex(list, fromIndex, direction) {
+  const length = list.length;
+  if (length === 0) {
+    return -1;
+  }
+
+  let index = fromIndex;
+  for (let step = 0; step < length; step += 1) {
+    index = (index + direction + length) % length;
+    if (isNodeEnabled(list[index])) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function findFirstEnabledIndex(list) {
+  for (let i = 0; i < list.length; i += 1) {
+    if (isNodeEnabled(list[i])) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function isFocusableElement(element) {
   if (!(element instanceof HTMLElement)) {
     return false;
@@ -304,7 +341,7 @@ export default function MenuShell() {
       ? menuFocusIndex
       : activeMenuIndex >= 0
         ? activeMenuIndex
-        : 0;
+        : Math.max(findFirstEnabledIndex(sidebarRoots), 0);
   const drawerTrail = useMemo(
     () => resolveDrawerTrail(sidebarRoots, drawerPath),
     [drawerPath, sidebarRoots]
@@ -316,7 +353,7 @@ export default function MenuShell() {
   const resolvedDrawerFocusIndex =
     drawerFocusIndex >= 0 && drawerFocusIndex < drawerEntries.length
       ? drawerFocusIndex
-      : 0;
+      : Math.max(findFirstEnabledIndex(drawerEntries), 0);
 
   const activeTitle = useMemo(() => {
     // 1. Exact menu match (covers static routes)
@@ -966,7 +1003,7 @@ export default function MenuShell() {
   }
 
   function handleSidebarSelection(node) {
-    if (!node) {
+    if (!node || !isNodeEnabled(node)) {
       return;
     }
 
@@ -983,7 +1020,7 @@ export default function MenuShell() {
   }
 
   function handleDrawerSelection(node) {
-    if (!node) {
+    if (!node || !isNodeEnabled(node)) {
       return;
     }
 
@@ -1232,14 +1269,20 @@ export default function MenuShell() {
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      const nextIndex = (index + 1) % sidebarRoots.length;
+      const nextIndex = findNextEnabledIndex(sidebarRoots, index, 1);
+      if (nextIndex === -1) {
+        return;
+      }
       setMenuFocusIndex(nextIndex);
       moveFocus(menuButtonRefs.current, nextIndex);
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      const nextIndex = (index - 1 + sidebarRoots.length) % sidebarRoots.length;
+      const nextIndex = findNextEnabledIndex(sidebarRoots, index, -1);
+      if (nextIndex === -1) {
+        return;
+      }
       setMenuFocusIndex(nextIndex);
       moveFocus(menuButtonRefs.current, nextIndex);
     }
@@ -1270,14 +1313,20 @@ export default function MenuShell() {
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      const nextIndex = (index + 1) % drawerEntries.length;
+      const nextIndex = findNextEnabledIndex(drawerEntries, index, 1);
+      if (nextIndex === -1) {
+        return;
+      }
       setDrawerFocusIndex(nextIndex);
       moveFocus(drawerButtonRefs.current, nextIndex);
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      const nextIndex = (index - 1 + drawerEntries.length) % drawerEntries.length;
+      const nextIndex = findNextEnabledIndex(drawerEntries, index, -1);
+      if (nextIndex === -1) {
+        return;
+      }
       setDrawerFocusIndex(nextIndex);
       moveFocus(drawerButtonRefs.current, nextIndex);
     }
@@ -1425,6 +1474,7 @@ export default function MenuShell() {
       label: `Open ${item.title}`,
       hint: item.tx_code ?? `${index + 1}`,
       keywords: [item.title, item.route_path, item.tx_code].filter(Boolean),
+      disabled: item.is_visible === false,
       perform: () => handleMenuRoute(item.route_path),
       order: 200 + index,
     }));
@@ -1588,6 +1638,7 @@ export default function MenuShell() {
                 {sidebarRoots.map((node, index) => {
                   const hasChildren = node.children?.length > 0;
                   const isActive = index === activeMenuIndex;
+                  const isDisabled = !isNodeEnabled(node);
 
                   return (
                     <li key={node.item.menu_code}>
@@ -1596,7 +1647,12 @@ export default function MenuShell() {
                           menuButtonRefs.current[index] = element;
                         }}
                         type="button"
-                        title={node.item.title}
+                        title={
+                          isDisabled
+                            ? `${node.item.title} — no access`
+                            : node.item.title
+                        }
+                        disabled={isDisabled}
                         onFocus={() => {
                           setActiveZone("menu");
                           setMenuFocusIndex(index);
@@ -1604,12 +1660,15 @@ export default function MenuShell() {
                         onKeyDown={(event) => handleMenuKeyDown(event, index)}
                         onClick={() => handleSidebarSelection(node)}
                         aria-current={!hasChildren && isActive ? "page" : undefined}
+                        aria-disabled={isDisabled}
                         className={`grid w-full items-center gap-2 border px-2 py-2 text-left text-sm ${
                           collapsed ? "grid-cols-1 justify-items-center" : "grid-cols-[32px_minmax(0,1fr)_20px]"
                         } ${
-                          isActive
-                            ? "border-sky-500 bg-sky-100 font-semibold text-sky-950"
-                            : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                          isDisabled
+                            ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                            : isActive
+                              ? "border-sky-500 bg-sky-100 font-semibold text-sky-950"
+                              : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
                         }`}
                       >
                         <span className="font-mono text-[11px] text-slate-500">
@@ -1617,7 +1676,16 @@ export default function MenuShell() {
                         </span>
                         {!collapsed ? (
                           <span className="min-w-0">
-                            <span className="block truncate">{node.item.title}</span>
+                            <span className="flex items-center gap-1.5">
+                              <span className="truncate">{node.item.title}</span>
+                              {isDisabled ? (
+                                <span
+                                  aria-hidden="true"
+                                  title="No access"
+                                  className="inline-block h-[6px] w-[6px] shrink-0 rounded-full bg-red-500"
+                                />
+                              ) : null}
+                            </span>
                             {node.item.tx_code ? (
                               <span className="block font-mono text-[14px] text-slate-400 leading-tight">
                                 {node.item.tx_code}
@@ -1680,6 +1748,7 @@ export default function MenuShell() {
                 {drawerEntries.map((node, index) => {
                   const hasChildren = node.children?.length > 0;
                   const isActive = node.item.route_path === location.pathname;
+                  const isDisabled = !isNodeEnabled(node);
 
                   return (
                     <li key={node.item.menu_code}>
@@ -1688,7 +1757,12 @@ export default function MenuShell() {
                           drawerButtonRefs.current[index] = element;
                         }}
                         type="button"
-                        title={node.item.title}
+                        title={
+                          isDisabled
+                            ? `${node.item.title} — no access`
+                            : node.item.title
+                        }
+                        disabled={isDisabled}
                         onFocus={() => {
                           setActiveZone("menu");
                           setDrawerFocusIndex(index);
@@ -1696,10 +1770,13 @@ export default function MenuShell() {
                         onKeyDown={(event) => handleDrawerKeyDown(event, index)}
                         onClick={() => handleDrawerSelection(node)}
                         aria-current={!hasChildren && isActive ? "page" : undefined}
+                        aria-disabled={isDisabled}
                         className={`grid w-full grid-cols-[32px_minmax(0,1fr)_20px] items-center gap-2 border px-2 py-2 text-left text-sm ${
-                          isActive
-                            ? "border-sky-500 bg-sky-100 font-semibold text-sky-950"
-                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                          isDisabled
+                            ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                            : isActive
+                              ? "border-sky-500 bg-sky-100 font-semibold text-sky-950"
+                              : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                         }`}
                       >
                         <span className="font-mono text-[11px] text-slate-500">
@@ -1708,9 +1785,22 @@ export default function MenuShell() {
                         <span className="min-w-0">
                           <span className="block truncate">{node.item.title}</span>
                           {node.item.tx_code ? (
-                            <span className="block font-mono text-[14px] text-slate-400 leading-tight">
-                              {node.item.tx_code}
+                            <span className="flex items-center gap-1.5 font-mono text-[14px] text-slate-400 leading-tight">
+                              <span>{node.item.tx_code}</span>
+                              {isDisabled ? (
+                                <span
+                                  aria-hidden="true"
+                                  title="No access"
+                                  className="inline-block h-[6px] w-[6px] shrink-0 rounded-full bg-red-500"
+                                />
+                              ) : null}
                             </span>
+                          ) : isDisabled ? (
+                            <span
+                              aria-hidden="true"
+                              title="No access"
+                              className="mt-1 inline-block h-[6px] w-[6px] shrink-0 rounded-full bg-red-500"
+                            />
                           ) : null}
                         </span>
                         <span className="justify-self-end text-[11px] text-slate-400">

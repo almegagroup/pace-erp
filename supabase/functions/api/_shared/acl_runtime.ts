@@ -24,6 +24,7 @@ type MenuSnapshotRow = {
   display_order: number | null;
   snapshot_version?: number | null;
   tx_code?: string | null;
+  is_visible?: boolean | null;
 };
 
 export async function getActiveAclVersionIdForCompany(
@@ -102,7 +103,7 @@ export async function rebuildAdminSessionMenuSnapshot(
     .schema("erp_menu")
     .from("menu_snapshot")
     .select(
-      "menu_code, title, description, route_path, menu_type, parent_menu_code, display_order, snapshot_version, tx_code",
+      "menu_code, title, description, route_path, menu_type, parent_menu_code, display_order, snapshot_version, tx_code, is_visible",
     )
     .eq("user_id", authUserId)
     .eq("universe", "SA")
@@ -207,13 +208,16 @@ export async function rebuildAclSessionMenuSnapshot(
     .schema("erp_menu")
     .from("menu_snapshot")
     .select(
-      "menu_code, title, description, route_path, menu_type, parent_menu_code, display_order, snapshot_version, tx_code",
+      "menu_code, title, description, route_path, menu_type, parent_menu_code, display_order, snapshot_version, tx_code, is_visible",
     )
     .eq("user_id", authUserId)
     .eq("company_id", companyId)
     .eq("work_context_id", workContextId)
     .eq("universe", "ACL")
-    .eq("is_visible", true)
+    // NOTE: intentionally NOT filtering by is_visible here — invisible
+    // (denied) rows are still returned so the frontend can render them
+    // greyed-out instead of omitting them. See
+    // docs/Operation Management/Disabled-Menu-Item-Feature-Plan.md
     .order("display_order", { ascending: true });
 
   if (menuReadError) {
@@ -267,9 +271,15 @@ export async function rebuildGlobalAclMenuSnapshot(
 
   // 2. For each company: resolve default work context → build ACL menu snapshot
   //    (no sessionId passed — we don't store per-company session snapshots here)
-  //    Union all results, deduplicate by menu_code (first occurrence wins)
-  const seenMenuCodes = new Set<string>();
-  const unionMenuRows: MenuSnapshotRow[] = [];
+  //    Union all results by menu_code. A row is now visible in the union if
+  //    it is visible in ANY of the user's companies — this must be an OR,
+  //    not a naive "first occurrence wins", now that a menu_code can appear
+  //    with is_visible=false in one company's snapshot and true in another
+  //    (e.g. SCM sees Purchase Orders in every company, but a page might be
+  //    granted in Company A only). First-occurrence-wins would incorrectly
+  //    grey out a page the user genuinely has access to in a different
+  //    company, purely based on loop order.
+  const rowsByMenuCode = new Map<string, MenuSnapshotRow>();
 
   for (const companyId of companyIds) {
     try {
@@ -285,9 +295,11 @@ export async function rebuildGlobalAclMenuSnapshot(
       );
 
       for (const row of menuRows) {
-        if (!seenMenuCodes.has(row.menu_code)) {
-          seenMenuCodes.add(row.menu_code);
-          unionMenuRows.push(row);
+        const existing = rowsByMenuCode.get(row.menu_code);
+        if (!existing) {
+          rowsByMenuCode.set(row.menu_code, row);
+        } else if (row.is_visible === true && existing.is_visible !== true) {
+          rowsByMenuCode.set(row.menu_code, row);
         }
       }
     } catch {
@@ -295,6 +307,8 @@ export async function rebuildGlobalAclMenuSnapshot(
       continue;
     }
   }
+
+  const unionMenuRows: MenuSnapshotRow[] = Array.from(rowsByMenuCode.values());
 
   // 3. Delete any existing GLOBAL_ACL snapshot for this session
   const { error: deleteError } = await db

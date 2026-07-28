@@ -287,8 +287,20 @@ if (!row) {
 
   // --------------------------------------------------
   // Hard deny (no snapshot)
+  //
+  // NOTE: data.length is no longer a valid signal on its own — the ACL
+  // branch now always returns the full structural menu (visible AND
+  // greyed-out rows), so it is virtually never empty even for a user with
+  // zero real access. The real "this account has nothing" signal is now
+  // "every row is_visible=false" (no ALLOW anywhere for this user/company/
+  // work-context). SA/GLOBAL_ACL rows are unaffected (SA is always
+  // is_visible=true; GLOBAL_ACL is a union so the same rule still holds).
   // --------------------------------------------------
-  if (data.length === 0) {
+  const hasAnyVisibleRow = data.some(
+    (item) => (item as { is_visible?: boolean })?.is_visible === true,
+  );
+
+  if (data.length === 0 || !hasAnyVisibleRow) {
 
     console.warn("SNAPSHOT_ABSENT", {
       auth_user_id,
@@ -1030,11 +1042,11 @@ console.log("🟡 PREVIEW_SNAPSHOT_CALL", {
       menu_type,
       parent_menu_code,
       display_order,
-      tx_code
+      tx_code,
+      is_visible
     `)
     .eq("user_id", targetUserId)
     .eq("universe", universe)
-    .eq("is_visible", true)
     .order("display_order");
 
   snapshotQuery = companyId
