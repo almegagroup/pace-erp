@@ -25,6 +25,7 @@ export type WorkflowScopeInput = {
   requester_auth_user_id?: string | null;
   requester_work_context_id?: string | null;
   requester_department_work_context_id?: string | null;
+  requester_role_code?: string | null;
 };
 
 type ScopedRuleRow = {
@@ -33,6 +34,7 @@ type ScopedRuleRow = {
   scope_type?: string | null;
   subject_work_context_id: string | null;
   subject_user_id?: string | null;
+  subject_role_code?: string | null;
 };
 
 type StageScopedRuleRow = ScopedRuleRow & {
@@ -237,6 +239,17 @@ function matchesScopeType(
     );
   }
 
+  // Rank-based escalation (e.g. "if an L2_USER submits, an L1_MANAGER
+  // approves") — keys off the CREATOR's own role, not a specific named
+  // person or department, so it generalizes to anyone holding that rank.
+  if (scopeType === "SUBJECT_ROLE") {
+    return Boolean(
+      row.subject_role_code &&
+      workflow.requester_role_code &&
+      row.subject_role_code === workflow.requester_role_code,
+    );
+  }
+
   if (scopeType === "WORK_CONTEXT") {
     return Boolean(
       row.subject_work_context_id &&
@@ -277,6 +290,7 @@ function matchesScopeType(
 function buildScopePriorityBuckets(workflow: WorkflowScopeInput): string[] {
   const buckets = [
     "USER_EXCEPTION",
+    "SUBJECT_ROLE",
     "WORK_CONTEXT",
     "DEPARTMENT",
     "COMPANY_WIDE",

@@ -14,6 +14,7 @@ import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -88,6 +89,98 @@ function ptoErrorResponse(
 
 function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline.
+}
+
+// Previously missing entirely: nothing checked that the approver's active
+// company context actually matched the PTO's OWN source company, so anyone
+// active in ANY company (with plain ACL approve access) could approve a PTO
+// belonging to a different company's transfer. Mirrors sto.handlers.ts's
+// assertStoVisibleToContext — same rationale, source/target instead of
+// sending/receiving.
+function assertPtoVisibleToContext(ctx: ProcurementHandlerContext, pto: PtoRow): void {
+  const scopedCompanyId = toTrimmedString(ctx.context.companyId);
+  if (
+    scopedCompanyId
+    && scopedCompanyId !== toTrimmedString(pto.source_company_id)
+    && scopedCompanyId !== toTrimmedString(pto.target_company_id)
+  ) {
+    throw new Error("PTO_SCOPE_VIOLATION");
+  }
+}
+
+type PtoApproverMapRow = {
+  approver_user_id: string | null;
+  approver_role_code: string | null;
+  resource_code: string | null;
+  action_code: string | null;
+  scope_type: string | null;
+  subject_user_id: string | null;
+  subject_work_context_id: string | null;
+  subject_role_code: string | null;
+  approval_stage: number;
+};
+
+async function loadPtoApproverRules(companyId: string): Promise<PtoApproverMapRow[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("acl")
+    .from("approver_map")
+    .select("approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage")
+    .eq("resource_code", "PROC_PLANT_TRANSFER_LIST")
+    .eq("action_code", "APPROVE")
+    .eq("company_id", companyId);
+
+  if (error) {
+    throw new Error("PTO_APPROVER_LOOKUP_FAILED");
+  }
+  return (data as PtoApproverMapRow[] | null) ?? [];
+}
+
+function matchesPtoApprover(rows: PtoApproverMapRow[], ctx: ProcurementHandlerContext): boolean {
+  return rows.some((row) => {
+    if (row.approver_user_id) return row.approver_user_id === ctx.auth_user_id;
+    if (row.approver_role_code) return row.approver_role_code === ctx.roleCode;
+    return false;
+  });
+}
+
+// Business rule: the SENDING company's L2/L3 Manager approves a Plant
+// Transfer — configured as company-wide, role-based (not named-person)
+// approver_map rows for PROC_PLANT_TRANSFER_LIST:APPROVE, keyed to
+// pto.source_company_id (never the caller's own active company, which may
+// legitimately be the target/receiving side). Same scoped-matching engine as
+// po.handlers.ts's assertProcurementHeadRole; see that function's comment
+// for the full rationale. Unconfigured falls back to DIRECTOR only.
+async function assertPtoApproverRole(
+  ctx: ProcurementHandlerContext,
+  companyId: string,
+  createdBy?: string | null,
+): Promise<void> {
+  if (ctx.roleCode === "SA" || ctx.roleCode === "GA") {
+    return;
+  }
+
+  const rules = await loadPtoApproverRules(companyId);
+  let isConfiguredApprover: boolean;
+
+  if (rules.length === 0) {
+    isConfiguredApprover = ctx.roleCode === "DIRECTOR";
+  } else {
+    const scopedRules = pickScopedApproverRules(
+      { resource_code: "PROC_PLANT_TRANSFER_LIST", action_code: "APPROVE", requester_auth_user_id: createdBy ?? null },
+      rules,
+    );
+    isConfiguredApprover = scopedRules.length > 0
+      ? matchesPtoApprover(scopedRules, ctx)
+      : ctx.roleCode === "DIRECTOR";
+  }
+
+  if (!isConfiguredApprover) {
+    throw new Error("PTO_APPROVER_REQUIRED");
+  }
+
+  if (createdBy && createdBy === ctx.auth_user_id && ctx.roleCode !== "DIRECTOR") {
+    throw new Error("PTO_SELF_APPROVAL_FORBIDDEN");
+  }
 }
 
 function getIdFromPath(req: Request): string {
@@ -429,6 +522,8 @@ export async function approvePTOHandler(
     assertProcurementReadRole(ctx);
     const ptoId = new URL(req.url).pathname.split("/")[4] ?? "";
     const pto = await fetchPto(ptoId);
+    assertPtoVisibleToContext(ctx, pto);
+    await assertPtoApproverRole(ctx, toTrimmedString(pto.source_company_id), toTrimmedString(pto.created_by));
     if (toUpperTrimmedString(pto.status) !== "DRAFT") {
       return ptoErrorResponse(req, ctx, "PTO_INVALID_STATUS", 400, "Only DRAFT PTO can be approved.");
     }
@@ -443,7 +538,9 @@ export async function approvePTOHandler(
     return okResponse(updated, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PTO_APPROVE_FAILED";
-    const status = code === "PTO_NOT_FOUND" ? 404 : 500;
+    const status = code === "PTO_NOT_FOUND" ? 404
+      : code === "PTO_SCOPE_VIOLATION" || code === "PTO_APPROVER_REQUIRED" || code === "PTO_SELF_APPROVAL_FORBIDDEN" ? 403
+      : 500;
     return ptoErrorResponse(req, ctx, code, status, code);
   }
 }

@@ -14,6 +14,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -24,7 +25,17 @@ type ProcurementHandlerContext = {
 };
 type StoRow = Record<string, unknown>;
 type StoLineRow = Record<string, unknown>;
-type ApproverMapRow = { approver_user_id: string | null; approver_role_code: string | null };
+type ApproverMapRow = {
+  approver_user_id: string | null;
+  approver_role_code: string | null;
+  resource_code: string | null;
+  action_code: string | null;
+  scope_type: string | null;
+  subject_user_id: string | null;
+  subject_work_context_id: string | null;
+  subject_role_code: string | null;
+  approval_stage: number;
+};
 type PreparedStoLine = {
   material_id: string;
   quantity: number;
@@ -183,13 +194,21 @@ function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline.
 }
 
+// Bookkeeping key note: acl.approver_map rows must reference a resource_code
+// already registered in acl.module_resource_map (DB trigger-enforced), and
+// PROC_STO_CREATE is a route-only companion resource with no
+// erp_menu.menu_master row (same pattern as OM_VENDOR_CREATE) — so it can
+// never satisfy that requirement. PROC_STO_LIST is already registered and is
+// this resource's own sibling. This key is purely internal to this lookup;
+// it does NOT change the route-level ACL gate, which stays
+// PROC_STO_CREATE:APPROVE per route-acl-registry.ts, unchanged.
 async function loadStoApproverRules(companyId: string): Promise<ApproverMapRow[]> {
   const { data, error } = await serviceRoleClient
     .schema("acl")
     .from("approver_map")
-    .select("approver_user_id, approver_role_code")
-    .eq("resource_code", "PROC_STO_CREATE")
-    .eq("action_code", "WRITE")
+    .select("approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage")
+    .eq("resource_code", "PROC_STO_LIST")
+    .eq("action_code", "APPROVE")
     .eq("company_id", companyId);
 
   if (error) {
@@ -197,6 +216,21 @@ async function loadStoApproverRules(companyId: string): Promise<ApproverMapRow[]
   }
 
   return (data as ApproverMapRow[] | null) ?? [];
+}
+
+// Rank-based escalation chains (SUBJECT_ROLE scope_type) key off the
+// creator's own role, not their identity — need a lookup since callers only
+// pass the creator's user id.
+async function getUserRoleCode(userId: string): Promise<string | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("user_roles")
+    .select("role_code")
+    .eq("auth_user_id", userId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return String((data as Record<string, unknown>).role_code ?? "") || null;
 }
 
 function matchesApprover(rows: ApproverMapRow[], ctx: ProcurementHandlerContext): boolean {
@@ -207,6 +241,10 @@ function matchesApprover(rows: ApproverMapRow[], ctx: ProcurementHandlerContext)
   });
 }
 
+// Same creator-scoped approval-chain mechanism as po.handlers.ts's
+// assertProcurementHeadRole — see that function's comment for the full
+// rationale. Configured-but-unscoped and fully-unconfigured both fall back
+// to DIRECTOR, so a plain company-wide setup keeps working untouched.
 async function assertStoApproverRole(
   ctx: ProcurementHandlerContext,
   companyId: string,
@@ -217,9 +255,25 @@ async function assertStoApproverRole(
   }
 
   const rules = await loadStoApproverRules(companyId);
-  const isConfiguredApprover = rules.length > 0
-    ? matchesApprover(rules, ctx)
-    : ctx.roleCode === "DIRECTOR";
+  let isConfiguredApprover: boolean;
+
+  if (rules.length === 0) {
+    isConfiguredApprover = ctx.roleCode === "DIRECTOR";
+  } else {
+    const creatorRoleCode = createdBy ? await getUserRoleCode(createdBy) : null;
+    const scopedRules = pickScopedApproverRules(
+      {
+        resource_code: "PROC_STO_LIST",
+        action_code: "APPROVE",
+        requester_auth_user_id: createdBy ?? null,
+        requester_role_code: creatorRoleCode,
+      },
+      rules,
+    );
+    isConfiguredApprover = scopedRules.length > 0
+      ? matchesApprover(scopedRules, ctx)
+      : ctx.roleCode === "DIRECTOR";
+  }
 
   if (!isConfiguredApprover) {
     throw new Error("PROCUREMENT_HEAD_REQUIRED");

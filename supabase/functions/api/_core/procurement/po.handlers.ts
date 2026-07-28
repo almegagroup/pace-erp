@@ -13,6 +13,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type PurchaseOrderRow = Record<string, unknown>;
@@ -319,21 +320,56 @@ function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
 // actually works (same matching semantics as hr/shared.ts's isApproverMatch).
 // Self-approval is blocked unless the approver is DIRECTOR — DIRECTOR may
 // create and approve their own PO; everyone else needs a different approver.
-type ApproverMapRow = { approver_user_id: string | null; approver_role_code: string | null };
+type ApproverMapRow = {
+  approver_user_id: string | null;
+  approver_role_code: string | null;
+  resource_code: string | null;
+  action_code: string | null;
+  scope_type: string | null;
+  subject_user_id: string | null;
+  subject_work_context_id: string | null;
+  subject_role_code: string | null;
+  approval_stage: number;
+};
 
+// Bookkeeping key note: acl.approver_map rows must reference a resource_code
+// already registered in acl.module_resource_map (DB trigger-enforced), and
+// PROC_PO_CREATE is a route-only companion resource that deliberately has no
+// erp_menu.menu_master row (same pattern as OM_VENDOR_CREATE) — so it can
+// never satisfy that requirement. PROC_PO_ORDER_APPROVALS (PO13's own
+// resource) is already registered and is the natural sibling — approving a
+// PO is the same action whether triggered from PO01's own page or PO13's
+// queue (both call this same function). This key is purely internal to this
+// lookup; it does NOT change the route-level ACL gate, which stays
+// PROC_PO_CREATE:APPROVE per route-acl-registry.ts, unchanged.
 async function loadPoApproverRules(companyId: string): Promise<ApproverMapRow[]> {
   const { data, error } = await serviceRoleClient
     .schema("acl")
     .from("approver_map")
-    .select("approver_user_id, approver_role_code")
-    .eq("resource_code", "PROC_PO_CREATE")
-    .eq("action_code", "WRITE")
+    .select("approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage")
+    .eq("resource_code", "PROC_PO_ORDER_APPROVALS")
+    .eq("action_code", "APPROVE")
     .eq("company_id", companyId);
 
   if (error) {
     throw new Error("PROCUREMENT_APPROVER_LOOKUP_FAILED");
   }
   return (data as ApproverMapRow[] | null) ?? [];
+}
+
+// Rank-based escalation chains (SUBJECT_ROLE scope_type) key off the
+// creator's own role, not their identity — need a lookup since callers only
+// pass the creator's user id.
+async function getUserRoleCode(userId: string): Promise<string | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("user_roles")
+    .select("role_code")
+    .eq("auth_user_id", userId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return String((data as Record<string, unknown>).role_code ?? "") || null;
 }
 
 function matchesApprover(rows: ApproverMapRow[], ctx: ProcurementHandlerContext): boolean {
@@ -344,6 +380,14 @@ function matchesApprover(rows: ApproverMapRow[], ctx: ProcurementHandlerContext)
   });
 }
 
+// Creator-specific approval chains (e.g. "if X submits, Y or Z approves") use
+// the same scope_type/subject_user_id columns HR's workflow engine already
+// relies on (see _shared/workflow_scope.ts) — pickScopedApproverRules narrows
+// the raw approver_map rows down to the ones that actually apply to this PO's
+// creator (USER_EXCEPTION rows take priority) before the flat matchesApprover
+// check runs. A company that has configured rows but none scoped to this
+// particular creator falls back to DIRECTOR, same as the fully-unconfigured
+// case — so a plain company-wide/DIRECTOR-only setup keeps working untouched.
 async function assertProcurementHeadRole(
   ctx: ProcurementHandlerContext,
   companyId: string,
@@ -354,9 +398,25 @@ async function assertProcurementHeadRole(
   }
 
   const rules = await loadPoApproverRules(companyId);
-  const isConfiguredApprover = rules.length > 0
-    ? matchesApprover(rules, ctx)
-    : ctx.roleCode === "DIRECTOR"; // no approver_map row configured yet — fall back to DIRECTOR.
+  let isConfiguredApprover: boolean;
+
+  if (rules.length === 0) {
+    isConfiguredApprover = ctx.roleCode === "DIRECTOR"; // no approver_map row configured yet — fall back to DIRECTOR.
+  } else {
+    const creatorRoleCode = createdBy ? await getUserRoleCode(createdBy) : null;
+    const scopedRules = pickScopedApproverRules(
+      {
+        resource_code: "PROC_PO_ORDER_APPROVALS",
+        action_code: "APPROVE",
+        requester_auth_user_id: createdBy ?? null,
+        requester_role_code: creatorRoleCode,
+      },
+      rules,
+    );
+    isConfiguredApprover = scopedRules.length > 0
+      ? matchesApprover(scopedRules, ctx)
+      : ctx.roleCode === "DIRECTOR"; // configured rows exist, but none scoped to this creator — fall back to DIRECTOR.
+  }
 
   if (!isConfiguredApprover) {
     throw new Error("PROCUREMENT_HEAD_REQUIRED");
