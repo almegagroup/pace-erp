@@ -83,30 +83,56 @@ Status: ✅ Decided + implemented in prod (2026-07-28, ACL v8)
 
 ## Group 2 — Procurement Masters
 
-Status: 🟨 PM01/02/03/07 decided (view-only, rank-gated writes — see structural
-note); PM06 decided + code-fixed to real department-based writes (2026-07-28,
-ACL v12); **PM05 still pending** (business owner explicitly excluded it from
-"same as the others" and hasn't given its own decision yet).
+Status: ✅ Fully decided + implemented in prod (2026-07-28, ACL v13).
 
 | tx_code | Page | SCM | Stores | Logistics | Director |
 |---|---|---|---|---|---|
-| PM01 | Payment Terms | V | | | V |
-| PM02 | Ports | V | | | V |
-| PM03 | Port Transit Times | V | | | V |
-| PM05 | Lead Times | ⬜ pending | ⬜ pending | ⬜ pending | ⬜ pending |
+| PM01 | Payment Terms | V C E D | | | V |
+| PM02 | Ports | V C E D | | | V |
+| PM03 | Port Transit Times | V C E D | | | V |
+| PM05 | Lead Times (Import + Domestic) | V C E D | | | V |
 | PM06 | Transporters | V C E D | V C E | V C E | V C E D |
-| PM07 | Customs House Agents | V | | | V |
+| PM07 | Customs House Agents | V C E D | | | V |
 
-**Structural note — PM01/02/03/07 (still true, PM06 is now the exception):**
-These four pages are VIEW-only at the ACL/department level — no department-scoped
-Create/Edit. Actual write authority (create/edit/delete a Payment Term, Port,
-CHA, etc.) is governed by a separate, pre-existing backend rule
-(`assertManagerOrSARole` in `l2_masters.handlers.ts`): any Manager-tier role
-(L1_MANAGER+) or SA/GA, regardless of department, can write — not gated by ACL
-capability. A User-tier SCM staff member can view but not create/edit; only an
-SCM Manager (or Director/SA) can. Deliberately left as-is — business owner only
-asked for PM06 to change (Stores/Logistics need Create/Edit because managers
-aren't always present when a GRN needs a new transporter).
+**Revised decision (2026-07-28, supersedes the earlier "view-only, rank-gated"
+note below for PM01/02/03/05/07):** business owner gave SCM full authority
+(Create/Edit/Delete, not just View) on all five, Director drops to View-only
+on these five specifically — a deliberate Special Rule override of the
+"Director always gets everything" Basic Rule, same pattern already used for
+MM01/MM02 in Group 1.
+
+**Code fix — same root cause as PM06, now closed for all of Group 2
+(2026-07-28):** PM01/02/03/05/07's write handlers had the identical
+`assertManagerOrSARole` rank-check PM06 had — giving SCM a department
+capability in ACL would have done nothing while that check stood, since any
+User-tier SCM staff member would still be blocked (only Manager-tier+/SA
+could write, regardless of department). Removed `assertManagerOrSARole(ctx)`
+from all 30 remaining write/edit/delete/contact/email/map handlers across
+Payment Terms, Ports, Port Transit, Import + Domestic Lead Times, and CHA in
+`supabase/functions/api/_core/procurement/l2_masters.handlers.ts`.
+`createMaterialCategoryHandler` (PM04, Group 1, already decided/implemented
+separately) deliberately left untouched — out of scope here. Route-level ACL
+gating (`route-acl-registry.ts`) for all 5 resource codes
+(`PROC_PAYMENT_TERMS_MASTER`, `PROC_PORT_MASTER`, `PROC_PORT_TRANSIT_MASTER`,
+`PROC_IMPORT_LEAD_TIME_MASTER`, `PROC_DOMESTIC_LEAD_TIME_MASTER`,
+`PROC_CHA_MASTER`) was already correctly registered, so removing the
+redundant rank check was the entire fix. Verified zero new `deno check`
+errors via git-stash before/after (same 4 pre-existing `.count`/`.range`/
+`.ilike` TS2339 errors, unrelated lines). Committed + pushed to `dev`
+(`211b05e` for PM06; a second commit for this Group-2-wide fix) — user opens
+the prod PR themselves, per standing instruction.
+
+**ACL data (prod, done 2026-07-28, v13):** split the old `CAP_PROC_SETUP`
+(previously VIEW-only, shared by DIRECTOR + SUPPLY CHAIN on all 6 menus) into
+`CAP_PROC_SETUP` (now full VIEW+WRITE+EDIT+DELETE, kept on SUPPLY CHAIN only)
+and new `CAP_PROC_SETUP_VIEW` (VIEW only, moved DIRECTOR onto it), across all
+6 menu codes (5 pages, PM05 counted twice for Import+Domestic) and both
+CMP003/CMP006. `role_capabilities` mirrored for the new capability. Pipeline
+re-run: new `acl_versions` v13 for all 3 prod companies,
+`capture_acl_version_source` + `generate_acl_snapshot`, stale v12
+`precomputed_acl_view` rows deleted. Verified via `precomputed_acl_view`:
+SUPPLY CHAIN = V/W/E/D all present on all 6 resource codes in both companies;
+DIRECTOR = V only, on all 6, in both companies.
 
 **PM06 — code fix + real department-based writes (2026-07-28):**
 - **Root cause:** PM06's write handlers had the same `assertManagerOrSARole`
@@ -117,17 +143,20 @@ aren't always present when a GRN needs a new transporter).
   Transporter-specific handlers (`createTransporterHandler`,
   `updateTransporterHandler`, `deleteTransporterHandler`, contacts/emails/
   company-map get+upsert handlers) in
-  `supabase/functions/api/_core/procurement/l2_masters.handlers.ts`. PM01-03/
-  05/07's handlers deliberately untouched — still Manager-rank-gated by
-  design (not asked to change). Route-level ACL gating
+  `supabase/functions/api/_core/procurement/l2_masters.handlers.ts`.
+  ~~PM01-03/05/07's handlers deliberately untouched — still Manager-rank-gated
+  by design (not asked to change).~~ **Superseded 2026-07-28 same day:**
+  business owner then asked for SCM full authority on PM01/02/03/05/07 too —
+  see the Group 2 "Code fix" note above the table, which closes this for the
+  remaining 30 handlers. Route-level ACL gating
   (`route-acl-registry.ts`, resource `PROC_TRANSPORTER_MASTER`, actions
   VIEW/WRITE/EDIT/DELETE) was already correctly registered, so removing the
   redundant rank check was the entire fix. Verified zero new `deno check`
   errors via git-stash before/after (4 pre-existing `.count`/`.range`/
   `.ilike` TS2339 errors, unrelated lines, confirmed present on the
-  unmodified file too). **Not yet committed to git** (dev branch) — pending
-  user confirmation; will not be pushed to prod by Claude either way (user
-  handles prod rollout via their own PR, per standing instruction).
+  unmodified file too). Committed + pushed to `dev` (`211b05e`) — user opened
+  the prod PR themselves (not pushed to prod by Claude, per standing
+  instruction).
 - **ACL data (prod, done 2026-07-28, v12):** split the old `CAP_PROC_TRANSPORTER`
   (VIEW-only) into two capabilities on the same `PROC_TRANSPORTER_MASTER`
   menu — `CAP_PROC_TRANSPORTER` now carries VIEW+WRITE+EDIT+DELETE (kept on

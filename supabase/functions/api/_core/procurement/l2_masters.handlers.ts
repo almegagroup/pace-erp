@@ -226,7 +226,9 @@ export async function listPaymentTermsHandler(req: Request, ctx: ProcurementHand
 
 export async function createPaymentTermsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PAYMENT_TERMS_MASTER:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const name = toTrimmedString(body.name);
     const paymentMethod = toUpperTrimmedString(body.payment_method);
@@ -276,7 +278,9 @@ export async function createPaymentTermsHandler(req: Request, ctx: ProcurementHa
 
 export async function updatePaymentTermsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PAYMENT_TERMS_MASTER:EDIT) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const { data: existing, error: existingError } = await serviceRoleClient
@@ -381,7 +385,9 @@ export async function getPaymentTermsHandler(req: Request, ctx: ProcurementHandl
 
 export async function deletePaymentTermsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PAYMENT_TERMS_MASTER:DELETE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PAYMENT_TERMS", 400, "ID required");
 
@@ -407,7 +413,9 @@ export async function deletePaymentTermsHandler(req: Request, ctx: ProcurementHa
 
 export async function togglePaymentTermsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PAYMENT_TERMS_MASTER:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
     const active = body.active === true || body.active === "true";
@@ -455,7 +463,9 @@ export async function listReferenceDateTypesHandler(req: Request, ctx: Procureme
 
 export async function createReferenceDateTypeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PAYMENT_TERMS_MASTER:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const code = toUpperTrimmedString(body.code);
     const label = toTrimmedString(body.label);
@@ -486,7 +496,9 @@ export async function createReferenceDateTypeHandler(req: Request, ctx: Procurem
 
 export async function toggleReferenceDateTypeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PAYMENT_TERMS_MASTER:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
     const isActive = body.is_active === true || body.is_active === "true";
@@ -537,7 +549,9 @@ export async function listPortsHandler(req: Request, ctx: ProcurementHandlerCont
 
 export async function createPortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PORT_MASTER:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const portName = toTrimmedString(body.port_name);
     const portType = toUpperTrimmedString(body.port_type);
@@ -585,7 +599,9 @@ export async function createPortHandler(req: Request, ctx: ProcurementHandlerCon
 
 export async function updatePortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PORT_MASTER:EDIT) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const updates: JsonRecord = {};
@@ -644,7 +660,9 @@ async function countPortReferences(portId: string): Promise<number> {
 
 export async function deletePortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PORT_MASTER:DELETE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PORT", 400, "ID required");
 
@@ -669,7 +687,9 @@ export async function deletePortHandler(req: Request, ctx: ProcurementHandlerCon
 
 export async function togglePortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PORT_MASTER:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
     const active = body.active === true || body.active === "true";
@@ -719,7 +739,9 @@ export async function listTransitTimesHandler(req: Request, ctx: ProcurementHand
 
 export async function upsertTransitTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PORT_TRANSIT_MASTER:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const portId = toTrimmedString(body.port_id);
     const companyId = toTrimmedString(body.company_id);
@@ -780,7 +802,9 @@ export async function listProcurementCompaniesHandler(_req: Request, ctx: Procur
 
 export async function deleteTransitTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_PORT_TRANSIT_MASTER:DELETE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_TRANSIT", 400, "Transit id required");
     const { error } = await serviceRoleClient.schema("erp_master").from("port_plant_transit_master").delete().eq("id", id);
@@ -876,7 +900,9 @@ export async function listImportLeadTimesHandler(req: Request, ctx: ProcurementH
 
 export async function deleteImportLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_IMPORT_LEAD_TIME_MASTER:DELETE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const id = getLastPathSegment(req);
     const { error } = await serviceRoleClient
       .schema("erp_master")
@@ -894,7 +920,9 @@ export async function deleteImportLeadTimeHandler(req: Request, ctx: Procurement
 
 export async function updateImportLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_IMPORT_LEAD_TIME_MASTER:EDIT) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const id = getLastPathSegment(req);
     const body = await parseBody(req);
 
@@ -941,7 +969,9 @@ export async function updateImportLeadTimeHandler(req: Request, ctx: Procurement
 
 export async function upsertImportLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_IMPORT_LEAD_TIME_MASTER:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
     const portId = toTrimmedString(body.port_of_discharge_id || body.port_id);
@@ -1002,7 +1032,9 @@ export async function listDomesticLeadTimesHandler(req: Request, ctx: Procuremen
 
 export async function deleteDomesticLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_DOMESTIC_LEAD_TIME_MASTER:DELETE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const id = getLastPathSegment(req);
     const { error } = await serviceRoleClient
       .schema("erp_master")
@@ -1020,7 +1052,9 @@ export async function deleteDomesticLeadTimeHandler(req: Request, ctx: Procureme
 
 export async function updateDomesticLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_DOMESTIC_LEAD_TIME_MASTER:EDIT) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const id = getLastPathSegment(req);
     const body = await parseBody(req);
 
@@ -1071,7 +1105,9 @@ export async function updateDomesticLeadTimeHandler(req: Request, ctx: Procureme
 
 export async function upsertDomesticLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_DOMESTIC_LEAD_TIME_MASTER:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
     const companyId = toTrimmedString(body.company_id);
@@ -1511,7 +1547,9 @@ export async function listCHAsHandler(req: Request, ctx: ProcurementHandlerConte
 
 export async function createCHAHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const chaName = toTrimmedString(body.cha_name);
     const gstNumber = toUpperTrimmedString(body.gst_number);
@@ -1554,7 +1592,9 @@ export async function createCHAHandler(req: Request, ctx: ProcurementHandlerCont
 
 export async function mapCHAToPortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:EDIT) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const chaId = getIdFromPath(req);
     const body = await parseBody(req);
     if (!(await ensureChaExists(chaId))) {
@@ -1603,7 +1643,9 @@ export async function mapCHAToPortHandler(req: Request, ctx: ProcurementHandlerC
 
 export async function updateCHAHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:EDIT) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const chaId = getIdFromPath(req);
     if (!(await ensureChaExists(chaId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CHA_NOT_FOUND", 404, "CHA not found");
@@ -1638,7 +1680,9 @@ export async function updateCHAHandler(req: Request, ctx: ProcurementHandlerCont
 
 export async function toggleCHAHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:EDIT) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const chaId = toTrimmedString(body.id);
     const active = Boolean(body.active);
@@ -1659,7 +1703,9 @@ export async function toggleCHAHandler(req: Request, ctx: ProcurementHandlerCont
 
 export async function deleteCHAHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:DELETE) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const chaId = getIdFromPath(req);
     if (!(await ensureChaExists(chaId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CHA_NOT_FOUND", 404, "CHA not found");
@@ -1678,7 +1724,9 @@ export async function deleteCHAHandler(req: Request, ctx: ProcurementHandlerCont
 
 export async function getChaContactsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:VIEW) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const chaId = toTrimmedString(new URL(req.url).searchParams.get("cha_id"));
     if (!chaId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "cha_id required");
     const { data, error } = await serviceRoleClient
@@ -1697,7 +1745,9 @@ export async function getChaContactsHandler(req: Request, ctx: ProcurementHandle
 
 export async function upsertChaContactsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:EDIT) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const chaId = toTrimmedString(body.cha_id);
     const contacts = Array.isArray(body.contacts) ? body.contacts : [];
@@ -1738,7 +1788,9 @@ export async function upsertChaContactsHandler(req: Request, ctx: ProcurementHan
 
 export async function getChaEmailsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:VIEW) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const chaId = toTrimmedString(new URL(req.url).searchParams.get("cha_id"));
     if (!chaId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "cha_id required");
     const { data, error } = await serviceRoleClient
@@ -1757,7 +1809,9 @@ export async function getChaEmailsHandler(req: Request, ctx: ProcurementHandlerC
 
 export async function upsertChaEmailsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:EDIT) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const chaId = toTrimmedString(body.cha_id);
     const emails = Array.isArray(body.emails) ? body.emails : [];
@@ -1797,7 +1851,9 @@ export async function upsertChaEmailsHandler(req: Request, ctx: ProcurementHandl
 
 export async function listChaCompanyMapsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:VIEW) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const chaId = toTrimmedString(new URL(req.url).searchParams.get("cha_id"));
     if (!chaId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "cha_id required");
     const { data, error } = await serviceRoleClient
@@ -1816,7 +1872,9 @@ export async function listChaCompanyMapsHandler(req: Request, ctx: ProcurementHa
 
 export async function mapChaToCompanyHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:EDIT) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const body = await parseBody(req);
     const chaId = toTrimmedString(body.cha_id);
     const companyId = toTrimmedString(body.company_id);
@@ -1874,7 +1932,9 @@ export async function listCHAPortsHandler(req: Request, ctx: ProcurementHandlerC
 
 export async function unmapCHAPortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_CHA_MASTER:EDIT) — no longer a
+    // blanket Manager/SA rank check; department grants (e.g. SCM full power,
+    // Director view-only) are actually enforced.
     const parts = new URL(req.url).pathname.split("/");
     const chaId = parts[4];
     const portId = parts[6];
