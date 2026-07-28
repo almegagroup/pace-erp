@@ -1148,7 +1148,9 @@ export async function listTransportersHandler(req: Request, ctx: ProcurementHand
 
 export async function createTransporterHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_TRANSPORTER_MASTER:WRITE) — no
+    // longer a blanket Manager/SA rank check, so department grants (e.g.
+    // Stores/Logistics: Create+Edit, no Delete) are actually enforced.
     const body = await parseBody(req);
     const transporterName = toTrimmedString(body.transporter_name);
     const usageDirection = toUpperTrimmedString(body.usage_direction);
@@ -1189,7 +1191,7 @@ export async function createTransporterHandler(req: Request, ctx: ProcurementHan
 
 export async function updateTransporterHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated (PROC_TRANSPORTER_MASTER:EDIT) — see createTransporterHandler note.
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const updates: JsonRecord = {};
@@ -1230,7 +1232,10 @@ export async function updateTransporterHandler(req: Request, ctx: ProcurementHan
 
 export async function deleteTransporterHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated (PROC_TRANSPORTER_MASTER:DELETE) — see createTransporterHandler note.
+    // This is deliberately the ONLY action Stores/Logistics do not hold, so
+    // removing the old blanket rank check here (not just Create/Edit) is
+    // exactly what makes that split actually enforceable.
     const id = getIdFromPath(req);
     const { error } = await serviceRoleClient
       .schema("erp_master")
@@ -1292,7 +1297,7 @@ async function getTransporterById(id: string): Promise<Record<string, unknown> |
 
 export async function getTransporterContactsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated (PROC_TRANSPORTER_MASTER:VIEW) — see createTransporterHandler note.
     const transporterId = toTrimmedString(new URL(req.url).searchParams.get("transporter_id"));
     if (!transporterId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "transporter_id required");
     const { data, error } = await serviceRoleClient
@@ -1311,7 +1316,7 @@ export async function getTransporterContactsHandler(req: Request, ctx: Procureme
 
 export async function upsertTransporterContactsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated (PROC_TRANSPORTER_MASTER:EDIT) — see createTransporterHandler note.
     const body = await parseBody(req);
     const transporterId = toTrimmedString(body.transporter_id);
     const contacts = Array.isArray(body.contacts) ? body.contacts : [];
@@ -1352,7 +1357,7 @@ export async function upsertTransporterContactsHandler(req: Request, ctx: Procur
 
 export async function getTransporterEmailsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated (PROC_TRANSPORTER_MASTER:VIEW) — see createTransporterHandler note.
     const transporterId = toTrimmedString(new URL(req.url).searchParams.get("transporter_id"));
     if (!transporterId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "transporter_id required");
     const { data, error } = await serviceRoleClient
@@ -1371,7 +1376,7 @@ export async function getTransporterEmailsHandler(req: Request, ctx: Procurement
 
 export async function upsertTransporterEmailsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated (PROC_TRANSPORTER_MASTER:EDIT) — see createTransporterHandler note.
     const body = await parseBody(req);
     const transporterId = toTrimmedString(body.transporter_id);
     const emails = Array.isArray(body.emails) ? body.emails : [];
@@ -1411,7 +1416,7 @@ export async function upsertTransporterEmailsHandler(req: Request, ctx: Procurem
 
 export async function listTransporterCompanyMapsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated (PROC_TRANSPORTER_MASTER:VIEW) — see createTransporterHandler note.
     const transporterId = toTrimmedString(new URL(req.url).searchParams.get("transporter_id"));
     if (!transporterId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "transporter_id required");
     const { data, error } = await serviceRoleClient
@@ -1430,7 +1435,7 @@ export async function listTransporterCompanyMapsHandler(req: Request, ctx: Procu
 
 export async function mapTransporterToCompanyHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated (PROC_TRANSPORTER_MASTER:EDIT) — see createTransporterHandler note.
     const body = await parseBody(req);
     const transporterId = toTrimmedString(body.transporter_id);
     const companyId = toTrimmedString(body.company_id);
