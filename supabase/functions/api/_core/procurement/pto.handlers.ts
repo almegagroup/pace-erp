@@ -116,6 +116,7 @@ type PtoApproverMapRow = {
   scope_type: string | null;
   subject_user_id: string | null;
   subject_work_context_id: string | null;
+  subject_role_code: string | null;
   approval_stage: number;
 };
 
@@ -123,7 +124,7 @@ async function loadPtoApproverRules(companyId: string): Promise<PtoApproverMapRo
   const { data, error } = await serviceRoleClient
     .schema("acl")
     .from("approver_map")
-    .select("approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, approval_stage")
+    .select("approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage")
     .eq("resource_code", "PROC_PLANT_TRANSFER_LIST")
     .eq("action_code", "APPROVE")
     .eq("company_id", companyId);

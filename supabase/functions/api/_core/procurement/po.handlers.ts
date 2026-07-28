@@ -328,6 +328,7 @@ type ApproverMapRow = {
   scope_type: string | null;
   subject_user_id: string | null;
   subject_work_context_id: string | null;
+  subject_role_code: string | null;
   approval_stage: number;
 };
 
@@ -345,7 +346,7 @@ async function loadPoApproverRules(companyId: string): Promise<ApproverMapRow[]>
   const { data, error } = await serviceRoleClient
     .schema("acl")
     .from("approver_map")
-    .select("approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, approval_stage")
+    .select("approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage")
     .eq("resource_code", "PROC_PO_ORDER_APPROVALS")
     .eq("action_code", "APPROVE")
     .eq("company_id", companyId);
@@ -354,6 +355,21 @@ async function loadPoApproverRules(companyId: string): Promise<ApproverMapRow[]>
     throw new Error("PROCUREMENT_APPROVER_LOOKUP_FAILED");
   }
   return (data as ApproverMapRow[] | null) ?? [];
+}
+
+// Rank-based escalation chains (SUBJECT_ROLE scope_type) key off the
+// creator's own role, not their identity — need a lookup since callers only
+// pass the creator's user id.
+async function getUserRoleCode(userId: string): Promise<string | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("user_roles")
+    .select("role_code")
+    .eq("auth_user_id", userId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return String((data as Record<string, unknown>).role_code ?? "") || null;
 }
 
 function matchesApprover(rows: ApproverMapRow[], ctx: ProcurementHandlerContext): boolean {
@@ -387,8 +403,14 @@ async function assertProcurementHeadRole(
   if (rules.length === 0) {
     isConfiguredApprover = ctx.roleCode === "DIRECTOR"; // no approver_map row configured yet — fall back to DIRECTOR.
   } else {
+    const creatorRoleCode = createdBy ? await getUserRoleCode(createdBy) : null;
     const scopedRules = pickScopedApproverRules(
-      { resource_code: "PROC_PO_ORDER_APPROVALS", action_code: "APPROVE", requester_auth_user_id: createdBy ?? null },
+      {
+        resource_code: "PROC_PO_ORDER_APPROVALS",
+        action_code: "APPROVE",
+        requester_auth_user_id: createdBy ?? null,
+        requester_role_code: creatorRoleCode,
+      },
       rules,
     );
     isConfiguredApprover = scopedRules.length > 0
