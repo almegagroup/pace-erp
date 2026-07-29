@@ -255,7 +255,8 @@ export async function createStrokeChangeRequestHandler(
   ctx: ProdHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROD_CHANGE_BOM_ITEM:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const body = await parseBody(req);
     const strokeMasterId = toTrimmedString(body.stroke_master_id);
     const companyId = toTrimmedString(body.company_id);
@@ -375,7 +376,8 @@ export async function approveStrokeChangeRequestHandler(
   ctx: ProdHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROD_CHANGE_BOM_ITEM_APPROVAL:APPROVE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return crError(req, ctx, "PROD_SCR_ID_MISSING", 400, "ID required");
 
@@ -485,7 +487,8 @@ export async function rejectStrokeChangeRequestHandler(
   ctx: ProdHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROD_CHANGE_BOM_ITEM_APPROVAL:APPROVE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return crError(req, ctx, "PROD_SCR_ID_MISSING", 400, "ID required");
 

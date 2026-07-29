@@ -20,7 +20,6 @@ import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
-  assertManagerOrSARole,
   assertProdReadRole,
   parseBody,
   toTrimmedString,
@@ -337,7 +336,6 @@ export async function getPlanFeedHandler(req: Request, ctx: ProdHandlerContext):
 // POST /api/production/plan-feed
 export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
 
     const companyId = toTrimmedString(body.company_id);
@@ -405,16 +403,20 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
 // (Party, Ordered Qty, Pack Qty, dates, Ordered Stroke) is always editable.
 export async function updatePlanFeedHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const id = getIdFromPath(req);
     if (!id) return foErr(req, ctx, "PROD_PLAN_FEED_ID_MISSING", 400, "FO ID required");
 
     const { data: existing, error: fetchErr } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
-      .select("id, status").eq("id", id).maybeSingle();
+      .select("id, status, company_id").eq("id", id).maybeSingle();
 
     if (fetchErr) throw new Error("PROD_PLAN_FEED_FETCH_FAILED");
     if (!existing) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
+    try {
+      await assertCompanyScope(ctx, (existing as JsonRecord).company_id as string);
+    } catch {
+      return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if ((existing as JsonRecord).status === "CANCELLED") {
       return foErr(req, ctx, "PROD_PLAN_FEED_CANCELLED", 422, "Cancelled FO cannot be edited");
     }
@@ -466,14 +468,18 @@ export async function updatePlanFeedHandler(req: Request, ctx: ProdHandlerContex
 // CANCELLED. No more "delink manually first" block.
 export async function cancelPlanFeedHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const id = getIdFromPath(req);
     if (!id) return foErr(req, ctx, "PROD_PLAN_FEED_ID_MISSING", 400, "FO ID required");
 
     const { data: existing } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
-      .select("id, status").eq("id", id).maybeSingle();
+      .select("id, status, company_id").eq("id", id).maybeSingle();
     if (!existing) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
+    try {
+      await assertCompanyScope(ctx, (existing as JsonRecord).company_id as string);
+    } catch {
+      return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if ((existing as JsonRecord).status === "CANCELLED") {
       return foErr(req, ctx, "PROD_PLAN_FEED_ALREADY_CANCELLED", 409, "Already cancelled");
     }
@@ -522,7 +528,6 @@ export async function listFoAllocationsHandler(req: Request, ctx: ProdHandlerCon
 // FO) can never exceed that Packing PO's own qty.
 export async function upsertFoAllocationHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const planFeedId = getIdFromPath(req);
     if (!planFeedId) return foErr(req, ctx, "PROD_PLAN_FEED_ID_MISSING", 400, "FO ID required");
 
@@ -536,8 +541,13 @@ export async function upsertFoAllocationHandler(req: Request, ctx: ProdHandlerCo
 
     const { data: fo, error: foErrRes } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
-      .select("id, status, material_id").eq("id", planFeedId).maybeSingle();
+      .select("id, status, material_id, company_id").eq("id", planFeedId).maybeSingle();
     if (foErrRes || !fo) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
+    try {
+      await assertCompanyScope(ctx, (fo as JsonRecord).company_id as string);
+    } catch {
+      return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     if ((fo as JsonRecord).status !== "ACTIVE") {
       return foErr(req, ctx, "PROD_PLAN_FEED_NOT_ACTIVE", 422, "FO is not ACTIVE");
     }

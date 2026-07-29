@@ -493,7 +493,8 @@ export async function listBatchNumbersHandler(req: Request, ctx: ProdHandlerCont
 
 export async function releaseBatchNumberHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROD_BATCH_RELEASE:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return batchError(req, ctx, "PROD_BATCH_NUMBER_ID_MISSING", 400, "ID required");
 

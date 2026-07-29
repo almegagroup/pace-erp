@@ -43,8 +43,6 @@ function logDbError(context: string, error: unknown): void {
   console.error(`[INWARD_QA_DB_ERROR] ${context}:`, JSON.stringify(error));
 }
 
-const QA_ALLOWED_ROLES = ["SA", "DIRECTOR", "PROCUREMENT_HEAD", "QA_OFFICER", "STORE_MANAGER"];
-const QA_MANAGER_ROLES = ["SA", "DIRECTOR", "PROCUREMENT_HEAD", "STORE_MANAGER"];
 const QA_DOC_MUTABLE_STATUSES = new Set(["PENDING", "IN_PROGRESS"]);
 const QA_PUBLIC_STATUS_MAP: Record<string, string> = {
   PENDING: "PENDING",
@@ -60,18 +58,6 @@ const QA_DECISION_MOVEMENT_MAP: Record<string, { dbDecision: string; movementTyp
 };
 // Tolerance for float qty comparisons (matches numeric(20,6) column precision).
 const QTY_EPSILON = 0.000001;
-
-function assertQARole(ctx: QAHandlerContext): void {
-  if (!QA_ALLOWED_ROLES.includes(ctx.roleCode)) {
-    throw new ApiError(403, "QA access required");
-  }
-}
-
-function assertQAManagerRole(ctx: QAHandlerContext): void {
-  if (!QA_MANAGER_ROLES.includes(ctx.roleCode)) {
-    throw new ApiError(403, "QA manager access required");
-  }
-}
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -336,7 +322,10 @@ export async function listQADocumentsHandler(
   ctx: QAHandlerContext,
 ): Promise<Response> {
   try {
-    assertQARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:VIEW) — was a
+    // hardcoded role check against role codes that don't exist in this
+    // system's actual role_ladder.ts taxonomy (PROCUREMENT_HEAD/QA_OFFICER/
+    // STORE_MANAGER), which meant only SA/DIRECTOR could ever pass it.
     const url = new URL(req.url);
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const grnId = toTrimmedString(url.searchParams.get("grn_id"));
@@ -440,7 +429,10 @@ export async function getQADocumentHandler(
   ctx: QAHandlerContext,
 ): Promise<Response> {
   try {
-    assertQARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:VIEW) — was a
+    // hardcoded role check against role codes that don't exist in this
+    // system's actual role_ladder.ts taxonomy (PROCUREMENT_HEAD/QA_OFFICER/
+    // STORE_MANAGER), which meant only SA/DIRECTOR could ever pass it.
     const qaDocumentId = getQaIdFromPath(req);
     if (!qaDocumentId) {
       throw new ApiError(400, "QA document id is required");
@@ -459,7 +451,10 @@ export async function addTestLineHandler(
   ctx: QAHandlerContext,
 ): Promise<Response> {
   try {
-    assertQARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:WRITE) — was a
+    // hardcoded role check against role codes that don't exist in this
+    // system's actual role_ladder.ts taxonomy (PROCUREMENT_HEAD/QA_OFFICER/
+    // STORE_MANAGER), which meant only SA/DIRECTOR could ever pass it.
     const qaDocumentId = getQaIdFromPath(req);
     if (!qaDocumentId) {
       throw new ApiError(400, "QA document id is required");
@@ -551,7 +546,10 @@ export async function updateTestLineHandler(
   ctx: QAHandlerContext,
 ): Promise<Response> {
   try {
-    assertQARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:EDIT) — was a
+    // hardcoded role check against role codes that don't exist in this
+    // system's actual role_ladder.ts taxonomy (PROCUREMENT_HEAD/QA_OFFICER/
+    // STORE_MANAGER), which meant only SA/DIRECTOR could ever pass it.
     const qaDocumentId = getQaIdFromPath(req);
     const lineId = getTestLineIdFromPath(req);
     if (!qaDocumentId || !lineId) {
@@ -635,7 +633,10 @@ export async function deleteTestLineHandler(
   ctx: QAHandlerContext,
 ): Promise<Response> {
   try {
-    assertQARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:DELETE) — was a
+    // hardcoded role check against role codes that don't exist in this
+    // system's actual role_ladder.ts taxonomy (PROCUREMENT_HEAD/QA_OFFICER/
+    // STORE_MANAGER), which meant only SA/DIRECTOR could ever pass it.
     const qaDocumentId = getQaIdFromPath(req);
     const lineId = getTestLineIdFromPath(req);
     if (!qaDocumentId || !lineId) {
@@ -686,7 +687,10 @@ export async function submitUsageDecisionHandler(
   ctx: QAHandlerContext,
 ): Promise<Response> {
   try {
-    assertQARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:APPROVE) — was a
+    // hardcoded role check against role codes that don't exist in this
+    // system's actual role_ladder.ts taxonomy (PROCUREMENT_HEAD/QA_OFFICER/
+    // STORE_MANAGER), which meant only SA/DIRECTOR could ever pass it.
     const qaDocumentId = getQaIdFromPath(req);
     if (!qaDocumentId) {
       throw new ApiError(400, "QA document id is required");
@@ -752,9 +756,10 @@ export async function submitUsageDecisionHandler(
       if (!Number.isFinite(decisionLine.quantity) || decisionLine.quantity <= 0) {
         throw new ApiError(400, "decision_lines.quantity must be greater than zero");
       }
-      if (decisionLine.usage_decision === "FOR_REPROCESS") {
-        assertQAManagerRole(ctx);
-      }
+      // FOR_REPROCESS no longer gets a stricter tier than other usage
+      // decisions — same PROC_QA_QUEUE:APPROVE gate as the rest of this
+      // handler (business owner decision, matches the other 6 pages fixed
+      // in this same pass).
 
       // post_stock_movement() auto-assigns item_number (SAP MKPF/MSEG style) per
       // (document_number, document_year), so every call under the same Material Document
