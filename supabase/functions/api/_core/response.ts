@@ -8,6 +8,8 @@
  * Authority: Backend
  */
 
+import { log } from "../_lib/logger.ts";
+
 export type Action = "NONE" | "LOGOUT" | "REDIRECT" | "RELOAD";
 
 /**
@@ -129,6 +131,24 @@ export function errorResponse(
 ): Response {
 
   const publicCode = normalizeCode(code);
+
+  // Every error response in the app funnels through here, so this is the one
+  // place that can log the REAL internal code (before it gets collapsed to
+  // the generic public code/message sent to the client) alongside the actual
+  // HTTP status, route, and gate — searchable in Render logs as "ERROR_RESPONSE".
+  log({
+    level: "ERROR",
+    request_id: requestId,
+    gate_id: meta?.gateId,
+    route_key: meta?.routeKey,
+    event: "ERROR_RESPONSE",
+    decision: code,
+    meta: {
+      status,
+      public_code: publicCode,
+      decision_trace: meta?.decisionTrace ?? null,
+    },
+  });
 
   const action: Action =
     publicCode.startsWith("SESSION_") &&
