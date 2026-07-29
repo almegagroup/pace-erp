@@ -12,6 +12,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { isSameOrHigher } from "../../_shared/role_ladder.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -1001,6 +1002,15 @@ export async function pruneGateEntryHandler(
 ): Promise<Response> {
   try {
     assertProcurementReadRole(ctx);
+    // Prune shares its ACL action (PROC_GRN_LIST:WRITE) with plain GRN
+    // creation, which every Stores rank needs — so the L3_USER+ ceiling for
+    // Prune specifically can't be expressed at the ACL layer and is
+    // enforced here instead. isSameOrHigher naturally lets SA/GA/DIRECTOR/
+    // Managers through too; ACL's own department gate (Stores-only) already
+    // keeps this from reaching unrelated departments.
+    if (!isSameOrHigher(ctx.roleCode, "L3_USER")) {
+      return procurementErrorResponse(req, ctx, "GE_PRUNE_RANK_REQUIRED", 403, "L3_USER rank or higher is required to prune a gate entry.");
+    }
     const gateEntryId = getPathSegments(req)[3] ?? "";
     if (!gateEntryId) {
       return procurementErrorResponse(req, ctx, "GE_ID_REQUIRED", 400, "Gate entry id is required.");

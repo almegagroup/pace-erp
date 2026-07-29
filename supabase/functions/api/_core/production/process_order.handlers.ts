@@ -2100,7 +2100,8 @@ export async function updateProcessOrderLinesHandler(req: Request, ctx: ProdHand
 
 export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROD_QA_QUEUE:APPROVE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return poErr(req, ctx, "PROD_PO_ID_MISSING", 400, "ID required");
 
@@ -2146,7 +2147,8 @@ export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandle
 
 export async function qaRejectProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROD_QA_QUEUE:APPROVE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return poErr(req, ctx, "PROD_PO_ID_MISSING", 400, "ID required");
 
@@ -2883,7 +2885,8 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
 
 export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROD_PO_VERIFY:APPROVE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return poErr(req, ctx, "PROD_PO_ID_MISSING", 400, "ID required");
 
@@ -3210,7 +3213,8 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
 
 export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROD_REVERSAL:APPROVE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return poErr(req, ctx, "PROD_PO_ID_MISSING", 400, "ID required");
 

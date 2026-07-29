@@ -16,7 +16,6 @@ import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
-  assertManagerOrSARole,
   parseBody,
   toTrimmedString,
   toUpperTrimmedString,
@@ -552,7 +551,6 @@ export async function createPackBomHandler(
   ctx: ProdHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id) || toTrimmedString(ctx.context.companyId);
     const poType = toUpperTrimmedString(body.po_type);
@@ -717,7 +715,6 @@ export async function approvePackBomHandler(
   ctx: ProdHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const id = getIdFromPath(req);
     if (!id) return bomError(req, ctx, "PROD_BOM_ID_MISSING", 400, "ID required");
 
@@ -727,12 +724,13 @@ export async function approvePackBomHandler(
     const { data: bom, error: bomFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom")
-      .select("id, status, sku_material_id")
+      .select("id, status, sku_material_id, company_id")
       .eq("id", id)
       .maybeSingle();
 
     if (bomFetchErr) throw new Error("PROD_BOM_FETCH_FAILED");
     if (!bom) return bomError(req, ctx, "PROD_BOM_NOT_FOUND", 404, "Pack BOM not found");
+    await assertPackBomCompanyScope(ctx, (bom as JsonRecord).company_id as string);
     if ((bom as JsonRecord).status !== "DRAFT") {
       return bomError(req, ctx, "PROD_BOM_NOT_DRAFT", 422, "Only DRAFT Pack BOMs can be approved");
     }
@@ -790,7 +788,6 @@ export async function rejectPackBomHandler(
   ctx: ProdHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const id = getIdFromPath(req);
     if (!id) return bomError(req, ctx, "PROD_BOM_ID_MISSING", 400, "ID required");
 
@@ -803,12 +800,13 @@ export async function rejectPackBomHandler(
     const { data: bom, error: bomFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom")
-      .select("id, status")
+      .select("id, status, company_id")
       .eq("id", id)
       .maybeSingle();
 
     if (bomFetchErr) throw new Error("PROD_BOM_FETCH_FAILED");
     if (!bom) return bomError(req, ctx, "PROD_BOM_NOT_FOUND", 404, "Pack BOM not found");
+    await assertPackBomCompanyScope(ctx, (bom as JsonRecord).company_id as string);
     if ((bom as JsonRecord).status !== "DRAFT") {
       return bomError(req, ctx, "PROD_BOM_NOT_DRAFT", 422, "Only DRAFT Pack BOMs can be rejected");
     }
@@ -905,7 +903,6 @@ export async function createPackBomChangeRequestHandler(
   ctx: ProdHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const id = getIdFromPath(req);
     if (!id) return bomError(req, ctx, "PROD_BOM_ID_MISSING", 400, "Pack BOM ID required");
 
@@ -920,12 +917,13 @@ export async function createPackBomChangeRequestHandler(
     const { data: bom, error: bomFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom")
-      .select("id, status, sku_material_id")
+      .select("id, status, sku_material_id, company_id")
       .eq("id", id)
       .maybeSingle();
 
     if (bomFetchErr) throw new Error("PROD_BOM_FETCH_FAILED");
     if (!bom) return bomError(req, ctx, "PROD_BOM_NOT_FOUND", 404, "Pack BOM not found");
+    await assertPackBomCompanyScope(ctx, (bom as JsonRecord).company_id as string);
     if ((bom as JsonRecord).status !== "ACTIVE") {
       return bomError(req, ctx, "PROD_BCR_BOM_NOT_ACTIVE", 422, "Change requests can only be created for ACTIVE Pack BOMs");
     }
@@ -1192,7 +1190,6 @@ export async function approvePackBomChangeRequestHandler(
   ctx: ProdHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const id = getIdFromPath(req);
     if (!id) return bomError(req, ctx, "PROD_BCR_ID_MISSING", 400, "ID required");
 
@@ -1203,12 +1200,13 @@ export async function approvePackBomChangeRequestHandler(
     const { data: cr, error: crFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom_change_request")
-      .select("id, status, pack_bom_id")
+      .select("id, status, pack_bom_id, bom:pack_bom!pack_bom_id(company_id)")
       .eq("id", id)
       .maybeSingle();
 
     if (crFetchErr) throw new Error("PROD_BCR_FETCH_FAILED");
     if (!cr) return bomError(req, ctx, "PROD_BCR_NOT_FOUND", 404, "Change request not found");
+    await assertPackBomCompanyScope(ctx, ((cr as JsonRecord).bom as JsonRecord | null)?.company_id as string);
     if ((cr as JsonRecord).status !== "DRAFT") {
       return bomError(req, ctx, "PROD_BCR_NOT_DRAFT", 422, "Only DRAFT change requests can be approved");
     }
@@ -1252,7 +1250,6 @@ export async function rejectPackBomChangeRequestHandler(
   ctx: ProdHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const id = getIdFromPath(req);
     if (!id) return bomError(req, ctx, "PROD_BCR_ID_MISSING", 400, "ID required");
 
@@ -1265,12 +1262,13 @@ export async function rejectPackBomChangeRequestHandler(
     const { data: cr, error: crFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom_change_request")
-      .select("id, status")
+      .select("id, status, bom:pack_bom!pack_bom_id(company_id)")
       .eq("id", id)
       .maybeSingle();
 
     if (crFetchErr) throw new Error("PROD_BCR_FETCH_FAILED");
     if (!cr) return bomError(req, ctx, "PROD_BCR_NOT_FOUND", 404, "Change request not found");
+    await assertPackBomCompanyScope(ctx, ((cr as JsonRecord).bom as JsonRecord | null)?.company_id as string);
     if ((cr as JsonRecord).status !== "DRAFT") {
       return bomError(req, ctx, "PROD_BCR_NOT_DRAFT", 422, "Only DRAFT change requests can be rejected");
     }

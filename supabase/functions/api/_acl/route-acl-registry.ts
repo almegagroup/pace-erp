@@ -291,7 +291,12 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
     "GET:/api/production/packing-orders/sfg-batches":  { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
     "POST:/api/production/packing-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
   "GET:/api/production/fg-stock-breakdown":           { skipAcl: false, resourceCode: "PROD_FG_STOCK_BREAKDOWN", action: "VIEW" },
-  "GET:/api/production/sfg-qa-documents":            { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "VIEW" },
+  // Split off PROD_QA_QUEUE 2026-07-29 — PR18 (SFG Result Recording) shared
+  // this resource with PR16 (QA Approval Queue), but the two need different
+  // rank ceilings (PR18 up to L2_MANAGER, PR16 up to L3_MANAGER); sharing a
+  // resource meant they could never be set independently, same class of
+  // conflict as the Start Batch/PR17 split done earlier this session.
+  "GET:/api/production/sfg-qa-documents":            { skipAcl: false, resourceCode: "PROD_SFG_RESULT_RECORDING", action: "VIEW" },
   "GET:/api/production/stroke-change-requests":      { skipAcl: false, resourceCode: "PROD_CHANGE_BOM_ITEM_APPROVAL", action: "VIEW" },
   "POST:/api/production/stroke-change-requests":     { skipAcl: false, resourceCode: "PROD_CHANGE_BOM_ITEM", action: "WRITE" },
   "GET:/api/production/pack-boms/eligible-skus":     { skipAcl: false, resourceCode: "PROD_PACK_BOM_CREATE", action: "VIEW" },
@@ -973,8 +978,14 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "APPROVE" } },
   },
   {
+    // Was PROD_BATCH_RELEASE (shared with PR17's "release a voided batch
+    // number" — a QA/Manager-tier oversight function). Split onto its own
+    // resource code (2026-07-29) — Start Batch is Production's own action,
+    // clicked right after QA approves in PR16's flow; sharing PR17's
+    // resource would have blocked Production from starting a batch once
+    // PR17 was restricted to QA-Manager-tier + Plant Head only.
     pattern: /^\/api\/production\/process-orders\/[^/]+\/start-batch$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROD_BATCH_RELEASE", action: "WRITE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_START_BATCH", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/production\/process-orders\/[^/]+\/finalize$/,
@@ -998,21 +1009,21 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+$/,
-    methods: { GET: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "VIEW" } },
+    methods: { GET: { skipAcl: false, resourceCode: "PROD_SFG_RESULT_RECORDING", action: "VIEW" } },
   },
   {
     pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+\/test-lines$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "WRITE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_SFG_RESULT_RECORDING", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+\/test-lines\/[^/]+$/,
     methods: {
-      PUT: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "EDIT" },
+      PUT: { skipAcl: false, resourceCode: "PROD_SFG_RESULT_RECORDING", action: "EDIT" },
     },
   },
   {
     pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+\/decision$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "APPROVE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_SFG_RESULT_RECORDING", action: "APPROVE" } },
   },
   {
     pattern: /^\/api\/production\/packing-orders\/[^/]+$/,

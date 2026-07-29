@@ -703,7 +703,8 @@ export async function getPartialReversalDetailHandler(req: Request, ctx: ProdHan
 // include/exclude choice is caller-supplied.
 export async function createPartialBatchReversalHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROD_PARTIAL_BATCH_REVERSAL:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const body = await parseBody(req);
 
     const processOrderId = toTrimmedString(body.process_order_id);
