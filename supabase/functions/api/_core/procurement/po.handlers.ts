@@ -1363,29 +1363,38 @@ export async function getPoFilterOptionsHandler(
     const vendorIds = intersectIdSets(vendorIdSets);
     const materialIds = intersectIdSets(materialIdSets);
 
+    // A constrained set that intersected down to zero real IDs must short-circuit
+    // to an empty result WITHOUT querying — passing an empty/placeholder array to
+    // .in() on a uuid column either matches everything (empty array) or throws
+    // 22P02 (invalid placeholder like "__none__"). Only a non-empty ID list, or no
+    // constraint at all (null = don't filter), is safe to hand to .in()/the query.
+    const companyEmpty = companyIds !== null && companyIds.length === 0;
+    const vendorEmpty = vendorIds !== null && vendorIds.length === 0;
+    const materialEmpty = materialIds !== null && materialIds.length === 0;
+
     let companyQuery = serviceRoleClient.schema("erp_master").from("companies")
       .select("id, company_code, company_name")
       .eq("company_kind", "BUSINESS")
       .eq("status", "ACTIVE")
       .order("company_name", { ascending: true });
-    if (companyIds !== null) companyQuery = companyQuery.in("id", companyIds.length ? companyIds : ["__none__"]);
+    if (companyIds !== null && companyIds.length > 0) companyQuery = companyQuery.in("id", companyIds);
 
     let vendorQuery = serviceRoleClient.schema("erp_master").from("vendor_master")
       .select("id, vendor_code, vendor_name, vendor_type, indent_number_required")
       .eq("status", "ACTIVE")
       .order("vendor_name", { ascending: true });
-    if (vendorIds !== null) vendorQuery = vendorQuery.in("id", vendorIds.length ? vendorIds : ["__none__"]);
+    if (vendorIds !== null && vendorIds.length > 0) vendorQuery = vendorQuery.in("id", vendorIds);
 
     let materialQuery = serviceRoleClient.schema("erp_master").from("material_master")
       .select("id, pace_code, material_name, material_type")
       .in("material_type", ["RM", "PM"])
       .order("material_name", { ascending: true });
-    if (materialIds !== null) materialQuery = materialQuery.in("id", materialIds.length ? materialIds : ["__none__"]);
+    if (materialIds !== null && materialIds.length > 0) materialQuery = materialQuery.in("id", materialIds);
 
     const [companiesResult, vendorsResult, materialsResult] = await Promise.all([
-      companyQuery,
-      vendorQuery,
-      materialQuery,
+      companyEmpty ? Promise.resolve({ data: [] as unknown[], error: null }) : companyQuery,
+      vendorEmpty ? Promise.resolve({ data: [] as unknown[], error: null }) : vendorQuery,
+      materialEmpty ? Promise.resolve({ data: [] as unknown[], error: null }) : materialQuery,
     ]);
 
     if (companiesResult.error || vendorsResult.error || materialsResult.error) {
