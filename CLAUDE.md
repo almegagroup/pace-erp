@@ -746,6 +746,15 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
   > `version_company_module_map`, `version_work_context_capabilities`।
   > হাতে insert করলে বাকি ৫টা অসম্পূর্ণ থেকে যেত। **ACL version capture করাই যথেষ্ট।**
 
+  > **⚠️ দ্বিতীয় সংশোধন (2026-07-29, Group 5 ACL session-এ ধরা পড়ে) — উপরের কথাটা
+  > শুধু একটা version-এর *প্রথমবার* capture-এর জন্য সত্যি।** `capture_acl_version_source`-এর
+  > ভেতরে guard আছে: `IF source_captured_at IS NOT NULL THEN RETURN`। একই `acl_version_id`-তে
+  > দ্বিতীয়বার call করলে সেটা **সম্পূর্ণ no-op** — কোনো নতুন live data (capability, grant, ইত্যাদি)
+  > version table-এ কপি হয় না, নীরবে পুরনো capture-ই থেকে যায়। যদি একই দিনে একাধিকবার ACL data
+  > session চালাও (যেমন এক দিনে ৩-৪টা Group একে একে করা), **প্রতিটা নতুন data-change-এর পরে
+  > অবশ্যই নতুন `acl_versions` row বানাও** (version bump, যেমন v19→v20) — আগের version_id
+  > পুনরায় capture করা ভুল, তাতে কিছুই আপডেট হবে না অথচ কোনো error-ও আসবে না, তাই ধরা কঠিন।
+
 ---
 
 ## 8-PERF. Performance — ⏸️ GO-LIVE পর্যন্ত থামানো (2026-07-19)
