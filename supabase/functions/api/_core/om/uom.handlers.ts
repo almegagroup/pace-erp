@@ -11,7 +11,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertManagerOrSARole, assertOmSaContext } from "./shared.ts";
+import { assertOmSaContext } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -48,7 +48,6 @@ export async function listUomHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const isActive = new URL(req.url).searchParams.get("is_active");
     let query = serviceRoleClient

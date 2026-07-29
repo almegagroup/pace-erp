@@ -11,7 +11,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertManagerOrSARole, assertOmSaContext } from "./shared.ts";
+import { assertOmSaContext } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -56,7 +56,6 @@ export async function listMaterialTypeCategoriesHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const materialType = toTrimmedString(url.searchParams.get("material_type")).toUpperCase();

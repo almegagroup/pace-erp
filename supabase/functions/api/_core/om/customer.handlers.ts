@@ -11,7 +11,6 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertManagerOrSARole } from "./shared.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -158,7 +157,6 @@ export async function createCustomerHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
@@ -237,7 +235,6 @@ export async function listCustomersHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const customerType = toTrimmedString(url.searchParams.get("customer_type")).toUpperCase();
@@ -286,7 +283,6 @@ export async function getCustomerHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const id = toTrimmedString(new URL(req.url).searchParams.get("id"));
     if (!id) {
@@ -312,7 +308,6 @@ export async function updateCustomerHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
@@ -393,7 +388,6 @@ export async function changeCustomerStatusHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
@@ -448,7 +442,6 @@ export async function mapCustomerToCompanyHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const customerId = toTrimmedString(body.customer_id);
@@ -494,7 +487,6 @@ export async function listCustomerCompanyMapsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const customerId = toTrimmedString(new URL(req.url).searchParams.get("customer_id"));
     if (!customerId) {
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 400, "customer_id required");

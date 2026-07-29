@@ -19,12 +19,18 @@ import { queryKeys } from "../../hooks/queries/queryKeys.js";
 function canOpenApprovalInbox(menuSnapshot) {
   const rows = Array.isArray(menuSnapshot) ? menuSnapshot : [];
 
+  // The menu snapshot always includes greyed-out (is_visible:false) rows too,
+  // so the sidebar can render "you don't have this" placeholders. Matching on
+  // resource_code/route_path alone would treat a greyed-out row as usable and
+  // fire the approval-inbox query anyway, which the backend then correctly
+  // denies (403) — silently, but as noise. Must also require is_visible.
   return rows.some(
     (row) =>
-      row?.resource_code === "HR_LEAVE_APPROVAL_INBOX" ||
-      row?.resource_code === "HR_OUT_WORK_APPROVAL_INBOX" ||
-      row?.route_path === "/dashboard/hr/leave/approval-inbox" ||
-      row?.route_path === "/dashboard/hr/out-work/approval-inbox",
+      row?.is_visible === true &&
+      (row?.resource_code === "HR_LEAVE_APPROVAL_INBOX" ||
+        row?.resource_code === "HR_OUT_WORK_APPROVAL_INBOX" ||
+        row?.route_path === "/dashboard/hr/leave/approval-inbox" ||
+        row?.route_path === "/dashboard/hr/out-work/approval-inbox"),
   );
 }
 

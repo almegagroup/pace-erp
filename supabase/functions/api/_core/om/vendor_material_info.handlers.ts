@@ -11,7 +11,6 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertManagerOrSARole } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -328,7 +327,6 @@ export async function createVendorMaterialInfoHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
@@ -404,7 +402,6 @@ export async function listVendorMaterialInfosHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const vendorSearch = toTrimmedString(url.searchParams.get("vendor_search")).replace(/[%_]/g, "");
@@ -480,7 +477,6 @@ export async function getVendorMaterialInfoHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const id = toTrimmedString(url.searchParams.get("id"));
@@ -524,7 +520,6 @@ export async function updateVendorMaterialInfoHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
@@ -646,7 +641,6 @@ export async function unmapVendorMaterialInfoHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const id = toTrimmedString(url.searchParams.get("id"));
@@ -693,7 +687,6 @@ export async function changeVendorMaterialInfoStatusHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
@@ -740,7 +733,6 @@ export async function listMappedMaterialIdsForVendorHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
