@@ -11,7 +11,6 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertManagerOrSARole } from "./shared.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -86,7 +85,6 @@ export async function createVendorHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const vendorName = toTrimmedString(body.vendor_name);
@@ -160,7 +158,6 @@ export async function listVendorsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const vendorType = toTrimmedString(url.searchParams.get("vendor_type")).toUpperCase();
@@ -198,7 +195,6 @@ export async function getVendorHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const id = toTrimmedString(new URL(req.url).searchParams.get("id"));
     if (!id) return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
@@ -240,7 +236,6 @@ export async function updateVendorHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
@@ -303,7 +298,6 @@ export async function changeVendorStatusHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
@@ -358,7 +352,6 @@ export async function deleteVendorsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const ids: string[] = Array.isArray(body.ids)
@@ -402,7 +395,6 @@ export async function getVendorContactsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const vendorId = toTrimmedString(new URL(req.url).searchParams.get("vendor_id"));
     if (!vendorId) return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "vendor_id required");
 
@@ -429,7 +421,6 @@ export async function upsertVendorContactsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
@@ -482,7 +473,6 @@ export async function getVendorEmailsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const vendorId = toTrimmedString(new URL(req.url).searchParams.get("vendor_id"));
     if (!vendorId) return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "vendor_id required");
 
@@ -509,7 +499,6 @@ export async function upsertVendorEmailsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
@@ -561,7 +550,6 @@ export async function listVendorCompanyMappingHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
@@ -613,7 +601,6 @@ export async function bulkMapVendorsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
@@ -657,7 +644,6 @@ export async function bulkUnmapVendorsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
@@ -693,7 +679,6 @@ export async function getVendorBanksHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const vendorId = toTrimmedString(new URL(req.url).searchParams.get("vendor_id"));
     if (!vendorId) return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "vendor_id required");
 
@@ -720,7 +705,6 @@ export async function upsertVendorBanksHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
@@ -775,7 +759,6 @@ export async function mapVendorToCompanyHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
@@ -822,7 +805,6 @@ export async function listVendorCompanyMapsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const vendorId = toTrimmedString(new URL(req.url).searchParams.get("vendor_id"));
     if (!vendorId) return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 400, "vendor_id required");
 
@@ -849,7 +831,6 @@ export async function addVendorPaymentTermsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
@@ -902,7 +883,6 @@ export async function getVendorPaymentTermsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));

@@ -11,7 +11,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertManagerOrSARole, assertOmAdminContext, assertOmSaContext } from "./shared.ts";
+import { assertOmAdminContext, assertOmSaContext } from "./shared.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -116,7 +116,6 @@ export async function listStorageLocationsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));

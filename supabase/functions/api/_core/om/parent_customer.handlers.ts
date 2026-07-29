@@ -9,7 +9,6 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertManagerOrSARole } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -38,7 +37,6 @@ export async function createParentCustomerHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const name = toTrimmedString(body.parent_customer_name);
@@ -85,7 +83,6 @@ export async function listParentCustomersHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const status = toTrimmedString(url.searchParams.get("status")).toUpperCase();
@@ -120,7 +117,6 @@ export async function updateParentCustomerHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
