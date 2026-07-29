@@ -794,3 +794,116 @@ on PR00/09/11/13/14/20/22/23; Pradip/Kishor get PR00/09 full (Plant Head) +
 PACKBOM view, zero on PR10/11; Prasenjit (SCM, L3_USER) gets PR05/07 create
 only; Ankan (SCM, L1_MANAGER) gets PR05/07 create + PR06/08 approve; Bijon
 (Director) gets VIEW on all 13; P0076 (ACL MASTER) gets full on everything.
+
+---
+
+## Full-Doc Audit (2026-07-29, ACL v30/v27)
+
+Business owner asked for a comprehensive re-check across every group's live
+state (not just the group being actively worked). Method: pulled every
+department's full grant list across all ~55 tx_code resources at once for
+one reference user per department archetype (Nilkamal, Pabitra, Pradip,
+Kishor, Soni, Bijon, P0076, plus a Stores/SCM spot-check), then separately
+queried for any capability held broadly (≥3 departments) in either company
+to catch blanket grants that hadn't surfaced through normal page-by-page
+work.
+
+**🔴 One real leak found and fixed:** `CAP_PROC_QA` — a capability that
+predates this whole doc — granted VIEW on **both** `PROC_GRN_LIST` (PO05,
+Group 4) and `PROC_QA_QUEUE` (PO06, Group 5) to **every department**
+(ACL-MASTER, Audit, Director, Management, Quality in both companies, plus
+CMP010's Audit). Missed during both Group 4 and Group 5's cleanup because
+neither session's "which capability governs this resource" check happened
+to surface it — Group 4 found `CAP_PROC_RECEIVING`/`CAP_PROC_GATE_SECURITY`
+as the operative capabilities for GRN and never noticed `CAP_PROC_QA` also
+touched it; Group 5 built entirely new tiered capabilities for PO06 without
+checking whether an older capability also granted the same page. Concrete
+effect: Bijon Kanabar (Director) had VIEW on both PO05 and PO06 despite
+"Director gets nothing" being locked for both groups.
+
+Fixed the same way as every other blanket-capability cleanup this session:
+deleted `CAP_PROC_QA`'s `work_context_capabilities` rows except the two
+`ACL-MASTER` ones (already redundant — `CAP_PROC_RECEIVING`/Stores covers
+GRN, `CAP_QA_TIER_L3MGR`/`CAP_QA_PLANTHEAD` covers PO06). ACL v30
+(CMP003/CMP006), v27 (CMP010). Verified: Bijon now zero on both
+`PROC_GRN_LIST` and `PROC_QA_QUEUE`; Stores (Hiranmoy Dwari) still full on
+GRN; Nilkamal still full on PO06 — no regression.
+
+**Everything else checked clean:** the broad-capability sweep (`≥3`
+departments) turned up nothing else unaccounted for — every other
+multi-department capability found (`CAP_ORDERLIST_MGRTIER`,
+`CAP_PACKBOM_VIEW`, `CAP_PLANFEED_VIEW_OTHER`, `CAP_CONVCOST_VIEW`,
+`CAP_PROC_PLANT_TRANSFER`, `CAP_OM_CUSTOMER_VIEW`, etc.) matched its
+documented design exactly, department-for-department. `CAP_OM_MASTER_DATA`
+showed up broadly-held too but has **zero** `capability_menu_actions` rows
+— a dead/inert capability, not a leak.
+
+**Lesson for future groups:** when deciding a page's ACL, don't stop at
+finding *a* capability that already covers it — check whether *any other*
+capability also grants the same `(menu_code, action)` pair before assuming
+the department list is complete. A quick
+`select capability_code from acl.capability_menu_actions where menu_id = (select id from acl.menu_master where menu_code = 'X')`
+per resource_code would have caught this immediately in both Group 4 and 5.
+
+---
+
+## Live Incident (2026-07-29) — PO create broke for non-Manager SCM users
+
+Business owner reported widespread 403/500 errors testing PO creation as
+Ankan (L1_MANAGER) and Prasenjit (L3_USER) on prod (`erp.almegagroup.in`).
+
+**Root cause — a second, much larger instance of the recurring
+hardcoded-rank-check bug, in a module never touched by this doc's audits:**
+`om/vendor.handlers.ts`'s `listVendorsHandler` (and 41 other call sites
+across 8 more `om/*.handlers.ts` files — material, customer, cost_center,
+location, material_type_category, parent_customer, uom,
+vendor_material_info) called `assertManagerOrSARole(ctx)` independently of
+ACL. Confirmed via live prod logs: `OM_VENDOR_LIST:VIEW` ACL decision was
+`ALLOW` for Ankan, yet the request still 500'd — the ACL gate passed, the
+handler's own hardcoded check blocked it anyway, and since the thrown
+`MANAGER_OR_SA_REQUIRED` code isn't specially mapped in that handler's
+catch block, it fell through to a generic 500 instead of a clean 403. This
+had nothing to do with Group 1-10's own ACL grants (already correct) — it
+blocked the vendor/material dropdowns the PO Create page depends on,
+regardless of what ACL said.
+
+**Fixed:** removed all 42 `assertManagerOrSARole` call sites across the 9
+`om/*.handlers.ts` files (bulk script + manual verification), same fix
+pattern as every other instance this session. Verified zero new `deno
+check` errors (31 pre-existing, unrelated TS errors identical before/after
+via git-stash).
+
+**Second, smaller bug found in the same investigation — dashboard querying
+approval-inboxes the user can't see:** `UserDashboardHome.jsx`'s
+`canOpenApprovalInbox()` matched on `resource_code`/`route_path` presence
+in the menu snapshot only, not `is_visible`. Since `/api/me/menu`
+deliberately returns *all* rows (visible **and** greyed-out, so the sidebar
+can render disabled items — a recent, intentional design change) this
+caused the dashboard to fire `HR_LEAVE_APPROVAL_INBOX`/
+`HR_OUT_WORK_APPROVAL_INBOX` queries for users whose sidebar correctly hid
+those items, generating harmless but alarming 403 console noise. Fixed by
+requiring `row.is_visible === true` in the match.
+
+**HR module fully deactivated (business owner decision, separate from the
+bug fix):** while investigating, confirmed all 8 `CAP_HR_*` capabilities
+(Leave/Out-work self-service+approval, Attendance, Correction) were
+blanket-granted across every department in every company system-wide (not
+just CMP003/CMP006/CMP010 — this was live everywhere). Business owner
+confirmed HR was never meant to be live yet — "not giving it now, will set
+it up group-wise later, same process as this doc." Deleted all 8
+capabilities' `work_context_capabilities` grants except `ACL-MASTER`. ACL
+v31 (CMP003/CMP006), v28 (CMP010). Verified: Ankan zero HR access, P0076
+still full. **When HR is formally rolled out, follow this doc's exact
+per-page/per-department process — do not re-enable via blanket capability
+grants again.**
+
+**Still open, not fixed by this pass — flagged, not resolved:**
+- `GET /api/om/cost-centers` returned 403 for Ankan even though its route
+  has `skipAcl: true` and the handler has no rank-check of its own — source
+  of the 403 not yet identified, needs its own investigation.
+- `GET /api/procurement/po-filter-options` returned 500 for Ankan; its own
+  rank-check (`assertProcurementReadRole`) is already a no-op, so this is
+  an unrelated, still-uninvestigated failure.
+Business owner directed: ship this fix first (unblocks PO creation
+end-to-end, the critical path), re-test with fresh logs, then chase these
+two separately rather than guessing ahead of evidence.
