@@ -46,6 +46,7 @@ function createEmptyLine(defaultPaymentTermId = "") {
     payment_term_id: defaultPaymentTermId,
     freight_term: "FOR",
     gst_terms: "",
+    gst_rate: "",
     remarks: "",
     has_rebate: false,
     rebate_rate: "",
@@ -88,6 +89,21 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
+        </label>
+
+        {/* §113.15 -- STO never had a GST rate source anywhere (no column on
+            this line, no material-master GST field either); captured here
+            so DO/Invoice can compute GST amount for STO the same way SO does. */}
+        <label className="grid gap-1 text-xs font-semibold text-slate-700">
+          GST Rate (%)
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={line.gst_rate}
+            onChange={(event) => onChange({ gst_rate: event.target.value })}
+            className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+          />
         </label>
 
         <label className="grid gap-1 text-xs font-semibold text-slate-700">
@@ -482,6 +498,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
           payment_term_id: line.payment_term_id,
           freight_term: line.freight_term,
           gst_terms: line.gst_terms || null,
+          gst_rate: line.gst_rate !== "" ? Number(line.gst_rate) : null,
           remarks: line.remarks.trim() || null,
           has_rebate: line.has_rebate,
           rebate_rate: line.has_rebate && line.rebate_rate !== "" ? Number(line.rebate_rate) : null,

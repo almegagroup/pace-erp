@@ -45,6 +45,7 @@ type PreparedStoLine = {
   payment_term_id: string;
   freight_term: string;
   gst_terms: string | null;
+  gst_rate: number | null;
   remarks: string | null;
   has_rebate: boolean;
   rebate_rate: number | null;
@@ -635,6 +636,7 @@ function parseStoLineInput(
     payment_term_id: paymentTermId,
     freight_term: freightTerm,
     gst_terms: toTrimmedString(line.gst_terms) || null,
+    gst_rate: parseNullableNumber(line.gst_rate),
     remarks: toTrimmedString(line.remarks) || null,
     has_rebate: hasRebate,
     rebate_rate: hasRebate ? rebateRate : null,
@@ -1138,6 +1140,8 @@ export async function createSTOHandler(
         payment_term_id: line.payment_term_id,
         freight_term: line.freight_term,
         gst_terms: line.gst_terms,
+        gst_rate: line.gst_rate,
+        gst_amount: line.gst_rate ? Number((line.quantity * line.transfer_price * line.gst_rate / 100).toFixed(4)) : null,
         remarks: line.remarks,
         has_rebate: line.has_rebate,
         rebate_rate: line.rebate_rate,
@@ -1412,6 +1416,19 @@ export async function updateSTOHandler(
           payment_term_id: line.payment_term_id !== undefined ? (toTrimmedString(line.payment_term_id) || null) : undefined,
           freight_term: line.freight_term !== undefined ? (toTrimmedString(line.freight_term) || null) : undefined,
           gst_terms: line.gst_terms !== undefined ? (toTrimmedString(line.gst_terms) || null) : undefined,
+          gst_rate: line.gst_rate !== undefined ? parseNullableNumber(line.gst_rate) : undefined,
+          // Edit forms always resubmit the whole line (qty/rate/payment_term/
+          // freight_term are already required together per handleSubmitEdit),
+          // so quantity/transfer_price are safely available here whenever
+          // gst_rate is -- no separate fetch of the pre-existing row needed.
+          gst_amount: line.gst_rate !== undefined
+            ? (() => {
+                const rate = parseNullableNumber(line.gst_rate);
+                const qty = quantity ?? parseNullableNumber(line.quantity);
+                const price = parseNullableNumber(line.transfer_price);
+                return rate && qty && price ? Number((qty * price * rate / 100).toFixed(4)) : null;
+              })()
+            : undefined,
           remarks: line.remarks !== undefined ? (toTrimmedString(line.remarks) || null) : undefined,
           has_rebate: line.has_rebate !== undefined ? line.has_rebate === true : undefined,
           rebate_rate: line.rebate_rate !== undefined ? parseNullableNumber(line.rebate_rate) : undefined,

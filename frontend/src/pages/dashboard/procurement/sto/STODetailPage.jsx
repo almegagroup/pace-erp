@@ -89,6 +89,7 @@ function buildEditState(detail) {
       payment_term_id: line.payment_term_id ?? "",
       freight_term: line.freight_term ?? "FOR",
       gst_terms: line.gst_terms ?? "",
+      gst_rate: line.gst_rate != null ? String(line.gst_rate) : "",
       remarks: line.remarks ?? "",
       has_rebate: Boolean(line.has_rebate),
       rebate_rate: line.rebate_rate ?? "",
@@ -519,6 +520,7 @@ export default function STODetailPage() {
           payment_term_id: line.payment_term_id,
           freight_term: line.freight_term,
           gst_terms: line.gst_terms || null,
+          gst_rate: line.gst_rate !== "" ? Number(line.gst_rate) : null,
           remarks: line.remarks.trim() || null,
           has_rebate: line.has_rebate,
           rebate_rate: line.has_rebate && line.rebate_rate !== "" ? Number(line.rebate_rate) : null,
@@ -1028,6 +1030,22 @@ export default function STODetailPage() {
                           <option key={option.value} value={option.value}>{option.label}</option>
                         ))}
                       </select>
+                    </label>
+                    <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                      GST Rate (%)
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={line.gst_rate}
+                        onChange={(event) =>
+                          setEditForm((current) => ({
+                            ...current,
+                            lines: current.lines.map((entry) => entry.id === line.id ? { ...entry, gst_rate: event.target.value } : entry),
+                          }))
+                        }
+                        className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                      />
                     </label>
                     <label className="grid gap-1 text-xs font-semibold text-slate-700">
                       Expected Delivery
