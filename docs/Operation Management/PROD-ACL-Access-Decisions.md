@@ -901,9 +901,115 @@ grants again.**
 - `GET /api/om/cost-centers` returned 403 for Ankan even though its route
   has `skipAcl: true` and the handler has no rank-check of its own — source
   of the 403 not yet identified, needs its own investigation.
-- `GET /api/procurement/po-filter-options` returned 500 for Ankan; its own
-  rank-check (`assertProcurementReadRole`) is already a no-op, so this is
-  an unrelated, still-uninvestigated failure.
 Business owner directed: ship this fix first (unblocks PO creation
 end-to-end, the critical path), re-test with fresh logs, then chase these
 two separately rather than guessing ahead of evidence.
+
+**✅ `po-filter-options` 500 — resolved (2026-07-29), via the new logging
+below.** Root cause: `getPoFilterOptionsHandler` (`po.handlers.ts`) used the
+literal string `"__none__"` as a "match nothing" placeholder when an
+intersected vendor/material ID set came back legitimately empty — but that
+string isn't a valid UUID, so Postgres rejected it (`22P02: invalid input
+syntax for type uuid`) instead of returning zero rows. This fired for
+**every** company today, since `vendor_company_map`/`material_company_ext`
+are both completely empty in prod (0 rows) — not a per-company issue.
+Because all three sub-queries (company/vendor/material) share one response
+and the handler throws on any sub-query error, the whole endpoint 500'd —
+including the company list, which had nothing to do with the failing
+vendor/material lookup. This is why Ankan's Company dropdown was empty too.
+Fixed (commit `841762e9`): when an ID set intersects to empty, skip the
+query entirely and return `[]` directly instead of passing an invalid
+placeholder to `.in()`. Verified `deno check` zero new errors (diff-scoped
+to the changed lines only, git-stash was not used this session per explicit
+user instruction).
+
+**Centralized backend error logging added (commit `3e3fb6b8`).**
+`_core/response.ts`'s `errorResponse()` — the one function every handler's
+error path funnels through — now logs `{event: "ERROR_RESPONSE", decision:
+<real internal code>, status, public_code, decision_trace}` before
+collapsing the code to the generic Gate-2 public message. Previously the
+client only ever saw "Request blocked by security policy" for every 4xx/5xx
+regardless of cause (deliberate, enumeration-safe design) — this made
+diagnosing anything from the outside impossible. Render logs can now be
+searched for `"ERROR_RESPONSE"` to see the real cause+route+status
+immediately, without guessing or adding one-off `console.error` calls per
+incident. This is what let the `po-filter-options` bug above get diagnosed
+directly from one pasted log line instead of another round of hypotheses.
+
+---
+
+## Data/config bugs found alongside the ACL work (2026-07-29, not ACL — logged here since they surfaced from the same incident)
+
+- **PostgREST "Exposed schemas" toggle** — `erp_production` was present in
+  Prod's Dashboard → Settings → API → Exposed schemas *list* but not
+  actually toggled on, so every `erp_production` query 500'd
+  (`PGRST106`-class failure) regardless of ACL/rank-check correctness — hit
+  first on Pack Code Master (OM08). Fixed by the business owner directly in
+  the Dashboard, no code/DB change. Matches the exact gotcha already
+  documented in `CLAUDE.md` §8 ("নতুন schema বানালে PostgREST-এ expose
+  করতে হবে") — this is the first time Production module pages were
+  actively used in prod, so it had never been caught before.
+- **`vendor_code_sequence` counter not advanced after a bulk data copy** —
+  Claude bulk-copied all 65 dev vendors directly into prod via SQL
+  (`erp_master.vendor_master`, codes V-00004 through V-00068) without also
+  advancing `erp_master.vendor_code_sequence.last_number` (still at 8 from
+  earlier testing). Next "Create Vendor" click generated V-00009 — a code
+  that already existed from the bulk copy — and hit the `vendor_code`
+  UNIQUE constraint, surfacing as a 500. Fixed by setting `last_number = 68`
+  directly (MCP, no code change). **Lesson for any future bulk copy that
+  bypasses an app-level "generate next code" RPC: always check for, and
+  advance, the matching counter/sequence table in the same pass.**
+
+---
+
+## ACL-MASTER (P0076) full-access gap — 6 resources found VIEW-only, not full CRUD (2026-07-29)
+
+Business owner challenged the earlier bug-list summary's claim that
+"ACL-MASTER gets full access everywhere" — correct catch. Verified against
+`acl.precomputed_acl_view` (auth_user_id for P0076) across every resource:
+6 resources resolved **VIEW only**, despite the code (`route-acl-registry.ts`)
+registering more actions for them.
+
+**Root cause:** these 6 resources' only access path for P0076 was one of
+the old blanket capabilities already found and narrowed-to-ACL-MASTER-only
+elsewhere in this doc (`CAP_PROC_ACCOUNTS`, `CAP_PROC_RETURNS`,
+`CAP_PROC_SALES`, `CAP_PROC_INVENTORY`) — and those capabilities'
+`acl.capability_menu_actions` rows had **only ever had VIEW configured**
+for these specific resources, predating this session entirely. Deleting the
+other departments' grants (correct, per this doc's pattern) just made
+ACL-MASTER's own pre-existing narrow grant visible for the first time.
+
+| Group | tx_code | Resource | Had | Code supports | Added |
+|---|---|---|---|---|---|
+| 7 | AC01 Invoice Verification | `PROC_IV_LIST` | VIEW | VIEW, APPROVE | APPROVE |
+| 7 | AC03 Landed Costs | `PROC_LC_LIST` | VIEW | VIEW, WRITE, EDIT, DELETE, APPROVE | WRITE, EDIT, DELETE, APPROVE |
+| 6 | PO09 Debit Notes | `PROC_DEBIT_NOTE_LIST` | VIEW | VIEW, WRITE, EDIT, APPROVE | WRITE, EDIT, APPROVE |
+| 6 | PO10 Exchange Reference | `PROC_EXCHANGE_REF_LIST` | VIEW | VIEW, WRITE | WRITE |
+| 8 | SO02 Sales Invoice | `PROC_INV_LIST` | VIEW | VIEW, WRITE, APPROVE | WRITE, APPROVE |
+| 9 | IN01 Physical Inventory | `PROC_PI_LIST` | VIEW | VIEW, WRITE, APPROVE | WRITE, APPROVE |
+
+**Checked and confirmed correct (not a gap):** AC02 Blocked Invoices
+(`PROC_BLOCKED_IV_LIST`) — the code itself only has one route (`GET`,
+VIEW) for this resource today; there is no unblock/release action wired
+anywhere, so VIEW-only for ACL-MASTER is complete, not missing anything.
+
+**Fix:** inserted the missing `(capability_code, menu_id, action)` rows
+into `acl.capability_menu_actions` for the 4 capabilities above — safe and
+scoped, since each of those capabilities is now held by ACL-MASTER only
+(every other department's grant was already deleted earlier in this doc).
+Bumped to new ACL versions (v32 CMP003/CMP006, v29 CMP010, since the
+previous versions were already captured — see the capture-once gotcha
+elsewhere in this doc), captured, `generate_acl_snapshot`'d, and rebuilt
+`erp_menu.menu_snapshot` for all of P0076's (company, work_context) pairs.
+Verified via `precomputed_acl_view`: all 6 resources now resolve the full
+action set matching what the code supports.
+
+**Lesson for future groups (RM/PM Sale, STO, FG Dispatch and beyond):**
+"ACL-MASTER still has the row, so it's fine" is not sufficient verification
+— the row surviving a blanket-capability cleanup only proves ACL-MASTER
+*had some* access before, not that it has the *full* action set the page's
+own code actually supports. Cross-check
+`select action_code from acl.precomputed_acl_view where auth_user_id = <P0076> and resource_code = 'X'`
+against the resource's actual routes in `route-acl-registry.ts` for every
+resource touched by a group's cleanup, not just the departments being
+newly designed.
