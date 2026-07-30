@@ -29,6 +29,11 @@ import {
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { createSalesOrder, listMaterialUomConversionsForProcurement } from "../procurementApi.js";
 
+const FREIGHT_TERM_OPTIONS = [
+  { value: "FOR", label: "FOR" },
+  { value: "FREIGHT_SEPARATE", label: "Freight Separate" },
+  { value: "FREIGHT_AT_ACTUALS", label: "Freight at Actuals" },
+];
 const REBATE_BASIS_OPTIONS = [
   { value: "BASE_UOM", label: "Base UOM" },
   { value: "PO_UOM", label: "PO UOM" },
@@ -49,7 +54,7 @@ function createEmptyLine() {
     rate: "",
     discount_pct: "0",
     gst_rate: "",
-    freight_term: "",
+    freight_term: "FOR",
     remarks: "",
     has_rebate: false,
     rebate_rate: "",
@@ -136,11 +141,16 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
       <div className="grid gap-4">
         <label className="grid gap-1 text-xs font-semibold text-slate-700">
           Freight Term
-          <input
+          <select
             value={line.freight_term}
             onChange={(event) => onChange({ freight_term: event.target.value })}
-            className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-          />
+            className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+          >
+            <option value="">Select freight term</option>
+            {FREIGHT_TERM_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
         </label>
         <label className="grid gap-1 text-xs font-semibold text-slate-700">
           Remarks
