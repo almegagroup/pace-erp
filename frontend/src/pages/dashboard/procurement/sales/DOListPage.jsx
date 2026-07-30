@@ -108,9 +108,13 @@ export default function DOListPage() {
             <ErpDenseGrid
               columns={[
                 { key: "dc_number", label: "DO Number", width: "140px" },
-                { key: "source_display", label: "Source", width: "120px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },
+                { key: "source_display", label: "Source", width: "100px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },
+                { key: "source_document_number", label: "SO / STO Number", width: "140px", render: (row) => row.source_document_number || "—" },
                 { key: "customer_display", label: "Customer", render: (row) => row.customer_display || "—" },
                 { key: "dc_date", label: "DO Date", width: "110px" },
+                { key: "vehicle_number", label: "Vehicle Number", width: "130px", render: (row) => row.vehicle_number || "—" },
+                { key: "transporter_display", label: "Transporter", render: (row) => row.transporter_display || "—" },
+                { key: "lr_number", label: "LR Number", width: "120px", render: (row) => row.lr_number || "—" },
                 {
                   key: "status",
                   label: "Status",

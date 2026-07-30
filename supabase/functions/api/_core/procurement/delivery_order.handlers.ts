@@ -692,6 +692,28 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     const customerMap = new Map(((customers ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
     const receivingCompanyMap = new Map(((receivingCompanies ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
+    // List page was missing source doc number, transporter, vehicle/LR --
+    // vehicle_number/lr_number are already raw columns on delivery_challan
+    // (select("*") already carries them through untouched), but the source
+    // document's own number and the transporter's name both need a join.
+    const soIds = [...new Set(rows.map((row) => toTrimmedString(row.sales_order_id)).filter(Boolean))];
+    const stoIds = [...new Set(rows.map((row) => toTrimmedString(row.sto_id)).filter(Boolean))];
+    const transporterIds = [...new Set(rows.map((row) => toTrimmedString(row.transporter_id)).filter(Boolean))];
+    const [{ data: sos }, { data: stos }, { data: transporters }] = await Promise.all([
+      soIds.length
+        ? serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number").in("id", soIds)
+        : Promise.resolve({ data: [] as JsonRecord[] }),
+      stoIds.length
+        ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number").in("id", stoIds)
+        : Promise.resolve({ data: [] as JsonRecord[] }),
+      transporterIds.length
+        ? serviceRoleClient.schema("erp_master").from("transporter_master").select("id, transporter_code, transporter_name").in("id", transporterIds)
+        : Promise.resolve({ data: [] as JsonRecord[] }),
+    ]);
+    const soMap = new Map(((sos ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+    const stoMap = new Map(((stos ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+    const transporterMap = new Map(((transporters ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+
     const items = rows.map((row) => {
       const customer = customerMap.get(toTrimmedString(row.customer_id));
       const receivingCompany = receivingCompanyMap.get(toTrimmedString(row.receiving_company_id));
@@ -700,10 +722,17 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         : receivingCompany
           ? `To: ${receivingCompany.company_code ?? receivingCompany.company_name ?? ""}`.trim()
           : null;
+      const so = soMap.get(toTrimmedString(row.sales_order_id));
+      const sto = stoMap.get(toTrimmedString(row.sto_id));
+      const transporter = transporterMap.get(toTrimmedString(row.transporter_id));
       return {
         ...row,
         source_display: row.sales_order_id ? "SALES_ORDER" : row.sto_id ? "STO" : null,
+        source_document_number: so ? so.so_number : sto ? sto.sto_number : null,
         customer_display: customerDisplay,
+        transporter_display: transporter
+          ? `${transporter.transporter_code ?? ""} — ${transporter.transporter_name ?? ""}`.trim()
+          : (toTrimmedString(row.transporter_name_freetext) || null),
       };
     });
 
