@@ -15,7 +15,7 @@
  * Authority: Frontend
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -23,7 +23,14 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import {
+  openScreen,
+  openScreenWithContext,
+  popScreen,
+  getActiveScreenContext,
+  updateActiveScreenContext,
+} from "../../../../navigation/screenStackEngine.js";
+import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { useCostCentersQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import {
@@ -31,6 +38,7 @@ import {
   listDOSourceDocuments,
   listDOSourceLines,
   listDOStorageLocationOptions,
+  listTransporters,
 } from "../procurementApi.js";
 
 function formatFixed(value, digits = 3) {
@@ -65,11 +73,17 @@ function SourcePickerDrawer({ visible, sourceType, companyId, onClose, onPick })
               key={item.id}
               type="button"
               onClick={() => onPick(item)}
-              className="grid grid-cols-[140px_110px_1fr] items-center gap-3 border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:border-sky-400 hover:bg-sky-50"
+              className="grid grid-cols-[130px_1fr_90px] items-start gap-3 border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:border-sky-400 hover:bg-sky-50"
             >
-              <span className="font-mono font-semibold text-slate-800">{item.document_number}</span>
-              <span className="text-xs text-slate-500">{item.document_date}</span>
-              <span className="truncate text-slate-700">{item.counterparty_display || "—"}</span>
+              <span className="grid gap-0.5">
+                <span className="font-mono font-semibold text-slate-800">{item.document_number}</span>
+                <span className="text-xs text-slate-500">{item.document_date}</span>
+              </span>
+              <span className="grid gap-0.5">
+                <span className="truncate text-slate-700">{item.counterparty_display || "—"}</span>
+                {item.reference_display ? <span className="truncate text-xs text-slate-500">{item.reference_display}</span> : null}
+              </span>
+              <span className="justify-self-end rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-600">{item.status}</span>
             </button>
           ))}
         </div>
@@ -105,10 +119,13 @@ function ItemPickerDrawer({ visible, sourceType, sourceId, alreadyAddedIds, onCl
               key={item.id}
               type="button"
               onClick={() => onPick(item)}
-              className="grid grid-cols-[1fr_110px] items-center gap-3 border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:border-sky-400 hover:bg-sky-50"
+              className="grid grid-cols-[1fr_130px] items-center gap-3 border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:border-sky-400 hover:bg-sky-50"
             >
               <span className="truncate text-slate-800">{item.material_display || item.material_id}</span>
-              <span className="text-right font-mono text-xs text-slate-500">{formatFixed(item.balance_qty)} {item.uom_code}</span>
+              <span className="grid justify-items-end gap-0.5">
+                <span className="font-mono text-xs font-semibold text-emerald-700">Bal {formatFixed(item.balance_qty)} {item.uom_code}</span>
+                <span className="font-mono text-[10px] text-slate-400">of {formatFixed(item.quantity)} {item.uom_code} ordered</span>
+              </span>
             </button>
           ))}
         </div>
@@ -119,20 +136,56 @@ function ItemPickerDrawer({ visible, sourceType, sourceId, alreadyAddedIds, onCl
 
 export default function DOCreatePage() {
   const navigate = useNavigate();
-  const { runtimeContext } = useMenu();
+  const { runtimeContext, allowedRoutes } = useMenu();
   const companyId = runtimeContext?.selectedCompanyId || "";
+  const canManageTransporters = isRouteAllowed(allowedRoutes ?? new Set(), "/dashboard/procurement/masters/transporters");
 
-  const [sourceType, setSourceType] = useState("SALES_ORDER");
-  const [source, setSource] = useState(null);
+  // Restored after a round-trip to "Add to Transporter Master" (§113.10 bug #6
+  // — Transporter must be a master pick like GRN's Transporter tab, not free
+  // text; the create-new detour needs this page's own state back on return).
+  const _saved = getActiveScreenContext()?.doFormValues ?? {};
+
+  const [sourceType, setSourceType] = useState(_saved.sourceType ?? "SALES_ORDER");
+  const [source, setSource] = useState(_saved.source ?? null);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [showItemPicker, setShowItemPicker] = useState(false);
-  const [costCenterId, setCostCenterId] = useState("");
-  const [lines, setLines] = useState([]);
-  const [locationOptionsByLine, setLocationOptionsByLine] = useState({});
-  const [deliveryFields, setDeliveryFields] = useState({ transporter_name_freetext: "", vehicle_number: "", lr_number: "", driver_name: "", remarks: "" });
+  const [costCenterId, setCostCenterId] = useState(_saved.costCenterId ?? "");
+  const [lines, setLines] = useState(_saved.lines ?? []);
+  const [locationOptionsByLine, setLocationOptionsByLine] = useState(_saved.locationOptionsByLine ?? {});
+  const [deliveryFields, setDeliveryFields] = useState(
+    _saved.deliveryFields ?? { vehicle_number: "", lr_number: "", driver_name: "", remarks: "" }
+  );
+  const [transporterId, setTransporterId] = useState(_saved.transporterId ?? "");
+  const [transporterName, setTransporterName] = useState(_saved.transporterName ?? "");
+  const [transporterSearch, setTransporterSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  const debounceRef = useRef(null);
+  const [debouncedTransporterSearch, setDebouncedTransporterSearch] = useState("");
+  useEffect(() => {
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedTransporterSearch(transporterSearch.trim()), 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [transporterSearch]);
+
+  const transporterQuery = useQuery({
+    queryKey: ["procurement", "transporters", "do-search", debouncedTransporterSearch, companyId],
+    queryFn: () => listTransporters({ search: debouncedTransporterSearch, company_id: companyId, limit: 20 }),
+    enabled: debouncedTransporterSearch.length >= 2,
+  });
+  const transporterResults = Array.isArray(transporterQuery.data) ? transporterQuery.data : (transporterQuery.data?.data ?? transporterQuery.data?.items ?? []);
+
+  function handleAddTransporterToMaster() {
+    updateActiveScreenContext({
+      doFormValues: {
+        sourceType, source, costCenterId, lines, locationOptionsByLine,
+        deliveryFields, transporterId, transporterName,
+      },
+    });
+    openScreen("PROC_TRANSPORTER_MASTER");
+  }
 
   const costCenterQuery = useCostCentersQuery({ company_id: companyId, active: true }, { enabled: Boolean(companyId) });
   const costCenterOptions = useMemo(
@@ -165,6 +218,7 @@ export default function DOCreatePage() {
       material_display: item.material_display,
       uom_code: item.uom_code,
       quantity: String(item.balance_qty ?? ""),
+      source_balance_qty: item.balance_qty ?? null,
       storage_location_id: "",
       available_qty: null,
     }]);
@@ -203,6 +257,10 @@ export default function DOCreatePage() {
       setError("Each line requires a quantity and a storage location.");
       return;
     }
+    if (lines.some((line) => line.source_balance_qty != null && Number(line.quantity || 0) > Number(line.source_balance_qty))) {
+      setError("A line's quantity exceeds the source document's remaining balance.");
+      return;
+    }
 
     setSaving(true);
     setError("");
@@ -213,6 +271,8 @@ export default function DOCreatePage() {
         source_id: source.id,
         cost_center_id: costCenterId,
         ...deliveryFields,
+        transporter_id: transporterId || null,
+        transporter_name_freetext: transporterId ? null : (transporterName || null),
         lines: lines.map((line) => ({
           source_line_id: line.source_line_id,
           quantity: Number(line.quantity),
@@ -235,16 +295,27 @@ export default function DOCreatePage() {
       key: "quantity",
       label: "Qty (full or partial)",
       width: "150px",
-      render: (_row, index) => (
-        <input
-          type="number"
-          min="0"
-          step="0.0001"
-          value={lines[index].quantity}
-          onChange={(event) => updateLine(index, { quantity: event.target.value })}
-          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
-        />
-      ),
+      render: (_row, index) => {
+        const line = lines[index];
+        const overBalance = line.source_balance_qty != null && Number(line.quantity || 0) > Number(line.source_balance_qty);
+        return (
+          <div className="grid gap-0.5">
+            <input
+              type="number"
+              min="0"
+              step="0.0001"
+              value={line.quantity}
+              onChange={(event) => updateLine(index, { quantity: event.target.value })}
+              className={`h-8 w-full border bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500 ${overBalance ? "border-rose-400" : "border-slate-300"}`}
+            />
+            {line.source_balance_qty != null ? (
+              <span className={`font-mono text-[10px] ${overBalance ? "text-rose-600" : "text-slate-400"}`}>
+                of {formatFixed(line.source_balance_qty)} {line.uom_code} balance
+              </span>
+            ) : null}
+          </div>
+        );
+      },
     },
     { key: "uom_code", label: "UOM", width: "70px" },
     {
@@ -350,7 +421,47 @@ export default function DOCreatePage() {
                     <input value={deliveryFields.lr_number} onChange={(event) => setDeliveryFields((current) => ({ ...current, lr_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
                   </ErpDenseFormRow>
                   <ErpDenseFormRow label="Transporter">
-                    <input value={deliveryFields.transporter_name_freetext} onChange={(event) => setDeliveryFields((current) => ({ ...current, transporter_name_freetext: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                    {transporterId && transporterName ? (
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-8 flex-1 items-center border border-emerald-300 bg-emerald-50 px-2 text-xs text-emerald-900">{transporterName}</span>
+                        <button type="button" onClick={() => { setTransporterId(""); setTransporterName(""); setTransporterSearch(""); }} className="h-8 border border-slate-300 bg-white px-2 text-[11px] font-semibold text-slate-600">Clear</button>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Type 2+ characters to search transporter master…"
+                          value={transporterSearch}
+                          onChange={(event) => setTransporterSearch(event.target.value)}
+                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+                        />
+                        {transporterSearch.trim().length >= 2 && (
+                          <div className="absolute left-0 right-0 top-full z-20 mt-0.5 max-h-52 overflow-y-auto border border-slate-200 bg-white shadow-md">
+                            {transporterQuery.isLoading && <div className="px-3 py-2 text-xs text-slate-400">Searching…</div>}
+                            {!transporterQuery.isLoading && transporterResults.length === 0 && (
+                              <div className="px-3 py-2 text-xs text-slate-500">
+                                No match found.
+                                {canManageTransporters ? (
+                                  <button type="button" onClick={handleAddTransporterToMaster} className="ml-2 text-sky-600 underline">Add to Transporter Master →</button>
+                                ) : (
+                                  <span className="ml-2 text-slate-400">(Contact manager to add)</span>
+                                )}
+                              </div>
+                            )}
+                            {transporterResults.map((t) => (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); setTransporterSearch(""); }}
+                                className="block w-full border-b border-slate-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-sky-50"
+                              >
+                                <span className="font-mono text-[10px] text-slate-500">{t.transporter_code}</span> {t.transporter_name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </ErpDenseFormRow>
                   <ErpDenseFormRow label="Driver Name">
                     <input value={deliveryFields.driver_name} onChange={(event) => setDeliveryFields((current) => ({ ...current, driver_name: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />

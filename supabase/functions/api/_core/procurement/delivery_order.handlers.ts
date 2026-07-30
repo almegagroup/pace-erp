@@ -99,7 +99,7 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
       let query = serviceRoleClient
         .schema("erp_procurement")
         .from("sales_order")
-        .select("id, so_number, so_date, customer_id, company_id, status")
+        .select("id, so_number, so_date, customer_id, customer_po_number, company_id, status")
         .in("status", ["CREATED", "ISSUED"])
         .order("created_at", { ascending: false })
         .limit(100);
@@ -115,23 +115,26 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
       const customerMap = new Map(((customers ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
       return okResponse({
-        items: rows.map((row) => ({
-          id: row.id,
-          document_number: row.so_number,
-          document_date: row.so_date,
-          counterparty_display: (() => {
-            const customer = customerMap.get(toTrimmedString(row.customer_id));
-            return customer ? `${customer.customer_code ?? ""} — ${customer.customer_name ?? ""}`.trim() : null;
-          })(),
-        })),
+        items: rows.map((row) => {
+          const customer = customerMap.get(toTrimmedString(row.customer_id));
+          return {
+            id: row.id,
+            document_number: row.so_number,
+            document_date: row.so_date,
+            status: row.status,
+            reference_display: row.customer_po_number ? `Customer PO ${row.customer_po_number}` : null,
+            counterparty_display: customer ? `${customer.customer_code ?? ""} — ${customer.customer_name ?? ""}`.trim() : null,
+          };
+        }),
       }, ctx.request_id, req);
     }
 
-    // STO
+    // STO — §113.10 fix: bare receiving-company name gave almost no context
+    // to pick from (no sending company, no type, no status).
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("stock_transfer_order")
-      .select("id, sto_number, sto_date, receiving_company_id, sending_company_id, status")
+      .select("id, sto_number, sto_date, receiving_company_id, sending_company_id, sto_type, status")
       .in("status", ["CREATED", "DISPATCHED"])
       .order("created_at", { ascending: false })
       .limit(100);
@@ -140,22 +143,31 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
     if (error) return doErrorResponse(req, ctx, "DO_SOURCE_LIST_FAILED", 500, "Unable to list source STOs.");
 
     const rows = (data ?? []) as JsonRecord[];
-    const companyIds = [...new Set(rows.map((row) => toTrimmedString(row.receiving_company_id)).filter(Boolean))];
+    const companyIds = [...new Set([
+      ...rows.map((row) => toTrimmedString(row.sending_company_id)),
+      ...rows.map((row) => toTrimmedString(row.receiving_company_id)),
+    ].filter(Boolean))];
     const { data: companies } = companyIds.length
       ? await serviceRoleClient.schema("erp_master").from("companies").select("id, company_name, company_code").in("id", companyIds)
       : { data: [] as JsonRecord[] };
     const companyMap = new Map(((companies ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
     return okResponse({
-      items: rows.map((row) => ({
-        id: row.id,
-        document_number: row.sto_number,
-        document_date: row.sto_date,
-        counterparty_display: (() => {
-          const company = companyMap.get(toTrimmedString(row.receiving_company_id));
-          return company ? String(company.company_name ?? company.company_code ?? "") : null;
-        })(),
-      })),
+      items: rows.map((row) => {
+        const sending = companyMap.get(toTrimmedString(row.sending_company_id));
+        const receiving = companyMap.get(toTrimmedString(row.receiving_company_id));
+        return {
+          id: row.id,
+          document_number: row.sto_number,
+          document_date: row.sto_date,
+          status: row.status,
+          reference_display: row.sto_type,
+          counterparty_display: [
+            sending ? `From ${sending.company_code ?? sending.company_name}` : null,
+            receiving ? `To ${receiving.company_code ?? receiving.company_name}` : null,
+          ].filter(Boolean).join(" — ") || null,
+        };
+      }),
     }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_SOURCE_LIST_FAILED";
@@ -254,9 +266,13 @@ export async function listDOStorageLocationOptionsHandler(req: Request, ctx: Pro
 
     const rows = (data ?? []) as JsonRecord[];
     const locationIds = [...new Set(rows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
-    const { data: locations } = locationIds.length
-      ? await serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
-      : { data: [] as JsonRecord[] };
+    // storage_location_master's real columns are "code"/"name" — the
+    // earlier "location_code"/"location_name" query silently failed
+    // (error was never checked) and left every option blank.
+    const { data: locations, error: locationError } = locationIds.length
+      ? await serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (locationError) return doErrorResponse(req, ctx, "DO_LOCATION_LOOKUP_FAILED", 500, "Unable to resolve storage location names.");
     const locationMap = new Map(((locations ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
     return okResponse({
@@ -264,7 +280,7 @@ export async function listDOStorageLocationOptionsHandler(req: Request, ctx: Pro
         const location = locationMap.get(toTrimmedString(row.storage_location_id));
         return {
           storage_location_id: row.storage_location_id,
-          location_display: location ? `${location.location_code ?? ""} — ${location.location_name ?? ""}`.trim() : null,
+          location_display: location ? `${location.code ?? ""} — ${location.name ?? ""}`.trim() : null,
           on_hand_qty: row.quantity,
         };
       }),
