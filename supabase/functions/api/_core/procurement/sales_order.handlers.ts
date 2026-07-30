@@ -162,7 +162,7 @@ async function assertCustomerMappedToCompany(customerId: string, companyId: stri
   }
 }
 
-type PackagingCostInput = {
+export type PackagingCostInput = {
   basis: string | null;
   rate: number | null;
   gstTreatment: string | null;
@@ -177,7 +177,10 @@ function computePackagingCost(input: PackagingCostInput, quantity: number): numb
 }
 
 // §113.9 — packaging cost formula, three GST-treatment branches.
-function computeLineValues(params: {
+// Exported so delivery_order.handlers.ts's DO create can recompute the same
+// values at the DO's own (possibly partial-dispatch) quantity, not just
+// copy the source line's full-quantity totals verbatim (§113.13).
+export function computeLineValues(params: {
   rate: number;
   discountPct: number;
   quantity: number;
@@ -231,12 +234,17 @@ function computeLineValues(params: {
 
 // §113.5 — line-level lock: a line is frozen once any DO (delivery_challan_line)
 // references it. Derived, not stored — no sync-drift risk.
+// §113.15 -- a cancelled DO (delivery_challan.status = CANCELLED, the new
+// pre-PGI DO reversal) must release the SO line it was locking, otherwise
+// "reverse the DO to edit header fields" (the error message below) would be
+// false -- the line would stay locked forever even after the DO is gone.
 async function fetchLockedSoLineIds(soId: string): Promise<Set<string>> {
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
     .from("delivery_challan_line")
-    .select("so_line_id, delivery_challan!inner(sales_order_id)")
-    .eq("delivery_challan.sales_order_id", soId);
+    .select("so_line_id, delivery_challan!inner(sales_order_id, status)")
+    .eq("delivery_challan.sales_order_id", soId)
+    .neq("delivery_challan.status", "CANCELLED");
 
   if (error) {
     throw new Error("SO_DO_LOCK_LOOKUP_FAILED");

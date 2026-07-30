@@ -252,6 +252,7 @@ import {
   updateSOLinesHandler,
 } from "../_core/procurement/sales_order.handlers.ts";
 import {
+  cancelDeliveryOrderHandler,
   createDeliveryOrderHandler,
   getDeliveryOrderHandler,
   listDeliveryOrdersHandler,
@@ -882,6 +883,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/delivery-orders\/[^/]+$/.test(pathname) && req.method === "GET") {
     return await getDeliveryOrderHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/delivery-orders\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+    return await cancelDeliveryOrderHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/sales-orders\/[^/]+\/lines$/.test(pathname) && req.method === "PATCH") {

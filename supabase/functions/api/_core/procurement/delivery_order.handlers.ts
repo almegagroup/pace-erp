@@ -20,6 +20,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { computeLineValues, type PackagingCostInput } from "./sales_order.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -177,13 +178,18 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
 
 // §113.5 — lines already referenced by a delivery_challan_line are locked;
 // only truly-open lines are offered in the DO line picker.
+// A line stays locked only while the DO referencing it is still live --
+// cancelling a DO (delivery_challan.status = CANCELLED) must free its
+// source line back up for a new DO, so a CANCELLED parent is excluded here
+// rather than only checking delivery_challan_line's own existence.
 async function fetchLockedLineIds(column: "so_line_id" | "sto_line_id", lineIds: string[]): Promise<Set<string>> {
   if (lineIds.length === 0) return new Set();
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
     .from("delivery_challan_line")
-    .select(column)
-    .in(column, lineIds);
+    .select(`${column}, delivery_challan!inner(status)`)
+    .in(column, lineIds)
+    .neq("delivery_challan.status", "CANCELLED");
   if (error) throw new Error("DO_LOCK_LOOKUP_FAILED");
   return new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row[column])).filter(Boolean));
 }
@@ -430,15 +436,50 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
       preparedLines.push({ sourceLine, quantity, storageLocationId });
     }
 
+    // §113.13 — DO carries a full commercial snapshot (rate/GST/packaging
+    // cost/rebate) copied from the source line, recomputed at the DO's own
+    // (possibly partial-dispatch) quantity rather than copying the source
+    // line's full-quantity totals verbatim. Safe to do once, at create time,
+    // because a line with a DO against it freezes (§113.5) -- the source
+    // commercial fields can't change out from under this snapshot afterward.
+    // STO has no packaging-cost mechanism (§113.9 was SO-only), so it always
+    // computes with an empty PackagingCostInput.
+    const commercialByLine = preparedLines.map(({ sourceLine, quantity }) => {
+      const rate = Number((isSalesOrder ? sourceLine.net_rate : sourceLine.transfer_price) ?? 0);
+      const packaging: PackagingCostInput = isSalesOrder
+        ? {
+            basis: (sourceLine.packaging_cost_basis as string | null) ?? null,
+            rate: sourceLine.packaging_cost_rate != null ? Number(sourceLine.packaging_cost_rate) : null,
+            gstTreatment: (sourceLine.packaging_gst_treatment as string | null) ?? null,
+            customGstRate: sourceLine.packaging_gst_rate != null ? Number(sourceLine.packaging_gst_rate) : null,
+          }
+        : { basis: null, rate: null, gstTreatment: null, customGstRate: null };
+      return computeLineValues({
+        rate,
+        discountPct: isSalesOrder ? Number(sourceLine.discount_pct ?? 0) : 0,
+        quantity,
+        materialGstRate: sourceLine.gst_rate != null ? Number(sourceLine.gst_rate) : null,
+        packaging,
+      });
+    });
+
     // Real gap caught live 2026-07-30: total_value was never written anywhere
     // in this handler, so DOListPage always showed 0.00. Computed here (not
     // as a follow-up UPDATE) since every line's rate is already known before
     // the header insert -- one round trip, not two.
-    const totalValue = Number(
-      preparedLines
-        .reduce((sum, { sourceLine, quantity }) => sum + quantity * Number((isSalesOrder ? sourceLine.net_rate : sourceLine.transfer_price) ?? 0), 0)
-        .toFixed(4),
-    );
+    const totalValue = Number(commercialByLine.reduce((sum, c) => sum + c.totalValue, 0).toFixed(4));
+
+    // freight_term/payment_term_id are per-line on both sales_order_line and
+    // stock_transfer_order_line (payment_term_id is header-level on SO,
+    // per-line on STO) -- DO stores them once at header level, same
+    // simplification already made for cost_center_id. Taken from the first
+    // prepared line; a DO's lines all come from one source document, so in
+    // practice these don't vary within a single DO.
+    const firstSourceLine = preparedLines[0]?.sourceLine;
+    const headerFreightTerm = toTrimmedString(firstSourceLine?.freight_term) || null;
+    const headerPaymentTermId = isSalesOrder
+      ? toTrimmedString(source.payment_term_id) || null
+      : toTrimmedString(firstSourceLine?.payment_term_id) || null;
 
     const dcNumber = await generateProcurementDocNumber("DC");
     const { data: dc, error: dcError } = await serviceRoleClient
@@ -454,6 +495,8 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
         sto_id: isSalesOrder ? null : sourceId,
         sales_order_id: isSalesOrder ? sourceId : null,
         cost_center_id: costCenterId,
+        freight_term: headerFreightTerm,
+        payment_term_id: headerPaymentTermId,
         delivery_address: toTrimmedString(body.delivery_address) || null,
         transporter_id: toTrimmedString(body.transporter_id) || null,
         transporter_name_freetext: toTrimmedString(body.transporter_name_freetext) || null,
@@ -478,6 +521,7 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
     // material+location is still possible without doing this sequentially).
     for (let index = 0; index < preparedLines.length; index += 1) {
       const { sourceLine, quantity, storageLocationId } = preparedLines[index];
+      const commercial = commercialByLine[index];
 
       const { error: dcLineError } = await serviceRoleClient
         .schema("erp_procurement")
@@ -491,8 +535,19 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
           quantity,
           uom_code: sourceLine.uom_code,
           unit_value: isSalesOrder ? sourceLine.net_rate : sourceLine.transfer_price,
-          line_total: Number((quantity * Number(isSalesOrder ? sourceLine.net_rate : sourceLine.transfer_price ?? 0)).toFixed(4)),
+          line_total: commercial.totalValue,
           storage_location_id: storageLocationId,
+          gst_rate: sourceLine.gst_rate != null ? Number(sourceLine.gst_rate) : null,
+          gst_amount: commercial.gstAmount,
+          packaging_cost_basis: isSalesOrder ? (sourceLine.packaging_cost_basis as string | null) ?? null : null,
+          packaging_cost_rate: isSalesOrder && sourceLine.packaging_cost_rate != null ? Number(sourceLine.packaging_cost_rate) : null,
+          packaging_cost_amount: commercial.packagingCostAmount,
+          packaging_gst_treatment: isSalesOrder ? (sourceLine.packaging_gst_treatment as string | null) ?? null : null,
+          packaging_gst_rate: isSalesOrder && sourceLine.packaging_gst_rate != null ? Number(sourceLine.packaging_gst_rate) : null,
+          has_rebate: sourceLine.has_rebate === true,
+          rebate_rate: sourceLine.has_rebate === true && sourceLine.rebate_rate != null ? Number(sourceLine.rebate_rate) : null,
+          rebate_rate_uom_basis: sourceLine.has_rebate === true ? (sourceLine.rebate_rate_uom_basis as string | null) ?? null : null,
+          rebate_remarks: sourceLine.has_rebate === true ? (sourceLine.rebate_remarks as string | null) ?? null : null,
         });
       if (dcLineError) {
         return doErrorResponse(req, ctx, "DO_LINE_CREATE_FAILED", 500, "Unable to create delivery order line.");
@@ -534,6 +589,112 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
       : code === "DO_LINE_LOCKED" ? 409
       : ["DO_QTY_EXCEEDS_BALANCE", "INSUFFICIENT_STOCK", "DO_CREATE_INVALID", "DO_LINE_INVALID"].includes(code) ? 400
       : 500;
+    return doErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// §113.15 -- pre-PGI DO reversal, deliberately a SEPARATE handler/route/ACL
+// action from createDeliveryOrderHandler (business owner requirement: cancel
+// authority must be grantable to a different role than create authority,
+// later, without touching this handler). Whole-DO only, not per-line --
+// matches PO/STO's own whole-document cancel shape. Only valid pre-PGI
+// (status CREATED); once DISPATCHED, the reverse path is Invoice reversal
+// instead (reverseSalesInvoiceHandler), which also unwinds the DO.
+export async function cancelDeliveryOrderHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const dcId = getIdFromPath(req);
+    if (!dcId) return doErrorResponse(req, ctx, "DO_ID_REQUIRED", 400, "Delivery order id is required.");
+    const body = await parseBody(req);
+    const reason = toTrimmedString(body.reason);
+    if (!reason) return doErrorResponse(req, ctx, "DO_CANCEL_REASON_REQUIRED", 400, "Cancellation reason is required.");
+
+    const { data: dc, error: dcError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("delivery_challan")
+      .select("*")
+      .eq("id", dcId)
+      .single();
+    if (dcError || !dc) return doErrorResponse(req, ctx, "DO_NOT_FOUND", 404, "Delivery order not found.");
+    try {
+      await assertCompanyScope(ctx, toTrimmedString(dc.selling_company_id));
+    } catch {
+      return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (toUpperTrimmedString(dc.status) !== "CREATED") {
+      return doErrorResponse(req, ctx, "DO_CANCEL_BLOCKED", 400, "Only a DO that has not yet been PGI'd/invoiced can be cancelled directly -- reverse the Invoice instead.");
+    }
+
+    const { data: dcLines, error: dcLinesError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("delivery_challan_line")
+      .select("so_line_id, sto_line_id, material_id, quantity")
+      .eq("dc_id", dcId);
+    if (dcLinesError) return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load delivery order lines.");
+    const lineRows = (dcLines ?? []) as JsonRecord[];
+    const sourceLineIds = lineRows.map((row) => toTrimmedString(row.so_line_id) || toTrimmedString(row.sto_line_id)).filter(Boolean);
+
+    const nowIso = new Date().toISOString();
+    const { error: dcUpdateError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("delivery_challan")
+      .update({
+        status: "CANCELLED",
+        cancellation_reason: reason,
+        cancelled_by: ctx.auth_user_id,
+        cancelled_at: nowIso,
+      })
+      .eq("id", dcId);
+    if (dcUpdateError) return doErrorResponse(req, ctx, "DO_CANCEL_FAILED", 500, "Unable to cancel delivery order.");
+
+    // Release the reservation so the SO/STO line becomes pickable by a new
+    // DO again (fetchLockedLineIds/fetchLockedSoLineIds both now exclude
+    // CANCELLED delivery_challan rows, so the line itself unlocks the
+    // moment this update lands -- this just frees the stock hold).
+    if (sourceLineIds.length > 0) {
+      const { error: reservationError } = await serviceRoleClient
+        .schema("erp_production")
+        .from("reservation_document")
+        .update({ status: "CANCELLED", last_updated_by: ctx.auth_user_id, last_updated_at: nowIso })
+        .in("source_line_id", sourceLineIds)
+        .in("status", RESERVATION_OPEN_STATUSES);
+      if (reservationError) return doErrorResponse(req, ctx, "DO_RESERVATION_RELEASE_FAILED", 500, "Unable to release reservation for cancelled delivery order.");
+    }
+
+    // STO-sourced: undo the CSN dispatch-qty sync this DO made at create
+    // time (upsertCsnDispatch) -- no real dispatch ever happened, cancel is
+    // strictly pre-PGI. Status (ORD->TRN) is deliberately left alone --
+    // other CSN activity may have happened since, and reverting it isn't
+    // safe to infer from this cancel alone.
+    if (toUpperTrimmedString(dc.dc_type) === "STO" && dc.sto_id) {
+      for (const row of lineRows) {
+        const materialId = toTrimmedString(row.material_id);
+        const quantity = Number(row.quantity ?? 0);
+        if (!materialId || quantity <= 0) continue;
+        const { data: csn, error: csnError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("consignment_note")
+          .select("id, total_dispatch_qty")
+          .eq("sto_id", String(dc.sto_id))
+          .eq("material_id", materialId)
+          .in("status", ["ORD", "TRN", "GED"])
+          .maybeSingle();
+        if (csnError) return doErrorResponse(req, ctx, "DO_CSN_LOOKUP_FAILED", 500, "Unable to look up linked CSN.");
+        if (!csn) continue;
+        const nextTotal = Math.max(0, Number(csn.total_dispatch_qty ?? 0) - quantity);
+        const { error: csnUpdateError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("consignment_note")
+          .update({ total_dispatch_qty: Number(nextTotal.toFixed(6)), last_updated_by: ctx.auth_user_id, last_updated_at: nowIso })
+          .eq("id", String(csn.id));
+        if (csnUpdateError) return doErrorResponse(req, ctx, "DO_CSN_DISPATCH_UNDO_FAILED", 500, "Unable to undo CSN dispatch-qty sync.");
+      }
+    }
+
+    return okResponse(await hydrateDeliveryOrder(dcId), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "DO_CANCEL_FAILED";
+    const status = code === "DO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") || code.includes("BLOCKED") ? 400 : 500;
     return doErrorResponse(req, ctx, code, status, code);
   }
 }

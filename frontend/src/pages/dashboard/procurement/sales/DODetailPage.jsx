@@ -5,18 +5,23 @@
  * Authority: Frontend
  */
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { getActiveScreenContext } from "../../../../navigation/screenStackEngine.js";
-import { getDeliveryOrder } from "../procurementApi.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
+import { cancelDeliveryOrder, getDeliveryOrder } from "../procurementApi.js";
 
 export default function DODetailPage() {
   const routeParams = useParams();
   const routeId = routeParams.id;
   const id = routeId && routeId !== ":id" ? routeId : getActiveScreenContext()?.id;
+  const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [notice, setNotice] = useState("");
 
   const doQuery = useQuery({
     queryKey: ["procurement", "delivery-order", id],
@@ -27,12 +32,40 @@ export default function DODetailPage() {
   const data = doQuery.data ?? {};
   const lines = Array.isArray(data.lines) ? data.lines : [];
 
+  // §113.15 -- DO cancel only valid pre-PGI (status CREATED); once
+  // DISPATCHED, reversal happens through the Invoice instead.
+  const canCancel = data.status === "CREATED";
+
+  async function handleCancel() {
+    const reason = await openActionPrompt({ eyebrow: "Delivery Order", title: "Cancel this DO?", label: "Cancellation reason", required: true });
+    if (!reason) return;
+    setSaving(true);
+    setActionError("");
+    setNotice("");
+    try {
+      await cancelDeliveryOrder(id, { reason });
+      setNotice("Delivery order cancelled.");
+      await doQuery.refetch();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "PROCUREMENT_DO_CANCEL_FAILED");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <ErpScreenScaffold
       eyebrow="Procurement"
       title={data.dc_number ? `Delivery Order — ${data.dc_number}` : "Delivery Order"}
-      actions={[{ key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() }]}
-      notices={doQuery.error ? [{ key: "do-detail-error", tone: "error", message: doQuery.error instanceof Error ? doQuery.error.message : "PROCUREMENT_DO_FETCH_FAILED" }] : []}
+      actions={[
+        { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
+        ...(canCancel ? [{ key: "cancel", label: saving ? "Cancelling..." : "Cancel DO", tone: "danger", onClick: () => void handleCancel(), disabled: saving }] : []),
+      ]}
+      notices={[
+        ...(doQuery.error ? [{ key: "do-detail-error", tone: "error", message: doQuery.error instanceof Error ? doQuery.error.message : "PROCUREMENT_DO_FETCH_FAILED" }] : []),
+        ...(actionError ? [{ key: "do-action-error", tone: "error", message: actionError }] : []),
+        ...(notice ? [{ key: "do-action-notice", tone: "success", message: notice }] : []),
+      ]}
     >
       {doQuery.isLoading ? (
         <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">Loading delivery order...</div>
@@ -49,6 +82,9 @@ export default function DODetailPage() {
               <div><span className="text-xs text-slate-500">Driver Name</span><div>{data.driver_name || "—"}</div></div>
               <div><span className="text-xs text-slate-500">Transporter</span><div>{data.transporter_display || "—"}</div></div>
               <div><span className="text-xs text-slate-500">Cost Center</span><div>{data.cost_center_display || "—"}</div></div>
+              {data.status === "CANCELLED" ? (
+                <div className="md:col-span-3"><span className="text-xs text-slate-500">Cancellation Reason</span><div>{data.cancellation_reason || "—"}</div></div>
+              ) : null}
             </div>
           </ErpSectionCard>
 

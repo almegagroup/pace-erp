@@ -759,6 +759,14 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { GET: { skipAcl: false, resourceCode: "PROC_DO_LIST", action: "VIEW" } },
   },
   {
+    // §113.15 -- deliberately its own action (EDIT, same shape as PO/STO's
+    // own cancel/knock-off) rather than reusing DO create's WRITE action, so
+    // cancel authority can be granted to a different role than create
+    // authority later without touching this handler.
+    pattern: /^\/api\/procurement\/delivery-orders\/[^/]+\/cancel$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" } },
+  },
+  {
     pattern: /^\/api\/procurement\/sales-orders\/[^/]+\/cancel$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "EDIT" } },
   },

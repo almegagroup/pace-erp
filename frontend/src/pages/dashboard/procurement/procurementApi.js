@@ -831,6 +831,10 @@ export function createDeliveryOrder(data) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders", data);
 }
 
+export function cancelDeliveryOrder(id, data) {
+  return fetchProcurement("POST", `/api/procurement/delivery-orders/${encodeURIComponent(id)}/cancel`, data);
+}
+
 export function listDOSourceDocuments(params) {
   return fetchProcurement("GET", "/api/procurement/delivery-orders/source-documents", undefined, params);
 }
