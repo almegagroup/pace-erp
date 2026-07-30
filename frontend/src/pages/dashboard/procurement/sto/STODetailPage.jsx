@@ -216,7 +216,14 @@ export default function STODetailPage() {
     && detail.amendment_log.some((row) => row.requires_approval === true && String(row.approval_status || "").toUpperCase() === "PENDING");
   const canEdit = String(detail?.status || "").toUpperCase() === "DRAFT";
   const canConfirmForApproval = String(detail?.status || "").toUpperCase() === "DRAFT";
-  const canAmend = String(detail?.status || "").toUpperCase() === "CREATED";
+  // §113 Task D fix: backend's amendSTOHandler already allows CREATED *and*
+  // PENDING_APPROVAL (qty/rate changes just need their own approval) — the
+  // frontend button was only checking CREATED, so there was no way to fix a
+  // mistake while an STO sat waiting for approval. Blocked while an earlier
+  // amendment is itself still awaiting approval, to avoid stacking two
+  // unresolved amendments on the same STO.
+  const canAmend = ["CREATED", "PENDING_APPROVAL"].includes(String(detail?.status || "").toUpperCase())
+    && !hasPendingAmendment;
   const canApproveAmendment = String(detail?.status || "").toUpperCase() === "PENDING_APPROVAL" && canApprove && hasPendingAmendment;
   const canConfirmReceipt =
     String(detail?.status || "").toUpperCase() === "DISPATCHED" &&
