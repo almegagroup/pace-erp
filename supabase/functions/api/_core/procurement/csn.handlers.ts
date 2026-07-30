@@ -1015,7 +1015,11 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     return {
       ...row,
       po_number: po?.po_number ?? null,
-      po_date: po?.po_date ?? null,
+      // §113 fix: STO-sourced CSNs have no po_id, so this stayed blank for
+      // every inter-plant row even though sto_date was already resolved
+      // right below — mirrors display_reference_number's existing
+      // sto-falls-back-to-po pattern.
+      po_date: po?.po_date ?? sto?.sto_date ?? null,
       sto_number: sto?.sto_number ?? null,
       sto_date: sto?.sto_date ?? null,
       display_reference_number: sto?.sto_number ?? po?.po_number ?? null,
