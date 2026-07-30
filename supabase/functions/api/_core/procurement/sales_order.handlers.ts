@@ -30,6 +30,9 @@ const SO_STATUSES = new Set(["CREATED", "ISSUED", "INVOICED", "CLOSED", "CANCELL
 const SO_LINE_STATUSES = new Set(["OPEN", "PARTIALLY_ISSUED", "FULLY_ISSUED", "KNOCKED_OFF", "CANCELLED"]);
 const SALES_INVOICE_STATUSES = new Set(["DRAFT", "POSTED"]);
 const GST_TYPES = new Set(["CGST_SGST", "IGST"]);
+const REBATE_BASIS_VALUES = new Set(["BASE_UOM", "PO_UOM"]);
+const PACKAGING_BASIS_VALUES = new Set(["FLAT", "PER_KG"]);
+const PACKAGING_GST_TREATMENTS = new Set(["NO_GST", "SAME_AS_MATERIAL", "CUSTOM"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -131,10 +134,119 @@ async function fetchMaterial(materialId: string): Promise<JsonRecord> {
 async function assertSalesMaterial(materialId: string): Promise<JsonRecord> {
   const material = await fetchMaterial(materialId);
   const materialType = toUpperTrimmedString(material.material_type);
-  if (!["RM", "PM"].includes(materialType)) {
+  // §113.1 — SO01 phase-1 scope is RM/PM/INT; FG dispatch is a separate future module.
+  if (!["RM", "PM", "INT"].includes(materialType)) {
     throw new Error("ONLY_RM_PM_ALLOWED");
   }
   return material;
+}
+
+// §113.6 — a customer must be mapped to the SO's own company, not just
+// exist anywhere in the system. customer_company_map is the source of truth
+// (see om/customer.handlers.ts's mapCustomerToCompanyHandler).
+async function assertCustomerMappedToCompany(customerId: string, companyId: string): Promise<void> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("customer_company_map")
+    .select("customer_id")
+    .eq("customer_id", customerId)
+    .eq("company_id", companyId)
+    .eq("active", true)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("SO_CUSTOMER_COMPANY_MAP_LOOKUP_FAILED");
+  }
+  if (!data) {
+    throw new Error("CUSTOMER_NOT_MAPPED_TO_COMPANY");
+  }
+}
+
+type PackagingCostInput = {
+  basis: string | null;
+  rate: number | null;
+  gstTreatment: string | null;
+  customGstRate: number | null;
+};
+
+function computePackagingCost(input: PackagingCostInput, quantity: number): number {
+  if (!input.basis || input.rate === null) {
+    return 0;
+  }
+  return input.basis === "PER_KG" ? input.rate * quantity : input.rate;
+}
+
+// §113.9 — packaging cost formula, three GST-treatment branches.
+function computeLineValues(params: {
+  rate: number;
+  discountPct: number;
+  quantity: number;
+  materialGstRate: number | null;
+  packaging: PackagingCostInput;
+}): {
+  netRate: number;
+  packagingCostAmount: number;
+  taxableValue: number;
+  gstAmount: number;
+  totalValue: number;
+} {
+  const { rate, discountPct, quantity, materialGstRate, packaging } = params;
+  const netRate = Number((rate * (1 - discountPct / 100)).toFixed(4));
+  const baseValue = Number((netRate * quantity).toFixed(4));
+  const packagingCostAmount = Number(computePackagingCost(packaging, quantity).toFixed(4));
+  const gstRate = materialGstRate ?? 0;
+
+  if (packagingCostAmount <= 0 || packaging.gstTreatment === "NO_GST" || !packaging.gstTreatment) {
+    const taxableValue = baseValue;
+    const gstAmount = Number((taxableValue * gstRate / 100).toFixed(4));
+    return {
+      netRate,
+      packagingCostAmount,
+      taxableValue,
+      gstAmount,
+      totalValue: Number((taxableValue + gstAmount + packagingCostAmount).toFixed(4)),
+    };
+  }
+
+  if (packaging.gstTreatment === "SAME_AS_MATERIAL") {
+    const taxableValue = Number((baseValue + packagingCostAmount).toFixed(4));
+    const gstAmount = Number((taxableValue * gstRate / 100).toFixed(4));
+    return { netRate, packagingCostAmount, taxableValue, gstAmount, totalValue: Number((taxableValue + gstAmount).toFixed(4)) };
+  }
+
+  // CUSTOM
+  const packagingGstRate = packaging.customGstRate ?? 0;
+  const baseGstAmount = Number((baseValue * gstRate / 100).toFixed(4));
+  const packagingGstAmount = Number((packagingCostAmount * packagingGstRate / 100).toFixed(4));
+  const taxableValue = Number((baseValue + packagingCostAmount).toFixed(4));
+  const gstAmount = Number((baseGstAmount + packagingGstAmount).toFixed(4));
+  return {
+    netRate,
+    packagingCostAmount,
+    taxableValue,
+    gstAmount,
+    totalValue: Number((baseValue + packagingCostAmount + baseGstAmount + packagingGstAmount).toFixed(4)),
+  };
+}
+
+// §113.5 — line-level lock: a line is frozen once any DO (delivery_challan_line)
+// references it. Derived, not stored — no sync-drift risk.
+async function fetchLockedSoLineIds(soId: string): Promise<Set<string>> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("delivery_challan_line")
+    .select("so_line_id, delivery_challan!inner(sales_order_id)")
+    .eq("delivery_challan.sales_order_id", soId);
+
+  if (error) {
+    throw new Error("SO_DO_LOCK_LOOKUP_FAILED");
+  }
+
+  return new Set(
+    ((data ?? []) as JsonRecord[])
+      .map((row) => toTrimmedString(row.so_line_id))
+      .filter(Boolean),
+  );
 }
 
 async function fetchSo(soId: string): Promise<SoRow> {
@@ -440,6 +552,7 @@ export async function createSOHandler(
     } catch {
       return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    await assertCustomerMappedToCompany(customerId, companyId);
 
     const linePayload: JsonRecord[] = [];
     for (let index = 0; index < lines.length; index += 1) {
@@ -449,35 +562,68 @@ export async function createSOHandler(
       const rate = parsePositiveNumber(line.rate);
       const discountPct = parseNullableNumber(line.discount_pct) ?? 0;
       const gstRate = parseNullableNumber(line.gst_rate);
-      const issueStorageLocationId = toTrimmedString(line.issue_storage_location_id) || null;
+      const freightTerm = toTrimmedString(line.freight_term) || null;
+      const remarks = toTrimmedString(line.remarks) || null;
+      const hasRebate = Boolean(line.has_rebate);
+      const rebateRate = hasRebate ? parseNullableNumber(line.rebate_rate) : null;
+      const rebateBasis = hasRebate ? toTrimmedString(line.rebate_rate_uom_basis).toUpperCase() || null : null;
+      const rebateRemarks = hasRebate ? toTrimmedString(line.rebate_remarks) || null : null;
+      const packagingBasis = toTrimmedString(line.packaging_cost_basis).toUpperCase() || null;
+      const packagingRate = parseNullableNumber(line.packaging_cost_rate);
+      const packagingGstTreatment = toTrimmedString(line.packaging_gst_treatment).toUpperCase() || null;
+      const packagingCustomGstRate = parseNullableNumber(line.packaging_gst_rate);
 
       if (!materialId || !quantity || !rate) {
         return salesErrorResponse(req, ctx, "SO_LINE_INVALID", 400, `material_id, quantity, and rate are required for line ${index + 1}.`);
       }
-
       if (discountPct < 0 || discountPct > 100) {
         return salesErrorResponse(req, ctx, "SO_DISCOUNT_INVALID", 400, `discount_pct must be between 0 and 100 for line ${index + 1}.`);
       }
+      if (hasRebate && rebateBasis && !REBATE_BASIS_VALUES.has(rebateBasis)) {
+        return salesErrorResponse(req, ctx, "SO_REBATE_BASIS_INVALID", 400, `Invalid rebate basis for line ${index + 1}.`);
+      }
+      if (packagingBasis && !PACKAGING_BASIS_VALUES.has(packagingBasis)) {
+        return salesErrorResponse(req, ctx, "SO_PACKAGING_BASIS_INVALID", 400, `Invalid packaging cost basis for line ${index + 1}.`);
+      }
+      if (packagingGstTreatment && !PACKAGING_GST_TREATMENTS.has(packagingGstTreatment)) {
+        return salesErrorResponse(req, ctx, "SO_PACKAGING_GST_TREATMENT_INVALID", 400, `Invalid packaging GST treatment for line ${index + 1}.`);
+      }
+      if (packagingGstTreatment === "CUSTOM" && packagingCustomGstRate === null) {
+        return salesErrorResponse(req, ctx, "SO_PACKAGING_GST_RATE_REQUIRED", 400, `Custom packaging GST rate is required for line ${index + 1}.`);
+      }
 
       const material = await assertSalesMaterial(materialId);
-      const netRate = Number((rate * (1 - discountPct / 100)).toFixed(4));
-      const taxableValue = Number((netRate * quantity).toFixed(4));
-      const gstAmount = gstRate !== null ? Number((taxableValue * gstRate / 100).toFixed(4)) : null;
-      const totalValue = Number((taxableValue + (gstAmount ?? 0)).toFixed(4));
+      const computed = computeLineValues({
+        rate,
+        discountPct,
+        quantity,
+        materialGstRate: gstRate,
+        packaging: { basis: packagingBasis, rate: packagingRate, gstTreatment: packagingGstTreatment, customGstRate: packagingCustomGstRate },
+      });
 
       linePayload.push({
         line_number: index + 1,
         material_id: materialId,
-        issue_storage_location_id: issueStorageLocationId,
         quantity,
         uom_code: toTrimmedString(line.uom_code) || toTrimmedString(material.base_uom_code),
         rate,
         discount_pct: discountPct,
-        net_rate: netRate,
+        net_rate: computed.netRate,
         gst_rate: gstRate,
-        gst_amount: gstAmount,
-        total_value: totalValue,
+        gst_amount: computed.gstAmount,
+        total_value: computed.totalValue,
         balance_qty: quantity,
+        freight_term: freightTerm,
+        remarks,
+        has_rebate: hasRebate,
+        rebate_rate: rebateRate,
+        rebate_rate_uom_basis: rebateBasis,
+        rebate_remarks: rebateRemarks,
+        packaging_cost_basis: packagingBasis,
+        packaging_cost_rate: packagingRate,
+        packaging_cost_amount: computed.packagingCostAmount || null,
+        packaging_gst_treatment: packagingGstTreatment,
+        packaging_gst_rate: packagingGstTreatment === "CUSTOM" ? packagingCustomGstRate : null,
       });
     }
 
@@ -517,8 +663,12 @@ export async function createSOHandler(
     return okResponse(await hydrateSo(String(so.id), ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SO_CREATE_FAILED";
-    const message = code === "ONLY_RM_PM_ALLOWED" ? "Only RM/PM materials allowed in Sales Order" : code;
-    const status = code === "MATERIAL_NOT_FOUND" ? 404 : code === "ONLY_RM_PM_ALLOWED" ? 400 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    const message = code === "ONLY_RM_PM_ALLOWED" ? "Only RM/PM/INT materials allowed in Sales Order" : code;
+    const status = code === "MATERIAL_NOT_FOUND" ? 404
+      : code === "ONLY_RM_PM_ALLOWED" ? 400
+      : code === "COMPANY_SCOPE_VIOLATION" ? 403
+      : code === "CUSTOMER_NOT_MAPPED_TO_COMPANY" ? 422
+      : 500;
     return salesErrorResponse(req, ctx, code, status, message);
   }
 }
@@ -535,27 +685,57 @@ export async function listSOsHandler(
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+    const search = toTrimmedString(url.searchParams.get("search")).replace(/[%_]/g, "");
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
+    const offset = parseNullableNumber(url.searchParams.get("offset")) ?? 0;
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("sales_order")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) query = query.eq("company_id", companyId);
     if (customerId) query = query.eq("customer_id", customerId);
     if (status && SO_STATUSES.has(status)) query = query.eq("status", status);
     if (dateFrom) query = query.gte("so_date", dateFrom);
     if (dateTo) query = query.lte("so_date", dateTo);
+    // R-01/R-03: server-side search over the full dataset, not just the current page.
+    if (search) query = query.or(`so_number.ilike.%${search}%,customer_po_number.ilike.%${search}%`);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       return salesErrorResponse(req, ctx, "SO_LIST_FAILED", 500, "Unable to list sales orders.");
     }
 
-    return okResponse({ items: data ?? [] }, ctx.request_id, req);
+    const rows = (data ?? []) as JsonRecord[];
+    const customerIds = [...new Set(rows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
+    const companyIds = [...new Set(rows.map((row) => toTrimmedString(row.company_id)).filter(Boolean))];
+
+    const [customerResp, companyResp] = await Promise.all([
+      customerIds.length
+        ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)
+        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      companyIds.length
+        ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds)
+        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    ]);
+
+    const customerMap = new Map(((customerResp.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+    const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+
+    const items = rows.map((row) => {
+      const customer = customerMap.get(toTrimmedString(row.customer_id));
+      const company = companyMap.get(toTrimmedString(row.company_id));
+      return {
+        ...row,
+        customer_display: customer ? `${customer.customer_code ?? ""} — ${customer.customer_name ?? ""}`.trim() : null,
+        company_display: company ? String(company.company_name ?? company.company_code ?? "") : null,
+      };
+    });
+
+    return okResponse({ items, total: count ?? items.length }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SO_LIST_FAILED";
     return salesErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
@@ -591,17 +771,30 @@ export async function updateSOHandler(
     const so = await fetchSo(soId);
     assertSoVisibleToContext(ctx, so);
 
-    if (toUpperTrimmedString(so.status) !== "CREATED") {
-      return salesErrorResponse(req, ctx, "SO_UPDATE_BLOCKED", 400, "Only CREATED sales orders can be updated.");
+    if (!["CREATED", "ISSUED"].includes(toUpperTrimmedString(so.status))) {
+      return salesErrorResponse(req, ctx, "SO_UPDATE_BLOCKED", 400, "Cancelled/closed sales orders cannot be updated.");
+    }
+
+    // §113.5 — header fields are a single all-or-nothing lock: the moment
+    // ANY line has a DO against it, Customer/PO Number/Payment Term/Delivery
+    // Address freeze together (unlike line fields, which lock individually).
+    const lockedLineIds = await fetchLockedSoLineIds(soId);
+    if (lockedLineIds.size > 0) {
+      return salesErrorResponse(req, ctx, "SO_HEADER_LOCKED", 409, "Header is locked — a Delivery Order already exists against this SO. Reverse the DO to edit header fields.");
     }
 
     const patch: JsonRecord = {};
+    const customerId = toTrimmedString(body.customer_id);
     const customerPoNumber = toTrimmedString(body.customer_po_number);
     const customerPoDate = toTrimmedString(body.customer_po_date);
     const deliveryAddress = body.delivery_address === null ? null : toTrimmedString(body.delivery_address);
     const paymentTermId = body.payment_term_id === null ? null : toTrimmedString(body.payment_term_id);
     const remarks = body.remarks === null ? null : toTrimmedString(body.remarks);
 
+    if (customerId && customerId !== toTrimmedString(so.customer_id)) {
+      await assertCustomerMappedToCompany(customerId, toTrimmedString(so.company_id));
+      patch.customer_id = customerId;
+    }
     if (customerPoNumber) patch.customer_po_number = customerPoNumber;
     if (customerPoDate) patch.customer_po_date = customerPoDate;
     if (body.delivery_address !== undefined) patch.delivery_address = deliveryAddress || null;
@@ -623,8 +816,175 @@ export async function updateSOHandler(
     return okResponse(await hydrateSo(soId, ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SO_UPDATE_FAILED";
-    const status = code === "SO_NOT_FOUND" ? 404 : code === "SO_SCOPE_VIOLATION" ? 403 : 500;
+    const status = code === "SO_NOT_FOUND" ? 404
+      : code === "SO_SCOPE_VIOLATION" ? 403
+      : code === "CUSTOMER_NOT_MAPPED_TO_COMPANY" ? 422
+      : code === "SO_HEADER_LOCKED" ? 409
+      : 500;
     return salesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// §113.5/§113.8 — Stage-1 line editing. Each request line is either an
+// existing line (upsert/delete, blocked if locked by a DO) or a brand-new
+// line (always allowed — a new line can never be locked). No line ever
+// existed for SO before this redesign; header-only PATCH could not touch
+// material/qty/rate at all.
+export async function updateSOLinesHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const soId = getIdFromPath(req);
+    const body = await parseBody(req);
+    const so = await fetchSo(soId);
+    assertSoVisibleToContext(ctx, so);
+
+    if (!["CREATED", "ISSUED"].includes(toUpperTrimmedString(so.status))) {
+      return salesErrorResponse(req, ctx, "SO_UPDATE_BLOCKED", 400, "Cancelled/closed sales orders cannot be updated.");
+    }
+
+    const requestLines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    if (requestLines.length === 0) {
+      return salesErrorResponse(req, ctx, "SO_LINES_REQUIRED", 400, "At least one line operation is required.");
+    }
+
+    const existingLines = await fetchSoLines(soId);
+    const existingLineMap = new Map(existingLines.map((line) => [String(line.id), line]));
+    const lockedLineIds = await fetchLockedSoLineIds(soId);
+    let nextLineNumber = existingLines.reduce((max, line) => Math.max(max, parsePositiveNumber(line.line_number) ?? 0), 0) + 1;
+
+    // DEPENDENT: line_number allocation for new lines must be sequential within this request.
+    for (const reqLine of requestLines) {
+      const lineId = toTrimmedString(reqLine.id);
+      const action = toTrimmedString(reqLine._action).toUpperCase() || "UPSERT";
+
+      if (lineId) {
+        if (!existingLineMap.has(lineId)) {
+          return salesErrorResponse(req, ctx, "SO_LINE_NOT_FOUND", 404, `Line ${lineId} not found on this SO.`);
+        }
+        if (lockedLineIds.has(lineId)) {
+          return salesErrorResponse(req, ctx, "SO_LINE_LOCKED", 409, `Line is locked by an existing Delivery Order — reverse the DO to edit or remove it.`);
+        }
+      } else if (action === "DELETE") {
+        return salesErrorResponse(req, ctx, "SO_LINE_ID_REQUIRED", 400, "id is required to delete a line.");
+      }
+
+      if (action === "DELETE") {
+        const { error: deleteError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("sales_order_line")
+          .delete()
+          .eq("id", lineId)
+          .eq("so_id", soId);
+        if (deleteError) {
+          return salesErrorResponse(req, ctx, "SO_LINE_DELETE_FAILED", 500, "Unable to delete sales order line.");
+        }
+        continue;
+      }
+
+      const materialId = toTrimmedString(reqLine.material_id);
+      const quantity = parsePositiveNumber(reqLine.quantity);
+      const rate = parsePositiveNumber(reqLine.rate);
+      const discountPct = parseNullableNumber(reqLine.discount_pct) ?? 0;
+      const gstRate = parseNullableNumber(reqLine.gst_rate);
+      const freightTerm = toTrimmedString(reqLine.freight_term) || null;
+      const remarks = toTrimmedString(reqLine.remarks) || null;
+      const hasRebate = Boolean(reqLine.has_rebate);
+      const rebateRate = hasRebate ? parseNullableNumber(reqLine.rebate_rate) : null;
+      const rebateBasis = hasRebate ? toTrimmedString(reqLine.rebate_rate_uom_basis).toUpperCase() || null : null;
+      const rebateRemarks = hasRebate ? toTrimmedString(reqLine.rebate_remarks) || null : null;
+      const packagingBasis = toTrimmedString(reqLine.packaging_cost_basis).toUpperCase() || null;
+      const packagingRate = parseNullableNumber(reqLine.packaging_cost_rate);
+      const packagingGstTreatment = toTrimmedString(reqLine.packaging_gst_treatment).toUpperCase() || null;
+      const packagingCustomGstRate = parseNullableNumber(reqLine.packaging_gst_rate);
+
+      if (!materialId || !quantity || !rate) {
+        return salesErrorResponse(req, ctx, "SO_LINE_INVALID", 400, "material_id, quantity, and rate are required.");
+      }
+      if (discountPct < 0 || discountPct > 100) {
+        return salesErrorResponse(req, ctx, "SO_DISCOUNT_INVALID", 400, "discount_pct must be between 0 and 100.");
+      }
+      if (hasRebate && rebateBasis && !REBATE_BASIS_VALUES.has(rebateBasis)) {
+        return salesErrorResponse(req, ctx, "SO_REBATE_BASIS_INVALID", 400, "Invalid rebate basis.");
+      }
+      if (packagingBasis && !PACKAGING_BASIS_VALUES.has(packagingBasis)) {
+        return salesErrorResponse(req, ctx, "SO_PACKAGING_BASIS_INVALID", 400, "Invalid packaging cost basis.");
+      }
+      if (packagingGstTreatment && !PACKAGING_GST_TREATMENTS.has(packagingGstTreatment)) {
+        return salesErrorResponse(req, ctx, "SO_PACKAGING_GST_TREATMENT_INVALID", 400, "Invalid packaging GST treatment.");
+      }
+      if (packagingGstTreatment === "CUSTOM" && packagingCustomGstRate === null) {
+        return salesErrorResponse(req, ctx, "SO_PACKAGING_GST_RATE_REQUIRED", 400, "Custom packaging GST rate is required.");
+      }
+
+      const material = await assertSalesMaterial(materialId);
+      const computed = computeLineValues({
+        rate,
+        discountPct,
+        quantity,
+        materialGstRate: gstRate,
+        packaging: { basis: packagingBasis, rate: packagingRate, gstTreatment: packagingGstTreatment, customGstRate: packagingCustomGstRate },
+      });
+
+      const linePayload = {
+        material_id: materialId,
+        quantity,
+        uom_code: toTrimmedString(reqLine.uom_code) || toTrimmedString(material.base_uom_code),
+        rate,
+        discount_pct: discountPct,
+        net_rate: computed.netRate,
+        gst_rate: gstRate,
+        gst_amount: computed.gstAmount,
+        total_value: computed.totalValue,
+        balance_qty: quantity,
+        freight_term: freightTerm,
+        remarks,
+        has_rebate: hasRebate,
+        rebate_rate: rebateRate,
+        rebate_rate_uom_basis: rebateBasis,
+        rebate_remarks: rebateRemarks,
+        packaging_cost_basis: packagingBasis,
+        packaging_cost_rate: packagingRate,
+        packaging_cost_amount: computed.packagingCostAmount || null,
+        packaging_gst_treatment: packagingGstTreatment,
+        packaging_gst_rate: packagingGstTreatment === "CUSTOM" ? packagingCustomGstRate : null,
+        last_updated_at: new Date().toISOString(),
+      };
+
+      if (lineId) {
+        const { error: updateError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("sales_order_line")
+          .update(linePayload)
+          .eq("id", lineId)
+          .eq("so_id", soId);
+        if (updateError) {
+          return salesErrorResponse(req, ctx, "SO_LINE_UPDATE_FAILED", 500, "Unable to update sales order line.");
+        }
+      } else {
+        const { error: insertError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("sales_order_line")
+          .insert({ ...linePayload, so_id: soId, line_number: nextLineNumber, line_status: "OPEN", issued_qty: 0 });
+        if (insertError) {
+          return salesErrorResponse(req, ctx, "SO_LINE_CREATE_FAILED", 500, "Unable to create sales order line.");
+        }
+        nextLineNumber += 1;
+      }
+    }
+
+    return okResponse(await hydrateSo(soId, ctx), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_LINES_UPDATE_FAILED";
+    const message = code === "ONLY_RM_PM_ALLOWED" ? "Only RM/PM/INT materials allowed in Sales Order" : code;
+    const status = ["SO_NOT_FOUND", "MATERIAL_NOT_FOUND", "SO_LINE_NOT_FOUND"].includes(code) ? 404
+      : code === "SO_SCOPE_VIOLATION" ? 403
+      : code === "SO_LINE_LOCKED" ? 409
+      : ["ONLY_RM_PM_ALLOWED"].includes(code) ? 400
+      : 500;
+    return salesErrorResponse(req, ctx, code, status, message);
   }
 }
 
@@ -1131,13 +1491,14 @@ export async function listSalesInvoicesHandler(
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
+    const offset = parseNullableNumber(url.searchParams.get("offset")) ?? 0;
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("sales_invoice")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) query = query.eq("company_id", companyId);
     if (customerId) query = query.eq("customer_id", customerId);
@@ -1145,12 +1506,12 @@ export async function listSalesInvoicesHandler(
     if (dateFrom) query = query.gte("invoice_date", dateFrom);
     if (dateTo) query = query.lte("invoice_date", dateTo);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       return salesErrorResponse(req, ctx, "SALES_INVOICE_LIST_FAILED", 500, "Unable to list sales invoices.");
     }
 
-    return okResponse({ items: data ?? [] }, ctx.request_id, req);
+    return okResponse({ items: data ?? [], total: count ?? (data ?? []).length }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SALES_INVOICE_LIST_FAILED";
     return salesErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);

@@ -73,6 +73,7 @@ import {
   getCustomerHandler,
   listCustomerCompanyMapsHandler,
   listCustomersHandler,
+  lookupCustomerGstProfileHandler,
   mapCustomerToCompanyHandler,
   updateCustomerHandler,
 } from "../_core/om/customer.handlers.ts";
@@ -251,6 +252,8 @@ export async function dispatchOmRoutes(
       return await mapCustomerToCompanyHandler(req, ctx);
     case "GET:/api/om/customer/company-maps":
       return await listCustomerCompanyMapsHandler(req, ctx);
+    case "GET:/api/om/customer/gst-profile":
+      return await lookupCustomerGstProfileHandler(req, ctx);
 
     case "GET:/api/om/parent-customers":
       return await listParentCustomersHandler(req, ctx);

@@ -249,7 +249,16 @@ import {
   listSOsHandler,
   postSalesInvoiceHandler,
   updateSOHandler,
+  updateSOLinesHandler,
 } from "../_core/procurement/sales_order.handlers.ts";
+import {
+  createDeliveryOrderHandler,
+  getDeliveryOrderHandler,
+  listDeliveryOrdersHandler,
+  listDOSourceDocumentsHandler,
+  listDOSourceLinesHandler,
+  listDOStorageLocationOptionsHandler,
+} from "../_core/procurement/delivery_order.handlers.ts";
 import {
   approveSTOHandler,
   approveSTOAmendmentHandler,
@@ -474,6 +483,17 @@ export async function dispatchProcurementRoutes(
       return await createSOHandler(req, ctx);
     case "GET:/api/procurement/sales-orders":
       return await listSOsHandler(req, ctx);
+
+    case "GET:/api/procurement/delivery-orders":
+      return await listDeliveryOrdersHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders":
+      return await createDeliveryOrderHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders/source-documents":
+      return await listDOSourceDocumentsHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders/source-lines":
+      return await listDOSourceLinesHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders/storage-locations":
+      return await listDOStorageLocationOptionsHandler(req, ctx);
     case "POST:/api/procurement/sales-invoices":
       return await createSalesInvoiceHandler(req, ctx);
     case "GET:/api/procurement/sales-invoices":
@@ -857,6 +877,14 @@ export async function dispatchProcurementRoutes(
     if (req.method === "PUT") {
       return await updateSOHandler(req, ctx);
     }
+  }
+
+  if (/^\/api\/procurement\/delivery-orders\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getDeliveryOrderHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/sales-orders\/[^/]+\/lines$/.test(pathname) && req.method === "PATCH") {
+    return await updateSOLinesHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/sales-orders\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {

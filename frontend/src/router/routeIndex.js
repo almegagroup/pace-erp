@@ -115,6 +115,8 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/transfer",                "/dashboard/procurement/transfer/:id"],
     ["/dashboard/procurement/sales-orders",            "/dashboard/procurement/sales-orders/:id"],
     ["/dashboard/procurement/sales-orders/create",     "/dashboard/procurement/sales-orders/:id"],
+    ["/dashboard/procurement/delivery-orders",         "/dashboard/procurement/delivery-orders/:id"],
+    ["/dashboard/procurement/delivery-orders/create",  "/dashboard/procurement/delivery-orders/:id"],
     ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/:id"],
     ["/dashboard/procurement/physical-inventory",      "/dashboard/procurement/physical-inventory/:id"],
 

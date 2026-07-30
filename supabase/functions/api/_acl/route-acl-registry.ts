@@ -101,6 +101,13 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // ── Procurement: Sales ───────────────────────────────────────────────────
   "GET:/api/procurement/sales-orders":                { skipAcl: false, resourceCode: "PROC_SO_LIST",   action: "VIEW"  },
   "POST:/api/procurement/sales-orders":               { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
+
+  // ── Sales: Delivery Order (§113 Stage 2, TX SO03, GRP_ACL_SALES) ──────────
+  "GET:/api/procurement/delivery-orders":                       { skipAcl: false, resourceCode: "PROC_DO_LIST",   action: "VIEW"  },
+  "POST:/api/procurement/delivery-orders":                      { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "WRITE" },
+  "GET:/api/procurement/delivery-orders/source-documents":      { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
+  "GET:/api/procurement/delivery-orders/source-lines":          { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
+  "GET:/api/procurement/delivery-orders/storage-locations":     { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
 
@@ -221,11 +228,13 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
 
   // ── OM: Customer ─────────────────────────────────────────────────────────
   "GET:/api/om/customers":                            { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
+  "GET:/api/om/customer":                             { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
   "POST:/api/om/customer":                            { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
   "PATCH:/api/om/customer":                           { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
   "POST:/api/om/customer/status":                     { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
   "POST:/api/om/customer/company-map":                { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
   "GET:/api/om/customer/company-maps":                { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
+  "GET:/api/om/customer/gst-profile":                 { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "VIEW"  },
 
   // ── OM: Parent Customer (groups RM/PM Sales Customer rows) ──────────────
   "GET:/api/om/parent-customers":                     { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
@@ -742,12 +751,23 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     },
   },
   {
+    pattern: /^\/api\/procurement\/delivery-orders\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_DO_LIST", action: "VIEW" } },
+  },
+  {
     pattern: /^\/api\/procurement\/sales-orders\/[^/]+\/cancel$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "EDIT" } },
   },
   {
-    pattern: /^\/api\/procurement\/sales-orders\/[^/]+\/issue-stock$/,
+    // §113 bug fix — this pattern was "/issue-stock" but the real route
+    // (procurement.routes.ts) is "/issue"; the mismatch meant this endpoint
+    // 403'd for everyone except SA/GA regardless of ACL grants (checklist #8).
+    pattern: /^\/api\/procurement\/sales-orders\/[^/]+\/issue$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/sales-orders\/[^/]+\/lines$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "EDIT" } },
   },
   {
     pattern: /^\/api\/procurement\/sales-orders\/[^/]+\/lines\/[^/]+\/knock-off$/,

@@ -1215,17 +1215,29 @@ export async function listSTOsHandler(
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const stoType = toUpperTrimmedString(url.searchParams.get("sto_type"));
     const materialScope = toUpperTrimmedString(url.searchParams.get("material_scope"));
+    // §113.10 fix: was fetch-200-then-filter-client-side, so any company with
+    // more than 200 STOs silently truncated. OUTBOUND/INBOUND is now a real
+    // server-side filter instead of the old .or() + client-side split.
+    const direction = toUpperTrimmedString(url.searchParams.get("direction"));
+    const search = toTrimmedString(url.searchParams.get("search")).replace(/[%_]/g, "");
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
+    const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("stock_transfer_order")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) {
-      query = query.or(`sending_company_id.eq.${companyId},receiving_company_id.eq.${companyId}`);
+      if (direction === "INBOUND") {
+        query = query.eq("receiving_company_id", companyId);
+      } else if (direction === "OUTBOUND") {
+        query = query.eq("sending_company_id", companyId);
+      } else {
+        query = query.or(`sending_company_id.eq.${companyId},receiving_company_id.eq.${companyId}`);
+      }
     }
     if (status && STO_STATUSES.has(status)) {
       query = query.eq("status", status);
@@ -1233,8 +1245,11 @@ export async function listSTOsHandler(
     if (stoType && STO_TYPES.has(stoType)) {
       query = query.eq("sto_type", stoType);
     }
+    if (search) {
+      query = query.ilike("sto_number", `%${search}%`);
+    }
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       return stoErrorResponse(req, ctx, "STO_LIST_FAILED", 500, "Unable to list STOs.");
     }
@@ -1244,7 +1259,25 @@ export async function listSTOsHandler(
       items = await filterStosByMaterialTypes(items, ["RM", "PM"]);
     }
 
-    return okResponse({ items }, ctx.request_id, req);
+    // R-01/R-03 fix: server-side bulk-resolve company display names instead
+    // of the frontend falling back to a raw UUID when a client-side map missed.
+    const companyIds = [...new Set(items.flatMap((row) => [toTrimmedString(row.sending_company_id), toTrimmedString(row.receiving_company_id)]).filter(Boolean))];
+    const { data: companies } = companyIds.length
+      ? await serviceRoleClient.schema("erp_master").from("companies").select("id, company_name, company_code").in("id", companyIds)
+      : { data: [] as JsonRecord[] };
+    const companyMap = new Map(((companies ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+
+    const enrichedItems = items.map((row) => {
+      const sending = companyMap.get(toTrimmedString(row.sending_company_id));
+      const receiving = companyMap.get(toTrimmedString(row.receiving_company_id));
+      return {
+        ...row,
+        sending_company_display: sending ? String(sending.company_name ?? sending.company_code ?? "") : null,
+        receiving_company_display: receiving ? String(receiving.company_name ?? receiving.company_code ?? "") : null,
+      };
+    });
+
+    return okResponse({ items: enrichedItems, total: count ?? enrichedItems.length }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_LIST_FAILED";
     return stoErrorResponse(req, ctx, code, 500, code);

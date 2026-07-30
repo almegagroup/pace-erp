@@ -433,6 +433,30 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_DO_LIST: {
+    screen_code: "PROC_DO_LIST",
+    route: "/dashboard/procurement/delivery-orders",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_DO_CREATE: {
+    screen_code: "PROC_DO_CREATE",
+    route: "/dashboard/procurement/delivery-orders/create",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_DO_DETAIL: {
+    screen_code: "PROC_DO_DETAIL",
+    route: "/dashboard/procurement/delivery-orders/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_INV_LIST: {
     screen_code: "PROC_INV_LIST",
     route: "/dashboard/procurement/sales-invoices",

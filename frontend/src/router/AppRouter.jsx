@@ -161,6 +161,9 @@ import LandedCostDetailPage from "../pages/dashboard/procurement/accounts/Landed
 import SOListPage from "../pages/dashboard/procurement/sales/SOListPage.jsx";
 import SOCreatePage from "../pages/dashboard/procurement/sales/SOCreatePage.jsx";
 import SODetailPage from "../pages/dashboard/procurement/sales/SODetailPage.jsx";
+import DOListPage from "../pages/dashboard/procurement/sales/DOListPage.jsx";
+import DOCreatePage from "../pages/dashboard/procurement/sales/DOCreatePage.jsx";
+import DODetailPage from "../pages/dashboard/procurement/sales/DODetailPage.jsx";
 import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvoiceListPage.jsx";
 import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
 import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocumentListPage.jsx";
@@ -714,6 +717,18 @@ export default function AppRouter() {
                   <Route
                     path="procurement/sales-orders/:id"
                     element={<SODetailPage />}
+                  />
+                  <Route
+                    path="procurement/delivery-orders"
+                    element={<DOListPage />}
+                  />
+                  <Route
+                    path="procurement/delivery-orders/create"
+                    element={<DOCreatePage />}
+                  />
+                  <Route
+                    path="procurement/delivery-orders/:id"
+                    element={<DODetailPage />}
                   />
                   <Route
                     path="procurement/sales-invoices"
