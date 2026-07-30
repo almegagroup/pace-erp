@@ -15744,7 +15744,7 @@ CUSTOM:
 
 ---
 
-### 113.13 — DO Commercial Data Snapshot (LOCKED — 2026-07-30, implementation pending)
+### 113.13 — DO Commercial Data Snapshot (LOCKED — 2026-07-30, ✅ IMPLEMENTED 2026-07-31)
 
 **সমস্যা:** `delivery_challan_line`-এ শুধু `unit_value` (rate) আর `line_total` (qty×rate, tax ছাড়া) copy হয় — GST rate/amount, packaging cost (basis/rate/amount/GST treatment), freight term, rebate — এর কোনোটাই DO-তে carry হয় না, আর `delivery_challan_line`-এ এসবের জন্য column-ই নেই।
 
@@ -15776,7 +15776,7 @@ CUSTOM:
 
 ---
 
-### 113.15 — Stage 3: PGI + Sales/STO Invoice (LOCKED — 2026-07-31, implementation pending)
+### 113.15 — Stage 3: PGI + Sales/STO Invoice (LOCKED — 2026-07-31, ✅ IMPLEMENTATION COMPLETE 2026-07-31, commits `a8da1e38`→`26ced52e`)
 
 **Scope:** RM/PM/INT dispatch-এর PGI (Goods Issue) + Invoice — Stage 3 of §113.2-এর 3-stage architecture (Order → DO → **GI+Invoice**)। FG আলাদা (Phase 2), এখানে touch হয়নি।
 
