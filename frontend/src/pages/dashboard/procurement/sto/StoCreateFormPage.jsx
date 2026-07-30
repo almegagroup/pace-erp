@@ -500,10 +500,13 @@ export default function StoCreateFormPage({ openingMode = false }) {
         return;
       }
 
-      if (form.sto_type === "INTER_PLANT") {
-        await confirmSTO(created?.id, { approval_required: true });
-      }
-
+      // Both STO types land in DRAFT and go through the same explicit
+      // Create -> Edit -> Confirm -> Approve lifecycle as a Purchase Order
+      // (Gate-13.7 checklist: "STO types behave identically after
+      // creation"). INTER_PLANT used to auto-confirm itself here, skipping
+      // the DRAFT review step and the "Confirm STO" button entirely --
+      // caught live 2026-07-30 when it silently jumped straight to
+      // PENDING_APPROVAL with no chance to review/edit first.
       openScreen(OPERATION_SCREENS.PROC_STO_DETAIL.screen_code);
       navigate(`/dashboard/procurement/stos/${encodeURIComponent(created?.id)}`);
     } catch (saveError) {
