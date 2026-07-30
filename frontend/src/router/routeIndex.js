@@ -118,6 +118,7 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/delivery-orders",         "/dashboard/procurement/delivery-orders/:id"],
     ["/dashboard/procurement/delivery-orders/create",  "/dashboard/procurement/delivery-orders/:id"],
     ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/:id"],
+    ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/pgi/create"],
     ["/dashboard/procurement/physical-inventory",      "/dashboard/procurement/physical-inventory/:id"],
 
     ["/dashboard/procurement/opening-stock", "/dashboard/procurement/opening-stock/:id"],

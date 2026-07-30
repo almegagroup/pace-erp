@@ -879,6 +879,14 @@ export function postSalesInvoice(id) {
   return fetchProcurement("POST", `/api/procurement/sales-invoices/${encodeURIComponent(id)}/post`);
 }
 
+export function createPgiInvoice(data) {
+  return fetchProcurement("POST", "/api/procurement/sales-invoices/pgi", data);
+}
+
+export function reverseSalesInvoice(id, data) {
+  return fetchProcurement("POST", `/api/procurement/sales-invoices/${encodeURIComponent(id)}/reverse`, data);
+}
+
 export function listGlobalNumberSeries() {
   return fetchProcurement("GET", "/api/procurement/number-series/global");
 }

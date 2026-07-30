@@ -163,6 +163,7 @@ import SOCreatePage from "../pages/dashboard/procurement/sales/SOCreatePage.jsx"
 import SODetailPage from "../pages/dashboard/procurement/sales/SODetailPage.jsx";
 import DOListPage from "../pages/dashboard/procurement/sales/DOListPage.jsx";
 import DOCreatePage from "../pages/dashboard/procurement/sales/DOCreatePage.jsx";
+import PgiInvoiceCreatePage from "../pages/dashboard/procurement/sales/PgiInvoiceCreatePage.jsx";
 import DODetailPage from "../pages/dashboard/procurement/sales/DODetailPage.jsx";
 import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvoiceListPage.jsx";
 import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
@@ -733,6 +734,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/sales-invoices"
                     element={<SalesInvoiceListPage />}
+                  />
+                  <Route
+                    path="procurement/sales-invoices/pgi/create"
+                    element={<PgiInvoiceCreatePage />}
                   />
                   <Route
                     path="procurement/sales-invoices/:id"

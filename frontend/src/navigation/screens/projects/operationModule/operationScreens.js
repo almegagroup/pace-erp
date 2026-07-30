@@ -473,6 +473,16 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // §113.15 -- Stage 3 PGI + Invoice creation flow, entered from SO02
+  // (PROC_INV_LIST, now the DO/PGI queue) by picking a CREATED DO.
+  PROC_INV_PGI_CREATE: {
+    screen_code: "PROC_INV_PGI_CREATE",
+    route: "/dashboard/procurement/sales-invoices/pgi/create",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_OPENING_STOCK_LIST: {
     screen_code: "PROC_OPENING_STOCK_LIST",
     route: "/dashboard/procurement/opening-stock",

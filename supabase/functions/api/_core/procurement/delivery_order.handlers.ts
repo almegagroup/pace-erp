@@ -729,12 +729,12 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
   const materialIds = [...new Set(lineRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   const locationIds = [...new Set(lineRows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
 
-  const [companiesResp, customerResp, sourceResp, transporterResp, costCenterResp, materialsResp, locationsResp] = await Promise.all([
+  const [companiesResp, customerResp, sourceResp, transporterResp, costCenterResp, materialsResp, locationsResp, paymentTermResp] = await Promise.all([
     companyIds.length
-      ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds)
+      ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name, state_name").in("id", companyIds)
       : Promise.resolve({ data: [] as JsonRecord[], error: null }),
     dc.customer_id
-      ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").eq("id", dc.customer_id).maybeSingle()
+      ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name, billing_state").eq("id", dc.customer_id).maybeSingle()
       : Promise.resolve({ data: null as JsonRecord | null, error: null }),
     isSalesOrder
       ? (dc.sales_order_id
@@ -755,6 +755,9 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
     locationIds.length
       ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds)
       : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    dc.payment_term_id
+      ? serviceRoleClient.schema("erp_master").from("payment_terms_master").select("id, code, name").eq("id", dc.payment_term_id).maybeSingle()
+      : Promise.resolve({ data: null as JsonRecord | null, error: null }),
   ]);
   if (companiesResp.error) throw new Error("DO_COMPANY_LOOKUP_FAILED");
   if (customerResp.error) throw new Error("DO_CUSTOMER_LOOKUP_FAILED");
@@ -763,6 +766,7 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
   if (costCenterResp.error) throw new Error("DO_COST_CENTER_LOOKUP_FAILED");
   if (materialsResp.error) throw new Error("DO_MATERIAL_LOOKUP_FAILED");
   if (locationsResp.error) throw new Error("DO_LOCATION_LOOKUP_FAILED");
+  if (paymentTermResp.error) throw new Error("DO_PAYMENT_TERM_LOOKUP_FAILED");
 
   const companyMap = new Map(((companiesResp.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
   const materialMap = new Map(((materialsResp.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
@@ -771,8 +775,15 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
   const source = sourceResp.data as JsonRecord | null;
   const transporter = transporterResp.data as JsonRecord | null;
   const costCenter = costCenterResp.data as JsonRecord | null;
+  const paymentTerm = paymentTermResp.data as JsonRecord | null;
   const sellingCompany = companyMap.get(toTrimmedString(dc.selling_company_id));
   const receivingCompany = companyMap.get(toTrimmedString(dc.receiving_company_id));
+  // §113.15 -- same pair createPgiInvoiceHandler compares for GST type, shown
+  // here purely as a preview so the PGI+Invoice form can display it before
+  // submit (nothing here is authoritative -- the handler recomputes it fresh).
+  const counterpartyStateName = isSalesOrder
+    ? (toTrimmedString(customer?.billing_state) || null)
+    : (toTrimmedString(receivingCompany?.state_name) || null);
 
   const hydratedLines = lineRows.map((row) => {
     const material = materialMap.get(toTrimmedString(row.material_id));
@@ -796,6 +807,9 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
     source_reference_display: isSalesOrder ? (source?.customer_po_number ? `Customer PO ${source.customer_po_number}` : null) : (source?.sto_type ?? null),
     transporter_display: transporter ? `${transporter.transporter_code ?? ""} — ${transporter.transporter_name ?? ""}`.trim() : (dc.transporter_name_freetext ?? null),
     cost_center_display: costCenter ? `${costCenter.cost_center_code ?? ""} | ${costCenter.cost_center_name ?? ""}`.trim() : null,
+    payment_term_display: paymentTerm ? `${paymentTerm.code ?? ""} | ${paymentTerm.name ?? ""}`.trim() : null,
+    selling_company_state_name: toTrimmedString(sellingCompany?.state_name) || null,
+    counterparty_state_name: counterpartyStateName,
     lines: hydratedLines,
   };
 }

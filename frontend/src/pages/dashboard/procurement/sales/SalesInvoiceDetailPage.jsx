@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -12,9 +11,11 @@ import {
   getSalesInvoice,
   getSalesOrder,
   postSalesInvoice,
+  reverseSalesInvoice,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
   useCustomerOptionsQuery,
   useMaterialOptionsQuery,
@@ -26,7 +27,8 @@ function formatMoney(value) {
 }
 
 function getStatusTone(status) {
-  return String(status || "").toUpperCase() === "POSTED" ? "emerald" : "slate";
+  const upper = String(status || "").toUpperCase();
+  return upper === "POSTED" ? "emerald" : upper === "CANCELLED" ? "rose" : "slate";
 }
 
 export default function SalesInvoiceDetailPage() {
@@ -35,7 +37,6 @@ export default function SalesInvoiceDetailPage() {
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || routeId);
   const [searchParams] = useSearchParams();
-  const { runtimeContext } = useMenu();
   const [selectedDcId, setSelectedDcId] = useState("");
   const [draftLines, setDraftLines] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -188,6 +189,26 @@ export default function SalesInvoiceDetailPage() {
     }
   }
 
+  // §113.15 -- separate action from create/post, distinct ACL EDIT action
+  // (route-acl-registry.ts). Only valid for a POSTED (§113.15-created)
+  // invoice, i.e. reversal handler blocks anything else server-side too.
+  async function handleReverse() {
+    const reason = await openActionPrompt({ eyebrow: "Sales Invoice", title: "Reverse this invoice?", label: "Reversal reason", required: true });
+    if (!reason) return;
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await reverseSalesInvoice(id, { reason });
+      setNotice("Invoice reversed — stock restored, delivery order released back to the PGI queue.");
+      await detailQuery.refetch();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_SALES_INVOICE_REVERSE_FAILED");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function openSoDetail() {
     const targetSoId = detail?.so_id || salesOrder?.id;
     if (!targetSoId) {
@@ -212,6 +233,8 @@ export default function SalesInvoiceDetailPage() {
           ? [{ key: "create-post", label: saving ? "Posting..." : "Post Invoice", tone: "primary", onClick: () => void handleCreateAndPost(), disabled: saving || !selectedDcId }]
           : detail?.status === "DRAFT"
           ? [{ key: "post", label: saving ? "Posting..." : "Post Invoice", tone: "primary", onClick: () => void handlePostExisting(), disabled: saving }]
+          : detail?.status === "POSTED"
+          ? [{ key: "reverse", label: saving ? "Reversing..." : "Reverse Invoice", tone: "danger", onClick: () => void handleReverse(), disabled: saving }]
           : []),
       ]}
     >
@@ -286,14 +309,19 @@ export default function SalesInvoiceDetailPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          <ErpSectionCard eyebrow="Header" title={`${detail.invoice_number || "-"} | ${customerMap.get(detail.customer_id)?.customer_name || detail.customer_id || "-"}`}>
+          <ErpSectionCard eyebrow="Header" title={`${detail.invoice_number || "-"} | ${detail.sto_id ? "STO Dispatch" : (customerMap.get(detail.customer_id)?.customer_name || detail.customer_id || "-")}`}>
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
               <ErpFieldPreview label="Status" value={detail.status} tone={getStatusTone(detail.status)} />
               <ErpFieldPreview label="Invoice Date" value={detail.invoice_date} />
-              <ErpFieldPreview label="DC Ref" value={detail.dc_id} />
+              <ErpFieldPreview label="Tally Invoice Number" value={detail.tally_invoice_number || "—"} />
+              <ErpFieldPreview label="Tally Invoice Date" value={detail.tally_invoice_date || "—"} />
               <ErpFieldPreview label="GST Type" value={detail.gst_type} />
               <ErpFieldPreview label="Total Taxable" value={formatMoney(detail.total_taxable_value)} />
+              <ErpFieldPreview label="Freight" value={detail.freight_included ? formatMoney(detail.freight_amount) : "—"} />
               <ErpFieldPreview label="Total Invoice" value={formatMoney(detail.total_invoice_value)} />
+              {detail.status === "CANCELLED" ? (
+                <ErpFieldPreview label="Cancellation Reason" value={detail.cancellation_reason || "—"} />
+              ) : null}
             </div>
           </ErpSectionCard>
 
