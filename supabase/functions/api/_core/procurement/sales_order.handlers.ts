@@ -452,6 +452,7 @@ async function getCompanyAndCustomerTaxContext(companyId: string, customerId: st
   companyGstNumber: string | null;
   companyStateName: string | null;
   customerGstNumber: string | null;
+  customerBillingState: string | null;
 }> {
   const [companyResp, customerResp] = await Promise.all([
     serviceRoleClient
@@ -463,7 +464,7 @@ async function getCompanyAndCustomerTaxContext(companyId: string, customerId: st
     serviceRoleClient
       .schema("erp_master")
       .from("customer_master")
-      .select("gst_number")
+      .select("gst_number, billing_state")
       .eq("id", customerId)
       .maybeSingle(),
   ]);
@@ -476,13 +477,20 @@ async function getCompanyAndCustomerTaxContext(companyId: string, customerId: st
     companyGstNumber: toTrimmedString(companyResp.data?.gst_number) || null,
     companyStateName: toTrimmedString(companyResp.data?.state_name) || null,
     customerGstNumber: toTrimmedString(customerResp.data?.gst_number) || null,
+    customerBillingState: toTrimmedString(customerResp.data?.billing_state) || null,
   };
 }
 
-function deriveSalesInvoiceGstType(companyGstNumber: string | null, customerGstNumber: string | null): "CGST_SGST" | "IGST" {
-  const companyStateCode = companyGstNumber?.slice(0, 2) ?? "";
-  const customerStateCode = customerGstNumber?.slice(0, 2) ?? "";
-  if (companyStateCode && customerStateCode && companyStateCode === customerStateCode) {
+// §113 GST design session, 2026-07-30 — was GSTIN state-code-prefix
+// comparison, which always fell through to IGST for an unregistered
+// customer (no GSTIN, so the code side was always empty). Place of supply
+// is the customer's own registered state, independent of registration
+// status -- compare state names directly, same as vendor_master's own
+// reg_address_state pattern on the purchase side.
+function deriveSalesInvoiceGstType(companyStateName: string | null, customerBillingState: string | null): "CGST_SGST" | "IGST" {
+  const company = companyStateName?.trim().toLowerCase() ?? "";
+  const customer = customerBillingState?.trim().toLowerCase() ?? "";
+  if (company && customer && company === customer) {
     return "CGST_SGST";
   }
   return "IGST";
@@ -1389,7 +1397,7 @@ export async function createSalesInvoiceHandler(
     }
 
     const taxContext = await getCompanyAndCustomerTaxContext(companyId, customerId);
-    const gstType = deriveSalesInvoiceGstType(taxContext.companyGstNumber, taxContext.customerGstNumber);
+    const gstType = deriveSalesInvoiceGstType(taxContext.companyStateName, taxContext.customerBillingState);
     if (!GST_TYPES.has(gstType)) {
       return salesErrorResponse(req, ctx, "SALES_INVOICE_GST_TYPE_INVALID", 400, "Invalid sales invoice GST type.");
     }

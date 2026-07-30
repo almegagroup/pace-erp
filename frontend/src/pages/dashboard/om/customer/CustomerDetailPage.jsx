@@ -105,6 +105,7 @@ export default function CustomerDetailPage() {
       parent_customer_id: customer.parent_customer_id ?? "",
       delivery_address: customer.delivery_address ?? "",
       billing_address: customer.billing_address ?? "",
+      billing_state: customer.billing_state ?? "",
       primary_contact_person: customer.primary_contact_person ?? "",
       phone: customer.phone ?? "",
       primary_email: customer.primary_email ?? "",
@@ -133,6 +134,10 @@ export default function CustomerDetailPage() {
       setError("DELIVERY_ADDRESS_REQUIRED");
       return;
     }
+    if (!form.billing_state || !form.billing_state.trim()) {
+      setError("Billing state is required (needed for CGST/SGST vs IGST on invoices).");
+      return;
+    }
     setSaving(true);
     setError("");
     setNotice("");
@@ -144,6 +149,7 @@ export default function CustomerDetailPage() {
         currency_code: form.currency_code,
         delivery_address: form.delivery_address,
         billing_address: form.billing_address,
+        billing_state: form.billing_state,
         primary_contact_person: form.primary_contact_person,
         phone: form.phone,
         primary_email: form.primary_email,
@@ -323,6 +329,15 @@ export default function CustomerDetailPage() {
                     className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                   />
                 </ErpDenseFormRow>
+                <ErpDenseFormRow label="Billing State" required>
+                  <input
+                    value={form.billing_state}
+                    onChange={(event) => setField("billing_state", event.target.value)}
+                    placeholder="e.g. West Bengal"
+                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">Determines CGST+SGST vs IGST on sales invoices.</p>
+                </ErpDenseFormRow>
                 <ErpDenseFormRow label="Primary Contact">
                   <input
                     value={form.primary_contact_person}
@@ -353,6 +368,7 @@ export default function CustomerDetailPage() {
                 <ErpFieldPreview label="Primary Email" value={customer.primary_email} />
                 <ErpFieldPreview label="Delivery Address" value={customer.delivery_address} multiline />
                 <ErpFieldPreview label="Billing Address" value={customer.billing_address} multiline />
+                <ErpFieldPreview label="Billing State" value={customer.billing_state} />
               </div>
             )}
           </ErpSectionCard>

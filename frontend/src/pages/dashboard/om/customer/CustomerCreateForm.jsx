@@ -77,6 +77,7 @@ export default function CustomerCreateForm({
     currency_code: "BDT",
     delivery_address: "",
     billing_address: "",
+    billing_state: "",
     gst_number: "",
     gst_category: "",
     primary_contact_person: "",
@@ -214,6 +215,10 @@ export default function CustomerCreateForm({
       setError("OM_INVALID_CUSTOMER_TYPE");
       return;
     }
+    if (!form.billing_state.trim()) {
+      setError("Billing state is required (needed for CGST/SGST vs IGST on invoices).");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -227,6 +232,7 @@ export default function CustomerCreateForm({
         currency_code: form.currency_code,
         delivery_address: form.delivery_address.trim(),
         billing_address: form.billing_address.trim() || undefined,
+        billing_state: form.billing_state.trim(),
         gst_number: isVendorLinked ? undefined : form.gst_number.trim() || undefined,
         gst_category: form.gst_category || undefined,
         primary_contact_person: form.primary_contact_person.trim() || undefined,
@@ -448,6 +454,15 @@ export default function CustomerCreateForm({
           onChange={(event) => updateField("billing_address", event.target.value)}
           className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
         />
+      </ErpDenseFormRow>
+      <ErpDenseFormRow label="Billing State" required>
+        <input
+          value={form.billing_state}
+          onChange={(event) => updateField("billing_state", event.target.value)}
+          placeholder="e.g. West Bengal"
+          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+        />
+        <p className="mt-1 text-xs text-slate-500">Determines CGST+SGST vs IGST on sales invoices — required for every customer, registered or not.</p>
       </ErpDenseFormRow>
       <ErpDenseFormRow label="Primary Contact">
         <input

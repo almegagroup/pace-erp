@@ -167,6 +167,7 @@ export async function createCustomerHandler(
     const customerName = toTrimmedString(body.customer_name);
     const customerType = toTrimmedString(body.customer_type).toUpperCase();
     const deliveryAddress = toTrimmedString(body.delivery_address);
+    const billingState = toTrimmedString(body.billing_state);
     const foCustomerTypeRaw = toTrimmedString(body.fo_customer_type).toUpperCase();
     const gstCategory = toTrimmedString(body.gst_category).toUpperCase();
     // §113.6 — a customer created with no company mapping produces an
@@ -175,6 +176,12 @@ export async function createCustomerHandler(
 
     if ((!customerName && !vendorId) || !deliveryAddress || !ALLOWED_CUSTOMER_TYPES.has(customerType)) {
       return customerErrorResponse(req, ctx, "OM_INVALID_CUSTOMER_TYPE", 400, "Invalid customer type");
+    }
+    // §113 GST design session, 2026-07-30 — place of supply must come from
+    // the customer's own state, not their GSTIN (unregistered customers
+    // have none). Mandatory regardless of gst_category.
+    if (!billingState) {
+      return customerErrorResponse(req, ctx, "OM_CUSTOMER_BILLING_STATE_REQUIRED", 400, "Billing state is required");
     }
     if (!companyId) {
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_COMPANY_REQUIRED", 400, "company_id is required");
@@ -216,6 +223,7 @@ export async function createCustomerHandler(
       fo_customer_type: foCustomerTypeRaw || null,
       delivery_address: deliveryAddress,
       billing_address: toTrimmedString(body.billing_address) || null,
+      billing_state: billingState,
       gst_number: vendorId ? null : toTrimmedString(body.gst_number) || null,
       gst_category: gstCategory || null,
       pan_number: toTrimmedString(body.pan_number) || null,
@@ -420,6 +428,7 @@ export async function updateCustomerHandler(
       ...(isVendorLinked ? [] : ["customer_name", "gst_number"]),
       "delivery_address",
       "billing_address",
+      "billing_state",
       "pan_number",
       "primary_contact_person",
       "phone",
