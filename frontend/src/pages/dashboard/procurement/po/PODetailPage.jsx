@@ -304,11 +304,17 @@ export default function PODetailPage() {
   }
 
   async function handleCancelPo() {
-    const reason = await openActionPrompt({ eyebrow: "Purchase Order", title: "Cancel this PO?", label: "Cancellation reason", required: true });
+    const isDraft = po?.status === "DRAFT";
+    const reason = await openActionPrompt({
+      eyebrow: "Purchase Order",
+      title: isDraft ? "Remove this item from the order?" : "Cancel this PO?",
+      label: isDraft ? "Removal reason" : "Cancellation reason",
+      required: true,
+    });
     if (!reason) return;
     await runAction(
       () => cancelPurchaseOrder(id, { reason }),
-      "Purchase order cancelled."
+      isDraft ? "Item removed from the order." : "Purchase order cancelled."
     );
   }
 
@@ -520,6 +526,16 @@ export default function PODetailPage() {
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         ...(po?.status === "DRAFT" ? [{ key: "edit", label: "Edit", tone: "neutral", onClick: openEditModal, disabled: saving }] : []),
         ...(po?.status === "DRAFT" ? [{ key: "confirm", label: saving ? "Confirming..." : "Confirm", tone: "primary", onClick: () => void handleConfirm(), disabled: saving }] : []),
+        // Multi-item PO create is actually one purchase_order row per
+        // material, bundled under one po_order_group -- but before this,
+        // the only way to drop a single wrong item pre-confirm was to
+        // confirm/reject the WHOLE group (all-or-nothing). cancelPOHandler
+        // already scopes to one PO row and has no status gate of its own
+        // (only blocks post-GRN), so this reuses it as-is at DRAFT;
+        // syncOrderGroupStatus + confirmPOOrderGroupHandler's own
+        // draft-only filter already handle a group with one item removed
+        // correctly -- confirmed by reading both, no backend change needed.
+        ...(po?.status === "DRAFT" ? [{ key: "remove", label: "Remove Item", tone: "danger", onClick: () => void handleCancelPo(), disabled: saving }] : []),
         // Approve/Reject/Approve-Amendment are deliberately NOT exposed here —
         // approval authority lives only on the dedicated "Pending PO
         // Approvals" page (PROC_PO_ORDER_APPROVALS, gated to the Procurement
