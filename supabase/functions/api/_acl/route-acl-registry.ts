@@ -793,6 +793,20 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     pattern: /^\/api\/procurement\/sales-invoices\/[^/]+\/post$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "APPROVE" } },
   },
+  {
+    // §113.15 -- combined PGI+Invoice create. Same resource as SO02
+    // (PROC_INV_LIST) since this reuses that page, action WRITE matching
+    // the legacy POST /sales-invoices route's own convention.
+    pattern: /^\/api\/procurement\/sales-invoices\/pgi$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" } },
+  },
+  {
+    // Deliberately its own action (EDIT, same shape as DO cancel) rather
+    // than reusing PGI-create's WRITE action, so reversal authority can be
+    // granted to a different role than create authority later.
+    pattern: /^\/api\/procurement\/sales-invoices\/[^/]+\/reverse$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "EDIT" } },
+  },
 
   // ── Physical Inventory ────────────────────────────────────────────────────
   {

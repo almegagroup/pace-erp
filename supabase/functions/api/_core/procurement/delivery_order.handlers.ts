@@ -20,7 +20,14 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
-import { computeLineValues, type PackagingCostInput } from "./sales_order.handlers.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import {
+  computeLineValues,
+  deriveSalesInvoiceGstType,
+  getSnapshotForIssue,
+  hasPhysicalInventoryBlock,
+  type PackagingCostInput,
+} from "./sales_order.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -901,5 +908,391 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_LIST_FAILED";
     return doErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
+  }
+}
+
+const EXCLUSIVE_FREIGHT_TERMS = new Set(["FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS"]);
+
+// §113.15 -- the combined PGI + Invoice action (Accounts). Deliberately a
+// NEW additive route/handler, not a rewrite of the legacy
+// createSalesInvoiceHandler/postSalesInvoiceHandler pair (still wired,
+// unused by the new frontend flow -- left as a follow-up cleanup rather
+// than risk touching call sites not fully traced in this pass). One click:
+// generates the Invoice number, requires the Tally reference (this ERP's
+// own invoice is tracking-only, no IRN/e-invoice link -- the real legal
+// document is created in Tally separately), computes GST (customer
+// billing_state for SO, sending-vs-receiving company state_name for STO,
+// both via the same deriveSalesInvoiceGstType), and posts stock movement
+// P601 "GI for Dispatch (Delivery)" per DO line, all in one request. DO
+// itself is never touched again after create except by this handler (sets
+// DISPATCHED) and the reversal handler (sets back to CREATED).
+export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const body = await parseBody(req);
+    const dcId = toTrimmedString(body.dc_id);
+    const tallyInvoiceNumber = toTrimmedString(body.tally_invoice_number);
+    const tallyInvoiceDate = toTrimmedString(body.tally_invoice_date);
+    if (!dcId || !tallyInvoiceNumber || !tallyInvoiceDate) {
+      return doErrorResponse(req, ctx, "PGI_INVOICE_INVALID", 400, "dc_id, tally_invoice_number, and tally_invoice_date are required.");
+    }
+
+    const { data: dc, error: dcError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("delivery_challan")
+      .select("*")
+      .eq("id", dcId)
+      .single();
+    if (dcError || !dc) return doErrorResponse(req, ctx, "DO_NOT_FOUND", 404, "Delivery order not found.");
+    try {
+      await assertCompanyScope(ctx, toTrimmedString(dc.selling_company_id));
+    } catch {
+      return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (toUpperTrimmedString(dc.status) !== "CREATED") {
+      return doErrorResponse(req, ctx, "DO_NOT_READY_FOR_PGI", 400, "Only a CREATED delivery order (not yet PGI'd, not cancelled) can be invoiced.");
+    }
+
+    // §113.15 lock: 1 DO = 1 Invoice. Enforced here (not a DB unique
+    // constraint on dc_id) so a CANCELLED invoice's dc_id can be reused by
+    // a fresh attempt -- see reverseSalesInvoiceHandler.
+    const { data: existingInvoice, error: existingInvoiceError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_invoice")
+      .select("id")
+      .eq("dc_id", dcId)
+      .in("status", ["DRAFT", "POSTED"])
+      .maybeSingle();
+    if (existingInvoiceError) return doErrorResponse(req, ctx, "PGI_INVOICE_LOOKUP_FAILED", 500, "Unable to check for an existing invoice.");
+    if (existingInvoice) return doErrorResponse(req, ctx, "DO_ALREADY_INVOICED", 409, "This delivery order already has an active invoice.");
+
+    const { data: dcLines, error: dcLinesError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("delivery_challan_line")
+      .select("*")
+      .eq("dc_id", dcId)
+      .order("line_number", { ascending: true });
+    if (dcLinesError) return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load delivery order lines.");
+    const lines = (dcLines ?? []) as JsonRecord[];
+    if (lines.length === 0) return doErrorResponse(req, ctx, "DO_EMPTY", 400, "Delivery order has no lines.");
+
+    const isSalesOrder = toUpperTrimmedString(dc.dc_type) === "SALES";
+    const companyId = toTrimmedString(dc.selling_company_id);
+
+    // GST type: same function either way, just a different pair of states.
+    let companyStateName: string | null = null;
+    let counterpartyStateName: string | null = null;
+    const { data: sellingCompany, error: sellingCompanyError } = await serviceRoleClient
+      .schema("erp_master").from("companies").select("state_name").eq("id", companyId).maybeSingle();
+    if (sellingCompanyError) return doErrorResponse(req, ctx, "PGI_INVOICE_TAX_CONTEXT_FAILED", 500, "Unable to load company tax context.");
+    companyStateName = toTrimmedString(sellingCompany?.state_name) || null;
+
+    if (isSalesOrder) {
+      const customerId = toTrimmedString(dc.customer_id);
+      if (!customerId) return doErrorResponse(req, ctx, "PGI_INVOICE_CUSTOMER_REQUIRED", 400, "Delivery order has no customer.");
+      const { data: customer, error: customerError } = await serviceRoleClient
+        .schema("erp_master").from("customer_master").select("billing_state").eq("id", customerId).maybeSingle();
+      if (customerError) return doErrorResponse(req, ctx, "PGI_INVOICE_TAX_CONTEXT_FAILED", 500, "Unable to load customer tax context.");
+      counterpartyStateName = toTrimmedString(customer?.billing_state) || null;
+    } else {
+      const receivingCompanyId = toTrimmedString(dc.receiving_company_id);
+      if (!receivingCompanyId) return doErrorResponse(req, ctx, "PGI_INVOICE_RECEIVING_COMPANY_REQUIRED", 400, "Delivery order has no receiving company.");
+      const { data: receivingCompany, error: receivingCompanyError } = await serviceRoleClient
+        .schema("erp_master").from("companies").select("state_name").eq("id", receivingCompanyId).maybeSingle();
+      if (receivingCompanyError) return doErrorResponse(req, ctx, "PGI_INVOICE_TAX_CONTEXT_FAILED", 500, "Unable to load receiving company tax context.");
+      counterpartyStateName = toTrimmedString(receivingCompany?.state_name) || null;
+    }
+    const gstType = deriveSalesInvoiceGstType(companyStateName, counterpartyStateName);
+
+    // Freight: only meaningful when the DO's own freight_term is an
+    // "exclusive" kind (FOR = inclusive, nothing to enter). Normalized
+    // defensively here even though the frontend only shows the Yes/No
+    // toggle for exclusive freight_term in the first place.
+    const freightTerm = toUpperTrimmedString(dc.freight_term);
+    const freightEligible = EXCLUSIVE_FREIGHT_TERMS.has(freightTerm);
+    const freightIncluded = freightEligible && body.freight_included === true;
+    const freightAmount = freightIncluded ? parsePositiveNumber(body.freight_amount) : null;
+    if (freightIncluded && !freightAmount) {
+      return doErrorResponse(req, ctx, "PGI_INVOICE_FREIGHT_AMOUNT_REQUIRED", 400, "Freight amount is required when freight is included.");
+    }
+
+    // Per-line GST split (cgst+sgst vs igst) off the DO line's own
+    // already-snapshotted gst_amount (§113.13) -- the total doesn't change
+    // with the split, only how it's divided.
+    const lineComputations = lines.map((line) => {
+      const quantity = Number(line.quantity ?? 0);
+      const rate = Number(line.unit_value ?? 0);
+      const taxableValue = Number((quantity * rate).toFixed(4));
+      const gstAmount = Number(line.gst_amount ?? 0);
+      const cgstAmount = gstType === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : null;
+      const sgstAmount = gstType === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : null;
+      const igstAmount = gstType === "IGST" ? gstAmount : null;
+      // Reuse the DO line's own already-correct line_total rather than
+      // recomputing taxableValue+gstAmount here -- computeLineValues folds
+      // packaging cost into the total differently across its three
+      // GST-treatment branches (§113.9), and DO already ran that formula
+      // once at create time (§113.13). Recomputing a simplified version
+      // here would silently drop packaging cost for the NO_GST branch.
+      const lineTotal = Number(line.line_total ?? (taxableValue + gstAmount));
+      return { line, quantity, rate, taxableValue, gstAmount, cgstAmount, sgstAmount, igstAmount, lineTotal };
+    });
+
+    let totalTaxableValue = 0;
+    let totalCgstAmount = 0;
+    let totalSgstAmount = 0;
+    let totalIgstAmount = 0;
+    for (const c of lineComputations) {
+      totalTaxableValue += c.taxableValue;
+      totalCgstAmount += c.cgstAmount ?? 0;
+      totalSgstAmount += c.sgstAmount ?? 0;
+      totalIgstAmount += c.igstAmount ?? 0;
+    }
+    const totalGstAmount = Number((totalCgstAmount + totalSgstAmount + totalIgstAmount).toFixed(4));
+    const totalInvoiceValue = Number((totalTaxableValue + totalGstAmount + (freightAmount ?? 0)).toFixed(4));
+
+    const invoiceNumber = await generateProcurementDocNumber("SALES_INVOICE");
+    const { data: invoice, error: invoiceError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_invoice")
+      .insert({
+        invoice_number: invoiceNumber,
+        invoice_date: todayIsoDate(),
+        company_id: companyId,
+        customer_id: isSalesOrder ? toTrimmedString(dc.customer_id) : null,
+        sto_id: isSalesOrder ? null : toTrimmedString(dc.sto_id),
+        dc_id: dcId,
+        so_id: isSalesOrder ? toTrimmedString(dc.sales_order_id) : null,
+        payment_term_id: toTrimmedString(dc.payment_term_id) || null,
+        gst_type: gstType,
+        tally_invoice_number: tallyInvoiceNumber,
+        tally_invoice_date: tallyInvoiceDate,
+        freight_included: freightIncluded,
+        freight_amount: freightAmount,
+        total_taxable_value: Number(totalTaxableValue.toFixed(4)),
+        total_cgst_amount: Number(totalCgstAmount.toFixed(4)),
+        total_sgst_amount: Number(totalSgstAmount.toFixed(4)),
+        total_igst_amount: Number(totalIgstAmount.toFixed(4)),
+        total_gst_amount: totalGstAmount,
+        total_invoice_value: totalInvoiceValue,
+        status: "POSTED",
+        posted_by: ctx.auth_user_id,
+        posted_at: new Date().toISOString(),
+        remarks: toTrimmedString(body.remarks) || null,
+        created_by: ctx.auth_user_id,
+      })
+      .select("*")
+      .single();
+    if (invoiceError || !invoice) return doErrorResponse(req, ctx, "PGI_INVOICE_CREATE_FAILED", 500, "Unable to create invoice.");
+
+    const linePayload = lineComputations.map((c, index) => ({
+      invoice_id: invoice.id,
+      line_number: index + 1,
+      so_line_id: isSalesOrder ? c.line.so_line_id : null,
+      dc_line_id: c.line.id,
+      material_id: c.line.material_id,
+      quantity: c.quantity,
+      uom_code: c.line.uom_code,
+      rate: c.rate,
+      taxable_value: c.taxableValue,
+      gst_rate: c.line.gst_rate != null ? Number(c.line.gst_rate) : null,
+      cgst_amount: c.cgstAmount,
+      sgst_amount: c.sgstAmount,
+      igst_amount: c.igstAmount,
+      line_total: c.lineTotal,
+    }));
+    const { error: lineInsertError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_invoice_line")
+      .insert(linePayload);
+    if (lineInsertError) return doErrorResponse(req, ctx, "PGI_INVOICE_LINE_CREATE_FAILED", 500, "Unable to create invoice lines.");
+
+    // §106: one Material Document for the whole PGI event; the invoice
+    // number becomes the reference (this is the invoice's own physical
+    // goods-issue event, not the DO's -- DO itself never posts stock).
+    const matDoc = await generateMaterialDocNumber(companyId);
+
+    // DEPENDENT: each line's stock posting must land before the next
+    // line's availability check, same reasoning as dispatchSTOHandler's
+    // own posting loop -- shared material+location across lines could
+    // otherwise double-spend the same balance within this one request.
+    for (const c of lineComputations) {
+      const materialId = toTrimmedString(c.line.material_id);
+      const storageLocationId = toTrimmedString(c.line.storage_location_id);
+      const postingBlocked = await hasPhysicalInventoryBlock(materialId, storageLocationId);
+      if (postingBlocked) {
+        return doErrorResponse(req, ctx, "MATERIAL_POSTING_BLOCKED", 409, "Material has an active physical inventory count in progress.");
+      }
+      let snapshot: JsonRecord;
+      try {
+        snapshot = await getSnapshotForIssue(companyId, storageLocationId, materialId);
+      } catch {
+        return doErrorResponse(req, ctx, "INSUFFICIENT_STOCK", 400, `No unrestricted stock found for line ${c.line.line_number}.`);
+      }
+      if (Number(snapshot.quantity ?? 0) < c.quantity) {
+        return doErrorResponse(req, ctx, "INSUFFICIENT_STOCK", 400, `Insufficient stock for line ${c.line.line_number}.`);
+      }
+
+      const posting = await serviceRoleClient
+        .schema("erp_inventory")
+        .rpc("post_stock_movement", {
+          p_document_number: String(invoice.invoice_number),
+          p_document_date: String(invoice.invoice_date),
+          p_posting_date: todayIsoDate(),
+          p_movement_type_code: "P601",
+          p_company_id: companyId,
+          p_storage_location_id: storageLocationId,
+          p_material_id: materialId,
+          p_quantity: c.quantity,
+          p_base_uom_code: c.line.uom_code,
+          p_unit_value: Number(snapshot.valuation_rate ?? 0),
+          p_stock_type_code: "UNRESTRICTED",
+          p_direction: "OUT",
+          p_posted_by: ctx.auth_user_id,
+          p_reversal_of_id: null,
+          p_material_doc_number: matDoc.docNumber,
+          p_material_doc_year: matDoc.docYear,
+          p_reference_document_number: String(invoice.invoice_number),
+          p_reference_document_type: "SALES_INVOICE",
+          p_reference_document_id: invoice.id ?? null,
+        });
+      if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {
+        return doErrorResponse(req, ctx, "PGI_POST_FAILED", 500, `Unable to post GI stock movement for line ${c.line.line_number}.`);
+      }
+    }
+
+    const { error: dcStatusError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("delivery_challan")
+      .update({ status: "DISPATCHED" })
+      .eq("id", dcId);
+    if (dcStatusError) return doErrorResponse(req, ctx, "DO_STATUS_UPDATE_FAILED", 500, "Invoice posted, but unable to update delivery order status.");
+
+    return okResponse({ ...invoice, lines: linePayload }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PGI_INVOICE_CREATE_FAILED";
+    const status = code === "DO_NOT_FOUND" ? 404
+      : code === "COMPANY_SCOPE_VIOLATION" ? 403
+      : code === "DO_ALREADY_INVOICED" ? 409
+      : code.includes("REQUIRED") || code.includes("INVALID") || code.includes("NOT_READY") || code === "INSUFFICIENT_STOCK" ? 400
+      : 500;
+    return doErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// §113.15 -- post-PGI Invoice reversal, deliberately a SEPARATE handler
+// from createPgiInvoiceHandler (same separation-of-duties requirement as
+// cancelDeliveryOrderHandler). Cancels the invoice, reverses stock via
+// P602, and releases the DO back to CREATED so a fresh PGI+Invoice attempt
+// can be made against it -- Tally number/date reuse on the retry is fine
+// (business owner's own call, no uniqueness enforced).
+export async function reverseSalesInvoiceHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const invoiceId = getIdFromPath(req);
+    if (!invoiceId) return doErrorResponse(req, ctx, "PGI_INVOICE_ID_REQUIRED", 400, "Invoice id is required.");
+    const body = await parseBody(req);
+    const reason = toTrimmedString(body.reason);
+    if (!reason) return doErrorResponse(req, ctx, "PGI_INVOICE_REVERSE_REASON_REQUIRED", 400, "Reversal reason is required.");
+
+    const { data: invoice, error: invoiceError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_invoice")
+      .select("*")
+      .eq("id", invoiceId)
+      .single();
+    if (invoiceError || !invoice) return doErrorResponse(req, ctx, "PGI_INVOICE_NOT_FOUND", 404, "Invoice not found.");
+    try {
+      await assertCompanyScope(ctx, toTrimmedString(invoice.company_id));
+    } catch {
+      return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (toUpperTrimmedString(invoice.status) !== "POSTED") {
+      return doErrorResponse(req, ctx, "PGI_INVOICE_REVERSE_BLOCKED", 400, "Only a POSTED invoice can be reversed.");
+    }
+
+    const dcId = toTrimmedString(invoice.dc_id);
+    const companyId = toTrimmedString(invoice.company_id);
+
+    // Original P601 legs for this invoice. reference_document_type/id and
+    // p_reversal_of_id's target both live on stock_document (the per-leg
+    // header post_stock_movement() writes one row of per document+item),
+    // not stock_ledger -- stock_ledger carries no reference/reversal
+    // columns of its own at all.
+    const { data: originalDocRows, error: docLookupError } = await serviceRoleClient
+      .schema("erp_inventory")
+      .from("stock_document")
+      .select("id, material_id, source_location_id, quantity, base_uom_code, valuation_rate, reversal_document_id")
+      .eq("reference_document_type", "SALES_INVOICE")
+      .eq("reference_document_id", invoiceId)
+      .eq("movement_type_code", "P601");
+    if (docLookupError) return doErrorResponse(req, ctx, "PGI_INVOICE_LEDGER_LOOKUP_FAILED", 500, "Unable to load the original stock postings.");
+    const originalLegs = ((originalDocRows ?? []) as JsonRecord[]).filter((row) => !row.reversal_document_id);
+    if (originalLegs.length === 0) return doErrorResponse(req, ctx, "PGI_INVOICE_NO_POSTINGS_FOUND", 500, "No reversible stock postings found for this invoice.");
+
+    const matDoc = await generateMaterialDocNumber(companyId);
+    const nowIso = new Date().toISOString();
+
+    // DEPENDENT: same reasoning as the original posting loop -- sequential
+    // to avoid double-crediting shared material+location within one request.
+    for (const leg of originalLegs) {
+      const posting = await serviceRoleClient
+        .schema("erp_inventory")
+        .rpc("post_stock_movement", {
+          p_document_number: String(invoice.invoice_number),
+          p_document_date: String(invoice.invoice_date),
+          p_posting_date: todayIsoDate(),
+          p_movement_type_code: "P602",
+          p_company_id: companyId,
+          p_storage_location_id: leg.source_location_id,
+          p_material_id: leg.material_id,
+          p_quantity: Number(leg.quantity ?? 0),
+          p_base_uom_code: leg.base_uom_code,
+          // Reverse at the ORIGINAL leg's own rate, not a fresh snapshot
+          // read -- reversing at a stale/zero rate would dilute the
+          // restored material's own weighted-average (§104-4's own rule,
+          // applied here the same way).
+          p_unit_value: Number(leg.valuation_rate ?? 0),
+          p_stock_type_code: "UNRESTRICTED",
+          p_direction: "IN",
+          p_posted_by: ctx.auth_user_id,
+          p_reversal_of_id: leg.id,
+          p_material_doc_number: matDoc.docNumber,
+          p_material_doc_year: matDoc.docYear,
+          p_reference_document_number: String(invoice.invoice_number),
+          p_reference_document_type: "SALES_INVOICE",
+          p_reference_document_id: invoiceId,
+        });
+      if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {
+        return doErrorResponse(req, ctx, "PGI_REVERSAL_POST_FAILED", 500, "Unable to post GI reversal stock movement.");
+      }
+    }
+
+    const { error: invoiceUpdateError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_invoice")
+      .update({
+        status: "CANCELLED",
+        cancellation_reason: reason,
+        cancelled_by: ctx.auth_user_id,
+        cancelled_at: nowIso,
+        last_updated_at: nowIso,
+      })
+      .eq("id", invoiceId);
+    if (invoiceUpdateError) return doErrorResponse(req, ctx, "PGI_INVOICE_REVERSE_FAILED", 500, "Unable to cancel the invoice.");
+
+    if (dcId) {
+      const { error: dcUpdateError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("delivery_challan")
+        .update({ status: "CREATED" })
+        .eq("id", dcId);
+      if (dcUpdateError) return doErrorResponse(req, ctx, "DO_RELEASE_FAILED", 500, "Invoice reversed, but unable to release the delivery order back to the queue.");
+    }
+
+    return okResponse({ ...invoice, status: "CANCELLED", cancellation_reason: reason }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PGI_INVOICE_REVERSE_FAILED";
+    const status = code === "PGI_INVOICE_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") || code.includes("BLOCKED") ? 400 : 500;
+    return doErrorResponse(req, ctx, code, status, code);
   }
 }

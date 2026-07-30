@@ -28,7 +28,7 @@ type SalesInvoiceLineRow = Record<string, unknown>;
 
 const SO_STATUSES = new Set(["CREATED", "ISSUED", "INVOICED", "CLOSED", "CANCELLED"]);
 const SO_LINE_STATUSES = new Set(["OPEN", "PARTIALLY_ISSUED", "FULLY_ISSUED", "KNOCKED_OFF", "CANCELLED"]);
-const SALES_INVOICE_STATUSES = new Set(["DRAFT", "POSTED"]);
+const SALES_INVOICE_STATUSES = new Set(["DRAFT", "POSTED", "CANCELLED"]);
 const GST_TYPES = new Set(["CGST_SGST", "IGST"]);
 const REBATE_BASIS_VALUES = new Set(["BASE_UOM", "PO_UOM"]);
 const PACKAGING_BASIS_VALUES = new Set(["FLAT", "PER_KG"]);
@@ -335,7 +335,10 @@ async function hydrateSo(soId: string, ctx?: ProcurementHandlerContext): Promise
   };
 }
 
-async function hasPhysicalInventoryBlock(
+// Exported so delivery_order.handlers.ts's PGI+Invoice handler can reuse
+// the same pre-posting checks the legacy atomic SO/STO issue handlers
+// already use, instead of duplicating them.
+export async function hasPhysicalInventoryBlock(
   materialId: string,
   storageLocationId: string,
 ): Promise<boolean> {
@@ -354,7 +357,7 @@ async function hasPhysicalInventoryBlock(
   return Boolean(data?.id);
 }
 
-async function getSnapshotForIssue(
+export async function getSnapshotForIssue(
   companyId: string,
   storageLocationId: string,
   materialId: string,
@@ -495,7 +498,11 @@ async function getCompanyAndCustomerTaxContext(companyId: string, customerId: st
 // is the customer's own registered state, independent of registration
 // status -- compare state names directly, same as vendor_master's own
 // reg_address_state pattern on the purchase side.
-function deriveSalesInvoiceGstType(companyStateName: string | null, customerBillingState: string | null): "CGST_SGST" | "IGST" {
+// Exported -- already source-agnostic (just compares two state-name
+// strings), so delivery_order.handlers.ts's PGI+Invoice handler reuses it
+// as-is for STO (sending vs receiving company state), not just SO
+// (company vs customer billing state).
+export function deriveSalesInvoiceGstType(companyStateName: string | null, customerBillingState: string | null): "CGST_SGST" | "IGST" {
   const company = companyStateName?.trim().toLowerCase() ?? "";
   const customer = customerBillingState?.trim().toLowerCase() ?? "";
   if (company && customer && company === customer) {

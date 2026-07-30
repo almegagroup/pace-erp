@@ -254,11 +254,13 @@ import {
 import {
   cancelDeliveryOrderHandler,
   createDeliveryOrderHandler,
+  createPgiInvoiceHandler,
   getDeliveryOrderHandler,
   listDeliveryOrdersHandler,
   listDOSourceDocumentsHandler,
   listDOSourceLinesHandler,
   listDOStorageLocationOptionsHandler,
+  reverseSalesInvoiceHandler,
 } from "../_core/procurement/delivery_order.handlers.ts";
 import {
   approveSTOHandler,
@@ -911,6 +913,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/sales-invoices\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
     return await postSalesInvoiceHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/sales-invoices\/pgi$/.test(pathname) && req.method === "POST") {
+    return await createPgiInvoiceHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/sales-invoices\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
+    return await reverseSalesInvoiceHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/stos\/[^/]+$/.test(pathname)) {
