@@ -1157,7 +1157,14 @@ export async function createSTOHandler(
       return stoErrorResponse(req, ctx, "STO_LINE_CREATE_FAILED", 500, "Unable to create STO lines.");
     }
 
-    await createCsnForSto(sto as StoRow, linePayload as StoLineRow[], ctx.auth_user_id, deliveryType);
+    // CSN must not exist before the STO is actually approved -- matches
+    // PO exactly (createCsnsForPo only runs from confirmPOHandler's
+    // no-approval branch and approvePOHandler, never createPOHandler).
+    // This used to fire right here at raw creation, which meant an
+    // INTER_PLANT STO could have a live CSN while still sitting in DRAFT
+    // -- caught 2026-07-30, business owner correction. confirmSTOHandler's
+    // own no-approval-required branch and approveSTOHandler already call
+    // createCsnForSto at the right time; this was the only premature call.
 
     return okResponse(await hydrateSto(String(sto.id), ctx), ctx.request_id, req);
   } catch (error) {
@@ -1498,11 +1505,12 @@ export async function cancelSTOHandler(
 // table (matching PO's shape) but nothing ever wrote KNOCKED_OFF to them --
 // dispatchSTOHandler/closeSTOHandler were already written to treat
 // KNOCKED_OFF lines as resolved, just never had anything setting it.
-// STO's own CSN auto-creation fires at createSTOHandler (INTER_PLANT only,
-// even for a still-DRAFT STO) -- unlike PO where CSN only appears at
-// CONFIRMED -- so a CSN can already exist here even before approval.
-// Same restraint as PO's line knock-off: only inactivates a CSN still at
-// ORD; TRN/GED (already dispatched) is left untouched, never silently
+// CSN timing now matches PO exactly (createSTOHandler no longer creates one
+// early -- see its own comment): at DRAFT/PENDING_APPROVAL no CSN exists
+// yet, so knocking off a line there is a plain line removal, nothing to
+// inactivate. Only once CREATED (post-approval) can a CSN exist for that
+// material -- same restraint as PO's line knock-off: only inactivates it if
+// still ORD; TRN/GED (already dispatched) is left untouched, never silently
 // cancelled.
 export async function knockOffSTOLineHandler(
   req: Request,
