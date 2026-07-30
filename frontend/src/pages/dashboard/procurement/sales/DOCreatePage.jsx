@@ -15,7 +15,8 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -134,6 +135,105 @@ function ItemPickerDrawer({ visible, sourceType, sourceId, alreadyAddedIds, onCl
   );
 }
 
+// Transporter search + "Add to Transporter Master" — results are portaled to
+// document.body (fixed-position, tracked off the input's own rect) because
+// this field lives inside an ErpSectionCard, which clips overflow; a plain
+// absolute-positioned dropdown would render but stay invisible/cut off, the
+// exact bug ErpComboboxField's own portal fix (this session) already solved.
+function TransporterPicker({ transporterId, transporterName, onSelect, onClear, companyId, canManageTransporters, onAddNew }) {
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [panelRect, setPanelRect] = useState(null);
+  const wrapperRef = useRef(null);
+  const debounceRef = useRef(null);
+
+  useEffect(() => {
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [search]);
+
+  const open = debouncedSearch.length >= 2;
+
+  const transporterQuery = useQuery({
+    queryKey: ["procurement", "transporters", "do-search", debouncedSearch, companyId],
+    queryFn: () => listTransporters({ search: debouncedSearch, company_id: companyId, limit: 20 }),
+    enabled: open,
+  });
+  const results = Array.isArray(transporterQuery.data) ? transporterQuery.data : (transporterQuery.data?.data ?? transporterQuery.data?.items ?? []);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPanelRect(null);
+      return undefined;
+    }
+    function updateRect() {
+      const el = wrapperRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setPanelRect({ top: rect.bottom, left: rect.left, width: rect.width });
+    }
+    updateRect();
+    window.addEventListener("scroll", updateRect, true);
+    window.addEventListener("resize", updateRect);
+    return () => {
+      window.removeEventListener("scroll", updateRect, true);
+      window.removeEventListener("resize", updateRect);
+    };
+  }, [open]);
+
+  if (transporterId && transporterName) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="flex h-8 flex-1 items-center border border-emerald-300 bg-emerald-50 px-2 text-xs text-emerald-900">{transporterName}</span>
+        <button type="button" onClick={onClear} className="h-8 border border-slate-300 bg-white px-2 text-[11px] font-semibold text-slate-600">Clear</button>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <input
+        type="text"
+        placeholder="Type 2+ characters to search transporter master…"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+      />
+      {open && panelRect &&
+        createPortal(
+          <div
+            style={{ position: "fixed", top: panelRect.top, left: panelRect.left, width: panelRect.width, zIndex: 1000200 }}
+            className="max-h-52 overflow-y-auto border border-slate-400 bg-white shadow-md"
+          >
+            {transporterQuery.isLoading && <div className="px-3 py-2 text-xs text-slate-400">Searching…</div>}
+            {!transporterQuery.isLoading && results.length === 0 && (
+              <div className="px-3 py-2 text-xs text-slate-500">
+                No match found.
+                {canManageTransporters ? (
+                  <button type="button" onClick={onAddNew} className="ml-2 text-sky-600 underline">Add to Transporter Master →</button>
+                ) : (
+                  <span className="ml-2 text-slate-400">(Contact manager to add)</span>
+                )}
+              </div>
+            )}
+            {results.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => { onSelect(t); setSearch(""); }}
+                className="block w-full border-b border-slate-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-sky-50"
+              >
+                <span className="font-mono text-[10px] text-slate-500">{t.transporter_code}</span> {t.transporter_name}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
 export default function DOCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext, allowedRoutes } = useMenu();
@@ -157,25 +257,9 @@ export default function DOCreatePage() {
   );
   const [transporterId, setTransporterId] = useState(_saved.transporterId ?? "");
   const [transporterName, setTransporterName] = useState(_saved.transporterName ?? "");
-  const [transporterSearch, setTransporterSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-
-  const debounceRef = useRef(null);
-  const [debouncedTransporterSearch, setDebouncedTransporterSearch] = useState("");
-  useEffect(() => {
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => setDebouncedTransporterSearch(transporterSearch.trim()), 300);
-    return () => clearTimeout(debounceRef.current);
-  }, [transporterSearch]);
-
-  const transporterQuery = useQuery({
-    queryKey: ["procurement", "transporters", "do-search", debouncedTransporterSearch, companyId],
-    queryFn: () => listTransporters({ search: debouncedTransporterSearch, company_id: companyId, limit: 20 }),
-    enabled: debouncedTransporterSearch.length >= 2,
-  });
-  const transporterResults = Array.isArray(transporterQuery.data) ? transporterQuery.data : (transporterQuery.data?.data ?? transporterQuery.data?.items ?? []);
 
   function handleAddTransporterToMaster() {
     updateActiveScreenContext({
@@ -421,47 +505,15 @@ export default function DOCreatePage() {
                     <input value={deliveryFields.lr_number} onChange={(event) => setDeliveryFields((current) => ({ ...current, lr_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
                   </ErpDenseFormRow>
                   <ErpDenseFormRow label="Transporter">
-                    {transporterId && transporterName ? (
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-8 flex-1 items-center border border-emerald-300 bg-emerald-50 px-2 text-xs text-emerald-900">{transporterName}</span>
-                        <button type="button" onClick={() => { setTransporterId(""); setTransporterName(""); setTransporterSearch(""); }} className="h-8 border border-slate-300 bg-white px-2 text-[11px] font-semibold text-slate-600">Clear</button>
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <input
-                          type="text"
-                          placeholder="Type 2+ characters to search transporter master…"
-                          value={transporterSearch}
-                          onChange={(event) => setTransporterSearch(event.target.value)}
-                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
-                        />
-                        {transporterSearch.trim().length >= 2 && (
-                          <div className="absolute left-0 right-0 top-full z-20 mt-0.5 max-h-52 overflow-y-auto border border-slate-200 bg-white shadow-md">
-                            {transporterQuery.isLoading && <div className="px-3 py-2 text-xs text-slate-400">Searching…</div>}
-                            {!transporterQuery.isLoading && transporterResults.length === 0 && (
-                              <div className="px-3 py-2 text-xs text-slate-500">
-                                No match found.
-                                {canManageTransporters ? (
-                                  <button type="button" onClick={handleAddTransporterToMaster} className="ml-2 text-sky-600 underline">Add to Transporter Master →</button>
-                                ) : (
-                                  <span className="ml-2 text-slate-400">(Contact manager to add)</span>
-                                )}
-                              </div>
-                            )}
-                            {transporterResults.map((t) => (
-                              <button
-                                key={t.id}
-                                type="button"
-                                onClick={() => { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); setTransporterSearch(""); }}
-                                className="block w-full border-b border-slate-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-sky-50"
-                              >
-                                <span className="font-mono text-[10px] text-slate-500">{t.transporter_code}</span> {t.transporter_name}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    <TransporterPicker
+                      transporterId={transporterId}
+                      transporterName={transporterName}
+                      companyId={companyId}
+                      canManageTransporters={canManageTransporters}
+                      onSelect={(t) => { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); }}
+                      onClear={() => { setTransporterId(""); setTransporterName(""); }}
+                      onAddNew={handleAddTransporterToMaster}
+                    />
                   </ErpDenseFormRow>
                   <ErpDenseFormRow label="Driver Name">
                     <input value={deliveryFields.driver_name} onChange={(event) => setDeliveryFields((current) => ({ ...current, driver_name: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
