@@ -15743,3 +15743,82 @@ CUSTOM:
 **Phase 1 (RM/PM/INT) সম্পূর্ণ শেষ → Phase 2 (FG Dispatch)** — আলাদা design session, এই session touch করেনি।
 
 ---
+
+### 113.13 — DO Commercial Data Snapshot (LOCKED — 2026-07-30, implementation pending)
+
+**সমস্যা:** `delivery_challan_line`-এ শুধু `unit_value` (rate) আর `line_total` (qty×rate, tax ছাড়া) copy হয় — GST rate/amount, packaging cost (basis/rate/amount/GST treatment), freight term, rebate — এর কোনোটাই DO-তে carry হয় না, আর `delivery_challan_line`-এ এসবের জন্য column-ই নেই।
+
+**Lock:** DO নিজেই এই পুরো commercial snapshot carry করবে — SO/STO line থেকে DO তৈরির সময় copy হয়ে বসবে।
+
+**যুক্তি:**
+- SO line-এ একবার DO তৈরি হয়ে গেলে সেই line-এর commercial field frozen হয়ে যায় (§113.5-এর line-level lock) — তাই DO তৈরির মুহূর্তে copy করা data পরে stale হওয়ার ঝুঁকি নেই, SO/STO-র সেই line আর বদলাতেই পারবে না।
+- এই codebase-এর নিজস্ব established pattern (GRN PO থেকে rate copy করে রাখে, §104.9-এর process_order_line_reco ইচ্ছাকৃতভাবে denormalized/flat) — নতুন কিছু না।
+- Accounts (যারা PGI+Invoice বানাবে, দেখো §113.15) শুধু DO দেখেই কাজ করতে পারবে, SO/STO-তে আলাদা join করে ফিরে তাকাতে হবে না।
+
+**যা যোগ করতে হবে (migration, implementation pending):** `delivery_challan_line`-এ GST rate/amount (CGST/SGST/IGST breakdown), packaging cost (basis/rate/amount/GST treatment), rebate columns; `delivery_challan` header-এ freight_term, payment_term_id। `createDeliveryOrderHandler`-এ SO/STO line থেকে এসব copy করে বসানো।
+
+---
+
+### 113.14 — GST Type Determination Fix: Customer Billing State (LOCKED + ✅ IMPLEMENTED — 2026-07-30)
+
+**Bug পাওয়া গেছে:** `deriveSalesInvoiceGstType()` company vs customer GSTIN-এর প্রথম ২ digit (state code) মিলিয়ে CGST+SGST/IGST ঠিক করত। Unregistered customer-এর GSTIN নেই, তাই তার state code সবসময় খালি — ফলে comparison কখনো মিলত না, **সবসময় IGST**-এ পড়ে যেত, even যদি customer company-র same state-এই থাকে।
+
+**Root cause:** Place of Supply GSTIN দিয়ে নয়, customer আসলে কোন state-এ আছে সেটা দিয়ে ঠিক হওয়ার কথা। `customer_master`-এ কোনো structured state field ছিল না (শুধু free-text address)। `vendor_master`-এ এই একই সমস্যা আগে থেকেই সমাধান করা ছিল (`reg_address_state`/`corr_address_state`) কিন্তু customer-এর মডেল সহজ, একটাই field দরকার।
+
+**Fix (✅ done, commit `3a1fe949`):**
+- Migration `20260730170000` — `erp_master.customer_master.billing_state` (text, `companies.state_name`-এর মতোই plain style)
+- `createCustomerHandler`/`updateCustomerHandler` — Billing State এখন mandatory (registered/unregistered নির্বিশেষে)
+- `deriveSalesInvoiceGstType()` এখন `companies.state_name` vs `customer_master.billing_state` সরাসরি তুলনা করে, GSTIN prefix দিয়ে না
+- `CustomerCreateForm.jsx` + `CustomerDetailPage.jsx` — দুটোতেই Billing State field যোগ
+- পুরনো customer (যাদের billing_state NULL, যেমন C-00005) backfill করা হয়নি — আসল state business owner-এর জানা তথ্য, বানিয়ে বসানো যায় না
+
+**STO-এর জন্য (এখনো implement হয়নি, §113.15-এ):** একই logic, শুধু `customer_master.billing_state`-এর জায়গায় **receiving company-র `state_name`** — `companies` table-এ `gst_number` আর `state_name` দুটোই already আছে (sending company আর receiving company দুটোই `companies` থেকে আসে), তাই নতুন কোনো field লাগবে না।
+
+---
+
+### 113.15 — Stage 3: PGI + Sales/STO Invoice (LOCKED — 2026-07-31, implementation pending)
+
+**Scope:** RM/PM/INT dispatch-এর PGI (Goods Issue) + Invoice — Stage 3 of §113.2-এর 3-stage architecture (Order → DO → **GI+Invoice**)। FG আলাদা (Phase 2), এখানে touch হয়নি।
+
+**Role split (business owner):** DO Stores বানায় (§113 Task E, আগেই করা)। PGI + Invoice — দুটোই **Accounts**-এর কাজ, একটা combined action-এ।
+
+**পুরনো legacy mechanism-এর gap (audit করে পাওয়া):**
+- `createSalesInvoiceHandler`/`postSalesInvoiceHandler` (SO02, `sales_invoice`/`sales_invoice_line`) — শুধু SO-sourced delivery_challan (dc_type=SALES) accept করে, STO hard-blocked (`"Only SALES delivery challans can create sales invoices."`)
+- `postSalesInvoiceHandler` GST amount হিসাব করে status POSTED করে দেয় কিন্তু **কোনো `post_stock_movement()` call নেই** — PGI আসলে এখানে কখনো হয়ই না
+- বাস্তব stock movement (PGI) আজকে হয় সম্পূর্ণ আলাদা, পুরনো atomic SO issue-stock mechanism দিয়ে (Invoice তৈরি হওয়ার অনেক আগে, DO-র সাথে কোনো সম্পর্ক ছাড়াই) — Task C-তে ইচ্ছাকৃতভাবে untouched রাখা হয়েছিল, কারণ true DO/GI separation-এর জন্য DO (Task E) আগে দরকার ছিল
+
+**Lock — একটাই unified mechanism, existing SO02 page reuse:**
+- SO02 (`Sales Invoices`, route `/dashboard/procurement/sales-invoices`) page-টাই এখন **SO + STO দুটোরই** PGI+Invoice mechanism হবে — আলাদা STO Invoice page/table বানানো হবে না
+- `sales_invoice`/`sales_invoice_line` table-ই reuse হবে (নতুন কিছু বানাতে হবে না) — শুধু dc_type=STO-এর block সরাতে হবে, আর নতুন field/logic যোগ করতে হবে
+- **1 DO = 1 Invoice সবসময়** — partial/multiple invoice per DO নেই
+- **Tally Invoice Number + Tally Invoice Date** — নতুন mandatory field, SO আর STO দুটোতেই। মূল legal/GST invoice Tally-তে বানানো হয় (IRN/e-invoice link নেই এই ERP invoice-এ) — ERP-র নিজের Invoice শুধু tracking-এর জন্য কিন্তু পুরোপুরি সঠিক হতে হবে (printout এখন লাগবে না, পরে আলাদা আলোচনা হবে)
+
+**SO02 নতুন shape — DO List / PGI Queue:**
+- List হবে DO (SO+STO উভয় সোর্স), 100 rows/page pagination
+- Sort: যেগুলো এখনো PGI হয়নি সেগুলো উপরে (action-needed); হয়ে গেলে date অনুযায়ী সরে যাবে
+- নতুন action button: **"PGI & INVOICE"** (keyboard shortcut সহ, এই app-এর existing convention মতোই)
+
+**PGI & INVOICE flow:**
+1. বাটনে click করলে DO picker আসবে
+2. DO select করলে auto-resolve/দেখাবে (DO-র নিজের commercial snapshot থেকে, §113.13): State, SO/STO Number, Consignee Name+Address, Transporter, LR Number+Date, material lines-এর GST breakup, packaging cost
+3. Manual entry: **Tally Invoice Number, Tally Invoice Date** (mandatory)
+4. Freight — line-এর freight_term "exclusive" টাইপ হলে (FREIGHT_SEPARATE/FREIGHT_AT_ACTUALS, FOR না) Yes/No জিজ্ঞেস করবে amount বসানো হবে কিনা — No হলে বাদ, Yes হলে amount বসবে; payment terms দেখাবে
+5. Submit → **read-only review screen** (শেষবার check করার সুযোগ) — ভুল থাকলে Cancel করে ফিরে গিয়ে ঠিক করা যাবে, ঠিক থাকলে আবার Submit
+6. **চূড়ান্ত Submit (এক atomic transaction):**
+   - প্রতিটা DO line-এর জন্য stock movement **P601 "GI for Dispatch (Delivery)"** post হবে (OUT, UNRESTRICTED থেকে, DO line-এর storage_location_id থেকে)
+   - System Invoice Number generate হবে (existing doc-number-series convention মতো)
+   - Invoice record তৈরি (Tally number/date, GST breakdown, packaging cost, freight (যদি থাকে), payment terms সহ)
+   - DO-র status আপডেট হবে (delivery_challan-এর CHECK constraint-এ `DISPATCHED` value already আছে, কখনো set হয়নি — এখন এখানে ব্যবহার হবে)
+
+**Reversal — DO (PGI-এর আগে):**
+- পুরো DO বাতিল (per-line না), reason mandatory
+- `reservation_document` release/cancel হয়ে যাবে — SO/STO line আবার নতুন DO-র জন্য খালি
+
+**Reversal — PGI+Invoice (Submit হয়ে যাওয়ার পরে):**
+- Invoice status → CANCELLED
+- Stock **P602** দিয়ে reverse (P601-এর pair)
+- DO আবার "release" হয়ে SO02-এর pending queue-তে ফিরে আসবে (status আবার CREATED-এ, reservation reopen/recreate)
+- নতুন Invoice আবার একই process দিয়ে বানানো যাবে — Tally invoice number/date same হলেও সমস্যা নেই (ERP-এর নিজের কোনো uniqueness enforce করার দরকার নেই, business owner-এর সিদ্ধান্ত)
+- Tally-তে ঠিক করা business owner-এর দায়িত্ব, ERP শুধু নিজের রেকর্ড ঠিক রাখবে
+
+---
