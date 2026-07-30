@@ -488,6 +488,33 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
       ? toTrimmedString(source.payment_term_id) || null
       : toTrimmedString(firstSourceLine?.payment_term_id) || null;
 
+    // DOCreatePage.jsx never collects delivery_address (no such field on the
+    // form), so body.delivery_address is always absent -- auto-resolve it
+    // instead: SO already carries its own delivery_address (typed at SO
+    // create); STO has no such concept, so it falls back to the receiving
+    // company's own address from Company Master (§113 bug report, 2026-07-31
+    // -- was landing as blank for every STO-sourced DO).
+    let resolvedDeliveryAddress = toTrimmedString(body.delivery_address) || null;
+    if (!resolvedDeliveryAddress) {
+      if (isSalesOrder) {
+        resolvedDeliveryAddress = toTrimmedString(source.delivery_address) || null;
+      } else {
+        const receivingCompanyId = toTrimmedString(source.receiving_company_id);
+        if (receivingCompanyId) {
+          const { data: receivingCompany, error: receivingCompanyError } = await serviceRoleClient
+            .schema("erp_master")
+            .from("companies")
+            .select("full_address")
+            .eq("id", receivingCompanyId)
+            .maybeSingle();
+          if (receivingCompanyError) {
+            return doErrorResponse(req, ctx, "DO_RECEIVING_COMPANY_LOOKUP_FAILED", 500, "Unable to load the receiving company's address.");
+          }
+          resolvedDeliveryAddress = toTrimmedString(receivingCompany?.full_address) || null;
+        }
+      }
+    }
+
     const dcNumber = await generateProcurementDocNumber("DC");
     const { data: dc, error: dcError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -504,7 +531,7 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
         cost_center_id: costCenterId,
         freight_term: headerFreightTerm,
         payment_term_id: headerPaymentTermId,
-        delivery_address: toTrimmedString(body.delivery_address) || null,
+        delivery_address: resolvedDeliveryAddress,
         transporter_id: toTrimmedString(body.transporter_id) || null,
         transporter_name_freetext: toTrimmedString(body.transporter_name_freetext) || null,
         vehicle_number: toTrimmedString(body.vehicle_number) || null,
