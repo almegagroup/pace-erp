@@ -430,6 +430,16 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
       preparedLines.push({ sourceLine, quantity, storageLocationId });
     }
 
+    // Real gap caught live 2026-07-30: total_value was never written anywhere
+    // in this handler, so DOListPage always showed 0.00. Computed here (not
+    // as a follow-up UPDATE) since every line's rate is already known before
+    // the header insert -- one round trip, not two.
+    const totalValue = Number(
+      preparedLines
+        .reduce((sum, { sourceLine, quantity }) => sum + quantity * Number((isSalesOrder ? sourceLine.net_rate : sourceLine.transfer_price) ?? 0), 0)
+        .toFixed(4),
+    );
+
     const dcNumber = await generateProcurementDocNumber("DC");
     const { data: dc, error: dcError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -451,6 +461,7 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
         lr_number: toTrimmedString(body.lr_number) || null,
         driver_name: toTrimmedString(body.driver_name) || null,
         status: "CREATED",
+        total_value: totalValue,
         remarks: toTrimmedString(body.remarks) || null,
       })
       .select("*")
@@ -609,7 +620,9 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
     ...dc,
     selling_company_display: sellingCompany ? `${sellingCompany.company_code ?? ""} — ${sellingCompany.company_name ?? ""}`.trim() : null,
     receiving_company_display: receivingCompany ? `${receivingCompany.company_code ?? ""} — ${receivingCompany.company_name ?? ""}`.trim() : null,
-    customer_display: customer ? `${customer.customer_code ?? ""} — ${customer.customer_name ?? ""}`.trim() : null,
+    customer_display: customer
+      ? (customer.customer_name ? `${customer.customer_code ?? ""} — ${customer.customer_name}`.trim() : String(customer.customer_code ?? ""))
+      : null,
     source_document_number: isSalesOrder ? (source?.so_number ?? null) : (source?.sto_number ?? null),
     source_document_date: isSalesOrder ? (source?.so_date ?? null) : (source?.sto_date ?? null),
     source_reference_display: isSalesOrder ? (source?.customer_po_number ? `Customer PO ${source.customer_po_number}` : null) : (source?.sto_type ?? null),
@@ -663,17 +676,34 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
 
     const rows = (data ?? []) as JsonRecord[];
     const customerIds = [...new Set(rows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
-    const { data: customers } = customerIds.length
-      ? await serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)
-      : { data: [] as JsonRecord[] };
+    // STO-sourced DO rows have no customer_id at all (customer_id is only
+    // ever set for dc_type SALES, per createDeliveryOrderHandler) -- the
+    // "Customer" column was showing a bare "—" for every STO row instead of
+    // the counterparty that's actually relevant there, the receiving company.
+    const receivingCompanyIds = [...new Set(rows.map((row) => toTrimmedString(row.receiving_company_id)).filter(Boolean))];
+    const [{ data: customers }, { data: receivingCompanies }] = await Promise.all([
+      customerIds.length
+        ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)
+        : Promise.resolve({ data: [] as JsonRecord[] }),
+      receivingCompanyIds.length
+        ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", receivingCompanyIds)
+        : Promise.resolve({ data: [] as JsonRecord[] }),
+    ]);
     const customerMap = new Map(((customers ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+    const receivingCompanyMap = new Map(((receivingCompanies ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
     const items = rows.map((row) => {
       const customer = customerMap.get(toTrimmedString(row.customer_id));
+      const receivingCompany = receivingCompanyMap.get(toTrimmedString(row.receiving_company_id));
+      const customerDisplay = customer
+        ? (customer.customer_name ? `${customer.customer_code ?? ""} — ${customer.customer_name}`.trim() : String(customer.customer_code ?? ""))
+        : receivingCompany
+          ? `To: ${receivingCompany.company_code ?? receivingCompany.company_name ?? ""}`.trim()
+          : null;
       return {
         ...row,
         source_display: row.sales_order_id ? "SALES_ORDER" : row.sto_id ? "STO" : null,
-        customer_display: customer ? `${customer.customer_code ?? ""} — ${customer.customer_name ?? ""}`.trim() : null,
+        customer_display: customerDisplay,
       };
     });
 
