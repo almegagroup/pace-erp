@@ -527,6 +527,12 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
   }
 }
 
+// §8A R-00/R-03 — DO detail (and the invoice stage this feeds later) must
+// never carry raw FK ids; every reference is bulk-resolved here in one
+// round each, not per-row. This was a stub (`{...dc, lines}` verbatim) left
+// over from the initial Task E build — caught live 2026-07-30 showing raw
+// UUIDs for material/storage location and nothing at all for
+// customer/company/source-document/transporter/cost-center.
 async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
   const { data: dc, error: dcError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan").select("*").eq("id", dcId).single();
   if (dcError || !dc) throw new Error("DO_NOT_FOUND");
@@ -537,7 +543,80 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
     .eq("dc_id", dcId)
     .order("line_number", { ascending: true });
   if (linesError) throw new Error("DO_LINE_FETCH_FAILED");
-  return { ...dc, lines: lines ?? [] };
+  const lineRows = (lines ?? []) as JsonRecord[];
+
+  const isSalesOrder = toUpperTrimmedString(dc.dc_type) === "SALES";
+  const companyIds = [...new Set([dc.selling_company_id, dc.receiving_company_id].map((v) => toTrimmedString(v)).filter(Boolean))];
+  const materialIds = [...new Set(lineRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+  const locationIds = [...new Set(lineRows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
+
+  const [companiesResp, customerResp, sourceResp, transporterResp, costCenterResp, materialsResp, locationsResp] = await Promise.all([
+    companyIds.length
+      ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds)
+      : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    dc.customer_id
+      ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").eq("id", dc.customer_id).maybeSingle()
+      : Promise.resolve({ data: null as JsonRecord | null, error: null }),
+    isSalesOrder
+      ? (dc.sales_order_id
+          ? serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, so_date, customer_po_number").eq("id", dc.sales_order_id).maybeSingle()
+          : Promise.resolve({ data: null as JsonRecord | null, error: null }))
+      : (dc.sto_id
+          ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, sto_date, sto_type").eq("id", dc.sto_id).maybeSingle()
+          : Promise.resolve({ data: null as JsonRecord | null, error: null })),
+    dc.transporter_id
+      ? serviceRoleClient.schema("erp_master").from("transporter_master").select("id, transporter_code, transporter_name").eq("id", dc.transporter_id).maybeSingle()
+      : Promise.resolve({ data: null as JsonRecord | null, error: null }),
+    dc.cost_center_id
+      ? serviceRoleClient.schema("erp_master").from("cost_center_master").select("id, cost_center_code, cost_center_name").eq("id", dc.cost_center_id).maybeSingle()
+      : Promise.resolve({ data: null as JsonRecord | null, error: null }),
+    materialIds.length
+      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name").in("id", materialIds)
+      : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    locationIds.length
+      ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds)
+      : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+  ]);
+  if (companiesResp.error) throw new Error("DO_COMPANY_LOOKUP_FAILED");
+  if (customerResp.error) throw new Error("DO_CUSTOMER_LOOKUP_FAILED");
+  if (sourceResp.error) throw new Error("DO_SOURCE_LOOKUP_FAILED");
+  if (transporterResp.error) throw new Error("DO_TRANSPORTER_LOOKUP_FAILED");
+  if (costCenterResp.error) throw new Error("DO_COST_CENTER_LOOKUP_FAILED");
+  if (materialsResp.error) throw new Error("DO_MATERIAL_LOOKUP_FAILED");
+  if (locationsResp.error) throw new Error("DO_LOCATION_LOOKUP_FAILED");
+
+  const companyMap = new Map(((companiesResp.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const materialMap = new Map(((materialsResp.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const locationMap = new Map(((locationsResp.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const customer = customerResp.data as JsonRecord | null;
+  const source = sourceResp.data as JsonRecord | null;
+  const transporter = transporterResp.data as JsonRecord | null;
+  const costCenter = costCenterResp.data as JsonRecord | null;
+  const sellingCompany = companyMap.get(toTrimmedString(dc.selling_company_id));
+  const receivingCompany = companyMap.get(toTrimmedString(dc.receiving_company_id));
+
+  const hydratedLines = lineRows.map((row) => {
+    const material = materialMap.get(toTrimmedString(row.material_id));
+    const location = locationMap.get(toTrimmedString(row.storage_location_id));
+    return {
+      ...row,
+      material_display: material ? `${material.pace_code ?? ""} ${material.material_name ?? ""}`.trim() : null,
+      storage_location_display: location ? `${location.code ?? ""} — ${location.name ?? ""}`.trim() : null,
+    };
+  });
+
+  return {
+    ...dc,
+    selling_company_display: sellingCompany ? `${sellingCompany.company_code ?? ""} — ${sellingCompany.company_name ?? ""}`.trim() : null,
+    receiving_company_display: receivingCompany ? `${receivingCompany.company_code ?? ""} — ${receivingCompany.company_name ?? ""}`.trim() : null,
+    customer_display: customer ? `${customer.customer_code ?? ""} — ${customer.customer_name ?? ""}`.trim() : null,
+    source_document_number: isSalesOrder ? (source?.so_number ?? null) : (source?.sto_number ?? null),
+    source_document_date: isSalesOrder ? (source?.so_date ?? null) : (source?.sto_date ?? null),
+    source_reference_display: isSalesOrder ? (source?.customer_po_number ? `Customer PO ${source.customer_po_number}` : null) : (source?.sto_type ?? null),
+    transporter_display: transporter ? `${transporter.transporter_code ?? ""} — ${transporter.transporter_name ?? ""}`.trim() : (dc.transporter_name_freetext ?? null),
+    cost_center_display: costCenter ? `${costCenter.cost_center_code ?? ""} | ${costCenter.cost_center_name ?? ""}`.trim() : null,
+    lines: hydratedLines,
+  };
 }
 
 export async function getDeliveryOrderHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
