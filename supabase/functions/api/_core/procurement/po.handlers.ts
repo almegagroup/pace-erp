@@ -14,6 +14,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
+import { recalculateAndBuildUpdates } from "./csn.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type PurchaseOrderRow = Record<string, unknown>;
@@ -51,6 +52,7 @@ const MUTABLE_AMENDMENT_FIELDS = new Set([
   "expected_delivery_date",
   "incoterm",
   "payment_term_id",
+  "delivery_type",
   "cost_center_id",
   "remarks",
 ]);
@@ -869,13 +871,30 @@ async function createCsnsForPo(
         const orderedQty = Number(line.ordered_qty ?? 0);
         const materialId = toTrimmedString(line.material_id);
         const materialCategoryId = materialCategoryByMaterialId.get(materialId) ?? null;
+        const csnType = deriveCsnType(po);
+        const portOfDischargeId = toTrimmedString(po.destination_port_id) || null;
+
+        // Seed the same ETD/ETA-to-plant cascade the CSN would otherwise only
+        // get on its first later edit -- see recalculateAndBuildUpdates's own
+        // comment in csn.handlers.ts for why this was blank until TRN before.
+        const etaUpdates = await recalculateAndBuildUpdates(
+          {
+            csn_type: csnType,
+            po_id: po.id,
+            vendor_id: po.vendor_id,
+            material_category_id: materialCategoryId,
+            company_id: po.company_id,
+            consignee_company_id: po.company_id,
+          },
+          portOfDischargeId ? { port_of_discharge_id: portOfDischargeId } : {},
+        );
 
         const { error } = await serviceRoleClient
           .schema("erp_procurement")
           .from("consignment_note")
           .insert({
             csn_number: csnNumber,
-            csn_type: deriveCsnType(po),
+            csn_type: csnType,
             status: "ORD",
             company_id: po.company_id,
             vendor_id: po.vendor_id,
@@ -891,7 +910,8 @@ async function createCsnsForPo(
             has_rebate: po.has_rebate === true,
             rebate_remarks: po.rebate_remarks ?? null,
             indent_required: po.indent_required === true,
-            port_of_discharge_id: po.destination_port_id ?? null,
+            port_of_discharge_id: portOfDischargeId,
+            ...etaUpdates,
             created_by: createdBy,
           });
 
@@ -2008,6 +2028,7 @@ export async function amendPOHandler(
       expected_delivery_date: body.delivery_date ?? body.expected_delivery_date,
       incoterm: body.incoterm,
       payment_term_id: body.payment_term_id,
+      delivery_type: body.delivery_type,
       cost_center_id: body.cost_center_id,
       remarks: body.remarks,
     };
@@ -2065,6 +2086,12 @@ export async function amendPOHandler(
           return procurementErrorResponse(req, ctx, "PROCUREMENT_COST_CENTER_NOT_FOUND", 404, "Cost center not found");
         }
         lineUpdates.cost_center_id = costCenterId;
+      } else if (fieldName === "delivery_type") {
+        const deliveryType = toUpperTrimmedString(normalizedValue);
+        if (!DELIVERY_TYPES.has(deliveryType)) {
+          return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_DELIVERY_TYPE", 400, "Invalid delivery type");
+        }
+        headerUpdates.delivery_type = deliveryType;
       } else {
         headerUpdates[fieldName] = normalizedValue || null;
       }

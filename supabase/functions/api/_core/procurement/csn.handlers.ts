@@ -755,7 +755,13 @@ function calculateETACascade(
   return updates;
 }
 
-async function recalculateAndBuildUpdates(
+// Exported so po.handlers.ts's createCsnsForPo() can seed the same
+// ETD/ETA-to-plant cascade at CSN creation time -- previously only ran on
+// a later save/edit, so eta_to_plant_calculated stayed NULL from PO confirm
+// all the way until someone touched the CSN (typically at TRN, when
+// LR/ATD gets entered). Caught live 2026-07-30 as "ETA to Plant blank
+// until TRN" in CSN Tracker.
+export async function recalculateAndBuildUpdates(
   csn: CsnRow,
   inputUpdates: JsonRecord,
 ): Promise<JsonRecord> {
