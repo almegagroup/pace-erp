@@ -309,7 +309,9 @@ async function hydrateSo(soId: string, ctx?: ProcurementHandlerContext): Promise
       .schema("erp_procurement")
       .from("gate_exit_outbound")
       .select("*")
-      .eq("so_id", soId)
+      // gate_exit_outbound's real FK column is sales_order_id — "so_id" was
+      // never a real column, so this query 500'd on every SO create/fetch.
+      .eq("sales_order_id", soId)
       .order("created_at", { ascending: false }),
   ]);
 
