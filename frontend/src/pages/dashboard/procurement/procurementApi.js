@@ -580,6 +580,14 @@ export function cancelSTO(id, data) {
   return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/cancel`, data);
 }
 
+export function knockOffSTOLine(id, lineId, data) {
+  return fetchProcurement(
+    "POST",
+    `/api/procurement/stos/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}/knock-off`,
+    data
+  );
+}
+
 export function confirmSTO(id, data) {
   return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/confirm`, data);
 }

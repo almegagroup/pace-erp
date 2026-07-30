@@ -1195,6 +1195,7 @@ export async function listCSNsHandler(req: Request, ctx: ProcurementHandlerConte
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const csnType = toUpperTrimmedString(url.searchParams.get("csn_type"));
     const poId = toTrimmedString(url.searchParams.get("po_id"));
+    const stoId = toTrimmedString(url.searchParams.get("sto_id"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
@@ -1215,6 +1216,7 @@ export async function listCSNsHandler(req: Request, ctx: ProcurementHandlerConte
     if (status) query = query.eq("status", status);
     if (csnType) query = query.eq("csn_type", csnType);
     if (poId) query = query.eq("po_id", poId);
+    if (stoId) query = query.eq("sto_id", stoId);
     if (dateFrom) query = query.gte("created_at", `${dateFrom}T00:00:00.000Z`);
     if (dateTo) query = query.lte("created_at", `${dateTo}T23:59:59.999Z`);
 

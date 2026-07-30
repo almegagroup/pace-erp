@@ -269,6 +269,7 @@ import {
   confirmSTOReceiptHandler,
   createSTOHandler,
   dispatchSTOHandler,
+  knockOffSTOLineHandler,
   getSTOHandler,
   getLastStoPaymentTermHandler,
   listSTOsHandler,
@@ -918,6 +919,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/stos\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
     return await cancelSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/lines\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
+    return await knockOffSTOLineHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/stos\/[^/]+\/confirm$/.test(pathname) && req.method === "POST") {

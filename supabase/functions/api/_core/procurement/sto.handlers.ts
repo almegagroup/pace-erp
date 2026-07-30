@@ -180,6 +180,10 @@ function getIdFromPath(req: Request): string {
   return getPathSegments(req)[3] ?? "";
 }
 
+function getLineIdFromPath(req: Request): string {
+  return getPathSegments(req)[5] ?? "";
+}
+
 function stoErrorResponse(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -823,13 +827,22 @@ async function inactivateLinkedCsnsForSto(input: {
   actionedBy: string;
   clearStoLink?: boolean;
   eligibleStatuses?: string[];
+  // consignment_note has no sto_line_id column (unlike po_line_id for PO) --
+  // one CSN per STO line, but linked only via sto_id + material_id. A
+  // line-scoped knock-off must narrow by material to avoid touching a
+  // sibling line's CSN for a different material on the same STO.
+  materialId?: string;
 }): Promise<void> {
-  const { data: rows, error: fetchError } = await serviceRoleClient
+  let query = serviceRoleClient
     .schema("erp_procurement")
     .from("consignment_note")
     .select("id, status")
     .eq("sto_id", input.stoId)
     .in("status", input.eligibleStatuses ?? ["ORD", "TRN", "GED"]);
+  if (input.materialId) {
+    query = query.eq("material_id", input.materialId);
+  }
+  const { data: rows, error: fetchError } = await query;
 
   if (fetchError) {
     throw new Error("PROCUREMENT_CSN_UPDATE_FAILED");
@@ -1478,6 +1491,89 @@ export async function cancelSTOHandler(
   }
 }
 
+// Per-line equivalent of PO's knockOffPOLineHandler -- STO is one multi-line
+// document (not PO's one-doc-per-material split), so "remove one bad item"
+// means knocking off a single stock_transfer_order_line, not the whole
+// document. The line_status/knock_off_* columns already existed on this
+// table (matching PO's shape) but nothing ever wrote KNOCKED_OFF to them --
+// dispatchSTOHandler/closeSTOHandler were already written to treat
+// KNOCKED_OFF lines as resolved, just never had anything setting it.
+// STO's own CSN auto-creation fires at createSTOHandler (INTER_PLANT only,
+// even for a still-DRAFT STO) -- unlike PO where CSN only appears at
+// CONFIRMED -- so a CSN can already exist here even before approval.
+// Same restraint as PO's line knock-off: only inactivates a CSN still at
+// ORD; TRN/GED (already dispatched) is left untouched, never silently
+// cancelled.
+export async function knockOffSTOLineHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const stoId = getIdFromPath(req);
+    const lineId = getLineIdFromPath(req);
+    const body = await parseBody(req);
+    const reason = toTrimmedString(body.reason || body.knock_off_reason);
+    if (!reason) {
+      return stoErrorResponse(req, ctx, "STO_LINE_KNOCK_OFF_REASON_REQUIRED", 400, "Knock-off reason is required.");
+    }
+
+    const sto = await fetchSto(stoId);
+    assertStoVisibleToContext(ctx, sto);
+    if (!["DRAFT", "PENDING_APPROVAL", "CREATED"].includes(toUpperTrimmedString(sto.status))) {
+      return stoErrorResponse(req, ctx, "STO_LINE_KNOCK_OFF_BLOCKED", 400, "STO line can only be knocked off before dispatch.");
+    }
+
+    const lines = await fetchStoLines(stoId);
+    const targetLine = lines.find((line) => toTrimmedString(line.id) === lineId);
+    if (!targetLine) {
+      return stoErrorResponse(req, ctx, "STO_LINE_NOT_FOUND", 404, "STO line not found.");
+    }
+    if (toUpperTrimmedString(targetLine.line_status) === "KNOCKED_OFF") {
+      return stoErrorResponse(req, ctx, "STO_LINE_ALREADY_KNOCKED_OFF", 400, "This line is already knocked off.");
+    }
+    if (Number(targetLine.dispatched_qty ?? 0) > 0) {
+      return stoErrorResponse(req, ctx, "STO_LINE_ALREADY_DISPATCHED", 400, "This line already has dispatched quantity and cannot be knocked off.");
+    }
+
+    const nowIso = new Date().toISOString();
+    const { error: lineError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order_line")
+      .update({
+        line_status: "KNOCKED_OFF",
+        knock_off_reason: reason,
+        knocked_off_by: ctx.auth_user_id,
+        knocked_off_at: nowIso,
+        last_updated_at: nowIso,
+      })
+      .eq("id", lineId);
+
+    if (lineError) {
+      return stoErrorResponse(req, ctx, "STO_LINE_KNOCK_OFF_FAILED", 500, "Unable to knock off STO line.");
+    }
+
+    try {
+      await inactivateLinkedCsnsForSto({
+        stoId,
+        materialId: toTrimmedString(targetLine.material_id),
+        reasonCode: "KOF",
+        reason,
+        actionedBy: ctx.auth_user_id,
+        eligibleStatuses: ["ORD"],
+      });
+    } catch (_csnError) {
+      return stoErrorResponse(req, ctx, "STO_LINE_KNOCK_OFF_FAILED", 500, "Unable to inactivate linked CSN for knocked-off line.");
+    }
+
+    return okResponse(await hydrateSto(stoId, ctx), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "STO_LINE_KNOCK_OFF_FAILED";
+    const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_LINE_NOT_FOUND" ? 404 : code === "STO_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") || code.includes("BLOCKED") || code.includes("ALREADY") ? 400 : 500;
+    return stoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
 export async function transformSubCSNToSTOHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -1995,9 +2091,14 @@ export async function dispatchSTOHandler(
       return stoErrorResponse(req, ctx, "STO_DISPATCH_BLOCKED", 400, "Only CREATED STO can be dispatched.");
     }
 
-    const lines = await fetchStoLines(stoId);
+    // KNOCKED_OFF lines (knockOffSTOLineHandler) must never reach dispatch --
+    // matches closeSTOHandler's own existing KNOCKED_OFF-is-resolved
+    // treatment on the other end of the lifecycle.
+    const lines = (await fetchStoLines(stoId)).filter(
+      (line) => toUpperTrimmedString(line.line_status) !== "KNOCKED_OFF",
+    );
     if (lines.length === 0) {
-      return stoErrorResponse(req, ctx, "STO_EMPTY", 400, "STO has no lines.");
+      return stoErrorResponse(req, ctx, "STO_EMPTY", 400, "STO has no lines to dispatch (all lines knocked off).");
     }
 
     const dispatchedLineResults: Array<{ line: StoLineRow; stockDocumentId: string }> = [];
