@@ -83,6 +83,17 @@ import {
   updateParentCustomerHandler,
 } from "../_core/om/parent_customer.handlers.ts";
 import {
+  addDispatchCustomerAddressHandler,
+  createDispatchCustomerHandler,
+  createOrGetDepotCodeHandler,
+  createParentCompanyHandler,
+  listDepotCodesHandler,
+  listDispatchCustomerAddressesHandler,
+  listParentCompaniesHandler,
+  updateDispatchCustomerAddressHandler,
+  upgradeDispatchCustomerToRegisteredHandler,
+} from "../_core/om/fg_dispatch_customer.handlers.ts";
+import {
   createUomHandler,
   listUomHandler,
   toggleUomHandler,
@@ -131,6 +142,7 @@ export async function dispatchOmRoutes(
     auth_user_id: session.authUserId,
     roleCode: context.roleCode,
   };
+  const pathname = new URL(req.url).pathname;
 
   switch (routeKey) {
     case "POST:/api/om/material":
@@ -261,6 +273,16 @@ export async function dispatchOmRoutes(
       return await createParentCustomerHandler(req, ctx);
     case "PATCH:/api/om/parent-customer":
       return await updateParentCustomerHandler(req, ctx);
+    case "POST:/api/om/fg-parent-company":
+      return await createParentCompanyHandler(req, ctx);
+    case "GET:/api/om/fg-parent-companies":
+      return await listParentCompaniesHandler(req, ctx);
+    case "POST:/api/om/fg-depot-code":
+      return await createOrGetDepotCodeHandler(req, ctx);
+    case "GET:/api/om/fg-depot-codes":
+      return await listDepotCodesHandler(req, ctx);
+    case "POST:/api/om/fg-dispatch-customer":
+      return await createDispatchCustomerHandler(req, ctx);
 
     case "GET:/api/om/uoms":
       return await listUomHandler(req, ctx);
@@ -313,6 +335,21 @@ export async function dispatchOmRoutes(
       return await toggleMachineHandler(req, ctx);
 
     default:
-      return null;
+      break;
   }
+
+  if (/^\/api\/om\/fg-dispatch-customers\/[^/]+\/upgrade-gst$/.test(pathname) && req.method === "POST") {
+    return await upgradeDispatchCustomerToRegisteredHandler(req, ctx);
+  }
+  if (/^\/api\/om\/fg-dispatch-customers\/[^/]+\/addresses$/.test(pathname) && req.method === "POST") {
+    return await addDispatchCustomerAddressHandler(req, ctx);
+  }
+  if (/^\/api\/om\/fg-dispatch-customers\/[^/]+\/addresses$/.test(pathname) && req.method === "GET") {
+    return await listDispatchCustomerAddressesHandler(req, ctx);
+  }
+  if (/^\/api\/om\/fg-dispatch-addresses\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateDispatchCustomerAddressHandler(req, ctx);
+  }
+
+  return null;
 }

@@ -156,6 +156,19 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/transporters/company-map":   { skipAcl: false, resourceCode: "PROC_TRANSPORTER_MASTER",        action: "EDIT"  },
   "GET:/api/procurement/gst-profile":                 { skipAcl: true },
   "GET:/api/procurement/companies":                   { skipAcl: true },
+
+  // —— Production: Accounts rate masters ————————————————————————————————————————————
+  "GET:/api/production/mts-sku-rates":               { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "VIEW" },
+  "POST:/api/production/mts-sku-rates/draft":        { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "WRITE" },
+  "GET:/api/production/mts-sku-rates/pending-drafts": { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "VIEW" },
+  "POST:/api/production/mts-sku-rates/approve":      { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "APPROVE" },
+  "GET:/api/production/mts-sku-rates/available-months": { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "VIEW" },
+  "POST:/api/production/costing-groups":             { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "WRITE" },
+  "GET:/api/production/costing-groups":              { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
+  "GET:/api/production/costing-rate/materials":      { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
+  "POST:/api/production/costing-rate/draft":         { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "WRITE" },
+  "GET:/api/production/costing-rate/pending-drafts": { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
+  "POST:/api/production/costing-rate/approve":       { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "APPROVE" },
   "GET:/api/procurement/chas":                        { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "VIEW"  },
   "POST:/api/procurement/chas":                       { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "WRITE" },
   "POST:/api/procurement/chas/toggle":                { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "EDIT"  },
@@ -240,6 +253,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/om/parent-customers":                     { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
   "POST:/api/om/parent-customer":                     { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
   "PATCH:/api/om/parent-customer":                    { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
+  "GET:/api/om/fg-parent-companies":                  { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "VIEW" },
+  "POST:/api/om/fg-parent-company":                   { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
+  "GET:/api/om/fg-depot-codes":                       { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "VIEW" },
+  "POST:/api/om/fg-depot-code":                       { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
+  "POST:/api/om/fg-dispatch-customer":                { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
 
   // ── OM: Utility (used by forms — skipAcl) ────────────────────────────────
   "GET:/api/om/uoms":                                 { skipAcl: true },
@@ -416,6 +434,36 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
       GET:    { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"   },
       PUT:    { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT"   },
       DELETE: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "DELETE" },
+    },
+  },
+
+  {
+    pattern: /^\/api\/om\/fg-dispatch-customers\/[^/]+\/upgrade-gst$/,
+    methods: { POST: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/om\/fg-dispatch-customers\/[^/]+\/addresses$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "VIEW" },
+      POST: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
+    },
+  },
+  {
+    pattern: /^\/api\/om\/fg-dispatch-addresses\/[^/]+$/,
+    methods: {
+      PATCH: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/production\/costing-groups\/[^/]+\/members$/,
+    methods: {
+      POST: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "WRITE" },
+    },
+  },
+  {
+    pattern: /^\/api\/production\/costing-groups\/[^/]+\/members\/[^/]+$/,
+    methods: {
+      DELETE: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "DELETE" },
     },
   },
   {

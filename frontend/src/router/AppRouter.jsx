@@ -110,6 +110,7 @@ import AslDetailPage from "../pages/dashboard/om/asl/AslDetailPage.jsx";
 import CustomerListPage from "../pages/dashboard/om/customer/CustomerListPage.jsx";
 import CustomerCreatePage from "../pages/dashboard/om/customer/CustomerCreatePage.jsx";
 import CustomerDetailPage from "../pages/dashboard/om/customer/CustomerDetailPage.jsx";
+import FgDispatchCustomerPage from "../pages/dashboard/om/FgDispatchCustomerPage.jsx";
 import POListPage from "../pages/dashboard/procurement/po/POListPage.jsx";
 import POCreatePage from "../pages/dashboard/procurement/po/POCreatePage.jsx";
 import POCreateOpeningPage from "../pages/dashboard/procurement/po/POCreateOpeningPage.jsx";
@@ -196,6 +197,8 @@ import SfgResultRecordingPage from "../pages/dashboard/production/SfgResultRecor
 import FgStockBreakdownPage from "../pages/dashboard/production/FgStockBreakdownPage.jsx";
 import PartialBatchReversalPage from "../pages/dashboard/production/PartialBatchReversalPage.jsx";
 import ConversionCostPage from "../pages/dashboard/production/ConversionCostPage.jsx";
+import MtsSkuMonthlyRatePage from "../pages/dashboard/production/MtsSkuMonthlyRatePage.jsx";
+import SlocCostingGroupPage from "../pages/dashboard/production/SlocCostingGroupPage.jsx";
 import OldProcessPoPage from "../pages/dashboard/production/OldProcessPoPage.jsx";
 import OldPackingPoPage from "../pages/dashboard/production/OldPackingPoPage.jsx";
 import PartialReversalReportPage from "../pages/dashboard/production/PartialReversalReportPage.jsx";
@@ -516,6 +519,10 @@ export default function AppRouter() {
                     element={<CustomerDetailPage />}
                   />
                   <Route
+                    path="om/fg-dispatch-customers"
+                    element={<FgDispatchCustomerPage />}
+                  />
+                  <Route
                     path="procurement/purchase-orders"
                     element={<POListPage />}
                   />
@@ -788,6 +795,8 @@ export default function AppRouter() {
                   <Route path="production/partial-batch-reversal" element={<PartialBatchReversalPage />} />
                   <Route path="production/partial-reversal-report" element={<PartialReversalReportPage />} />
                   <Route path="production/conversion-cost" element={<ConversionCostPage />} />
+                  <Route path="production/mts-sku-monthly-rate" element={<MtsSkuMonthlyRatePage />} />
+                  <Route path="production/sloc-costing-group" element={<SlocCostingGroupPage />} />
                   <Route path="production/old-process-po" element={<OldProcessPoPage />} />
                   <Route path="production/old-packing-po" element={<OldPackingPoPage />} />
                 </Route>

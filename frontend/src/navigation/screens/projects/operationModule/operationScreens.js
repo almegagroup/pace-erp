@@ -81,6 +81,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  OM_FG_DISPATCH_CUSTOMER: {
+    screen_code: "OM_FG_DISPATCH_CUSTOMER",
+    route: "/dashboard/om/fg-dispatch-customers",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_PO_LIST: {
     screen_code: "PROC_PO_LIST",
     route: "/dashboard/procurement/purchase-orders",
@@ -759,6 +767,22 @@ export const OPERATION_SCREENS = Object.freeze({
   ACC_CONVERSION_COST: {
     screen_code: "ACC_CONVERSION_COST",
     route: "/dashboard/production/conversion-cost",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  ACC_MTS_SKU_MONTHLY_RATE: {
+    screen_code: "ACC_MTS_SKU_MONTHLY_RATE",
+    route: "/dashboard/production/mts-sku-monthly-rate",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  ACC_SLOC_COSTING_GROUP: {
+    screen_code: "ACC_SLOC_COSTING_GROUP",
+    route: "/dashboard/production/sloc-costing-group",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

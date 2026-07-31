@@ -69,6 +69,19 @@ export const listConversionRates = (p) => fetchProd("GET", "/api/production/conv
 export const createConversionRate = (body) => fetchProd("POST", "/api/production/conversion-rates", body);
 // §104.8 — stroke-derived opening-rate suggestion, consumed by IN05 Opening Stock
 export const getDerivedOpeningRate = (p) => fetchProd("GET", "/api/production/derived-opening-rate", undefined, p);
+export const listMtsSkuRates = (p) => fetchProd("GET", "/api/production/mts-sku-rates", undefined, p);
+export const saveMtsSkuRateDraft = (body) => fetchProd("POST", "/api/production/mts-sku-rates/draft", body);
+export const listPendingMtsSkuRateDrafts = (p) => fetchProd("GET", "/api/production/mts-sku-rates/pending-drafts", undefined, p);
+export const approveMtsSkuRate = (body) => fetchProd("POST", "/api/production/mts-sku-rates/approve", body);
+export const listApprovedMtsSkuMonths = (p) => fetchProd("GET", "/api/production/mts-sku-rates/available-months", undefined, p);
+export const createCostingGroup = (body) => fetchProd("POST", "/api/production/costing-groups", body);
+export const listCostingGroups = (p) => fetchProd("GET", "/api/production/costing-groups", undefined, p);
+export const addCostingGroupMembers = (groupId, body) => fetchProd("POST", `/api/production/costing-groups/${groupId}/members`, body);
+export const removeCostingGroupMember = (groupId, memberId) => fetchProd("DELETE", `/api/production/costing-groups/${groupId}/members/${memberId}`);
+export const listCostingRateMaterials = (p) => fetchProd("GET", "/api/production/costing-rate/materials", undefined, p);
+export const saveCostingRateDraft = (body) => fetchProd("POST", "/api/production/costing-rate/draft", body);
+export const listPendingCostingDrafts = (p) => fetchProd("GET", "/api/production/costing-rate/pending-drafts", undefined, p);
+export const approveCostingRate = (body) => fetchProd("POST", "/api/production/costing-rate/approve", body);
 
 // ── Opening Genealogy (§104.9) — PR22 Old Process PO / PR23 Old Packing PO ────
 export const createOldProcessPo = (body) => fetchProd("POST", "/api/production/old-process-po", body);

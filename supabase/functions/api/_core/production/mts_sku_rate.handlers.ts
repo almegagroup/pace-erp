@@ -1,0 +1,409 @@
+/*
+ * File-ID: 27.25-BE
+ * File-Path: supabase/functions/api/_core/production/mts_sku_rate.handlers.ts
+ * Gate: 27.25
+ * Domain: PRODUCTION / COSTING (Accounts ACL)
+ * Purpose: AC05 MTS SKU monthly sale-rate master. Company-scoped FG SKU list with
+ *          draft-save, separate approve action, and approved-month lookup for future SO use.
+ * Authority: Backend
+ */
+
+import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { okResponse, errorResponse } from "../response.ts";
+import type { ProdHandlerContext } from "./production.shared.ts";
+import {
+  assertProdReadRole,
+  parseBody,
+  parseNonNegativeNumber,
+  toTrimmedString,
+} from "./production.shared.ts";
+
+type JsonRecord = Record<string, unknown>;
+
+type ScopedSkuRow = {
+  material_id: string;
+  pace_code: string;
+  material_name: string;
+  base_uom_code: string | null;
+};
+
+function rateError(req: Request, ctx: ProdHandlerContext, code: string, status: number, message: string): Response {
+  return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
+}
+
+async function getCompanyScope(ctx: ProdHandlerContext, requestedCompanyId?: string): Promise<string> {
+  const scopedCompanyId = toTrimmedString(ctx.context.companyId);
+  const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
+  if (companyId) await assertCompanyScope(ctx, companyId);
+  return companyId;
+}
+
+function normalizeRateMonth(raw: unknown): string | null {
+  const value = toTrimmedString(raw);
+  if (!/^\d{4}-\d{2}(-\d{2})?$/.test(value)) return null;
+  const dateValue = value.length === 7 ? `${value}-01` : value;
+  const date = new Date(`${dateValue}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-01`;
+}
+
+async function getScopedMtsSkuRows(companyId: string): Promise<ScopedSkuRow[]> {
+  const { data: skuRows, error: skuError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_plant_ext")
+    .select("material_id")
+    .eq("company_id", companyId);
+  if (skuError) {
+    console.error("[mts_sku_rate.getScopedMtsSkuRows.materialPlantExt] query failed:", JSON.stringify(skuError));
+    throw new Error("PROD_MTS_RATE_LIST_FAILED");
+  }
+
+  const materialIds = [...new Set(((skuRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+  if (materialIds.length === 0) return [];
+
+  const { data: skuMaterials, error: materialError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("id, pace_code, material_name, base_uom_code, shade_code, pack_code")
+    .in("id", materialIds);
+  if (materialError) {
+    console.error("[mts_sku_rate.getScopedMtsSkuRows.materialMaster] query failed:", JSON.stringify(materialError));
+    throw new Error("PROD_MTS_RATE_LIST_FAILED");
+  }
+
+  const { data: prodshadeConfigs, error: configError } = await serviceRoleClient
+    .schema("erp_production")
+    .from("prodshade_pack_config")
+    .select(`
+      material_id,
+      active,
+      pack_code:pack_code_master!pack_code_id(pack_code)
+    `)
+    .eq("active", true);
+  if (configError) {
+    console.error("[mts_sku_rate.getScopedMtsSkuRows.prodshadePackConfig] query failed:", JSON.stringify(configError));
+    throw new Error("PROD_MTS_RATE_LIST_FAILED");
+  }
+
+  const prodshadeIds = [...new Set(((prodshadeConfigs ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+  if (prodshadeIds.length === 0) return [];
+
+  const [prodshadesResult, strokeResult] = await Promise.all([
+    serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .select("id, shade_code")
+      .in("id", prodshadeIds),
+    serviceRoleClient
+      .schema("erp_production")
+      .from("stroke_master")
+      .select("prodshade_material_id")
+      .eq("company_id", companyId)
+      .eq("po_type", "MTS")
+      .eq("status", "APPROVED"),
+  ]);
+
+  if (prodshadesResult.error) {
+    console.error("[mts_sku_rate.getScopedMtsSkuRows.prodshadeMaterials] query failed:", JSON.stringify(prodshadesResult.error));
+    throw new Error("PROD_MTS_RATE_LIST_FAILED");
+  }
+  if (strokeResult.error) {
+    console.error("[mts_sku_rate.getScopedMtsSkuRows.strokeMaster] query failed:", JSON.stringify(strokeResult.error));
+    throw new Error("PROD_MTS_RATE_LIST_FAILED");
+  }
+
+  const prodshadeMaterialMap = new Map<string, JsonRecord>();
+  for (const row of ((prodshadesResult.data ?? []) as JsonRecord[])) {
+    prodshadeMaterialMap.set(toTrimmedString(row.id), row);
+  }
+
+  const approvedProdshadeIds = new Set(
+    ((strokeResult.data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.prodshade_material_id)).filter(Boolean),
+  );
+  const activeMatchKeys = new Set<string>();
+  for (const row of ((prodshadeConfigs ?? []) as JsonRecord[])) {
+    const prodshadeId = toTrimmedString(row.material_id);
+    if (!approvedProdshadeIds.has(prodshadeId)) continue;
+    const prodshade = prodshadeMaterialMap.get(prodshadeId);
+    const packCode = toTrimmedString(((row.pack_code ?? {}) as JsonRecord).pack_code);
+    const shadeCode = toTrimmedString(prodshade?.shade_code);
+    if (!shadeCode || !packCode) continue;
+    activeMatchKeys.add(`${shadeCode}|||${packCode}`);
+  }
+
+  const scopedRows = ((skuMaterials ?? []) as JsonRecord[])
+    .filter((row) => activeMatchKeys.has(`${toTrimmedString(row.shade_code)}|||${toTrimmedString(row.pack_code)}`))
+    .map((row) => ({
+      material_id: toTrimmedString(row.id),
+      pace_code: toTrimmedString(row.pace_code),
+      material_name: toTrimmedString(row.material_name),
+      base_uom_code: toTrimmedString(row.base_uom_code) || null,
+    }))
+    .sort((a, b) => {
+      const codeCmp = a.pace_code.localeCompare(b.pace_code);
+      return codeCmp !== 0 ? codeCmp : a.material_name.localeCompare(b.material_name);
+    });
+
+  return scopedRows;
+}
+
+function parseDraftLines(input: unknown): Array<{ material_id: string; rate: number }> {
+  if (!Array.isArray(input)) return [];
+  const parsed: Array<{ material_id: string; rate: number }> = [];
+  for (const row of input) {
+    const line = (row ?? {}) as JsonRecord;
+    const materialId = toTrimmedString(line.material_id);
+    const rate = parseNonNegativeNumber(line.rate);
+    if (!materialId || rate === null) continue;
+    parsed.push({ material_id: materialId, rate });
+  }
+  return parsed;
+}
+
+export async function listMtsSkuRateHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    if (!companyId) {
+      return rateError(req, ctx, "PROD_MTS_RATE_COMPANY_REQUIRED", 400, "company_id is required.");
+    }
+    const rateMonth = normalizeRateMonth(url.searchParams.get("rate_month"));
+    if (url.searchParams.has("rate_month") && !rateMonth) {
+      return rateError(req, ctx, "PROD_MTS_RATE_MONTH_INVALID", 400, "rate_month must be YYYY-MM or YYYY-MM-DD.");
+    }
+
+    const scopedRows = await getScopedMtsSkuRows(companyId);
+    let rateMap = new Map<string, JsonRecord>();
+    if (rateMonth && scopedRows.length > 0) {
+      const { data, error } = await serviceRoleClient
+        .schema("erp_production")
+        .from("mts_sku_monthly_rate")
+        .select("material_id, rate, status")
+        .eq("company_id", companyId)
+        .eq("rate_month", rateMonth)
+        .in("material_id", scopedRows.map((row) => row.material_id));
+      if (error) {
+        console.error("[mts_sku_rate.listMtsSkuRateHandler] query failed:", JSON.stringify(error));
+        throw new Error("PROD_MTS_RATE_LIST_FAILED");
+      }
+      rateMap = new Map(((data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.material_id), row]));
+    }
+
+    return okResponse({
+      data: scopedRows.map((row) => {
+        const rateRow = rateMap.get(row.material_id);
+        return {
+          ...row,
+          rate: rateRow ? Number(rateRow.rate ?? 0) : null,
+          status: rateRow ? toTrimmedString(rateRow.status) : null,
+          has_rate: Boolean(rateRow),
+        };
+      }),
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PROD_MTS_RATE_LIST_FAILED";
+    return rateError(req, ctx, code, 500, "MTS SKU rate list failed.");
+  }
+}
+
+export async function saveMtsSkuRateDraftHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const body = await parseBody(req);
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const rateMonth = normalizeRateMonth(body.rate_month);
+    const lines = parseDraftLines(body.lines);
+    if (!companyId || !rateMonth || lines.length === 0) {
+      return rateError(req, ctx, "PROD_MTS_RATE_DRAFT_INVALID", 400, "company_id, rate_month, and at least one line are required.");
+    }
+
+    const scopedRows = await getScopedMtsSkuRows(companyId);
+    const scopedMaterialIds = new Set(scopedRows.map((row) => row.material_id));
+    const requestedMaterialIds = [...new Set(lines.map((line) => line.material_id))];
+    if (requestedMaterialIds.some((id) => !scopedMaterialIds.has(id))) {
+      return rateError(req, ctx, "PROD_MTS_RATE_SKU_SCOPE_INVALID", 422, "One or more selected SKUs are not MTS-scoped for this company.");
+    }
+
+    const { data: existingRows, error: existingError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("mts_sku_monthly_rate")
+      .select("id, material_id, status")
+      .eq("company_id", companyId)
+      .eq("rate_month", rateMonth)
+      .in("material_id", requestedMaterialIds);
+    if (existingError) {
+      console.error("[mts_sku_rate.saveDraft.existing] query failed:", JSON.stringify(existingError));
+      throw new Error("PROD_MTS_RATE_DRAFT_SAVE_FAILED");
+    }
+
+    const approvedHit = ((existingRows ?? []) as JsonRecord[]).find((row) => toTrimmedString(row.status) === "APPROVED");
+    if (approvedHit) {
+      return rateError(req, ctx, "PROD_MTS_RATE_MONTH_APPROVED", 409, "Approved monthly rates cannot be changed.");
+    }
+
+    const payload = lines.map((line) => ({
+      company_id: companyId,
+      material_id: line.material_id,
+      rate_month: rateMonth,
+      rate: line.rate,
+      status: "DRAFT",
+      created_by: ctx.auth_user_id,
+      last_updated_by: ctx.auth_user_id,
+      last_updated_at: new Date().toISOString(),
+    }));
+    const { error: upsertError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("mts_sku_monthly_rate")
+      .upsert(payload, { onConflict: "company_id,material_id,rate_month" });
+    if (upsertError) {
+      console.error("[mts_sku_rate.saveDraft.upsert] query failed:", JSON.stringify(upsertError));
+      throw new Error("PROD_MTS_RATE_DRAFT_SAVE_FAILED");
+    }
+
+    return okResponse({ data: { company_id: companyId, rate_month: rateMonth, line_count: payload.length } }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PROD_MTS_RATE_DRAFT_SAVE_FAILED";
+    return rateError(req, ctx, code, 500, "MTS SKU rate draft save failed.");
+  }
+}
+
+export async function listDraftMtsSkuRatesHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    if (!companyId) {
+      return rateError(req, ctx, "PROD_MTS_RATE_COMPANY_REQUIRED", 400, "company_id is required.");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_production")
+      .from("mts_sku_monthly_rate")
+      .select("rate_month, rate")
+      .eq("company_id", companyId)
+      .eq("status", "DRAFT")
+      .order("rate_month", { ascending: false });
+    if (error) {
+      console.error("[mts_sku_rate.listDrafts] query failed:", JSON.stringify(error));
+      throw new Error("PROD_MTS_RATE_DRAFT_LIST_FAILED");
+    }
+
+    const groups = new Map<string, { rate_month: string; line_count: number; filled_count: number }>();
+    for (const row of ((data ?? []) as JsonRecord[])) {
+      const rateMonth = toTrimmedString(row.rate_month);
+      const entry = groups.get(rateMonth) ?? { rate_month: rateMonth, line_count: 0, filled_count: 0 };
+      entry.line_count += 1;
+      if (Number(row.rate ?? 0) > 0) entry.filled_count += 1;
+      groups.set(rateMonth, entry);
+    }
+
+    return okResponse({ data: [...groups.values()] }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PROD_MTS_RATE_DRAFT_LIST_FAILED";
+    return rateError(req, ctx, code, 500, "Pending MTS SKU drafts list failed.");
+  }
+}
+
+export async function approveMtsSkuRateHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const body = await parseBody(req);
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const rateMonth = normalizeRateMonth(body.rate_month);
+    if (!companyId || !rateMonth) {
+      return rateError(req, ctx, "PROD_MTS_RATE_APPROVE_INVALID", 400, "company_id and rate_month are required.");
+    }
+
+    const scopedRows = await getScopedMtsSkuRows(companyId);
+    if (scopedRows.length === 0) {
+      return rateError(req, ctx, "PROD_MTS_RATE_SCOPE_EMPTY", 422, "No MTS-scoped SKUs exist for this company.");
+    }
+    const materialIds = scopedRows.map((row) => row.material_id);
+    const { data: rateRows, error: rateErrorResult } = await serviceRoleClient
+      .schema("erp_production")
+      .from("mts_sku_monthly_rate")
+      .select("material_id, rate, status")
+      .eq("company_id", companyId)
+      .eq("rate_month", rateMonth)
+      .in("material_id", materialIds);
+    if (rateErrorResult) {
+      console.error("[mts_sku_rate.approve.list] query failed:", JSON.stringify(rateErrorResult));
+      throw new Error("PROD_MTS_RATE_APPROVE_FAILED");
+    }
+
+    const rowMap = new Map(((rateRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.material_id), row]));
+    const missingRows = scopedRows.filter((row) => !rowMap.has(row.material_id));
+    if (missingRows.length > 0) {
+      return rateError(req, ctx, "PROD_MTS_RATE_APPROVE_INCOMPLETE", 409, "All MTS SKUs must have a saved rate before approval.");
+    }
+
+    const incompleteRow = scopedRows.find((row) => {
+      const rateRow = rowMap.get(row.material_id);
+      return !rateRow || Number(rateRow.rate ?? 0) <= 0 || toTrimmedString(rateRow.status) !== "DRAFT";
+    });
+    if (incompleteRow) {
+      return rateError(req, ctx, "PROD_MTS_RATE_APPROVE_INCOMPLETE", 409, "All MTS SKU rates must be greater than zero and still in Draft before approval.");
+    }
+
+    const approvedAt = new Date().toISOString();
+    const { error: updateError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("mts_sku_monthly_rate")
+      .update({
+        status: "APPROVED",
+        approved_by: ctx.auth_user_id,
+        approved_at: approvedAt,
+        last_updated_by: ctx.auth_user_id,
+        last_updated_at: approvedAt,
+      })
+      .eq("company_id", companyId)
+      .eq("rate_month", rateMonth)
+      .eq("status", "DRAFT");
+    if (updateError) {
+      console.error("[mts_sku_rate.approve.update] query failed:", JSON.stringify(updateError));
+      throw new Error("PROD_MTS_RATE_APPROVE_FAILED");
+    }
+
+    return okResponse({ data: { company_id: companyId, rate_month: rateMonth, approved_count: materialIds.length } }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PROD_MTS_RATE_APPROVE_FAILED";
+    return rateError(req, ctx, code, 500, "MTS SKU rate approval failed.");
+  }
+}
+
+export async function listApprovedMonthsForSkuHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const materialId = toTrimmedString(url.searchParams.get("material_id"));
+    if (!companyId || !materialId) {
+      return rateError(req, ctx, "PROD_MTS_RATE_AVAILABLE_MONTHS_INVALID", 400, "company_id and material_id are required.");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_production")
+      .from("mts_sku_monthly_rate")
+      .select("rate_month, rate")
+      .eq("company_id", companyId)
+      .eq("material_id", materialId)
+      .eq("status", "APPROVED")
+      .order("rate_month", { ascending: false });
+    if (error) {
+      console.error("[mts_sku_rate.availableMonths] query failed:", JSON.stringify(error));
+      throw new Error("PROD_MTS_RATE_AVAILABLE_MONTHS_FAILED");
+    }
+
+    return okResponse({
+      data: ((data ?? []) as JsonRecord[]).map((row) => ({
+        rate_month: toTrimmedString(row.rate_month),
+        rate: Number(row.rate ?? 0),
+      })),
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PROD_MTS_RATE_AVAILABLE_MONTHS_FAILED";
+    return rateError(req, ctx, code, 500, "Approved MTS months lookup failed.");
+  }
+}

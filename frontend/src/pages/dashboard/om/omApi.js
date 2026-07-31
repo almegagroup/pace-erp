@@ -541,6 +541,92 @@ export async function changeCustomerStatus(payload) {
   );
 }
 
+export async function createFgParentCompany(payload) {
+  return fetchJson(
+    "/api/om/fg-parent-company",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "MM05_PARENT_COMPANY_CREATE_FAILED"
+  );
+}
+
+export async function listFgParentCompanies(params = {}) {
+  const query = buildParams(params);
+  return fetchJson(`/api/om/fg-parent-companies?${query.toString()}`, {}, "MM05_PARENT_COMPANY_LIST_FAILED");
+}
+
+export async function createOrGetFgDepotCode(payload) {
+  return fetchJson(
+    "/api/om/fg-depot-code",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "MM05_DEPOT_CODE_CREATE_FAILED"
+  );
+}
+
+export async function listFgDepotCodes(params = {}) {
+  const query = buildParams(params);
+  return fetchJson(`/api/om/fg-depot-codes?${query.toString()}`, {}, "MM05_DEPOT_CODE_LIST_FAILED");
+}
+
+export async function createFgDispatchCustomer(payload) {
+  return fetchJson(
+    "/api/om/fg-dispatch-customer",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "MM05_CUSTOMER_CREATE_FAILED"
+  );
+}
+
+export async function upgradeFgDispatchCustomer(customerId, payload) {
+  return fetchJson(
+    `/api/om/fg-dispatch-customers/${customerId}/upgrade-gst`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "MM05_CUSTOMER_UPGRADE_FAILED"
+  );
+}
+
+export async function addFgDispatchCustomerAddress(customerId, payload) {
+  return fetchJson(
+    `/api/om/fg-dispatch-customers/${customerId}/addresses`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "MM05_ADDRESS_CREATE_FAILED"
+  );
+}
+
+export async function listFgDispatchCustomerAddresses(customerId) {
+  return fetchJson(`/api/om/fg-dispatch-customers/${customerId}/addresses`, {}, "MM05_ADDRESS_LIST_FAILED");
+}
+
+export async function updateFgDispatchCustomerAddress(addressId, payload) {
+  return fetchJson(
+    `/api/om/fg-dispatch-addresses/${addressId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "MM05_ADDRESS_UPDATE_FAILED"
+  );
+}
+
 export async function listUoms(params = {}) {
   const query = buildParams(params);
   return fetchJson(`/api/om/uoms?${query.toString()}`, {}, "OM_UOM_LIST_FAILED");
