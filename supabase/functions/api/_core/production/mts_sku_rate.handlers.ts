@@ -17,6 +17,7 @@ import {
   parseBody,
   parseNonNegativeNumber,
   toTrimmedString,
+  toUpperTrimmedString,
 } from "./production.shared.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -26,6 +27,15 @@ type ScopedSkuRow = {
   pace_code: string;
   material_name: string;
   base_uom_code: string | null;
+  dispatch_uom_options?: Array<{ uom_code: string; label: string; factor_to_kg: number }>;
+};
+
+type MaterialUomConversionRow = {
+  material_id: string;
+  from_uom_code: string | null;
+  to_uom_code: string | null;
+  conversion_factor: number | null;
+  variable_conversion: boolean | null;
 };
 
 function rateError(req: Request, ctx: ProdHandlerContext, code: string, status: number, message: string): Response {
@@ -46,6 +56,74 @@ function normalizeRateMonth(raw: unknown): string | null {
   const date = new Date(`${dateValue}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return null;
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function normalizeUomCode(raw: unknown): string {
+  return toUpperTrimmedString(raw);
+}
+
+function dedupeOptions(options: Array<{ uom_code: string; label: string; factor_to_kg: number }>) {
+  const seen = new Set<string>();
+  return options.filter((option) => {
+    const key = `${option.uom_code}|||${option.factor_to_kg}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function getMaterialKgConversionMap(materialIds: string[]): Promise<Map<string, Array<{ uom_code: string; label: string; factor_to_kg: number }>>> {
+  if (materialIds.length === 0) return new Map();
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_uom_conversion")
+    .select("material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion")
+    .in("material_id", materialIds);
+  if (error) {
+    console.error("[mts_sku_rate.getMaterialKgConversionMap] query failed:", JSON.stringify(error));
+    throw new Error("PROD_MTS_RATE_LIST_FAILED");
+  }
+
+  const map = new Map<string, Array<{ uom_code: string; label: string; factor_to_kg: number }>>();
+  for (const row of ((data ?? []) as MaterialUomConversionRow[])) {
+    if (row.variable_conversion === true) continue;
+    const materialId = toTrimmedString(row.material_id);
+    const fromUom = normalizeUomCode(row.from_uom_code);
+    const toUom = normalizeUomCode(row.to_uom_code);
+    const factor = Number(row.conversion_factor ?? 0);
+    if (!materialId || !fromUom || !toUom || !Number.isFinite(factor) || factor <= 0) continue;
+    const bucket = map.get(materialId) ?? [];
+    if (fromUom === "KG") {
+      bucket.push({ uom_code: "KG", label: "KG", factor_to_kg: 1 });
+      bucket.push({ uom_code: toUom, label: toUom, factor_to_kg: 1 / factor });
+    } else if (toUom === "KG") {
+      bucket.push({ uom_code: "KG", label: "KG", factor_to_kg: 1 });
+      bucket.push({ uom_code: fromUom, label: fromUom, factor_to_kg: factor });
+    }
+    map.set(materialId, dedupeOptions(bucket).sort((a, b) => a.uom_code.localeCompare(b.uom_code)));
+  }
+  return map;
+}
+
+function resolveRatePerKg(
+  dispatchUomCode: string,
+  rate: number,
+  options: Array<{ uom_code: string; label: string; factor_to_kg: number }>,
+): number | null {
+  const selected = options.find((option) => option.uom_code === dispatchUomCode);
+  if (!selected || !Number.isFinite(selected.factor_to_kg) || selected.factor_to_kg <= 0) return null;
+  return Number((rate / selected.factor_to_kg).toFixed(6));
+}
+
+async function loadMtsRateApprovalRequired(): Promise<boolean> {
+  const { data } = await serviceRoleClient
+    .schema("acl")
+    .from("resource_approval_policy")
+    .select("approval_required")
+    .eq("resource_code", "ACC_MTS_SKU_MONTHLY_RATE")
+    .eq("action_code", "WRITE")
+    .maybeSingle();
+  return data?.approval_required === true;
 }
 
 async function getScopedMtsSkuRows(companyId: string): Promise<ScopedSkuRow[]> {
@@ -132,6 +210,7 @@ async function getScopedMtsSkuRows(companyId: string): Promise<ScopedSkuRow[]> {
     activeMatchKeys.add(`${shadeCode}|||${packCode}`);
   }
 
+  const conversionMap = await getMaterialKgConversionMap(materialIds);
   const scopedRows = ((skuMaterials ?? []) as JsonRecord[])
     .filter((row) => activeMatchKeys.has(`${toTrimmedString(row.shade_code)}|||${toTrimmedString(row.pack_code)}`))
     .map((row) => ({
@@ -139,7 +218,12 @@ async function getScopedMtsSkuRows(companyId: string): Promise<ScopedSkuRow[]> {
       pace_code: toTrimmedString(row.pace_code),
       material_name: toTrimmedString(row.material_name),
       base_uom_code: toTrimmedString(row.base_uom_code) || null,
+      dispatch_uom_options: dedupeOptions([
+        ...(normalizeUomCode(row.base_uom_code) === "KG" ? [{ uom_code: "KG", label: "KG", factor_to_kg: 1 }] : []),
+        ...(conversionMap.get(toTrimmedString(row.id)) ?? []),
+      ]),
     }))
+    .filter((row) => (row.dispatch_uom_options ?? []).length > 0)
     .sort((a, b) => {
       const codeCmp = a.pace_code.localeCompare(b.pace_code);
       return codeCmp !== 0 ? codeCmp : a.material_name.localeCompare(b.material_name);
@@ -148,15 +232,16 @@ async function getScopedMtsSkuRows(companyId: string): Promise<ScopedSkuRow[]> {
   return scopedRows;
 }
 
-function parseDraftLines(input: unknown): Array<{ material_id: string; rate: number }> {
+function parseDraftLines(input: unknown): Array<{ material_id: string; rate: number; dispatch_uom_code: string }> {
   if (!Array.isArray(input)) return [];
-  const parsed: Array<{ material_id: string; rate: number }> = [];
+  const parsed: Array<{ material_id: string; rate: number; dispatch_uom_code: string }> = [];
   for (const row of input) {
     const line = (row ?? {}) as JsonRecord;
     const materialId = toTrimmedString(line.material_id);
     const rate = parseNonNegativeNumber(line.rate);
-    if (!materialId || rate === null) continue;
-    parsed.push({ material_id: materialId, rate });
+    const dispatchUomCode = normalizeUomCode(line.dispatch_uom_code);
+    if (!materialId || rate === null || !dispatchUomCode) continue;
+    parsed.push({ material_id: materialId, rate, dispatch_uom_code: dispatchUomCode });
   }
   return parsed;
 }
@@ -180,7 +265,7 @@ export async function listMtsSkuRateHandler(req: Request, ctx: ProdHandlerContex
       const { data, error } = await serviceRoleClient
         .schema("erp_production")
         .from("mts_sku_monthly_rate")
-        .select("material_id, rate, status")
+        .select("material_id, rate, status, dispatch_uom_code, rate_per_kg")
         .eq("company_id", companyId)
         .eq("rate_month", rateMonth)
         .in("material_id", scopedRows.map((row) => row.material_id));
@@ -197,6 +282,8 @@ export async function listMtsSkuRateHandler(req: Request, ctx: ProdHandlerContex
         return {
           ...row,
           rate: rateRow ? Number(rateRow.rate ?? 0) : null,
+          dispatch_uom_code: rateRow ? normalizeUomCode(rateRow.dispatch_uom_code) : null,
+          rate_per_kg: rateRow ? Number(rateRow.rate_per_kg ?? 0) : null,
           status: rateRow ? toTrimmedString(rateRow.status) : null,
           has_rate: Boolean(rateRow),
         };
@@ -243,16 +330,31 @@ export async function saveMtsSkuRateDraftHandler(req: Request, ctx: ProdHandlerC
       return rateError(req, ctx, "PROD_MTS_RATE_MONTH_APPROVED", 409, "Approved monthly rates cannot be changed.");
     }
 
-    const payload = lines.map((line) => ({
+    const scopedByMaterial = new Map(scopedRows.map((row) => [row.material_id, row]));
+    const approvalRequired = await loadMtsRateApprovalRequired();
+    const savedAt = new Date().toISOString();
+    const payload = lines.map((line) => {
+      const scopedRow = scopedByMaterial.get(line.material_id);
+      const options = scopedRow?.dispatch_uom_options ?? [];
+      const ratePerKg = resolveRatePerKg(line.dispatch_uom_code, line.rate, options);
+      if (ratePerKg === null) {
+        throw new Error("PROD_MTS_RATE_DISPATCH_UOM_INVALID");
+      }
+      return {
       company_id: companyId,
       material_id: line.material_id,
       rate_month: rateMonth,
       rate: line.rate,
-      status: "DRAFT",
+      dispatch_uom_code: line.dispatch_uom_code,
+      rate_per_kg: ratePerKg,
+      status: approvalRequired ? "DRAFT" : "APPROVED",
       created_by: ctx.auth_user_id,
       last_updated_by: ctx.auth_user_id,
-      last_updated_at: new Date().toISOString(),
-    }));
+      last_updated_at: savedAt,
+      approved_by: approvalRequired ? null : ctx.auth_user_id,
+      approved_at: approvalRequired ? null : savedAt,
+    };
+    });
     const { error: upsertError } = await serviceRoleClient
       .schema("erp_production")
       .from("mts_sku_monthly_rate")
@@ -262,7 +364,14 @@ export async function saveMtsSkuRateDraftHandler(req: Request, ctx: ProdHandlerC
       throw new Error("PROD_MTS_RATE_DRAFT_SAVE_FAILED");
     }
 
-    return okResponse({ data: { company_id: companyId, rate_month: rateMonth, line_count: payload.length } }, ctx.request_id, req);
+    return okResponse({
+      data: {
+        company_id: companyId,
+        rate_month: rateMonth,
+        line_count: payload.length,
+        status: approvalRequired ? "DRAFT" : "APPROVED",
+      },
+    }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROD_MTS_RATE_DRAFT_SAVE_FAILED";
     return rateError(req, ctx, code, 500, "MTS SKU rate draft save failed.");
@@ -281,7 +390,7 @@ export async function listDraftMtsSkuRatesHandler(req: Request, ctx: ProdHandler
     const { data, error } = await serviceRoleClient
       .schema("erp_production")
       .from("mts_sku_monthly_rate")
-      .select("rate_month, rate")
+      .select("rate_month, rate, rate_per_kg")
       .eq("company_id", companyId)
       .eq("status", "DRAFT")
       .order("rate_month", { ascending: false });
@@ -400,6 +509,7 @@ export async function listApprovedMonthsForSkuHandler(req: Request, ctx: ProdHan
       data: ((data ?? []) as JsonRecord[]).map((row) => ({
         rate_month: toTrimmedString(row.rate_month),
         rate: Number(row.rate ?? 0),
+        rate_per_kg: Number(row.rate_per_kg ?? 0),
       })),
     }, ctx.request_id, req);
   } catch (error) {

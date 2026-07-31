@@ -3043,3 +3043,25 @@ This entry is a v2 correction on top of the earlier `2026-07-31 23:05 IST` AC06 
 - `deno check supabase/functions/api/_routes/production.routes.ts` still reports only the same pre-existing unrelated baseline typing errors in older files (`pack_config.handlers.ts`, `_pipeline/session.ts`), not AC06-v2-local failures.
 - No ACL/menu DB registration tables were touched, per brief.
 - The linked Dev push also applied one already-pending non-AC06 migration, `20260801011000_gate28_opening_stock_packing_order_link.sql`, because it was already queued locally in the linked environment before this AC06 v2 push.
+
+## 2026-07-31 23:58 IST - AC05 + MM05 user-QA corrections
+
+**Scope implemented:** follow-up correction pass after direct user feedback on AC05 and MM05 behavior, focused on DB + backend + frontend only.
+
+- AC05 correction:
+  added `supabase/migrations/20260801030000_gate27_25_ac05_corrections.sql` to extend `erp_production.mts_sku_monthly_rate` with `dispatch_uom_code` and `rate_per_kg`,
+  updated `supabase/functions/api/_core/production/mts_sku_rate.handlers.ts` to expose Dispatch-UOM choices that actually resolve to KG via `material_uom_conversion`, persist both entered rate and resolved per-KG rate, and auto-mark save as `APPROVED` when no `ACC_MTS_SKU_MONTHLY_RATE:WRITE` approval policy exists,
+  rebuilt `frontend/src/pages/dashboard/production/MtsSkuMonthlyRatePage.jsx` so month selection is shown in April-start fiscal order and each MTS SKU row now captures Dispatch UOM plus live per-KG resolution preview.
+
+- MM05 correction:
+  added `supabase/migrations/20260801031000_gate27_27_mm05_corrections.sql` to extend `erp_master.fg_dispatch_customer` with `state`, `full_address`, and `pin_code`,
+  updated `supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts` so customer create and unregistered-to-registered GST-upgrade both persist customer state/address fields on the master row,
+  rebuilt `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx` so Company + Type + FO Customer Type sit together, Direct is clearly labeled as Virtual Depot, Depot remains Depot, parent/depot cards stay compact, customer GST/unregistered entry gets the larger area, and direct additional-address entry reuses the same field shape as the main customer address form.
+
+**Verification notes / limitations:**
+
+- `deno check supabase/functions/api/_core/production/mts_sku_rate.handlers.ts` passed.
+- `deno check supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts` passed.
+- File-level ESLint passed for `frontend/src/pages/dashboard/production/MtsSkuMonthlyRatePage.jsx` and `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx` when rerun outside the Windows sandbox.
+- `node scripts/migration-integrity-check.mjs` produced the local checksum probe (`count=395`, `md5=c72608823d7d35296d61979d86013ef6`) but this environment still did not auto-run the remote comparison query.
+- No ACL/menu DB registration tables were touched in this correction pass.

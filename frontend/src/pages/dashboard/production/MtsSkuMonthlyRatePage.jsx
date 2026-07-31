@@ -7,24 +7,25 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates
 import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import {
-  listMtsSkuRates,
-  saveMtsSkuRateDraft,
-  listPendingMtsSkuRateDrafts,
   approveMtsSkuRate,
+  listMtsSkuRates,
+  listPendingMtsSkuRateDrafts,
+  saveMtsSkuRateDraft,
 } from "./prodApi.js";
 
 const TABS = [
-  { key: "entry", label: "Rate Chart Entry" },
+  { key: "entry", label: "Rate Entry" },
   { key: "approve", label: "Approve" },
 ];
 
 const ERROR_MESSAGES = {
   PROD_MTS_RATE_COMPANY_REQUIRED: "Company is required.",
   PROD_MTS_RATE_MONTH_INVALID: "Month must be valid.",
-  PROD_MTS_RATE_DRAFT_INVALID: "Company, month, and at least one valid rate line are required.",
+  PROD_MTS_RATE_DRAFT_INVALID: "Company, month, and at least one valid line are required.",
   PROD_MTS_RATE_MONTH_APPROVED: "This month is already approved and cannot be changed.",
-  PROD_MTS_RATE_APPROVE_INCOMPLETE: "Every MTS SKU must have a rate greater than zero before approval.",
-  PROD_MTS_RATE_SCOPE_EMPTY: "No MTS-scoped SKU is configured for this company yet.",
+  PROD_MTS_RATE_APPROVE_INCOMPLETE: "Every MTS SKU must have rate and dispatch UOM before approval.",
+  PROD_MTS_RATE_SCOPE_EMPTY: "No MTS SKU is ready for this company yet.",
+  PROD_MTS_RATE_DISPATCH_UOM_INVALID: "Selected dispatch UOM cannot resolve to per-KG rate.",
 };
 
 function friendlyError(error) {
@@ -32,12 +33,31 @@ function friendlyError(error) {
   return ERROR_MESSAGES[error.code] ?? error.message ?? "Request failed.";
 }
 
-function monthInputValue(isoDate) {
-  return String(isoDate ?? "").slice(0, 7);
+function currentFiscalMonthValue() {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-function currentMonth() {
-  return new Date().toISOString().slice(0, 7);
+function fiscalMonthOptions(anchorMonth) {
+  const [yearPart, monthPart] = String(anchorMonth || currentFiscalMonthValue()).split("-");
+  const anchorYear = Number(yearPart);
+  const anchorMonthNumber = Number(monthPart);
+  const fiscalStartYear = Number.isFinite(anchorYear) && Number.isFinite(anchorMonthNumber) && anchorMonthNumber >= 4
+    ? anchorYear
+    : anchorYear - 1;
+  const options = [];
+  for (let offset = -1; offset <= 1; offset += 1) {
+    const startYear = fiscalStartYear + offset;
+    for (let month = 4; month <= 15; month += 1) {
+      const calendarMonth = month > 12 ? month - 12 : month;
+      const calendarYear = month > 12 ? startYear + 1 : startYear;
+      const value = `${calendarYear}-${String(calendarMonth).padStart(2, "0")}`;
+      const labelDate = new Date(Date.UTC(calendarYear, calendarMonth - 1, 1));
+      const label = labelDate.toLocaleString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+      options.push({ value, label, fy: `FY ${startYear}-${String(startYear + 1).slice(-2)}` });
+    }
+  }
+  return options;
 }
 
 function pageSlice(rows, page, pageSize) {
@@ -56,19 +76,43 @@ function pageSlice(rows, page, pageSize) {
   };
 }
 
+function MonthSelect({ value, onChange, inputRef, disabled = false }) {
+  const options = fiscalMonthOptions(value);
+  const currentFy = options.find((option) => option.value === value)?.fy;
+  return (
+    <label className="grid gap-1 text-xs font-semibold text-slate-700">
+      Month
+      <select
+        ref={inputRef}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label} ({option.fy})
+          </option>
+        ))}
+      </select>
+      <span className="text-[11px] font-normal text-slate-500">{currentFy ?? "Fiscal months start from April."}</span>
+    </label>
+  );
+}
+
 export default function MtsSkuMonthlyRatePage() {
   const { runtimeContext } = useMenu();
   const qc = useQueryClient();
+  const monthInputRef = useRef(null);
   const [tab, setTab] = useState("entry");
   const [companyId, setCompanyId] = useState("");
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth());
+  const [selectedMonth, setSelectedMonth] = useState(currentFiscalMonthValue());
   const [approvalMonth, setApprovalMonth] = useState("");
-  const [draftRates, setDraftRates] = useState({});
+  const [draftRows, setDraftRows] = useState({});
   const [page, setPage] = useState(1);
   const [draftPage, setDraftPage] = useState(1);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
-  const monthInputRef = useRef(null);
 
   useEffect(() => {
     if (!companyId) {
@@ -78,23 +122,20 @@ export default function MtsSkuMonthlyRatePage() {
   }, [companyId, runtimeContext]);
 
   useEffect(() => {
-    setDraftRates({});
     setPage(1);
   }, [companyId, selectedMonth, tab]);
 
-  useEffect(() => {
-    setDraftPage(1);
-  }, [companyId]);
-
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
-    window.setTimeout(() => setNotice({ msg: "", tone: "success" }), 4000);
+    window.setTimeout(() => setNotice({ msg: "", tone: "success" }), 4500);
   }
 
+  const activeMonth = tab === "approve" && approvalMonth ? approvalMonth : selectedMonth;
+
   const entryQuery = useQuery({
-    queryKey: ["mts-sku-rates", companyId, selectedMonth, tab],
-    queryFn: () => listMtsSkuRates({ company_id: companyId, rate_month: `${selectedMonth}-01` }),
-    enabled: Boolean(companyId),
+    queryKey: ["mts-sku-rates", companyId, activeMonth],
+    queryFn: () => listMtsSkuRates({ company_id: companyId, rate_month: `${activeMonth}-01` }),
+    enabled: Boolean(companyId && activeMonth),
     select: (payload) => (Array.isArray(payload) ? payload : payload?.data ?? []),
   });
 
@@ -105,47 +146,81 @@ export default function MtsSkuMonthlyRatePage() {
     select: (payload) => (Array.isArray(payload) ? payload : payload?.data ?? []),
   });
 
-  const mergedEntryRows = useMemo(() => (
+  useEffect(() => {
+    const rows = entryQuery.data ?? [];
+    if (rows.length === 0) return;
+    setDraftRows((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const row of rows) {
+        if (next[row.material_id]) continue;
+        next[row.material_id] = {
+          rate: row.rate ?? "",
+          dispatch_uom_code: row.dispatch_uom_code ?? row.dispatch_uom_options?.[0]?.uom_code ?? "",
+        };
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [entryQuery.data]);
+
+  const mergedRows = useMemo(() => (
     (entryQuery.data ?? []).map((row) => {
-      const cachedRate = draftRates[row.material_id];
+      const draft = draftRows[row.material_id] ?? {};
+      const selectedUom = String(draft.dispatch_uom_code ?? row.dispatch_uom_code ?? row.dispatch_uom_options?.[0]?.uom_code ?? "");
+      const option = (row.dispatch_uom_options ?? []).find((entry) => entry.uom_code === selectedUom) ?? null;
+      const enteredRate = draft.rate ?? row.rate ?? "";
+      const numericRate = enteredRate === "" ? null : Number(enteredRate);
+      const ratePerKg = option && numericRate !== null && Number.isFinite(numericRate) && option.factor_to_kg > 0
+        ? Number((numericRate / Number(option.factor_to_kg)).toFixed(6))
+        : row.rate_per_kg ?? null;
       return {
         ...row,
         display_label: `${row.pace_code} - ${row.material_name}`,
-        draft_rate: cachedRate ?? (row.rate ?? ""),
+        draft_rate: enteredRate,
+        draft_dispatch_uom_code: selectedUom,
+        draft_rate_per_kg: ratePerKg,
       };
     })
-  ), [draftRates, entryQuery.data]);
+  ), [draftRows, entryQuery.data]);
 
-  const entryPageData = pageSlice(mergedEntryRows, page, 15);
-  const pendingDraftPageData = pageSlice(pendingDraftsQuery.data ?? [], draftPage, 12);
+  const entryPageData = pageSlice(mergedRows, page, 14);
+  const pendingDraftPageData = pageSlice(pendingDraftsQuery.data ?? [], draftPage, 10);
 
-  function updateDraftRate(materialId, value) {
-    setDraftRates((current) => ({ ...current, [materialId]: value }));
+  function updateDraft(materialId, patch) {
+    setDraftRows((current) => ({
+      ...current,
+      [materialId]: {
+        ...(current[materialId] ?? {}),
+        ...patch,
+      },
+    }));
   }
 
   async function handleSave() {
     if (!companyId) {
-      toast("Select a company first.", "error");
+      toast("Select company first.", "error");
       return;
     }
-    const lines = mergedEntryRows
+    const lines = mergedRows
       .map((row) => ({
         material_id: row.material_id,
+        dispatch_uom_code: row.draft_dispatch_uom_code,
         rate: row.draft_rate === "" ? null : Number(row.draft_rate),
       }))
-      .filter((row) => row.rate != null && Number.isFinite(row.rate) && row.rate >= 0);
+      .filter((row) => row.dispatch_uom_code && row.rate != null && Number.isFinite(row.rate) && row.rate >= 0);
     if (lines.length === 0) {
-      toast("Enter at least one rate before saving.", "error");
+      toast("Enter at least one valid rate with dispatch UOM.", "error");
       return;
     }
     setSubmitting(true);
     try {
-      await saveMtsSkuRateDraft({
+      const result = await saveMtsSkuRateDraft({
         company_id: companyId,
         rate_month: `${selectedMonth}-01`,
         lines,
       });
-      toast("Draft rates saved.");
+      toast(result?.status === "APPROVED" ? "Rates saved and activated." : "Draft saved. Approval is still required.");
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["mts-sku-rates"] }),
         qc.invalidateQueries({ queryKey: ["mts-sku-rate-pending-drafts"] }),
@@ -182,9 +257,10 @@ export default function MtsSkuMonthlyRatePage() {
   }
 
   function openDraftMonth(row) {
+    const monthValue = String(row.rate_month ?? "").slice(0, 7);
+    setApprovalMonth(monthValue);
+    setSelectedMonth(monthValue);
     setTab("approve");
-    setApprovalMonth(monthInputValue(row.rate_month));
-    setSelectedMonth(monthInputValue(row.rate_month));
   }
 
   useErpScreenHotkeys({
@@ -207,12 +283,31 @@ export default function MtsSkuMonthlyRatePage() {
 
   const entryColumns = [
     { key: "pace_code", label: "SKU", width: "120px" },
-    { key: "material_name", label: "Material", width: "260px" },
-    { key: "base_uom_code", label: "UOM", width: "90px" },
+    { key: "material_name", label: "Description", width: "260px" },
+    { key: "base_uom_code", label: "Base UOM", width: "90px" },
+    {
+      key: "dispatch_uom_code",
+      label: "Dispatch UOM",
+      width: "140px",
+      render: (row) => (
+        <select
+          value={row.draft_dispatch_uom_code}
+          onChange={(event) => updateDraft(row.material_id, { dispatch_uom_code: event.target.value })}
+          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+        >
+          <option value="">Select</option>
+          {(row.dispatch_uom_options ?? []).map((option) => (
+            <option key={`${row.material_id}-${option.uom_code}`} value={option.uom_code}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      ),
+    },
     {
       key: "rate",
-      label: "Rate",
-      width: "140px",
+      label: "Rate / Dispatch UOM",
+      width: "150px",
       align: "right",
       render: (row) => (
         <input
@@ -220,10 +315,17 @@ export default function MtsSkuMonthlyRatePage() {
           min="0"
           step="0.0001"
           value={row.draft_rate}
-          onChange={(event) => updateDraftRate(row.material_id, event.target.value)}
+          onChange={(event) => updateDraft(row.material_id, { rate: event.target.value })}
           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-right text-xs text-slate-900 outline-none focus:border-sky-500"
         />
       ),
+    },
+    {
+      key: "rate_per_kg",
+      label: "Resolved / KG",
+      width: "130px",
+      align: "right",
+      render: (row) => row.draft_rate_per_kg == null ? <span className="text-slate-400">-</span> : Number(row.draft_rate_per_kg).toFixed(4),
     },
     {
       key: "status",
@@ -233,29 +335,29 @@ export default function MtsSkuMonthlyRatePage() {
         <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${row.status === "APPROVED" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
           {row.status}
         </span>
-      ) : <span className="text-slate-400">No rate</span>,
+      ) : <span className="text-slate-400">New</span>,
     },
   ];
 
   const draftColumns = [
-    { key: "rate_month", label: "Rate Month", width: "160px" },
+    { key: "rate_month", label: "Month", width: "160px" },
     {
       key: "filled",
       label: "Filled",
-      width: "140px",
+      width: "110px",
       render: (row) => `${row.filled_count}/${row.line_count}`,
     },
     {
       key: "open",
       label: "Open",
-      width: "120px",
+      width: "110px",
       render: (row) => (
         <button
           type="button"
           onClick={() => openDraftMonth(row)}
           className="border border-sky-300 bg-sky-50 px-3 py-1 text-[11px] font-semibold text-sky-900"
         >
-          Open
+          Review
         </button>
       ),
     },
@@ -264,11 +366,11 @@ export default function MtsSkuMonthlyRatePage() {
   return (
     <ErpScreenScaffold
       title="MTS SKU Monthly Rate Master"
-      subtitle="AC05 — company-scoped MTS FG SKU monthly sale rate chart with separate Draft save and Approve."
+      subtitle="AC05 - company-wise monthly rate chart with April-start fiscal month selection, dispatch UOM, and per-KG resolution."
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
       actions={[
         {
-          label: submitting ? "Working..." : tab === "entry" ? "Save Draft" : "Approve Month",
+          label: submitting ? "Working..." : tab === "entry" ? "Save" : "Approve Month",
           tone: "primary",
           disabled: submitting || !companyId,
           onClick: () => { void (tab === "entry" ? handleSave() : handleApprove()); },
@@ -282,38 +384,35 @@ export default function MtsSkuMonthlyRatePage() {
               key={entry.key}
               type="button"
               onClick={() => setTab(entry.key)}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab === entry.key ? "border-sky-600 text-sky-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}
+              className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${tab === entry.key ? "border-sky-600 text-sky-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}
             >
               {entry.label}
             </button>
           ))}
         </div>
 
-        <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,320px)_180px]">
+        <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,320px)_220px]">
           <TransactionCompanySelector
             runtimeContext={runtimeContext}
             value={companyId}
             onChange={setCompanyId}
             label="Company"
           />
-          <label className="grid gap-1 text-xs font-semibold text-slate-700">
-            {tab === "approve" ? "Selected Month" : "Rate Month"}
-            <input
-              ref={monthInputRef}
-              type="month"
-              value={tab === "approve" && approvalMonth ? approvalMonth : selectedMonth}
-              onChange={(event) => {
-                const nextValue = event.target.value;
-                if (tab === "approve") setApprovalMonth(nextValue);
-                setSelectedMonth(nextValue);
-              }}
-              className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-            />
-          </label>
+          <MonthSelect
+            value={tab === "approve" && approvalMonth ? approvalMonth : selectedMonth}
+            onChange={(value) => {
+              if (tab === "approve") setApprovalMonth(value);
+              setSelectedMonth(value);
+            }}
+            inputRef={monthInputRef}
+          />
         </div>
 
         {tab === "entry" ? (
-          <>
+          <div className="grid gap-4">
+            <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+              Only MTS SKU items for the selected company appear here. Rate is entered in Dispatch UOM and the system resolves the per-KG value before save.
+            </div>
             <ErpPaginationStrip
               page={entryPageData.page}
               setPage={setPage}
@@ -326,14 +425,14 @@ export default function MtsSkuMonthlyRatePage() {
               columns={entryColumns}
               rows={entryPageData.rows}
               rowKey={(row) => row.material_id}
-              maxHeight="480px"
-              emptyMessage={entryQuery.isLoading ? "Loading MTS SKU list..." : "No MTS-scoped SKU found for this company."}
+              maxHeight="520px"
+              emptyMessage={entryQuery.isLoading ? "Loading MTS SKU list..." : "No MTS SKU is configured for this company."}
             />
-          </>
+          </div>
         ) : (
-          <div className="grid gap-4">
-            <div>
-              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Pending Draft Months</div>
+          <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
+            <div className="grid gap-3">
+              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Pending Draft Months</div>
               <ErpPaginationStrip
                 page={pendingDraftPageData.page}
                 setPage={setDraftPage}
@@ -347,21 +446,20 @@ export default function MtsSkuMonthlyRatePage() {
                 rows={pendingDraftPageData.rows}
                 rowKey={(row) => row.rate_month}
                 onRowActivate={openDraftMonth}
-                maxHeight="280px"
-                emptyMessage={pendingDraftsQuery.isLoading ? "Loading pending drafts..." : "No draft month is pending approval."}
+                maxHeight="300px"
+                emptyMessage={pendingDraftsQuery.isLoading ? "Loading draft months..." : "No approval is pending."}
               />
             </div>
-
-            <div>
-              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                Approval Grid — {approvalMonth || selectedMonth || "Select a month"}
+            <div className="grid gap-3">
+              <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                Approval month: <span className="font-semibold">{approvalMonth || selectedMonth || "-"}</span>
               </div>
               <ErpDenseGrid
                 columns={entryColumns}
-                rows={entryPageData.rows}
+                rows={mergedRows}
                 rowKey={(row) => `${row.material_id}-approve`}
-                maxHeight="420px"
-                emptyMessage={entryQuery.isLoading ? "Loading month details..." : "Open a draft month to review and approve."}
+                maxHeight="520px"
+                emptyMessage={entryQuery.isLoading ? "Loading month details..." : "Choose a draft month to review."}
               />
             </div>
           </div>
