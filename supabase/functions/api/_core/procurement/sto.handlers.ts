@@ -45,6 +45,7 @@ type PreparedStoLine = {
   payment_term_id: string;
   freight_term: string;
   gst_terms: string | null;
+  gst_rate: number | null;
   remarks: string | null;
   has_rebate: boolean;
   rebate_rate: number | null;
@@ -178,6 +179,10 @@ function getPathSegments(req: Request): string[] {
 
 function getIdFromPath(req: Request): string {
   return getPathSegments(req)[3] ?? "";
+}
+
+function getLineIdFromPath(req: Request): string {
+  return getPathSegments(req)[5] ?? "";
 }
 
 function stoErrorResponse(
@@ -631,6 +636,7 @@ function parseStoLineInput(
     payment_term_id: paymentTermId,
     freight_term: freightTerm,
     gst_terms: toTrimmedString(line.gst_terms) || null,
+    gst_rate: parseNullableNumber(line.gst_rate),
     remarks: toTrimmedString(line.remarks) || null,
     has_rebate: hasRebate,
     rebate_rate: hasRebate ? rebateRate : null,
@@ -823,13 +829,22 @@ async function inactivateLinkedCsnsForSto(input: {
   actionedBy: string;
   clearStoLink?: boolean;
   eligibleStatuses?: string[];
+  // consignment_note has no sto_line_id column (unlike po_line_id for PO) --
+  // one CSN per STO line, but linked only via sto_id + material_id. A
+  // line-scoped knock-off must narrow by material to avoid touching a
+  // sibling line's CSN for a different material on the same STO.
+  materialId?: string;
 }): Promise<void> {
-  const { data: rows, error: fetchError } = await serviceRoleClient
+  let query = serviceRoleClient
     .schema("erp_procurement")
     .from("consignment_note")
     .select("id, status")
     .eq("sto_id", input.stoId)
     .in("status", input.eligibleStatuses ?? ["ORD", "TRN", "GED"]);
+  if (input.materialId) {
+    query = query.eq("material_id", input.materialId);
+  }
+  const { data: rows, error: fetchError } = await query;
 
   if (fetchError) {
     throw new Error("PROCUREMENT_CSN_UPDATE_FAILED");
@@ -1125,6 +1140,8 @@ export async function createSTOHandler(
         payment_term_id: line.payment_term_id,
         freight_term: line.freight_term,
         gst_terms: line.gst_terms,
+        gst_rate: line.gst_rate,
+        gst_amount: line.gst_rate ? Number((line.quantity * line.transfer_price * line.gst_rate / 100).toFixed(4)) : null,
         remarks: line.remarks,
         has_rebate: line.has_rebate,
         rebate_rate: line.rebate_rate,
@@ -1144,7 +1161,14 @@ export async function createSTOHandler(
       return stoErrorResponse(req, ctx, "STO_LINE_CREATE_FAILED", 500, "Unable to create STO lines.");
     }
 
-    await createCsnForSto(sto as StoRow, linePayload as StoLineRow[], ctx.auth_user_id, deliveryType);
+    // CSN must not exist before the STO is actually approved -- matches
+    // PO exactly (createCsnsForPo only runs from confirmPOHandler's
+    // no-approval branch and approvePOHandler, never createPOHandler).
+    // This used to fire right here at raw creation, which meant an
+    // INTER_PLANT STO could have a live CSN while still sitting in DRAFT
+    // -- caught 2026-07-30, business owner correction. confirmSTOHandler's
+    // own no-approval-required branch and approveSTOHandler already call
+    // createCsnForSto at the right time; this was the only premature call.
 
     return okResponse(await hydrateSto(String(sto.id), ctx), ctx.request_id, req);
   } catch (error) {
@@ -1215,17 +1239,29 @@ export async function listSTOsHandler(
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const stoType = toUpperTrimmedString(url.searchParams.get("sto_type"));
     const materialScope = toUpperTrimmedString(url.searchParams.get("material_scope"));
+    // §113.10 fix: was fetch-200-then-filter-client-side, so any company with
+    // more than 200 STOs silently truncated. OUTBOUND/INBOUND is now a real
+    // server-side filter instead of the old .or() + client-side split.
+    const direction = toUpperTrimmedString(url.searchParams.get("direction"));
+    const search = toTrimmedString(url.searchParams.get("search")).replace(/[%_]/g, "");
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
+    const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("stock_transfer_order")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) {
-      query = query.or(`sending_company_id.eq.${companyId},receiving_company_id.eq.${companyId}`);
+      if (direction === "INBOUND") {
+        query = query.eq("receiving_company_id", companyId);
+      } else if (direction === "OUTBOUND") {
+        query = query.eq("sending_company_id", companyId);
+      } else {
+        query = query.or(`sending_company_id.eq.${companyId},receiving_company_id.eq.${companyId}`);
+      }
     }
     if (status && STO_STATUSES.has(status)) {
       query = query.eq("status", status);
@@ -1233,8 +1269,11 @@ export async function listSTOsHandler(
     if (stoType && STO_TYPES.has(stoType)) {
       query = query.eq("sto_type", stoType);
     }
+    if (search) {
+      query = query.ilike("sto_number", `%${search}%`);
+    }
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       return stoErrorResponse(req, ctx, "STO_LIST_FAILED", 500, "Unable to list STOs.");
     }
@@ -1244,7 +1283,25 @@ export async function listSTOsHandler(
       items = await filterStosByMaterialTypes(items, ["RM", "PM"]);
     }
 
-    return okResponse({ items }, ctx.request_id, req);
+    // R-01/R-03 fix: server-side bulk-resolve company display names instead
+    // of the frontend falling back to a raw UUID when a client-side map missed.
+    const companyIds = [...new Set(items.flatMap((row) => [toTrimmedString(row.sending_company_id), toTrimmedString(row.receiving_company_id)]).filter(Boolean))];
+    const { data: companies } = companyIds.length
+      ? await serviceRoleClient.schema("erp_master").from("companies").select("id, company_name, company_code").in("id", companyIds)
+      : { data: [] as JsonRecord[] };
+    const companyMap = new Map(((companies ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+
+    const enrichedItems = items.map((row) => {
+      const sending = companyMap.get(toTrimmedString(row.sending_company_id));
+      const receiving = companyMap.get(toTrimmedString(row.receiving_company_id));
+      return {
+        ...row,
+        sending_company_display: sending ? String(sending.company_name ?? sending.company_code ?? "") : null,
+        receiving_company_display: receiving ? String(receiving.company_name ?? receiving.company_code ?? "") : null,
+      };
+    });
+
+    return okResponse({ items: enrichedItems, total: count ?? enrichedItems.length }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_LIST_FAILED";
     return stoErrorResponse(req, ctx, code, 500, code);
@@ -1359,6 +1416,19 @@ export async function updateSTOHandler(
           payment_term_id: line.payment_term_id !== undefined ? (toTrimmedString(line.payment_term_id) || null) : undefined,
           freight_term: line.freight_term !== undefined ? (toTrimmedString(line.freight_term) || null) : undefined,
           gst_terms: line.gst_terms !== undefined ? (toTrimmedString(line.gst_terms) || null) : undefined,
+          gst_rate: line.gst_rate !== undefined ? parseNullableNumber(line.gst_rate) : undefined,
+          // Edit forms always resubmit the whole line (qty/rate/payment_term/
+          // freight_term are already required together per handleSubmitEdit),
+          // so quantity/transfer_price are safely available here whenever
+          // gst_rate is -- no separate fetch of the pre-existing row needed.
+          gst_amount: line.gst_rate !== undefined
+            ? (() => {
+                const rate = parseNullableNumber(line.gst_rate);
+                const qty = quantity ?? parseNullableNumber(line.quantity);
+                const price = parseNullableNumber(line.transfer_price);
+                return rate && qty && price ? Number((qty * price * rate / 100).toFixed(4)) : null;
+              })()
+            : undefined,
           remarks: line.remarks !== undefined ? (toTrimmedString(line.remarks) || null) : undefined,
           has_rebate: line.has_rebate !== undefined ? line.has_rebate === true : undefined,
           rebate_rate: line.rebate_rate !== undefined ? parseNullableNumber(line.rebate_rate) : undefined,
@@ -1441,6 +1511,90 @@ export async function cancelSTOHandler(
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_CANCEL_FAILED";
     const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_SCOPE_VIOLATION" ? 403 : 500;
+    return stoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// Per-line equivalent of PO's knockOffPOLineHandler -- STO is one multi-line
+// document (not PO's one-doc-per-material split), so "remove one bad item"
+// means knocking off a single stock_transfer_order_line, not the whole
+// document. The line_status/knock_off_* columns already existed on this
+// table (matching PO's shape) but nothing ever wrote KNOCKED_OFF to them --
+// dispatchSTOHandler/closeSTOHandler were already written to treat
+// KNOCKED_OFF lines as resolved, just never had anything setting it.
+// CSN timing now matches PO exactly (createSTOHandler no longer creates one
+// early -- see its own comment): at DRAFT/PENDING_APPROVAL no CSN exists
+// yet, so knocking off a line there is a plain line removal, nothing to
+// inactivate. Only once CREATED (post-approval) can a CSN exist for that
+// material -- same restraint as PO's line knock-off: only inactivates it if
+// still ORD; TRN/GED (already dispatched) is left untouched, never silently
+// cancelled.
+export async function knockOffSTOLineHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const stoId = getIdFromPath(req);
+    const lineId = getLineIdFromPath(req);
+    const body = await parseBody(req);
+    const reason = toTrimmedString(body.reason || body.knock_off_reason);
+    if (!reason) {
+      return stoErrorResponse(req, ctx, "STO_LINE_KNOCK_OFF_REASON_REQUIRED", 400, "Knock-off reason is required.");
+    }
+
+    const sto = await fetchSto(stoId);
+    assertStoVisibleToContext(ctx, sto);
+    if (!["DRAFT", "PENDING_APPROVAL", "CREATED"].includes(toUpperTrimmedString(sto.status))) {
+      return stoErrorResponse(req, ctx, "STO_LINE_KNOCK_OFF_BLOCKED", 400, "STO line can only be knocked off before dispatch.");
+    }
+
+    const lines = await fetchStoLines(stoId);
+    const targetLine = lines.find((line) => toTrimmedString(line.id) === lineId);
+    if (!targetLine) {
+      return stoErrorResponse(req, ctx, "STO_LINE_NOT_FOUND", 404, "STO line not found.");
+    }
+    if (toUpperTrimmedString(targetLine.line_status) === "KNOCKED_OFF") {
+      return stoErrorResponse(req, ctx, "STO_LINE_ALREADY_KNOCKED_OFF", 400, "This line is already knocked off.");
+    }
+    if (Number(targetLine.dispatched_qty ?? 0) > 0) {
+      return stoErrorResponse(req, ctx, "STO_LINE_ALREADY_DISPATCHED", 400, "This line already has dispatched quantity and cannot be knocked off.");
+    }
+
+    const nowIso = new Date().toISOString();
+    const { error: lineError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order_line")
+      .update({
+        line_status: "KNOCKED_OFF",
+        knock_off_reason: reason,
+        knocked_off_by: ctx.auth_user_id,
+        knocked_off_at: nowIso,
+        last_updated_at: nowIso,
+      })
+      .eq("id", lineId);
+
+    if (lineError) {
+      return stoErrorResponse(req, ctx, "STO_LINE_KNOCK_OFF_FAILED", 500, "Unable to knock off STO line.");
+    }
+
+    try {
+      await inactivateLinkedCsnsForSto({
+        stoId,
+        materialId: toTrimmedString(targetLine.material_id),
+        reasonCode: "KOF",
+        reason,
+        actionedBy: ctx.auth_user_id,
+        eligibleStatuses: ["ORD"],
+      });
+    } catch (_csnError) {
+      return stoErrorResponse(req, ctx, "STO_LINE_KNOCK_OFF_FAILED", 500, "Unable to inactivate linked CSN for knocked-off line.");
+    }
+
+    return okResponse(await hydrateSto(stoId, ctx), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "STO_LINE_KNOCK_OFF_FAILED";
+    const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_LINE_NOT_FOUND" ? 404 : code === "STO_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") || code.includes("BLOCKED") || code.includes("ALREADY") ? 400 : 500;
     return stoErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -1962,9 +2116,14 @@ export async function dispatchSTOHandler(
       return stoErrorResponse(req, ctx, "STO_DISPATCH_BLOCKED", 400, "Only CREATED STO can be dispatched.");
     }
 
-    const lines = await fetchStoLines(stoId);
+    // KNOCKED_OFF lines (knockOffSTOLineHandler) must never reach dispatch --
+    // matches closeSTOHandler's own existing KNOCKED_OFF-is-resolved
+    // treatment on the other end of the lifecycle.
+    const lines = (await fetchStoLines(stoId)).filter(
+      (line) => toUpperTrimmedString(line.line_status) !== "KNOCKED_OFF",
+    );
     if (lines.length === 0) {
-      return stoErrorResponse(req, ctx, "STO_EMPTY", 400, "STO has no lines.");
+      return stoErrorResponse(req, ctx, "STO_EMPTY", 400, "STO has no lines to dispatch (all lines knocked off).");
     }
 
     const dispatchedLineResults: Array<{ line: StoLineRow; stockDocumentId: string }> = [];

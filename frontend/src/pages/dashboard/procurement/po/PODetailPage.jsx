@@ -12,6 +12,7 @@ import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import {
   amendPurchaseOrder,
   cancelPurchaseOrder,
@@ -81,6 +82,8 @@ function getLineStatusTone(status) {
 function buildAmendmentState(lines, po) {
   return {
     delivery_date: po?.expected_delivery_date ?? "",
+    payment_term_id: po?.payment_term_id ?? lines?.[0]?.payment_term_id ?? "",
+    delivery_type: po?.delivery_type ?? "STANDARD",
     remarks: "",
     lines: (lines ?? []).map((line) => ({
       id: line.id,
@@ -143,7 +146,7 @@ export default function PODetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState(buildEditState(null, ""));
   const [amendmentOpen, setAmendmentOpen] = useState(false);
-  const [amendmentForm, setAmendmentForm] = useState({ delivery_date: "", remarks: "", lines: [] });
+  const [amendmentForm, setAmendmentForm] = useState({ delivery_date: "", payment_term_id: "", delivery_type: "STANDARD", remarks: "", lines: [] });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -301,11 +304,17 @@ export default function PODetailPage() {
   }
 
   async function handleCancelPo() {
-    const reason = await openActionPrompt({ eyebrow: "Purchase Order", title: "Cancel this PO?", label: "Cancellation reason", required: true });
+    const isDraft = po?.status === "DRAFT";
+    const reason = await openActionPrompt({
+      eyebrow: "Purchase Order",
+      title: isDraft ? "Remove this item from the order?" : "Cancel this PO?",
+      label: isDraft ? "Removal reason" : "Cancellation reason",
+      required: true,
+    });
     if (!reason) return;
     await runAction(
       () => cancelPurchaseOrder(id, { reason }),
-      "Purchase order cancelled."
+      isDraft ? "Item removed from the order." : "Purchase order cancelled."
     );
   }
 
@@ -319,6 +328,24 @@ export default function PODetailPage() {
   }
 
   async function handleKnockOffLine(lineId) {
+    // Line knock-off only auto-cancels CSNs still at ORD (server-side,
+    // deliberately -- an in-transit shipment shouldn't be silently
+    // cancelled). Anything already TRN/GED for this line will be left
+    // untouched by the knock-off, so surface that before the user commits.
+    const inTransitCsns = csns.filter(
+      (csn) => csn.po_line_id === lineId && ["TRN", "GED"].includes(String(csn.status || "").toUpperCase())
+    );
+    if (inTransitCsns.length > 0) {
+      const csnList = inTransitCsns.map((csn) => `${csn.csn_number} (${csn.status})`).join(", ");
+      const proceed = await openActionConfirm({
+        eyebrow: "Purchase Order",
+        title: "Material already in transit for this line",
+        message: `${csnList} — already dispatched, this knock-off will NOT cancel or affect them. Only the remaining un-dispatched balance will be closed. Continue?`,
+        confirmLabel: "Continue",
+      });
+      if (!proceed) return;
+    }
+
     const reason = await openActionPrompt({ eyebrow: "Purchase Order", title: "Knock off this line?", label: "Knock-off reason", required: true });
     if (!reason) return;
     await runAction(
@@ -333,6 +360,8 @@ export default function PODetailPage() {
     );
     const headerChanged =
       amendmentForm.delivery_date !== String(po?.expected_delivery_date ?? "") ||
+      amendmentForm.payment_term_id !== String(po?.payment_term_id ?? po?.lines?.[0]?.payment_term_id ?? "") ||
+      amendmentForm.delivery_type !== String(po?.delivery_type ?? "STANDARD") ||
       amendmentForm.remarks.trim() !== "";
 
     if (!headerChanged && changedLines.length === 0) {
@@ -348,6 +377,8 @@ export default function PODetailPage() {
         await amendPurchaseOrder(id, {
           po_line_id: po?.lines?.[0]?.id,
           delivery_date: amendmentForm.delivery_date || null,
+          payment_term_id: amendmentForm.payment_term_id || null,
+          delivery_type: amendmentForm.delivery_type || null,
           remarks: amendmentForm.remarks.trim() || null,
         });
       }
@@ -453,18 +484,34 @@ export default function PODetailPage() {
     }
   }
 
+  // §113.10-style bug: PO line grid showed Ordered vs Received (open_qty,
+  // which only moves on GRN) but nothing about what's already dispatched --
+  // a knock-off decision needs to know whether the balance is truly free or
+  // already committed to a CSN that's TRN/GED (in transit / at the gate).
+  // CSN rows are already fetched on this page (csnQuery, below) with
+  // po_line_id + status, so this is a pure client-side join, no new call.
   const grnSummaryRows = useMemo(
     () =>
       Array.isArray(po?.lines)
-        ? po.lines.map((line) => ({
-            id: line.id,
-            material_id: line.material_id,
-            ordered_qty: Number(line.ordered_qty ?? 0),
-            received_qty: Number((Number(line.ordered_qty ?? 0) - Number(line.open_qty ?? 0)).toFixed(6)),
-            open_qty: Number(line.open_qty ?? 0),
-          }))
+        ? po.lines.map((line) => {
+            const lineCsns = csns.filter((csn) => csn.po_line_id === line.id);
+            const sumByStatuses = (statuses) =>
+              lineCsns
+                .filter((csn) => statuses.includes(String(csn.status || "").toUpperCase()))
+                .reduce((sum, csn) => sum + Number(csn.po_qty ?? 0), 0);
+            return {
+              id: line.id,
+              material_id: line.material_id,
+              material_display: line.material_display,
+              ordered_qty: Number(line.ordered_qty ?? 0),
+              received_qty: Number((Number(line.ordered_qty ?? 0) - Number(line.open_qty ?? 0)).toFixed(6)),
+              open_qty: Number(line.open_qty ?? 0),
+              csn_not_dispatched_qty: sumByStatuses(["ORD"]),
+              csn_in_transit_qty: sumByStatuses(["TRN", "GED"]),
+            };
+          })
         : [],
-    [po?.lines]
+    [po?.lines, csns]
   );
 
   return (
@@ -479,6 +526,16 @@ export default function PODetailPage() {
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         ...(po?.status === "DRAFT" ? [{ key: "edit", label: "Edit", tone: "neutral", onClick: openEditModal, disabled: saving }] : []),
         ...(po?.status === "DRAFT" ? [{ key: "confirm", label: saving ? "Confirming..." : "Confirm", tone: "primary", onClick: () => void handleConfirm(), disabled: saving }] : []),
+        // Multi-item PO create is actually one purchase_order row per
+        // material, bundled under one po_order_group -- but before this,
+        // the only way to drop a single wrong item pre-confirm was to
+        // confirm/reject the WHOLE group (all-or-nothing). cancelPOHandler
+        // already scopes to one PO row and has no status gate of its own
+        // (only blocks post-GRN), so this reuses it as-is at DRAFT;
+        // syncOrderGroupStatus + confirmPOOrderGroupHandler's own
+        // draft-only filter already handle a group with one item removed
+        // correctly -- confirmed by reading both, no backend change needed.
+        ...(po?.status === "DRAFT" ? [{ key: "remove", label: "Remove Item", tone: "danger", onClick: () => void handleCancelPo(), disabled: saving }] : []),
         // Approve/Reject/Approve-Amendment are deliberately NOT exposed here —
         // approval authority lives only on the dedicated "Pending PO
         // Approvals" page (PROC_PO_ORDER_APPROVALS, gated to the Procurement
@@ -637,17 +694,19 @@ export default function PODetailPage() {
             />
           </ErpSectionCard>
 
-          <ErpSectionCard eyebrow="GRN Summary" title="Ordered vs received">
+          <ErpSectionCard eyebrow="Dispatch & Receipt Summary" title="Ordered vs dispatched vs received — before knocking off a balance, check it isn't already in transit">
             <ErpDenseGrid
               columns={[
-                { key: "material_id", label: "Material" },
-                { key: "ordered_qty", label: "Ordered Qty", width: "120px" },
-                { key: "received_qty", label: "Received Qty", width: "120px" },
-                { key: "open_qty", label: "Open Qty", width: "120px" },
+                { key: "material_id", label: "Material", render: (row) => row.material_display || row.material_id || "—" },
+                { key: "ordered_qty", label: "Ordered Qty", width: "110px", align: "right" },
+                { key: "csn_not_dispatched_qty", label: "Not Yet Dispatched", width: "130px", align: "right" },
+                { key: "csn_in_transit_qty", label: "In Transit / At Gate", width: "130px", align: "right" },
+                { key: "received_qty", label: "Received (GRN)", width: "120px", align: "right" },
+                { key: "open_qty", label: "Open Qty (Balance)", width: "130px", align: "right" },
               ]}
               rows={grnSummaryRows}
               rowKey={(row) => row.id}
-              emptyMessage="No GRN summary rows available."
+              emptyMessage="No dispatch/receipt summary rows available."
             />
           </ErpSectionCard>
 
@@ -946,6 +1005,31 @@ export default function PODetailPage() {
                     onChange={(event) => setAmendmentForm((current) => ({ ...current, delivery_date: event.target.value }))}
                     className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
                   />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Payment Term
+                  <select
+                    value={amendmentForm.payment_term_id}
+                    onChange={(event) => setAmendmentForm((current) => ({ ...current, payment_term_id: event.target.value }))}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select payment term</option>
+                    {paymentTermOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Delivery Type
+                  <select
+                    value={amendmentForm.delivery_type}
+                    onChange={(event) => setAmendmentForm((current) => ({ ...current, delivery_type: event.target.value }))}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    {["STANDARD", "BULK", "TANKER"].map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
                 </label>
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Remarks

@@ -12,10 +12,13 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { resolveGstProfileWithSource } from "../../_shared/gst_resolver.ts";
+import { deriveCompanyFieldsFromGstProfile } from "../../_shared/gst_company_fields.ts";
 
 type JsonRecord = Record<string, unknown>;
 
 const ALLOWED_CUSTOMER_TYPES = new Set(["DOMESTIC", "EXPORT"]);
+const ALLOWED_GST_CATEGORIES = new Set(["REGISTERED", "UNREGISTERED", "COMPOSITION", "EXPORT"]);
 // §83.18-REVISED (2026-07-23): separate from customer_type above (unrelated
 // DOMESTIC/EXPORT commercial classification) -- this filters the Plan Feed (FO) Party
 // dropdown by PO Type. Optional/nullable: RM/PM Sales customers never set it.
@@ -164,10 +167,27 @@ export async function createCustomerHandler(
     const customerName = toTrimmedString(body.customer_name);
     const customerType = toTrimmedString(body.customer_type).toUpperCase();
     const deliveryAddress = toTrimmedString(body.delivery_address);
+    const billingState = toTrimmedString(body.billing_state);
     const foCustomerTypeRaw = toTrimmedString(body.fo_customer_type).toUpperCase();
+    const gstCategory = toTrimmedString(body.gst_category).toUpperCase();
+    // §113.6 — a customer created with no company mapping produces an
+    // unscoped row every other company can see; mandatory at create time.
+    const companyId = toTrimmedString(body.company_id);
 
     if ((!customerName && !vendorId) || !deliveryAddress || !ALLOWED_CUSTOMER_TYPES.has(customerType)) {
       return customerErrorResponse(req, ctx, "OM_INVALID_CUSTOMER_TYPE", 400, "Invalid customer type");
+    }
+    // §113 GST design session, 2026-07-30 — place of supply must come from
+    // the customer's own state, not their GSTIN (unregistered customers
+    // have none). Mandatory regardless of gst_category.
+    if (!billingState) {
+      return customerErrorResponse(req, ctx, "OM_CUSTOMER_BILLING_STATE_REQUIRED", 400, "Billing state is required");
+    }
+    if (!companyId) {
+      return customerErrorResponse(req, ctx, "OM_CUSTOMER_COMPANY_REQUIRED", 400, "company_id is required");
+    }
+    if (gstCategory && !ALLOWED_GST_CATEGORIES.has(gstCategory)) {
+      return customerErrorResponse(req, ctx, "OM_INVALID_GST_CATEGORY", 400, "Invalid GST category");
     }
     if (foCustomerTypeRaw && !ALLOWED_FO_CUSTOMER_TYPES.has(foCustomerTypeRaw)) {
       return customerErrorResponse(req, ctx, "OM_INVALID_FO_CUSTOMER_TYPE", 400, "Invalid FO customer type");
@@ -177,6 +197,14 @@ export async function createCustomerHandler(
     }
     if (parentCustomerId && !(await ensureParentCustomerExists(parentCustomerId))) {
       return customerErrorResponse(req, ctx, "OM_PARENT_CUSTOMER_NOT_FOUND", 404, "Parent customer not found");
+    }
+    if (!(await ensureCompanyExists(companyId))) {
+      return customerErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return customerErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const { data: customerCode, error: codeError } = await serviceRoleClient.rpc("generate_customer_code");
@@ -195,7 +223,9 @@ export async function createCustomerHandler(
       fo_customer_type: foCustomerTypeRaw || null,
       delivery_address: deliveryAddress,
       billing_address: toTrimmedString(body.billing_address) || null,
+      billing_state: billingState,
       gst_number: vendorId ? null : toTrimmedString(body.gst_number) || null,
+      gst_category: gstCategory || null,
       pan_number: toTrimmedString(body.pan_number) || null,
       primary_contact_person: toTrimmedString(body.primary_contact_person) || null,
       phone: toTrimmedString(body.phone) || null,
@@ -220,13 +250,59 @@ export async function createCustomerHandler(
       throw new Error("OM_CUSTOMER_CREATE_FAILED");
     }
 
+    // Atomic with create — a customer row must never exist unmapped (§113.6).
+    const { error: mapError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("customer_company_map")
+      .insert({ customer_id: data.id, company_id: companyId, active: true });
+
+    if (mapError) {
+      console.error("[createCustomerHandler] company map insert failed:", JSON.stringify(mapError));
+      // Roll back the orphaned customer row rather than leaving an unmapped one behind.
+      await serviceRoleClient.schema("erp_master").from("customer_master").delete().eq("id", data.id);
+      throw new Error("OM_CUSTOMER_COMPANY_MAP_FAILED");
+    }
+
     const [enriched] = await enrichCustomerRows([data as Record<string, unknown>]);
     return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {
     console.error("[createCustomerHandler] caught error:", err);
     const code = (err as Error).message || "OM_CUSTOMER_CREATE_FAILED";
-    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") || code.includes("REQUIRED") ? 400 : 500;
     return customerErrorResponse(req, ctx, code, status, "Customer create failed");
+  }
+}
+
+export async function lookupCustomerGstProfileHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    const gstNumber = toTrimmedString(new URL(req.url).searchParams.get("gst_number")).toUpperCase();
+    if (!gstNumber) {
+      return customerErrorResponse(req, ctx, "OM_GST_NUMBER_REQUIRED", 400, "gst_number is required");
+    }
+
+    const resolved = await resolveGstProfileWithSource(gstNumber);
+    const fields = deriveCompanyFieldsFromGstProfile(resolved.profile);
+
+    return okResponse(
+      {
+        data: {
+          gst_number: resolved.profile.gst_number,
+          legal_name: resolved.profile.legal_name,
+          source: resolved.source,
+          state_name: fields.state_name,
+          full_address: fields.full_address,
+          pin_code: fields.pin_code,
+        },
+      },
+      ctx.request_id,
+      req,
+    );
+  } catch (err) {
+    const code = (err as Error).message || "OM_GST_LOOKUP_FAILED";
+    return customerErrorResponse(req, ctx, code, code.includes("REQUIRED") ? 400 : 500, "GST lookup failed");
   }
 }
 
@@ -241,8 +317,28 @@ export async function listCustomersHandler(
     const foCustomerType = toTrimmedString(url.searchParams.get("fo_customer_type")).toUpperCase();
     const statusFilter = toTrimmedString(url.searchParams.get("status")).toUpperCase();
     const search = normalizeSearch(toTrimmedString(url.searchParams.get("search")));
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
     const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
+
+    // §113.6 — without this, a Customer dropdown scoped to one company
+    // showed every customer in the system, mapped or not.
+    let scopedCustomerIds: string[] | null = null;
+    if (companyId) {
+      const { data: mapRows, error: mapError } = await serviceRoleClient
+        .schema("erp_master")
+        .from("customer_company_map")
+        .select("customer_id")
+        .eq("company_id", companyId)
+        .eq("active", true);
+      if (mapError) {
+        throw new Error("OM_CUSTOMER_LIST_FAILED");
+      }
+      scopedCustomerIds = (mapRows ?? []).map((row: Record<string, unknown>) => String(row.customer_id));
+      if (scopedCustomerIds!.length === 0) {
+        return okResponse({ data: [], total: 0 }, ctx.request_id, req);
+      }
+    }
 
     let query = serviceRoleClient
       .schema("erp_master")
@@ -251,6 +347,9 @@ export async function listCustomersHandler(
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
+    if (scopedCustomerIds) {
+      query = query.in("id", scopedCustomerIds);
+    }
     if (customerType) {
       query = query.eq("customer_type", customerType);
     }
@@ -329,6 +428,7 @@ export async function updateCustomerHandler(
       ...(isVendorLinked ? [] : ["customer_name", "gst_number"]),
       "delivery_address",
       "billing_address",
+      "billing_state",
       "pan_number",
       "primary_contact_person",
       "phone",
@@ -340,6 +440,14 @@ export async function updateCustomerHandler(
       if (body[field] !== undefined) {
         updates[field] = body[field];
       }
+    }
+
+    if (body.gst_category !== undefined) {
+      const gstCategory = toTrimmedString(body.gst_category).toUpperCase();
+      if (gstCategory && !ALLOWED_GST_CATEGORIES.has(gstCategory)) {
+        return customerErrorResponse(req, ctx, "OM_INVALID_GST_CATEGORY", 400, "Invalid GST category");
+      }
+      updates.gst_category = gstCategory || null;
     }
 
     if (body.fo_customer_type !== undefined) {

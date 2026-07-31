@@ -580,6 +580,14 @@ export function cancelSTO(id, data) {
   return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/cancel`, data);
 }
 
+export function knockOffSTOLine(id, lineId, data) {
+  return fetchProcurement(
+    "POST",
+    `/api/procurement/stos/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}/knock-off`,
+    data
+  );
+}
+
 export function confirmSTO(id, data) {
   return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/confirm`, data);
 }
@@ -806,6 +814,39 @@ export function updateSalesOrder(id, data) {
   return fetchProcurement("PUT", `/api/procurement/sales-orders/${encodeURIComponent(id)}`, data);
 }
 
+export function updateSalesOrderLines(id, data) {
+  return fetchProcurement("PATCH", `/api/procurement/sales-orders/${encodeURIComponent(id)}/lines`, data);
+}
+
+// §113 Stage 2 — Delivery Order (shared by SO + STO)
+export function listDeliveryOrders(params) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders", undefined, params);
+}
+
+export function getDeliveryOrder(id) {
+  return fetchProcurement("GET", `/api/procurement/delivery-orders/${encodeURIComponent(id)}`);
+}
+
+export function createDeliveryOrder(data) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders", data);
+}
+
+export function cancelDeliveryOrder(id, data) {
+  return fetchProcurement("POST", `/api/procurement/delivery-orders/${encodeURIComponent(id)}/cancel`, data);
+}
+
+export function listDOSourceDocuments(params) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders/source-documents", undefined, params);
+}
+
+export function listDOSourceLines(params) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders/source-lines", undefined, params);
+}
+
+export function listDOStorageLocationOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders/storage-locations", undefined, params);
+}
+
 export function cancelSalesOrder(id, data) {
   return fetchProcurement("POST", `/api/procurement/sales-orders/${encodeURIComponent(id)}/cancel`, data);
 }
@@ -836,6 +877,14 @@ export function createSalesInvoice(data) {
 
 export function postSalesInvoice(id) {
   return fetchProcurement("POST", `/api/procurement/sales-invoices/${encodeURIComponent(id)}/post`);
+}
+
+export function createPgiInvoice(data) {
+  return fetchProcurement("POST", "/api/procurement/sales-invoices/pgi", data);
+}
+
+export function reverseSalesInvoice(id, data) {
+  return fetchProcurement("POST", `/api/procurement/sales-invoices/${encodeURIComponent(id)}/reverse`, data);
 }
 
 export function listGlobalNumberSeries() {

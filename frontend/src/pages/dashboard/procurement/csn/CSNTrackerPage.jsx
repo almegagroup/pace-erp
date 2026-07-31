@@ -184,29 +184,21 @@ function buildDraft(row) {
   if (!draft.consignee_company_id) {
     draft.consignee_company_id = row?.consignee_company_id ?? row?.company_id ?? "";
   }
-  draft.atd = row?.atd ?? "";
+  // §113 fix: no more draft.atd — ATD has no real column (it's just
+  // bl_date/lr_date), and the edit drawer now reads those directly for its
+  // read-only ATD mirror instead of carrying a separate, driftable copy.
   return draft;
 }
 
-function normalizePayload(draft, row) {
+function normalizePayload(draft) {
   const payload = {};
   for (const [key, value] of Object.entries(draft)) {
-    if (key === "atd") {
-      continue;
-    }
     if (typeof value === "boolean") {
       payload[key] = value;
     } else if (value === "") {
       payload[key] = null;
     } else {
       payload[key] = value;
-    }
-  }
-  if (draft.atd !== undefined) {
-    if (row?.csn_type === "IMPORT") {
-      payload.bl_date = draft.atd || null;
-    } else if (row?.csn_type === "DOMESTIC") {
-      payload.lr_date = draft.atd || null;
     }
   }
   return payload;
@@ -525,8 +517,11 @@ export default function CSNTrackerPage() {
   // PERF: `companyId` starts as "" and is filled a tick later by the auto-select effect above.
   // Without a guard both of these fired immediately with no company (fetching every company's
   // rows — the expensive case), then fired AGAIN once the company resolved. Measured live: two
-  // wasted heavy calls per page load, ~6s. Gate them until the company is known; the auto-select
-  // always sets one, so nothing is lost — the query just runs once, with the right scope.
+  // wasted heavy calls per page load, ~6s. Gate them until the initial
+  // auto-select effect has settled (companyInitialized) — not on companyId
+  // itself, which was the bug: companyId is legitimately "" once the user
+  // explicitly picks "ALL", and Boolean("") disabled the query forever,
+  // making "ALL" show nothing instead of everything.
   const trackerQuery = useQuery({
     queryKey: ["csn-tracker", companyId, status, csnType, dateFrom, dateTo, page],
     queryFn: () =>
@@ -539,13 +534,13 @@ export default function CSNTrackerPage() {
         limit: LIMIT,
         offset: (page - 1) * LIMIT,
       }),
-    enabled: Boolean(companyId),
+    enabled: companyInitialized,
   });
 
   const alertsQuery = useQuery({
     queryKey: ["csn-alert-counts", companyId],
     queryFn: () => getAllAlertCounts({ company_id: companyId || undefined }),
-    enabled: Boolean(companyId),
+    enabled: companyInitialized,
   });
 
   useErpScreenHotkeys({
@@ -713,7 +708,7 @@ export default function CSNTrackerPage() {
     setError("");
     setNotice("");
     try {
-      const payload = normalizePayload(draft, row);
+      const payload = normalizePayload(draft);
       const nextDispatchQty = parseNumber(payload.dispatch_qty);
       const currentDispatchQty = parseNumber(row.dispatch_qty);
       const dispatchChanged = nextDispatchQty !== currentDispatchQty;
@@ -1328,8 +1323,15 @@ export default function CSNTrackerPage() {
                                     <EditField label="ETD" rowId={row.id} fieldName="etd" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input type="date" value={draft.etd ?? ""} onChange={(event) => patchDraft("etd", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
-                                    <EditField label="ATD" rowId={row.id} fieldName={row.csn_type === "IMPORT" ? "bl_date" : "lr_date"} activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.atd ?? ""} onChange={(event) => patchDraft("atd", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                                    <EditField label="ATD (from LR/BL Date below)" rowId={row.id} fieldName={row.csn_type === "IMPORT" ? "bl_date" : "lr_date"} activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      {/* §113 fix: this used to be its own editable input bound to a
+                                          separate draft.atd key -- since ATD has no real DB column (it's
+                                          only ever bl_date for IMPORT / lr_date for DOMESTIC), editing it
+                                          independently let a stale/empty draft.atd silently overwrite
+                                          whatever the user had just typed into the real LR/BL Date field
+                                          below on save. Now purely a live read-only mirror -- there is
+                                          exactly one place to edit this date. */}
+                                      <input type="date" value={(row.csn_type === "IMPORT" ? draft.bl_date : draft.lr_date) ?? ""} readOnly disabled className="h-[26px] border border-slate-300 bg-slate-100 px-2 text-[11px] text-slate-600 outline-none" />
                                     </EditField>
                                     {row.csn_type === "IMPORT" ? (
                                       <>

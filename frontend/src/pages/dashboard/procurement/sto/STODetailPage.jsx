@@ -28,6 +28,8 @@ import {
   confirmSTOReceipt,
   dispatchSTO,
   getSTO,
+  knockOffSTOLine,
+  listCSNs,
   rejectSTO,
   updateSTO,
   updateGateExitWeight,
@@ -87,6 +89,7 @@ function buildEditState(detail) {
       payment_term_id: line.payment_term_id ?? "",
       freight_term: line.freight_term ?? "FOR",
       gst_terms: line.gst_terms ?? "",
+      gst_rate: line.gst_rate != null ? String(line.gst_rate) : "",
       remarks: line.remarks ?? "",
       has_rebate: Boolean(line.has_rebate),
       rebate_rate: line.rebate_rate ?? "",
@@ -137,6 +140,16 @@ export default function STODetailPage() {
   const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const detail = detailQuery.data ?? null;
+  // INTER_PLANT STOs get their own CSN(s) at create time (unlike PO, which
+  // only creates CSN at CONFIRMED) -- needed here to warn before knocking
+  // off a line whose CSN is already TRN/GED (§113.10 line-knock-off pattern,
+  // same as PODetailPage.jsx's fix for the same gap).
+  const csnQuery = useQuery({
+    queryKey: ["procurement", "sto-csns", id],
+    queryFn: () => listCSNs({ sto_id: id, limit: 200, offset: 0 }),
+    enabled: Boolean(id),
+  });
+  const csns = Array.isArray(csnQuery.data?.data) ? csnQuery.data.data : [];
   const materials = materialQuery.materials;
   const paymentTerms = paymentTermQuery.paymentTerms;
   const loading = detailQuery.isLoading || materialQuery.isLoading || paymentTermQuery.isLoading;
@@ -216,7 +229,14 @@ export default function STODetailPage() {
     && detail.amendment_log.some((row) => row.requires_approval === true && String(row.approval_status || "").toUpperCase() === "PENDING");
   const canEdit = String(detail?.status || "").toUpperCase() === "DRAFT";
   const canConfirmForApproval = String(detail?.status || "").toUpperCase() === "DRAFT";
-  const canAmend = String(detail?.status || "").toUpperCase() === "CREATED";
+  // §113 Task D fix: backend's amendSTOHandler already allows CREATED *and*
+  // PENDING_APPROVAL (qty/rate changes just need their own approval) — the
+  // frontend button was only checking CREATED, so there was no way to fix a
+  // mistake while an STO sat waiting for approval. Blocked while an earlier
+  // amendment is itself still awaiting approval, to avoid stacking two
+  // unresolved amendments on the same STO.
+  const canAmend = ["CREATED", "PENDING_APPROVAL"].includes(String(detail?.status || "").toUpperCase())
+    && !hasPendingAmendment;
   const canApproveAmendment = String(detail?.status || "").toUpperCase() === "PENDING_APPROVAL" && canApprove && hasPendingAmendment;
   const canConfirmReceipt =
     String(detail?.status || "").toUpperCase() === "DISPATCHED" &&
@@ -233,7 +253,7 @@ export default function STODetailPage() {
   const linesMissingLocations = useMemo(
     () =>
       (detail?.lines ?? []).filter(
-        (line) => !line.sending_storage_location_id || !line.receiving_storage_location_id
+        (line) => line.line_status !== "KNOCKED_OFF" && (!line.sending_storage_location_id || !line.receiving_storage_location_id)
       ),
     [detail?.lines]
   );
@@ -300,6 +320,7 @@ export default function STODetailPage() {
       paymentTermQuery.refetch(),
       sendingCostCenterQuery.refetch(),
       receivingCostCenterQuery.refetch(),
+      csnQuery.refetch(),
     ]);
   }
 
@@ -355,7 +376,7 @@ export default function STODetailPage() {
       const saved = await saveDispatchLocations();
       if (!saved) return;
     }
-    const lineMessages = (detail.lines ?? []).map((line) => {
+    const lineMessages = (detail.lines ?? []).filter((line) => line.line_status !== "KNOCKED_OFF").map((line) => {
       const materialName =
         materialMap.get(line.material_id)?.material_name ||
         materialMap.get(line.material_id)?.material_code ||
@@ -381,6 +402,31 @@ export default function STODetailPage() {
     const reason = await openActionPrompt({ eyebrow: "STO", title: "Cancel this STO?", label: "Cancellation reason", required: true });
     if (!reason) return;
     await runAction(() => cancelSTO(detail.id, { cancellation_reason: reason }), "STO cancelled.");
+  }
+
+  // Same PO/STO parity fix requested by the business owner: a multi-item STO
+  // needed a way to drop one wrong line without touching the rest -- and
+  // knocking it off must not silently ignore a CSN already TRN/GED for that
+  // material (consignment_note has no sto_line_id, so this matches by
+  // material_id, same as the backend's own knockOffSTOLineHandler).
+  async function handleKnockOffLine(line) {
+    if (!detail) return;
+    const inTransitCsns = csns.filter(
+      (csn) => csn.material_id === line.material_id && ["TRN", "GED"].includes(String(csn.status || "").toUpperCase())
+    );
+    if (inTransitCsns.length > 0) {
+      const csnList = inTransitCsns.map((csn) => `${csn.csn_number} (${csn.status})`).join(", ");
+      const proceed = await openActionConfirm({
+        eyebrow: "STO",
+        title: "Material already in transit for this line",
+        message: `${csnList} — already dispatched, this knock-off will NOT cancel or affect them. Continue?`,
+        confirmLabel: "Continue",
+      });
+      if (!proceed) return;
+    }
+    const reason = await openActionPrompt({ eyebrow: "STO", title: "Knock off this line?", label: "Knock-off reason", required: true });
+    if (!reason) return;
+    await runAction(() => knockOffSTOLine(detail.id, line.id, { reason }), "STO line knocked off.");
   }
 
   async function handleConfirmForApproval() {
@@ -474,6 +520,7 @@ export default function STODetailPage() {
           payment_term_id: line.payment_term_id,
           freight_term: line.freight_term,
           gst_terms: line.gst_terms || null,
+          gst_rate: line.gst_rate !== "" ? Number(line.gst_rate) : null,
           remarks: line.remarks.trim() || null,
           has_rebate: line.has_rebate,
           rebate_rate: line.has_rebate && line.rebate_rate !== "" ? Number(line.rebate_rate) : null,
@@ -640,6 +687,33 @@ export default function STODetailPage() {
                 { key: "received_qty", label: "Received Qty", width: "110px", render: (row) => row.received_qty ?? "—" },
                 { key: "balance_qty", label: "Balance Qty", width: "110px", render: (row) => row.balance_qty ?? "—" },
                 { key: "available_qty", label: "Available Stock", width: "120px", render: (row) => row.available_qty ?? "—" },
+                {
+                  key: "line_status",
+                  label: "Status",
+                  width: "120px",
+                  render: (row) => (
+                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${row.line_status === "KNOCKED_OFF" ? "bg-rose-100 text-rose-800" : row.line_status === "RECEIVED" ? "bg-emerald-100 text-emerald-800" : "bg-sky-100 text-sky-800"}`}>
+                      {row.line_status || "OPEN"}
+                    </span>
+                  ),
+                },
+                {
+                  key: "actions",
+                  label: "Actions",
+                  width: "120px",
+                  render: (row) =>
+                    ["DRAFT", "PENDING_APPROVAL", "CREATED"].includes(String(detail.status || "").toUpperCase())
+                    && row.line_status !== "KNOCKED_OFF"
+                    && Number(row.dispatched_qty ?? 0) === 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleKnockOffLine(row)}
+                        className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700"
+                      >
+                        Knock-off
+                      </button>
+                    ) : "—",
+                },
               ]}
               rows={detail.lines ?? []}
               rowKey={(row) => row.id}
@@ -956,6 +1030,22 @@ export default function STODetailPage() {
                           <option key={option.value} value={option.value}>{option.label}</option>
                         ))}
                       </select>
+                    </label>
+                    <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                      GST Rate (%)
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={line.gst_rate}
+                        onChange={(event) =>
+                          setEditForm((current) => ({
+                            ...current,
+                            lines: current.lines.map((entry) => entry.id === line.id ? { ...entry, gst_rate: event.target.value } : entry),
+                          }))
+                        }
+                        className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                      />
                     </label>
                     <label className="grid gap-1 text-xs font-semibold text-slate-700">
                       Expected Delivery

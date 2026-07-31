@@ -499,11 +499,17 @@ export async function listCustomers({
   fo_customer_type,
   status,
   search,
+  company_id,
   limit = 50,
   offset = 0,
 } = {}) {
-  const params = buildParams({ customer_type, fo_customer_type, status, search, limit, offset });
+  const params = buildParams({ customer_type, fo_customer_type, status, search, company_id, limit, offset });
   return fetchJson(`/api/om/customers?${params.toString()}`, {}, "OM_CUSTOMER_LIST_FAILED");
+}
+
+export async function lookupCustomerGstProfile(gstNumber) {
+  const params = buildParams({ gst_number: gstNumber });
+  return fetchJson(`/api/om/customer/gst-profile?${params.toString()}`, {}, "OM_CUSTOMER_GST_LOOKUP_FAILED");
 }
 
 export async function getCustomer(id) {

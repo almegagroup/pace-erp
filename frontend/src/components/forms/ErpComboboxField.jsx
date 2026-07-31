@@ -187,6 +187,11 @@ export default function ErpComboboxField({
         event.key === " "
       ) {
         event.preventDefault();
+        // A parent row/grid (e.g. ErpDenseGrid) may bind its own
+        // ArrowUp/ArrowDown/Enter handler for row navigation on the same
+        // keys — without this, the keypress that opens this dropdown would
+        // also bubble up and move row focus or activate the row.
+        event.stopPropagation();
         openDropdown();
       }
       return;
@@ -195,20 +200,24 @@ export default function ErpComboboxField({
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
+        event.stopPropagation();
         setHighlightIndex((prev) => Math.min(prev + 1, filtered.length - 1));
         break;
       case "ArrowUp":
         event.preventDefault();
+        event.stopPropagation();
         setHighlightIndex((prev) => Math.max(prev - 1, 0));
         break;
       case "Enter":
         event.preventDefault();
+        event.stopPropagation();
         if (filtered[highlightIndex] != null && !filtered[highlightIndex].disabled) {
           selectOption(filtered[highlightIndex].value);
         }
         break;
       case "Escape":
         event.preventDefault();
+        event.stopPropagation();
         setOpen(false);
         setQuery("");
         break;

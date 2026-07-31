@@ -15521,3 +15521,338 @@ assertCompanyScope(ctx, companyId): Promise<void>
 **শিক্ষা (নিজের ভুল থেকে):** "সব ঠিক করা হয়েছে" বলার আগে **নিজের নিজের tool-এর সীমাবদ্ধতা** (guard script-এর নিজের doc-comment-এই লেখা ছিল "Shape 3 ধরা যায় না") থেকে conclusion টানা উচিত ছিল — সেটা যে সত্যিই বাকি আছে সেটা re-check না করেই "COMPLETE" লেখা ভুল ছিল। এখন থেকে কোনো audit-এর "সম্পূর্ণ" দাবি করার আগে যে tool দিয়ে audit হয়েছে তার নিজের সীমাবদ্ধতা section আলাদাভাবে চেক করা — যদি সেই সীমাবদ্ধতার আওতায় কিছু থেকে থাকে, সেটা এখনো unverified, "COMPLETE" না।
 
 ---
+
+## Section 113 — Sales Module Redesign: 3-Stage Order → DO → GI+Invoice Architecture (LOCKED — 2026-07-30)
+
+### 113.1 — পটভূমি এবং Scope
+
+Live code audit (SO01/SO02, `sales_order.handlers.ts`, `SOListPage.jsx`, `SOCreatePage.jsx`) করে দেখা গেল আজকের RM/PM/INT Sales Order design ভুল/অসম্পূর্ণ — নিচে ১১৩.১৩-এ পুরো bug list। Business owner সিদ্ধান্ত নেন **পুরো Sales domain redesign করা হবে**, ধাপে ধাপে:
+
+```
+Phase 1 (এখন, এই session): RM/PM/INT — SO + STO + তাদের unified DO + Invoice, সম্পূর্ণ শেষ করা
+Phase 2 (পরে, আলাদা session): FG Dispatch — নতুন module, আলাদা design
+```
+
+**এই session-এর scope শুধু Phase 1।** FG Dispatch (production-type-ভিত্তিক dispatch unit — Admix=Packing PO, Hypershot=Batch+qty, IWC=SKU+qty, §83.2 আগে থেকেই locked) স্পর্শ করা হয়নি, ইচ্ছাকৃতভাবে।
+
+### 113.2 — 3-Stage Universal Architecture (LOCKED)
+
+সব ধরনের sales/transfer একই ৩-stage pattern অনুসরণ করবে (SAP-এর VA01→VL01N→VF01 মডেলের সমতুল্য, §59-61-এর পুরনো discovery-র সাথে সঙ্গতিপূর্ণ):
+
+```
+Stage 1 — ORDER               Stage 2 — DELIVERY ORDER (DO)      Stage 3 — GI + INVOICE
+(Create / Edit / Approve*)  →  (pick/pack/dispatch-unit stage) →  (Post Goods Issue + Invoice)
+
+  SO  (RM/PM/INT)
+  STO
+  [FG Dispatch — Phase 2]
+
+*Approve শুধু STO-র জন্য প্রযোজ্য, SO-র জন্য না (§113.5 দেখো)
+```
+
+**Invoice posting সবসময় DO-র against হয়**, SO/STO-র against সরাসরি না — এটা আজকের কোডের সাথেও সঙ্গতিপূর্ণ (`createSalesInvoiceHandler` already `dc_id` নেয়, `so_id` না)।
+
+### 113.3 — DO Unification (LOCKED)
+
+দুই ধরনের DO — **এক নয়**:
+
+| DO Type | Source | GST/Invoice |
+|---|---|---|
+| **RM/PM/INT DO (unified)** | SO (RM/PM/INT) + STO দুটোই এখানে যায় | Invoice posting এই DO-র against |
+| **FG DO (আলাদা)** | FG Dispatch [Phase 2] | Invoice posting এই DO-র against |
+
+RM/PM/INT DO আজকের `delivery_challan` টেবিলকে repurpose/extend করে বানানো হবে (নতুন প্যারালাল টেবিল না — `dc_type`, `dc_id`-ভিত্তিক invoice join আগে থেকেই আছে)।
+
+### 113.4 — SO vs STO: Approval, Ownership, Business Rationale (LOCKED)
+
+**Business logic (business owner-এর নিজের ভাষায়):**
+- **SO (RM/PM/INT):** SCM-এর বাইরের অনেকেই (বিভিন্ন department/company-র মানুষ) ad-hoc ভাবে RM/PM কোথাও পাঠাতে চায় — broad, non-SCM ব্যবহার। তাই **SO create-এ কোনো Approval নেই** — সরাসরি `CREATED` স্ট্যাটাসেই DO-stage-এর জন্য eligible।
+- **STO:** সম্পূর্ণ SCM-এর নিয়ন্ত্রণে, SCM নিজেই তৈরি করে। তাই **STO-তে Approval আছে** — এবং এটা **PO-র approval mechanism reuse করে** (নতুন কিছু বানাতে হবে না)।
+
+**Discovery (কোড+DB verify করে পাওয়া, কোনো নতুন কাজ লাগবে না):**
+- STO-র নিজের TX code+ACL group **আগে থেকেই সঠিক জায়গায় আছে**: `PROC_STO_LIST` = TX code **`PO07`**, group `GRP_ACL_PROCUREMENT` (SCM), `GRP_ACL_SALES`-এ না।
+- **`PO13` — "Pending Order Approvals (PO/STO)"** আগে থেকেই exists — PO আর STO-র approval already shared/একসাথে একই page-এ হয়, ঠিক যা business owner চাইছেন।
+- আসল standalone STO module (`STOListPage.jsx`+`STOCreatePage.jsx`, route `/dashboard/procurement/stos`) **আগে থেকেই আলাদা** frontend-এ আছে।
+
+**সিদ্ধান্ত:** `SOListPage.jsx`-এর ভিতরের STO tab **সম্পূর্ণ redundant/duplicate** — সরিয়ে ফেলা হবে। SO01 শুধু Sales Order-এর জন্যই থাকবে।
+
+STO Stage 1 (Order create/edit/approve) → Stage 2 (DO) → Stage 3 (GI) — SO-র মতো পুরোপুরি ৩-stage-এ split হবে, STO-র আজকের atomic `dispatchSTOHandler` (stock+DC+GXO একসাথে) ভাঙা হবে।
+
+### 113.5 — SO Edit Lock: Line-Level (LOCKED)
+
+- DO তৈরি হয়ে গেলে সংশ্লিষ্ট SO আর edit করা যাবে না মূল rule — কিন্তু lock **line-level**, header-level না।
+- একটা SO-তে ৫টা line থাকলে, ২টা-য় DO হয়ে গেলে — **শুধু সেই ২টা line freeze**, বাকি ৩টা open/editable থাকে।
+- মিসটেক ধরা পড়লে DO **reverse (=cancel)** করতে হবে, তারপর সেই line আবার editable হবে, তারপর নতুন DO আবার বানাতে হবে।
+- **Header fields lock (LOCKED — 2026-07-30, Claude-এর যুক্তিসঙ্গত ডিফল্ট, business owner override করতে পারেন):** Header fields (Customer, Customer PO Number, Payment Term, Delivery Address) **পুরো SO-তে একটাও DO তৈরি না হওয়া পর্যন্ত editable** — যেকোনো একটা line-এ DO হওয়া মাত্রই পুরো header freeze হয়ে যাবে (line-level lock-এর থেকে আলাদা rule)। কারণ: এই fields গুলো document-এর commercial identity নির্ধারণ করে (কোন customer, কোন PO reference-এ) — line-level partial lock শুধু material/qty-জাতীয় transactional detail-এর জন্য ঠিক আছে, কিন্তু partial dispatch শুরু হয়ে যাওয়ার পরে Customer বা Payment Term বদলে গেলে আগের DO-র সাথে data-inconsistency তৈরি হবে (DO তখনও পুরনো customer/payment-term reference বহন করছে)। Header edit করতে হলে প্রথমে সব DO reverse করতে হবে।
+
+### 113.6 — Customer Master: Company-Scope Gap (LOCKED — গুরুত্বপূর্ণ ফিক্স)
+
+Live code audit-এ পাওয়া গেছে (checklist-এর §2 pattern-এর নতুন রূপ):
+
+- `erp_master.customer_company_map` টেবিল আগে থেকেই আছে (vendor-এর `vendor_company_map`-এর সমতুল্য), আর `mapCustomerToCompanyHandler` ঠিকমতো `assertCompanyScope` চেক করে
+- কিন্তু **`listCustomersHandler`-এ `company_id` filter নেই** — MM04 page-ও, SO Create dropdown-ও এই endpoint থেকেই data নেয়, তাই **সিস্টেমের সব customer সব company-তে দেখায়**, mapped কিনা না দেখেই
+- **`createSOHandler` validate করে না** যে selected customer আসলে SO-র company-তে mapped কিনা
+- **`createCustomerHandler`-এ company mapping mandatory না** — নতুন customer company-agnostic তৈরি হয়
+
+**Fix (LOCKED):**
+1. `listCustomersHandler` — `company_id` param support + `customer_company_map` দিয়ে filter
+2. `createSOHandler` — customer-company mapping server-side validate
+3. `createCustomerHandler` — **company mapping create-এর সময়ই mandatory** (কমপক্ষে একটা company) — নাহলে বিশাল unscoped customer list জমে যাবে
+
+### 113.7 — Customer Create: GST Pattern (Vendor Master থেকে reuse, LOCKED)
+
+Transporter Master-এর simple WITH_GST/WITHOUT_GST toggle **reuse হবে না** — বরং **Vendor Master-এর (SAVendorMaster.jsx) আসল pattern**:
+
+- `gst_number` — plain optional input + **"Check GST" বাটন** (existing `lookupGst()`/GST profile endpoint reuse — auto-fill name/address/state/pin)
+- **`gst_category`** dropdown — `REGISTERED / UNREGISTERED / COMPOSITION / EXPORT` (Vendor-এর মতোই ৪-value) — এটাই আসল "GST holder কিনা" classification, `gst_number` ভরা আছে কিনা তার উপর নির্ভর করে না
+- **`customer_master`-এ নতুন column `gst_category` যোগ করতে হবে** (migration — আজ নেই)
+
+**Company resolve — দুই context-এ দুইভাবে:**
+- **MM04 standalone create:** Company **mandatory single-select** dropdown, create-এর সময়ই। একই customer পরে আরও company-তে map করতে চাইলে Customer Detail page থেকে (existing `mapCustomerToCompanyHandler`/`listCustomerCompanyMapsHandler` reuse, নতুন backend লাগবে না)।
+- **SO01-এর inline "+New Customer" modal:** Company field **locked/auto-set** SO-তে already-selected company থেকে — user-কে আলাদা করে জিজ্ঞেস করা হয় না।
+- দুই জায়গাতেই **একই reusable Customer-create form component** — শুধু Company field-এর আচরণ আলাদা (dropdown vs locked), GST toggle/lookup/category সহ বাকি সব অংশ হুবহু অভিন্ন।
+- একই customer একাধিক company-তে mapped থাকতে পারা **valid/expected** (many-to-many, `customer_company_map` এটাই সাপোর্ট করে)।
+
+### 113.8 — SO Create: Field List ও UI Architecture (LOCKED)
+
+**Architecture — POCreatePage.jsx-এর pattern reuse (কিন্তু literal copy না):**
+
+✅ যা reuse হবে:
+- একটাই backend-driven cross-filter endpoint (company↔customer↔material) — client-side filtering বাদ
+- UOM dropdown data-driven (material-এর নিজের valid UOM list থেকে, `material_uom_conversion`) — free-text বাদ
+- Proper `useQuery` (React Query) — `useEffect`+`setState` বাদ (R-02 ফিক্স)
+- `ErpComboboxField`, `ErpDenseGrid` (item select টেবিল-row, PO-র মতো), per-line "More" drawer pattern
+
+❌ যা copy হবে না (PO-specific, SO-তে অর্থহীন):
+- "One PO per material" split — SO **একটাই document, multi-line**, ভাঙবে না
+- ASL/VMI hard-block (vendor-material approved-link, customer-এ প্রযোজ্য না)
+- Incoterm (import-purchase-specific)
+
+**Header:** Company, Customer (+ inline "New Customer", §113.7), Customer PO Number, Customer PO Date, Payment Term, Delivery Address, Remarks — কোনো Approval নেই।
+
+**Storage Location এবং Cost Center — SO/STO/Legacy STO কোথাও নেই, শুধু DO স্টেজে আসবে।** (PO-র pattern-এর সাথেও সঙ্গতিপূর্ণ — PO Create-এও storage location নেই, GRN-এ resolve হয়)
+
+**Line — main table row (সবসময় দৃশ্যমান):**
+```
+Material | Qty | UOM (dropdown) | Rate | Discount% | GST Rate% | Net Rate | Line Value | GST Amount | [More] [Remove]
+```
+
+**Line — "More" drawer (per line, PO-র Rebate drawer-এর প্যাটার্নে):**
+```
+Freight Term
+Remarks
+Has Rebate: [Yes] [No] → Rate + Basis + Remarks
+Has Packaging Cost: [Yes] [No] → Basis (FLAT/PER_KG) + Rate + GST Treatment
+```
+
+### 113.9 — Packaging Cost Design (LOCKED)
+
+অনেক RM-এ packaging cost থাকে — কখনো পুরো line-এর উপর flat, কখনো item-wise per-KG। আর GST treatment-ও ফিক্সড না — কখনো GST-মুক্ত (Freight-এর মতো), কখনো material-এর নিজের GST rate-এই পড়ে, কখনো নিজস্ব আলাদা GST rate।
+
+**Fields (per line, "More" drawer-এ):**
+- **Packaging Cost Basis:** `FLAT` (পুরো line-এ একবার) / `PER_KG` (× quantity) — একই Rate input, শুধু interpretation আলাদা, কোনো নতুন field আসে না
+- **Packaging Cost Rate**
+- **GST Treatment:** তিনটা option —
+  - `NO_GST` — Freight-এর মতো, taxable value-র বাইরে
+  - `SAME_AS_MATERIAL` — line-এর নিজের GST Rate% reuse করে
+  - `CUSTOM` — বাছলে নতুন input আসে: **Packaging GST Rate %**
+
+**Formula:**
+```
+Packaging Cost Amount = Basis===PER_KG ? Rate × Qty : Rate
+
+NO_GST:
+  Taxable Value = Net Rate × Qty
+  GST Amount     = Taxable Value × Material GST%
+  Line Total      = Taxable Value + GST Amount + Packaging Cost Amount   ← আলাদা, GST-মুক্ত
+
+SAME_AS_MATERIAL:
+  Taxable Value = (Net Rate × Qty) + Packaging Cost Amount
+  GST Amount     = Taxable Value × Material GST%
+  Line Total      = Taxable Value + GST Amount
+
+CUSTOM:
+  Base GST Amount       = (Net Rate × Qty) × Material GST%
+  Packaging GST Amount  = Packaging Cost Amount × Packaging GST%
+  Line Total              = (Net Rate × Qty) + Packaging Cost Amount + Base GST Amount + Packaging GST Amount
+```
+
+### 113.10 — Bug List Found During This Audit (সব code-verified, redesign-এর সাথে বান্ডিল হবে)
+
+| # | Bug | Where |
+|---|---|---|
+| 1 | Pagination সম্পূর্ণ ভাঙা — `offset` পড়াই হয় না | `listSOsHandler`, `listSalesInvoicesHandler` |
+| 2 | কোনো `total` count রিটার্ন হয় না | একই দুই handler |
+| 3 | R-03 violation — customer_name/company_name bulk-resolve হয় না, raw row রিটার্ন হয় | `listSOsHandler` |
+| 4 | R-01 violation — ৪ জায়গায় raw UUID fallback (`row.customer_id`, `row.company_id`, `row.sending_company_id`, `row.receiving_company_id`) | `SOListPage.jsx` |
+| 5 | R-02 violation — `useEffect`+`setState`, `useQuery` না | `SOListPage.jsx` |
+| 6 | Search শুধু current page (৫০ row)-এ কাজ করে, পুরো dataset-এ না | `SOListPage.jsx` |
+| 7 | STO tab সম্পূর্ণ redundant duplicate (§113.4-এ resolved) | `SOListPage.jsx` |
+| 8 | "Issue Storage Location" raw text `<input>`, dropdown না — user হাতে UUID টাইপ করত | `SOCreatePage.jsx` (§113.8-এ resolved — storage location আর SO-তেই নেই) |
+| 9 | UOM Code free-text input, master lookup নেই | `SOCreatePage.jsx` (§113.8-এ resolved) |
+| 10 | `issueSOStockHandler`-এ stock check হার্ডকোড `UNRESTRICTED`+`batch_id IS NULL` — FG (batch-tracked)-এর জন্য reuse করা যাবে না, confirms FG Dispatch আলাদা module লাগবে (Phase 2) | `sales_order.handlers.ts` |
+| 11 | Customer company-scope filter/validation সম্পূর্ণ অনুপস্থিত (§113.6) | `customer.handlers.ts`, `sales_order.handlers.ts` |
+
+### 113.11 — Design সম্পূর্ণ LOCKED (2026-07-30) — Implementation Task Breakdown
+
+সব open প্রশ্ন resolved (§113.5 header-lock সহ)। Design ধাপ শেষ, এখন implementation task ভাগ করে দেওয়া হলো — checklist-এর ([[known-bug-patterns-predesign-checklist]]) relevant item গুলো প্রতিটা task-এ tag করা আছে।
+
+**Task A — DB Migrations**
+- `customer_master.gst_category` column (CHECK: REGISTERED/UNREGISTERED/COMPOSITION/EXPORT)
+- `customer_company_map` — mandatory-at-create enforcement (backend logic, schema আগে থেকেই আছে)
+- `delivery_challan`-কে RM/PM/INT unified DO হিসেবে extend (নতুন column — line-level source references, GI/Invoice linkage যদি আগে থেকে না থাকে)
+- SO line-level DO-lock ট্র্যাক করার column (`sales_order_line`-এ, যেমন `do_id`/`locked_by_do_id`)
+- SO header-lock ফ্ল্যাগ (`sales_order.is_header_locked` বা derived from "কোনো line lock আছে কিনা")
+
+**Task B — Customer Master (MM04) Backend + Frontend**
+- `listCustomersHandler` — `company_id` filter (checklist #2)
+- `createCustomerHandler` — mandatory company_id + atomic `customer_company_map` insert
+- GST pattern — Vendor Master-এর হুবহু (`gst_number`+"Check GST"+`gst_category` dropdown), Transporter-এর toggle না
+- Reusable create-form component বানানো (MM04 standalone + SO01 inline দুটোতে ব্যবহারের জন্য)
+
+**Task C — SO01 (List + Create + Edit) rebuild**
+- `listSOsHandler` — offset/range + total count fix, server-side bulk-resolve customer_name/company_name (R-01/R-03 fix)
+- `createSOHandler` — customer-company-scope validation যোগ (checklist #2)
+- `SOListPage.jsx` — `useQuery` migration (R-02), STO tab সরানো, raw-UUID fallback সরানো (R-01), server-side search
+- `SOCreatePage.jsx` — সম্পূর্ণ নতুন, PO Create architecture reuse (cross-filter endpoint, `ErpDenseGrid` line table, per-line "More" drawer), inline Customer create modal, Packaging Cost mechanism, Freight Term/Rebate, header-lock+line-lock enforcement
+- ACL: SO-র জন্য কোনো Approve resource/capability লাগবে না (design অনুযায়ী) — নিশ্চিত করা যেন নতুন কিছু ভুল করে approval-gated না হয়ে যায়
+
+**Task D — STO 3-stage split**
+- আজকের atomic `dispatchSTOHandler` ভেঙে STO Order (create/edit) → DO → GI — আলাদা handler
+- STO-র existing PO07/PO13 approval infrastructure reuse (নতুন approval মেকানিজম বানাতে হবে না — checklist #7 অনুযায়ী verify করা এটা সত্যিই কাজ করছে কিনা)
+
+**Task E — Unified RM/PM/INT DO (Stage 2)**
+- DO create page — SO/STO থেকে open line pull করে DO বানানো, Storage Location + Cost Center এখানে (line-level)
+- DO status lifecycle
+- Invoice creation `dc_id` (নতুন DO id)-এর against, existing logic largely reused
+
+**ক্রম (dependency অনুযায়ী):** A → B (Customer আগে, কারণ SO Create-এর inline modal নির্ভর করে) → C (SO) ও D (STO) সমান্তরাল হতে পারে → E (DO, দুটোরই output দরকার)
+
+### 113.12 — Implementation ✅ COMPLETE (2026-07-30, Tasks A-E সব শেষ)
+
+- ✅ **Task A** — migrations (`gst_category`, SO line freight/rebate/packaging, DO cost_center/storage_location, CSN `total_dispatch_qty`) — সব dev-এ applied + history reconciled
+- ✅ **Task B** — Customer Master company-scope fix + Vendor-style GST pattern + reusable `CustomerCreateForm.jsx` (MM04 + SO01 inline দুটোতেই)
+- ✅ **Task C** — SO01 সম্পূর্ণ rebuild — backend (pagination, bulk-resolve, packaging cost formula, customer-company validation, নতুন `updateSOLinesHandler`) + frontend (`SOListPage.jsx`, `SOCreatePage.jsx`)
+- ✅ **Task D** — STO bug-audit — `STOCreatePage.jsx` আগে থেকেই PO-মানের (কোনো পরিবর্তন লাগেনি); `STOListPage.jsx`+`listSTOsHandler` একই bug-class ফিক্স (R-01/R-02/R-03, 200-row client-side truncation)। Dispatch mechanism ও approval infra (PO13, prod-এ live-verified rank-escalation chain) অক্ষত রাখা হয়েছে ইচ্ছাকৃতভাবে।
+- ✅ **Task E** — Delivery Order (নতুন `delivery_order.handlers.ts`, TX SO03/`GRP_ACL_SALES`, `DOListPage.jsx`/`DOCreatePage.jsx`/`DODetailPage.jsx`) — Page+Drawer+table-row-grid flow, `erp_production.reservation_document` reuse (আগে থেকেই SALES_ORDER/STO সাপোর্ট করত, কখনো wire হয়নি), CSN auto-sync (`upsertCsnDispatch()`, `upsertCsnArrival()`-এর mirror)
+
+**বোনাস bug fix (পথে পাওয়া):** `GET:/api/om/customer` ACL registry entry ছিল না; `POST /sales-orders/:id/issue-stock` vs আসল route `/issue` mismatch (checklist #8 pattern, Issue Stock সবার জন্য 403 দিত)।
+
+**Verification:** সব backend file `deno check` ক্লিন (শুধু pre-existing `.range()`/`.or()`/`.gt()` typing noise), সব frontend file `eslint` ০ error। ACL registration (DO) dev-এ live snapshot-এ verify করা।
+
+**Phase 1 (RM/PM/INT) সম্পূর্ণ শেষ → Phase 2 (FG Dispatch)** — আলাদা design session, এই session touch করেনি।
+
+---
+
+### 113.13 — DO Commercial Data Snapshot (LOCKED — 2026-07-30, ✅ IMPLEMENTED 2026-07-31)
+
+**সমস্যা:** `delivery_challan_line`-এ শুধু `unit_value` (rate) আর `line_total` (qty×rate, tax ছাড়া) copy হয় — GST rate/amount, packaging cost (basis/rate/amount/GST treatment), freight term, rebate — এর কোনোটাই DO-তে carry হয় না, আর `delivery_challan_line`-এ এসবের জন্য column-ই নেই।
+
+**Lock:** DO নিজেই এই পুরো commercial snapshot carry করবে — SO/STO line থেকে DO তৈরির সময় copy হয়ে বসবে।
+
+**যুক্তি:**
+- SO line-এ একবার DO তৈরি হয়ে গেলে সেই line-এর commercial field frozen হয়ে যায় (§113.5-এর line-level lock) — তাই DO তৈরির মুহূর্তে copy করা data পরে stale হওয়ার ঝুঁকি নেই, SO/STO-র সেই line আর বদলাতেই পারবে না।
+- এই codebase-এর নিজস্ব established pattern (GRN PO থেকে rate copy করে রাখে, §104.9-এর process_order_line_reco ইচ্ছাকৃতভাবে denormalized/flat) — নতুন কিছু না।
+- Accounts (যারা PGI+Invoice বানাবে, দেখো §113.15) শুধু DO দেখেই কাজ করতে পারবে, SO/STO-তে আলাদা join করে ফিরে তাকাতে হবে না।
+
+**যা যোগ করতে হবে (migration, implementation pending):** `delivery_challan_line`-এ GST rate/amount (CGST/SGST/IGST breakdown), packaging cost (basis/rate/amount/GST treatment), rebate columns; `delivery_challan` header-এ freight_term, payment_term_id। `createDeliveryOrderHandler`-এ SO/STO line থেকে এসব copy করে বসানো।
+
+---
+
+### 113.14 — GST Type Determination Fix: Customer Billing State (LOCKED + ✅ IMPLEMENTED — 2026-07-30)
+
+**Bug পাওয়া গেছে:** `deriveSalesInvoiceGstType()` company vs customer GSTIN-এর প্রথম ২ digit (state code) মিলিয়ে CGST+SGST/IGST ঠিক করত। Unregistered customer-এর GSTIN নেই, তাই তার state code সবসময় খালি — ফলে comparison কখনো মিলত না, **সবসময় IGST**-এ পড়ে যেত, even যদি customer company-র same state-এই থাকে।
+
+**Root cause:** Place of Supply GSTIN দিয়ে নয়, customer আসলে কোন state-এ আছে সেটা দিয়ে ঠিক হওয়ার কথা। `customer_master`-এ কোনো structured state field ছিল না (শুধু free-text address)। `vendor_master`-এ এই একই সমস্যা আগে থেকেই সমাধান করা ছিল (`reg_address_state`/`corr_address_state`) কিন্তু customer-এর মডেল সহজ, একটাই field দরকার।
+
+**Fix (✅ done, commit `3a1fe949`):**
+- Migration `20260730170000` — `erp_master.customer_master.billing_state` (text, `companies.state_name`-এর মতোই plain style)
+- `createCustomerHandler`/`updateCustomerHandler` — Billing State এখন mandatory (registered/unregistered নির্বিশেষে)
+- `deriveSalesInvoiceGstType()` এখন `companies.state_name` vs `customer_master.billing_state` সরাসরি তুলনা করে, GSTIN prefix দিয়ে না
+- `CustomerCreateForm.jsx` + `CustomerDetailPage.jsx` — দুটোতেই Billing State field যোগ
+- পুরনো customer (যাদের billing_state NULL, যেমন C-00005) backfill করা হয়নি — আসল state business owner-এর জানা তথ্য, বানিয়ে বসানো যায় না
+
+**STO-এর জন্য (এখনো implement হয়নি, §113.15-এ):** একই logic, শুধু `customer_master.billing_state`-এর জায়গায় **receiving company-র `state_name`** — `companies` table-এ `gst_number` আর `state_name` দুটোই already আছে (sending company আর receiving company দুটোই `companies` থেকে আসে), তাই নতুন কোনো field লাগবে না।
+
+---
+
+### 113.15 — Stage 3: PGI + Sales/STO Invoice (LOCKED — 2026-07-31, ✅ IMPLEMENTATION COMPLETE 2026-07-31, commits `a8da1e38`→`26ced52e`)
+
+**Scope:** RM/PM/INT dispatch-এর PGI (Goods Issue) + Invoice — Stage 3 of §113.2-এর 3-stage architecture (Order → DO → **GI+Invoice**)। FG আলাদা (Phase 2), এখানে touch হয়নি।
+
+**Role split (business owner):** DO Stores বানায় (§113 Task E, আগেই করা)। PGI + Invoice — দুটোই **Accounts**-এর কাজ, একটা combined action-এ।
+
+**পুরনো legacy mechanism-এর gap (audit করে পাওয়া):**
+- `createSalesInvoiceHandler`/`postSalesInvoiceHandler` (SO02, `sales_invoice`/`sales_invoice_line`) — শুধু SO-sourced delivery_challan (dc_type=SALES) accept করে, STO hard-blocked (`"Only SALES delivery challans can create sales invoices."`)
+- `postSalesInvoiceHandler` GST amount হিসাব করে status POSTED করে দেয় কিন্তু **কোনো `post_stock_movement()` call নেই** — PGI আসলে এখানে কখনো হয়ই না
+- বাস্তব stock movement (PGI) আজকে হয় সম্পূর্ণ আলাদা, পুরনো atomic SO issue-stock mechanism দিয়ে (Invoice তৈরি হওয়ার অনেক আগে, DO-র সাথে কোনো সম্পর্ক ছাড়াই) — Task C-তে ইচ্ছাকৃতভাবে untouched রাখা হয়েছিল, কারণ true DO/GI separation-এর জন্য DO (Task E) আগে দরকার ছিল
+
+**Lock — একটাই unified mechanism, existing SO02 page reuse:**
+- SO02 (`Sales Invoices`, route `/dashboard/procurement/sales-invoices`) page-টাই এখন **SO + STO দুটোরই** PGI+Invoice mechanism হবে — আলাদা STO Invoice page/table বানানো হবে না
+- `sales_invoice`/`sales_invoice_line` table-ই reuse হবে (নতুন কিছু বানাতে হবে না) — শুধু dc_type=STO-এর block সরাতে হবে, আর নতুন field/logic যোগ করতে হবে
+- **1 DO = 1 Invoice সবসময়** — partial/multiple invoice per DO নেই
+- **Tally Invoice Number + Tally Invoice Date** — নতুন mandatory field, SO আর STO দুটোতেই। মূল legal/GST invoice Tally-তে বানানো হয় (IRN/e-invoice link নেই এই ERP invoice-এ) — ERP-র নিজের Invoice শুধু tracking-এর জন্য কিন্তু পুরোপুরি সঠিক হতে হবে (printout এখন লাগবে না, পরে আলাদা আলোচনা হবে)
+
+**SO02 নতুন shape — DO List / PGI Queue:**
+- List হবে DO (SO+STO উভয় সোর্স), 100 rows/page pagination
+- Sort: যেগুলো এখনো PGI হয়নি সেগুলো উপরে (action-needed); হয়ে গেলে date অনুযায়ী সরে যাবে
+- নতুন action button: **"PGI & INVOICE"** (keyboard shortcut সহ, এই app-এর existing convention মতোই)
+
+**PGI & INVOICE flow:**
+1. বাটনে click করলে DO picker আসবে
+2. DO select করলে auto-resolve/দেখাবে (DO-র নিজের commercial snapshot থেকে, §113.13): State, SO/STO Number, Consignee Name+Address, Transporter, LR Number+Date, material lines-এর GST breakup, packaging cost
+3. Manual entry: **Tally Invoice Number, Tally Invoice Date** (mandatory)
+4. Freight — line-এর freight_term "exclusive" টাইপ হলে (FREIGHT_SEPARATE/FREIGHT_AT_ACTUALS, FOR না) Yes/No জিজ্ঞেস করবে amount বসানো হবে কিনা — No হলে বাদ, Yes হলে amount বসবে; payment terms দেখাবে
+5. Submit → **read-only review screen** (শেষবার check করার সুযোগ) — ভুল থাকলে Cancel করে ফিরে গিয়ে ঠিক করা যাবে, ঠিক থাকলে আবার Submit
+6. **চূড়ান্ত Submit (এক atomic transaction):**
+   - প্রতিটা DO line-এর জন্য stock movement **P601 "GI for Dispatch (Delivery)"** post হবে (OUT, UNRESTRICTED থেকে, DO line-এর storage_location_id থেকে)
+   - System Invoice Number generate হবে (existing doc-number-series convention মতো)
+   - Invoice record তৈরি (Tally number/date, GST breakdown, packaging cost, freight (যদি থাকে), payment terms সহ)
+   - DO-র status আপডেট হবে (delivery_challan-এর CHECK constraint-এ `DISPATCHED` value already আছে, কখনো set হয়নি — এখন এখানে ব্যবহার হবে)
+
+**Reversal — DO (PGI-এর আগে):**
+- পুরো DO বাতিল (per-line না), reason mandatory
+- `reservation_document` release/cancel হয়ে যাবে — SO/STO line আবার নতুন DO-র জন্য খালি
+
+**Reversal — PGI+Invoice (Submit হয়ে যাওয়ার পরে):**
+- Invoice status → CANCELLED
+- Stock **P602** দিয়ে reverse (P601-এর pair)
+- DO আবার "release" হয়ে SO02-এর pending queue-তে ফিরে আসবে (status আবার CREATED-এ, reservation reopen/recreate)
+- নতুন Invoice আবার একই process দিয়ে বানানো যাবে — Tally invoice number/date same হলেও সমস্যা নেই (ERP-এর নিজের কোনো uniqueness enforce করার দরকার নেই, business owner-এর সিদ্ধান্ত)
+- Tally-তে ঠিক করা business owner-এর দায়িত্ব, ERP শুধু নিজের রেকর্ড ঠিক রাখবে
+
+---
+
+### 113.16 — SO Ship-To mechanism + GST place-of-supply correction (LOCKED — 2026-07-31)
+
+**যে সমস্যা ধরা পড়ল (business owner-এর নিজের testing-এ, SO Create page-এ):** SO Create-এ "Delivery Address" একটা free-text field ছিল, manually type করতে হতো — Customer Master-এ address/state থাকা সত্ত্বেও কোনো auto-fill নেই। আরও গুরুত্বপূর্ণ, §113.13/§113.15-এ GST type (CGST+SGST vs IGST) নির্ধারণ হতো সরাসরি `customer_master.billing_state` দিয়ে — কিন্তু GST আইনে **Place of Supply** (যেটা CGST+SGST/IGST ঠিক করে) আসলে **Ship-To location**-এর state দিয়ে হয়, Customer-এর registered/billing state দিয়ে না। এই দুটো আলাদা হতে পারে (Customer Kolkata-তে registered, কিন্তু জিনিস পাঠাচ্ছে Gujarat-এর একটা site-এ) — আগের design এটা simplify করে ভুল করে ফেলেছিল।
+
+**Lock — SO-তে নতুন Ship-To mechanism:**
+- SO Create-এ Customer select করলে তার নিজের address (delivery_address) + state (billing_state) **auto-fill/preview** হবে
+- একটা checkbox: **"Ship To same as Customer?"** — default **checked** (true)
+  - Checked থাকলে: Ship-To = Customer-এর নিজের data (address, state, GST) হুবহু কপি হয়ে যাবে SO-তে, resolve সময়েই (create/save-এ) — আলাদা কিছু জিজ্ঞেস করা হবে না
+  - Uncheck করলে: আলাদা Ship-To section আসবে —
+    - **Type**: Registered / Unregistered
+    - **Registered** হলে: GST Number input + **"Check GST"** বাটন (existing GST lookup mechanism reuse — Vendor/Transporter/CHA/Customer Master-এ যেটা আগে থেকেই আছে, `GET /api/om/customer/gst-profile?gst_number=...` — generic, নতুন কিছু বানাতে হবে না) → Name, Full Address, State auto-fetch হবে, পরে editable
+    - **Unregistered** হলে: Name, Address, **State** সব manually type করতে হবে (State ছাড়া GST type ঠিক করা যাবে না, তাই এটা mandatory)
+- **State সবসময় mandatory** — same-as-customer হলে Customer-এর billing_state থেকে resolve হবে (blank থাকলে SO save-ই হবে না — Customer Master-এ আগে ঠিক করতে হবে), custom হলে manually দিতে হবে
+
+**Data model — SO-র own row-এ resolve করে store করা হয় (computed, live lookup না):**
+- `sales_order.ship_to_same_as_customer` (bool, শুধু UI-convenience record, downstream logic এটা পড়ে না)
+- `sales_order.ship_to_type` / `ship_to_gst_number` / `ship_to_name` / `ship_to_address` / `ship_to_state` — এগুলো সবসময় **resolved/effective** value ধরে রাখে (same-as-customer হলেও customer-এর data এখানে copy হয়ে যায়) — যাতে downstream কোনো কোড কখনো "same_as_customer true/false" branch করে customer_master আবার query করতে না হয়
+- `sales_order.delivery_address` (পুরনো column) — এখনো থাকবে, এখন থেকে এটা `ship_to_address`-এর সাথে সবসময় sync থাকবে (backward-compat — DO/PGI-এর existing auto-resolve কোড অপরিবর্তিত থেকে যাবে)
+
+**DO snapshot (§113.13-এর একই pattern):** DO তৈরির সময় SO-র `ship_to_state`/`ship_to_name`/`ship_to_address`/`ship_to_gst_number` **`delivery_challan`-এ copy হয়ে freeze** হয়ে যাবে (STO-র জন্য প্রযোজ্য না — STO-তে receiving company-র নিজের state_name-ই সবসময় ship-to, আগে থেকেই সঠিক, কোনো change লাগেনি)।
+
+**GST type নির্ধারণ — সংশোধন:** `createPgiInvoiceHandler`-এর SO branch এখন `customer_master.billing_state` live query করার বদলে সরাসরি `delivery_challan.ship_to_state` পড়বে (DO-তেই আগে থেকে আছে, extra round trip লাগে না, বরং আগের চেয়ে কম query)। §113.15-এ যোগ করা hard-block (state ফাঁকা থাকলে PGI আটকাবে) এখনো থাকবে, শুধু error code বদলাবে (`DO_SHIP_TO_STATE_MISSING`) — practice-এ এটা আর trigger হওয়ার কথা না, কারণ SO save-এর সময়েই state mandatory।
+
+**Header lock:** Ship-To fields SO-র header-level commercial identity-র অংশ — §113.5-এর existing rule অনুযায়ী (Customer/PO Number/Payment Term/Delivery Address একসাথে freeze হয় যেকোনো line-এ DO তৈরি হলে) এই same lock group-এ যোগ হবে।
+
+**Scope:** SO-only (RM/PM/INT)। STO-তে কোনো পরিবর্তন নেই। FG (Phase 2) আলাদা, এখানে touch হয়নি।
+
+**Addendum (একই দিন, business owner-এর নিজের চ্যালেঞ্জে ধরা পড়ল — 2026-07-31): Invoice-এই Bill-To + Ship-To দুটোই printed থাকতে হবে, শুধু GST math-এর জন্য না।**
+GST invoice-এ আইনত দুটো party আলাদাভাবে দেখাতে হয় — **Bill To** (Customer-এর নিজের registered identity — Name, Billing Address, State, GST Number) আর **Ship To** (delivery destination — উপরের mechanism)। উপরের lock শুধু GST type নির্ধারণের জন্য Ship-To state ঠিক করেছিল, কিন্তু `sales_invoice` table-এ কোনো Bill-To/Ship-To column-ই ছিল না, আর Invoice Detail page-এও কোথাও এই দুটো block আলাদাভাবে দেখাচ্ছিল না — শুধু customer name (title-এ) আর একটা loose "Consignee Address"।
+
+**Fix:** `sales_invoice`-এ ৮টা নতুন column (`bill_to_name/address/state/gst_number`, `ship_to_name/address/state/gst_number`) — PGI-র সময়েই **freeze** হয়ে যায় (invoice নিজে self-contained থাকে, পরে DO/Customer বদলালেও invoice-এর data বদলাবে না)। SO-র জন্য: Bill-To = Customer Master-এর billing_address/billing_state/gst_number; Ship-To = DO-র frozen ship_to_* snapshot। STO-র জন্য: কোনো আলাদা customer নেই, তাই Bill-To ও Ship-To দুটোই receiving company-র নিজের data (company address/state/GST Number)। PGI Create form (review-এর আগে) আর Invoice Detail page — দুটোতেই এখন আলাদা "Bill-To / Ship-To" section আছে (দুই column পাশাপাশি)।
+
+---

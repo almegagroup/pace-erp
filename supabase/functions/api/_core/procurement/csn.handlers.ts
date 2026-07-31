@@ -755,7 +755,13 @@ function calculateETACascade(
   return updates;
 }
 
-async function recalculateAndBuildUpdates(
+// Exported so po.handlers.ts's createCsnsForPo() can seed the same
+// ETD/ETA-to-plant cascade at CSN creation time -- previously only ran on
+// a later save/edit, so eta_to_plant_calculated stayed NULL from PO confirm
+// all the way until someone touched the CSN (typically at TRN, when
+// LR/ATD gets entered). Caught live 2026-07-30 as "ETA to Plant blank
+// until TRN" in CSN Tracker.
+export async function recalculateAndBuildUpdates(
   csn: CsnRow,
   inputUpdates: JsonRecord,
 ): Promise<JsonRecord> {
@@ -1015,7 +1021,11 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     return {
       ...row,
       po_number: po?.po_number ?? null,
-      po_date: po?.po_date ?? null,
+      // §113 fix: STO-sourced CSNs have no po_id, so this stayed blank for
+      // every inter-plant row even though sto_date was already resolved
+      // right below — mirrors display_reference_number's existing
+      // sto-falls-back-to-po pattern.
+      po_date: po?.po_date ?? sto?.sto_date ?? null,
       sto_number: sto?.sto_number ?? null,
       sto_date: sto?.sto_date ?? null,
       display_reference_number: sto?.sto_number ?? po?.po_number ?? null,
@@ -1185,6 +1195,7 @@ export async function listCSNsHandler(req: Request, ctx: ProcurementHandlerConte
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const csnType = toUpperTrimmedString(url.searchParams.get("csn_type"));
     const poId = toTrimmedString(url.searchParams.get("po_id"));
+    const stoId = toTrimmedString(url.searchParams.get("sto_id"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
@@ -1205,6 +1216,7 @@ export async function listCSNsHandler(req: Request, ctx: ProcurementHandlerConte
     if (status) query = query.eq("status", status);
     if (csnType) query = query.eq("csn_type", csnType);
     if (poId) query = query.eq("po_id", poId);
+    if (stoId) query = query.eq("sto_id", stoId);
     if (dateFrom) query = query.gte("created_at", `${dateFrom}T00:00:00.000Z`);
     if (dateTo) query = query.lte("created_at", `${dateTo}T23:59:59.999Z`);
 

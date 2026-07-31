@@ -433,6 +433,30 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_DO_LIST: {
+    screen_code: "PROC_DO_LIST",
+    route: "/dashboard/procurement/delivery-orders",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_DO_CREATE: {
+    screen_code: "PROC_DO_CREATE",
+    route: "/dashboard/procurement/delivery-orders/create",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_DO_DETAIL: {
+    screen_code: "PROC_DO_DETAIL",
+    route: "/dashboard/procurement/delivery-orders/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_INV_LIST: {
     screen_code: "PROC_INV_LIST",
     route: "/dashboard/procurement/sales-invoices",
@@ -444,6 +468,16 @@ export const OPERATION_SCREENS = Object.freeze({
   PROC_INV_DETAIL: {
     screen_code: "PROC_INV_DETAIL",
     route: "/dashboard/procurement/sales-invoices/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  // §113.15 -- Stage 3 PGI + Invoice creation flow, entered from SO02
+  // (PROC_INV_LIST, now the DO/PGI queue) by picking a CREATED DO.
+  PROC_INV_PGI_CREATE: {
+    screen_code: "PROC_INV_PGI_CREATE",
+    route: "/dashboard/procurement/sales-invoices/pgi/create",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

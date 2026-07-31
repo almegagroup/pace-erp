@@ -249,7 +249,19 @@ import {
   listSOsHandler,
   postSalesInvoiceHandler,
   updateSOHandler,
+  updateSOLinesHandler,
 } from "../_core/procurement/sales_order.handlers.ts";
+import {
+  cancelDeliveryOrderHandler,
+  createDeliveryOrderHandler,
+  createPgiInvoiceHandler,
+  getDeliveryOrderHandler,
+  listDeliveryOrdersHandler,
+  listDOSourceDocumentsHandler,
+  listDOSourceLinesHandler,
+  listDOStorageLocationOptionsHandler,
+  reverseSalesInvoiceHandler,
+} from "../_core/procurement/delivery_order.handlers.ts";
 import {
   approveSTOHandler,
   approveSTOAmendmentHandler,
@@ -260,6 +272,7 @@ import {
   confirmSTOReceiptHandler,
   createSTOHandler,
   dispatchSTOHandler,
+  knockOffSTOLineHandler,
   getSTOHandler,
   getLastStoPaymentTermHandler,
   listSTOsHandler,
@@ -474,6 +487,17 @@ export async function dispatchProcurementRoutes(
       return await createSOHandler(req, ctx);
     case "GET:/api/procurement/sales-orders":
       return await listSOsHandler(req, ctx);
+
+    case "GET:/api/procurement/delivery-orders":
+      return await listDeliveryOrdersHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders":
+      return await createDeliveryOrderHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders/source-documents":
+      return await listDOSourceDocumentsHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders/source-lines":
+      return await listDOSourceLinesHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders/storage-locations":
+      return await listDOStorageLocationOptionsHandler(req, ctx);
     case "POST:/api/procurement/sales-invoices":
       return await createSalesInvoiceHandler(req, ctx);
     case "GET:/api/procurement/sales-invoices":
@@ -859,6 +883,18 @@ export async function dispatchProcurementRoutes(
     }
   }
 
+  if (/^\/api\/procurement\/delivery-orders\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getDeliveryOrderHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/delivery-orders\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+    return await cancelDeliveryOrderHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/sales-orders\/[^/]+\/lines$/.test(pathname) && req.method === "PATCH") {
+    return await updateSOLinesHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/sales-orders\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
     return await cancelSOHandler(req, ctx);
   }
@@ -879,6 +915,14 @@ export async function dispatchProcurementRoutes(
     return await postSalesInvoiceHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/sales-invoices\/pgi$/.test(pathname) && req.method === "POST") {
+    return await createPgiInvoiceHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/sales-invoices\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
+    return await reverseSalesInvoiceHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/stos\/[^/]+$/.test(pathname)) {
     if (req.method === "GET") {
       return await getSTOHandler(req, ctx);
@@ -890,6 +934,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/stos\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
     return await cancelSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/lines\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
+    return await knockOffSTOLineHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/stos\/[^/]+\/confirm$/.test(pathname) && req.method === "POST") {
