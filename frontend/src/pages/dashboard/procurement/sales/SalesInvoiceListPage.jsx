@@ -110,7 +110,7 @@ export default function SalesInvoiceListPage() {
   const filteredRows = useMemo(() => {
     if (!debouncedSearch) return rows;
     return rows.filter((row) => {
-      const haystack = [row.dc_number, row.source_document_number, row.customer_display]
+      const haystack = [row.dc_number, row.source_document_number, row.customer_display, row.invoice_number, row.tally_invoice_number]
         .filter(Boolean).join(" ").toLowerCase();
       return haystack.includes(debouncedSearch);
     });
@@ -133,6 +133,12 @@ export default function SalesInvoiceListPage() {
   function openPgiInvoice(row) {
     openScreenWithContext(OPERATION_SCREENS.PROC_INV_PGI_CREATE.screen_code, { dcId: row.id, refreshOnReturn: true });
     navigate("/dashboard/procurement/sales-invoices/pgi/create");
+  }
+
+  function openInvoiceDetail(row) {
+    if (!row.invoice_id) return;
+    openScreenWithContext(OPERATION_SCREENS.PROC_INV_DETAIL.screen_code, { id: row.invoice_id, refreshOnReturn: true });
+    navigate(`/dashboard/procurement/sales-invoices/${encodeURIComponent(row.invoice_id)}`);
   }
 
   return (
@@ -160,7 +166,7 @@ export default function SalesInvoiceListPage() {
                 {companyOptions.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
               </select>
             </label>
-            <QuickFilterInput label="Search" value={search} onChange={setSearch} primaryFocus placeholder="DO number, SO/STO number, or customer" />
+            <QuickFilterInput label="Search" value={search} onChange={setSearch} primaryFocus placeholder="DO number, SO/STO number, invoice number, or customer" />
           </div>
         ),
       }}
@@ -184,6 +190,9 @@ export default function SalesInvoiceListPage() {
                   render: (row) => <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getStatusTone(row.status)}`}>{row.status === "CREATED" ? "PENDING PGI" : row.status}</span>,
                 },
                 { key: "total_value", label: "Total Value", width: "120px", render: (row) => (Number.isFinite(Number(row.total_value)) ? Number(row.total_value).toFixed(2) : "-") },
+                { key: "invoice_number", label: "Invoice Number", width: "130px", render: (row) => row.invoice_number || "—" },
+                { key: "invoice_date", label: "Invoice Date", width: "110px", render: (row) => row.invoice_date || "—" },
+                { key: "tally_invoice_number", label: "Tally Invoice No.", width: "130px", render: (row) => row.tally_invoice_number || "—" },
                 {
                   key: "actions",
                   label: "",
@@ -195,6 +204,14 @@ export default function SalesInvoiceListPage() {
                       className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-950"
                     >
                       PGI &amp; Invoice
+                    </button>
+                  ) : row.invoice_id ? (
+                    <button
+                      type="button"
+                      onClick={(event) => { event.stopPropagation(); openInvoiceDetail(row); }}
+                      className="border border-slate-400 bg-white px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-700"
+                    >
+                      Open Invoice
                     </button>
                   ) : "—",
                 },

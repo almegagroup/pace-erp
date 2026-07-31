@@ -7,15 +7,17 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { getActiveScreenContext } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { cancelDeliveryOrder, getDeliveryOrder } from "../procurementApi.js";
 
 export default function DODetailPage() {
+  const navigate = useNavigate();
   const routeParams = useParams();
   const routeId = routeParams.id;
   const id = routeId && routeId !== ":id" ? routeId : getActiveScreenContext()?.id;
@@ -53,12 +55,19 @@ export default function DODetailPage() {
     }
   }
 
+  function openInvoiceDetail() {
+    if (!data.invoice_id) return;
+    openScreenWithContext(OPERATION_SCREENS.PROC_INV_DETAIL.screen_code, { id: data.invoice_id, refreshOnReturn: true });
+    navigate(`/dashboard/procurement/sales-invoices/${encodeURIComponent(data.invoice_id)}`);
+  }
+
   return (
     <ErpScreenScaffold
       eyebrow="Procurement"
       title={data.dc_number ? `Delivery Order — ${data.dc_number}` : "Delivery Order"}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
+        ...(data.invoice_id ? [{ key: "open-invoice", label: "Open Invoice", tone: "neutral", onClick: openInvoiceDetail }] : []),
         ...(canCancel ? [{ key: "cancel", label: saving ? "Cancelling..." : "Cancel DO", tone: "danger", onClick: () => void handleCancel(), disabled: saving }] : []),
       ]}
       notices={[
@@ -87,6 +96,18 @@ export default function DODetailPage() {
               ) : null}
             </div>
           </ErpSectionCard>
+
+          {data.invoice_id ? (
+            <ErpSectionCard eyebrow="PGI & Invoice" title="What this DO's goods issue posted">
+              <div className="grid gap-3 md:grid-cols-3 text-sm">
+                <div><span className="text-xs text-slate-500">Invoice Number</span><div className="font-mono font-semibold">{data.invoice_number || "—"}</div></div>
+                <div><span className="text-xs text-slate-500">Invoice Date</span><div>{data.invoice_date || "—"}</div></div>
+                <div><span className="text-xs text-slate-500">Invoice Status</span><div>{data.invoice_status || "—"}</div></div>
+                <div><span className="text-xs text-slate-500">Tally Invoice Number</span><div>{data.tally_invoice_number || "—"}</div></div>
+                <div><span className="text-xs text-slate-500">Tally Invoice Date</span><div>{data.tally_invoice_date || "—"}</div></div>
+              </div>
+            </ErpSectionCard>
+          ) : null}
 
           <ErpSectionCard eyebrow="Source & Party" title="What this DO dispatches, and against which order">
             <div className="grid gap-3 md:grid-cols-3 text-sm">

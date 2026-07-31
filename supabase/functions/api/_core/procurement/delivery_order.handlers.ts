@@ -756,7 +756,7 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
   const materialIds = [...new Set(lineRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   const locationIds = [...new Set(lineRows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
 
-  const [companiesResp, customerResp, sourceResp, transporterResp, costCenterResp, materialsResp, locationsResp, paymentTermResp] = await Promise.all([
+  const [companiesResp, customerResp, sourceResp, transporterResp, costCenterResp, materialsResp, locationsResp, paymentTermResp, invoiceResp] = await Promise.all([
     companyIds.length
       ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name, state_name").in("id", companyIds)
       : Promise.resolve({ data: [] as JsonRecord[], error: null }),
@@ -785,6 +785,18 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
     dc.payment_term_id
       ? serviceRoleClient.schema("erp_master").from("payment_terms_master").select("id, code, name").eq("id", dc.payment_term_id).maybeSingle()
       : Promise.resolve({ data: null as JsonRecord | null, error: null }),
+    // §113.15 -- the DO detail page never showed the resulting invoice at
+    // all (real gap flagged live 2026-07-31 after the first PGI test):
+    // most recent invoice against this DO, any status, so a CANCELLED one
+    // still shows for history even after the DO reopens to CREATED.
+    serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_invoice")
+      .select("id, invoice_number, invoice_date, status, tally_invoice_number, tally_invoice_date")
+      .eq("dc_id", dcId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
   if (companiesResp.error) throw new Error("DO_COMPANY_LOOKUP_FAILED");
   if (customerResp.error) throw new Error("DO_CUSTOMER_LOOKUP_FAILED");
@@ -794,6 +806,8 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
   if (materialsResp.error) throw new Error("DO_MATERIAL_LOOKUP_FAILED");
   if (locationsResp.error) throw new Error("DO_LOCATION_LOOKUP_FAILED");
   if (paymentTermResp.error) throw new Error("DO_PAYMENT_TERM_LOOKUP_FAILED");
+  if (invoiceResp.error) throw new Error("DO_INVOICE_LOOKUP_FAILED");
+  const invoice = invoiceResp.data as JsonRecord | null;
 
   const companyMap = new Map(((companiesResp.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
   const materialMap = new Map(((materialsResp.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
@@ -837,6 +851,12 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
     payment_term_display: paymentTerm ? `${paymentTerm.code ?? ""} | ${paymentTerm.name ?? ""}`.trim() : null,
     selling_company_state_name: toTrimmedString(sellingCompany?.state_name) || null,
     counterparty_state_name: counterpartyStateName,
+    invoice_id: invoice?.id ?? null,
+    invoice_number: invoice?.invoice_number ?? null,
+    invoice_date: invoice?.invoice_date ?? null,
+    invoice_status: invoice?.status ?? null,
+    tally_invoice_number: invoice?.tally_invoice_number ?? null,
+    tally_invoice_date: invoice?.tally_invoice_date ?? null,
     lines: hydratedLines,
   };
 }
@@ -923,6 +943,27 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     const stoMap = new Map(((stos ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
     const transporterMap = new Map(((transporters ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
+    // §113.15 -- the queue never showed the resulting invoice number/date
+    // once a DO went DISPATCHED (real gap flagged live 2026-07-31). One
+    // dc_id can have more than one invoice row over time (reversal + a
+    // fresh retry), so this keeps only the most recent per dc_id --
+    // ordering desc then only setting on first-seen does that in one pass.
+    const dcIds = rows.map((row) => String(row.id));
+    const { data: invoices, error: invoicesError } = dcIds.length
+      ? await serviceRoleClient
+          .schema("erp_procurement")
+          .from("sales_invoice")
+          .select("id, dc_id, invoice_number, invoice_date, status, tally_invoice_number, tally_invoice_date")
+          .in("dc_id", dcIds)
+          .order("created_at", { ascending: false })
+      : { data: [] as JsonRecord[], error: null };
+    if (invoicesError) return doErrorResponse(req, ctx, "DO_INVOICE_LOOKUP_FAILED", 500, "Unable to load invoice references.");
+    const invoiceMap = new Map<string, JsonRecord>();
+    for (const row of (invoices ?? []) as JsonRecord[]) {
+      const key = toTrimmedString(row.dc_id);
+      if (key && !invoiceMap.has(key)) invoiceMap.set(key, row);
+    }
+
     const items = rows.map((row) => {
       const customer = customerMap.get(toTrimmedString(row.customer_id));
       const receivingCompany = receivingCompanyMap.get(toTrimmedString(row.receiving_company_id));
@@ -934,6 +975,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       const so = soMap.get(toTrimmedString(row.sales_order_id));
       const sto = stoMap.get(toTrimmedString(row.sto_id));
       const transporter = transporterMap.get(toTrimmedString(row.transporter_id));
+      const invoice = invoiceMap.get(String(row.id));
       return {
         ...row,
         source_display: row.sales_order_id ? "SALES_ORDER" : row.sto_id ? "STO" : null,
@@ -942,6 +984,12 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         transporter_display: transporter
           ? `${transporter.transporter_code ?? ""} — ${transporter.transporter_name ?? ""}`.trim()
           : (toTrimmedString(row.transporter_name_freetext) || null),
+        invoice_id: invoice?.id ?? null,
+        invoice_number: invoice?.invoice_number ?? null,
+        invoice_date: invoice?.invoice_date ?? null,
+        invoice_status: invoice?.status ?? null,
+        tally_invoice_number: invoice?.tally_invoice_number ?? null,
+        tally_invoice_date: invoice?.tally_invoice_date ?? null,
       };
     });
 
