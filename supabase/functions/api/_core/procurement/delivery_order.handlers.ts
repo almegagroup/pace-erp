@@ -1199,6 +1199,25 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
       if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {
         return doErrorResponse(req, ctx, "PGI_POST_FAILED", 500, `Unable to post GI stock movement for line ${c.line.line_number}.`);
       }
+
+      // Close out the reservation this DO line opened at create time
+      // (§83.5) -- physical stock has now actually left via the P601
+      // posting above, so leaving it OPEN/PARTIAL would keep blocking a
+      // later DO's availability check (getAvailableQty) against the same
+      // material+location forever. Real gap found live 2026-07-31: the
+      // first PGI test left its reservation stuck OPEN with issued_qty=0.
+      const sourceLineId = toTrimmedString(isSalesOrder ? c.line.so_line_id : c.line.sto_line_id);
+      if (sourceLineId) {
+        const { error: reservationCloseError } = await serviceRoleClient
+          .schema("erp_production")
+          .from("reservation_document")
+          .update({ status: "FULLY_ISSUED", issued_qty: c.quantity, last_updated_by: ctx.auth_user_id, last_updated_at: new Date().toISOString() })
+          .eq("source_line_id", sourceLineId)
+          .in("status", RESERVATION_OPEN_STATUSES);
+        if (reservationCloseError) {
+          return doErrorResponse(req, ctx, "PGI_RESERVATION_CLOSE_FAILED", 500, `Invoice posted, but unable to close the reservation for line ${c.line.line_number}.`);
+        }
+      }
     }
 
     const { error: dcStatusError } = await serviceRoleClient
