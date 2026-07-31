@@ -181,11 +181,11 @@ function sumOtherDraftQuantities(rows, matcher, excludeRowKey = "") {
 }
 
 function batchOptionLabel(batch) {
-  return `${batch.batch_number} Â· Stroke ${batch.stroke_number ?? "--"} Â· ${normalizeNumeric(batch.actual_qty).toFixed(3)} KG`;
+  return `${batch.batch_number} · Stroke ${batch.stroke_number ?? "--"} · ${normalizeNumeric(batch.actual_qty).toFixed(3)} KG`;
 }
 
 function packingOptionLabel(packingOrder) {
-  return `${packingOrder.po_number} Â· Batch ${packingOrder.batch_number} Â· ${normalizeNumeric(packingOrder.actual_qty_kg).toFixed(3)} KG`;
+  return `${packingOrder.po_number} · Batch ${packingOrder.batch_number} · ${normalizeNumeric(packingOrder.actual_qty_kg).toFixed(3)} KG`;
 }
 
 function resolveSfgRemaining(batch, lines, excludeLineId = "") {
@@ -1061,7 +1061,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                               blankLabel="Select PR22 batch"
                             />
                             <div className="text-xs text-slate-500">
-                              Stroke {selectedEditSfgBatch?.stroke_number ?? "--"} Â· Remaining {resolveSfgRemaining(selectedEditSfgBatch ?? {}, lines, editingLineId).toFixed(3)} KG
+                              Stroke {selectedEditSfgBatch?.stroke_number ?? "--"} · Remaining {resolveSfgRemaining(selectedEditSfgBatch ?? {}, lines, editingLineId).toFixed(3)} KG
                             </div>
                           </div>
                         </ErpDenseFormRow>
@@ -1086,7 +1086,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                               blankLabel="Select PR23 packing PO"
                             />
                             <div className="text-xs text-slate-500">
-                              Batch {selectedEditFgOrder?.batch_number ?? "--"} Â· {selectedEditFgOrder?.num_packs ?? "--"} packs Â· {selectedEditFgOrder?.fill_qty_per_pack ?? "--"} KG/pack Â· Remaining {resolveFgRemaining(selectedEditFgOrder ?? {}, lines, editingLineId).toFixed(3)} KG
+                              Batch {selectedEditFgOrder?.batch_number ?? "--"} · {selectedEditFgOrder?.num_packs ?? "--"} packs · {selectedEditFgOrder?.fill_qty_per_pack ?? "--"} KG/pack · Remaining {resolveFgRemaining(selectedEditFgOrder ?? {}, lines, editingLineId).toFixed(3)} KG
                             </div>
                           </div>
                         </ErpDenseFormRow>
@@ -1275,7 +1275,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                   blankLabel="Select PR22 batch"
                                 />
                                 <div className="text-xs text-slate-500">
-                                  Stroke {selectedSingleSfgBatch?.stroke_number ?? "--"} Â· Remaining {resolveSfgRemaining(selectedSingleSfgBatch ?? {}, lines).toFixed(3)} KG
+                                  Stroke {selectedSingleSfgBatch?.stroke_number ?? "--"} · Remaining {resolveSfgRemaining(selectedSingleSfgBatch ?? {}, lines).toFixed(3)} KG
                                 </div>
                               </div>
                             </ErpDenseFormRow>
@@ -1300,7 +1300,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                   blankLabel="Select PR23 packing PO"
                                 />
                                 <div className="text-xs text-slate-500">
-                                  Batch {selectedSingleFgOrder?.batch_number ?? "--"} Â· {selectedSingleFgOrder?.num_packs ?? "--"} packs Â· {selectedSingleFgOrder?.fill_qty_per_pack ?? "--"} KG/pack Â· Remaining {resolveFgRemaining(selectedSingleFgOrder ?? {}, lines).toFixed(3)} KG
+                                  Batch {selectedSingleFgOrder?.batch_number ?? "--"} · {selectedSingleFgOrder?.num_packs ?? "--"} packs · {selectedSingleFgOrder?.fill_qty_per_pack ?? "--"} KG/pack · Remaining {resolveFgRemaining(selectedSingleFgOrder ?? {}, lines).toFixed(3)} KG
                                 </div>
                               </div>
                             </ErpDenseFormRow>

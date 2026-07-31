@@ -29,6 +29,9 @@ const STOCK_TYPES = new Set(["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"]);
 const CURRENCY_CODES = new Set(["INR", "USD"]);
 const OPENING_STOCK_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "SFG", "FG"]);
 const OPENING_STOCK_PO_TYPES = new Set(["MTO", "HPS", "MTS", "MTEST"]);
+const OPENING_GENEALOGY_PO_TYPES = new Set(["MTO", "HPS"]);
+const PACKING_PO_TYPE_BY_SOURCE: Record<string, string> = { MTO: "PMTO", HPS: "PHPS" };
+const OPENING_QTY_TOL = 0.01;
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -258,6 +261,187 @@ async function fetchMaterialTypesByIds(materialIds: string[]): Promise<Map<strin
       .filter((row: JsonRecord) => row?.id && row?.material_type)
       .map((row: JsonRecord) => [toTrimmedString(row.id), toUpperTrimmedString(row.material_type)]),
   );
+}
+
+async function isOpeningProcessOrder(processOrderId: string): Promise<boolean> {
+  if (!processOrderId) return false;
+  const { count, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("process_order_line_reco")
+    .select("id", { count: "exact", head: true })
+    .eq("process_order_id", processOrderId)
+    .eq("source_txn_type", "OPENING") as { count?: number; error?: unknown };
+  if (error) throw new Error("OPENING_STOCK_OPENING_LINK_LOOKUP_FAILED");
+  return (count ?? 0) > 0;
+}
+
+async function isOpeningPackingOrder(packingOrderId: string, processOrderId: string): Promise<boolean> {
+  if (!packingOrderId) return false;
+  const { count, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("packing_order_line_reco")
+    .select("id", { count: "exact", head: true })
+    .eq("packing_order_id", packingOrderId)
+    .eq("source_txn_type", "OPENING") as { count?: number; error?: unknown };
+  if (error) throw new Error("OPENING_STOCK_OPENING_LINK_LOOKUP_FAILED");
+  if ((count ?? 0) > 0) return true;
+  return await isOpeningProcessOrder(processOrderId);
+}
+
+async function resolveSfgOpeningProcessOrder(
+  companyId: string,
+  poType: string,
+  materialId: string,
+  batchNumber: string,
+): Promise<{ id: string; batch_number: string; actual_qty: number } | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("process_order")
+    .select("id, batch_number, actual_qty")
+    .eq("company_id", companyId)
+    .eq("po_type", poType)
+    .eq("material_id", materialId)
+    .eq("batch_number", batchNumber)
+    .maybeSingle();
+  if (error) throw new Error("OPENING_STOCK_OPENING_LINK_LOOKUP_FAILED");
+  const row = data as JsonRecord | null;
+  if (!row?.id) return null;
+  if (!(await isOpeningProcessOrder(toTrimmedString(row.id)))) return null;
+  return {
+    id: toTrimmedString(row.id),
+    batch_number: toTrimmedString(row.batch_number),
+    actual_qty: Number(row.actual_qty ?? 0),
+  };
+}
+
+async function resolveFgOpeningPackingOrder(
+  companyId: string,
+  poType: string,
+  materialId: string,
+  packingOrderId: string,
+): Promise<{ id: string; batch_number: string; actual_qty_kg: number; fill_qty_per_pack: number | null; num_packs: number | null } | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("packing_order")
+    .select("id, process_order_id, po_type, source_po_type, material_id, batch_number, actual_qty_kg, fill_qty_per_pack, num_packs, status")
+    .eq("id", packingOrderId)
+    .eq("company_id", companyId)
+    .eq("material_id", materialId)
+    .eq("status", "FINAL")
+    .maybeSingle();
+  if (error) throw new Error("OPENING_STOCK_OPENING_LINK_LOOKUP_FAILED");
+  const row = data as JsonRecord | null;
+  if (!row?.id) return null;
+  const matchesPoType =
+    toUpperTrimmedString(row.source_po_type) === poType ||
+    toUpperTrimmedString(row.po_type) === (PACKING_PO_TYPE_BY_SOURCE[poType] ?? "");
+  if (!matchesPoType) return null;
+  if (!(await isOpeningPackingOrder(toTrimmedString(row.id), toTrimmedString(row.process_order_id)))) return null;
+  return {
+    id: toTrimmedString(row.id),
+    batch_number: toTrimmedString(row.batch_number),
+    actual_qty_kg: Number(row.actual_qty_kg ?? 0),
+    fill_qty_per_pack: row.fill_qty_per_pack != null ? Number(row.fill_qty_per_pack) : null,
+    num_packs: row.num_packs != null ? Number(row.num_packs) : null,
+  };
+}
+
+async function normalizeOpeningGenealogyLine(
+  document: OpeningStockDocumentRow,
+  materialId: string,
+  materialType: string,
+  batchNumberInput: unknown,
+  packingOrderIdInput: unknown,
+): Promise<{ batch_number: string | null; packing_order_id: string | null }> {
+  const normalizedMaterialType = toUpperTrimmedString(materialType);
+  if (normalizedMaterialType !== "SFG" && normalizedMaterialType !== "FG") {
+    return { batch_number: null, packing_order_id: null };
+  }
+
+  const documentPoType = toUpperTrimmedString(document.po_type);
+  if (!OPENING_GENEALOGY_PO_TYPES.has(documentPoType)) {
+    return {
+      batch_number: toTrimmedString(batchNumberInput) || null,
+      packing_order_id: null,
+    };
+  }
+
+  const companyId = toTrimmedString(document.company_id);
+  if (normalizedMaterialType === "SFG") {
+    const batchNumber = toTrimmedString(batchNumberInput).toUpperCase();
+    if (!batchNumber) {
+      throw new Error("OPENING_STOCK_SFG_BATCH_NOT_FOUND");
+    }
+    const processOrder = await resolveSfgOpeningProcessOrder(companyId, documentPoType, materialId, batchNumber);
+    if (!processOrder) {
+      throw new Error("OPENING_STOCK_SFG_BATCH_NOT_FOUND");
+    }
+    return { batch_number: processOrder.batch_number, packing_order_id: null };
+  }
+
+  const packingOrderId = toTrimmedString(packingOrderIdInput);
+  if (!packingOrderId) {
+    throw new Error("OPENING_STOCK_FG_PACKING_PO_NOT_FOUND");
+  }
+  const packingOrder = await resolveFgOpeningPackingOrder(companyId, documentPoType, materialId, packingOrderId);
+  if (!packingOrder) {
+    throw new Error("OPENING_STOCK_FG_PACKING_PO_NOT_FOUND");
+  }
+  return { batch_number: packingOrder.batch_number, packing_order_id: packingOrder.id };
+}
+
+async function validateOpeningSubmitGenealogy(
+  document: OpeningStockDocumentRow,
+  lines: OpeningStockLineRow[],
+): Promise<void> {
+  const materialType = toUpperTrimmedString(document.material_type);
+  const poType = toUpperTrimmedString(document.po_type);
+  if (!OPENING_GENEALOGY_PO_TYPES.has(poType)) return;
+  if (materialType === "SFG") {
+    const grouped = new Map<string, { material_id: string; quantity: number }>();
+    for (const line of lines) {
+      const batchNumber = toTrimmedString(line.batch_number).toUpperCase();
+      const materialId = toTrimmedString(line.material_id);
+      if (!batchNumber || !materialId) throw new Error("OPENING_STOCK_BATCH_QTY_MISMATCH");
+      const current = grouped.get(batchNumber) ?? { material_id: materialId, quantity: 0 };
+      current.quantity += Number(line.quantity ?? 0);
+      grouped.set(batchNumber, current);
+    }
+    for (const [batchNumber, group] of grouped) {
+      const processOrder = await resolveSfgOpeningProcessOrder(
+        toTrimmedString(document.company_id),
+        poType,
+        group.material_id,
+        batchNumber,
+      );
+      if (!processOrder || Math.abs(group.quantity - processOrder.actual_qty) > OPENING_QTY_TOL) {
+        throw new Error("OPENING_STOCK_BATCH_QTY_MISMATCH");
+      }
+    }
+    return;
+  }
+  if (materialType === "FG") {
+    const grouped = new Map<string, { material_id: string; quantity: number }>();
+    for (const line of lines) {
+      const packingOrderId = toTrimmedString(line.packing_order_id);
+      const materialId = toTrimmedString(line.material_id);
+      if (!packingOrderId || !materialId) throw new Error("OPENING_STOCK_BATCH_QTY_MISMATCH");
+      const current = grouped.get(packingOrderId) ?? { material_id: materialId, quantity: 0 };
+      current.quantity += Number(line.quantity ?? 0);
+      grouped.set(packingOrderId, current);
+    }
+    for (const [packingOrderId, group] of grouped) {
+      const packingOrder = await resolveFgOpeningPackingOrder(
+        toTrimmedString(document.company_id),
+        poType,
+        group.material_id,
+        packingOrderId,
+      );
+      if (!packingOrder || Math.abs(group.quantity - packingOrder.actual_qty_kg) > OPENING_QTY_TOL) {
+        throw new Error("OPENING_STOCK_BATCH_QTY_MISMATCH");
+      }
+    }
+  }
 }
 
 function ensureDraftDocument(document: OpeningStockDocumentRow): void {
@@ -620,6 +804,7 @@ export async function addOpeningStockLineHandler(
     const storageLocationId = toTrimmedString(body.storage_location_id);
     const stockType = toUpperTrimmedString(body.stock_type);
     const batchNumber = toTrimmedString(body.batch_number) || null;
+    const packingOrderId = toTrimmedString(body.packing_order_id) || null;
     const isZeroStock = body.is_zero_stock === true;
     const quantity = isZeroStock ? 0 : parsePositiveNumber(body.quantity);
     const ratePerUnit = parseNonNegativeNumber(body.rate_per_unit) ?? 0;
@@ -650,7 +835,13 @@ export async function addOpeningStockLineHandler(
     ensureDraftDocument(document);
     const materialType = await fetchMaterialType(materialId);
     ensureDocumentMaterialScope(document, materialType);
-    const normalizedBatchNumber = materialType === "SFG" || materialType === "FG" ? batchNumber : null;
+    const normalizedGenealogy = await normalizeOpeningGenealogyLine(
+      document,
+      materialId,
+      materialType,
+      batchNumber,
+      packingOrderId,
+    );
 
     const { data: lastLine, error: lastLineError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -685,7 +876,8 @@ export async function addOpeningStockLineHandler(
         is_zero_stock: isZeroStock,
         entered_uom_code: enteredUomCode,
         entered_quantity: enteredQuantity,
-        batch_number: normalizedBatchNumber,
+        batch_number: normalizedGenealogy.batch_number,
+        packing_order_id: normalizedGenealogy.packing_order_id,
         movement_type_code: deriveMovementType(stockType),
       })
       .select("*")
@@ -708,6 +900,8 @@ export async function addOpeningStockLineHandler(
       ? 403
       : code === "OPENING_STOCK_DOCUMENT_MATERIAL_SCOPE_MISMATCH"
       ? 409
+      : code === "OPENING_STOCK_SFG_BATCH_NOT_FOUND" || code === "OPENING_STOCK_FG_PACKING_PO_NOT_FOUND"
+      ? 422
       : code.includes("NOT_DRAFT")
       ? 409
       : code.includes("NOT_FOUND")
@@ -761,7 +955,7 @@ export async function updateOpeningStockLineHandler(
       const { data: existingLine, error: existingLineError } = await serviceRoleClient
         .schema("erp_procurement")
         .from("opening_stock_line")
-        .select("material_id")
+        .select("material_id, packing_order_id, batch_number")
         .eq("id", lineId)
         .eq("document_id", documentId)
         .single();
@@ -777,9 +971,45 @@ export async function updateOpeningStockLineHandler(
       }
 
       const materialType = await fetchMaterialType(String(existingLine.material_id));
-      patch.batch_number = materialType === "SFG" || materialType === "FG"
-        ? toTrimmedString(body.batch_number) || null
-        : null;
+      const normalizedGenealogy = await normalizeOpeningGenealogyLine(
+        document,
+        toTrimmedString(existingLine.material_id),
+        materialType,
+        body.batch_number,
+        body.packing_order_id ?? existingLine.packing_order_id,
+      );
+      patch.batch_number = normalizedGenealogy.batch_number;
+      patch.packing_order_id = normalizedGenealogy.packing_order_id;
+    }
+    if (body.packing_order_id !== undefined && body.batch_number === undefined) {
+      const { data: existingLine, error: existingLineError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("opening_stock_line")
+        .select("material_id, batch_number")
+        .eq("id", lineId)
+        .eq("document_id", documentId)
+        .single();
+
+      if (existingLineError || !existingLine?.material_id) {
+        return openingStockErrorResponse(
+          req,
+          ctx,
+          "OPENING_STOCK_LINE_NOT_FOUND",
+          404,
+          "Opening stock line not found.",
+        );
+      }
+
+      const materialType = await fetchMaterialType(String(existingLine.material_id));
+      const normalizedGenealogy = await normalizeOpeningGenealogyLine(
+        document,
+        toTrimmedString(existingLine.material_id),
+        materialType,
+        existingLine.batch_number,
+        body.packing_order_id,
+      );
+      patch.batch_number = normalizedGenealogy.batch_number;
+      patch.packing_order_id = normalizedGenealogy.packing_order_id;
     }
     if (body.stock_type !== undefined) {
       const stockType = toUpperTrimmedString(body.stock_type);
@@ -814,6 +1044,8 @@ export async function updateOpeningStockLineHandler(
     const code = error instanceof Error ? error.message : "OPENING_STOCK_LINE_UPDATE_FAILED";
     const status = code === "SA_REQUIRED"
       ? 403
+      : code === "OPENING_STOCK_SFG_BATCH_NOT_FOUND" || code === "OPENING_STOCK_FG_PACKING_PO_NOT_FOUND"
+      ? 422
       : code.includes("NOT_DRAFT")
       ? 409
       : code.includes("NOT_FOUND")
@@ -1019,13 +1251,13 @@ export async function batchUpdateOpeningStockLinesHandler(
       const enteredQuantity = patch.entered_quantity !== undefined
         ? parseNonNegativeNumber(patch.entered_quantity)
         : parseNonNegativeNumber(existing?.entered_quantity);
-      const batchNumber = materialType === "SFG" || materialType === "FG"
-        ? (
-          patch.batch_number !== undefined
-            ? toTrimmedString(patch.batch_number) || null
-            : toTrimmedString(existing?.batch_number) || null
-        )
-        : null;
+      const normalizedGenealogy = await normalizeOpeningGenealogyLine(
+        document,
+        materialId,
+        materialType,
+        patch.batch_number !== undefined ? patch.batch_number : existing?.batch_number,
+        patch.packing_order_id !== undefined ? patch.packing_order_id : existing?.packing_order_id,
+      );
 
       const normalizedLine = {
         document_id: documentId,
@@ -1036,7 +1268,8 @@ export async function batchUpdateOpeningStockLinesHandler(
         rate_per_unit: rate,
         entered_uom_code: enteredUomCode,
         entered_quantity: enteredQuantity ?? quantity,
-        batch_number: batchNumber,
+        batch_number: normalizedGenealogy.batch_number,
+        packing_order_id: normalizedGenealogy.packing_order_id,
         is_zero_stock: isZeroStock,
         movement_type_code: deriveMovementType(stockType),
       };
@@ -1097,6 +1330,8 @@ export async function batchUpdateOpeningStockLinesHandler(
       ? 403
       : code === "OPENING_STOCK_DOCUMENT_MATERIAL_SCOPE_MISMATCH"
       ? 409
+      : code === "OPENING_STOCK_SFG_BATCH_NOT_FOUND" || code === "OPENING_STOCK_FG_PACKING_PO_NOT_FOUND"
+      ? 422
       : code.includes("NOT_SUBMITTED")
       ? 409
       : code.includes("NOT_FOUND")
@@ -1135,6 +1370,8 @@ export async function submitOpeningStockDocumentHandler(
       );
     }
 
+    await validateOpeningSubmitGenealogy(document, lines);
+
     const { error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("opening_stock_document")
@@ -1158,7 +1395,13 @@ export async function submitOpeningStockDocumentHandler(
     return okResponse(await hydrateOpeningStockDocument(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_DOCUMENT_SUBMIT_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    const status = code === "SA_REQUIRED"
+      ? 403
+      : code === "OPENING_STOCK_BATCH_QTY_MISMATCH"
+      ? 409
+      : code.includes("NOT_FOUND")
+      ? 404
+      : 500;
     return openingStockErrorResponse(req, ctx, code, status, code);
   }
 }

@@ -16473,4 +16473,215 @@ Storage Location শুধু **browsing/discovery-এর জন্য** ব্�
   SO/report-এ যখন একটা মাস select হবে, **সেই মাসের saved structure অনুযায়ীই** calculate হবে
   (§114.10-এর history/snapshot design অপরিবর্তিত)
 
+### 114.22 — ⚠️ AC06 রিভিউ (business owner লাইভ ক্লিক-থ্রু, 2026-08-01) — শিপ করা implementation প্রকৃত
+requirement-এর সাথে মেলে না, বড় সংশোধন LOCKED
+
+Business owner deployed page ক্লিক করে দেখলেন এবং বললেন প্রথম implementation **"ekdom bekar"**
+(পুরোপুরি ব্যবহারযোগ্য না)। §114.9-এ যা লেখা ছিল ("storage location choose korbe, r oi location e
+thaka Item er list asbe") **অসম্পূর্ণ ছিল** — একটামাত্র storage location দিয়ে browse করাটাই আসল
+মেকানিজম না, তার **আগে আরেকটা স্তর** দরকার। §114.21-এর material-level uniqueness rule (একটা
+material একই সময়ে সর্বোচ্চ একটা Costing Group-এর সদস্য) **অপরিবর্তিত/সঠিক** — এই সংশোধন শুধু
+browsing/grouping mechanism আর Approval flow-কে ঠিক করছে, সেই core rule-কে না।
+
+**নতুন স্তর — "SLoc Group" (সম্পূর্ণ নতুন master, Costing Category Group-এর থেকে আলাদা):**
+- User একাধিক Storage Location **multi-select** করে একটা নামযুক্ত "SLoc Group" বানাবে (যেমন
+  "Admix RM Locations")। এটা company-scoped, reusable, স্বাধীন master — Costing Category Group
+  না, তার prerequisite।
+- একটা Storage Location একাধিক SLoc Group-এ থাকতে পারে (exclusivity নেই — এটা শুধু একটা saved
+  browse-filter, §114.21-এর material-exclusivity rule-এর সাথে conflict করে না)।
+
+**Costing Category Group তৈরির flow (সংশোধিত):**
+1. User একটা existing SLoc Group বাছবে (বা নতুন বানাবে ওই মুহূর্তে)।
+2. সেই SLoc Group-এর সব Storage Location মিলিয়ে (union) একটা **unique Item list** দেখাবে —
+   প্রতিটা item-এর পাশে বর্তমান Costing Category Group name (থাকলে), না থাকলে blank।
+3. User এই list থেকে multi-select করে **নতুন নামে** একটা Costing Category Group বানাবে, অথবা
+   existing group-এ member add করবে — মেকানিজম আগের মতোই (§114.9), শুধু item list-এর উৎস এখন
+   single location না, SLoc Group-এর union।
+
+**Rate Master entry (সংশোধিত — এখানেও SLoc Group দিয়েই শুরু হবে, single location না):**
+1. User Rate Master বাটনে ক্লিক করে একটা SLoc Group বাছবে।
+2. সেই group-এর সব location মিলিয়ে unique Item list — column: Item, Group Name (Costing
+   Category Group-এর নাম, standalone হলে blank)।
+3. Header-এ Month (মাসের প্রথম তারিখ)।
+4. প্রতি item-এ rate বসানোর ঘর — **group-এর প্রথম member-এই শুধু editable input**, বাকি member-রা
+   read-only/auto-filled (আগের implementation-এ ভুলভাবে প্রতিটা member-এর নিজস্ব editable input
+   ছিল, যেকোনোটাতে বসালেই বাকিদের propagate হতো — এখন শুধু প্রথমটাতেই বসানো যাবে, বাকিরা locked
+   দেখাবে)।
+5. Save → status DRAFT (আগের মতোই)।
+
+**Approval — সম্পূর্ণ নতুন Detail-page mechanism (আগে ছিল শুধু blunt bulk-approve, কোনো edit
+capability ছিল না):**
+- একই page-এ "Approval" বাটন → সেই company-এর সব DRAFT মাসের list (আগের মতোই)।
+- একটা draft row-এ click/Enter করলে **Detail page** খুলবে — সেই (company, month)-এর **সব** drafted
+  row (কোন SLoc Group দিয়ে browse করে বসানো হয়েছিল তার উপর নির্ভর করে না, `costing_rate_line`-এর
+  পুরো drafted set)।
+- Approver-এর full access: rate বদলাতে পারবে (existing `saveCostingRateDraftHandler` reuse করে,
+  নতুন কিছু লাগবে না), আর group থেকে কাউকে বাদ দিয়ে standalone বা অন্য group-এ সরাতে পারবে
+  (existing `removeCostingGroupMemberHandler`/`addCostingGroupMemberHandler` reuse)।
+- **⚠️ গুরুত্বপূর্ণ nuance:** group membership বদলালে **এই মাসের ইতিমধ্যে-draft-করা
+  `costing_rate_line.group_id`-এ সাথে সাথে বদলাবে না** — সেটা snapshot (§114.10-এর
+  history-preservation design অনুযায়ী, `saveCostingRateDraftHandler`-এর নিজস্ব membership-lookup
+  logic থেকেই snapshot হয়)। Approver যদি এই মাসের row-টাও নতুন group অনুযায়ী চায়, তাকে rate-ও
+  re-save করতে হবে (re-snapshot trigger করার জন্য) — শুধু membership বদলালেই যথেষ্ট না। এটা bug
+  না, ইচ্ছাকৃত।
+- সবশেষে Approve — existing `approveCostingRateHandler`-ই ব্যবহার হবে (company+month scope,
+  incomplete/zero-rate hard-block অপরিবর্তিত)।
+- Approve হওয়ার **পরেই** SO-তে সেই month select করলে rate capture হবে (আগের থেকেই locked, অপরিবর্তিত)।
+
+**DB পরিবর্তন প্রয়োজন:** দুটো নতুন টেবিল — `erp_production.sloc_group`
+(id, company_id, name, created_by, created_at, UNIQUE(company_id, name)) আর
+`erp_production.sloc_group_member` (id, sloc_group_id, storage_location_id, added_by, added_at,
+UNIQUE(sloc_group_id, storage_location_id))। `costing_group`/`costing_group_member`/
+`costing_rate_line` — **অপরিবর্তিত**, এখনো material-level, কোনো location column না।
+
+**Task brief:** `CODEX-GATE27.26-AC06-SLOC-COSTING-GROUP-TASK-BRIEF.md` সম্পূর্ণ rewrite করা
+হয়েছে এই সংশোধন প্রতিফলিত করতে — একই ফাইলে, v2 হিসেবে (Codex-এর আগের commit-এর উপর modify করবে,
+নতুন করে শুরু করবে না)।
+
+---
+
+## Section 115 — Opening Stock: SFG/FG Discovery Session (LOCKED — 2026-08-01)
+
+### 115.1 — Real gap আবিষ্কার (code-verified, business owner-এর প্রশ্নের উত্তরে)
+
+Business owner-এর প্রশ্ন ছিল "IN05/IN06 ভালো করে পড়ে দেখো" — তার আগে নিজেই ধরেছিলেন "RM/PM/INT-এর
+জন্য already বানানো আছে, নেই শুধু SFG/FG-এর জন্য"। কোড পড়ে **নির্দিষ্ট করে** confirm হলো:
+`OpeningStockDetailPage.jsx`-এ
+
+```js
+const isBlockedPlaceholder =
+    (documentMaterialType === "SFG" || documentMaterialType === "FG") &&
+    (documentPoType === "MTO" || documentPoType === "HPS");
+```
+
+— MTO/HPS-এর SFG/FG opening document-এ line-entry অংশটা **সম্পূর্ণ placeholder** ("Will open after
+implementation"), generic RM/PM/INT entry form (Material/Location/Stock Type/Qty/Rate/Batch Number)
+সেখানে দেখানোই হয় না। **MTS/MTEST-এর SFG/FG তাতে পড়ে না** — ওরা generic form-ই ব্যবহার করে
+(`isBlockedPlaceholder` শুধু MTO/HPS-এ true), Batch Number blank রেখে already কাজ করে
+(`BATCH_NUMBER_HELP_TEXT`: "leave blank if this is an MTS item"). মানে gap শুধু **MTO/HPS SFG/FG**-এ,
+MTS-এ না — §108-এর "MTS batch-blind" lock-এর সাথেই মেলে।
+
+সুবিধা: যেহেতু এই অংশ কখনো ব্যবহারই হয়নি, কোনো real production data নষ্ট হওয়ার ঝুঁকি নেই —
+পুরো design fresh করা যাচ্ছে।
+
+### 115.2 — PR22/PR23 already বানানো আছে, কিন্তু dependency-এর দিক ভুল (code-verified)
+
+`opening_genealogy.handlers.ts` পড়ে দেখা গেল PR22 (`createOldProcessPoHandler`)/PR23
+(`createOldPackingPoHandler`) দুটোই **`openingBatchExists()`** guard দিয়ে আটকানো — অর্থাৎ কোড ধরেই
+নিয়েছে **IN05 আগে posts করবে, PR22/PR23 পরে সেটাকে reconcile করবে** ("anti-typo guard" +
+`sumOpeningQty()`/`sumAllocatedPackingQty()` দিয়ে qty match চেক)। Frontend page-এর নিজের comment-ও
+তাই বলে: *"Sequence: Opening Stock (IN05) first → then this page (→ PR23 for FG)"*।
+
+এটা এই session-এ locked design-এর **উল্টো** — নিচে §115.3-এ চূড়ান্ত locked order।
+
+### 115.3 — ✅ FINAL LOCKED order (MTO/HPS): PR22 → SFG opening (IN05) → PR23 → FG opening (IN05)
+
+```
+PR22 (SFG batch declare) → SFG opening line (IN05) → PR23 (FG/Packing PO declare) → FG opening line (IN05)
+```
+
+**কেন এই দিকে, উল্টো না:**
+- SFG-এর জন্য: PR22 আগে থাকা দরকার কারণ IN05-এর SFG line-এর **Batch Number dropdown নিজেই PR22
+  থেকে সোর্স হবে** (Stroke + total qty ওখান থেকে আসবে) — PR22 না থাকলে বাছার কিছুই থাকবে না।
+- FG-এর জন্য: প্রথমে "silently match" আইডিয়া (PR23 না থাকলেও IN05 আগে posts করবে, PR23 পরে
+  attach করবে) প্রস্তাব করা হয়েছিল business owner-এর একটা বাস্তব উদ্বেগে (পুরনো Google Sheet-এ
+  real Packing PO number কখনো track হয়নি) — কিন্তু business owner নিজেই ধরলেন এটা আসল সমস্যা না,
+  কারণ **PR23 নতুন synthetic po_number generate করে** (`generateGlobalDocNumber("PACK_PO")`),
+  পুরনো real PO number লাগেই না। তাই simple, single-direction order-ই final: **PR23 আগে,
+  তারপরই FG opening**।
+
+**⚠️ Prerequisite (business owner সংশোধন করেছেন, structural — শুধু runtime error না):**
+PR22-এর Prodshade dropdown-এর list **সরাসরি Stroke Master-এর APPROVED entry থেকে** আসে (কোড-এ
+`listStrokeMasters({status:"APPROVED"})`) — Stroke Master না থাকলে সেই Prodshade PR22-তে
+**দেখাই যাবে না**, error-ও দেখাতে হবে না, list-এই absent। একইভাবে PR23-এর FG SKU list Pack BOM
+দিয়ে বানানো SKU-র উপর নির্ভরশীল (material_type=FG, existing material list, কোনো নতুন filter
+লাগবে না — কিন্তু PM line auto-derive Pack BOM-এর উপর নির্ভর করে, `!packBomId` হলে
+"No active Pack BOM for this SKU" already দেখায়)।
+
+### 115.4 — Guard reversal (কোড পরিবর্তন প্রয়োজন)
+
+`createOldProcessPoHandler`/`createOldPackingPoHandler`-এর বর্তমান `openingBatchExists()` +
+`sumOpeningQty()`/`sumAllocatedPackingQty()` reconciliation checks **সরাতে হবে** (এগুলো এখন উল্টো
+দিকে চেক করছে — IN05 posted কিনা)। নতুন reconciliation-এর জায়গা হবে **IN05-এর নিজের Submit
+handler**-এ (§115.9 দেখো), PR22/PR23 তৈরির সময় না। PR22/PR23-এর বাকি সব validation (duplicate
+batch guard, MTO/HPS-only po_type, company scope) অপরিবর্তিত থাকবে।
+
+Frontend page copy-ও (দুই জায়গায় "Sequence: Opening Stock (IN05) first..." লেখা আছে) উল্টে
+"PR22/PR23 first → then Opening Stock (IN05)" করতে হবে — নাহলে user ভুল পথে যাবে।
+
+### 115.5 — IN05 SFG opening line shape (MTO/HPS)
+
+Material (Prodshade, existing generic dropdown) → Batch Number (dropdown, PR22-এর
+`listOldProcessPoBatchesHandler` থেকে, client-side এ selected material_id + document.po_type
+দিয়ে filter) → বাছলে Stroke নম্বর দেখাবে (read-only) + **Remaining Qty** (client-side হিসাব:
+PR22.actual_qty − Σ(এই document-এর অন্য lines যাদের batch_number একই), qty field-এ default হিসেবে
+prefill, user overwrite করে কমিয়ে বাকিটা নতুন row-এ ভিন্ন Status-এ দিতে পারবে) → Storage Location
+→ Stock Type (Unrestricted/QA/Blocked — already generic, তিনটেই সব material type-এ কাজ করে,
+নতুন কিছু লাগবে না) → Rate Per Unit (per KG সরাসরি, SFG-এর pack code নেই বলে জটিলতা নেই)।
+
+### 115.6 — IN05 FG opening line shape (MTO/HPS) — rate/conversion মেকানিজম সহ
+
+Material (FG SKU) → **Packing PO** (নতুন dropdown, PR23-এর নতুন list endpoint থেকে — §115.9 দেখো,
+client-side এ selected material_id + document.po_type দিয়ে filter) → বাছলে auto-fetch/read-only:
+Batch Number (PR23.batch_number, parent PR22 থেকে inherited), Number of Packs (PR23.num_packs),
+KG/Pack (PR23.fill_qty_per_pack) + **Remaining Qty (KG)** (client-side: PR23.actual_qty_kg −
+Σ(এই document-এর অন্য lines যাদের packing_order_id একই), qty-তে prefill) → Storage Location →
+Stock Type → **Rate Per Pack (user যেই unit-এ ভাবে সেই unit-এ entry — barrel/IBC-এর rate, KG-এর
+না)** → সিস্টেম `rate_per_unit (KG) = Rate Per Pack ÷ PR23.fill_qty_per_pack` হিসাব করে posts করে।
+তিনটাই (Number of Packs, KG/Pack, Rate Per Pack) PR23 থেকেই আসে বলে **কোনো আলাদা manual
+conversion-factor entry লাগবে না** — এটাই আগের প্রস্তাবের (PR23 না থাকা অবস্থায় IN05-এ manual
+KG/Barrel entry) সংশোধন, PR23 আগে থাকায় আর দরকার নেই।
+
+Tanker (pack code 000)-এর ক্ষেত্রে rate সরাসরি per-KG-ই থাকবে (কোনো conversion লাগবে না, যেহেতু
+outer unit-ই KG) — UI-তে "Rate Per Pack" লেবেলটা material-এর pack code অনুযায়ী "Rate Per KG"-এ
+বদলে দেখানো যেতে পারে (cosmetic, নতুন logic লাগবে না, `fill_qty_per_pack` না থাকলে ÷1 করলেই হয়)।
+
+### 115.7 — MTS/MTEST — অপরিবর্তিত, কোনো নতুন কাজ লাগবে না
+
+MTS/MTEST SFG/FG documents আগে থেকেই generic entry form ব্যবহার করে (§115.1-এর কোড-প্রমাণ),
+কোনো batch/Packing PO নির্ভরতা নেই (§108 batch-blind lock)। Rate সরাসরি SKU-র নিজের fixed
+`material_uom_conversion` (§113.15 auto-sync, Fixed BOM types) দিয়ে Dispatch UoM-এ convert হবে —
+কিন্তু এটাও এখনো বানানো হয়নি (Rate field সব জায়গায় এখন প্লেইন number input, কোনো UoM picker নেই,
+শুধু Qty-এর জন্য `UomQuantityInput` আছে §110-এ)। **তাই এই একটা ছোট piece MTS/MTEST-এর জন্যও নতুন
+কাজ:** Rate field-এ material-এর fixed conversion থাকলে (non-`variable_conversion` row)
+`UomQuantityInput`-এর মতো একটা choice দেখানো, না থাকলে plain per-KG — generic (SFG/FG উভয়ের
+জন্যই প্রযোজ্য, MTO/HPS-এর barrel/pack rate mechanism থেকে **আলাদা** কোড পথ, কারণ conversion
+source আলাদা: material-level fixed factor বনাম PR23-instance-level factor)।
+
+### 115.8 — IN06 (Approval-stage correction) — একই shape মিরর করতে হবে
+
+`OpeningStockApprovalPage.jsx` (SUBMITTED-stage line correction, `batchUpdateOpeningStockLinesHandler`
+ব্যবহার করে) হুবহু একই field set নিয়ে কাজ করে যা IN05 detail page-এর DRAFT entry করে (material,
+location, stock type, qty, rate, batch number) — তাই §115.5/115.6-এর নতুন SFG/FG shape এখানেও
+mirror করতে হবে, নাহলে SUBMITTED স্টেজে correction করতে গেলে user আবার generic form-এই আটকে যাবে।
+
+### 115.9 — নতুন DB/API surface (ন্যূনতম, existing pattern reuse করে)
+
+1. **Migration** — `erp_procurement.opening_stock_line`-এ নতুন `packing_order_id uuid REFERENCES
+   erp_production.packing_order(id)` column (nullable, FG lines-only, RM/PM/INT/SFG-এ সবসময় NULL)।
+2. **নতুন GET endpoint** — `listOldPackingPoBatchesHandler` (`GET
+   /api/production/old-packing-po/batches?company_id=&material_id=`), হুবহু existing
+   `listOldProcessPoBatchesHandler`-এর প্যাটার্ন মিরর করে (কিন্তু `packing_order_line_reco` থেকে
+   distinct `packing_order_id` বের করে, `source_txn_type='OPENING'` ফিল্টার সহ, তারপর
+   `packing_order` জয়েন করে `id, po_number, batch_number, material_id, actual_qty_kg,
+   fill_qty_per_pack, num_packs, process_order_id` রিটার্ন করে)। এটা ছাড়া বাকি সব হিসাব
+   (§115.5/115.6-এর Remaining Qty) **client-side-ই থাকবে**, `detail.lines` (already loaded)
+   ব্যবহার করে — কোনো নতুন backend round trip লাগবে না।
+3. **`addOpeningStockLineHandler`/`updateOpeningStockLineHandler`/`batchUpdateOpeningStockLinesHandler`**
+   (`opening_stock.handlers.ts`)-এ নতুন server-side validation: SFG line-এর `batch_number` কোনো
+   OPENING-tagged `process_order` (company + po_type + material_id match) না হলে reject; FG
+   line-এর `packing_order_id` কোনো OPENING-tagged `packing_order` (একই match + status FINAL) না
+   হলে reject, আর তার `batch_number`-ও সেই PR23 থেকেই derive হবে (user সরাসরি টাইপ করবে না FG-র
+   জন্য, শুধু SFG-র জন্য — যদিও practically dropdown-ই ভরে দেবে)।
+
+### 115.10 — Reconciliation validation — কোথায় বসবে (নতুন সিদ্ধান্ত)
+
+যেহেতু PR22/PR23-এর নিজস্ব reconciliation guard সরে যাচ্ছে (§115.4), সেই দায়িত্ব IN05-এর নিজের
+**Submit** handler-এ (`submitOpeningStockDocumentHandler`) নিতে হবে — DRAFT থেকে SUBMITTED-এ
+যাওয়ার আগে হার্ড-চেক: একই `batch_number` শেয়ার করা সব SFG line-এর quantity-র যোগফল অবশ্যই সেই
+batch-এর PR22.actual_qty-র সমান হতে হবে (tolerance §104.9.1-এর মতোই ছোট, ০.০১ KG), আর একই
+`packing_order_id` শেয়ার করা সব FG line-এর যোগফল সেই PR23.actual_qty_kg-র সমান হতে হবে। এটাই
+আগের PR22/PR23-সাইড guard-এর কাজটাই করে, শুধু নতুন direction-এ (IN05 নিজেকে PR22/PR23-এর বিরুদ্ধে
+মেলায়, উল্টোটা না) — একটা batch/Packing PO আংশিক opening করে Submit করলে ধরা পড়বে।
+
 ---

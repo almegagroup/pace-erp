@@ -1013,3 +1013,123 @@ own code actually supports. Cross-check
 against the resource's actual routes in `route-acl-registry.ts` for every
 resource touched by a group's cleanup, not just the departments being
 newly designed.
+
+## P0076 company mapping + work-context primary fix (2026-07-31)
+
+**Two more P0076 "full authority" gaps found and fixed, same night as the
+6-resource gap above:**
+
+1. **`erp_map.user_companies` only had 2 rows for P0076** (CMP003 primary,
+   CMP006) out of **13 active BUSINESS companies** in prod
+   (CMP003-CMP015 minus the SYSTEM row CMP002). `assertCompanyScope()` (the
+   generic company-boundary guard used everywhere — separate from and
+   layered on top of ACL) denies P0076 in any of the other 11 companies
+   regardless of ACL grants, since P0076 is a normal DIRECTOR-role account
+   (not a literal SA/GA bypass) and this guard has no admin exception for
+   it. Fixed: inserted `erp_map.user_companies` rows for all 11 missing
+   companies (`is_primary=false`). **Still open:** none of those 11
+   companies have an `acl.acl_versions` row at all — this whole doc's ACL
+   work has only ever touched CMP003/CMP006/CMP010. Company-scope is now
+   fixed everywhere, but ACL itself will still fail differently (no
+   snapshot) in the other 10 until/unless this doc's full process is
+   replicated there.
+2. **P0076 held two work contexts per company (DIRECTOR + ACL-MASTER) with
+   BOTH marked `is_primary=true`** in `erp_acl.user_work_contexts` — an
+   ambiguous double-primary that let session/default resolution land on the
+   plain **DIRECTOR** context (view-only almost everywhere in this doc)
+   instead of **ACL-MASTER** (full authority). Confirmed live via Render
+   log: `ACL_DEFAULT_DENY_NO_MATCH` on `ACC_CONVERSION_COST:WRITE` while
+   `work_context_id` in the log matched DEPT_DPT024 = DIRECTOR, not
+   DEPT_DPT030 = ACL-MASTER. Fixed: set `is_primary=false` on the DIRECTOR
+   row for both companies, leaving ACL-MASTER as the sole primary. Next
+   login lands P0076 on ACL-MASTER by default.
+
+## Group 11 — Sales (SO01/SO02/SO03) + Accounts Costing extension (AC05/AC06) + FG Dispatch Customer (MM05) (2026-07-31, ACL v33)
+
+Business owner's instruction, verbatim intent: SO01 (RM/PM Sale = Sales
+Order) → Accounts, full, whole department up through L3_Manager (no
+manager-tier ceiling, unlike most other groups). SO02 (Sales Invoices) →
+Accounts, full including Post/Approve. SO03 (Delivery Order) → Stores,
+full. AC05 (MTS SKU Monthly Rate) + AC06 (SLoc Costing Group) → Accounts
+full **excluding Approve**, Director gets the **same** full-minus-approve
+ceiling (not just view, an explicit deviation from this doc's usual
+Director-gets-nothing/view-only default), Management/L3_Manager (Plant
+Head pattern) gets View only, L1/L2 Auditor gets the **Approve** action
+specifically (matches the AC04 precedent — Accounts drafts, Auditor
+approves). MM05 (FG Dispatch Customer) → Accounts full, Plant Head view.
+
+**None of SO03/AC05/AC06/MM05 existed in prod at all before this session**
+(dev-only, from the 2026-07-29/30 commits — "Implement AC05/AC06/MM05",
+"Add FG Dispatch discovery"). SO01/SO02 already existed (Group 8,
+deactivated pending design — this is that design). Registered all 4 missing
+resources in prod: `erp_menu.menu_master` + `menu_tree` (parent groups:
+SO03→`GRP_ACL_SALES`, AC05/AC06→`GRP_ACL_ACCOUNTS`,
+MM05→`GRP_ACL_OM_MASTERS`, all 3 already existed) + `acl.menu_master`
+(including the route-only `PROC_DO_CREATE` companion resource, same
+pattern as `PROC_PO_CREATE`/`PROC_STO_CREATE` — verified via
+`route-acl-registry.ts` that Delivery Order create/cancel actually live on
+a separate resource code from the list/get routes).
+
+**Action universe verified against `route-acl-registry.ts` before
+designing** (not guessed): `PROC_SO_LIST`(VIEW) + `PROC_SO_CREATE`(VIEW,
+WRITE, EDIT); `PROC_INV_LIST`(VIEW, WRITE, APPROVE); `PROC_DO_LIST`(VIEW) +
+`PROC_DO_CREATE`(VIEW, WRITE, EDIT); `ACC_MTS_SKU_MONTHLY_RATE`(VIEW,
+WRITE, APPROVE); `ACC_SLOC_COSTING_GROUP`(VIEW, WRITE, DELETE, APPROVE);
+`OM_FG_DISPATCH_CUSTOMER`(VIEW, WRITE, EDIT — no Approve action exists in
+code for this one at all).
+
+**8 new capabilities** (department-vs-resource action sets differ enough
+that a shared capability across departments would have over-granted —
+e.g. Stores must never get `PROC_SO_CREATE`'s WRITE):
+`CAP_SALES_ACCOUNTS`, `CAP_SALES_STORES`, `CAP_DIRECTOR_VIEW_NEWPAGES`
+(Director's view-only default on SO01/SO02/SO03/MM05 — not mentioned
+explicitly for these 4, so defaulted to this doc's dominant View-only
+convention, flagged to business owner as an inferred default),
+`CAP_ACC_COSTING` (Accounts + Director, same full-minus-approve ceiling,
+one capability since they need identical actions), `CAP_ACC_COSTING_AUDITOR`
+(View+Approve only, not Write — Accounts drafts, Auditor approves, a real
+maker-checker split, not "auditor also gets create"), `CAP_ACC_COSTING_PLANTHEAD`,
+`CAP_OM_FG_DISPATCH`, `CAP_OM_FG_DISPATCH_PLANTHEAD`. `role_capabilities`
+for the whole-department capabilities uses this doc's established
+all-11-roles pattern (department/work-context membership is the real gate,
+role list just sets the ceiling within it). ACL-MASTER granted the
+full-access capabilities directly (not a 9th capability) — its own
+work_context added as an extra holder of `CAP_SALES_ACCOUNTS`,
+`CAP_SALES_STORES`, `CAP_ACC_COSTING`, `CAP_ACC_COSTING_AUDITOR`, and
+`CAP_OM_FG_DISPATCH`, giving it the union of every action across all 6
+resources including the Auditor-only Approve action.
+
+**False alarm during verification, resolved — worth recording so it isn't
+re-investigated from scratch next time:** first-pass verification (grouping
+`precomputed_acl_view` by resource_code without filtering `acl_version_id`)
+showed AUDIT with unexpected full `PROC_SO_CREATE`/`PROC_RTV_CREATE` access.
+Traced through `generate_acl_snapshot()`'s source and confirmed: the
+function only ever `DELETE`s rows matching the *specific* `acl_version_id`
+being regenerated — it never purges rows from **other, now-inactive**
+`acl_version_id`s for the same company. `precomputed_acl_view` has been
+accumulating one full copy of every historical version (v12 through v33 and
+beyond) forever, including pre-cleanup blanket grants from before this
+whole doc's work started. This is **not a live security issue** — verified
+`_shared/acl_snapshot.ts`'s `readAclSnapshotDecision()` (the only runtime
+read path, called from `_pipeline/acl.ts`'s `stepAcl`) always filters
+`.eq("acl_version_id", <the currently-active version>)`, so stale rows from
+deactivated versions are never actually served to a real request. Re-ran
+the same verification filtered to just v33 (CMP003) / the matching CMP006
+version and got the correct, designed result with no leaks. **Housekeeping
+item, not urgent:** `precomputed_acl_view` will keep growing unboundedly
+across every future version bump — a periodic
+`DELETE ... WHERE acl_version_id NOT IN (SELECT acl_version_id FROM acl.acl_versions WHERE is_active = true)`
+cleanup would be worth doing eventually, but is not a correctness or
+security fix.
+
+**Verified via `precomputed_acl_view` (v33, both CMP003/CMP006, filtered to
+the active version only):** ACCOUNTS = full on all 6 resources exactly as
+designed (`PROC_SO_LIST` View / `PROC_SO_CREATE` V+W+E / `PROC_INV_LIST`
+V+W+Approve / `ACC_MTS_SKU_MONTHLY_RATE` V+W / `ACC_SLOC_COSTING_GROUP`
+V+W+D / `OM_FG_DISPATCH_CUSTOMER` V+W+E); STORES = `PROC_DO_LIST` View +
+`PROC_DO_CREATE` V+W+E only; AUDIT = View+Approve only on AC05/AC06,
+nothing on the Sales resources; DIRECTOR = View-only on the 4 Sales/OM
+resources, full-minus-approve on AC05/AC06; MANAGEMENT = View-only on
+AC05/AC06/MM05; ACL-MASTER = full on everything including the Auditor-only
+Approve action. Symmetric across both companies. Also rebuilt
+`erp_menu.menu_snapshot` for P0076's (company, work_context) pairs.
