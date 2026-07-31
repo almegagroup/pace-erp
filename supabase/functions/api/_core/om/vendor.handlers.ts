@@ -686,7 +686,7 @@ export async function bulkUnmapVendorsHandler(
     const { error } = await serviceRoleClient
       .schema("erp_master")
       .from("vendor_company_map")
-      .update({ active: false, last_updated_at: new Date().toISOString() })
+      .update({ active: false })
       .eq("company_id", companyId)
       .in("vendor_id", vendorIds);
 
