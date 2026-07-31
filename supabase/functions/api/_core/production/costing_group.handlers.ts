@@ -3,7 +3,7 @@
  * File-Path: supabase/functions/api/_core/production/costing_group.handlers.ts
  * Gate: 27.26
  * Domain: PRODUCTION / COSTING (Accounts ACL)
- * Purpose: AC06 storage-location browse-based costing group + month-wise draft/approve rate chart.
+ * Purpose: AC06 storage-location-group browse-based costing group + month-wise draft/approve rate chart.
  * Authority: Backend
  */
 
@@ -40,16 +40,14 @@ function normalizeRateMonth(raw: unknown): string | null {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-01`;
 }
 
-function getGroupIdFromPath(req: Request): string {
+function getPathId(req: Request, segment: string): string {
   const parts = new URL(req.url).pathname.split("/").filter(Boolean);
-  const idx = parts.indexOf("costing-groups");
+  const idx = parts.indexOf(segment);
   return idx >= 0 ? toTrimmedString(parts[idx + 1]) : "";
 }
 
-function getMemberIdFromPath(req: Request): string {
-  const parts = new URL(req.url).pathname.split("/").filter(Boolean);
-  const idx = parts.indexOf("members");
-  return idx >= 0 ? toTrimmedString(parts[idx + 1]) : "";
+function uniqueStrings(values: unknown[]): string[] {
+  return [...new Set(values.map((value) => toTrimmedString(value)).filter(Boolean))];
 }
 
 async function getGroupById(groupId: string): Promise<JsonRecord | null> {
@@ -63,6 +61,17 @@ async function getGroupById(groupId: string): Promise<JsonRecord | null> {
   return (data as JsonRecord | null) ?? null;
 }
 
+async function getSlocGroupById(groupId: string): Promise<JsonRecord | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("sloc_group")
+    .select("id, company_id, name")
+    .eq("id", groupId)
+    .maybeSingle();
+  if (error) throw new Error("PROD_SLOC_GROUP_LOOKUP_FAILED");
+  return (data as JsonRecord | null) ?? null;
+}
+
 async function getMaterialMap(materialIds: string[]): Promise<Map<string, JsonRecord>> {
   const ids = [...new Set(materialIds.filter(Boolean))];
   const map = new Map<string, JsonRecord>();
@@ -73,7 +82,9 @@ async function getMaterialMap(materialIds: string[]): Promise<Map<string, JsonRe
     .select("id, pace_code, material_name, base_uom_code")
     .in("id", ids);
   if (error) throw new Error("PROD_COST_RATE_LIST_FAILED");
-  for (const row of ((data ?? []) as JsonRecord[])) map.set(toTrimmedString(row.id), row);
+  for (const row of ((data ?? []) as JsonRecord[])) {
+    map.set(toTrimmedString(row.id), row);
+  }
   return map;
 }
 
@@ -87,8 +98,210 @@ async function getStorageLocationMap(locationIds: string[]): Promise<Map<string,
     .select("id, storage_location_code, storage_location_name")
     .in("id", ids);
   if (error) throw new Error("PROD_COST_RATE_LIST_FAILED");
-  for (const row of ((data ?? []) as JsonRecord[])) map.set(toTrimmedString(row.id), row);
+  for (const row of ((data ?? []) as JsonRecord[])) {
+    map.set(toTrimmedString(row.id), row);
+  }
   return map;
+}
+
+async function getCostingGroupNameMap(groupIds: string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(groupIds.filter(Boolean))];
+  const map = new Map<string, string>();
+  if (ids.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("costing_group")
+    .select("id, name")
+    .in("id", ids);
+  if (error) throw new Error("PROD_COST_RATE_LIST_FAILED");
+  for (const row of ((data ?? []) as JsonRecord[])) {
+    map.set(toTrimmedString(row.id), toTrimmedString(row.name));
+  }
+  return map;
+}
+
+function sortMaterialRows<T extends JsonRecord>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => {
+    const groupCmp = String(a.group_name ?? "").localeCompare(String(b.group_name ?? ""));
+    if (groupCmp !== 0) return groupCmp;
+    const codeCmp = String(a.pace_code ?? "").localeCompare(String(b.pace_code ?? ""));
+    if (codeCmp !== 0) return codeCmp;
+    return String(a.material_name ?? "").localeCompare(String(b.material_name ?? ""));
+  });
+}
+
+export async function createSlocGroupHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const body = await parseBody(req);
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const name = toTrimmedString(body.name);
+    const storageLocationIds = Array.isArray(body.storage_location_ids) ? uniqueStrings(body.storage_location_ids) : [];
+    if (!companyId || !name || storageLocationIds.length === 0) {
+      return costingError(req, ctx, "PROD_SLOC_GROUP_INVALID", 400, "company_id, name, and storage_location_ids are required.");
+    }
+    const { data: group, error: groupError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("sloc_group")
+      .insert({
+        company_id: companyId,
+        name,
+        created_by: ctx.auth_user_id,
+      })
+      .select("id, company_id, name, created_at")
+      .single();
+    if (groupError) {
+      if (groupError.code === "23505") {
+        return costingError(req, ctx, "PROD_SLOC_GROUP_EXISTS", 409, "An SLoc Group with this name already exists for the company.");
+      }
+      throw new Error("PROD_SLOC_GROUP_CREATE_FAILED");
+    }
+    const { error: memberError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("sloc_group_member")
+      .insert(storageLocationIds.map((storage_location_id) => ({
+        sloc_group_id: toTrimmedString(group.id),
+        storage_location_id,
+        added_by: ctx.auth_user_id,
+      })));
+    if (memberError) throw new Error("PROD_SLOC_GROUP_CREATE_FAILED");
+    return okResponse({ data: group }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PROD_SLOC_GROUP_CREATE_FAILED";
+    return costingError(req, ctx, code, 500, "SLoc Group create failed.");
+  }
+}
+
+export async function listSlocGroupsHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    if (!companyId) {
+      return costingError(req, ctx, "PROD_SLOC_GROUP_COMPANY_REQUIRED", 400, "company_id is required.");
+    }
+    const { data: groups, error: groupError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("sloc_group")
+      .select("id, company_id, name, created_at")
+      .eq("company_id", companyId)
+      .order("name", { ascending: true });
+    if (groupError) throw new Error("PROD_SLOC_GROUP_LIST_FAILED");
+    const groupIds = uniqueStrings(((groups ?? []) as JsonRecord[]).map((row) => row.id));
+    const { data: members, error: memberError } = groupIds.length > 0
+      ? await serviceRoleClient
+        .schema("erp_production")
+        .from("sloc_group_member")
+        .select("id, sloc_group_id, storage_location_id, added_at")
+        .in("sloc_group_id", groupIds)
+      : { data: [], error: null };
+    if (memberError) throw new Error("PROD_SLOC_GROUP_LIST_FAILED");
+    const locationMap = await getStorageLocationMap(uniqueStrings(((members ?? []) as JsonRecord[]).map((row) => row.storage_location_id)));
+    const membersByGroup = new Map<string, JsonRecord[]>();
+    for (const member of ((members ?? []) as JsonRecord[])) {
+      const groupId = toTrimmedString(member.sloc_group_id);
+      const location = locationMap.get(toTrimmedString(member.storage_location_id));
+      const list = membersByGroup.get(groupId) ?? [];
+      list.push({
+        ...member,
+        storage_location_code: location ? toTrimmedString(location.storage_location_code) : null,
+        storage_location_name: location ? toTrimmedString(location.storage_location_name) : null,
+      });
+      membersByGroup.set(groupId, list);
+    }
+    return okResponse({
+      data: ((groups ?? []) as JsonRecord[]).map((group) => ({
+        ...group,
+        member_count: (membersByGroup.get(toTrimmedString(group.id)) ?? []).length,
+        members: (membersByGroup.get(toTrimmedString(group.id)) ?? []).sort((a, b) =>
+          String(a.storage_location_code ?? "").localeCompare(String(b.storage_location_code ?? ""))
+        ),
+      })),
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PROD_SLOC_GROUP_LIST_FAILED";
+    return costingError(req, ctx, code, 500, "SLoc Group list failed.");
+  }
+}
+
+export async function addSlocGroupMemberHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const groupId = getPathId(req, "sloc-groups");
+    const group = groupId ? await getSlocGroupById(groupId) : null;
+    if (!group) return costingError(req, ctx, "PROD_SLOC_GROUP_NOT_FOUND", 404, "SLoc Group not found.");
+    await assertCompanyScope(ctx, toTrimmedString(group.company_id));
+    const body = await parseBody(req);
+    const storageLocationIds = Array.isArray(body.storage_location_ids) ? uniqueStrings(body.storage_location_ids) : [];
+    if (storageLocationIds.length === 0) {
+      return costingError(req, ctx, "PROD_SLOC_GROUP_MEMBER_INVALID", 400, "At least one storage location is required.");
+    }
+    const { data: existing, error: existingError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("sloc_group_member")
+      .select("storage_location_id")
+      .eq("sloc_group_id", groupId)
+      .in("storage_location_id", storageLocationIds);
+    if (existingError) throw new Error("PROD_SLOC_GROUP_MEMBER_ADD_FAILED");
+    const existingIds = new Set(uniqueStrings(((existing ?? []) as JsonRecord[]).map((row) => row.storage_location_id)));
+    const inserts = storageLocationIds
+      .filter((storageLocationId) => !existingIds.has(storageLocationId))
+      .map((storage_location_id) => ({
+        sloc_group_id: groupId,
+        storage_location_id,
+        added_by: ctx.auth_user_id,
+      }));
+    if (inserts.length > 0) {
+      const { error: insertError } = await serviceRoleClient
+        .schema("erp_production")
+        .from("sloc_group_member")
+        .insert(inserts);
+      if (insertError) throw new Error("PROD_SLOC_GROUP_MEMBER_ADD_FAILED");
+    }
+    return okResponse({
+      data: {
+        sloc_group_id: groupId,
+        inserted_count: inserts.length,
+        skipped_count: storageLocationIds.length - inserts.length,
+      },
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PROD_SLOC_GROUP_MEMBER_ADD_FAILED";
+    return costingError(req, ctx, code, 500, "SLoc Group member add failed.");
+  }
+}
+
+export async function removeSlocGroupMemberHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const groupId = getPathId(req, "sloc-groups");
+    const memberId = getPathId(req, "members");
+    const group = groupId ? await getSlocGroupById(groupId) : null;
+    if (!group) return costingError(req, ctx, "PROD_SLOC_GROUP_NOT_FOUND", 404, "SLoc Group not found.");
+    await assertCompanyScope(ctx, toTrimmedString(group.company_id));
+    const { data: existing, error: existingError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("sloc_group_member")
+      .select("id")
+      .eq("id", memberId)
+      .eq("sloc_group_id", groupId)
+      .maybeSingle();
+    if (existingError) throw new Error("PROD_SLOC_GROUP_MEMBER_REMOVE_FAILED");
+    if (!existing) {
+      return costingError(req, ctx, "PROD_SLOC_GROUP_MEMBER_NOT_FOUND", 404, "SLoc Group member not found.");
+    }
+    const { error: deleteError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("sloc_group_member")
+      .delete()
+      .eq("id", memberId)
+      .eq("sloc_group_id", groupId);
+    if (deleteError) throw new Error("PROD_SLOC_GROUP_MEMBER_REMOVE_FAILED");
+    return okResponse({ data: { id: memberId } }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PROD_SLOC_GROUP_MEMBER_REMOVE_FAILED";
+    return costingError(req, ctx, code, 500, "SLoc Group member remove failed.");
+  }
 }
 
 export async function createCostingGroupHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -138,8 +351,8 @@ export async function listCostingGroupsHandler(req: Request, ctx: ProdHandlerCon
       .eq("company_id", companyId)
       .order("name", { ascending: true });
     if (error) throw new Error("PROD_COST_GROUP_LIST_FAILED");
-    const groupIds = ((groups ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)).filter(Boolean);
-    const { data: members, error: memberError } = groupIds.length
+    const groupIds = uniqueStrings(((groups ?? []) as JsonRecord[]).map((row) => row.id));
+    const { data: members, error: memberError } = groupIds.length > 0
       ? await serviceRoleClient
         .schema("erp_production")
         .from("costing_group_member")
@@ -147,28 +360,24 @@ export async function listCostingGroupsHandler(req: Request, ctx: ProdHandlerCon
         .in("group_id", groupIds)
       : { data: [], error: null };
     if (memberError) throw new Error("PROD_COST_GROUP_LIST_FAILED");
-    const materialMap = await getMaterialMap(((members ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)));
-    const locationMap = await getStorageLocationMap(((members ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.added_from_storage_location_id)));
+    const materialMap = await getMaterialMap(uniqueStrings(((members ?? []) as JsonRecord[]).map((row) => row.material_id)));
     const membersByGroup = new Map<string, JsonRecord[]>();
-    for (const row of ((members ?? []) as JsonRecord[])) {
-      const key = toTrimmedString(row.group_id);
-      const list = membersByGroup.get(key) ?? [];
-      const material = materialMap.get(toTrimmedString(row.material_id));
-      const location = locationMap.get(toTrimmedString(row.added_from_storage_location_id));
+    for (const member of ((members ?? []) as JsonRecord[])) {
+      const groupId = toTrimmedString(member.group_id);
+      const material = materialMap.get(toTrimmedString(member.material_id));
+      const list = membersByGroup.get(groupId) ?? [];
       list.push({
-        ...row,
+        ...member,
         pace_code: material ? toTrimmedString(material.pace_code) : null,
         material_name: material ? toTrimmedString(material.material_name) : null,
-        storage_location_code: location ? toTrimmedString(location.storage_location_code) : null,
-        storage_location_name: location ? toTrimmedString(location.storage_location_name) : null,
       });
-      membersByGroup.set(key, list);
+      membersByGroup.set(groupId, list);
     }
     return okResponse({
-      data: ((groups ?? []) as JsonRecord[]).map((row) => ({
-        ...row,
-        member_count: (membersByGroup.get(toTrimmedString(row.id)) ?? []).length,
-        members: membersByGroup.get(toTrimmedString(row.id)) ?? [],
+      data: ((groups ?? []) as JsonRecord[]).map((group) => ({
+        ...group,
+        member_count: (membersByGroup.get(toTrimmedString(group.id)) ?? []).length,
+        members: sortMaterialRows(membersByGroup.get(toTrimmedString(group.id)) ?? []),
       })),
     }, ctx.request_id, req);
   } catch (error) {
@@ -180,15 +389,12 @@ export async function listCostingGroupsHandler(req: Request, ctx: ProdHandlerCon
 export async function addCostingGroupMemberHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
-    const groupId = getGroupIdFromPath(req);
+    const groupId = getPathId(req, "costing-groups");
     const group = groupId ? await getGroupById(groupId) : null;
     if (!group) return costingError(req, ctx, "PROD_COST_GROUP_NOT_FOUND", 404, "Costing group not found.");
     await assertCompanyScope(ctx, toTrimmedString(group.company_id));
     const body = await parseBody(req);
-    const materialIds = Array.isArray(body.material_ids)
-      ? [...new Set(body.material_ids.map((value) => toTrimmedString(value)).filter(Boolean))]
-      : [];
-    const storageLocationId = toTrimmedString(body.storage_location_id) || null;
+    const materialIds = Array.isArray(body.material_ids) ? uniqueStrings(body.material_ids) : [];
     if (materialIds.length === 0) {
       return costingError(req, ctx, "PROD_COST_GROUP_MEMBER_INVALID", 400, "At least one material is required.");
     }
@@ -210,14 +416,16 @@ export async function addCostingGroupMemberHandler(req: Request, ctx: ProdHandle
       );
     }
     const existingInSameGroup = new Set(
-      ((existing ?? []) as JsonRecord[]).filter((row) => toTrimmedString(row.group_id) === groupId).map((row) => toTrimmedString(row.material_id)),
+      ((existing ?? []) as JsonRecord[])
+        .filter((row) => toTrimmedString(row.group_id) === groupId)
+        .map((row) => toTrimmedString(row.material_id)),
     );
     const inserts = materialIds
       .filter((materialId) => !existingInSameGroup.has(materialId))
       .map((material_id) => ({
         group_id: groupId,
         material_id,
-        added_from_storage_location_id: storageLocationId,
+        added_from_storage_location_id: null,
         added_by: ctx.auth_user_id,
       }));
     if (inserts.length > 0) {
@@ -243,8 +451,8 @@ export async function addCostingGroupMemberHandler(req: Request, ctx: ProdHandle
 export async function removeCostingGroupMemberHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
-    const groupId = getGroupIdFromPath(req);
-    const memberId = getMemberIdFromPath(req);
+    const groupId = getPathId(req, "costing-groups");
+    const memberId = getPathId(req, "members");
     const group = groupId ? await getGroupById(groupId) : null;
     if (!group) return costingError(req, ctx, "PROD_COST_GROUP_NOT_FOUND", 404, "Costing group not found.");
     await assertCompanyScope(ctx, toTrimmedString(group.company_id));
@@ -278,22 +486,39 @@ export async function listCostingRateMaterialsHandler(req: Request, ctx: ProdHan
     assertProdReadRole(ctx);
     const url = new URL(req.url);
     const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
-    const storageLocationId = toTrimmedString(url.searchParams.get("storage_location_id"));
+    const slocGroupId = toTrimmedString(url.searchParams.get("sloc_group_id"));
     const rateMonth = normalizeRateMonth(url.searchParams.get("rate_month"));
-    if (!companyId || !storageLocationId) {
-      return costingError(req, ctx, "PROD_COST_RATE_FILTER_INVALID", 400, "company_id and storage_location_id are required.");
+    if (!companyId || !slocGroupId) {
+      return costingError(req, ctx, "PROD_COST_RATE_FILTER_INVALID", 400, "company_id and sloc_group_id are required.");
     }
     if (url.searchParams.has("rate_month") && !rateMonth) {
       return costingError(req, ctx, "PROD_COST_RATE_MONTH_INVALID", 400, "rate_month must be YYYY-MM or YYYY-MM-DD.");
+    }
+    const slocGroup = await getSlocGroupById(slocGroupId);
+    if (!slocGroup) {
+      return costingError(req, ctx, "PROD_SLOC_GROUP_NOT_FOUND", 404, "SLoc Group not found.");
+    }
+    if (toTrimmedString(slocGroup.company_id) !== companyId) {
+      return costingError(req, ctx, "PROD_SLOC_GROUP_SCOPE_INVALID", 409, "SLoc Group does not belong to the selected company.");
+    }
+    const { data: slocMembers, error: slocMemberError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("sloc_group_member")
+      .select("storage_location_id")
+      .eq("sloc_group_id", slocGroupId);
+    if (slocMemberError) throw new Error("PROD_COST_RATE_LIST_FAILED");
+    const storageLocationIds = uniqueStrings(((slocMembers ?? []) as JsonRecord[]).map((row) => row.storage_location_id));
+    if (storageLocationIds.length === 0) {
+      return okResponse({ data: [] }, ctx.request_id, req);
     }
     const { data: snapshotRows, error: snapshotError } = await serviceRoleClient
       .schema("erp_inventory")
       .from("stock_snapshot")
       .select("material_id")
       .eq("company_id", companyId)
-      .eq("storage_location_id", storageLocationId);
+      .in("storage_location_id", storageLocationIds);
     if (snapshotError) throw new Error("PROD_COST_RATE_LIST_FAILED");
-    const materialIds = [...new Set(((snapshotRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+    const materialIds = uniqueStrings(((snapshotRows ?? []) as JsonRecord[]).map((row) => row.material_id));
     if (materialIds.length === 0) {
       return okResponse({ data: [] }, ctx.request_id, req);
     }
@@ -302,41 +527,43 @@ export async function listCostingRateMaterialsHandler(req: Request, ctx: ProdHan
       serviceRoleClient
         .schema("erp_production")
         .from("costing_group_member")
-        .select("material_id, group_id, group:costing_group!inner(name)")
+        .select("id, material_id, group_id, group:costing_group!inner(name)")
         .in("material_id", materialIds),
       rateMonth
         ? serviceRoleClient
           .schema("erp_production")
           .from("costing_rate_line")
-          .select("material_id, rate, status, group_id")
+          .select("id, material_id, rate, status, group_id")
           .eq("company_id", companyId)
           .eq("rate_month", rateMonth)
           .in("material_id", materialIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
     if (membershipResult.error || rateResult.error) throw new Error("PROD_COST_RATE_LIST_FAILED");
-    const membershipMap = new Map<string, JsonRecord>(((membershipResult.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.material_id), row]));
-    const rateMap = new Map<string, JsonRecord>(((rateResult.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.material_id), row]));
-    return okResponse({
-      data: materialIds.map((materialId) => {
-        const material = materialMap.get(materialId);
-        const membership = membershipMap.get(materialId);
-        const rateRow = rateMap.get(materialId);
-        return {
-          material_id: materialId,
-          pace_code: material ? toTrimmedString(material.pace_code) : null,
-          material_name: material ? toTrimmedString(material.material_name) : null,
-          base_uom_code: material ? toTrimmedString(material.base_uom_code) || null : null,
-          group_id: membership ? toTrimmedString(membership.group_id) : null,
-          group_name: membership ? toTrimmedString((membership.group as JsonRecord)?.name) : null,
-          rate: rateRow ? Number(rateRow.rate ?? 0) : null,
-          status: rateRow ? toTrimmedString(rateRow.status) : null,
-        };
-      }).sort((a, b) => {
-        const codeCmp = String(a.pace_code ?? "").localeCompare(String(b.pace_code ?? ""));
-        return codeCmp !== 0 ? codeCmp : String(a.material_name ?? "").localeCompare(String(b.material_name ?? ""));
-      }),
-    }, ctx.request_id, req);
+    const membershipMap = new Map<string, JsonRecord>(
+      ((membershipResult.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.material_id), row]),
+    );
+    const rateMap = new Map<string, JsonRecord>(
+      ((rateResult.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.material_id), row]),
+    );
+    const rows = materialIds.map((materialId) => {
+      const material = materialMap.get(materialId);
+      const membership = membershipMap.get(materialId);
+      const rateRow = rateMap.get(materialId);
+      return {
+        material_id: materialId,
+        row_id: rateRow ? toTrimmedString(rateRow.id) : null,
+        pace_code: material ? toTrimmedString(material.pace_code) : null,
+        material_name: material ? toTrimmedString(material.material_name) : null,
+        base_uom_code: material ? toTrimmedString(material.base_uom_code) || null : null,
+        group_member_id: membership ? toTrimmedString(membership.id) : null,
+        group_id: membership ? toTrimmedString(membership.group_id) : null,
+        group_name: membership ? toTrimmedString((membership.group as JsonRecord)?.name) : null,
+        rate: rateRow ? Number(rateRow.rate ?? 0) : null,
+        status: rateRow ? toTrimmedString(rateRow.status) : null,
+      };
+    });
+    return okResponse({ data: sortMaterialRows(rows) }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROD_COST_RATE_LIST_FAILED";
     return costingError(req, ctx, code, 500, "Costing rate material list failed.");
@@ -350,15 +577,17 @@ export async function saveCostingRateDraftHandler(req: Request, ctx: ProdHandler
     const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     const rateMonth = normalizeRateMonth(body.rate_month);
     const lines = Array.isArray(body.lines)
-      ? body.lines.map((row) => ({
+      ? body.lines
+        .map((row) => ({
           material_id: toTrimmedString((row as JsonRecord).material_id),
           rate: parseNonNegativeNumber((row as JsonRecord).rate),
-        })).filter((row) => row.material_id && row.rate !== null)
+        }))
+        .filter((row) => row.material_id && row.rate !== null)
       : [];
     if (!companyId || !rateMonth || lines.length === 0) {
       return costingError(req, ctx, "PROD_COST_RATE_DRAFT_INVALID", 400, "company_id, rate_month, and at least one line are required.");
     }
-    const materialIds = [...new Set(lines.map((row) => row.material_id))];
+    const materialIds = uniqueStrings(lines.map((row) => row.material_id));
     const { data: existingRows, error: existingError } = await serviceRoleClient
       .schema("erp_production")
       .from("costing_rate_line")
@@ -377,7 +606,10 @@ export async function saveCostingRateDraftHandler(req: Request, ctx: ProdHandler
       .select("material_id, group_id")
       .in("material_id", materialIds);
     if (membershipError) throw new Error("PROD_COST_RATE_DRAFT_SAVE_FAILED");
-    const membershipMap = new Map<string, JsonRecord>(((memberships ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.material_id), row]));
+    const membershipMap = new Map<string, JsonRecord>(
+      ((memberships ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.material_id), row]),
+    );
+    const now = new Date().toISOString();
     const payload = lines.map((line) => ({
       company_id: companyId,
       material_id: line.material_id,
@@ -387,7 +619,7 @@ export async function saveCostingRateDraftHandler(req: Request, ctx: ProdHandler
       status: "DRAFT",
       created_by: ctx.auth_user_id,
       last_updated_by: ctx.auth_user_id,
-      last_updated_at: new Date().toISOString(),
+      last_updated_at: now,
     }));
     const { error: upsertError } = await serviceRoleClient
       .schema("erp_production")
@@ -429,6 +661,68 @@ export async function listPendingCostingDraftsHandler(req: Request, ctx: ProdHan
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROD_COST_RATE_DRAFT_LIST_FAILED";
     return costingError(req, ctx, code, 500, "Pending costing drafts list failed.");
+  }
+}
+
+export async function listDraftCostingRateDetailHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const rateMonth = normalizeRateMonth(url.searchParams.get("rate_month"));
+    if (!companyId || !rateMonth) {
+      return costingError(req, ctx, "PROD_COST_RATE_DETAIL_INVALID", 400, "company_id and rate_month are required.");
+    }
+    const { data: draftRows, error: draftError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("costing_rate_line")
+      .select("id, material_id, rate, status, group_id")
+      .eq("company_id", companyId)
+      .eq("rate_month", rateMonth)
+      .order("material_id", { ascending: true });
+    if (draftError) throw new Error("PROD_COST_RATE_DETAIL_FAILED");
+    const rows = (draftRows ?? []) as JsonRecord[];
+    if (rows.length === 0) {
+      return okResponse({ data: [] }, ctx.request_id, req);
+    }
+    const materialIds = uniqueStrings(rows.map((row) => row.material_id));
+    const [materialMap, currentMembershipResult, snapshotGroupNameMap] = await Promise.all([
+      getMaterialMap(materialIds),
+      serviceRoleClient
+        .schema("erp_production")
+        .from("costing_group_member")
+        .select("id, material_id, group_id, group:costing_group!inner(name)")
+        .in("material_id", materialIds),
+      getCostingGroupNameMap(uniqueStrings(rows.map((row) => row.group_id))),
+    ]);
+    if (currentMembershipResult.error) throw new Error("PROD_COST_RATE_DETAIL_FAILED");
+    const currentMembershipMap = new Map<string, JsonRecord>(
+      ((currentMembershipResult.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.material_id), row]),
+    );
+    const detailRows = rows.map((row) => {
+      const materialId = toTrimmedString(row.material_id);
+      const material = materialMap.get(materialId);
+      const currentMembership = currentMembershipMap.get(materialId);
+      const snapshotGroupId = toTrimmedString(row.group_id);
+      return {
+        id: toTrimmedString(row.id),
+        material_id: materialId,
+        pace_code: material ? toTrimmedString(material.pace_code) : null,
+        material_name: material ? toTrimmedString(material.material_name) : null,
+        base_uom_code: material ? toTrimmedString(material.base_uom_code) || null : null,
+        group_id: snapshotGroupId || null,
+        group_name: snapshotGroupId ? snapshotGroupNameMap.get(snapshotGroupId) ?? null : null,
+        current_group_member_id: currentMembership ? toTrimmedString(currentMembership.id) : null,
+        current_group_id: currentMembership ? toTrimmedString(currentMembership.group_id) : null,
+        current_group_name: currentMembership ? toTrimmedString((currentMembership.group as JsonRecord)?.name) : null,
+        rate: Number(row.rate ?? 0),
+        status: toTrimmedString(row.status),
+      };
+    });
+    return okResponse({ data: sortMaterialRows(detailRows) }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PROD_COST_RATE_DETAIL_FAILED";
+    return costingError(req, ctx, code, 500, "Costing rate draft detail failed.");
   }
 }
 

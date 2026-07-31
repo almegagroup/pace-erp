@@ -54,19 +54,25 @@ import {
   listApprovedMonthsForSkuHandler,
 } from "../_core/production/mts_sku_rate.handlers.ts";
 import {
+  addSlocGroupMemberHandler,
   addCostingGroupMemberHandler,
   approveCostingRateHandler,
   createCostingGroupHandler,
+  createSlocGroupHandler,
+  listDraftCostingRateDetailHandler,
   listCostingGroupsHandler,
   listCostingRateMaterialsHandler,
   listPendingCostingDraftsHandler,
+  listSlocGroupsHandler,
   removeCostingGroupMemberHandler,
+  removeSlocGroupMemberHandler,
   saveCostingRateDraftHandler,
 } from "../_core/production/costing_group.handlers.ts";
 import {
   createOldProcessPoHandler,
   listOldProcessPoBatchesHandler,
   createOldPackingPoHandler,
+  listOldPackingPoBatchesHandler,
 } from "../_core/production/opening_genealogy.handlers.ts";
 import {
   listPlanFeedHandler,
@@ -221,12 +227,18 @@ export async function dispatchProductionRoutes(
       return await createCostingGroupHandler(req, ctx);
     case "GET:/api/production/costing-groups":
       return await listCostingGroupsHandler(req, ctx);
+    case "POST:/api/production/sloc-groups":
+      return await createSlocGroupHandler(req, ctx);
+    case "GET:/api/production/sloc-groups":
+      return await listSlocGroupsHandler(req, ctx);
     case "GET:/api/production/costing-rate/materials":
       return await listCostingRateMaterialsHandler(req, ctx);
     case "POST:/api/production/costing-rate/draft":
       return await saveCostingRateDraftHandler(req, ctx);
     case "GET:/api/production/costing-rate/pending-drafts":
       return await listPendingCostingDraftsHandler(req, ctx);
+    case "GET:/api/production/costing-rate/draft-detail":
+      return await listDraftCostingRateDetailHandler(req, ctx);
     case "POST:/api/production/costing-rate/approve":
       return await approveCostingRateHandler(req, ctx);
 
@@ -237,6 +249,8 @@ export async function dispatchProductionRoutes(
       return await listOldProcessPoBatchesHandler(req, ctx);
     case "POST:/api/production/old-packing-po":
       return await createOldPackingPoHandler(req, ctx);
+    case "GET:/api/production/old-packing-po/batches":
+      return await listOldPackingPoBatchesHandler(req, ctx);
 
     // Stroke Masters
     case "GET:/api/production/stroke-masters":
@@ -487,6 +501,12 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/costing-groups\/[^/]+\/members\/[^/]+$/.test(pathname) && req.method === "DELETE") {
     return await removeCostingGroupMemberHandler(req, ctx);
+  }
+  if (/^\/api\/production\/sloc-groups\/[^/]+\/members$/.test(pathname) && req.method === "POST") {
+    return await addSlocGroupMemberHandler(req, ctx);
+  }
+  if (/^\/api\/production\/sloc-groups\/[^/]+\/members\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await removeSlocGroupMemberHandler(req, ctx);
   }
 
   return null;

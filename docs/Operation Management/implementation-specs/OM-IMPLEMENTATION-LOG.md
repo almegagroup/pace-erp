@@ -3012,3 +3012,34 @@ integrity `in_sync = true` after reconciling the MCP timestamp per ยง8A.
 - `deno check supabase/functions/api/_routes/production.routes.ts` still reports only pre-existing unrelated baseline typing errors in older files (`pack_config.handlers.ts`, `_pipeline/session.ts`), not AC06-local failures.
 - `node scripts/migration-integrity-check.mjs` still fails in this Windows environment with the known `EPERM` issue, so migration sync was checked via `supabase migration list --linked` instead.
 - A full authenticated end-to-end replay of every brief verification scenario was not available in this terminal context; live verification here covered the corrected schema assumptions, migration state, and touched-surface checks rather than a browser-driven business fixture.
+
+## 2026-07-31 23:44 IST - Gate-27.26 AC06 SLoc Costing Group Master (v2 correction)
+
+**Scope implemented:** delta correction only from the updated `CODEX-GATE27.26-AC06-SLOC-COSTING-GROUP-TASK-BRIEF.md`, after re-reading feasibility ง114.22 and re-reading the shipped AC06 backend/frontend files in full first.
+
+- Added `supabase/migrations/20260801020000_gate27_26_costing_group_v2_sloc_group.sql` for the new `erp_production.sloc_group` and `erp_production.sloc_group_member` masters.
+- Extended `supabase/functions/api/_core/production/costing_group.handlers.ts` with SLoc Group create/list/member add/member remove handlers, changed costing-rate browse from `storage_location_id` to `sloc_group_id`, removed `storage_location_id` from costing-group member add, and added `GET /api/production/costing-rate/draft-detail` for month-detail approval workflow.
+- Updated `supabase/functions/api/_routes/production.routes.ts` and `supabase/functions/api/_acl/route-acl-registry.ts` with the new SLoc Group static routes, dynamic member routes, and draft-detail route under existing resource code `ACC_SLOC_COSTING_GROUP`.
+- Updated `frontend/src/pages/dashboard/production/prodApi.js` with the new AC06 v2 helpers and rebuilt `frontend/src/pages/dashboard/production/SlocCostingGroupPage.jsx` so:
+  header browse starts from SLoc Group,
+  the page includes SLoc Group management UI,
+  grouped rates are editable only on the first row and auto-propagate,
+  and approval now opens a draft-detail drawer with save/unmap/approve instead of approving directly from the month list.
+
+**Reference to prior AC06 entry:**
+This entry is a v2 correction on top of the earlier `2026-07-31 23:05 IST` AC06 implementation. The original material-level uniqueness and month-snapshot model remain intact. This pass adds the missing SLoc Group master and the required detail-first approval flow without rewriting the original three AC06 core tables.
+
+**Dev verification / migration state:**
+
+- Re-used the shared Dev access from `.mcp.codex.local.json` and re-checked the live `erp_production` AC06 tables before code changes.
+- Applied the new AC06 v2 migration to Dev with `supabase db push --linked`.
+- Ran `node scripts/migration-integrity-check.mjs` outside the Windows sandbox; the local probe now reports `count=393` and `md5=d1f4b911764dfbc82cf40694a367aad0` for remote comparison against `supabase_migrations.schema_migrations`.
+
+**Verification notes / limitations:**
+
+- `deno check supabase/functions/api/_core/production/costing_group.handlers.ts` passed.
+- `deno check supabase/functions/api/_acl/route-acl-registry.ts` passed.
+- File-level ESLint passed for `frontend/src/pages/dashboard/production/SlocCostingGroupPage.jsx` and `frontend/src/pages/dashboard/production/prodApi.js` when rerun outside the Windows sandbox.
+- `deno check supabase/functions/api/_routes/production.routes.ts` still reports only the same pre-existing unrelated baseline typing errors in older files (`pack_config.handlers.ts`, `_pipeline/session.ts`), not AC06-v2-local failures.
+- No ACL/menu DB registration tables were touched, per brief.
+- The linked Dev push also applied one already-pending non-AC06 migration, `20260801011000_gate28_opening_stock_packing_order_link.sql`, because it was already queued locally in the linked environment before this AC06 v2 push.
