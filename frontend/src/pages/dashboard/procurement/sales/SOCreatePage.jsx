@@ -28,6 +28,7 @@ import {
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { lookupCustomerGstProfile } from "../../om/omApi.js";
+import { INDIAN_STATES, matchIndianStateName } from "../../../../data/indianStates.js";
 import { createSalesOrder, listMaterialUomConversionsForProcurement } from "../procurementApi.js";
 
 const SHIP_TO_TYPE_OPTIONS = [
@@ -326,7 +327,7 @@ export default function SOCreatePage() {
         ship_to_gst_number: gst,
         ship_to_name: profile.legal_name || current.ship_to_name,
         ship_to_address: profile.full_address || current.ship_to_address,
-        ship_to_state: profile.state_name || current.ship_to_state,
+        ship_to_state: profile.state_name ? matchIndianStateName(profile.state_name) : current.ship_to_state,
       }));
       setGstNotice(`GST found: ${profile.legal_name ?? "—"}`);
     } catch {
@@ -674,7 +675,12 @@ export default function SOCreatePage() {
                     </label>
                     <label className="grid gap-1 text-xs font-semibold text-slate-700">
                       Ship-To State <span className="text-rose-500">*</span>
-                      <input value={form.ship_to_state} onChange={(event) => updateHeaderField("ship_to_state", event.target.value)} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                      <select value={form.ship_to_state} onChange={(event) => updateHeaderField("ship_to_state", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500">
+                        <option value="">Select state</option>
+                        {INDIAN_STATES.map((state) => (
+                          <option key={state.code} value={state.name}>{state.name}</option>
+                        ))}
+                      </select>
                     </label>
                   </div>
                 ) : null}

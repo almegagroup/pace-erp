@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
+import { INDIAN_STATES } from "../../../../data/indianStates.js";
 import { createCustomer, createParentCustomer, getVendor, lookupCustomerGstProfile } from "../omApi.js";
 import {
   useParentCustomersQuery,
@@ -456,12 +457,25 @@ export default function CustomerCreateForm({
         />
       </ErpDenseFormRow>
       <ErpDenseFormRow label="Billing State" required>
-        <input
-          value={form.billing_state}
-          onChange={(event) => updateField("billing_state", event.target.value)}
-          placeholder="e.g. West Bengal"
-          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        />
+        {form.customer_type === "DOMESTIC" ? (
+          <select
+            value={form.billing_state}
+            onChange={(event) => updateField("billing_state", event.target.value)}
+            className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+          >
+            <option value="">Select state</option>
+            {INDIAN_STATES.map((state) => (
+              <option key={state.code} value={state.name}>{state.name}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            value={form.billing_state}
+            onChange={(event) => updateField("billing_state", event.target.value)}
+            placeholder="State / province (foreign customer)"
+            className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+          />
+        )}
         <p className="mt-1 text-xs text-slate-500">Determines CGST+SGST vs IGST on sales invoices — required for every customer, registered or not.</p>
       </ErpDenseFormRow>
       <ErpDenseFormRow label="Primary Contact">

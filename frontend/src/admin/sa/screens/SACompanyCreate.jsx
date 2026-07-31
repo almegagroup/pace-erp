@@ -22,6 +22,7 @@ import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
 import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
+import { INDIAN_STATES } from "../../../data/indianStates.js";
 
 async function readJsonSafe(response) {
   try {
@@ -680,15 +681,19 @@ export default function SACompanyCreate() {
                 </ErpDenseFormRow>
 
                 <ErpDenseFormRow label="State Name">
-                  <input
+                  <select
                     ref={stateNameInputRef}
                     data-workspace-primary-focus="true"
                     data-erp-form-field="true"
                     value={stateName}
                     onChange={(event) => setStateName(event.target.value)}
-                    placeholder="State name"
-                    className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
-                  />
+                    className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+                  >
+                    <option value="">Select state</option>
+                    {INDIAN_STATES.map((state) => (
+                      <option key={state.code} value={state.name}>{state.name}</option>
+                    ))}
+                  </select>
                 </ErpDenseFormRow>
 
                 <ErpDenseFormRow label="PIN Code">
