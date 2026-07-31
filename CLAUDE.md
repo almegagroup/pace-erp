@@ -1182,6 +1182,20 @@ deployed app-এ আসল PO **930008** (batch EV02609, ১০ RM line) Verify 
 ওর **নির্দিষ্ট কারণ** (duplicate document_number) `item_number` দিয়ে সারানো হয়েছে, কিন্তু
 **গঠনগত দুর্বলতা রয়ে গেছে** — তাই একই শ্রেণির ঘটনা অন্য কারণে আবার ঘটতে পারে।
 
+**✅ PGI + Sales/STO Invoice (§113.15) DONE (2026-07-31, migration `20260731150000` — `complete_pgi_invoice_action`)** —
+CI-র `stock-posting-guard.mjs`-ই এটা ধরিয়ে দিল: §113.15/§113.16 বানানোর সময় নতুন
+`delivery_order.handlers.ts` সরাসরি `post_stock_movement` ডেকেছিল (২ জায়গায়, `createPgiInvoiceHandler`
++ `reverseSalesInvoiceHandler`) — ratchet ১৫→১৭ দেখিয়ে প্রতিটা commit-এ CI fail করছিল। Process PO
+Verify-এর একই pattern-এ migrate করা হলো — একটা function-ই **create ও reverse দুটো action** সামলায়
+(`p_context->>'action'` দিয়ে dispatch করে, কারণ registry-তে এক `reference_document_type`-এর জন্য
+একটাই `completion_function` থাকতে পারে, আর দুটোই `SALES_INVOICE` tag বহাল রাখা দরকার)। হিসাব
+(GST split, freight, bill-to/ship-to resolution) আগের মতোই TypeScript-এ, শুধু **লেখাটা** transaction-এ
+গেছে। `SALES_INVOICE`-ও registry-তে প্রথমবার register হলো (আগে ছিলই না — মানে এর P601/P602 posting
+গুলো `stock_health_check()`-এর Tier-2 check-এ চুপচাপ FAIL দেখাচ্ছিল, ধরা পড়েনি কারণ কেউ চেক করেনি)।
+rolled-back transaction দিয়ে dev-এর real data (invoice `9200000001` reverse + DO `9100000003` create,
+দুটোই) যাচাই করা হয়েছে — stock qty exact match, rollback পরিষ্কার। Guard আবার **১৫/১৫**-এ ফিরে এলো
+(নতুন কল যোগ হয়নি, শুধু যা যোগ হয়েছিল সেটা সরানো হলো)।
+
 ---
 
 ## 9. PACE ERP Build Layers — SAP Equivalent (Design Status)
