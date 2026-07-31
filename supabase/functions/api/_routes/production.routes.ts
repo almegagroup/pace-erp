@@ -47,6 +47,13 @@ import {
   getDerivedOpeningRateHandler,
 } from "../_core/production/conversion_cost.handlers.ts";
 import {
+  listMtsSkuRateHandler,
+  saveMtsSkuRateDraftHandler,
+  listDraftMtsSkuRatesHandler,
+  approveMtsSkuRateHandler,
+  listApprovedMonthsForSkuHandler,
+} from "../_core/production/mts_sku_rate.handlers.ts";
+import {
   createOldProcessPoHandler,
   listOldProcessPoBatchesHandler,
   createOldPackingPoHandler,
@@ -190,6 +197,16 @@ export async function dispatchProductionRoutes(
     // §104.8 — suggested opening rate for a produced material (stroke-derived), used by IN05
     case "GET:/api/production/derived-opening-rate":
       return await getDerivedOpeningRateHandler(req, ctx);
+    case "GET:/api/production/mts-sku-rates":
+      return await listMtsSkuRateHandler(req, ctx);
+    case "POST:/api/production/mts-sku-rates/draft":
+      return await saveMtsSkuRateDraftHandler(req, ctx);
+    case "GET:/api/production/mts-sku-rates/pending-drafts":
+      return await listDraftMtsSkuRatesHandler(req, ctx);
+    case "POST:/api/production/mts-sku-rates/approve":
+      return await approveMtsSkuRateHandler(req, ctx);
+    case "GET:/api/production/mts-sku-rates/available-months":
+      return await listApprovedMonthsForSkuHandler(req, ctx);
 
     // Opening Genealogy (§104.9) — PR22 Old Process PO + PR23 Old Packing PO (no stock movement)
     case "POST:/api/production/old-process-po":

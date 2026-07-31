@@ -2871,3 +2871,29 @@ integrity `in_sync = true` after reconciling the MCP timestamp per §8A.
 `supabase/migrations/20260719120000_posting_source_registry_and_health_check.sql`,
 `scripts/stock-health-check.sql`, `frontend/src/main.jsx`,
 `frontend/src/utils/errorMessages.js`, `CLAUDE.md`, feasibility §107.
+
+## 2026-07-31 19:42 IST — Gate-27.25 AC05 MTS SKU Monthly Rate Master
+
+**Scope implemented:** AC05 only from `CODEX-GATE27.25-AC05-MTS-SKU-MONTHLY-RATE-TASK-BRIEF.md`, after re-reading feasibility §114 and verifying the relevant live Dev schema before code.
+
+- Added `supabase/migrations/20260731160000_gate27_25_mts_sku_monthly_rate.sql` for the new `erp_production.mts_sku_monthly_rate` table with Draft/Approved status, company+material+month uniqueness, and audit fields.
+- Added `supabase/functions/api/_core/production/mts_sku_rate.handlers.ts` with five handlers: company-scoped MTS SKU list, Draft save, pending-draft month list, Approve, and approved-month lookup for future SO rate selection.
+- Wired the AC05 backend into `supabase/functions/api/_routes/production.routes.ts` and added code-level ACL route registration in `supabase/functions/api/_acl/route-acl-registry.ts` using the new resource code `ACC_MTS_SKU_MONTHLY_RATE` with distinct `WRITE` vs `APPROVE` actions.
+- Added frontend API wiring in `frontend/src/pages/dashboard/production/prodApi.js`, a new `frontend/src/pages/dashboard/production/MtsSkuMonthlyRatePage.jsx`, and route/screen registration in `frontend/src/router/AppRouter.jsx` and `frontend/src/navigation/screens/projects/operationModule/operationScreens.js`.
+
+**Dev verification / migration integrity:**
+
+- Used the shared token from `.mcp.codex.local.json` to verify live Dev schema on project `ytapuwiqicmvpanmzelb` before coding.
+- Confirmed the actual Pack-BOM-side SKU→Prodshade resolution shape differs slightly from the brief shorthand: `erp_production.prodshade_pack_config` stores `material_id` + `pack_code_id`, and `pack_code_master` is under `erp_production`, so AC05 mirrors that real resolution path.
+- Applied the AC05 migration to Dev and inserted the matching migration-history version row `20260731160000 / gate27_25_mts_sku_monthly_rate`.
+- Migration integrity after reconcile: local `count=389`, `md5=231ea20500497f1e967bdb0eba030467`; remote count/md5 matched, so `in_sync = true`.
+
+**Verification notes / limitations:**
+
+- `deno check supabase/functions/api/_core/production/mts_sku_rate.handlers.ts` passed.
+- `deno check supabase/functions/api/_acl/route-acl-registry.ts` passed.
+- `deno check supabase/functions/api/_routes/production.routes.ts` still reports only pre-existing unrelated baseline typing errors in older files (`pack_config.handlers.ts`, `_pipeline/session.ts`), not AC05-local failures.
+- `npm.cmd run build` in `frontend/` passed.
+- Current live Dev data has no approved `stroke_master` rows with `po_type='MTS'`, so the brief's requested runtime verification on a real company with 2 MTS-scoped SKUs could not be completed without inventing business data. This was recorded as a Dev-data limitation rather than silently faked.
+
+**Files:** `supabase/migrations/20260731160000_gate27_25_mts_sku_monthly_rate.sql`, `supabase/functions/api/_core/production/mts_sku_rate.handlers.ts`, `supabase/functions/api/_routes/production.routes.ts`, `supabase/functions/api/_acl/route-acl-registry.ts`, `frontend/src/pages/dashboard/production/prodApi.js`, `frontend/src/pages/dashboard/production/MtsSkuMonthlyRatePage.jsx`, `frontend/src/router/AppRouter.jsx`, `frontend/src/navigation/screens/projects/operationModule/operationScreens.js`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
