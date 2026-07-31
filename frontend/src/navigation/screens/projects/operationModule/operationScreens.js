@@ -780,6 +780,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  ACC_SLOC_COSTING_GROUP: {
+    screen_code: "ACC_SLOC_COSTING_GROUP",
+    route: "/dashboard/production/sloc-costing-group",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROD_OLD_PROCESS_PO: {
     screen_code: "PROD_OLD_PROCESS_PO",
     route: "/dashboard/production/old-process-po",

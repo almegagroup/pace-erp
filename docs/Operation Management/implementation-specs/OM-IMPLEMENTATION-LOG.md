@@ -2977,3 +2977,38 @@ integrity `in_sync = true` after reconciling the MCP timestamp per ยง8A.
 - `node scripts/migration-integrity-check.mjs` still fails in this Windows environment with the known `EPERM` issue, so migration sync was checked via `supabase migration list --linked` and direct remote table verification instead.
 - `deno check supabase/functions/api/_routes/om.routes.ts` still reports only pre-existing unrelated baseline typing errors in older OM files (`customer.handlers.ts`, `location.handlers.ts`, `material.handlers.ts`, `vendor*.handlers.ts`, `_pipeline/session.ts`), not MM05-local failures.
 - The upgrade modal flow was not replayed through a real authenticated browser/API session in this terminal context; its path was verified by code review, the corrected route parser, and the same underlying DB rules rather than a full UI-driven fixture run.
+
+## 2026-07-31 23:05 IST - Gate-27.26 AC06 SLoc Costing Group Master
+
+**Scope implemented:** AC06 only from the updated `CODEX-GATE27.26-AC06-SLOC-COSTING-GROUP-TASK-BRIEF.md`, after re-reading feasibility ง114.21 and re-checking the live Dev schema before code.
+
+- Added `supabase/migrations/20260731200000_gate27_26_costing_group.sql` for the three new AC06 tables:
+  `erp_production.costing_group`, `erp_production.costing_group_member`, and `erp_production.costing_rate_line`.
+- Implemented the locked material-level rule from ง114.21:
+  `costing_group_member` is unique on `material_id` only, and
+  `costing_rate_line` is unique on `(company_id, material_id, rate_month)` only.
+  Storage location is not part of either identity; it remains browse-context only.
+- Added `supabase/functions/api/_core/production/costing_group.handlers.ts` with handlers for group create/list, member add/remove, browse-material list by company+storage-location, draft save, pending-draft list, and separate approve.
+- Wired the backend into `supabase/functions/api/_routes/production.routes.ts` and added code-level ACL route registration in `supabase/functions/api/_acl/route-acl-registry.ts` under resource code `ACC_SLOC_COSTING_GROUP` with distinct `VIEW` / `WRITE` / `APPROVE` / `DELETE` actions as needed.
+- Added frontend API helpers in `frontend/src/pages/dashboard/production/prodApi.js`, created `frontend/src/pages/dashboard/production/SlocCostingGroupPage.jsx`, and wired the route/screen in `frontend/src/router/AppRouter.jsx` and `frontend/src/navigation/screens/projects/operationModule/operationScreens.js`.
+
+**Implementation note:**
+
+- The AC06 implementation intentionally resolves the same material to the same current group and same month-rate row no matter which storage location browse view discovered it.
+- Saved `costing_rate_line.group_id` acts as the monthly snapshot, so later group-membership changes do not retroactively rewrite old months.
+
+**Dev verification / migration state:**
+
+- Used the shared token from `.mcp.codex.local.json` to verify live Dev schema on project `ytapuwiqicmvpanmzelb` before coding.
+- Re-confirmed the actual source tables and company-link path used by the brief: `erp_inventory.stock_snapshot`, `erp_inventory.storage_location_master`, `erp_inventory.storage_location_plant_map`, and `erp_master.material_master`.
+- Applied the AC06 migration to Dev with `supabase db push --linked`.
+- Verified the remote migration ledger includes version `20260731200000`.
+
+**Verification notes / limitations:**
+
+- `deno check supabase/functions/api/_core/production/costing_group.handlers.ts` passed.
+- `deno check supabase/functions/api/_acl/route-acl-registry.ts` passed.
+- `npm.cmd run build` in `frontend/` passed.
+- `deno check supabase/functions/api/_routes/production.routes.ts` still reports only pre-existing unrelated baseline typing errors in older files (`pack_config.handlers.ts`, `_pipeline/session.ts`), not AC06-local failures.
+- `node scripts/migration-integrity-check.mjs` still fails in this Windows environment with the known `EPERM` issue, so migration sync was checked via `supabase migration list --linked` instead.
+- A full authenticated end-to-end replay of every brief verification scenario was not available in this terminal context; live verification here covered the corrected schema assumptions, migration state, and touched-surface checks rather than a browser-driven business fixture.

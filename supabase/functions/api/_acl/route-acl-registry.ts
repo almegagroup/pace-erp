@@ -163,6 +163,12 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/mts-sku-rates/pending-drafts": { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "VIEW" },
   "POST:/api/production/mts-sku-rates/approve":      { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "APPROVE" },
   "GET:/api/production/mts-sku-rates/available-months": { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "VIEW" },
+  "POST:/api/production/costing-groups":             { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "WRITE" },
+  "GET:/api/production/costing-groups":              { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
+  "GET:/api/production/costing-rate/materials":      { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
+  "POST:/api/production/costing-rate/draft":         { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "WRITE" },
+  "GET:/api/production/costing-rate/pending-drafts": { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
+  "POST:/api/production/costing-rate/approve":       { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "APPROVE" },
   "GET:/api/procurement/chas":                        { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "VIEW"  },
   "POST:/api/procurement/chas":                       { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "WRITE" },
   "POST:/api/procurement/chas/toggle":                { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "EDIT"  },
@@ -446,6 +452,18 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     pattern: /^\/api\/om\/fg-dispatch-addresses\/[^/]+$/,
     methods: {
       PATCH: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/production\/costing-groups\/[^/]+\/members$/,
+    methods: {
+      POST: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "WRITE" },
+    },
+  },
+  {
+    pattern: /^\/api\/production\/costing-groups\/[^/]+\/members\/[^/]+$/,
+    methods: {
+      DELETE: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "DELETE" },
     },
   },
   {
