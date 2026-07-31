@@ -3065,3 +3065,21 @@ This entry is a v2 correction on top of the earlier `2026-07-31 23:05 IST` AC06 
 - File-level ESLint passed for `frontend/src/pages/dashboard/production/MtsSkuMonthlyRatePage.jsx` and `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx` when rerun outside the Windows sandbox.
 - `node scripts/migration-integrity-check.mjs` produced the local checksum probe (`count=395`, `md5=c72608823d7d35296d61979d86013ef6`) but this environment still did not auto-run the remote comparison query.
 - No ACL/menu DB registration tables were touched in this correction pass.
+
+## 2026-07-31 23:59 IST - MM05 GST lookup alignment + AC05/AC06/MM05 consolidated handoff
+
+**MM05 GST lookup alignment:**
+
+- Added `lookupSharedGstProfile()` in `frontend/src/pages/dashboard/om/omApi.js` pointing to `/api/procurement/gst-profile`.
+- Switched both Parent Company and Customer `Check GST` actions in `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx` from `/api/om/customer/gst-profile` to the shared GST-profile path already used by Transporter.
+- This keeps MM05 on the common GST resolver family (`resolveGstProfileWithSource` + derived state/address fields) and exposes the richer shared profile payload / source semantics the user wanted MM05 to mirror.
+
+**Consolidated note for AC05 / AC06 / MM05:**
+
+- AC05 final shape: company-specific MTS SKU monthly rate master, April-start month ordering, Dispatch UOM selection, saved `rate_per_kg`, and approval-policy-aware activation.
+- AC06 final shape: corrected v2 SLoc Group driven browse model with material-level costing uniqueness preserved and draft-detail approval flow.
+- MM05 final shape: customer master persists state/address fields, Direct is clearly Virtual Depot, customer UI area is intentionally larger, and GST lookup now follows the shared GST-profile family instead of a customer-only lookup route.
+
+**Verification notes:**
+
+- File-level ESLint passed for `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx` and `frontend/src/pages/dashboard/om/omApi.js` after this GST alignment change.

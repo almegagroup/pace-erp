@@ -14,7 +14,7 @@ import {
   listFgDepotCodes,
   listFgDispatchCustomerAddresses,
   listFgParentCompanies,
-  lookupCustomerGstProfile,
+  lookupSharedGstProfile,
   updateFgDispatchCustomerAddress,
 } from "./omApi.js";
 
@@ -184,7 +184,7 @@ export default function FgDispatchCustomerPage() {
     if (!gst) return pushNotice("Enter a GST number first.", "error");
     setParentLookupBusy(true);
     try {
-      const profile = await lookupCustomerGstProfile(gst);
+      const profile = await lookupSharedGstProfile(gst);
       setParentForm((current) => ({
         ...current,
         gst_number: gst,
@@ -193,7 +193,7 @@ export default function FgDispatchCustomerPage() {
         full_address: profile.full_address || current.full_address,
         pin_code: profile.pin_code || current.pin_code,
       }));
-      pushNotice("Parent company GST profile loaded.", "info");
+      pushNotice(`Parent company GST profile loaded${profile.source ? ` (${String(profile.source).toLowerCase()})` : ""}.`, "info");
     } catch (error) {
       pushNotice(error?.message || "GST lookup failed.", "error");
     } finally {
@@ -206,7 +206,7 @@ export default function FgDispatchCustomerPage() {
     if (!gst) return pushNotice("Enter a GST number first.", "error");
     setCustomerLookupBusy(true);
     try {
-      const profile = await lookupCustomerGstProfile(gst);
+      const profile = await lookupSharedGstProfile(gst);
       const nextState = profile.state_name ? matchIndianStateName(profile.state_name) : customerForm.state;
       const nextAddress = profile.full_address || customerForm.full_address;
       const nextPin = profile.pin_code || customerForm.pin_code;
@@ -224,7 +224,7 @@ export default function FgDispatchCustomerPage() {
         address_line: nextAddress || current.address_line,
         pin_code: nextPin || current.pin_code,
       }));
-      pushNotice("Customer GST profile loaded.", "info");
+      pushNotice(`Customer GST profile loaded${profile.source ? ` (${String(profile.source).toLowerCase()})` : ""}.`, "info");
     } catch (error) {
       pushNotice(error?.message || "GST lookup failed.", "error");
     } finally {

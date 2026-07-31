@@ -512,6 +512,11 @@ export async function lookupCustomerGstProfile(gstNumber) {
   return fetchJson(`/api/om/customer/gst-profile?${params.toString()}`, {}, "OM_CUSTOMER_GST_LOOKUP_FAILED");
 }
 
+export async function lookupSharedGstProfile(gstNumber) {
+  const params = buildParams({ gst_number: gstNumber });
+  return fetchJson(`/api/procurement/gst-profile?${params.toString()}`, {}, "PROCUREMENT_GST_LOOKUP_FAILED");
+}
+
 export async function getCustomer(id) {
   const params = buildParams({ id });
   return fetchJson(`/api/om/customer?${params.toString()}`, {}, "OM_CUSTOMER_LOOKUP_FAILED");
