@@ -91,6 +91,9 @@ export default function DODetailPage() {
               <div><span className="text-xs text-slate-500">Driver Name</span><div>{data.driver_name || "—"}</div></div>
               <div><span className="text-xs text-slate-500">Transporter</span><div>{data.transporter_display || "—"}</div></div>
               <div><span className="text-xs text-slate-500">Cost Center</span><div>{data.cost_center_display || "—"}</div></div>
+              <div><span className="text-xs text-slate-500">Payment Term</span><div>{data.payment_term_display || "—"}</div></div>
+              <div><span className="text-xs text-slate-500">Freight Term</span><div>{data.freight_term || "—"}</div></div>
+              <div className="md:col-span-3"><span className="text-xs text-slate-500">Delivery / Consignee Address</span><div>{data.delivery_address || "—"}</div></div>
               {data.status === "CANCELLED" ? (
                 <div className="md:col-span-3"><span className="text-xs text-slate-500">Cancellation Reason</span><div>{data.cancellation_reason || "—"}</div></div>
               ) : null}
