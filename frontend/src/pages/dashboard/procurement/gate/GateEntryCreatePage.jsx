@@ -179,7 +179,7 @@ export default function GateEntryCreatePage() {
       return;
     }
     const po = item;
-    const isBulk = ["BULK", "TANKER"].includes((po.delivery_type || "").toUpperCase());
+    const isBulk = ["BULK"].includes((po.delivery_type || "").toUpperCase());
     const firstOpenLine = isBulk
       ? (po.lines ?? []).find((l) =>
           ["OPEN", "PARTIALLY_RECEIVED"].includes((l.line_status || "").toUpperCase())
@@ -269,7 +269,7 @@ export default function GateEntryCreatePage() {
     for (let i = 0; i < activeLines.length; i++) {
       const l = activeLines[i];
       const refNumber = l.po ? l.po.po_number : l.sto.sto_number;
-      const isBulk = l.po ? ["BULK", "TANKER"].includes((l.po.delivery_type || "").toUpperCase()) : false;
+      const isBulk = l.po ? ["BULK"].includes((l.po.delivery_type || "").toUpperCase()) : false;
       if (!isBulk && !l.csn) {
         setError(`Line ${i + 1} (${refNumber}): CSN must be selected.`);
         return;
@@ -304,7 +304,7 @@ export default function GateEntryCreatePage() {
         vehicle_number: vehicleNumber.trim().toUpperCase(),
         gross_weight: gw,
         lines: activeLines.map((l, index) => {
-          const isBulk = l.po ? ["BULK", "TANKER"].includes((l.po.delivery_type || "").toUpperCase()) : false;
+          const isBulk = l.po ? ["BULK"].includes((l.po.delivery_type || "").toUpperCase()) : false;
           const rcvQty = Number(l.rcvQty) || 0;
           let lineGrossWeight;
           if (index === activeLines.length - 1) {
@@ -446,7 +446,7 @@ export default function GateEntryCreatePage() {
 
   function renderLineRow(line, i) {
     const hasRef = line.po !== null || line.sto !== null;
-    const isBulk = ["BULK", "TANKER"].includes((line.po?.delivery_type || "").toUpperCase());
+    const isBulk = ["BULK"].includes((line.po?.delivery_type || "").toUpperCase());
     const isImportLine = (line.csn?.csn_type || "").toUpperCase() === "IMPORT";
     const sugs = hasRef ? [] : getRefSuggestions(line.refQuery);
     const showDrop = poDropRow === i && sugs.length > 0 && (allPos.length > 0 || allStos.length > 0);
