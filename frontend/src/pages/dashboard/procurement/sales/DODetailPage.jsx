@@ -128,6 +128,14 @@ export default function DODetailPage() {
               {data.source_reference_display ? (
                 <div className="md:col-span-3"><span className="text-xs text-slate-500">Reference</span><div>{data.source_reference_display}</div></div>
               ) : null}
+              {data.dc_type === "SALES" ? (
+                <>
+                  <div><span className="text-xs text-slate-500">Ship-To Name</span><div>{data.ship_to_name || "—"}</div></div>
+                  <div><span className="text-xs text-slate-500">Ship-To State</span><div>{data.ship_to_state || "—"}</div></div>
+                  <div><span className="text-xs text-slate-500">Ship-To GST Number</span><div>{data.ship_to_gst_number || "—"}</div></div>
+                  <div className="md:col-span-3"><span className="text-xs text-slate-500">Ship-To Address</span><div>{data.ship_to_address || "—"}</div></div>
+                </>
+              ) : null}
             </div>
           </ErpSectionCard>
 

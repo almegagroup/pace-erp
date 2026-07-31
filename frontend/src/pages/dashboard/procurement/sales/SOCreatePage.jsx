@@ -27,7 +27,13 @@ import {
   useMaterialOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import { lookupCustomerGstProfile } from "../../om/omApi.js";
 import { createSalesOrder, listMaterialUomConversionsForProcurement } from "../procurementApi.js";
+
+const SHIP_TO_TYPE_OPTIONS = [
+  { value: "REGISTERED", label: "Registered" },
+  { value: "UNREGISTERED", label: "Unregistered" },
+];
 
 const FREIGHT_TERM_OPTIONS = [
   { value: "FOR", label: "FOR" },
@@ -235,9 +241,14 @@ export default function SOCreatePage() {
     customer_id: "",
     customer_po_number: "",
     customer_po_date: "",
-    delivery_address: "",
     payment_term_id: "",
     remarks: "",
+    ship_to_same_as_customer: true,
+    ship_to_type: "REGISTERED",
+    ship_to_gst_number: "",
+    ship_to_name: "",
+    ship_to_address: "",
+    ship_to_state: "",
   });
   const [lines, setLines] = useState([createEmptyLine()]);
   const [lineMoreIndex, setLineMoreIndex] = useState(null);
@@ -245,6 +256,8 @@ export default function SOCreatePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [gstLooking, setGstLooking] = useState(false);
+  const [gstNotice, setGstNotice] = useState("");
 
   const companyOptions = useMemo(
     () => (runtimeContext?.availableCompanies ?? []).map((entry) => ({
@@ -274,6 +287,8 @@ export default function SOCreatePage() {
     })),
     [customers]
   );
+  const customerMap = useMemo(() => new Map(customers.map((entry) => [entry.id, entry])), [customers]);
+  const selectedCustomer = customerMap.get(form.customer_id) || null;
   const materialOptions = useMemo(
     () => materials
       .filter((entry) => SALES_MATERIAL_TYPES.has(String(entry.material_type || "").toUpperCase()))
@@ -288,6 +303,37 @@ export default function SOCreatePage() {
 
   function updateHeaderField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  // §113.16 -- reuses the same GST lookup already built for Customer/
+  // Vendor/Transporter/CHA Master (GET /api/om/customer/gst-profile),
+  // nothing new on the backend.
+  async function handleCheckShipToGst() {
+    const gst = form.ship_to_gst_number.trim().toUpperCase();
+    if (!gst) {
+      setError("Enter a GST number first.");
+      return;
+    }
+    setGstLooking(true);
+    setError("");
+    setGstNotice("");
+    try {
+      const result = await lookupCustomerGstProfile(gst);
+      const profile = result?.data;
+      if (!profile) throw new Error("OM_CUSTOMER_GST_LOOKUP_FAILED");
+      setForm((current) => ({
+        ...current,
+        ship_to_gst_number: gst,
+        ship_to_name: profile.legal_name || current.ship_to_name,
+        ship_to_address: profile.full_address || current.ship_to_address,
+        ship_to_state: profile.state_name || current.ship_to_state,
+      }));
+      setGstNotice(`GST found: ${profile.legal_name ?? "—"}`);
+    } catch {
+      setError("GST lookup failed. Check the GST number.");
+    } finally {
+      setGstLooking(false);
+    }
   }
 
   function updateLine(index, patch) {
@@ -343,6 +389,23 @@ export default function SOCreatePage() {
       setError("Custom packaging GST rate is required where selected.");
       return;
     }
+    // §113.16 -- mirrors the backend's validateResolvedShipTo() so the user
+    // sees the problem before a round trip, not after.
+    if (form.ship_to_same_as_customer) {
+      if (!selectedCustomer?.billing_state) {
+        setError("Selected customer has no Billing State set — fix it on Customer Master, or uncheck 'Ship To same as Customer' and enter Ship-To details manually.");
+        return;
+      }
+    } else {
+      if (!form.ship_to_state.trim() || !form.ship_to_name.trim() || !form.ship_to_address.trim()) {
+        setError("Ship-To Name, Address, and State are all required.");
+        return;
+      }
+      if (form.ship_to_type === "REGISTERED" && !form.ship_to_gst_number.trim()) {
+        setError("Ship-To GST Number is required for a Registered Ship-To.");
+        return;
+      }
+    }
 
     setSaving(true);
     setError("");
@@ -353,9 +416,14 @@ export default function SOCreatePage() {
         customer_id: form.customer_id,
         customer_po_number: form.customer_po_number.trim(),
         customer_po_date: form.customer_po_date || null,
-        delivery_address: form.delivery_address.trim() || null,
         payment_term_id: form.payment_term_id || null,
         remarks: form.remarks.trim() || null,
+        ship_to_same_as_customer: form.ship_to_same_as_customer,
+        ship_to_type: form.ship_to_same_as_customer ? null : form.ship_to_type,
+        ship_to_gst_number: form.ship_to_same_as_customer ? null : (form.ship_to_type === "REGISTERED" ? form.ship_to_gst_number.trim() : null),
+        ship_to_name: form.ship_to_same_as_customer ? null : form.ship_to_name.trim(),
+        ship_to_address: form.ship_to_same_as_customer ? null : form.ship_to_address.trim(),
+        ship_to_state: form.ship_to_same_as_customer ? null : form.ship_to_state.trim(),
         lines: lines.map((line) => ({
           material_id: line.material_id,
           quantity: Number(line.quantity),
@@ -541,13 +609,75 @@ export default function SOCreatePage() {
                   </select>
                 </label>
                 <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-2">
-                  Delivery Address
-                  <textarea rows={2} value={form.delivery_address} onChange={(event) => updateHeaderField("delivery_address", event.target.value)} className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                </label>
-                <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-2">
                   Remarks
                   <textarea rows={2} value={form.remarks} onChange={(event) => updateHeaderField("remarks", event.target.value)} className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
                 </label>
+              </div>
+            </ErpSectionCard>
+
+            <ErpSectionCard eyebrow="Ship-To" title="Place of supply — determines CGST+SGST vs IGST on the invoice (§113.16)">
+              <div className="grid gap-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Customer Address</div>
+                    {selectedCustomer ? (
+                      <>
+                        <div className="mt-1">{selectedCustomer.delivery_address || selectedCustomer.billing_address || "—"}</div>
+                        <div className="mt-1 text-xs text-slate-500">State: {selectedCustomer.billing_state || "— (not set on Customer Master)"}</div>
+                      </>
+                    ) : (
+                      <div className="mt-1 text-slate-400">Select a customer first.</div>
+                    )}
+                  </div>
+                  <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                    <input type="checkbox" checked={form.ship_to_same_as_customer} onChange={(event) => updateHeaderField("ship_to_same_as_customer", event.target.checked)} className="h-4 w-4" />
+                    Ship To same as Customer?
+                  </label>
+                </div>
+
+                {!form.ship_to_same_as_customer ? (
+                  <div className="grid gap-3 border-t border-slate-200 pt-3 md:grid-cols-3">
+                    <div className="grid gap-1 text-xs font-semibold text-slate-700">
+                      <span>Ship-To Type</span>
+                      <div className="flex gap-2">
+                        {SHIP_TO_TYPE_OPTIONS.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => updateHeaderField("ship_to_type", option.value)}
+                            className={`flex-1 px-3 py-2 text-xs font-semibold ${form.ship_to_type === option.value ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {form.ship_to_type === "REGISTERED" ? (
+                      <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-2">
+                        Ship-To GST Number
+                        <div className="flex gap-2">
+                          <input value={form.ship_to_gst_number} onChange={(event) => updateHeaderField("ship_to_gst_number", event.target.value.toUpperCase())} className="h-8 flex-1 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                          <button type="button" onClick={() => void handleCheckShipToGst()} disabled={gstLooking} className="h-8 whitespace-nowrap border border-sky-300 bg-sky-50 px-3 text-xs font-semibold text-sky-900 disabled:opacity-50">
+                            {gstLooking ? "Checking..." : "Check GST"}
+                          </button>
+                        </div>
+                        {gstNotice ? <span className="text-[11px] font-normal text-emerald-700">{gstNotice}</span> : null}
+                      </label>
+                    ) : null}
+                    <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                      Ship-To Name <span className="text-rose-500">*</span>
+                      <input value={form.ship_to_name} onChange={(event) => updateHeaderField("ship_to_name", event.target.value)} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                    </label>
+                    <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-2">
+                      Ship-To Address <span className="text-rose-500">*</span>
+                      <textarea rows={2} value={form.ship_to_address} onChange={(event) => updateHeaderField("ship_to_address", event.target.value)} className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                    </label>
+                    <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                      Ship-To State <span className="text-rose-500">*</span>
+                      <input value={form.ship_to_state} onChange={(event) => updateHeaderField("ship_to_state", event.target.value)} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                    </label>
+                  </div>
+                ) : null}
               </div>
             </ErpSectionCard>
 

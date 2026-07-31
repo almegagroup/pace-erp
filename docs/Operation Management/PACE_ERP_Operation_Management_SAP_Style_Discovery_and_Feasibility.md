@@ -15822,3 +15822,32 @@ CUSTOM:
 - Tally-তে ঠিক করা business owner-এর দায়িত্ব, ERP শুধু নিজের রেকর্ড ঠিক রাখবে
 
 ---
+
+### 113.16 — SO Ship-To mechanism + GST place-of-supply correction (LOCKED — 2026-07-31)
+
+**যে সমস্যা ধরা পড়ল (business owner-এর নিজের testing-এ, SO Create page-এ):** SO Create-এ "Delivery Address" একটা free-text field ছিল, manually type করতে হতো — Customer Master-এ address/state থাকা সত্ত্বেও কোনো auto-fill নেই। আরও গুরুত্বপূর্ণ, §113.13/§113.15-এ GST type (CGST+SGST vs IGST) নির্ধারণ হতো সরাসরি `customer_master.billing_state` দিয়ে — কিন্তু GST আইনে **Place of Supply** (যেটা CGST+SGST/IGST ঠিক করে) আসলে **Ship-To location**-এর state দিয়ে হয়, Customer-এর registered/billing state দিয়ে না। এই দুটো আলাদা হতে পারে (Customer Kolkata-তে registered, কিন্তু জিনিস পাঠাচ্ছে Gujarat-এর একটা site-এ) — আগের design এটা simplify করে ভুল করে ফেলেছিল।
+
+**Lock — SO-তে নতুন Ship-To mechanism:**
+- SO Create-এ Customer select করলে তার নিজের address (delivery_address) + state (billing_state) **auto-fill/preview** হবে
+- একটা checkbox: **"Ship To same as Customer?"** — default **checked** (true)
+  - Checked থাকলে: Ship-To = Customer-এর নিজের data (address, state, GST) হুবহু কপি হয়ে যাবে SO-তে, resolve সময়েই (create/save-এ) — আলাদা কিছু জিজ্ঞেস করা হবে না
+  - Uncheck করলে: আলাদা Ship-To section আসবে —
+    - **Type**: Registered / Unregistered
+    - **Registered** হলে: GST Number input + **"Check GST"** বাটন (existing GST lookup mechanism reuse — Vendor/Transporter/CHA/Customer Master-এ যেটা আগে থেকেই আছে, `GET /api/om/customer/gst-profile?gst_number=...` — generic, নতুন কিছু বানাতে হবে না) → Name, Full Address, State auto-fetch হবে, পরে editable
+    - **Unregistered** হলে: Name, Address, **State** সব manually type করতে হবে (State ছাড়া GST type ঠিক করা যাবে না, তাই এটা mandatory)
+- **State সবসময় mandatory** — same-as-customer হলে Customer-এর billing_state থেকে resolve হবে (blank থাকলে SO save-ই হবে না — Customer Master-এ আগে ঠিক করতে হবে), custom হলে manually দিতে হবে
+
+**Data model — SO-র own row-এ resolve করে store করা হয় (computed, live lookup না):**
+- `sales_order.ship_to_same_as_customer` (bool, শুধু UI-convenience record, downstream logic এটা পড়ে না)
+- `sales_order.ship_to_type` / `ship_to_gst_number` / `ship_to_name` / `ship_to_address` / `ship_to_state` — এগুলো সবসময় **resolved/effective** value ধরে রাখে (same-as-customer হলেও customer-এর data এখানে copy হয়ে যায়) — যাতে downstream কোনো কোড কখনো "same_as_customer true/false" branch করে customer_master আবার query করতে না হয়
+- `sales_order.delivery_address` (পুরনো column) — এখনো থাকবে, এখন থেকে এটা `ship_to_address`-এর সাথে সবসময় sync থাকবে (backward-compat — DO/PGI-এর existing auto-resolve কোড অপরিবর্তিত থেকে যাবে)
+
+**DO snapshot (§113.13-এর একই pattern):** DO তৈরির সময় SO-র `ship_to_state`/`ship_to_name`/`ship_to_address`/`ship_to_gst_number` **`delivery_challan`-এ copy হয়ে freeze** হয়ে যাবে (STO-র জন্য প্রযোজ্য না — STO-তে receiving company-র নিজের state_name-ই সবসময় ship-to, আগে থেকেই সঠিক, কোনো change লাগেনি)।
+
+**GST type নির্ধারণ — সংশোধন:** `createPgiInvoiceHandler`-এর SO branch এখন `customer_master.billing_state` live query করার বদলে সরাসরি `delivery_challan.ship_to_state` পড়বে (DO-তেই আগে থেকে আছে, extra round trip লাগে না, বরং আগের চেয়ে কম query)। §113.15-এ যোগ করা hard-block (state ফাঁকা থাকলে PGI আটকাবে) এখনো থাকবে, শুধু error code বদলাবে (`DO_SHIP_TO_STATE_MISSING`) — practice-এ এটা আর trigger হওয়ার কথা না, কারণ SO save-এর সময়েই state mandatory।
+
+**Header lock:** Ship-To fields SO-র header-level commercial identity-র অংশ — §113.5-এর existing rule অনুযায়ী (Customer/PO Number/Payment Term/Delivery Address একসাথে freeze হয় যেকোনো line-এ DO তৈরি হলে) এই same lock group-এ যোগ হবে।
+
+**Scope:** SO-only (RM/PM/INT)। STO-তে কোনো পরিবর্তন নেই। FG (Phase 2) আলাদা, এখানে touch হয়নি।
+
+---

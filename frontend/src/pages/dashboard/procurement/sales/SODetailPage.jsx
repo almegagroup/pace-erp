@@ -252,6 +252,17 @@ export default function SODetailPage() {
             </div>
           </ErpSectionCard>
 
+          <ErpSectionCard eyebrow="Ship-To" title="Place of supply — determines CGST+SGST vs IGST on the invoice (§113.16)">
+            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+              <ErpFieldPreview label="Same as Customer" value={detail.ship_to_same_as_customer ? "Yes" : "No"} />
+              <ErpFieldPreview label="Ship-To Name" value={detail.ship_to_name || "-"} />
+              <ErpFieldPreview label="Ship-To State" value={detail.ship_to_state || "-"} />
+              <ErpFieldPreview label="Ship-To Type" value={detail.ship_to_type || "-"} />
+              <ErpFieldPreview label="Ship-To GST Number" value={detail.ship_to_gst_number || "-"} />
+              <ErpFieldPreview label="Ship-To Address" value={detail.ship_to_address || "-"} />
+            </div>
+          </ErpSectionCard>
+
           {(detail.status === "CREATED" || detail.status === "ISSUED") && (latestDc?.dc_number || latestGxo?.exit_number) ? (
             <div className="rounded border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
               Delivery Challan {latestDc?.dc_number || "-"} and Gate Exit {latestGxo?.exit_number || "-"} auto-generated.
