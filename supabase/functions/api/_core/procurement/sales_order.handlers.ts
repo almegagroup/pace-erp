@@ -33,6 +33,7 @@ const GST_TYPES = new Set(["CGST_SGST", "IGST"]);
 const REBATE_BASIS_VALUES = new Set(["BASE_UOM", "PO_UOM"]);
 const PACKAGING_BASIS_VALUES = new Set(["FLAT", "PER_KG"]);
 const PACKAGING_GST_TREATMENTS = new Set(["NO_GST", "SAME_AS_MATERIAL", "CUSTOM"]);
+const SHIP_TO_TYPES = new Set(["REGISTERED", "UNREGISTERED"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -66,6 +67,63 @@ function parseNullableNumber(value: unknown): number | null {
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+type ResolvedShipTo = {
+  ship_to_same_as_customer: boolean;
+  ship_to_type: string | null;
+  ship_to_gst_number: string | null;
+  ship_to_name: string | null;
+  ship_to_address: string | null;
+  ship_to_state: string | null;
+  delivery_address: string | null;
+};
+
+// §113.16 — GST place-of-supply is the Ship-To location, not the customer's
+// registered/billing address -- those can legitimately differ. Resolves to
+// an EFFECTIVE value either way (copies the customer's own data when
+// same_as_customer, or takes the caller's manual entry otherwise) so no
+// downstream code (DO create, PGI GST-type derivation) ever needs to branch
+// on same_as_customer or re-query customer_master.
+function resolveShipTo(body: JsonRecord, customer: JsonRecord): ResolvedShipTo {
+  const sameAsCustomer = body.ship_to_same_as_customer === undefined ? true : Boolean(body.ship_to_same_as_customer);
+  if (sameAsCustomer) {
+    const address = toTrimmedString(customer.delivery_address) || toTrimmedString(customer.billing_address) || null;
+    return {
+      ship_to_same_as_customer: true,
+      ship_to_type: null,
+      ship_to_gst_number: null,
+      ship_to_name: toTrimmedString(customer.customer_name) || null,
+      ship_to_address: address,
+      ship_to_state: toTrimmedString(customer.billing_state) || null,
+      delivery_address: address,
+    };
+  }
+  const shipToType = toUpperTrimmedString(body.ship_to_type) || null;
+  const shipToState = toTrimmedString(body.ship_to_state) || null;
+  const shipToName = toTrimmedString(body.ship_to_name) || null;
+  const shipToAddress = toTrimmedString(body.ship_to_address) || null;
+  const shipToGstNumber = shipToType === "REGISTERED" ? (toTrimmedString(body.ship_to_gst_number) || null) : null;
+  return {
+    ship_to_same_as_customer: false,
+    ship_to_type: shipToType,
+    ship_to_gst_number: shipToGstNumber,
+    ship_to_name: shipToName,
+    ship_to_address: shipToAddress,
+    ship_to_state: shipToState,
+    delivery_address: shipToAddress,
+  };
+}
+
+function validateResolvedShipTo(resolved: ResolvedShipTo): string | null {
+  if (!resolved.ship_to_state) return "SO_SHIP_TO_STATE_REQUIRED";
+  if (!resolved.ship_to_same_as_customer) {
+    if (!resolved.ship_to_name) return "SO_SHIP_TO_NAME_REQUIRED";
+    if (!resolved.ship_to_address) return "SO_SHIP_TO_ADDRESS_REQUIRED";
+    if (!resolved.ship_to_type || !SHIP_TO_TYPES.has(resolved.ship_to_type)) return "SO_SHIP_TO_TYPE_INVALID";
+    if (resolved.ship_to_type === "REGISTERED" && !resolved.ship_to_gst_number) return "SO_SHIP_TO_GST_NUMBER_REQUIRED";
+  }
+  return null;
 }
 
 function getPathSegments(req: Request): string[] {
@@ -579,6 +637,24 @@ export async function createSOHandler(
     }
     await assertCustomerMappedToCompany(customerId, companyId);
 
+    // §113.16 -- Ship-To resolves to an effective value at save time (either
+    // copied from the customer, or the caller's manual entry), never a live
+    // lookup downstream.
+    const { data: customer, error: customerError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("customer_master")
+      .select("customer_name, delivery_address, billing_address, billing_state")
+      .eq("id", customerId)
+      .maybeSingle();
+    if (customerError || !customer) {
+      return salesErrorResponse(req, ctx, "SO_CUSTOMER_LOOKUP_FAILED", 500, "Unable to load customer for Ship-To resolution.");
+    }
+    const shipTo = resolveShipTo(body, customer as JsonRecord);
+    const shipToValidationError = validateResolvedShipTo(shipTo);
+    if (shipToValidationError) {
+      return salesErrorResponse(req, ctx, shipToValidationError, 400, "Ship-To details are incomplete (State is mandatory -- fix it on Customer Master, or uncheck 'Same as Customer' and enter it manually).");
+    }
+
     const linePayload: JsonRecord[] = [];
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
@@ -663,9 +739,15 @@ export async function createSOHandler(
         customer_id: customerId,
         customer_po_number: customerPoNumber,
         customer_po_date: toTrimmedString(body.customer_po_date) || null,
-        delivery_address: toTrimmedString(body.delivery_address) || null,
+        delivery_address: shipTo.delivery_address,
         payment_term_id: toTrimmedString(body.payment_term_id) || null,
         remarks: toTrimmedString(body.remarks) || null,
+        ship_to_same_as_customer: shipTo.ship_to_same_as_customer,
+        ship_to_type: shipTo.ship_to_type,
+        ship_to_gst_number: shipTo.ship_to_gst_number,
+        ship_to_name: shipTo.ship_to_name,
+        ship_to_address: shipTo.ship_to_address,
+        ship_to_state: shipTo.ship_to_state,
         created_by: ctx.auth_user_id,
       })
       .select("*")
@@ -816,15 +898,51 @@ export async function updateSOHandler(
     const paymentTermId = body.payment_term_id === null ? null : toTrimmedString(body.payment_term_id);
     const remarks = body.remarks === null ? null : toTrimmedString(body.remarks);
 
-    if (customerId && customerId !== toTrimmedString(so.customer_id)) {
+    const customerChanged = Boolean(customerId) && customerId !== toTrimmedString(so.customer_id);
+    if (customerChanged) {
       await assertCustomerMappedToCompany(customerId, toTrimmedString(so.company_id));
       patch.customer_id = customerId;
     }
     if (customerPoNumber) patch.customer_po_number = customerPoNumber;
     if (customerPoDate) patch.customer_po_date = customerPoDate;
-    if (body.delivery_address !== undefined) patch.delivery_address = deliveryAddress || null;
     if (body.payment_term_id !== undefined) patch.payment_term_id = paymentTermId || null;
     if (body.remarks !== undefined) patch.remarks = remarks || null;
+
+    // §113.16 -- recompute Ship-To only when the caller actually touches it
+    // (or the customer itself changed, which invalidates any prior
+    // same-as-customer resolution) -- otherwise a plain header PATCH that
+    // only sends delivery_address keeps the old raw-override behavior
+    // (no dedicated Ship-To edit UI exists yet, this stays backward-compatible).
+    const shipToKeysPresent = [
+      "ship_to_same_as_customer", "ship_to_type", "ship_to_gst_number",
+      "ship_to_name", "ship_to_address", "ship_to_state",
+    ].some((key) => body[key] !== undefined);
+    if (customerChanged || shipToKeysPresent) {
+      const effectiveCustomerId = customerId || toTrimmedString(so.customer_id);
+      const { data: customer, error: customerError } = await serviceRoleClient
+        .schema("erp_master")
+        .from("customer_master")
+        .select("customer_name, delivery_address, billing_address, billing_state")
+        .eq("id", effectiveCustomerId)
+        .maybeSingle();
+      if (customerError || !customer) {
+        return salesErrorResponse(req, ctx, "SO_CUSTOMER_LOOKUP_FAILED", 500, "Unable to load customer for Ship-To resolution.");
+      }
+      const shipTo = resolveShipTo(body, customer as JsonRecord);
+      const shipToValidationError = validateResolvedShipTo(shipTo);
+      if (shipToValidationError) {
+        return salesErrorResponse(req, ctx, shipToValidationError, 400, "Ship-To details are incomplete (State is mandatory -- fix it on Customer Master, or uncheck 'Same as Customer' and enter it manually).");
+      }
+      patch.delivery_address = shipTo.delivery_address;
+      patch.ship_to_same_as_customer = shipTo.ship_to_same_as_customer;
+      patch.ship_to_type = shipTo.ship_to_type;
+      patch.ship_to_gst_number = shipTo.ship_to_gst_number;
+      patch.ship_to_name = shipTo.ship_to_name;
+      patch.ship_to_address = shipTo.ship_to_address;
+      patch.ship_to_state = shipTo.ship_to_state;
+    } else if (body.delivery_address !== undefined) {
+      patch.delivery_address = deliveryAddress || null;
+    }
     patch.last_updated_at = new Date().toISOString();
     patch.last_updated_by = ctx.auth_user_id;
 

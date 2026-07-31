@@ -532,6 +532,14 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
         freight_term: headerFreightTerm,
         payment_term_id: headerPaymentTermId,
         delivery_address: resolvedDeliveryAddress,
+        // §113.16 -- Ship-To snapshot, frozen at DO-create time (same
+        // pattern as the §113.13 commercial snapshot). SO-only: STO's
+        // ship-to is inherently the receiving company, already correctly
+        // resolved from erp_master.companies at PGI time, no snapshot needed.
+        ship_to_state: isSalesOrder ? (toTrimmedString(source.ship_to_state) || null) : null,
+        ship_to_name: isSalesOrder ? (toTrimmedString(source.ship_to_name) || null) : null,
+        ship_to_address: isSalesOrder ? (toTrimmedString(source.ship_to_address) || null) : null,
+        ship_to_gst_number: isSalesOrder ? (toTrimmedString(source.ship_to_gst_number) || null) : null,
         transporter_id: toTrimmedString(body.transporter_id) || null,
         transporter_name_freetext: toTrimmedString(body.transporter_name_freetext) || null,
         vehicle_number: toTrimmedString(body.vehicle_number) || null,
@@ -819,11 +827,14 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
   const paymentTerm = paymentTermResp.data as JsonRecord | null;
   const sellingCompany = companyMap.get(toTrimmedString(dc.selling_company_id));
   const receivingCompany = companyMap.get(toTrimmedString(dc.receiving_company_id));
-  // §113.15 -- same pair createPgiInvoiceHandler compares for GST type, shown
+  // §113.16 -- same pair createPgiInvoiceHandler compares for GST type, shown
   // here purely as a preview so the PGI+Invoice form can display it before
-  // submit (nothing here is authoritative -- the handler recomputes it fresh).
+  // submit (nothing here is authoritative -- the handler recomputes it
+  // fresh). SO branch now reads the frozen dc.ship_to_state snapshot, same
+  // as the real handler -- was customer.billing_state, which is the wrong
+  // field for place-of-supply (§113.16).
   const counterpartyStateName = isSalesOrder
-    ? (toTrimmedString(customer?.billing_state) || null)
+    ? (toTrimmedString(dc.ship_to_state) || null)
     : (toTrimmedString(receivingCompany?.state_name) || null);
 
   const hydratedLines = lineRows.map((row) => {
@@ -1079,17 +1090,16 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
     if (isSalesOrder) {
       const customerId = toTrimmedString(dc.customer_id);
       if (!customerId) return doErrorResponse(req, ctx, "PGI_INVOICE_CUSTOMER_REQUIRED", 400, "Delivery order has no customer.");
-      const { data: customer, error: customerError } = await serviceRoleClient
-        .schema("erp_master").from("customer_master").select("billing_state").eq("id", customerId).maybeSingle();
-      if (customerError) return doErrorResponse(req, ctx, "PGI_INVOICE_TAX_CONTEXT_FAILED", 500, "Unable to load customer tax context.");
-      counterpartyStateName = toTrimmedString(customer?.billing_state) || null;
-      // Real gap found live 2026-07-31: deriveSalesInvoiceGstType() silently
-      // falls back to IGST whenever either state is blank -- fine as a
-      // last-resort default, but wrong to let it fire silently for a
-      // customer whose billing_state was simply never filled in. Hard-block
-      // instead so a wrong GST split on the invoice can't happen unnoticed.
+      // §113.16 -- place of supply is the Ship-To location, not the
+      // customer's registered/billing state; those can legitimately differ.
+      // dc.ship_to_state is already the frozen, resolved snapshot copied
+      // from the SO at DO-create time (§113.16) -- no live customer_master
+      // query needed here anymore (was the source of the earlier silent-
+      // IGST gap found live 2026-07-31, now structurally impossible for any
+      // DO created after this fix since ship_to_state is mandatory at SO save).
+      counterpartyStateName = toTrimmedString(dc.ship_to_state) || null;
       if (!counterpartyStateName) {
-        return doErrorResponse(req, ctx, "PGI_INVOICE_CUSTOMER_BILLING_STATE_MISSING", 400, "Customer has no Billing State set -- fix it on the Customer Master before PGI (needed to determine CGST+SGST vs IGST).");
+        return doErrorResponse(req, ctx, "DO_SHIP_TO_STATE_MISSING", 400, "This Delivery Order has no Ship-To State recorded (likely created before the Ship-To mechanism existed) -- reverse it and re-create the DO so it picks up the SO's current Ship-To.");
       }
     } else {
       const receivingCompanyId = toTrimmedString(dc.receiving_company_id);
