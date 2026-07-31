@@ -1083,6 +1083,14 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
         .schema("erp_master").from("customer_master").select("billing_state").eq("id", customerId).maybeSingle();
       if (customerError) return doErrorResponse(req, ctx, "PGI_INVOICE_TAX_CONTEXT_FAILED", 500, "Unable to load customer tax context.");
       counterpartyStateName = toTrimmedString(customer?.billing_state) || null;
+      // Real gap found live 2026-07-31: deriveSalesInvoiceGstType() silently
+      // falls back to IGST whenever either state is blank -- fine as a
+      // last-resort default, but wrong to let it fire silently for a
+      // customer whose billing_state was simply never filled in. Hard-block
+      // instead so a wrong GST split on the invoice can't happen unnoticed.
+      if (!counterpartyStateName) {
+        return doErrorResponse(req, ctx, "PGI_INVOICE_CUSTOMER_BILLING_STATE_MISSING", 400, "Customer has no Billing State set -- fix it on the Customer Master before PGI (needed to determine CGST+SGST vs IGST).");
+      }
     } else {
       const receivingCompanyId = toTrimmedString(dc.receiving_company_id);
       if (!receivingCompanyId) return doErrorResponse(req, ctx, "PGI_INVOICE_RECEIVING_COMPANY_REQUIRED", 400, "Delivery order has no receiving company.");
@@ -1090,6 +1098,12 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
         .schema("erp_master").from("companies").select("state_name").eq("id", receivingCompanyId).maybeSingle();
       if (receivingCompanyError) return doErrorResponse(req, ctx, "PGI_INVOICE_TAX_CONTEXT_FAILED", 500, "Unable to load receiving company tax context.");
       counterpartyStateName = toTrimmedString(receivingCompany?.state_name) || null;
+      if (!counterpartyStateName) {
+        return doErrorResponse(req, ctx, "PGI_INVOICE_RECEIVING_COMPANY_STATE_MISSING", 400, "Receiving company has no State set -- fix it on Company Master before PGI (needed to determine CGST+SGST vs IGST).");
+      }
+    }
+    if (!companyStateName) {
+      return doErrorResponse(req, ctx, "PGI_INVOICE_SELLING_COMPANY_STATE_MISSING", 400, "Selling company has no State set -- fix it on Company Master before PGI (needed to determine CGST+SGST vs IGST).");
     }
     const gstType = deriveSalesInvoiceGstType(companyStateName, counterpartyStateName);
 
