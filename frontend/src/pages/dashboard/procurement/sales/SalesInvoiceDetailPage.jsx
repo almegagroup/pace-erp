@@ -36,6 +36,7 @@ export default function SalesInvoiceDetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || routeId);
+  const isCreateMode = id === "new";
   const [searchParams] = useSearchParams();
   const [selectedDcId, setSelectedDcId] = useState("");
   const [draftLines, setDraftLines] = useState([]);
@@ -91,7 +92,6 @@ export default function SalesInvoiceDetailPage() {
     () => new Map(materials.map((entry) => [entry.id, entry])),
     [materials]
   );
-  const isCreateMode = id === "new";
   useEffect(() => {
     const nextError =
       detailQuery.error?.message ||
