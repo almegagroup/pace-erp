@@ -3083,3 +3083,22 @@ This entry is a v2 correction on top of the earlier `2026-07-31 23:05 IST` AC06 
 **Verification notes:**
 
 - File-level ESLint passed for `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx` and `frontend/src/pages/dashboard/om/omApi.js` after this GST alignment change.
+## 2026-07-31 23:59 IST - Gate-27.28 Opening Stock SFG/FG Part 2 frontend completion
+
+**Scope implemented:** Part 2 only from `CODEX-GATE27.28-PART2-FINISH-UI-TASK-BRIEF.md`, on top of the already-correct Part 1 backend. No backend behavior changes were made in `opening_stock.handlers.ts` or `opening_genealogy.handlers.ts`.
+
+- Updated `frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx` so the already-fetched PR22 / PR23 option queries are now actually rendered in all three entry surfaces: SFG MTO/HPS uses a Batch dropdown fed by PR22 rows, FG MTO/HPS uses a new Packing PO (PR23) dropdown that writes `packing_order_id`, each selection shows read-only lineage details plus computed remaining quantity, and selecting an option prefills quantity while still allowing user edits for split stock rows.
+- Fixed the live bulk-entry regression named in Change 0 by resolving each filtered bulk row back to its true `bulkRows` index before reading `bulkConversionQueries` / `bulkOpeningQueries`. This prevents `index is not defined` and avoids row-to-query misalignment whenever users add multiple mixed-material bulk rows.
+- Completed the FG rate-per-pack behavior using the selected packing order's `fill_qty_per_pack`, without changing the separate MTS/MTEST `material_uom_conversion` logic.
+- Rendered the previously-dead MTS/MTEST Rate UoM selectors in single-entry, edit, and bulk flows so the existing save-conversion logic is now usable from the UI.
+- Mirrored the same SFG/FG/rate-UoM field behavior into `frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockApprovalPage.jsx`, and also fixed the same positional-alignment bug there when saving only edited rows back through `batchUpdateOpeningStockLines`.
+- Cleaned stale frontend copy in `frontend/src/pages/dashboard/production/OldProcessPoPage.jsx` and `frontend/src/pages/dashboard/production/OldPackingPoPage.jsx` so those pages no longer instruct users to create Opening Stock first or imply reconciliation happens there instead of at IN05 submit.
+
+**Verification:**
+
+- ESLint now passes with 0 errors on `OpeningStockDetailPage.jsx`, `OpeningStockApprovalPage.jsx`, `OldProcessPoPage.jsx`, and `OldPackingPoPage.jsx`.
+- `deno check supabase/functions/api/_core/procurement/opening_stock.handlers.ts` passed.
+- `deno check supabase/functions/api/_core/production/opening_genealogy.handlers.ts` passed.
+- `node scripts/migration-integrity-check.mjs` ran and produced the current local checksum probe: `count=395`, `md5=c72608823d7d35296d61979d86013ef6`.
+
+**Files:** `frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx`, `frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockApprovalPage.jsx`, `frontend/src/pages/dashboard/production/OldProcessPoPage.jsx`, `frontend/src/pages/dashboard/production/OldPackingPoPage.jsx`, `docs/Codex-Log.md`, `docs/Operation Management/implementation-specs/OM-IMPLEMENTATION-LOG.md`.
