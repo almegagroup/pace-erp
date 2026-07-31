@@ -15856,3 +15856,621 @@ GST invoice-এ আইনত দুটো party আলাদাভাবে দ�
 **Fix:** `sales_invoice`-এ ৮টা নতুন column (`bill_to_name/address/state/gst_number`, `ship_to_name/address/state/gst_number`) — PGI-র সময়েই **freeze** হয়ে যায় (invoice নিজে self-contained থাকে, পরে DO/Customer বদলালেও invoice-এর data বদলাবে না)। SO-র জন্য: Bill-To = Customer Master-এর billing_address/billing_state/gst_number; Ship-To = DO-র frozen ship_to_* snapshot। STO-র জন্য: কোনো আলাদা customer নেই, তাই Bill-To ও Ship-To দুটোই receiving company-র নিজের data (company address/state/GST Number)। PGI Create form (review-এর আগে) আর Invoice Detail page — দুটোতেই এখন আলাদা "Bill-To / Ship-To" section আছে (দুই column পাশাপাশি)।
 
 ---
+
+## Section 114 — FG Dispatch (L5) Discovery Session (🔴 IN PROGRESS — 2026-07-31, চলছে, এখনো LOCKED না)
+
+> এই section live discovery session-এর running notes — আলোচনা যত এগোবে তত আপডেট হবে, শেষে
+> সম্পূর্ণ হলে "LOCKED" মার্ক হবে। নতুন session এই section পড়ে চলমান অবস্থা বুঝে নাও, প্রশ্ন করে
+> সিদ্ধান্ত নাও, তারপর আরো লেখো — আগের অংশ overwrite কোরো না।
+
+**Scope:** FG (Finished Goods) dispatch mechanism — §113 Sales Module Redesign-এর Phase 2, যেটা
+RM/PM/INT (Phase 1, §113) থেকে ইচ্ছাকৃতভাবে আলাদা রাখা হয়েছিল। CLAUDE.md-এ আগে থেকেই flag করা
+ছিল "🔴 Partial — Formal L5 session required" (~৫১% designed)।
+
+### 114.1 — চারটা Dispatch Mechanism (ব্যবসার real practice)
+
+Business-এ মোট **৪ ধরনের dispatch mechanism** ব্যবহার হয়:
+1. **Admix / HPS**
+2. **MTEST / ZTEST**
+3. **Direct**
+4. **Depot**
+
+(প্রতিটার বিস্তারিত ডিজাইন এই session-এই ধাপে ধাপে আসবে।)
+
+### 114.2 — FG Customer Structure (আলোচনা শুরু, চলছে)
+
+FG-র জন্য Customer create করাটা জটিল — কারণ **Direct** আর **Depot**, এই দুই dispatch-এর জন্য
+Customer-এর design আলাদা।
+
+**বর্তমান বাস্তবতা:** এখন পর্যন্ত সব FG sale **একটাই customer**-কে যায় — **Asian Paints**।
+(ভবিষ্যতে অন্য customer আসতে পারে, কিন্তু এখনই তার জন্য design generalize করার দরকার নেই — একটাই
+customer ধরে এগোনো যাবে, পরে দরকার হলে বাড়ানো হবে।)
+
+Asian Paints-এর নিজের দুই ধরনের Depot code আছে: **Depot** আর **Virtual Depot**। (আগে Depot নিয়ে
+আলোচনা হয়েছে, Virtual Depot এখনো আসেনি।)
+
+**Depot mechanism (আলোচনা হয়েছে, LOCKED না, পরে verify করে confirm করা হবে):**
+- একটা state-এ Asian Paints-এর **একটাই GST number** থাকে।
+- কিন্তু সেই একই state-এ Asian Paints-এর **একাধিক Depot** (আলাদা আলাদা physical location) থাকতে
+  পারে — সবগুলোরই GST number এক, কিন্তু address আলাদা।
+- প্রতিটা Depot-এর নিজস্ব **Depot Code** থাকে — এই code **Asian Paints নিজেই দেয়**, আমরা বানাই না।
+- Depot-এর address আমরা **manually** বসাব (GST lookup দিয়ে depot-level address পাওয়া যায় না,
+  GST তো state-level, নির্দিষ্ট depot-level না)।
+- **Bill To = Asian Paints** (সেই state-এর GST identity অনুযায়ী)। **Ship To = নির্দিষ্ট Depot
+  Code + তার manually-entered address**।
+
+**এখনই লক্ষণীয় structural ইঙ্গিত (এখনো সিদ্ধান্ত না, শুধু নোট):** এই Depot Code গুলো একবারের জন্য
+না — বারবার ব্যবহার হবে (একই Depot-এ বারবার dispatch হতে পারে)। §113.16-এ SO-র জন্য যে Ship-To
+mechanism বানানো হয়েছিল সেটা ছিল **per-order** (each SO তার নিজের ship-to ঠিক করে, "same as
+customer" বা manual)। কিন্তু এখানে মনে হচ্ছে দরকার একটা **reusable Depot/Ship-To Master** —
+একবার Depot Code + address সেভ করে রাখা, পরে বারবার dropdown থেকে select করা — RM/PM/INT-এর
+per-order pattern থেকে ভিন্ন। এটা confirm করে নেওয়া হবে যখন পুরো customer structure আলোচনা শেষ হবে।
+
+### 114.3 — Virtual Depot (business owner CONFIRMED 2026-07-31, LOCKED না — পুরো §114 lock হবে সব dispatch type-এর আলোচনা শেষ হলে)
+
+**Virtual Depot মানে:** জিনিস সরাসরি **end customer**-এর কাছে যায়, কোনো physical Asian
+Paints Depot-এ না — কিন্তু তবুও এটা Asian Paints-এর নিজের একটা Depot Code structure-এর ভেতর দিয়েই
+track হয়।
+
+**উদাহরণ:** ধরা যাক একটা end-party "ABC Company" — এর নিজের GST number থাকতেও পারে, নাও থাকতে
+পারে। এই party-র ক্ষেত্রে ৪ রকম বাস্তব scenario হতে পারে:
+1. একই customer-এর **আলাদা আলাদা address, কিন্তু একটাই Depot Code**
+2. একই customer-এর **আলাদা আলাদা address, প্রতিটার নিজের আলাদা Depot Code**
+3. **একাধিক address, একাধিক Depot Code** (এক state-এর ভেতরেই)
+4. **একাধিক address, একাধিক Depot Code, একাধিক state জুড়ে**
+
+**Hierarchy (আগে বলা Depot-এর সাথে মিলিয়ে):**
+State → Asian Paints-এর একটাই GST number → তার নিচে **একাধিক (Virtual) Depot Code** → তার
+নিচে **একাধিক end customer/address**, উপরের ৪ scenario অনুযায়ী।
+
+**যা এখান থেকে বোঝা যাচ্ছে (business owner CONFIRMED):** Depot Code আর Address-এর সম্পর্ক
+**কখনো strict 1:1 না** —
+- একটা Depot Code একাধিক address ধরতে পারে (scenario 1)
+- একটা customer-এর আলাদা address আলাদা Depot Code-এ যেতে পারে (scenario 2)
+- এটা এক state-এর ভেতরেই সীমাবদ্ধ থাকতে পারে, বা একাধিক state জুড়ে ছড়াতে পারে (scenario 3 vs 4)
+
+অর্থাৎ data model-এ **Depot Code ↔ Address** সম্পর্কটা একটা flexible mapping হতে হবে
+(one-to-many উভয় দিকেই সম্ভব), শুধু একটা field হিসেবে address আটকে রাখলে চলবে না — এটাও আগের
+"reusable Depot/Ship-To Master" ইঙ্গিতের সাথে মিলছে (§114.2-এর নোট)।
+
+### 114.4 — Depot dispatch-এর order flow (business owner CONFIRMED 2026-07-31)
+
+- Depot dispatch সরাসরি **real Depot Code**-এ যায় (§114.2-এর Depot, Virtual Depot Code না)।
+- Flow ঠিক **RM/PM/INT-এর SO/STO-র মতোই ৩-stage**: **Sales Order → DO → PGI+Invoice** (Tally
+  Invoice Number/Date সহ, §113.15-এর একই pattern)।
+- **তফাত:** এখানে **rate capture** একটু আলাদা ধরনের হয় (এখনো বিস্তারিত আসেনি — যখন প্রাসঙ্গিক
+  হবে তখন বিস্তারিত আলোচনা হবে)।
+
+**IWC dispatch allocation — CONFIRMED (business owner, 2026-07-31):** IWC-র **দুটো prodshade**
+আছে, কিন্তু ওরা **batch-manageable না** (§83.7/§108-এর আগের locked সিদ্ধান্তের সাথে সামঞ্জস্যপূর্ণ —
+IWC MTS-এ পড়ে, আর MTS/MTEST ইতিমধ্যেই batch-blind হিসেবে locked)। তাই IWC-র dispatch-এ
+Admix/HPS/MTEST-এর মতো FO/Packing-PO-number/batch-driven allocation লাগে না — **normal/generic
+SKU-quantity দিয়ে dispatch হয়** (allocation-এর দিক থেকে Powder-এর কাছাকাছি — batch-blind), কিন্তু
+**flow-টা এখনো এই §114.4-এর SO→DO→PGI+Invoice same-day-close-ই থাকে**, Powder-এর §114.6-এর
+advance-billing decoupled flow না।
+
+### 114.5 — Dispatch Type ↔ Production Type mapping (আংশিক CONFIRMED 2026-07-31 — point 2 confirmed, point 1 আলোচনা বাকি)
+
+Production type-এর নাম §83.2/§83.7-এর locked নামকরণ অনুযায়ী: Admix = MTO, Hypershot = HPS,
+IWC+Powder = MTS (§83.7, 2026-07-11 correction)।
+
+**যা বলা হয়েছে:**
+- **Direct** dispatch-এর ভেতরেই আসলে **দুই রকম আলাদা method** আছে —
+  - **Admix / HPS / MTEST(=ZTEST)** — এই তিনটে **একই** Direct-dispatch method ব্যবহার করে
+  - **বাকি MTS** (IWC বাদে, অর্থাৎ মূলত Powder) — Direct dispatch-এর ক্ষেত্রে **ভিন্ন** একটা method ব্যবহার করে
+- **IWC** নিজে Direct দিয়ে যায় না — **IWC-র dispatch mechanism হলো Depot** (§114.4-এ locked flow: SO→DO→PGI+Invoice)।
+- **CONFIRMED (business owner):** "ZTEST" আর "MTEST" — একই জিনিস, দুটো নাম একই dispatch type বোঝায়।
+
+### 114.6 — Direct dispatch-এর দুই sub-method (আলোচনা হয়েছে, LOCKED না — বিস্তারিত যাচাই বাকি)
+
+**Admix / HPS / MTEST — Direct method (business owner-এর নিজের কথা):**
+- SO-র সাথে **FO map হয়** (§83.18-REVISED-এর Plan Feed/FO mechanism, `plan_feed_packing_order_allocation`)
+- এই allocation **Packing PO number-wise** যায় (প্রতিটা Packing PO আলাদা করে FO-র সাথে map হয়)
+- Direct customer-এর কাছেই যায়
+- **যেদিন dispatch হয়, সেদিনই PGI+Invoice হয়ে "chapter close"** — অর্থাৎ RM/PM/INT-এর মতোই,
+  physical movement আর billing **একই সময়ে, একসাথে** (§113.15-এর atomic PGI+Invoice pattern-এর
+  সাথে মিলছে)
+
+**Powder (বাকি MTS) — সম্পূর্ণ আলাদা "Advance Billing" method (business owner-এর নিজের কথা,
+এখনো design না — শুধু বাস্তবতা লেখা হলো):**
+- **Billing physical stock movement-এর অনেক আগেই হয়ে যায়** — মাসজুড়ে SO, DO, Billing (Invoice)
+  চলতেই থাকে, stock থাকুক বা না থাকুক
+- এই SO/DO/Billing-এর সময় **system stock reduce করে না, stock check-ও করে না** (কোনো
+  availability validation নেই এই ধাপে)
+- **আসল physical dispatch (PGI) হয় যেদিন vehicle আসে** — তখনই real stock movement
+- **সমস্যা:** কখনো কখনো vehicle আসেই না কোনো কোনো DO-র জন্য — তখন **Invoice cancel**, **DO
+  cancel**, আর সংশ্লিষ্ট **SO-র balance prune** — সবগুলো করতে হয়
+- **তবুও, stock যেন কখনো negative না হয়ে যায়, তার জন্য সিস্টেমে কোথাও না কোথাও stock
+  validation থাকতেই হবে** (business owner-এর নিজের explicit শর্ত — ঠিক কোথায় এই check বসবে,
+  সেটা এখনো design করা হয়নি)
+
+**এই দুই method-এর মূল পার্থক্য (আমার নিজের সারাংশ, পরের বার্তায় confirm করতে হবে):**
+Admix/HPS/MTEST-এ **PGI ও Invoice সবসময় একসাথে, একই মুহূর্তে** ঘটে (stock movement =
+billing মুহূর্ত)। Powder-এ **Billing (Invoice) আর আসল PGI (stock movement) দুটো সম্পূর্ণ আলাদা
+সময়ে, আলাদা ঘটনা** — Invoice আগে হয়ে যেতে পারে, PGI পরে (vehicle আসার দিন), অথবা PGI কখনোই না
+হতেও পারে (তখন পুরো chain reverse করতে হয়)। এটা §113.15-এর "PGI ও Invoice সবসময় একসাথে,
+একই atomic action" নকশা থেকে **সম্পূর্ণ ভিন্ন** — Powder-এর জন্য এই দুটোকে **আলাদা করতে হবে**।
+
+**এখনো স্পষ্ট না, পরের আলোচনায় ঠিক করতে হবে:**
+- Powder-এ "Billing" ঠিক কী তৈরি করে — একটা Invoice record, নাকি অন্য কিছু? আর সেটা কি এখনকার
+  `sales_invoice` table-এর মতোই, নাকি আলাদা?
+- "vehicle এলে PGI হয়" — এই আলাদা, deferred PGI action-টা ঠিক কীভাবে trigger হবে (কোন
+  screen/button থেকে), আর কোন DO/Invoice-এর বিপরীতে সেটা বসবে
+
+**business owner-এর quick answer (2026-07-31), বিস্তারিত design পরে Powder session-এ:**
+1. Powder-এ "Billing" = একটা **Invoice record** (আলাদা কিছু না)
+2. "vehicle এলে PGI" trigger হয় **Vehicle Number + Date বসিয়ে, অথবা অন্য কোনো button দিয়ে** (এখনো exact UI ঠিক হয়নি)
+3. Stock validation-এর জায়গা — **এখনো ভাবা হয়নি, Powder session-এ ঠিক হবে**
+4. Invoice/DO cancel + SO prune chain — **এটাও Powder-এর নিজস্ব প্রশ্ন, Powder session-এ**
+
+### 114.7 — ⚠️ SCOPE DECISION (business owner CONFIRMED 2026-07-31): এই session শুধু Admix/HPS/MTEST + IWC, Powder পরে আলাদা
+
+**সিদ্ধান্ত:** এই L5 Dispatch design session-এর scope **এখন শুধু**:
+- **Admix / HPS / MTEST** — Direct dispatch method (§114.6-এ locked flow: FO↔Packing-PO map, দিনে একদিনেই PGI+Invoice)
+- **IWC** — Depot dispatch method (§114.4-এ locked flow: SO→DO→PGI+Invoice, RM/PM/INT-এর মতোই)
+
+**Powder-এর "Advance Billing" method সম্পূর্ণ আলাদা, পরের একটা আলাদা session-এ design হবে** —
+এটা নতুন কোনো সিদ্ধান্ত না, বরং §83 (2026-06-02 session)-এ আগে থেকেই locked থাকা project-wide
+sequencing-এর সাথেই মিলছে: "Admix, Hypershot, IWC — পুরো design + implement আগে। Powder —
+পরে (separate go-live, separate opening stock at Powder go-live date)।" §114.6-এর Powder-সংক্রান্ত
+সব open question (Billing mechanism, deferred PGI trigger, stock validation point, cancel-cascade)
+এখন থেকে **এই session-এর বাইরে**, Powder-এর নিজস্ব future session-এর জন্য reserved।
+
+**এখনো সম্পূর্ণ বাকি (এই session-এর in-scope অংশের জন্য):**
+- Costing/AP-Reco derivation (§113.15-addendum-এ locked সিদ্ধান্ত: Dispatch + Costing একসাথে design করতে হবে, আলাদা না)
+
+---
+
+### 114.8 — IWC/MTS Rate Capture: Monthly Rate Master (আলোচনা চলছে, LOCKED না)
+
+§114.4-এ flag করা "Depot-এর rate capture আলাদা" প্রশ্নের উত্তর এখান থেকে আসছে।
+
+**নতুন page — TX code SO04 (Sales ACL group, existing convention: SO01=Sales Order,
+SO02=DO/PGI Queue, SO03=Delivery Order):**
+- Company-wise MTS product-এর SKU list দেখাবে
+- প্রতিটা SKU-র জন্য **month-wise sale rate** সেট করা যাবে — **ACL-controlled** (business owner
+  CONFIRMED: SA-only না, role-based access — নির্দিষ্ট কোন group/role সেটা পরে ACL setup-এর
+  সময় ঠিক হবে, §104-5/AC04-এর precedent-এর মতোই "config data entry business-role function, SA-র না")
+
+**SO Create-এ ব্যবহার (business owner CONFIRMED 2026-07-31):**
+- SO-তে একটা choice থাকবে: **"Single Month?" — Yes/No**
+  - **Yes** হলে: Month select হয় **header-এ, একবার** — SO-র সব line একই month-এর rate নেবে
+  - **No** হলে: Month select হয় **per-line** — প্রতিটা line আলাদা month বেছে নিতে পারবে
+- যে SKU-র জন্য যে month-এ rate configured আছে, dropdown-এ শুধু সেগুলোই দেখাবে; month select
+  করলে সেই rate auto-fill হয়
+- **CONFIRMED — rate না থাকলে hard block:** কোনো SKU-র কোনো month-এই rate configured না থাকলে
+  সেই SO line তৈরি করা **যাবে না** — rate আগে Monthly Rate Master-এ বসাতেই হবে, কোনো manual
+  override নেই। (§113-জুড়ে established pattern-এর সাথেই মিলছে — missing required data থাকলে
+  silent default না দিয়ে hard block, যেমন §113.16-এ Ship-To State-এর জন্য করা হয়েছিল)
+
+---
+
+### 114.9 — HPS/MTO RM/PM/INT Costing Rate: Costing Group mechanism (আলোচনা চলছে, LOCKED না)
+
+§113-এর SO-level rate (Asian Paints দেয়, manually SO-তে বসে) থেকে এটা **আলাদা** —
+এটা HPS/MTO production-এ যে RM/PM/INT ব্যবহার হয়, তাদের নিজস্ব **costing rate** (§104-এর
+RMC/Conversion framework-এর ইনপুট হিসেবে ব্যবহার হওয়ার কথা, যাচাই বাকি)।
+
+**মূল mechanism (Alternate Material group-এর মতো প্যাটার্ন, business owner CONFIRMED,
+সংশোধন করে 2026-07-31):**
+- User একটা **Costing Group** বানাতে পারবে (ঐচ্ছিক) — নিজের পছন্দমতো Category/Name দিয়ে
+- Group-এ member add করতে গেলে Storage Location বেছে সেই location-এর material থেকে single/multiple member যোগ করা যায়
+- **একই group-এর সব member একই rate পাবে** (rate একবারই বসাতে হবে, group-এর জন্য)
+- Group থেকে বের হলে সেই material-এর নিজের আলাদা rate বসাতে হবে; অন্য group-এ ঢুকলে সেই group-এর rate নেবে
+
+**⚠️ সংশোধন (একই বার্তায়, business owner নিজে ধরিয়ে দিলেন — আগের ভুল অনুমান বাতিল):**
+Grouping সম্পূর্ণ **ঐচ্ছিক shortcut মাত্র** — কোনো storage location-এ থাকা মানেই কোনো material
+স্বয়ংক্রিয়ভাবে কোনো group-এর rate পেয়ে যাবে **না**। উদাহরণ: একটা storage location-এ ১০টা
+material থাকলে, তার মধ্যে ২টা group-এ যেতে পারে (একবারই rate বসবে ওই ২টার জন্য), কিন্তু
+**বাকি ৮টা standalone material-এরও নিজের নিজের rate আলাদা করে বসাতেই হবে** — কেউ skip হয় না,
+group শুধু repetitive rate-entry কমানোর একটা সুবিধা, কোনো implicit inheritance না।
+
+**যা গুরুত্বপূর্ণ:** HPS/MTO-এর জন্য **কোন কোন Storage Location-এর material-এর rate capture
+করতে হবে**, সেই scope ঠিক করাটাই মূল কাজ (সম্ভবত §83.4-এর Production Segment Location Config-এর
+rm_sloc/pm_sloc-এর সাথে সম্পর্কিত — যাচাই বাকি)।
+
+**business owner-এর উত্তর (2026-07-31):**
+1. **এই rate দিয়েই MTO/HPS-এর SO তৈরি হবে** — বিস্তারিত সংযোগ (§104 RMC-এর সাথে ঠিক কীভাবে জোড়া
+   লাগে) **ইচ্ছাকৃতভাবে পরে বলা হবে** — business owner নিজেই বলেছেন "আগে এই page-এর ব্যাপারটা
+   complete করি" — অর্থাৎ এখন শুধু Costing Group/Rate Master page-এর নিজের definition শেষ করা,
+   তারপর SO-র সাথে সংযোগ আলোচনা হবে। **এখনো OPEN, deliberately deferred, অনুমান করে বসানো হয়নি।**
+2. **কোন Storage Location scope-এ পড়বে — সেটা USER নিজে ঠিক করবে** (dynamic, প্রতিটা group
+   বানানোর সময় user-ই storage location বেছে নেবে — কোনো fixed hardcoded list না, §114.9-এর
+   mechanism-এর সাথেই সঙ্গতিপূর্ণ)।
+3. **Update cadence: মাসে ১-২ বার।**
+
+**এখনো OPEN (deliberately deferred, "এই page complete" হওয়ার পরে আসবে):**
+- এই rate ঠিক কীভাবে §104-এর RMC-এর সাথে/অথবা SO creation-এর সাথে যুক্ত হয়
+- MTEST বাকি — business owner পরে বলবেন
+
+**TX Code — নতুন প্রস্তাব (Claude-এর প্রস্তাব, business owner-এর confirm করা বাকি):**
+§114.8-এর SO04 (MTS SKU Monthly Sale Rate) থেকে এটা **আলাদা page** হওয়া উচিত — কাজ দুটো
+functionally ভিন্ন (একটা FG SKU sale rate, একটা RM/PM/INT cost rate)। §104-5-এর precedent
+অনুযায়ী (Conversion Cost Config → AC04, "costing config = Accounts-এর কাজ, SA-র না")
+এটাকেও **AC05** (Accounts ACL group) প্রস্তাব করছি। Confirm করা বাকি।
+
+**UI Flow — Costing Group তৈরি/সম্পাদনা (business owner CONFIRMED 2026-07-31):**
+1. User "Create Costing Material Group" action click করবে
+2. Group-এর **Name** দেবে (যেমন "Liquid Costing Group")
+3. তারপর একটা Storage Location বেছে নেবে — সেই location-এ থাকা material-এর list আসবে
+4. সেই list থেকে single বা multiple material বেছে নিয়ে **Save** করবে — group তৈরি হয়ে গেল
+5. চাইলে **আরেকটা Storage Location যোগ করে একই group-এ আরও member যোগ করা যায়** — অর্থাৎ
+   **একটা Costing Group একাধিক Storage Location জুড়ে material নিতে পারে**, শুধু একটা location-এ
+   সীমাবদ্ধ না
+6. যেকোনো সময় group-এ **item add বা unmap (remove)** — দুটোই করা যাবে, শুধু creation-এর সময় না
+7. একটা material যোগ করার সময় ব্যবহারকারী **existing group-এ যোগ করতে পারে, অথবা on-the-fly নতুন group তৈরি করতে পারে** — flexible, দুটো path-ই খোলা থাকবে
+
+### 114.10 — Monthly Rate Chart (rate বসানোর mechanism) + Approve lock (business owner CONFIRMED 2026-07-31)
+
+**List/Tab view:**
+- Storage Location অনুযায়ী Tab/Dropdown — select করলে সেই location-এর **সব item** (শুধু group
+  member না) দেখাবে, পাশে item সেই মুহূর্তে যে group-এ আছে তার নাম (কোনো group-এ না থাকলে blank)
+
+**"Create Rate Chart" flow:**
+1. Month select (মাসের ১ তারিখ — অর্থাৎ কোন মাসের rate সেটা বসানো হচ্ছে)
+2. সেই একই list (item + বর্তমান group name) আসবে
+3. **Group-এ থাকা item-এ শুধু প্রথম member-এর rate টাইপ করলেই বাকি সব member auto-fill হয়ে যায়**
+   (একই group = একই rate)
+4. Standalone (কোনো group-এ নেই) item-এর rate আলাদা করে বসাতে হবে, একে একে
+5. **সব item-এর rate বসানো বাধ্যতামূলক** — pagination থাকতে পারে, কিন্তু সব page-এর সব item-এর
+   rate না বসালে সম্পূর্ণ হবে না
+6. Save করার পর **Approve না হওয়া পর্যন্ত** rate edit/fill করা যায়। **একবার Approve হয়ে গেলে সেই
+   মাসের rate chart আর কোনোভাবে বদলানো যাবে না** (frozen)
+7. এই পুরো চক্র **month-on-month চলতেই থাকবে** — প্রতি মাসে নতুন rate chart, আর group/group-membership-ও
+   মাসে মাসে বদলাতে পারে (একটা material এক মাসে Group A-তে থাকতে পারে, অন্য মাসে Group B-তে)
+
+**দুটো hard rule (CONFIRMED):**
+- **কোনো মাসের rate Approve না হলে, সেই item-এর জন্য সেই মাসে কোনো usable rate থাকবে না** (downstream — SO creation-এ — ব্যবহার করা যাবে না)
+- **কোনো item-এর rate ০ (zero) হলে SO আটকে যাবে (hard block)**
+
+**History/Reporting প্রশ্নের উত্তর (Claude-এর প্রস্তাব, CONFIRMED):** যেহেতু প্রতিটা মাসের Rate
+Chart নিজেই একটা **frozen snapshot** (approve হওয়ার পর), আর প্রতিটা item-এর সাথে সেই মাসের
+group-নামও সেভ থাকে — তাই আলাদা কোনো "history report" table বানানোর দরকার নেই। কোন মাসের data
+দেখতে চাই সেটা select করলেই, সেই মাসের approved rate-chart-এর row গুলোই বলে দেবে সেই মাসে কোন
+item কোন group-এ ছিল, rate কী ছিল। **Purely database-level month-wise data, কোনো বড় আলাদা
+display/report table বানাতে হবে না।**
+
+**Approval flow (business owner CONFIRMED 2026-07-31):**
+- একই page-এ Approver-এর জন্য একটা button/section থাকবে — সেখানে **Draft one-liner list**
+  দেখাবে (কোন কোন Group-এর কোন কোন মাসের Rate Chart এখনো DRAFT অবস্থায় আছে)
+- সেই লাইনে গিয়ে Enter/Double-click করলে **পুরো rate area editable list হিসেবে খুলবে**
+- Approver rate check করবে, দরকার হলে **overwrite** করবে, তারপর **Approve**
+- **⚠️ Approve handler অবশ্যই আলাদা রাখতে হবে** (Draft তৈরি/edit করার handler থেকে সম্পূর্ণ
+  separate route/ACL action) — কারণ **যে Draft বানাবে/edit করবে, আর যে Approve করবে, তারা
+  আলাদা মানুষ হতে পারে**। এটা এই প্রজেক্টে ইতিমধ্যে established একটা pattern — §113.15-এ PGI
+  create vs Invoice reverse, DO create vs DO cancel — সব জায়গাতেই create/edit-authority আর
+  approve/reverse-authority আলাদা রাখা হয়েছে যাতে পরে আলাদা role-কে আলাদা permission দেওয়া যায়।
+  এখানেও সেই একই নিয়ম প্রযোজ্য হবে।
+
+---
+
+### 114.11 — MTEST rate (business owner CONFIRMED 2026-07-31)
+
+**MTEST-এর rate mechanism সরল — কোনো Costing Group/Rate Master লাগে না:**
+- MTEST-এ যে material যায়, তার **বিভিন্ন pack size-এর জন্য Asian Paints নিজেই rate fixed করে
+  রেখেছে**
+- তাই SO-তে এই rate **সরাসরি হাতে (manual entry)** বসবে — §113-এর RM/PM/INT SO line-এর
+  existing rate field-এর মতোই সাধারণ manual entry, §114.8/§114.9-এর মতো আলাদা কোনো rate
+  master/group mechanism দরকার নেই
+- MTEST-এর বাকি খুঁটিনাটি (SO Create page-এর exact design) **পরে SO Create design আলোচনার
+  সময় আসবে** — এখন শুধু rate mechanism-টা confirm হলো
+- **CONFIRMED — এটা purely manual, কোনো rate-chart/tracking/monthly-cadence mechanism নেই।**
+  প্রতিবার SO বানানোর সময় শুধু হাতে টাইপ করা, IWC-র §114.8 বা MTO/HPS-এর §114.9/114.10-এর মতো
+  কোনো master/approval দরকার নেই।
+
+(dispatch mechanism হিসেবে MTEST আগে থেকেই §114.6-এ locked — Admix/HPS-এর একই Direct method:
+FO↔Packing-PO map, dispatch-এর দিনই PGI+Invoice।)
+
+---
+
+### 114.12 — ⚠️ DECISION: Dispatch Customer-এর জন্য আলাদা page/master (business owner CONFIRMED 2026-07-31)
+
+**Virtual Depot customer-এর GST-upgrade provision (§114.3-এর continuation, business owner-এর
+নিজের কথা):**
+- Virtual Depot-এর end customer শুরুতে **Unregistered** হতে পারে
+- পরে সেই customer-কে **Registered-এ upgrade করার provision থাকতে হবে** — GST field আসবে, user
+  GST number দেবে, **"Check GST"** (existing GST lookup mechanism reuse — Vendor/Customer/
+  Transporter/CHA-তে যেটা আগে থেকেই আছে)
+- fetch হওয়া details একটা **modal**-এ খুলবে — field গুলো Company/Customer page-এ যা আছে সেরকমই,
+  ওখানেই **overwrite** করা যাবে
+- **যদি customer-এর একাধিক address থাকে** (§114.3-এর scenario অনুযায়ী থাকতেই পারে), তাহলে modal
+  জিজ্ঞেস করবে: **কোন address-টা replace হবে, নাকি এটা একটা নতুন address হিসেবে add হবে**
+
+**⚠️ মূল সিদ্ধান্ত: FG Dispatch customer-দের জন্য আলাদা, dedicated page/master দরকার —
+RM/PM/INT-এর existing Customer Master (om/customer, §113.6/§113.16) থেকে সম্পূর্ণ আলাদা।**
+কারণ: multiple address per customer, Depot Code-এর সাথে linkage, Unregistered→Registered
+upgrade flow — এগুলো RM/PM/INT-এর simple per-order Ship-To pattern-এর থেকে গঠনগতভাবে ভিন্ন।
+এই নতুন page-ই এখন design হবে।
+
+**TX Code — MM05 (live DB থেকে verify করা MM-series):** existing MM-series masters —
+MM01=Material (`OM_MATERIAL_LIST`), MM02=Vendor (`OM_VENDOR_LIST`), MM03=ASL/VMI
+(`OM_ASL_LIST`), MM04=Customer RM/PM (`OM_CUSTOMER_LIST`)। এই নতুন FG Dispatch Customer
+Master তাই পরের ক্রমিক — **MM05**।
+
+**ACL menu group — CONFIRMED (business owner, live DB দিয়ে যাচাই করা):** SA-only না,
+**ACL-এর অধীনে**। P0004-এর actual live cached menu snapshot (GLOBAL_ACL universe) সরাসরি
+চেক করা হয়েছে — MM04 (`OM_CUSTOMER_LIST`, title "RM/PM Sales Customer") আছে
+`GRP_ACL_OM_MASTERS` ("Operation Masters") group-এর ভেতরে। **MM05-ও এই একই group-এ থাকবে।**
+
+### 114.13 — MM05 পূর্ণ Data Hierarchy + Page Flow (business owner CONFIRMED 2026-07-31)
+
+**সংশোধিত/সম্পূর্ণ hierarchy (§114.2/§114.3-এর সাথে মিলিয়ে):**
+
+```
+State (per-state আলাদা GST)
+  → Parent Company (Asian Paints-এর সেই state-এর GST entity — state ভেদে আলাদা record)
+      → একাধিক Virtual Depot Code (প্রতিটার নিজস্ব VD description)
+          → একাধিক Customer
+              → একাধিক Address
+```
+
+**⚠️ গুরুত্বপূর্ণ:** "Parent Company" মানে literally একটাই "Asian Paints" record না —
+**প্রতিটা state-এর জন্য আলাদা Parent Company record**, কারণ GST state-wise (§114.2-এর
+লক করা নিয়ম)। Depot Code ↔ Customer ↔ Address সম্পর্কটা flexible, §114.3-এর locked ৪টা
+scenario অনুযায়ী (same depot code-এ বহু address, ভিন্ন address ভিন্ন depot code, এক state-এ
+একাধিক depot code, একাধিক state জুড়ে একাধিক depot code) — এই hierarchy সেই ৪টা scenario-ই
+সাপোর্ট করে।
+
+**MM05 Page — top-level fork (business owner CONFIRMED):**
+**Type: Direct** নাকি **Type: Depot** — এটাই প্রথম সিদ্ধান্ত record তৈরির সময়।
+
+**Type = Direct হলে:**
+- সহজ, RM/PM/INT Customer Master-এর মতোই — Registered/Unregistered
+- Registered → GST number → fetch → overwrite editable fields
+- Unregistered → Name + Address manual entry
+- **State সবসময় mandatory**
+- একাধিক address থাকতে পারে
+- পরে Unregistered → Registered upgrade — Modal দিয়ে GST fetch → overwrite → existing address
+  replace বা নতুন address add (choice)
+
+**Type = Depot হলে:**
+1. **Parent Company** — Create নতুন, বা existing থেকে Select (একবার একটা state-এর Asian Paints
+   entity বানানো হলে, পরের সব Depot/VD Code সেটাই **select** করবে, পুনরায় বানাতে হবে না)
+   - নতুন হলে: GST number → fetch → overwrite editable → Save
+2. সেই Parent Company-র নিচে **Virtual Depot Code** (Create বা Select) + **VD Description**
+3. সেই VD Code-এর নিচে **Customer** — Registered/Unregistered একই sub-flow (GST fetch/overwrite,
+   একাধিক address, State mandatory, পরে Unregistered→Registered upgrade একই modal pattern)
+
+**✅ RESOLVED (business owner CONFIRMED, নিচের §114.14-এ):** MM05-এর top-level "Type: Direct
+vs Depot" fork-টাই আসলে এই দুই chain-এর মধ্যে পার্থক্য করে —
+- **Type = Direct** → **Virtual Depot chain** ব্যবহার করে (Parent Company → VD Code →
+  Customer → Address, পুরো ৩-স্তর, কারণ Virtual Depot-এর সংজ্ঞাই ছিল "সরাসরি end customer-এর
+  কাছে যায়", §114.3)
+- **Type = Depot** → **Real Depot chain** ব্যবহার করে (Parent Company → Depot Code → manual
+  address সরাসরি, কোনো আলাদা Customer layer ছাড়াই, §114.2-এর already-locked flow)
+
+তাই এই দুটো একই page-এই স্বাভাবিকভাবে fit করে — "Type" fork-টাই সেই বিভাজন।
+
+---
+
+### 114.14 — SO Create Integration: FG dispatch-এ Customer/Depot resolve কীভাবে হয় (business owner CONFIRMED 2026-07-31)
+
+**SO Create flow (FG):**
+1. **Dispatch Type**: Direct বা Depot (§114.13-এর top-level fork, MM05-এর একই fork)
+2. **Production Type**: MTO/HPS, MTEST, বা MTS(IWC)
+3. **Customer** (Direct-এর জন্য) বা **Depot** (Depot-এর জন্য) বেছে নেবে
+   - না থাকলে **"+Create"** দিয়ে **MM05 page**-এ চলে যাবে, সেখানে সব set করে Save করলে **আবার SO
+     page-এ ফিরে আসবে** — ঠিক §113-এর RM/PM SOCreatePage.jsx-এর "+New Customer" inline-modal
+     pattern-এর মতোই (save → return → continue)
+4. **Address Drawer** খোলে — ঠিক Gate Entry-তে CSN pick করার Drawer যেমন দেখায়, সেই একই
+   established UI pattern reuse — existing address-গুলোর তালিকা, পাশে তার **Depot/VD Code**,
+   **Parent Company**, **State** দেখাবে
+5. একটা address select করলেই **auto-fill**: **Ship To** = সেই address, **Depot/VD Code**,
+   **Bill To** = Parent Company
+6. **GST type (CGST+SGST vs IGST)** — এই resolved Ship-To state আর selling company state
+   মিলিয়ে হিসাব হবে, ঠিক §113.16-এর একই `deriveSalesInvoiceGstType`-style mechanism
+
+**⚠️ সংশোধন/সংযোজন (business owner, একই বার্তায়) — Production Type শুধু rate mechanism
+নির্ধারণ করে না, Customer filtering-ও করে:** ধাপ ২-এ Production Type select করার পর, ধাপ ৩-এর
+Customer/Depot dropdown **সেই type অনুযায়ী filtered** হবে — কারণ MM05-এ Customer/Depot তৈরি
+করার সময়েই সেই type ট্যাগ করা হয়েছিল।
+
+**এটা একটা already-existing locked precedent-এর সাথে হুবহু মিলছে:** §83.18-REVISED (Plan Feed
+redesign, 2026-07-23)-এ `customer_master`-এ একটা nullable `fo_customer_type`
+(MTO_HPS/ZTEST/MTS) column locked আছে, ঠিক এই একই কারণে — Party dropdown filtering-এর জন্য।
+MM05-এর Customer/Depot creation flow-তেও তাই **এই একই ধরনের type-tag field** থাকতে হবে (MM05
+নিজেই সেই tag বসাবে creation-এর সময়), যাতে SO Create-এর dropdown filtering কাজ করতে পারে।
+**✅ CONFIRMED (business owner):** `customer_master.fo_customer_type` (§83.18-REVISED-এর
+existing column) **reuse হবে** — নতুন কোনো আলাদা column বানাতে হবে না, MM05-ও এই একই field
+ব্যবহার করবে।
+
+**Add Address (existing customer-এ) — CONFIRMED (business owner):** নতুন address যোগ করতে
+গেলে একই "Create বা Select" pattern reuse হবে যা customer প্রথমবার বানানোর সময় ব্যবহৃত হয়েছিল —
+- **Virtual Depot Code**: existing থেকে Select, অথবা নতুন Create
+- **Parent Company**-ও নতুন করে Select/Create করার সুযোগ থাকবে (শুধু VD Code না) — কারণ
+  §114.3-এর scenario 4 অনুযায়ী একই customer-এর ভিন্ন address ভিন্ন state/Parent Company-র
+  আওতায়ও পড়তে পারে, তাই নতুন address আগের address-এর মতো একই state-এর হবে এমন ধরে নেওয়া যাবে না
+
+---
+
+### 114.15 — ⚠️ FINAL TX Code Renumbering + Company-Scope Resolution (business owner CONFIRMED 2026-07-31)
+
+**TX Code সংশোধন — মোট ৩টা page, দুটোই Accounts-এ, একটা OM Masters-এ:**
+§114.8 (MTS/IWC SKU Monthly Rate) আর §114.9-114.10 (SLOC-ভিত্তিক MTO/HPS Costing Group) —
+দুটোরই কাজের ধরন একই (rate/costing config), তাই দুটোই **Accounts** series-এ যাবে, Sales-এ না:
+
+| আগের প্রস্তাব | চূড়ান্ত TX Code | Purpose | ACL Menu Group (live DB verify করা) |
+|---|---|---|---|
+| SO04 | **AC05** | MTS(IWC) SKU Monthly Sale Rate (§114.8) | `GRP_ACL_ACCOUNTS` ("Accounts") |
+| AC05 | **AC06** | SLOC-ভিত্তিক MTO/HPS Costing Group (§114.9/114.10) | `GRP_ACL_ACCOUNTS` ("Accounts") |
+| MM05 | **MM05** (অপরিবর্তিত) | FG Dispatch Customer Master (§114.12-114.14) | `GRP_ACL_OM_MASTERS` ("Operation Masters") |
+
+AC05/AC06 যাবে ঠিক সেই group-এ যেখানে AC04 (Conversion Cost Config) আছে (live DB verify করা —
+**`GRP_ACL_ACCOUNTS`**)। MM05 যাবে যেখানে MM04 (Customer) আছে (আগে verify করা —
+**`GRP_ACL_OM_MASTERS`**)।
+
+**Company-Scope Resolution — CONFIRMED, existing standard pattern reuse:**
+- **AC05, AC06** (rate/costing config): Company-specific। যে ব্যবহারকারীর **একটাই company**
+  scope-এ আছে, তার জন্য company **auto-resolve** হবে (dropdown দেখাবে না); যার **একাধিক
+  company** আছে, তার জন্য dropdown থেকে choose করতে হবে।
+- **MM05** (Dispatch Customer): নতুন তৈরি/edit করার সময় যদি সেই ব্যবহারকারীর **multi-company**
+  access থাকে, তাহলে company choose করতে হবে; **single-company** হলে company auto-resolve।
+
+এটা নতুন কোনো mechanism না — `getCompanyScope(ctx, requestedCompanyId)` (ইতিমধ্যে
+`sales_order.handlers.ts`-এ ব্যবহৃত) আর `TransactionCompanySelector` frontend component-এর
+existing pattern-ই এখানে reuse হবে, RM/PM SO Create-এ যেভাবে কাজ করে ঠিক সেভাবেই।
+
+**§10 (Known Bug Patterns Checklist)-এর ৭ নম্বর (Maker-checker) প্রশ্নের উত্তর — CONFIRMED
+(business owner):** MM05-এ **কোনো Approval workflow নেই** — সেভ করলেই active হয়ে যাবে, প্রজেক্টের
+established "No Default Approval Workflow" নিয়মের সাথেই মিলছে। পরে user চাইলে MM05-এ গিয়ে সরাসরি
+address edit করতে পারবে, কোনো gate ছাড়াই। (AC05/AC06-এর নিজস্ব Approve workflow-এর প্রশ্নটা —
+maker-checker লাগবে কিনা — এখনো আলাদাভাবে open, MM05-এর জন্য প্রযোজ্য না।)
+
+---
+
+### 114.16 — MM05 Data Integrity Check: Address State ↔ Parent Company State (business owner CONFIRMED 2026-07-31)
+
+**নতুন validation rule (real data-entry error prevention):**
+যেহেতু একটা Parent Company record নিজেই একটা নির্দিষ্ট state-এর GST entity (§114.13-এর locked
+নিয়ম — state-wise আলাদা Parent Company), তাই সেই Parent Company-র নিচে থাকা কোনো Depot Code-এর
+কোনো Address-এর State **অবশ্যই সেই Parent Company-র নিজের State-এর সাথে মিলতে হবে**।
+
+- **Check:** Address save করার সময়, system যাচাই করবে — যে Address দেওয়া হচ্ছে তার State, আর
+  সেই Address যে Depot Code-এর আওতায় পড়ছে তার Parent Company-র State — এই দুটো **এক কিনা**
+- **যদি না মেলে:** User-কে **Alert** দেখাবে, আর **Save block** করবে (ভুল করে অন্য Depot Code-এ
+  ঢুকিয়ে ফেলা, বা ভুল State দিয়ে ফেলা — এই ধরনের data-entry ভুল আটকানোর জন্য)
+- User পরে চাইলে ভুল ঠিক করে (সঠিক Depot Code বা সঠিক State দিয়ে) আবার save করতে পারবে — কোনো
+  hard lock নেই, শুধু ভুল অবস্থায় save হতে দেবে না
+- **State field-এ ব্যবহার হবে সেই একই shared India-states dropdown** (`frontend/src/data/
+  indianStates.js`-এর `INDIAN_STATES`, এই session-এই আগে বানানো) — Customer/Vendor/Company
+  Master-এ যেটা reuse হচ্ছে, MM05-ও সেই একই component/list ব্যবহার করবে
+
+---
+
+### 114.17 — ⚠️ CODEX task briefs লেখা হয়েছে (AC05/AC06/MM05) — implementation শুরু হয়েছে, SO design পাশাপাশি চলছে
+
+**২০২৬-০৭-৩১:** AC05, AC06, MM05 — এই ৩টার জন্য প্রতিটার নিজস্ব বিস্তারিত CODEX task brief লেখা
+হয়েছে (`docs/Operation Management/implementation-specs/CODEX-GATE27.25/26/27-*-TASK-BRIEF.md`)।
+Codex এখন এগুলো implement করছে (DB+BE+FE, commit করবে কিন্তু push করবে না)। এই কাজ শেষ হলে Claude
+verify করবে, তারপর ACL/menu group MCP দিয়ে বসাবে (Codex এই অংশ করবে না, শুধু
+`route-acl-registry.ts`-এ entry যোগ করবে)। এই তিনটার implementation চলাকালীন **SO/DO/PGI/Invoice
+design সমান্তরালে চলবে** (business owner-এর নিজের সিদ্ধান্ত — MM05/AC05/AC06 সম্ভাব্য minor
+follow-up change লাগতে পারে SO design শেষ হলে, সেটা accepted risk)।
+
+### 114.18 — FG SO Create: আলাদা page, TX Code SO04 (business owner CONFIRMED 2026-07-31)
+
+FG Dispatch-এর SO **RM/PM/INT-এর existing SOCreatePage.jsx থেকে আলাদা page** হবে — কারণ গঠন
+সম্পূর্ণ ভিন্ন (Dispatch Type/Production Type fork, Customer/Depot Address Drawer, আলাদা rate
+mechanism, packaging-cost/rebate-এর মতো RM/PM-specific জিনিস নেই)। ঠিক Process PO vs Packing
+PO-র মতোই — একই পরিবার, আলাদা page, কারণ ভেতরের গঠন আলাদা।
+
+**TX Code — SO04 (live DB verify করা):** existing SO-series — SO01=Sales Order RM/PM/INT
+(`PROC_SO_LIST`), SO02=DO/PGI Queue (`PROC_INV_LIST`), SO03=Delivery Order (`PROC_DO_LIST`) —
+সব **`GRP_ACL_SALES`** ("Sales") group-এ। SO04 এখন ফাঁকা (আগে IWC rate-এর জন্য ভাবা হয়েছিল,
+সেটা AC05-এ সরে গেছে §114.15-এ) — FG SO Create page তাই **SO04**, একই `GRP_ACL_SALES` group-এ।
+
+**Page display name (business owner CONFIRMED):** "**FG Sales Order**" — SO01 ("Sales Order",
+RM/PM/INT) থেকে sidebar-এ স্পষ্ট আলাদা দেখানোর জন্য।
+
+---
+
+### 114.19 — SO04 MTO/HPS Create Flow (business owner CONFIRMED 2026-07-31, বিস্তারিত)
+
+**ধাপে ধাপে flow:**
+
+1. **Customer** choose (MM05-এর master থেকে, §114.13-14)
+2. **Asian Paints Order Number** entry (তাদের PO number, RM/PM SO-এর `customer_po_number`-এর
+   মতোই একটা concept)
+3. User **SKU** এবং তার **Description** বসাবে (Asian Paints যা দিয়েছে, হুবহু তাই)
+4. **System SKU থেকে Prodshade resolve করবে** — সেই company-র material_master/stroke_master-এ
+   match থাকলে Prodshade auto-populate হবে, পাশে Description দেখাবে
+5. **Stroke field** আসবে — সেই Prodshade-এর জন্য `stroke_master`-এ stroke থাকলে **dropdown**
+   দেখাবে (user বেছে নেবে); না থাকলে **"এই Prodshade-এর কোনো stroke Stroke Master-এ নেই,
+   entry করতে হবে"** — এই বার্তা দেখাবে
+
+**তিনটা সম্ভাব্য gate/hard-block (SO create-এর আগেই পার হতে হবে):**
+- **SKU সেই company-র জন্য mapped কিনা** (`material_plant_ext`) — না থাকলে "create করতে হবে"
+  বলবে
+- **Prodshade-ই resolve হয় কিনা** SKU থেকে — না হলে সেটাও জানাবে
+- **সেই Prodshade-এর stroke Stroke Master-এ আছে কিনা** — না থাকলে SO **আটকে যাবে**, user-কে
+  QA-কে বলে Stroke Master-এ entry করিয়ে **Approve** করাতে হবে, তারপরই SO-তে এগোনো যাবে
+
+**Gate পার হলে এরপর:**
+6. **"Rate for Month"** — **AC06 (SLOC Costing Group)-এর data থেকে** month select করবে —
+   সেখান থেকে সেই month-এর **RM + INT** rate পাওয়া যাবে সবসময় (pack type নির্বিশেষে, কারণ
+   Stroke formulation fixed) — **PM-এর উৎস pack type ভেদে আলাদা, নিচে §114.20 দেখো (সংশোধিত)**
+7. **Conversion Cost** — **AC04 (existing Conversion Cost Config, §104.8)** থেকে সেই
+   company-র MTO/HPS segment-এর জন্য যা configured আছে, তাই আসবে
+8. **FO Number link** — একাধিক FO Number link করা যায় (§83.18-REVISED-এর Plan Feed/FO
+   allocation mechanism-এর সাথেই সংযুক্ত)। FO link করলে দেখাবে: কোন Prodshade, কোন Packing PO
+   Number/Batch Number, আর সেই FO-তে কত Qty আছে (Barrel+KG, Tanker হলে শুধু KG) — user সেখান
+   থেকে qty **কমাতে পারে** (partial allocation)
+9. **SO Save**
+
+**Save-পরবর্তী:**
+- FO-তে যা বাকি থাকল (balance), সেটা **পরে অন্য SO-তে map করা যাবে**, অথবা Production চাইলে
+  সেই balance **unmap**-ও করতে পারবে — এই mechanism **আগে থেকেই locked/designed** (§83.18-REVISED-এর
+  `plan_feed_packing_order_allocation` — qty-level partial map/unmap, increase/decrease anytime)
+
+---
+
+### 114.20 — ✅ FINAL LOCKED: MTO/HPS Per-KG / Per-Barrel Cost Formula (business owner CONFIRMED 2026-07-31)
+
+**সংশোধন (Claude-এর আগের ভুল ব্যাখ্যা বাতিল):** এটা দুই-ধাপি SFG→FG cascade (§104-2/104-3-এর
+already-coded engine formula) হিসেবে না ভেবে, business owner-এর নিজের flat per-KG সূত্র হিসেবে
+final ধরা হলো — গাণিতিকভাবে দুটো প্রায় সমতুল্য হলেও (SFG_qty ≈ FG_qty ধরলে), এই flat রূপটাই এখন
+থেকে reference।
+
+**Barrel (599)-এর জন্য:**
+```
+Total RM Cost ÷ FG Qty
++ Total PM Cost ÷ FG Qty
++ Conversion Cost ÷ KG
+= Total Per KG Cost
+
+Per Barrel Cost = Total Per KG Cost × Fill Qty Per Barrel   (যেমন 230 হলে × 230)
+```
+
+**Tanker (000)-এর জন্য (⚠️ PM cost নেই — bulk liquid, কোনো container/PM লাগে না):**
+```
+Total RM Cost ÷ FG Qty
++ Conversion Cost ÷ KG
+= Total Per KG Cost
+```
+
+**Fill Qty Per Barrel-এর উৎস — CONFIRMED: FO/Packing PO থেকে, কোনো generic default থেকে না।**
+§83.14-এ আগে থেকেই locked আছে — `fill_qty_per_pack` প্রতিটা Packing PO-তে আলাদা mandatory
+field ("balance barrel" scenario-তে একই batch-এর ভিন্ন Packing PO-তে ভিন্ন fill size থাকতে
+পারে, যেমন ২৩টা @230kg + ১টা @200kg)। তাই SO যে নির্দিষ্ট FO/Packing PO link করছে, **সেই
+নির্দিষ্ট Packing PO-র নিজের actual `fill_qty_per_pack`** থেকেই per-barrel-এ কনভার্ট হবে —
+কোনো company/Prodshade-level ধরে নেওয়া সংখ্যা ব্যবহার হবে না।
+
+**PM cost-এর উৎস — pack type ভেদে আলাদা (§114-এর আগের আলোচনা থেকে, একসাথে confirm হলো):**
+- **HPS (Fixed Pack BOM, BOM Required=Yes)** — PM materials আগে থেকেই জানা (Pack BOM-এ
+  pre-defined), তাই **AC06**-এর month-rate থেকেও PM cost পাওয়া সম্ভব SO-time-এ
+- **MTO (599/000, Non-Fixed, BOM Required=No)** — PM materials Pack BOM-এ pre-defined না
+  (Packing PO Standard stage-এ manually add হয়, §83.15), তাই SO-time-এ AC06 থেকে না —
+  **FO link করার পর সেই নির্দিষ্ট Packing PO-র নিজের actual PM entry** থেকেই PM cost আসবে
+
+---
+
+### 114.21 — Codex Blocker Resolution: MM05 `fo_customer_type` + AC06 Uniqueness (business owner LOCKED 2026-07-31)
+
+Codex-এর MM05 implementation শুরু করার সময় দুটো genuine conflict ধরা পড়ে (§114.15/§114.9-10-এর
+সাথে brief-এর নিজের ব্যাখ্যার অমিল) — কোনোটাই guess করে এগোয়নি, দুটোই এখানে resolve করা হলো।
+
+**MM05 — `fo_customer_type` "reuse"-এর অর্থ ✅ LOCKED:**
+একই **column name আর একই allowed values** (`MTO_HPS`/`ZTEST`/`MTS`), কিন্তু **MM05-এর নিজের নতুন
+`fg_dispatch_customer` table-এ** — `customer_master`-এর সেই column literally শেয়ার করা না।
+কারণ: (ক) §114.12-এর "সম্পূর্ণ আলাদা master" সিদ্ধান্ত ইচ্ছাকৃত (customer_master-এর single-address
+গঠন MM05-এর multi-address/Depot-hierarchy ধরতে পারে না); (খ) database-এ literally এক column
+দুই আলাদা table-এ শেয়ার করা সম্ভবও না; (গ) "reuse"-এর আসল উদ্দেশ্য ছিল নামকরণ/values-এর
+consistency, data-sharing না।
+
+**AC06 — Group membership আর Rate, material-level, storage-location-level না ✅ LOCKED:**
+একটা material **একাধিক Storage Location-এ থাকতে পারে** (স্বাভাবিক physical stock), কিন্তু
+সেই material **একই সময়ে একটাই Costing Group-এর সদস্য হবে** (location-ভেদে আলাদা group না)।
+Storage Location শুধু **browsing/discovery-এর জন্য** ব্যবহার হয় (কোন location-এ কী material
+আছে খুঁজে বের করতে), কিন্তু **group membership আর rate — দুটোই material-level concept**,
+`(material, location)`-level না।
+
+- **`costing_group_member`** — uniqueness শুধু `material_id`-এর উপর (একটা material একই সময়ে
+  সর্বোচ্চ একটা group-এ) — `storage_location_id` uniqueness key-তে থাকবে না
+- **`costing_rate_line`** — uniqueness শুধু `(company_id, material_id, rate_month)`-এর উপর —
+  একটা material-এর একটা মাসে **একটাই rate**, যেই যেই location-এ সেই material থাকুক না কেন;
+  ওই একই rate সব location-এ প্রযোজ্য হবে
+- পরের মাসে material অন্য group-এ যেতে পারে, বা standalone হতে পারে (আগের মতোই, §114.9)।
+  SO/report-এ যখন একটা মাস select হবে, **সেই মাসের saved structure অনুযায়ীই** calculate হবে
+  (§114.10-এর history/snapshot design অপরিবর্তিত)
+
+---
