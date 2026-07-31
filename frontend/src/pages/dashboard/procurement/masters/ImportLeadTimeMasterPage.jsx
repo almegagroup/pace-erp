@@ -33,8 +33,8 @@ export default function ImportLeadTimeMasterPage() {
   const noticeTimer = useRef(null);
 
   const companiesQuery = useCompaniesQuery();
-  const importVendorQuery = useVendorsQuery({ status: "ACTIVE", vendor_type: "IMPORT" });
-  const domesticVendorQuery = useVendorsQuery({ status: "ACTIVE", vendor_type: "DOMESTIC" });
+  const importVendorQuery = useVendorsQuery({ status: "ACTIVE", vendor_type: "IMPORT", limit: 1000 });
+  const domesticVendorQuery = useVendorsQuery({ status: "ACTIVE", vendor_type: "DOMESTIC", limit: 1000 });
   const leadTimeQuery = useQuery({
     queryKey: ["procurement", "lead-time-masters"],
     queryFn: async () => {
