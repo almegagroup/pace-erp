@@ -13,6 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -122,6 +123,11 @@ function validateResolvedShipTo(resolved: ResolvedShipTo): string | null {
     if (!resolved.ship_to_address) return "SO_SHIP_TO_ADDRESS_REQUIRED";
     if (!resolved.ship_to_type || !SHIP_TO_TYPES.has(resolved.ship_to_type)) return "SO_SHIP_TO_TYPE_INVALID";
     if (resolved.ship_to_type === "REGISTERED" && !resolved.ship_to_gst_number) return "SO_SHIP_TO_GST_NUMBER_REQUIRED";
+    // Manual Ship-To entry -- frontend dropdown only offers Indian states.
+    // same_as_customer's state isn't re-checked here since it's just a copy
+    // of the customer's own (already-validated-elsewhere, possibly foreign
+    // for an EXPORT customer) billing_state.
+    if (!INDIAN_STATE_NAMES.has(resolved.ship_to_state)) return "SO_SHIP_TO_STATE_INVALID";
   }
   return null;
 }

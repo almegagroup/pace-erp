@@ -1034,6 +1034,27 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
 
 const EXCLUSIVE_FREIGHT_TERMS = new Set(["FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS"]);
 
+// post_document/complete_pgi_invoice_action wrote the invoice+lines inside
+// the transaction, so this is a plain read-back for the response -- not
+// part of the write path.
+async function hydrateSalesInvoiceForDo(invoiceId: string): Promise<JsonRecord> {
+  const { data: invoice, error: invoiceError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("sales_invoice")
+    .select("*")
+    .eq("id", invoiceId)
+    .single();
+  if (invoiceError || !invoice) throw new Error("PGI_INVOICE_READBACK_FAILED");
+  const { data: invoiceLines, error: linesError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("sales_invoice_line")
+    .select("*")
+    .eq("invoice_id", invoiceId)
+    .order("line_number", { ascending: true });
+  if (linesError) throw new Error("PGI_INVOICE_LINE_READBACK_FAILED");
+  return { ...invoice, lines: invoiceLines ?? [] };
+}
+
 // §113.15 -- the combined PGI + Invoice action (Accounts). Deliberately a
 // NEW additive route/handler, not a rewrite of the legacy
 // createSalesInvoiceHandler/postSalesInvoiceHandler pair (still wired,
@@ -1227,12 +1248,90 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
     const totalInvoiceValue = Number((totalTaxableValue + totalGstAmount + (freightAmount ?? 0)).toFixed(4));
 
     const invoiceNumber = await generateProcurementDocNumber("SALES_INVOICE");
-    const { data: invoice, error: invoiceError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("sales_invoice")
-      .insert({
+    const invoiceId = crypto.randomUUID();
+    const invoiceDate = todayIsoDate();
+
+    // §8D step 4 -- CI's stock-posting-guard forbids calling
+    // post_stock_movement directly from a new file/handler: an interrupted
+    // request used to be able to leave stock posted with no invoice row (or
+    // vice versa). All checks below stay in TypeScript (§107.8's own rule --
+    // only the WRITE moves into the transaction, not the calculations);
+    // movements + the invoice/lines/reservation/DO writes all land in one
+    // erp_inventory.post_document() call, handled by
+    // erp_procurement.complete_pgi_invoice_action() in the same transaction.
+    const movements: JsonRecord[] = [];
+    for (const c of lineComputations) {
+      const materialId = toTrimmedString(c.line.material_id);
+      const storageLocationId = toTrimmedString(c.line.storage_location_id);
+      const postingBlocked = await hasPhysicalInventoryBlock(materialId, storageLocationId);
+      if (postingBlocked) {
+        return doErrorResponse(req, ctx, "MATERIAL_POSTING_BLOCKED", 409, "Material has an active physical inventory count in progress.");
+      }
+      let snapshot: JsonRecord;
+      try {
+        snapshot = await getSnapshotForIssue(companyId, storageLocationId, materialId);
+      } catch {
+        return doErrorResponse(req, ctx, "INSUFFICIENT_STOCK", 400, `No unrestricted stock found for line ${c.line.line_number}.`);
+      }
+      if (Number(snapshot.quantity ?? 0) < c.quantity) {
+        return doErrorResponse(req, ctx, "INSUFFICIENT_STOCK", 400, `Insufficient stock for line ${c.line.line_number}.`);
+      }
+      movements.push({
+        document_number: invoiceNumber,
+        document_date: invoiceDate,
+        posting_date: todayIsoDate(),
+        movement_type_code: "P601",
+        company_id: companyId,
+        storage_location_id: storageLocationId,
+        material_id: materialId,
+        quantity: c.quantity,
+        base_uom_code: c.line.uom_code,
+        unit_value: Number(snapshot.valuation_rate ?? 0),
+        stock_type_code: "UNRESTRICTED",
+        direction: "OUT",
+        reference_document_number: invoiceNumber,
+        line_ref: String(c.line.id),
+      });
+    }
+
+    // §106: one Material Document for the whole PGI event; the invoice
+    // number becomes the reference (this is the invoice's own physical
+    // goods-issue event, not the DO's -- DO itself never posts stock).
+    const matDoc = await generateMaterialDocNumber(companyId);
+    for (const m of movements) {
+      m.material_doc_number = matDoc.docNumber;
+      m.material_doc_year = matDoc.docYear;
+    }
+
+    const invoiceLinesPayload = lineComputations.map((c, index) => ({
+      line_number: index + 1,
+      so_line_id: isSalesOrder ? c.line.so_line_id : null,
+      dc_line_id: c.line.id,
+      material_id: c.line.material_id,
+      quantity: c.quantity,
+      uom_code: c.line.uom_code,
+      rate: c.rate,
+      taxable_value: c.taxableValue,
+      gst_rate: c.line.gst_rate != null ? Number(c.line.gst_rate) : null,
+      cgst_amount: c.cgstAmount,
+      sgst_amount: c.sgstAmount,
+      igst_amount: c.igstAmount,
+      line_total: c.lineTotal,
+    }));
+
+    const reservationsPayload = lineComputations
+      .map((c) => ({
+        source_line_id: toTrimmedString(isSalesOrder ? c.line.so_line_id : c.line.sto_line_id),
+        issued_qty: c.quantity,
+      }))
+      .filter((r) => r.source_line_id);
+
+    const context = {
+      action: "CREATE",
+      dc_id: dcId,
+      invoice: {
         invoice_number: invoiceNumber,
-        invoice_date: todayIsoDate(),
+        invoice_date: invoiceDate,
         company_id: companyId,
         customer_id: isSalesOrder ? toTrimmedString(dc.customer_id) : null,
         sto_id: isSalesOrder ? null : toTrimmedString(dc.sto_id),
@@ -1258,119 +1357,26 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
         total_igst_amount: Number(totalIgstAmount.toFixed(4)),
         total_gst_amount: totalGstAmount,
         total_invoice_value: totalInvoiceValue,
-        status: "POSTED",
         posted_by: ctx.auth_user_id,
-        posted_at: new Date().toISOString(),
         remarks: toTrimmedString(body.remarks) || null,
         created_by: ctx.auth_user_id,
-      })
-      .select("*")
-      .single();
-    if (invoiceError || !invoice) return doErrorResponse(req, ctx, "PGI_INVOICE_CREATE_FAILED", 500, "Unable to create invoice.");
+      },
+      lines: invoiceLinesPayload,
+      reservations: reservationsPayload,
+    };
 
-    const linePayload = lineComputations.map((c, index) => ({
-      invoice_id: invoice.id,
-      line_number: index + 1,
-      so_line_id: isSalesOrder ? c.line.so_line_id : null,
-      dc_line_id: c.line.id,
-      material_id: c.line.material_id,
-      quantity: c.quantity,
-      uom_code: c.line.uom_code,
-      rate: c.rate,
-      taxable_value: c.taxableValue,
-      gst_rate: c.line.gst_rate != null ? Number(c.line.gst_rate) : null,
-      cgst_amount: c.cgstAmount,
-      sgst_amount: c.sgstAmount,
-      igst_amount: c.igstAmount,
-      line_total: c.lineTotal,
-    }));
-    const { error: lineInsertError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("sales_invoice_line")
-      .insert(linePayload);
-    if (lineInsertError) return doErrorResponse(req, ctx, "PGI_INVOICE_LINE_CREATE_FAILED", 500, "Unable to create invoice lines.");
+    const { error: postDocumentError } = await serviceRoleClient
+      .schema("erp_inventory")
+      .rpc("post_document", {
+        p_reference_document_type: "SALES_INVOICE",
+        p_reference_document_id: invoiceId,
+        p_movements: movements,
+        p_posted_by: ctx.auth_user_id,
+        p_context: context,
+      });
+    if (postDocumentError) return doErrorResponse(req, ctx, "PGI_POST_FAILED", 500, postDocumentError.message || "Unable to post PGI and invoice.");
 
-    // §106: one Material Document for the whole PGI event; the invoice
-    // number becomes the reference (this is the invoice's own physical
-    // goods-issue event, not the DO's -- DO itself never posts stock).
-    const matDoc = await generateMaterialDocNumber(companyId);
-
-    // DEPENDENT: each line's stock posting must land before the next
-    // line's availability check, same reasoning as dispatchSTOHandler's
-    // own posting loop -- shared material+location across lines could
-    // otherwise double-spend the same balance within this one request.
-    for (const c of lineComputations) {
-      const materialId = toTrimmedString(c.line.material_id);
-      const storageLocationId = toTrimmedString(c.line.storage_location_id);
-      const postingBlocked = await hasPhysicalInventoryBlock(materialId, storageLocationId);
-      if (postingBlocked) {
-        return doErrorResponse(req, ctx, "MATERIAL_POSTING_BLOCKED", 409, "Material has an active physical inventory count in progress.");
-      }
-      let snapshot: JsonRecord;
-      try {
-        snapshot = await getSnapshotForIssue(companyId, storageLocationId, materialId);
-      } catch {
-        return doErrorResponse(req, ctx, "INSUFFICIENT_STOCK", 400, `No unrestricted stock found for line ${c.line.line_number}.`);
-      }
-      if (Number(snapshot.quantity ?? 0) < c.quantity) {
-        return doErrorResponse(req, ctx, "INSUFFICIENT_STOCK", 400, `Insufficient stock for line ${c.line.line_number}.`);
-      }
-
-      const posting = await serviceRoleClient
-        .schema("erp_inventory")
-        .rpc("post_stock_movement", {
-          p_document_number: String(invoice.invoice_number),
-          p_document_date: String(invoice.invoice_date),
-          p_posting_date: todayIsoDate(),
-          p_movement_type_code: "P601",
-          p_company_id: companyId,
-          p_storage_location_id: storageLocationId,
-          p_material_id: materialId,
-          p_quantity: c.quantity,
-          p_base_uom_code: c.line.uom_code,
-          p_unit_value: Number(snapshot.valuation_rate ?? 0),
-          p_stock_type_code: "UNRESTRICTED",
-          p_direction: "OUT",
-          p_posted_by: ctx.auth_user_id,
-          p_reversal_of_id: null,
-          p_material_doc_number: matDoc.docNumber,
-          p_material_doc_year: matDoc.docYear,
-          p_reference_document_number: String(invoice.invoice_number),
-          p_reference_document_type: "SALES_INVOICE",
-          p_reference_document_id: invoice.id ?? null,
-        });
-      if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {
-        return doErrorResponse(req, ctx, "PGI_POST_FAILED", 500, `Unable to post GI stock movement for line ${c.line.line_number}.`);
-      }
-
-      // Close out the reservation this DO line opened at create time
-      // (§83.5) -- physical stock has now actually left via the P601
-      // posting above, so leaving it OPEN/PARTIAL would keep blocking a
-      // later DO's availability check (getAvailableQty) against the same
-      // material+location forever. Real gap found live 2026-07-31: the
-      // first PGI test left its reservation stuck OPEN with issued_qty=0.
-      const sourceLineId = toTrimmedString(isSalesOrder ? c.line.so_line_id : c.line.sto_line_id);
-      if (sourceLineId) {
-        const { error: reservationCloseError } = await serviceRoleClient
-          .schema("erp_production")
-          .from("reservation_document")
-          .update({ status: "FULLY_ISSUED", issued_qty: c.quantity, last_updated_by: ctx.auth_user_id, last_updated_at: new Date().toISOString() })
-          .eq("source_line_id", sourceLineId)
-          .in("status", RESERVATION_OPEN_STATUSES);
-        if (reservationCloseError) {
-          return doErrorResponse(req, ctx, "PGI_RESERVATION_CLOSE_FAILED", 500, `Invoice posted, but unable to close the reservation for line ${c.line.line_number}.`);
-        }
-      }
-    }
-
-    const { error: dcStatusError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("delivery_challan")
-      .update({ status: "DISPATCHED" })
-      .eq("id", dcId);
-    if (dcStatusError) return doErrorResponse(req, ctx, "DO_STATUS_UPDATE_FAILED", 500, "Invoice posted, but unable to update delivery order status.");
-
-    return okResponse({ ...invoice, lines: linePayload }, ctx.request_id, req);
+    return okResponse(await hydrateSalesInvoiceForDo(invoiceId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PGI_INVOICE_CREATE_FAILED";
     const status = code === "DO_NOT_FOUND" ? 404
@@ -1435,62 +1441,53 @@ export async function reverseSalesInvoiceHandler(req: Request, ctx: ProcurementH
     const matDoc = await generateMaterialDocNumber(companyId);
     const nowIso = new Date().toISOString();
 
-    // DEPENDENT: same reasoning as the original posting loop -- sequential
-    // to avoid double-crediting shared material+location within one request.
-    for (const leg of originalLegs) {
-      const posting = await serviceRoleClient
-        .schema("erp_inventory")
-        .rpc("post_stock_movement", {
-          p_document_number: String(invoice.invoice_number),
-          p_document_date: String(invoice.invoice_date),
-          p_posting_date: todayIsoDate(),
-          p_movement_type_code: "P602",
-          p_company_id: companyId,
-          p_storage_location_id: leg.source_location_id,
-          p_material_id: leg.material_id,
-          p_quantity: Number(leg.quantity ?? 0),
-          p_base_uom_code: leg.base_uom_code,
-          // Reverse at the ORIGINAL leg's own rate, not a fresh snapshot
-          // read -- reversing at a stale/zero rate would dilute the
-          // restored material's own weighted-average (§104-4's own rule,
-          // applied here the same way).
-          p_unit_value: Number(leg.valuation_rate ?? 0),
-          p_stock_type_code: "UNRESTRICTED",
-          p_direction: "IN",
-          p_posted_by: ctx.auth_user_id,
-          p_reversal_of_id: leg.id,
-          p_material_doc_number: matDoc.docNumber,
-          p_material_doc_year: matDoc.docYear,
-          p_reference_document_number: String(invoice.invoice_number),
-          p_reference_document_type: "SALES_INVOICE",
-          p_reference_document_id: invoiceId,
-        });
-      if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {
-        return doErrorResponse(req, ctx, "PGI_REVERSAL_POST_FAILED", 500, "Unable to post GI reversal stock movement.");
-      }
-    }
+    // §8D step 4 -- same move as createPgiInvoiceHandler: all reversal legs
+    // + the invoice CANCELLED + DO reopened land in one erp_inventory.
+    // post_document() call, handled by complete_pgi_invoice_action()
+    // (action: 'REVERSE') in the same transaction.
+    const movements = originalLegs.map((leg) => ({
+      document_number: String(invoice.invoice_number),
+      document_date: String(invoice.invoice_date),
+      posting_date: todayIsoDate(),
+      movement_type_code: "P602",
+      company_id: companyId,
+      storage_location_id: leg.source_location_id,
+      material_id: leg.material_id,
+      quantity: Number(leg.quantity ?? 0),
+      base_uom_code: leg.base_uom_code,
+      // Reverse at the ORIGINAL leg's own rate, not a fresh snapshot read --
+      // reversing at a stale/zero rate would dilute the restored material's
+      // own weighted-average (§104-4's own rule, applied here the same way).
+      unit_value: Number(leg.valuation_rate ?? 0),
+      stock_type_code: "UNRESTRICTED",
+      direction: "IN",
+      reversal_of_id: leg.id,
+      material_doc_number: matDoc.docNumber,
+      material_doc_year: matDoc.docYear,
+      reference_document_number: String(invoice.invoice_number),
+      line_ref: String(leg.id),
+    }));
 
-    const { error: invoiceUpdateError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("sales_invoice")
-      .update({
-        status: "CANCELLED",
-        cancellation_reason: reason,
+    const context = {
+      action: "REVERSE",
+      dc_id: dcId || null,
+      cancel: {
         cancelled_by: ctx.auth_user_id,
         cancelled_at: nowIso,
-        last_updated_at: nowIso,
-      })
-      .eq("id", invoiceId);
-    if (invoiceUpdateError) return doErrorResponse(req, ctx, "PGI_INVOICE_REVERSE_FAILED", 500, "Unable to cancel the invoice.");
+        cancellation_reason: reason,
+      },
+    };
 
-    if (dcId) {
-      const { error: dcUpdateError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("delivery_challan")
-        .update({ status: "CREATED" })
-        .eq("id", dcId);
-      if (dcUpdateError) return doErrorResponse(req, ctx, "DO_RELEASE_FAILED", 500, "Invoice reversed, but unable to release the delivery order back to the queue.");
-    }
+    const { error: postDocumentError } = await serviceRoleClient
+      .schema("erp_inventory")
+      .rpc("post_document", {
+        p_reference_document_type: "SALES_INVOICE",
+        p_reference_document_id: invoiceId,
+        p_movements: movements,
+        p_posted_by: ctx.auth_user_id,
+        p_context: context,
+      });
+    if (postDocumentError) return doErrorResponse(req, ctx, "PGI_REVERSAL_POST_FAILED", 500, postDocumentError.message || "Unable to reverse GI and invoice.");
 
     return okResponse({ ...invoice, status: "CANCELLED", cancellation_reason: reason }, ctx.request_id, req);
   } catch (error) {

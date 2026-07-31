@@ -13,6 +13,7 @@ import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleCli
 import { okResponse, errorResponse } from "../../../_core/response.ts";
 import { log } from "../../../_lib/logger.ts";
 import { isSuperAdmin } from "../../../_shared/role_ladder.ts";
+import { INDIAN_STATE_NAMES } from "../../../_shared/indianStates.ts";
 
 type HandlerContext = {
   context: ContextResolution;
@@ -100,6 +101,16 @@ export async function updateCompanyAddressHandler(
       return errorResponse(
         "PIN_CODE_INVALID",
         "pin code must be exactly 6 digits",
+        ctx.request_id,
+      );
+    }
+
+    // The frontend dropdown only offers Indian states -- every company in
+    // this ERP is a domestic legal entity, so this holds unconditionally.
+    if (normalizedStateName && !INDIAN_STATE_NAMES.has(normalizedStateName)) {
+      return errorResponse(
+        "STATE_NAME_INVALID",
+        "invalid state name",
         ctx.request_id,
       );
     }

@@ -12,6 +12,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -95,6 +96,20 @@ export async function createVendorHandler(
     }
     if (!ALLOWED_VENDOR_TYPES.has(vendorType)) {
       return vendorErrorResponse(req, ctx, "OM_INVALID_VENDOR_TYPE", 400, "Invalid vendor type");
+    }
+    // DOMESTIC-only: the frontend dropdown only offers Indian states (Import
+    // vendors keep free text for their own country's state/province) --
+    // enforced here too so a direct API call can't slip in a typo that
+    // would silently break GST place-of-supply string matching.
+    if (vendorType === "DOMESTIC") {
+      const regState = toTrimmedString(body.reg_address_state);
+      const corrState = toTrimmedString(body.corr_address_state);
+      if (regState && !INDIAN_STATE_NAMES.has(regState)) {
+        return vendorErrorResponse(req, ctx, "OM_INVALID_REG_ADDRESS_STATE", 400, "Invalid registered address state");
+      }
+      if (corrState && !INDIAN_STATE_NAMES.has(corrState)) {
+        return vendorErrorResponse(req, ctx, "OM_INVALID_CORR_ADDRESS_STATE", 400, "Invalid correspondence address state");
+      }
     }
 
     const { data: vendorCode, error: codeError } = await serviceRoleClient.rpc("generate_vendor_code");
@@ -261,6 +276,19 @@ export async function updateVendorHandler(
     for (const field of mutableFields) {
       if (body[field] !== undefined) {
         updates[field] = toTrimmedString(body[field]) || null;
+      }
+    }
+
+    // Same DOMESTIC-only allowlist as create -- vendor_type itself isn't
+    // editable here, so the existing row's own type is authoritative.
+    if (toTrimmedString(existing.vendor_type).toUpperCase() === "DOMESTIC") {
+      const regState = updates.reg_address_state as string | null | undefined;
+      const corrState = updates.corr_address_state as string | null | undefined;
+      if (regState && !INDIAN_STATE_NAMES.has(regState)) {
+        return vendorErrorResponse(req, ctx, "OM_INVALID_REG_ADDRESS_STATE", 400, "Invalid registered address state");
+      }
+      if (corrState && !INDIAN_STATE_NAMES.has(corrState)) {
+        return vendorErrorResponse(req, ctx, "OM_INVALID_CORR_ADDRESS_STATE", 400, "Invalid correspondence address state");
       }
     }
 

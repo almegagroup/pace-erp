@@ -14,6 +14,7 @@ import type { OmHandlerContext } from "./shared.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { resolveGstProfileWithSource } from "../../_shared/gst_resolver.ts";
 import { deriveCompanyFieldsFromGstProfile } from "../../_shared/gst_company_fields.ts";
+import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -182,6 +183,11 @@ export async function createCustomerHandler(
     // have none). Mandatory regardless of gst_category.
     if (!billingState) {
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_BILLING_STATE_REQUIRED", 400, "Billing state is required");
+    }
+    // DOMESTIC-only: the frontend dropdown only offers Indian states (EXPORT
+    // customers keep free text for their own country's state/province).
+    if (customerType === "DOMESTIC" && !INDIAN_STATE_NAMES.has(billingState)) {
+      return customerErrorResponse(req, ctx, "OM_INVALID_BILLING_STATE", 400, "Invalid billing state");
     }
     if (!companyId) {
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_COMPANY_REQUIRED", 400, "company_id is required");
@@ -439,6 +445,15 @@ export async function updateCustomerHandler(
     for (const field of mutableFields) {
       if (body[field] !== undefined) {
         updates[field] = body[field];
+      }
+    }
+
+    // Same DOMESTIC-only allowlist as create -- customer_type itself isn't
+    // editable here, so the existing row's own type is authoritative.
+    if (toTrimmedString(existing.customer_type).toUpperCase() === "DOMESTIC" && updates.billing_state !== undefined) {
+      const billingState = toTrimmedString(updates.billing_state);
+      if (billingState && !INDIAN_STATE_NAMES.has(billingState)) {
+        return customerErrorResponse(req, ctx, "OM_INVALID_BILLING_STATE", 400, "Invalid billing state");
       }
     }
 

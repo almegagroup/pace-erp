@@ -28,6 +28,7 @@ import {
   bulkUnmapVendors,
 } from "../../../pages/dashboard/om/omApi.js";
 import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { INDIAN_STATES, matchIndianStateName } from "../../../data/indianStates.js";
 
 /* ─── Currency options ───────────────────────────────────────────────────── */
 const CURRENCY_OPTIONS = [
@@ -136,7 +137,7 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
       const profile = await lookupGst(gst);
       if (profile.legal_name) patch("vendor_name", profile.legal_name);
       if (profile.full_address) patch("reg_address_line1", profile.full_address);
-      if (profile.state_name)   patch("reg_address_state", profile.state_name);
+      if (profile.state_name)   patch("reg_address_state", matchIndianStateName(profile.state_name));
       if (profile.pin_code)     patch("reg_address_pin",   profile.pin_code);
       setGstNotice(`GST found: ${profile.legal_name ?? "—"}`);
     } catch {
@@ -306,7 +307,14 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
               </div>
               <div>
                 <div className={lbl}>State</div>
-                <input value={fields.reg_address_state} onChange={(e) => patch("reg_address_state", e.target.value)} className={inp} />
+                {vendorType === "DOMESTIC" ? (
+                  <select value={fields.reg_address_state} onChange={(e) => patch("reg_address_state", e.target.value)} className={inp}>
+                    <option value="">Select state</option>
+                    {INDIAN_STATES.map((state) => <option key={state.code} value={state.name}>{state.name}</option>)}
+                  </select>
+                ) : (
+                  <input value={fields.reg_address_state} onChange={(e) => patch("reg_address_state", e.target.value)} className={inp} placeholder="State / province" />
+                )}
               </div>
               <div>
                 <div className={lbl}>PIN / ZIP</div>
@@ -327,7 +335,14 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
               </div>
               <div>
                 <div className={lbl}>State</div>
-                <input value={fields.corr_address_state} onChange={(e) => patch("corr_address_state", e.target.value)} className={inp} />
+                {vendorType === "DOMESTIC" ? (
+                  <select value={fields.corr_address_state} onChange={(e) => patch("corr_address_state", e.target.value)} className={inp}>
+                    <option value="">Select state</option>
+                    {INDIAN_STATES.map((state) => <option key={state.code} value={state.name}>{state.name}</option>)}
+                  </select>
+                ) : (
+                  <input value={fields.corr_address_state} onChange={(e) => patch("corr_address_state", e.target.value)} className={inp} placeholder="State / province" />
+                )}
               </div>
               <div>
                 <div className={lbl}>PIN / ZIP</div>
