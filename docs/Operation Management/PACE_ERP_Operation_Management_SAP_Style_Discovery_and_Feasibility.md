@@ -15850,4 +15850,9 @@ CUSTOM:
 
 **Scope:** SO-only (RM/PM/INT)। STO-তে কোনো পরিবর্তন নেই। FG (Phase 2) আলাদা, এখানে touch হয়নি।
 
+**Addendum (একই দিন, business owner-এর নিজের চ্যালেঞ্জে ধরা পড়ল — 2026-07-31): Invoice-এই Bill-To + Ship-To দুটোই printed থাকতে হবে, শুধু GST math-এর জন্য না।**
+GST invoice-এ আইনত দুটো party আলাদাভাবে দেখাতে হয় — **Bill To** (Customer-এর নিজের registered identity — Name, Billing Address, State, GST Number) আর **Ship To** (delivery destination — উপরের mechanism)। উপরের lock শুধু GST type নির্ধারণের জন্য Ship-To state ঠিক করেছিল, কিন্তু `sales_invoice` table-এ কোনো Bill-To/Ship-To column-ই ছিল না, আর Invoice Detail page-এও কোথাও এই দুটো block আলাদাভাবে দেখাচ্ছিল না — শুধু customer name (title-এ) আর একটা loose "Consignee Address"।
+
+**Fix:** `sales_invoice`-এ ৮টা নতুন column (`bill_to_name/address/state/gst_number`, `ship_to_name/address/state/gst_number`) — PGI-র সময়েই **freeze** হয়ে যায় (invoice নিজে self-contained থাকে, পরে DO/Customer বদলালেও invoice-এর data বদলাবে না)। SO-র জন্য: Bill-To = Customer Master-এর billing_address/billing_state/gst_number; Ship-To = DO-র frozen ship_to_* snapshot। STO-র জন্য: কোনো আলাদা customer নেই, তাই Bill-To ও Ship-To দুটোই receiving company-র নিজের data (company address/state/GST Number)। PGI Create form (review-এর আগে) আর Invoice Detail page — দুটোতেই এখন আলাদা "Bill-To / Ship-To" section আছে (দুই column পাশাপাশি)।
+
 ---

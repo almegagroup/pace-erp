@@ -325,6 +325,25 @@ export default function SalesInvoiceDetailPage() {
             </div>
           </ErpSectionCard>
 
+          <ErpSectionCard eyebrow="Bill-To / Ship-To" title="Frozen at PGI time (§113.16-addendum)">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-2">
+                <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Bill To</div>
+                <ErpFieldPreview label="Name" value={detail.bill_to_name || "—"} />
+                <ErpFieldPreview label="Address" value={detail.bill_to_address || "—"} />
+                <ErpFieldPreview label="State" value={detail.bill_to_state || "—"} />
+                <ErpFieldPreview label="GST Number" value={detail.bill_to_gst_number || "—"} />
+              </div>
+              <div className="grid gap-2">
+                <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Ship To</div>
+                <ErpFieldPreview label="Name" value={detail.ship_to_name || "—"} />
+                <ErpFieldPreview label="Address" value={detail.ship_to_address || "—"} />
+                <ErpFieldPreview label="State" value={detail.ship_to_state || "—"} />
+                <ErpFieldPreview label="GST Number" value={detail.ship_to_gst_number || "—"} />
+              </div>
+            </div>
+          </ErpSectionCard>
+
           <ErpSectionCard eyebrow="Lines" title="Invoice lines">
             <ErpDenseGrid
               columns={[

@@ -766,10 +766,10 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
 
   const [companiesResp, customerResp, sourceResp, transporterResp, costCenterResp, materialsResp, locationsResp, paymentTermResp, invoiceResp] = await Promise.all([
     companyIds.length
-      ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name, state_name").in("id", companyIds)
+      ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name, state_name, full_address, gst_number").in("id", companyIds)
       : Promise.resolve({ data: [] as JsonRecord[], error: null }),
     dc.customer_id
-      ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name, billing_state").eq("id", dc.customer_id).maybeSingle()
+      ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name, billing_state, billing_address, delivery_address, gst_number").eq("id", dc.customer_id).maybeSingle()
       : Promise.resolve({ data: null as JsonRecord | null, error: null }),
     isSalesOrder
       ? (dc.sales_order_id
@@ -862,6 +862,27 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
     payment_term_display: paymentTerm ? `${paymentTerm.code ?? ""} | ${paymentTerm.name ?? ""}`.trim() : null,
     selling_company_state_name: toTrimmedString(sellingCompany?.state_name) || null,
     counterparty_state_name: counterpartyStateName,
+    // §113.16-addendum -- preview of the Bill-To/Ship-To pair the PGI+Invoice
+    // form will actually freeze onto the invoice (createPgiInvoiceHandler
+    // resolves the same way) -- "nothing here is authoritative" applies here
+    // too, same as counterparty_state_name above. STO has no separate
+    // customer, so Bill-To and Ship-To both preview as the receiving
+    // company; dc.ship_to_* (raw spread above) already carries the real
+    // frozen snapshot for SO, these overrides only kick in for STO.
+    bill_to_name: isSalesOrder
+      ? (toTrimmedString(customer?.customer_name) || null)
+      : (receivingCompany ? `${receivingCompany.company_code ?? ""} — ${receivingCompany.company_name ?? ""}`.trim() : null),
+    bill_to_address: isSalesOrder
+      ? (toTrimmedString(customer?.billing_address) || toTrimmedString(customer?.delivery_address) || null)
+      : (toTrimmedString(receivingCompany?.full_address) || null),
+    bill_to_state: isSalesOrder ? (toTrimmedString(customer?.billing_state) || null) : (toTrimmedString(receivingCompany?.state_name) || null),
+    bill_to_gst_number: isSalesOrder ? (toTrimmedString(customer?.gst_number) || null) : (toTrimmedString(receivingCompany?.gst_number) || null),
+    ...(isSalesOrder ? {} : {
+      ship_to_name: receivingCompany ? `${receivingCompany.company_code ?? ""} — ${receivingCompany.company_name ?? ""}`.trim() : null,
+      ship_to_address: toTrimmedString(receivingCompany?.full_address) || null,
+      ship_to_state: toTrimmedString(receivingCompany?.state_name) || null,
+      ship_to_gst_number: toTrimmedString(receivingCompany?.gst_number) || null,
+    }),
     invoice_id: invoice?.id ?? null,
     invoice_number: invoice?.invoice_number ?? null,
     invoice_date: invoice?.invoice_date ?? null,
@@ -1082,6 +1103,15 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
     // GST type: same function either way, just a different pair of states.
     let companyStateName: string | null = null;
     let counterpartyStateName: string | null = null;
+    // §113.16-addendum -- a GST invoice legally needs BOTH Bill-To (the
+    // customer's own registered identity) and Ship-To (the delivery
+    // destination) printed, not just whichever one happens to drive the
+    // CGST+SGST-vs-IGST math. Frozen onto the invoice itself at create time
+    // (not just left on the DO) so the invoice stays self-contained even if
+    // the DO/customer record changes later.
+    type PartyDetail = { name: string | null; address: string | null; state: string | null; gstNumber: string | null };
+    let billTo: PartyDetail;
+    let shipTo: PartyDetail;
     const { data: sellingCompany, error: sellingCompanyError } = await serviceRoleClient
       .schema("erp_master").from("companies").select("state_name").eq("id", companyId).maybeSingle();
     if (sellingCompanyError) return doErrorResponse(req, ctx, "PGI_INVOICE_TAX_CONTEXT_FAILED", 500, "Unable to load company tax context.");
@@ -1101,16 +1131,49 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
       if (!counterpartyStateName) {
         return doErrorResponse(req, ctx, "DO_SHIP_TO_STATE_MISSING", 400, "This Delivery Order has no Ship-To State recorded (likely created before the Ship-To mechanism existed) -- reverse it and re-create the DO so it picks up the SO's current Ship-To.");
       }
+      const { data: customer, error: customerError } = await serviceRoleClient
+        .schema("erp_master")
+        .from("customer_master")
+        .select("customer_name, billing_address, delivery_address, billing_state, gst_number")
+        .eq("id", customerId)
+        .maybeSingle();
+      if (customerError || !customer) return doErrorResponse(req, ctx, "PGI_INVOICE_CUSTOMER_LOOKUP_FAILED", 500, "Unable to load customer for Bill-To.");
+      billTo = {
+        name: toTrimmedString(customer.customer_name) || null,
+        address: toTrimmedString(customer.billing_address) || toTrimmedString(customer.delivery_address) || null,
+        state: toTrimmedString(customer.billing_state) || null,
+        gstNumber: toTrimmedString(customer.gst_number) || null,
+      };
+      shipTo = {
+        name: toTrimmedString(dc.ship_to_name) || null,
+        address: toTrimmedString(dc.ship_to_address) || null,
+        state: counterpartyStateName,
+        gstNumber: toTrimmedString(dc.ship_to_gst_number) || null,
+      };
     } else {
       const receivingCompanyId = toTrimmedString(dc.receiving_company_id);
       if (!receivingCompanyId) return doErrorResponse(req, ctx, "PGI_INVOICE_RECEIVING_COMPANY_REQUIRED", 400, "Delivery order has no receiving company.");
       const { data: receivingCompany, error: receivingCompanyError } = await serviceRoleClient
-        .schema("erp_master").from("companies").select("state_name").eq("id", receivingCompanyId).maybeSingle();
+        .schema("erp_master")
+        .from("companies")
+        .select("company_code, company_name, state_name, full_address, gst_number")
+        .eq("id", receivingCompanyId)
+        .maybeSingle();
       if (receivingCompanyError) return doErrorResponse(req, ctx, "PGI_INVOICE_TAX_CONTEXT_FAILED", 500, "Unable to load receiving company tax context.");
       counterpartyStateName = toTrimmedString(receivingCompany?.state_name) || null;
       if (!counterpartyStateName) {
         return doErrorResponse(req, ctx, "PGI_INVOICE_RECEIVING_COMPANY_STATE_MISSING", 400, "Receiving company has no State set -- fix it on Company Master before PGI (needed to determine CGST+SGST vs IGST).");
       }
+      // STO has no separate customer -- Bill-To and Ship-To are both the
+      // receiving company itself.
+      const receivingCompanyDetail: PartyDetail = {
+        name: receivingCompany?.company_name ? `${receivingCompany.company_code ?? ""} — ${receivingCompany.company_name}`.trim() : null,
+        address: toTrimmedString(receivingCompany?.full_address) || null,
+        state: counterpartyStateName,
+        gstNumber: toTrimmedString(receivingCompany?.gst_number) || null,
+      };
+      billTo = receivingCompanyDetail;
+      shipTo = receivingCompanyDetail;
     }
     if (!companyStateName) {
       return doErrorResponse(req, ctx, "PGI_INVOICE_SELLING_COMPANY_STATE_MISSING", 400, "Selling company has no State set -- fix it on Company Master before PGI (needed to determine CGST+SGST vs IGST).");
@@ -1177,6 +1240,14 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
         so_id: isSalesOrder ? toTrimmedString(dc.sales_order_id) : null,
         payment_term_id: toTrimmedString(dc.payment_term_id) || null,
         gst_type: gstType,
+        bill_to_name: billTo.name,
+        bill_to_address: billTo.address,
+        bill_to_state: billTo.state,
+        bill_to_gst_number: billTo.gstNumber,
+        ship_to_name: shipTo.name,
+        ship_to_address: shipTo.address,
+        ship_to_state: shipTo.state,
+        ship_to_gst_number: shipTo.gstNumber,
         tally_invoice_number: tallyInvoiceNumber,
         tally_invoice_date: tallyInvoiceDate,
         freight_included: freightIncluded,
