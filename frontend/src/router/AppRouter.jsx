@@ -110,6 +110,7 @@ import AslDetailPage from "../pages/dashboard/om/asl/AslDetailPage.jsx";
 import CustomerListPage from "../pages/dashboard/om/customer/CustomerListPage.jsx";
 import CustomerCreatePage from "../pages/dashboard/om/customer/CustomerCreatePage.jsx";
 import CustomerDetailPage from "../pages/dashboard/om/customer/CustomerDetailPage.jsx";
+import FgDispatchCustomerPage from "../pages/dashboard/om/FgDispatchCustomerPage.jsx";
 import POListPage from "../pages/dashboard/procurement/po/POListPage.jsx";
 import POCreatePage from "../pages/dashboard/procurement/po/POCreatePage.jsx";
 import POCreateOpeningPage from "../pages/dashboard/procurement/po/POCreateOpeningPage.jsx";
@@ -515,6 +516,10 @@ export default function AppRouter() {
                   <Route
                     path="om/customer/detail"
                     element={<CustomerDetailPage />}
+                  />
+                  <Route
+                    path="om/fg-dispatch-customers"
+                    element={<FgDispatchCustomerPage />}
                   />
                   <Route
                     path="procurement/purchase-orders"

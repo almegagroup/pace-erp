@@ -247,6 +247,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/om/parent-customers":                     { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
   "POST:/api/om/parent-customer":                     { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
   "PATCH:/api/om/parent-customer":                    { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
+  "GET:/api/om/fg-parent-companies":                  { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "VIEW" },
+  "POST:/api/om/fg-parent-company":                   { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
+  "GET:/api/om/fg-depot-codes":                       { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "VIEW" },
+  "POST:/api/om/fg-depot-code":                       { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
+  "POST:/api/om/fg-dispatch-customer":                { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
 
   // ── OM: Utility (used by forms — skipAcl) ────────────────────────────────
   "GET:/api/om/uoms":                                 { skipAcl: true },
@@ -423,6 +428,24 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
       GET:    { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"   },
       PUT:    { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT"   },
       DELETE: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "DELETE" },
+    },
+  },
+
+  {
+    pattern: /^\/api\/om\/fg-dispatch-customers\/[^/]+\/upgrade-gst$/,
+    methods: { POST: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/om\/fg-dispatch-customers\/[^/]+\/addresses$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "VIEW" },
+      POST: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
+    },
+  },
+  {
+    pattern: /^\/api\/om\/fg-dispatch-addresses\/[^/]+$/,
+    methods: {
+      PATCH: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "EDIT" },
     },
   },
   {

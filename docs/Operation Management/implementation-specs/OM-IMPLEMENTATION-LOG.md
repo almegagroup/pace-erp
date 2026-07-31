@@ -2897,3 +2897,83 @@ integrity `in_sync = true` after reconciling the MCP timestamp per §8A.
 - Current live Dev data has no approved `stroke_master` rows with `po_type='MTS'`, so the brief's requested runtime verification on a real company with 2 MTS-scoped SKUs could not be completed without inventing business data. This was recorded as a Dev-data limitation rather than silently faked.
 
 **Files:** `supabase/migrations/20260731160000_gate27_25_mts_sku_monthly_rate.sql`, `supabase/functions/api/_core/production/mts_sku_rate.handlers.ts`, `supabase/functions/api/_routes/production.routes.ts`, `supabase/functions/api/_acl/route-acl-registry.ts`, `frontend/src/pages/dashboard/production/prodApi.js`, `frontend/src/pages/dashboard/production/MtsSkuMonthlyRatePage.jsx`, `frontend/src/router/AppRouter.jsx`, `frontend/src/navigation/screens/projects/operationModule/operationScreens.js`, `docs/Codex-Log.md`, `OM-IMPLEMENTATION-LOG.md`.
+
+## 2026-07-31 20:18 IST - Gate-27.27 MM05 paused on spec conflict
+
+**Status:** No MM05 implementation started beyond doc review and live Dev verification. Work intentionally paused before migration/backend/frontend edits.
+
+**Why paused:** A direct brief-vs-feasibility conflict was found and resolving it would require guessing:
+
+- `CODEX-GATE27.27-MM05-DISPATCH-CUSTOMER-TASK-BRIEF.md` Change 1 defines a new table `erp_master.fg_dispatch_customer` with its own `fo_customer_type` column and explicitly frames this as reusing only the `customer_master.fo_customer_type` concept/allowed values.
+- Feasibility doc §114.14 says more specifically that `customer_master.fo_customer_type` itself "reuse hobe", "notun kono alada column banate hobe na", and "MM05-o ei eki field byabohar korbe".
+- At the same time, feasibility §114.12 says MM05 is a structurally separate master from `om/customer`, so the source doc and brief are not presently aligned on whether MM05 gets its own type-tag column or must literally write into the existing `customer_master.fo_customer_type`.
+
+**Live Dev verification completed before pause:**
+
+- Confirmed `erp_master.customer_master` exists and already has `fo_customer_type`.
+- Confirmed `erp_master.companies` has the expected company/GST/state/address columns needed by the MM05 parent-company flow.
+- Confirmed `erp_master.parent_customer_master` exists.
+- Confirmed MM05 target tables do not yet exist in Dev: `erp_master.fg_parent_company`, `erp_master.fg_depot_code`, `erp_master.fg_dispatch_customer`, `erp_master.fg_dispatch_customer_address`.
+
+**Action taken:** Per the user instruction for ambiguous/conflicting specs, the discrepancy was logged and implementation was stopped instead of choosing an interpretation silently.
+
+## 2026-07-31 20:26 IST - Claude handoff concerns for AC06 and MM05
+
+**AC06 concern (do not guess through):**
+
+- Feasibility §114.9/§114.10 reads as if one `(material_id, storage_location_id)` pair should belong to only one active costing group at a time; later costing/reporting language treats the resolved group as singular for that material-at-that-SLoc.
+- The AC06 brief's proposed schema does not currently enforce that. Its uniqueness is only `(group_id, material_id, storage_location_id)`, which still permits the same material+SLoc pair to be attached to multiple active groups at once.
+- That mismatch can make later costing-group resolution ambiguous. User was already told this concern in simple Bangla. If you continue AC06, either resolve/log this explicitly first or add a constraint/model change that matches the feasibility reading; do not silently proceed on the weaker uniqueness model.
+
+**MM05 concern (current blocker):**
+
+- Feasibility §114.12 says MM05 must remain a structurally separate master from `om/customer`.
+- Feasibility §114.14 also says `customer_master.fo_customer_type` itself should be reused and that no separate column should be created.
+- The MM05 brief instead defines a new `erp_master.fg_dispatch_customer` table with its own `fo_customer_type` column, interpreting "reuse" as same concept/value-set only.
+- Because these point in different schema directions, MM05 was intentionally paused before implementation. If you resume MM05, first resolve/log whether "reuse" means the literal existing `customer_master.fo_customer_type` column or only the same allowed values on a new MM05-owned column.
+
+## 2026-07-31 22:24 IST - Gate-27.27 MM05 FG Dispatch Customer Master
+
+**Scope implemented:** MM05 only from the updated `CODEX-GATE27.27-MM05-DISPATCH-CUSTOMER-TASK-BRIEF.md`, after re-reading feasibility �114 and re-checking the live Dev schema before code.
+
+- Added `supabase/migrations/20260731183000_gate27_27_fg_dispatch_customer.sql` for the four new MM05 tables:
+  `erp_master.fg_parent_company`, `erp_master.fg_depot_code`,
+  `erp_master.fg_dispatch_customer`, and `erp_master.fg_dispatch_customer_address`.
+- The migration also adds DB-level validation triggers so:
+  `DEPOT` inline address state must equal the linked parent-company state,
+  DIRECT depot codes cannot store inline addresses,
+  and customer-address rows can only point to `DIRECT` depot codes with matching parent-company state.
+- Added `supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts` with separate handlers for parent-company create/list, depot-code create/list, dispatch-customer create, GST upgrade from `UNREGISTERED -> REGISTERED`, and address add/update/list.
+- Wired the backend into `supabase/functions/api/_routes/om.routes.ts` and added code-level route ACL entries in `supabase/functions/api/_acl/route-acl-registry.ts` under resource code `OM_FG_DISPATCH_CUSTOMER`.
+- Added frontend API helpers in `frontend/src/pages/dashboard/om/omApi.js`, created `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx`, and wired the route/screen in `frontend/src/router/AppRouter.jsx` and `frontend/src/navigation/screens/projects/operationModule/operationScreens.js`.
+
+**Important implementation notes:**
+
+- A runtime-critical bug was caught and fixed before verification: the first MM05 backend pass parsed dynamic ids from `customers` / `addresses`, but the actual MM05 paths are `fg-dispatch-customers` / `fg-dispatch-addresses`. Without that fix, the upgrade and address handlers would not have resolved their target ids correctly.
+- The Direct-flow UI was also corrected to support per-address Parent Company re-pick, matching feasibility �114.13 and the brief's scenario-4 verification. This prevents the page from incorrectly forcing every address under the initial header-level parent selection.
+
+**Dev verification / migration state:**
+
+- Used the shared token from `.mcp.codex.local.json` to verify live Dev schema on project `ytapuwiqicmvpanmzelb` before coding.
+- Confirmed the MM05 target tables did not exist before implementation.
+- Applied the MM05 migration to Dev with `supabase db push --linked`.
+- Verified the remote migration ledger includes version `20260731183000`.
+- Verified all four new MM05 tables now exist on Dev.
+
+**Behavioral verification performed:**
+
+- Ran a self-cleaning SQL probe on Dev that inserted and deleted sample MM05 data.
+- Confirmed a `DEPOT` row with matching parent-company state saves successfully.
+- Confirmed a mismatched `DEPOT` address hard-fails with `MM05_STATE_MISMATCH`.
+- Confirmed a DIRECT customer address with matching parent-company state saves successfully.
+- Confirmed a mismatched DIRECT address hard-fails with `MM05_STATE_MISMATCH`.
+- Confirmed the same customer can hold a second address under a different parent company/state, matching feasibility �114.3 scenario 4.
+
+**Verification notes / limitations:**
+
+- `deno check supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts` passed.
+- `deno check supabase/functions/api/_acl/route-acl-registry.ts` passed.
+- `npm.cmd run build` in `frontend/` passed.
+- `node scripts/migration-integrity-check.mjs` still fails in this Windows environment with the known `EPERM` issue, so migration sync was checked via `supabase migration list --linked` and direct remote table verification instead.
+- `deno check supabase/functions/api/_routes/om.routes.ts` still reports only pre-existing unrelated baseline typing errors in older OM files (`customer.handlers.ts`, `location.handlers.ts`, `material.handlers.ts`, `vendor*.handlers.ts`, `_pipeline/session.ts`), not MM05-local failures.
+- The upgrade modal flow was not replayed through a real authenticated browser/API session in this terminal context; its path was verified by code review, the corrected route parser, and the same underlying DB rules rather than a full UI-driven fixture run.
