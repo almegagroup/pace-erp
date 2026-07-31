@@ -350,11 +350,17 @@ export async function createDispatchCustomerHandler(req: Request, ctx: OmHandler
     const name = toTrimmedString(body.name);
     const registrationType = toUpperTrimmedString(body.registration_type);
     const foCustomerType = toUpperTrimmedString(body.fo_customer_type);
+    const state = requireIndianState(req, ctx, body.state);
+    if (state instanceof Response) return state;
+    const fullAddress = toTrimmedString(body.full_address);
     if (!name || !REGISTRATION_TYPES.has(registrationType)) {
       return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "name and registration_type are required.");
     }
     if (foCustomerType && !FO_TYPES.has(foCustomerType)) {
       return mm05Error(req, ctx, "OM_INVALID_FO_CUSTOMER_TYPE", 400, "Invalid FO customer type.");
+    }
+    if (!fullAddress) {
+      return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "full_address and state are required.");
     }
     const gstNumber = registrationType === "REGISTERED" ? (toTrimmedString(body.gst_number) || null) : null;
     if (registrationType === "REGISTERED" && !gstNumber) {
@@ -368,6 +374,9 @@ export async function createDispatchCustomerHandler(req: Request, ctx: OmHandler
         registration_type: registrationType,
         gst_number: gstNumber,
         fo_customer_type: foCustomerType || null,
+        state,
+        full_address: fullAddress,
+        pin_code: toTrimmedString(body.pin_code) || null,
         status: "ACTIVE",
         created_by: ctx.auth_user_id,
       })
@@ -432,6 +441,9 @@ export async function upgradeDispatchCustomerToRegisteredHandler(req: Request, c
         registration_type: "REGISTERED",
         gst_number: gstNumber,
         fo_customer_type: nextFoType || null,
+        state,
+        full_address: addressLine,
+        pin_code: pinCode,
         last_updated_by: ctx.auth_user_id,
         last_updated_at: updatedAt,
       })

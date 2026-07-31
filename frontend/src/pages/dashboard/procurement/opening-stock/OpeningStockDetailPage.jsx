@@ -1,4 +1,4 @@
-/*
+﻿/*
  * File-ID: 19.3.4
  * File-Path: frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx
  * Gate: 19 (ACL migration)
@@ -35,15 +35,21 @@ import {
   useMaterialOptionsQuery,
   useStorageLocationsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
-import { getDerivedOpeningRate } from "../../production/prodApi.js";
+import {
+  getDerivedOpeningRate,
+  listOldPackingPoBatches,
+  listOldProcessPoBatches,
+} from "../../production/prodApi.js";
 
 const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 const ENTRY_MODES = Object.freeze({ SINGLE: "SINGLE", BULK: "BULK" });
+const OPENING_GENEALOGY_PO_TYPES = new Set(["MTO", "HPS"]);
+const RATE_UOM_PO_TYPES = new Set(["MTS", "MTEST"]);
 const CURRENCY_LOCALE_MAP = Object.freeze({
   INR: "en-IN",
   USD: "en-US",
 });
-const BATCH_NUMBER_HELP_TEXT = "Required for MTO/HPS Prodshades - leave blank if this is an MTS (IWC/Powder) item; MTS batch integration is not yet supported here.";
+const BATCH_NUMBER_HELP_TEXT = "MTO/HPS SFG must select a PR22 batch. MTO/HPS FG must select a PR23 packing order; batch is derived automatically. MTS/MTEST can still type batch manually.";
 
 function createEmptySingleForm() {
   return {
@@ -51,10 +57,12 @@ function createEmptySingleForm() {
     storage_location_id: "",
     stock_type: "UNRESTRICTED",
     batch_number: "",
+    packing_order_id: "",
     quantity: "",
     entered_uom_code: "",
     entered_quantity: "",
     rate_per_unit: "",
+    rate_uom_code: "",
   };
 }
 
@@ -65,12 +73,44 @@ function createBulkRow(index) {
     storage_location_id: "",
     stock_type: "UNRESTRICTED",
     batch_number: "",
+    packing_order_id: "",
     quantity: "",
     entered_uom_code: "",
     entered_quantity: "",
     rate_per_unit: "",
+    rate_uom_code: "",
     is_zero_stock: false,
   };
+}
+
+function buildRateUomOptions(material, conversions, includeAlternatesOnly = false) {
+  const baseUomCode = material?.base_uom_code || "";
+  const options = [];
+  if (baseUomCode && !includeAlternatesOnly) {
+    options.push({ value: baseUomCode, label: `${baseUomCode} (Base)`, factor: 1 });
+  }
+  for (const row of conversions ?? []) {
+    if (row.variable_conversion || row.to_uom_code !== baseUomCode || row.from_uom_code === baseUomCode) continue;
+    const factor = Number(row.conversion_factor);
+    if (!Number.isFinite(factor) || factor <= 0) continue;
+    options.push({ value: row.from_uom_code, label: row.from_uom_code, factor });
+  }
+  return options;
+}
+
+function findRateFactor(material, conversions, uomCode) {
+  const options = buildRateUomOptions(material, conversions, false);
+  return options.find((option) => option.value === uomCode)?.factor ?? 1;
+}
+
+function baseRateToDisplay(baseRate, material, conversions, uomCode) {
+  const factor = findRateFactor(material, conversions, uomCode || material?.base_uom_code);
+  return Number(baseRate ?? 0) * factor;
+}
+
+function displayRateToBase(displayRate, material, conversions, uomCode) {
+  const factor = findRateFactor(material, conversions, uomCode || material?.base_uom_code);
+  return factor > 0 ? Number(displayRate ?? 0) / factor : Number(displayRate ?? 0);
 }
 
 function formatCurrency(value, currencyCode = "INR") {
@@ -113,6 +153,71 @@ function formatLocationLabel(location) {
   return `${location.code ?? location.location_code ?? location.name ?? location.location_name ?? "Storage Location"} (${location.location_type ?? "STORE"})`;
 }
 
+function isSfgGenealogyDocument(isOpeningGenealogyDocument, documentMaterialType) {
+  return isOpeningGenealogyDocument && documentMaterialType === "SFG";
+}
+
+function isFgGenealogyDocument(isOpeningGenealogyDocument, documentMaterialType) {
+  return isOpeningGenealogyDocument && documentMaterialType === "FG";
+}
+
+function normalizeNumeric(value) {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function sumOtherLineQuantities(lines, matcher, excludeLineId = "") {
+  return (lines ?? []).reduce((sum, line) => {
+    if (excludeLineId && String(line.id ?? "") === String(excludeLineId)) return sum;
+    return matcher(line) ? sum + normalizeNumeric(line.quantity) : sum;
+  }, 0);
+}
+
+function sumOtherDraftQuantities(rows, matcher, excludeRowKey = "") {
+  return (rows ?? []).reduce((sum, row) => {
+    if (excludeRowKey && row.key === excludeRowKey) return sum;
+    return matcher(row) ? sum + normalizeNumeric(row.quantity) : sum;
+  }, 0);
+}
+
+function batchOptionLabel(batch) {
+  return `${batch.batch_number} · Stroke ${batch.stroke_number ?? "--"} · ${normalizeNumeric(batch.actual_qty).toFixed(3)} KG`;
+}
+
+function packingOptionLabel(packingOrder) {
+  return `${packingOrder.po_number} · Batch ${packingOrder.batch_number} · ${normalizeNumeric(packingOrder.actual_qty_kg).toFixed(3)} KG`;
+}
+
+function resolveSfgRemaining(batch, lines, excludeLineId = "") {
+  const usedQty = sumOtherLineQuantities(lines, (line) => String(line.batch_number ?? "") === String(batch.batch_number ?? ""), excludeLineId);
+  return Math.max(normalizeNumeric(batch.actual_qty) - usedQty, 0);
+}
+
+function resolveFgRemaining(packingOrder, lines, excludeLineId = "") {
+  const usedQty = sumOtherLineQuantities(lines, (line) => String(line.packing_order_id ?? "") === String(packingOrder.id ?? ""), excludeLineId);
+  return Math.max(normalizeNumeric(packingOrder.actual_qty_kg) - usedQty, 0);
+}
+
+function resolveBulkSfgRemaining(batch, lines, bulkRows, rowKey) {
+  const postedQty = sumOtherLineQuantities(lines, (line) => String(line.batch_number ?? "") === String(batch.batch_number ?? ""));
+  const draftQty = sumOtherDraftQuantities(bulkRows, (row) => String(row.batch_number ?? "") === String(batch.batch_number ?? ""), rowKey);
+  return Math.max(normalizeNumeric(batch.actual_qty) - postedQty - draftQty, 0);
+}
+
+function resolveBulkFgRemaining(packingOrder, lines, bulkRows, rowKey) {
+  const postedQty = sumOtherLineQuantities(lines, (line) => String(line.packing_order_id ?? "") === String(packingOrder.id ?? ""));
+  const draftQty = sumOtherDraftQuantities(bulkRows, (row) => String(row.packing_order_id ?? "") === String(packingOrder.id ?? ""), rowKey);
+  return Math.max(normalizeNumeric(packingOrder.actual_qty_kg) - postedQty - draftQty, 0);
+}
+
+function resolveOpeningRatePerUnit(displayRate, material, conversions, rateUomCode, fillQtyPerPack) {
+  const numericRate = normalizeNumeric(displayRate);
+  if (Number(fillQtyPerPack) > 0) {
+    return numericRate / Number(fillQtyPerPack);
+  }
+  return displayRateToBase(numericRate, material, conversions, rateUomCode || material?.base_uom_code);
+}
+
 export default function OpeningStockDetailPage({ documentId: documentIdProp = "" }) {
   const params = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
@@ -125,11 +230,11 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   const [entryDrawerOpen, setEntryDrawerOpen] = useState(false);
   const [editingLineId, setEditingLineId] = useState("");
   const [editForm, setEditForm] = useState(createEmptySingleForm());
-  // §109 — Opening Rate "Recalculate" (Phase 1, single material, no cascade yet).
+  // Â§109 â€” Opening Rate "Recalculate" (Phase 1, single material, no cascade yet).
   // Bulk-table UX per business owner feedback (2026-07-24): every un-recalculated
   // POSTED line gets an inline Corrected Rate input; ONE shared Reason + ONE
   // "Recalculate All" button submits every filled-in line in one action. Each
-  // line is one-time-use (enforced server-side, VALUATION_RECALC_ALREADY_DONE) —
+  // line is one-time-use (enforced server-side, VALUATION_RECALC_ALREADY_DONE) â€”
   // once done it shows as locked, no "reopen" mechanism exists yet.
   const [recalcRates, setRecalcRates] = useState({});
   const [recalcReason, setRecalcReason] = useState("");
@@ -149,9 +254,12 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   const currencyCode = detail?.currency_code || "INR";
   const documentMaterialType = String(detail?.material_type || "").toUpperCase();
   const documentPoType = String(detail?.po_type || "").toUpperCase();
-  const isBlockedPlaceholder =
+  const isOpeningGenealogyDocument =
     (documentMaterialType === "SFG" || documentMaterialType === "FG") &&
-    (documentPoType === "MTO" || documentPoType === "HPS");
+    OPENING_GENEALOGY_PO_TYPES.has(documentPoType);
+  const showRateUomSelector = RATE_UOM_PO_TYPES.has(documentPoType);
+  const isSfgGenealogy = isSfgGenealogyDocument(isOpeningGenealogyDocument, documentMaterialType);
+  const isFgGenealogy = isFgGenealogyDocument(isOpeningGenealogyDocument, documentMaterialType);
 
   const materialQuery = useMaterialOptionsQuery({ limit: 500, status: "ACTIVE" });
   const locationQuery = useStorageLocationsQuery(
@@ -239,16 +347,22 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   const companyLabel = companyMap.get(companyId) ?? companyId;
 
   const totalValue = useMemo(
-    () => Number(singleForm.quantity || 0) * Number(singleForm.rate_per_unit || 0),
-    [singleForm],
+    () => Number(singleForm.quantity || 0) * resolveOpeningRatePerUnit(
+      singleForm.rate_per_unit || 0,
+      selectedSingleMaterial,
+      singleConversionsQuery.data,
+      singleForm.rate_uom_code || selectedSingleMaterial?.base_uom_code,
+      selectedSingleFgOrder?.fill_qty_per_pack,
+    ),
+    [singleForm, selectedSingleFgOrder?.fill_qty_per_pack, selectedSingleMaterial, singleConversionsQuery.data],
   );
 
-  // §104.8 (LOCKED 2026-07-18): for a produced material (INT today, SFG later) the opening rate can
-  // be derived from its own Stroke — Σ(dosage% × that RM's current rate) — because opening stock is
-  // loaded bottom-up (RM/PM → INT → SFG → FG), so the inputs are already valued by the time we get
+  // Â§104.8 (LOCKED 2026-07-18): for a produced material (INT today, SFG later) the opening rate can
+  // be derived from its own Stroke â€” Î£(dosage% Ã— that RM's current rate) â€” because opening stock is
+  // loaded bottom-up (RM/PM â†’ INT â†’ SFG â†’ FG), so the inputs are already valued by the time we get
   // here. It is only a SUGGESTION: a *purchased* opening INT must keep its purchase price, and
   // suggesting (not forcing) stops a hand-typed rate from diverging from the formula in-house
-  // production will use — which would make the weighted average jump on the first PO after go-live.
+  // production will use â€” which would make the weighted average jump on the first PO after go-live.
   const derivedRateQuery = useQuery({
     queryKey: ["derived-opening-rate", companyId, singleForm.material_id],
     queryFn: () => getDerivedOpeningRate({ company_id: companyId, material_id: singleForm.material_id }),
@@ -257,10 +371,10 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   });
   const derivedRate = derivedRateQuery.data?.derivable ? derivedRateQuery.data : null;
 
-  // §110 Phase B — the material's own alternate UoMs (e.g. a purchased-in-bags
+  // Â§110 Phase B â€” the material's own alternate UoMs (e.g. a purchased-in-bags
   // RM, or an FG SKU's own outer pack unit), so the user can type "23 bags"
   // instead of hand-computing KG. Falls back to base-UoM-only display when a
-  // material has no material_uom_conversion rows (§110.4, deliberate — no
+  // material has no material_uom_conversion rows (Â§110.4, deliberate â€” no
   // bulk data-entry forced on materials that don't need it).
   const singleConversionsQuery = useQuery({
     queryKey: ["material-uom-conversions", singleForm.material_id],
@@ -282,13 +396,78 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       select: (response) => response?.data ?? [],
     })),
   });
+  const singleOpeningSfgQuery = useQuery({
+    queryKey: ["old-process-po-batches", companyId, singleForm.material_id],
+    queryFn: () => listOldProcessPoBatches({ company_id: companyId, material_id: singleForm.material_id }),
+    enabled: Boolean(isOpeningGenealogyDocument && documentMaterialType === "SFG" && companyId && singleForm.material_id),
+    select: (response) => response?.data ?? response ?? [],
+  });
+  const singleOpeningFgQuery = useQuery({
+    queryKey: ["old-packing-po-batches", companyId, singleForm.material_id],
+    queryFn: () => listOldPackingPoBatches({ company_id: companyId, material_id: singleForm.material_id }),
+    enabled: Boolean(isOpeningGenealogyDocument && documentMaterialType === "FG" && companyId && singleForm.material_id),
+    select: (response) => response?.data ?? response ?? [],
+  });
+  const editOpeningSfgQuery = useQuery({
+    queryKey: ["old-process-po-batches", companyId, editForm.material_id, "edit"],
+    queryFn: () => listOldProcessPoBatches({ company_id: companyId, material_id: editForm.material_id }),
+    enabled: Boolean(isOpeningGenealogyDocument && documentMaterialType === "SFG" && companyId && editForm.material_id),
+    select: (response) => response?.data ?? response ?? [],
+  });
+  const editOpeningFgQuery = useQuery({
+    queryKey: ["old-packing-po-batches", companyId, editForm.material_id, "edit"],
+    queryFn: () => listOldPackingPoBatches({ company_id: companyId, material_id: editForm.material_id }),
+    enabled: Boolean(isOpeningGenealogyDocument && documentMaterialType === "FG" && companyId && editForm.material_id),
+    select: (response) => response?.data ?? response ?? [],
+  });
+  const bulkOpeningQueries = useQueries({
+    queries: bulkRows.map((row) => ({
+      queryKey: [
+        documentMaterialType === "FG" ? "old-packing-po-batches" : "old-process-po-batches",
+        companyId,
+        row.material_id,
+        row.key,
+      ],
+      queryFn: () => (
+        documentMaterialType === "FG"
+          ? listOldPackingPoBatches({ company_id: companyId, material_id: row.material_id })
+          : listOldProcessPoBatches({ company_id: companyId, material_id: row.material_id })
+      ),
+      enabled: Boolean(isOpeningGenealogyDocument && companyId && row.material_id),
+      select: (response) => response?.data ?? response ?? [],
+    })),
+  });
+  const singleRateUomOptions = useMemo(
+    () => buildRateUomOptions(selectedSingleMaterial, singleConversionsQuery.data, showRateUomSelector),
+    [selectedSingleMaterial, singleConversionsQuery.data, showRateUomSelector],
+  );
+  const editRateUomOptions = useMemo(
+    () => buildRateUomOptions(selectedEditMaterial, editConversionsQuery.data, showRateUomSelector),
+    [selectedEditMaterial, editConversionsQuery.data, showRateUomSelector],
+  );
 
   const lines = Array.isArray(detail?.lines) ? detail.lines : [];
+  const selectedSingleSfgBatch = useMemo(
+    () => (singleOpeningSfgQuery.data ?? []).find((row) => String(row.batch_number ?? "") === String(singleForm.batch_number ?? "")) ?? null,
+    [singleForm.batch_number, singleOpeningSfgQuery.data],
+  );
+  const selectedSingleFgOrder = useMemo(
+    () => (singleOpeningFgQuery.data ?? []).find((row) => String(row.id ?? "") === String(singleForm.packing_order_id ?? "")) ?? null,
+    [singleForm.packing_order_id, singleOpeningFgQuery.data],
+  );
+  const selectedEditSfgBatch = useMemo(
+    () => (editOpeningSfgQuery.data ?? []).find((row) => String(row.batch_number ?? "") === String(editForm.batch_number ?? "")) ?? null,
+    [editForm.batch_number, editOpeningSfgQuery.data],
+  );
+  const selectedEditFgOrder = useMemo(
+    () => (editOpeningFgQuery.data ?? []).find((row) => String(row.id ?? "") === String(editForm.packing_order_id ?? "")) ?? null,
+    [editForm.packing_order_id, editOpeningFgQuery.data],
+  );
   const computedTotalValue = lines.reduce((sum, line) => sum + Number(line.total_value ?? 0), 0);
 
-  // §104-7/§109 — SFG and INT get the same dosage-derived rate suggestion at
+  // Â§104-7/Â§109 â€” SFG and INT get the same dosage-derived rate suggestion at
   // Recalculate time as they do at original Opening entry (Stroke dosage% x
-  // that RM's CURRENT rate) — useful here because the RM side may have just
+  // that RM's CURRENT rate) â€” useful here because the RM side may have just
   // been corrected in an earlier step of the same sweep. Still only a
   // suggestion: a purchased INT/SFG batch keeps its own real rate.
   const recalcSuggestLines = lines.filter((line) => {
@@ -350,6 +529,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
         material_id: singleForm.material_id,
         storage_location_id: singleForm.storage_location_id,
         stock_type: singleForm.stock_type,
+        packing_order_id: singleForm.packing_order_id || null,
         batch_number:
           selectedSingleMaterial?.material_type === "SFG" || selectedSingleMaterial?.material_type === "FG"
             ? singleForm.batch_number.trim().toUpperCase() || null
@@ -357,7 +537,13 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
         quantity: Number(singleForm.quantity),
         entered_uom_code: singleForm.entered_uom_code || null,
         entered_quantity: singleForm.entered_quantity === "" ? null : Number(singleForm.entered_quantity),
-        rate_per_unit: Number(singleForm.rate_per_unit),
+        rate_per_unit: resolveOpeningRatePerUnit(
+          singleForm.rate_per_unit || 0,
+          selectedSingleMaterial,
+          singleConversionsQuery.data,
+          singleForm.rate_uom_code || selectedSingleMaterial?.base_uom_code,
+          selectedSingleFgOrder?.fill_qty_per_pack,
+        ),
       });
       setNotice("Opening stock line added.");
       resetSingleForm();
@@ -385,18 +571,32 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     try {
       await Promise.all(
         validRows.map((row) => {
+          const rowIndex = bulkRows.indexOf(row);
           const material = materialMap.get(row.material_id);
           const baseUom = material?.base_uom_code || null;
           const quantity = row.is_zero_stock ? 0 : Number(row.quantity);
+          const openingRows = bulkOpeningQueries[rowIndex]?.data ?? [];
+          const selectedFgOrder = documentMaterialType === "FG"
+            ? openingRows.find((entry) => String(entry.id ?? "") === String(row.packing_order_id ?? "")) ?? null
+            : null;
           return addOpeningStockLine(detail.id, {
             material_id: row.material_id,
             storage_location_id: row.storage_location_id,
             stock_type: row.stock_type,
             quantity,
-            rate_per_unit: row.rate_per_unit === "" ? 0 : Number(row.rate_per_unit),
+            rate_per_unit: row.rate_per_unit === ""
+              ? 0
+              : resolveOpeningRatePerUnit(
+                row.rate_per_unit,
+                material,
+                bulkConversionQueries[rowIndex]?.data,
+                row.rate_uom_code || material?.base_uom_code,
+                selectedFgOrder?.fill_qty_per_pack,
+              ),
             is_zero_stock: Boolean(row.is_zero_stock),
             entered_uom_code: row.is_zero_stock ? baseUom : (row.entered_uom_code || baseUom),
             entered_quantity: row.is_zero_stock ? 0 : (row.entered_quantity === "" ? quantity : Number(row.entered_quantity)),
+            packing_order_id: row.packing_order_id || null,
             batch_number:
               material?.material_type === "SFG" || material?.material_type === "FG"
                 ? row.batch_number.trim().toUpperCase() || null
@@ -415,6 +615,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   }
 
   function startEditLine(line) {
+    const material = materialMap.get(line.material_id);
     setEditingLineId(line.id);
     setEditForm({
       material_id: line.material_id,
@@ -423,7 +624,14 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       quantity: String(line.quantity ?? ""),
       entered_uom_code: line.entered_uom_code ?? "",
       entered_quantity: line.entered_quantity != null ? String(line.entered_quantity) : "",
-      rate_per_unit: String(line.rate_per_unit ?? ""),
+      rate_uom_code: material?.base_uom_code || "",
+      rate_per_unit: String(baseRateToDisplay(
+        line.rate_per_unit ?? "",
+        material,
+        editConversionsQuery.data,
+        material?.base_uom_code,
+      )),
+      packing_order_id: String(line.packing_order_id ?? ""),
       batch_number: String(line.batch_number ?? ""),
     });
   }
@@ -437,6 +645,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       await updateOpeningStockLine(detail.id, editingLineId, {
         storage_location_id: editForm.storage_location_id,
         stock_type: editForm.stock_type,
+        packing_order_id: editForm.packing_order_id || null,
         batch_number:
           selectedEditMaterial?.material_type === "SFG" || selectedEditMaterial?.material_type === "FG"
             ? editForm.batch_number.trim().toUpperCase() || null
@@ -444,7 +653,13 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
         quantity: Number(editForm.quantity),
         entered_uom_code: editForm.entered_uom_code || null,
         entered_quantity: editForm.entered_quantity === "" ? null : Number(editForm.entered_quantity),
-        rate_per_unit: Number(editForm.rate_per_unit),
+        rate_per_unit: resolveOpeningRatePerUnit(
+          editForm.rate_per_unit || 0,
+          selectedEditMaterial,
+          editConversionsQuery.data,
+          editForm.rate_uom_code || selectedEditMaterial?.base_uom_code,
+          selectedEditFgOrder?.fill_qty_per_pack,
+        ),
       });
       setEditingLineId("");
       setNotice("Opening stock line updated.");
@@ -460,8 +675,8 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     setRecalcRates((current) => ({ ...current, [lineId]: value }));
   }
 
-  // §8B: each line's correction touches a different (material, location, stock_type)
-  // snapshot row — independent of every other line — so this batch runs in parallel,
+  // Â§8B: each line's correction touches a different (material, location, stock_type)
+  // snapshot row â€” independent of every other line â€” so this batch runs in parallel,
   // not a sequential for-loop.
   async function handleRecalculateAll() {
     if (!detail) return;
@@ -478,8 +693,8 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     setError("");
     setNotice("");
     try {
-      // Single batch call — the backend cascades RM/PM -> SFG -> FG in one
-      // action (§109). Sending each line separately would let two lines that
+      // Single batch call â€” the backend cascades RM/PM -> SFG -> FG in one
+      // action (Â§109). Sending each line separately would let two lines that
       // feed the same downstream batch race and silently overwrite each
       // other's correction, so this is never split into per-line calls.
       const { results } = await recalculateValuation({
@@ -610,8 +825,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
             <ErpFieldPreview label="Posted At" value={formatDateTime(detail.posted_at)} />
           </div>
 
-          {!isBlockedPlaceholder ? (
-            <ErpSectionCard
+          <ErpSectionCard
               eyebrow="Lines"
               title="Opening stock lines"
               aside={(
@@ -656,7 +870,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                       render: (row) =>
                         row.entered_uom_code && row.entered_uom_code !== materialMap.get(row.material_id)?.base_uom_code
                           ? `${row.entered_quantity} ${row.entered_uom_code}`
-                          : "—",
+                          : "â€”",
                     },
                     { key: "rate_per_unit", label: "Rate", width: "100px" },
                     {
@@ -669,7 +883,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                     ...(detail.status === "POSTED"
                       ? [{
                           key: "corrected_rate",
-                          label: "Corrected Rate (§109)",
+                          label: "Corrected Rate (Â§109)",
                           width: "160px",
                           render: (row) => {
                             if (row.already_recalculated) {
@@ -696,7 +910,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                   <button
                                     type="button"
                                     onClick={() => updateRecalcRate(row.id, String(Number(derivable.rate).toFixed(4)))}
-                                    title={`From Stroke ${derivable.stroke_number ?? "--"} dosage: ${Number(derivable.rate).toFixed(4)}/unit. Only a suggestion — purchased SFG/INT keeps its own purchase rate.`}
+                                    title={`From Stroke ${derivable.stroke_number ?? "--"} dosage: ${Number(derivable.rate).toFixed(4)}/unit. Only a suggestion â€” purchased SFG/INT keeps its own purchase rate.`}
                                     className="truncate text-left text-xs text-sky-700 underline decoration-dotted hover:text-sky-900"
                                   >
                                     Suggest {Number(derivable.rate).toFixed(4)} (from dosage)
@@ -730,7 +944,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                             </button>
                           </div>
                         ) : (
-                          "—"
+                          "â€”"
                         ),
                     },
                   ]}
@@ -742,13 +956,13 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                 {detail.status === "POSTED" ? (
                   <div className="grid gap-3 rounded border border-amber-200 bg-amber-50 p-4">
                     <div className="text-sm font-semibold text-amber-900">
-                      Recalculate Valuation (§109 — one click, fully automatic, one-time-use per line)
+                      Recalculate Valuation (Â§109 â€” one click, fully automatic, one-time-use per line)
                     </div>
                     <div className="text-xs text-amber-800">
                       Fill in "Corrected Rate" on whichever lines above need it, give one shared reason, then Recalculate All.
                       The system corrects these materials and then <strong>automatically cascades</strong> into every SFG batch
-                      and FG batch that consumed them — no separate manual step. The results below list every step the
-                      cascade actually touched. Already-recalculated lines are locked — no "reopen" action exists yet.
+                      and FG batch that consumed them â€” no separate manual step. The results below list every step the
+                      cascade actually touched. Already-recalculated lines are locked â€” no "reopen" action exists yet.
                     </div>
                     <ErpDenseFormRow label="Reason (required, applies to all lines recalculated in this action)">
                       <input
@@ -785,7 +999,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                 </>
                               ) : (
                                 <span className="text-rose-700">
-                                  <strong>{materialLabel}</strong>: failed — {result.error}
+                                  <strong>{materialLabel}</strong>: failed â€” {result.error}
                                 </span>
                               )}
                             </div>
@@ -827,9 +1041,59 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                           ))}
                         </select>
                       </ErpDenseFormRow>
+                      {isSfgGenealogy ? (
+                        <ErpDenseFormRow label="Batch Number">
+                          <div className="grid gap-1">
+                            <ErpComboboxField
+                              value={editForm.batch_number}
+                              onChange={(value) => {
+                                const selectedBatch = (editOpeningSfgQuery.data ?? []).find((row) => String(row.batch_number ?? "") === String(value)) ?? null;
+                                const remaining = selectedBatch ? resolveSfgRemaining(selectedBatch, lines, editingLineId) : 0;
+                                setEditForm((current) => ({
+                                  ...current,
+                                  batch_number: String(value ?? "").toUpperCase(),
+                                  quantity: selectedBatch ? String(remaining) : current.quantity,
+                                  entered_uom_code: selectedEditMaterial?.base_uom_code || current.entered_uom_code,
+                                  entered_quantity: selectedBatch ? String(remaining) : current.entered_quantity,
+                                }));
+                              }}
+                              options={(editOpeningSfgQuery.data ?? []).map((row) => ({ value: row.batch_number, label: batchOptionLabel(row) }))}
+                              blankLabel="Select PR22 batch"
+                            />
+                            <div className="text-xs text-slate-500">
+                              Stroke {selectedEditSfgBatch?.stroke_number ?? "--"} · Remaining {resolveSfgRemaining(selectedEditSfgBatch ?? {}, lines, editingLineId).toFixed(3)} KG
+                            </div>
+                          </div>
+                        </ErpDenseFormRow>
+                      ) : isFgGenealogy ? (
+                        <ErpDenseFormRow label="Packing PO (PR23)">
+                          <div className="grid gap-1">
+                            <ErpComboboxField
+                              value={editForm.packing_order_id}
+                              onChange={(value) => {
+                                const selectedOrder = (editOpeningFgQuery.data ?? []).find((row) => String(row.id ?? "") === String(value)) ?? null;
+                                const remaining = selectedOrder ? resolveFgRemaining(selectedOrder, lines, editingLineId) : 0;
+                                setEditForm((current) => ({
+                                  ...current,
+                                  packing_order_id: String(value ?? ""),
+                                  batch_number: selectedOrder?.batch_number ?? "",
+                                  quantity: selectedOrder ? String(remaining) : current.quantity,
+                                  entered_uom_code: selectedEditMaterial?.base_uom_code || current.entered_uom_code,
+                                  entered_quantity: selectedOrder ? String(remaining) : current.entered_quantity,
+                                }));
+                              }}
+                              options={(editOpeningFgQuery.data ?? []).map((row) => ({ value: row.id, label: packingOptionLabel(row) }))}
+                              blankLabel="Select PR23 packing PO"
+                            />
+                            <div className="text-xs text-slate-500">
+                              Batch {selectedEditFgOrder?.batch_number ?? "--"} · {selectedEditFgOrder?.num_packs ?? "--"} packs · {selectedEditFgOrder?.fill_qty_per_pack ?? "--"} KG/pack · Remaining {resolveFgRemaining(selectedEditFgOrder ?? {}, lines, editingLineId).toFixed(3)} KG
+                            </div>
+                          </div>
+                        </ErpDenseFormRow>
+                      ) : null}
                       <ErpDenseFormRow label="Quantity">
                         <UomQuantityInput
-                          key={editForm.material_id}
+                          key={`${editForm.material_id}-${editForm.batch_number}-${editForm.packing_order_id}-${editingLineId}`}
                           baseUomCode={selectedEditMaterial?.base_uom_code}
                           conversions={editConversionsQuery.data}
                           defaultUomCode={editForm.entered_uom_code || selectedEditMaterial?.purchase_uom_code}
@@ -842,17 +1106,30 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                           }))}
                         />
                       </ErpDenseFormRow>
-                      <ErpDenseFormRow label="Rate Per Unit">
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={editForm.rate_per_unit}
-                          onChange={(event) => setEditForm((current) => ({ ...current, rate_per_unit: event.target.value }))}
-                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        />
+                      <ErpDenseFormRow label={isFgGenealogy && Number(selectedEditFgOrder?.fill_qty_per_pack) > 0 ? "Rate Per Pack" : "Rate Per Unit"}>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={editForm.rate_per_unit}
+                            onChange={(event) => setEditForm((current) => ({ ...current, rate_per_unit: event.target.value }))}
+                            className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                          />
+                          {showRateUomSelector ? (
+                            <select
+                              value={editForm.rate_uom_code || selectedEditMaterial?.base_uom_code || ""}
+                              onChange={(event) => setEditForm((current) => ({ ...current, rate_uom_code: event.target.value }))}
+                              className="h-8 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                            >
+                              {editRateUomOptions.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                          ) : null}
+                        </div>
                       </ErpDenseFormRow>
-                      {selectedEditMaterial?.material_type === "SFG" || selectedEditMaterial?.material_type === "FG" ? (
+                      {!isSfgGenealogy && !isFgGenealogy && (selectedEditMaterial?.material_type === "SFG" || selectedEditMaterial?.material_type === "FG") ? (
                         <ErpDenseFormRow label="Batch Number">
                           <input
                             type="text"
@@ -978,7 +1255,56 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                               ))}
                             </select>
                           </ErpDenseFormRow>
-                          {selectedSingleMaterial?.material_type === "SFG" || selectedSingleMaterial?.material_type === "FG" ? (
+                          {isSfgGenealogy ? (
+                            <ErpDenseFormRow label="Batch Number">
+                              <div className="grid gap-1">
+                                <ErpComboboxField
+                                  value={singleForm.batch_number}
+                                  onChange={(value) => {
+                                    const selectedBatch = (singleOpeningSfgQuery.data ?? []).find((row) => String(row.batch_number ?? "") === String(value)) ?? null;
+                                    const remaining = selectedBatch ? resolveSfgRemaining(selectedBatch, lines) : 0;
+                                    setSingleForm((current) => ({
+                                      ...current,
+                                      batch_number: String(value ?? "").toUpperCase(),
+                                      quantity: selectedBatch ? String(remaining) : current.quantity,
+                                      entered_uom_code: selectedSingleMaterial?.base_uom_code || current.entered_uom_code,
+                                      entered_quantity: selectedBatch ? String(remaining) : current.entered_quantity,
+                                    }));
+                                  }}
+                                  options={(singleOpeningSfgQuery.data ?? []).map((row) => ({ value: row.batch_number, label: batchOptionLabel(row) }))}
+                                  blankLabel="Select PR22 batch"
+                                />
+                                <div className="text-xs text-slate-500">
+                                  Stroke {selectedSingleSfgBatch?.stroke_number ?? "--"} · Remaining {resolveSfgRemaining(selectedSingleSfgBatch ?? {}, lines).toFixed(3)} KG
+                                </div>
+                              </div>
+                            </ErpDenseFormRow>
+                          ) : isFgGenealogy ? (
+                            <ErpDenseFormRow label="Packing PO (PR23)">
+                              <div className="grid gap-1">
+                                <ErpComboboxField
+                                  value={singleForm.packing_order_id}
+                                  onChange={(value) => {
+                                    const selectedOrder = (singleOpeningFgQuery.data ?? []).find((row) => String(row.id ?? "") === String(value)) ?? null;
+                                    const remaining = selectedOrder ? resolveFgRemaining(selectedOrder, lines) : 0;
+                                    setSingleForm((current) => ({
+                                      ...current,
+                                      packing_order_id: String(value ?? ""),
+                                      batch_number: selectedOrder?.batch_number ?? "",
+                                      quantity: selectedOrder ? String(remaining) : current.quantity,
+                                      entered_uom_code: selectedSingleMaterial?.base_uom_code || current.entered_uom_code,
+                                      entered_quantity: selectedOrder ? String(remaining) : current.entered_quantity,
+                                    }));
+                                  }}
+                                  options={(singleOpeningFgQuery.data ?? []).map((row) => ({ value: row.id, label: packingOptionLabel(row) }))}
+                                  blankLabel="Select PR23 packing PO"
+                                />
+                                <div className="text-xs text-slate-500">
+                                  Batch {selectedSingleFgOrder?.batch_number ?? "--"} · {selectedSingleFgOrder?.num_packs ?? "--"} packs · {selectedSingleFgOrder?.fill_qty_per_pack ?? "--"} KG/pack · Remaining {resolveFgRemaining(selectedSingleFgOrder ?? {}, lines).toFixed(3)} KG
+                                </div>
+                              </div>
+                            </ErpDenseFormRow>
+                          ) : (selectedSingleMaterial?.material_type === "SFG" || selectedSingleMaterial?.material_type === "FG") ? (
                             <ErpDenseFormRow label="Batch Number">
                               <input
                                 type="text"
@@ -991,10 +1317,11 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                           <div className="grid gap-3 xl:grid-cols-3">
                             <ErpDenseFormRow label="Quantity" required>
                               <UomQuantityInput
-                                key={singleForm.material_id}
+                                key={`${singleForm.material_id}-${singleForm.batch_number}-${singleForm.packing_order_id}`}
                                 baseUomCode={selectedSingleMaterial?.base_uom_code}
                                 conversions={singleConversionsQuery.data}
                                 defaultUomCode={selectedSingleMaterial?.purchase_uom_code}
+                                value={singleForm.quantity}
                                 onChange={(baseQty, meta) => setSingleForm((current) => ({
                                   ...current,
                                   quantity: baseQty != null ? String(baseQty) : "",
@@ -1003,15 +1330,28 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                 }))}
                               />
                             </ErpDenseFormRow>
-                            <ErpDenseFormRow label="Rate Per Unit" required>
-                              <input
-                                type="number"
-                                min="0"
-                                step="any"
-                                value={singleForm.rate_per_unit}
-                                onChange={(event) => setSingleForm((current) => ({ ...current, rate_per_unit: event.target.value }))}
-                                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                              />
+                            <ErpDenseFormRow label={isFgGenealogy && Number(selectedSingleFgOrder?.fill_qty_per_pack) > 0 ? "Rate Per Pack" : "Rate Per Unit"} required>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  value={singleForm.rate_per_unit}
+                                  onChange={(event) => setSingleForm((current) => ({ ...current, rate_per_unit: event.target.value }))}
+                                  className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                />
+                                {showRateUomSelector ? (
+                                  <select
+                                    value={singleForm.rate_uom_code || selectedSingleMaterial?.base_uom_code || ""}
+                                    onChange={(event) => setSingleForm((current) => ({ ...current, rate_uom_code: event.target.value }))}
+                                    className="h-8 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                  >
+                                    {singleRateUomOptions.map((option) => (
+                                      <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                  </select>
+                                ) : null}
+                              </div>
                             </ErpDenseFormRow>
                             {derivedRate && (
                               <div className="col-span-full border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-slate-700">
@@ -1042,7 +1382,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                 </div>
                                 {derivedRate.incomplete && (
                                   <div className="mt-1 text-amber-700">
-                                    One or more inputs have no valued stock yet — load their opening stock first,
+                                    One or more inputs have no valued stock yet â€” load their opening stock first,
                                     or this suggestion is understated.
                                   </div>
                                 )}
@@ -1096,10 +1436,18 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                 <tbody>
                                   {bulkRows.map((row, index) => {
                                     const material = materialMap.get(row.material_id);
+                                    const openingRows = bulkOpeningQueries[index]?.data ?? [];
+                                    const selectedSfgBatch = isSfgGenealogy
+                                      ? openingRows.find((entry) => String(entry.batch_number ?? "") === String(row.batch_number ?? "")) ?? null
+                                      : null;
+                                    const selectedFgOrder = isFgGenealogy
+                                      ? openingRows.find((entry) => String(entry.id ?? "") === String(row.packing_order_id ?? "")) ?? null
+                                      : null;
+                                    const bulkRateUomOptions = buildRateUomOptions(material, bulkConversionQueries[index]?.data, showRateUomSelector);
                                     return (
                                       <tr key={row.key} className="align-top even:bg-slate-50/40">
                                         <td className="border-b border-slate-100 px-3 py-2">{index + 1}</td>
-                                        <td className="border-b border-slate-100 px-3 py-2">{material?.material_type ?? "—"}</td>
+                                        <td className="border-b border-slate-100 px-3 py-2">{material?.material_type ?? "â€”"}</td>
                                         <td className="border-b border-slate-100 px-3 py-2 min-w-[260px]">
                                           <ErpComboboxField
                                             value={row.material_id}
@@ -1108,7 +1456,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                             blankLabel="Select material"
                                           />
                                         </td>
-                                        <td className="border-b border-slate-100 px-3 py-2">{material?.pace_code ?? "—"}</td>
+                                        <td className="border-b border-slate-100 px-3 py-2">{material?.pace_code ?? "â€”"}</td>
                                         <td className="border-b border-slate-100 px-3 py-2 min-w-[240px]">
                                           <select
                                             value={row.storage_location_id}
@@ -1136,9 +1484,52 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                             ))}
                                           </select>
                                         </td>
-                                        <td className="border-b border-slate-100 px-3 py-2">{material?.base_uom_code ?? "—"}</td>
-                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[180px]">
-                                          {material?.material_type === "SFG" || material?.material_type === "FG" ? (
+                                        <td className="border-b border-slate-100 px-3 py-2">{material?.base_uom_code ?? "â€”"}</td>
+                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[240px]">
+                                          {isSfgGenealogy ? (
+                                            <div className="grid gap-1">
+                                              <ErpComboboxField
+                                                value={row.batch_number}
+                                                onChange={(value) => {
+                                                  const selectedBatch = openingRows.find((entry) => String(entry.batch_number ?? "") === String(value)) ?? null;
+                                                  const remaining = selectedBatch ? resolveBulkSfgRemaining(selectedBatch, lines, bulkRows, row.key) : 0;
+                                                  updateBulkRow(row.key, {
+                                                    batch_number: String(value ?? "").toUpperCase(),
+                                                    quantity: selectedBatch ? String(remaining) : row.quantity,
+                                                    entered_uom_code: material?.base_uom_code || row.entered_uom_code,
+                                                    entered_quantity: selectedBatch ? String(remaining) : row.entered_quantity,
+                                                  });
+                                                }}
+                                                options={openingRows.map((entry) => ({ value: entry.batch_number, label: batchOptionLabel(entry) }))}
+                                                blankLabel="Select PR22 batch"
+                                              />
+                                              <div className="text-[11px] text-slate-500">
+                                                Stroke {selectedSfgBatch?.stroke_number ?? "--"} · Remaining {resolveBulkSfgRemaining(selectedSfgBatch ?? {}, lines, bulkRows, row.key).toFixed(3)} KG
+                                              </div>
+                                            </div>
+                                          ) : isFgGenealogy ? (
+                                            <div className="grid gap-1">
+                                              <ErpComboboxField
+                                                value={row.packing_order_id}
+                                                onChange={(value) => {
+                                                  const selectedOrder = openingRows.find((entry) => String(entry.id ?? "") === String(value)) ?? null;
+                                                  const remaining = selectedOrder ? resolveBulkFgRemaining(selectedOrder, lines, bulkRows, row.key) : 0;
+                                                  updateBulkRow(row.key, {
+                                                    packing_order_id: String(value ?? ""),
+                                                    batch_number: selectedOrder?.batch_number ?? "",
+                                                    quantity: selectedOrder ? String(remaining) : row.quantity,
+                                                    entered_uom_code: material?.base_uom_code || row.entered_uom_code,
+                                                    entered_quantity: selectedOrder ? String(remaining) : row.entered_quantity,
+                                                  });
+                                                }}
+                                                options={openingRows.map((entry) => ({ value: entry.id, label: packingOptionLabel(entry) }))}
+                                                blankLabel="Select PR23 packing PO"
+                                              />
+                                              <div className="text-[11px] text-slate-500">
+                                                Batch {selectedFgOrder?.batch_number ?? "--"} · {selectedFgOrder?.num_packs ?? "--"} packs · {selectedFgOrder?.fill_qty_per_pack ?? "--"} KG/pack · Remaining {resolveBulkFgRemaining(selectedFgOrder ?? {}, lines, bulkRows, row.key).toFixed(3)} KG
+                                              </div>
+                                            </div>
+                                          ) : material?.material_type === "SFG" || material?.material_type === "FG" ? (
                                             <input
                                               type="text"
                                               value={row.batch_number}
@@ -1151,10 +1542,11 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                         </td>
                                         <td className="border-b border-slate-100 px-3 py-2 min-w-[220px]">
                                           <UomQuantityInput
-                                            key={row.material_id}
+                                            key={`${row.key}-${row.material_id}-${row.batch_number}-${row.packing_order_id}`}
                                             baseUomCode={material?.base_uom_code}
                                             conversions={bulkConversionQueries[index]?.data}
                                             defaultUomCode={material?.purchase_uom_code}
+                                            value={row.quantity}
                                             disabled={row.is_zero_stock}
                                             onChange={(baseQty, meta) => updateBulkRow(row.key, {
                                               quantity: row.is_zero_stock ? "0" : (baseQty != null ? String(baseQty) : ""),
@@ -1174,19 +1566,42 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                             className="h-4 w-4"
                                           />
                                         </td>
-                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[130px]">
-                                          <input
-                                            type="number"
-                                            min="0"
-                                            step="any"
-                                            placeholder="Optional"
-                                            value={row.rate_per_unit}
-                                            onChange={(event) => updateBulkRow(row.key, { rate_per_unit: event.target.value })}
-                                            className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                                          />
+                                        <td className="border-b border-slate-100 px-3 py-2 min-w-[220px]">
+                                          <div className="grid gap-1">
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              step="any"
+                                              placeholder="Optional"
+                                              value={row.rate_per_unit}
+                                              onChange={(event) => updateBulkRow(row.key, { rate_per_unit: event.target.value })}
+                                              aria-label={isFgGenealogy && Number(selectedFgOrder?.fill_qty_per_pack) > 0 ? "Rate Per Pack" : "Rate Per Unit"}
+                                              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                            />
+                                            {showRateUomSelector ? (
+                                              <select
+                                                value={row.rate_uom_code || material?.base_uom_code || ""}
+                                                onChange={(event) => updateBulkRow(row.key, { rate_uom_code: event.target.value })}
+                                                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                              >
+                                                {bulkRateUomOptions.map((option) => (
+                                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                              </select>
+                                            ) : null}
+                                          </div>
                                         </td>
                                         <td className="border-b border-slate-100 px-3 py-2">
-                                          {formatCurrency(Number(row.quantity || 0) * Number(row.rate_per_unit || 0), currencyCode)}
+                                          {formatCurrency(
+                                            Number(row.quantity || 0) * resolveOpeningRatePerUnit(
+                                              row.rate_per_unit || 0,
+                                              material,
+                                              bulkConversionQueries[index]?.data,
+                                              row.rate_uom_code || material?.base_uom_code,
+                                              selectedFgOrder?.fill_qty_per_pack,
+                                            ),
+                                            currencyCode,
+                                          )}
                                         </td>
                                         <td className="border-b border-slate-100 px-3 py-2">
                                           <button
@@ -1232,15 +1647,11 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                 ) : null}
               </div>
             </ErpSectionCard>
-          ) : null}
-
-          {detail && isBlockedPlaceholder ? (
-            <ErpSectionCard eyebrow="Entry" title="Opening Stock Entry">
-              <div className="text-sm text-slate-700">Will open after implementation</div>
-            </ErpSectionCard>
-          ) : null}
         </div>
       )}
     </ErpScreenScaffold>
   );
 }
+
+
+

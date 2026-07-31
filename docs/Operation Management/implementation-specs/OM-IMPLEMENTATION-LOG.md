@@ -3012,3 +3012,93 @@ integrity `in_sync = true` after reconciling the MCP timestamp per ยง8A.
 - `deno check supabase/functions/api/_routes/production.routes.ts` still reports only pre-existing unrelated baseline typing errors in older files (`pack_config.handlers.ts`, `_pipeline/session.ts`), not AC06-local failures.
 - `node scripts/migration-integrity-check.mjs` still fails in this Windows environment with the known `EPERM` issue, so migration sync was checked via `supabase migration list --linked` instead.
 - A full authenticated end-to-end replay of every brief verification scenario was not available in this terminal context; live verification here covered the corrected schema assumptions, migration state, and touched-surface checks rather than a browser-driven business fixture.
+
+## 2026-07-31 23:44 IST - Gate-27.26 AC06 SLoc Costing Group Master (v2 correction)
+
+**Scope implemented:** delta correction only from the updated `CODEX-GATE27.26-AC06-SLOC-COSTING-GROUP-TASK-BRIEF.md`, after re-reading feasibility ง114.22 and re-reading the shipped AC06 backend/frontend files in full first.
+
+- Added `supabase/migrations/20260801020000_gate27_26_costing_group_v2_sloc_group.sql` for the new `erp_production.sloc_group` and `erp_production.sloc_group_member` masters.
+- Extended `supabase/functions/api/_core/production/costing_group.handlers.ts` with SLoc Group create/list/member add/member remove handlers, changed costing-rate browse from `storage_location_id` to `sloc_group_id`, removed `storage_location_id` from costing-group member add, and added `GET /api/production/costing-rate/draft-detail` for month-detail approval workflow.
+- Updated `supabase/functions/api/_routes/production.routes.ts` and `supabase/functions/api/_acl/route-acl-registry.ts` with the new SLoc Group static routes, dynamic member routes, and draft-detail route under existing resource code `ACC_SLOC_COSTING_GROUP`.
+- Updated `frontend/src/pages/dashboard/production/prodApi.js` with the new AC06 v2 helpers and rebuilt `frontend/src/pages/dashboard/production/SlocCostingGroupPage.jsx` so:
+  header browse starts from SLoc Group,
+  the page includes SLoc Group management UI,
+  grouped rates are editable only on the first row and auto-propagate,
+  and approval now opens a draft-detail drawer with save/unmap/approve instead of approving directly from the month list.
+
+**Reference to prior AC06 entry:**
+This entry is a v2 correction on top of the earlier `2026-07-31 23:05 IST` AC06 implementation. The original material-level uniqueness and month-snapshot model remain intact. This pass adds the missing SLoc Group master and the required detail-first approval flow without rewriting the original three AC06 core tables.
+
+**Dev verification / migration state:**
+
+- Re-used the shared Dev access from `.mcp.codex.local.json` and re-checked the live `erp_production` AC06 tables before code changes.
+- Applied the new AC06 v2 migration to Dev with `supabase db push --linked`.
+- Ran `node scripts/migration-integrity-check.mjs` outside the Windows sandbox; the local probe now reports `count=393` and `md5=d1f4b911764dfbc82cf40694a367aad0` for remote comparison against `supabase_migrations.schema_migrations`.
+
+**Verification notes / limitations:**
+
+- `deno check supabase/functions/api/_core/production/costing_group.handlers.ts` passed.
+- `deno check supabase/functions/api/_acl/route-acl-registry.ts` passed.
+- File-level ESLint passed for `frontend/src/pages/dashboard/production/SlocCostingGroupPage.jsx` and `frontend/src/pages/dashboard/production/prodApi.js` when rerun outside the Windows sandbox.
+- `deno check supabase/functions/api/_routes/production.routes.ts` still reports only the same pre-existing unrelated baseline typing errors in older files (`pack_config.handlers.ts`, `_pipeline/session.ts`), not AC06-v2-local failures.
+- No ACL/menu DB registration tables were touched, per brief.
+- The linked Dev push also applied one already-pending non-AC06 migration, `20260801011000_gate28_opening_stock_packing_order_link.sql`, because it was already queued locally in the linked environment before this AC06 v2 push.
+
+## 2026-07-31 23:58 IST - AC05 + MM05 user-QA corrections
+
+**Scope implemented:** follow-up correction pass after direct user feedback on AC05 and MM05 behavior, focused on DB + backend + frontend only.
+
+- AC05 correction:
+  added `supabase/migrations/20260801030000_gate27_25_ac05_corrections.sql` to extend `erp_production.mts_sku_monthly_rate` with `dispatch_uom_code` and `rate_per_kg`,
+  updated `supabase/functions/api/_core/production/mts_sku_rate.handlers.ts` to expose Dispatch-UOM choices that actually resolve to KG via `material_uom_conversion`, persist both entered rate and resolved per-KG rate, and auto-mark save as `APPROVED` when no `ACC_MTS_SKU_MONTHLY_RATE:WRITE` approval policy exists,
+  rebuilt `frontend/src/pages/dashboard/production/MtsSkuMonthlyRatePage.jsx` so month selection is shown in April-start fiscal order and each MTS SKU row now captures Dispatch UOM plus live per-KG resolution preview.
+
+- MM05 correction:
+  added `supabase/migrations/20260801031000_gate27_27_mm05_corrections.sql` to extend `erp_master.fg_dispatch_customer` with `state`, `full_address`, and `pin_code`,
+  updated `supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts` so customer create and unregistered-to-registered GST-upgrade both persist customer state/address fields on the master row,
+  rebuilt `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx` so Company + Type + FO Customer Type sit together, Direct is clearly labeled as Virtual Depot, Depot remains Depot, parent/depot cards stay compact, customer GST/unregistered entry gets the larger area, and direct additional-address entry reuses the same field shape as the main customer address form.
+
+**Verification notes / limitations:**
+
+- `deno check supabase/functions/api/_core/production/mts_sku_rate.handlers.ts` passed.
+- `deno check supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts` passed.
+- File-level ESLint passed for `frontend/src/pages/dashboard/production/MtsSkuMonthlyRatePage.jsx` and `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx` when rerun outside the Windows sandbox.
+- `node scripts/migration-integrity-check.mjs` produced the local checksum probe (`count=395`, `md5=c72608823d7d35296d61979d86013ef6`) but this environment still did not auto-run the remote comparison query.
+- No ACL/menu DB registration tables were touched in this correction pass.
+
+## 2026-07-31 23:59 IST - MM05 GST lookup alignment + AC05/AC06/MM05 consolidated handoff
+
+**MM05 GST lookup alignment:**
+
+- Added `lookupSharedGstProfile()` in `frontend/src/pages/dashboard/om/omApi.js` pointing to `/api/procurement/gst-profile`.
+- Switched both Parent Company and Customer `Check GST` actions in `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx` from `/api/om/customer/gst-profile` to the shared GST-profile path already used by Transporter.
+- This keeps MM05 on the common GST resolver family (`resolveGstProfileWithSource` + derived state/address fields) and exposes the richer shared profile payload / source semantics the user wanted MM05 to mirror.
+
+**Consolidated note for AC05 / AC06 / MM05:**
+
+- AC05 final shape: company-specific MTS SKU monthly rate master, April-start month ordering, Dispatch UOM selection, saved `rate_per_kg`, and approval-policy-aware activation.
+- AC06 final shape: corrected v2 SLoc Group driven browse model with material-level costing uniqueness preserved and draft-detail approval flow.
+- MM05 final shape: customer master persists state/address fields, Direct is clearly Virtual Depot, customer UI area is intentionally larger, and GST lookup now follows the shared GST-profile family instead of a customer-only lookup route.
+
+**Verification notes:**
+
+- File-level ESLint passed for `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx` and `frontend/src/pages/dashboard/om/omApi.js` after this GST alignment change.
+## 2026-07-31 23:59 IST - Gate-27.28 Opening Stock SFG/FG Part 2 frontend completion
+
+**Scope implemented:** Part 2 only from `CODEX-GATE27.28-PART2-FINISH-UI-TASK-BRIEF.md`, on top of the already-correct Part 1 backend. No backend behavior changes were made in `opening_stock.handlers.ts` or `opening_genealogy.handlers.ts`.
+
+- Updated `frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx` so the already-fetched PR22 / PR23 option queries are now actually rendered in all three entry surfaces: SFG MTO/HPS uses a Batch dropdown fed by PR22 rows, FG MTO/HPS uses a new Packing PO (PR23) dropdown that writes `packing_order_id`, each selection shows read-only lineage details plus computed remaining quantity, and selecting an option prefills quantity while still allowing user edits for split stock rows.
+- Fixed the live bulk-entry regression named in Change 0 by resolving each filtered bulk row back to its true `bulkRows` index before reading `bulkConversionQueries` / `bulkOpeningQueries`. This prevents `index is not defined` and avoids row-to-query misalignment whenever users add multiple mixed-material bulk rows.
+- Completed the FG rate-per-pack behavior using the selected packing order's `fill_qty_per_pack`, without changing the separate MTS/MTEST `material_uom_conversion` logic.
+- Rendered the previously-dead MTS/MTEST Rate UoM selectors in single-entry, edit, and bulk flows so the existing save-conversion logic is now usable from the UI.
+- Mirrored the same SFG/FG/rate-UoM field behavior into `frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockApprovalPage.jsx`, and also fixed the same positional-alignment bug there when saving only edited rows back through `batchUpdateOpeningStockLines`.
+- Cleaned stale frontend copy in `frontend/src/pages/dashboard/production/OldProcessPoPage.jsx` and `frontend/src/pages/dashboard/production/OldPackingPoPage.jsx` so those pages no longer instruct users to create Opening Stock first or imply reconciliation happens there instead of at IN05 submit.
+
+**Verification:**
+
+- ESLint now passes with 0 errors on `OpeningStockDetailPage.jsx`, `OpeningStockApprovalPage.jsx`, `OldProcessPoPage.jsx`, and `OldPackingPoPage.jsx`.
+- `deno check supabase/functions/api/_core/procurement/opening_stock.handlers.ts` passed.
+- `deno check supabase/functions/api/_core/production/opening_genealogy.handlers.ts` passed.
+- `node scripts/migration-integrity-check.mjs` ran and produced the current local checksum probe: `count=395`, `md5=c72608823d7d35296d61979d86013ef6`.
+
+**Files:** `frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx`, `frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockApprovalPage.jsx`, `frontend/src/pages/dashboard/production/OldProcessPoPage.jsx`, `frontend/src/pages/dashboard/production/OldPackingPoPage.jsx`, `docs/Codex-Log.md`, `docs/Operation Management/implementation-specs/OM-IMPLEMENTATION-LOG.md`.
