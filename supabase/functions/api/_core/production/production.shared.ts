@@ -17,25 +17,10 @@ export type ProdHandlerContext = {
   roleCode: string;
 };
 
-// SA, GA, DIRECTOR, Managers, Auditors — full write + approve authority
-const MANAGER_OR_SA_ROLES = new Set([
-  "SA", "GA", "DIRECTOR",
-  "L4_MANAGER", "L3_MANAGER",
-  "L2_AUDITOR", "L1_AUDITOR",
-  "L2_MANAGER",
-]);
-
 // SA-only (config operations)
 export function assertSARole(ctx: ProdHandlerContext): void {
   if (ctx.roleCode !== "SA") {
     throw new Error("PROD_SA_REQUIRED");
-  }
-}
-
-// Manager+ or Auditor — used for approve actions and config writes
-export function assertManagerOrSARole(ctx: ProdHandlerContext): void {
-  if (!MANAGER_OR_SA_ROLES.has(ctx.roleCode)) {
-    throw new Error("PROD_MANAGER_OR_SA_REQUIRED");
   }
 }
 

@@ -17,6 +17,8 @@ import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
@@ -46,18 +48,19 @@ export default function SOListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
 
-  const [companyId, setCompanyId] = useState(runtimeContext?.selectedCompanyId || "");
+  const [companyId, setCompanyId] = useState("");
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   useErpScreenHotkeys({});
 
   const params = useMemo(
     () => ({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: status || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
@@ -65,12 +68,13 @@ export default function SOListPage() {
       limit: LIMIT,
       offset: (page - 1) * LIMIT,
     }),
-    [companyId, status, dateFrom, dateTo, search, page]
+    [effectiveCompanyId, status, dateFrom, dateTo, search, page]
   );
 
   const soQuery = useQuery({
     queryKey: ["procurement", "sales-orders", params],
     queryFn: () => listSalesOrders(params),
+    enabled: Boolean(effectiveCompanyId),
   });
 
   const rows = Array.isArray(soQuery.data?.items) ? soQuery.data.items : [];
@@ -79,14 +83,6 @@ export default function SOListPage() {
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
   const loading = soQuery.isLoading;
-
-  const companyOptions = useMemo(
-    () => (runtimeContext?.availableCompanies ?? []).map((entry) => ({
-      value: entry.id,
-      label: entry.company_name || entry.company_code || entry.id,
-    })),
-    [runtimeContext?.availableCompanies]
-  );
 
   function openCreateSO() {
     openScreen(OPERATION_SCREENS.PROC_SO_CREATE.screen_code);
@@ -112,13 +108,13 @@ export default function SOListPage() {
         title: "Sales order register — RM / PM / INT (§113.1, FG Dispatch is a separate module)",
         children: (
           <div className="grid gap-3 xl:grid-cols-[180px_180px_180px_180px_minmax(0,1fr)]">
-            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Company
-              <select value={companyId} onChange={(event) => { setCompanyId(event.target.value); setPage(1); }} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
-                <option value="">ALL</option>
-                {companyOptions.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-              </select>
-            </label>
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(value) => { setCompanyId(value); setPage(1); }}
+              label="Company"
+              hint=""
+            />
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Status
               <select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
@@ -150,31 +146,35 @@ export default function SOListPage() {
         children: (
           <div className="grid gap-3">
             <ErpPaginationStrip page={page} setPage={setPage} totalPages={totalPages} startIndex={startIndex} endIndex={endIndex} totalItems={total} />
-            <ErpDenseGrid
-              columns={[
-                { key: "so_number", label: "SO Number", width: "140px" },
-                { key: "customer_display", label: "Customer", render: (row) => row.customer_display || "—" },
-                { key: "customer_po_number", label: "Customer PO", width: "140px" },
-                { key: "so_date", label: "SO Date", width: "110px" },
-                {
-                  key: "status",
-                  label: "Status",
-                  width: "140px",
-                  render: (row) => (
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${soStatusTone(row.status)}`}>
-                      {row.status}
-                    </span>
-                  ),
-                },
-                { key: "company_display", label: "Company", render: (row) => row.company_display || "—" },
-                { key: "total_value", label: "Total Value", width: "120px", render: (row) => formatMoney(row.total_invoice_value ?? row.total_value) },
-              ]}
-              rows={rows}
-              rowKey={(row) => row.id}
-              onRowActivate={openSODetail}
-              getRowProps={(row) => ({ onDoubleClick: () => openSODetail(row), className: "cursor-pointer hover:bg-sky-50" })}
-              emptyMessage={loading ? "Loading sales orders..." : "No sales orders matched the current filter."}
-            />
+            {!effectiveCompanyId ? (
+              <p className="text-slate-400 text-sm py-6 text-center">Select a company to view sales orders.</p>
+            ) : (
+              <ErpDenseGrid
+                columns={[
+                  { key: "so_number", label: "SO Number", width: "140px" },
+                  { key: "customer_display", label: "Customer", render: (row) => row.customer_display || "—" },
+                  { key: "customer_po_number", label: "Customer PO", width: "140px" },
+                  { key: "so_date", label: "SO Date", width: "110px" },
+                  {
+                    key: "status",
+                    label: "Status",
+                    width: "140px",
+                    render: (row) => (
+                      <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${soStatusTone(row.status)}`}>
+                        {row.status}
+                      </span>
+                    ),
+                  },
+                  { key: "company_display", label: "Company", render: (row) => row.company_display || "—" },
+                  { key: "total_value", label: "Total Value", width: "120px", render: (row) => formatMoney(row.total_invoice_value ?? row.total_value) },
+                ]}
+                rows={rows}
+                rowKey={(row) => row.id}
+                onRowActivate={openSODetail}
+                getRowProps={(row) => ({ onDoubleClick: () => openSODetail(row), className: "cursor-pointer hover:bg-sky-50" })}
+                emptyMessage={loading ? "Loading sales orders..." : "No sales orders matched the current filter."}
+              />
+            )}
           </div>
         ),
       }}

@@ -3,6 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import {
+  buildTransactionCompanyList,
+  resolveDefaultTransactionCompanyId,
+} from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ModalBase from "../../../../components/layer/ModalBase.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
@@ -465,7 +470,6 @@ export default function CSNTrackerPage() {
   const { runtimeContext } = useMenu();
   useEffect(() => requestWideWorkspace(), []);
   const [companyId, setCompanyId] = useState("");
-  const [companyInitialized, setCompanyInitialized] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -489,23 +493,7 @@ export default function CSNTrackerPage() {
   const [loadingHistoryKey, setLoadingHistoryKey] = useState("");
 
   const columns = useMemo(() => buildColumnDefs(), []);
-  const companyOptions = useMemo(
-    () =>
-      (runtimeContext?.availableCompanies ?? []).map((entry) => ({
-        value: entry.id,
-        label: entry.company_name || entry.company_code || entry.id,
-      })),
-    [runtimeContext?.availableCompanies]
-  );
-
-  useEffect(() => {
-    if (companyInitialized) {
-      return;
-    }
-    setCompanyId(runtimeContext?.selectedCompanyId || companyOptions[0]?.value || "");
-    setCompanyInitialized(true);
-  }, [companyInitialized, companyOptions, runtimeContext?.selectedCompanyId]);
-
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setDebouncedSearch(search.trim().toLowerCase());
@@ -514,19 +502,11 @@ export default function CSNTrackerPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
-  // PERF: `companyId` starts as "" and is filled a tick later by the auto-select effect above.
-  // Without a guard both of these fired immediately with no company (fetching every company's
-  // rows — the expensive case), then fired AGAIN once the company resolved. Measured live: two
-  // wasted heavy calls per page load, ~6s. Gate them until the initial
-  // auto-select effect has settled (companyInitialized) — not on companyId
-  // itself, which was the bug: companyId is legitimately "" once the user
-  // explicitly picks "ALL", and Boolean("") disabled the query forever,
-  // making "ALL" show nothing instead of everything.
   const trackerQuery = useQuery({
-    queryKey: ["csn-tracker", companyId, status, csnType, dateFrom, dateTo, page],
+    queryKey: ["csn-tracker", effectiveCompanyId, status, csnType, dateFrom, dateTo, page],
     queryFn: () =>
       getCSNTracker({
-        company_id: companyId || undefined,
+        company_id: effectiveCompanyId || undefined,
         status: status || undefined,
         csn_type: csnType || undefined,
         date_from: dateFrom || undefined,
@@ -534,13 +514,13 @@ export default function CSNTrackerPage() {
         limit: LIMIT,
         offset: (page - 1) * LIMIT,
       }),
-    enabled: companyInitialized,
+    enabled: Boolean(effectiveCompanyId),
   });
 
   const alertsQuery = useQuery({
-    queryKey: ["csn-alert-counts", companyId],
-    queryFn: () => getAllAlertCounts({ company_id: companyId || undefined }),
-    enabled: companyInitialized,
+    queryKey: ["csn-alert-counts", effectiveCompanyId],
+    queryFn: () => getAllAlertCounts({ company_id: effectiveCompanyId || undefined }),
+    enabled: Boolean(effectiveCompanyId),
   });
 
   useErpScreenHotkeys({
@@ -761,7 +741,7 @@ export default function CSNTrackerPage() {
   }
 
   async function handleCreateSubCsn(row) {
-    const scopedCompanyId = companyId || row?.company_id || "";
+    const scopedCompanyId = effectiveCompanyId || row?.company_id || "";
     if (!row?.id || !scopedCompanyId) {
       setError("PROCUREMENT_SUB_CSN_COMPANY_REQUIRED");
       return;
@@ -994,24 +974,15 @@ export default function CSNTrackerPage() {
               </div>
 
               <div className="grid gap-2 xl:grid-cols-[210px_130px_130px_128px_128px_200px_minmax(0,1fr)]">
-                <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-                  Company
-                  <select
-                    value={companyId}
-                    onChange={(event) => {
-                      setCompanyId(event.target.value);
-                      setPage(1);
-                    }}
-                    className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
-                  >
-                    <option value="">ALL</option>
-                    {companyOptions.map((entry) => (
-                      <option key={entry.value} value={entry.value}>
-                        {entry.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <TransactionCompanySelector
+                  runtimeContext={runtimeContext}
+                  value={companyId}
+                  onChange={(nextValue) => {
+                    setCompanyId(nextValue);
+                    setPage(1);
+                  }}
+                  label="Company"
+                />
 
                 <label className="grid gap-1 text-[11px] font-medium text-slate-600">
                   Status

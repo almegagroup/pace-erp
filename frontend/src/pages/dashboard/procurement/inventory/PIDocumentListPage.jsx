@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
@@ -42,7 +44,8 @@ function normalizeLocationRows(payload) {
 export default function PIDocumentListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const selectedCompanyId = runtimeContext?.selectedCompanyId || "";
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const [rows, setRows] = useState([]);
   const [storageLocations, setStorageLocations] = useState([]);
   const [filters, setFilters] = useState({ status: "" });
@@ -89,6 +92,7 @@ export default function PIDocumentListPage() {
     setError("");
     try {
       const result = await listPIDocuments({
+        company_id: effectiveCompanyId || undefined,
         status: nextFilters.status || undefined,
       });
       setRows(Array.isArray(result?.items) ? result.items : []);
@@ -102,20 +106,20 @@ export default function PIDocumentListPage() {
 
   useEffect(() => {
     void loadDocuments(filters);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [effectiveCompanyId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let active = true;
 
     async function loadLocations() {
-      if (!selectedCompanyId) {
+      if (!effectiveCompanyId) {
         setStorageLocations([]);
         setForm((current) => ({ ...current, storage_location_id: "" }));
         return;
       }
       try {
         const result = await listStorageLocations({
-          company_id: selectedCompanyId,
+          company_id: effectiveCompanyId,
           is_active: true,
         });
         if (!active) return;
@@ -130,7 +134,7 @@ export default function PIDocumentListPage() {
     return () => {
       active = false;
     };
-  }, [selectedCompanyId]);
+  }, [effectiveCompanyId]);
 
   const locationOptions = useMemo(
     () =>
@@ -234,6 +238,14 @@ export default function PIDocumentListPage() {
         title: "Register and create",
         children: (
           <div className="grid gap-3 xl:grid-cols-3">
+            <div className="xl:col-span-3">
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={companyId}
+                onChange={setCompanyId}
+                label="Company"
+              />
+            </div>
             {metrics.map((metric) => (
               <div key={metric.label} className="rounded border border-slate-200 bg-white px-4 py-3">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{metric.label}</div>
@@ -292,7 +304,7 @@ export default function PIDocumentListPage() {
                   onDoubleClick: () => openDetail(row),
                   className: "cursor-pointer hover:bg-sky-50",
                 })}
-                emptyMessage={loading ? "Loading physical inventory documents..." : "No physical inventory documents found."}
+                emptyMessage={loading ? "Loading physical inventory documents..." : effectiveCompanyId ? "No physical inventory documents found." : "No company resolved for this session."}
                 maxHeight="460px"
               />
             </div>

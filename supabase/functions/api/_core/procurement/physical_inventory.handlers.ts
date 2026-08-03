@@ -10,6 +10,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
@@ -165,6 +166,53 @@ async function getStorageLocationScope(storageLocationId: string): Promise<{ com
   };
 }
 
+async function assertPIStorageLocationScope(
+  ctx: ProcurementHandlerContext,
+  storageLocationId: string,
+): Promise<{ company_id: string }> {
+  const scope = await getStorageLocationScope(storageLocationId);
+  try {
+    await assertCompanyScope(ctx, scope.company_id);
+  } catch {
+    throw new Error("PI_SCOPE_VIOLATION");
+  }
+  return scope;
+}
+
+async function listPIScopedStorageLocationIds(ctx: ProcurementHandlerContext): Promise<string[] | null> {
+  if (isCompanyScopeAdminBypass(ctx)) {
+    return null;
+  }
+
+  const { data: companyRows, error: companyError } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id);
+
+  if (companyError) {
+    throw new Error("PI_SCOPE_LOOKUP_FAILED");
+  }
+
+  const companyIds = [...new Set(((companyRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.company_id)).filter(Boolean))];
+  if (companyIds.length === 0) {
+    return [];
+  }
+
+  const { data: slocRows, error: slocError } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_plant_map")
+    .select("storage_location_id")
+    .in("company_id", companyIds)
+    .eq("active", true);
+
+  if (slocError) {
+    throw new Error("PI_SCOPE_LOOKUP_FAILED");
+  }
+
+  return [...new Set(((slocRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
+}
+
 async function getMaterialInfo(materialIds: string[]): Promise<Map<string, JsonRecord>> {
   if (materialIds.length === 0) {
     return new Map();
@@ -180,7 +228,7 @@ async function getMaterialInfo(materialIds: string[]): Promise<Map<string, JsonR
     throw new Error("PI_MATERIAL_LOOKUP_FAILED");
   }
 
-  return new Map((data ?? []).map((row) => [String(row.id), row as JsonRecord]));
+  return new Map(((data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 }
 
 async function getBookSnapshots(
@@ -300,10 +348,10 @@ async function checkPostingBlock(materialId: string, storageLocationId: string):
 }
 
 async function countNullPhysicalQty(documentId: string): Promise<number> {
-  const { count, error } = await serviceRoleClient
+  const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
     .from("physical_inventory_item")
-    .select("id", { count: "exact", head: true })
+    .select("id")
     .eq("document_id", documentId)
     .is("physical_qty", null);
 
@@ -311,7 +359,7 @@ async function countNullPhysicalQty(documentId: string): Promise<number> {
     throw new Error("PI_ITEM_COUNT_LOOKUP_FAILED");
   }
 
-  return Number(count ?? 0);
+  return Number((data ?? []).length);
 }
 
 function isItemFullyProcessed(item: PiItemRow): boolean {
@@ -338,6 +386,7 @@ export async function createPIDHandler(
       return piErrorResponse(req, ctx, "PI_CREATE_INVALID", 400, "storage_location_id, count_date, posting_date, and valid mode are required.");
     }
 
+    await assertPIStorageLocationScope(ctx, storageLocationId);
     const candidates = await getItemCandidates(mode, storageLocationId, rawItems);
     for (const candidate of candidates) {
       const blocked = await checkPostingBlock(candidate.material_id, storageLocationId);
@@ -411,7 +460,7 @@ export async function createPIDHandler(
     return okResponse(await hydratePID(String(document.id)), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PI_CREATE_FAILED";
-    const status = code === "MATERIAL_POSTING_BLOCKED" ? 409 : 500;
+    const status = code === "PI_SCOPE_VIOLATION" ? 403 : code === "MATERIAL_POSTING_BLOCKED" ? 409 : 500;
     return piErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -435,6 +484,14 @@ export async function listPIDsHandler(
 
     if (status && PID_STATUSES.has(status)) {
       query = query.eq("status", status);
+    }
+
+    const scopedStorageLocationIds = await listPIScopedStorageLocationIds(ctx);
+    if (scopedStorageLocationIds && scopedStorageLocationIds.length === 0) {
+      return okResponse({ items: [] }, ctx.request_id, req);
+    }
+    if (scopedStorageLocationIds) {
+      query = query.in("storage_location_id", scopedStorageLocationIds);
     }
 
     const { data, error } = await query;
@@ -482,7 +539,8 @@ export async function listPIDsHandler(
     );
   } catch (error) {
     const code = error instanceof Error ? error.message : "PI_LIST_FAILED";
-    return piErrorResponse(req, ctx, code, 500, code);
+    const status = code === "PI_SCOPE_VIOLATION" ? 403 : 500;
+    return piErrorResponse(req, ctx, code, status, code);
   }
 }
 
@@ -497,10 +555,12 @@ export async function getPIDHandler(
       return piErrorResponse(req, ctx, "PI_ID_REQUIRED", 400, "Physical inventory document id is required.");
     }
 
+    const document = await fetchPID(documentId);
+    await assertPIStorageLocationScope(ctx, String(document.storage_location_id));
     return okResponse(await hydratePID(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PI_FETCH_FAILED";
-    const status = code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
+    const status = code === "PI_SCOPE_VIOLATION" ? 403 : code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
     return piErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -521,6 +581,7 @@ export async function addPIItemHandler(
     }
 
     const document = await fetchPID(documentId);
+    await assertPIStorageLocationScope(ctx, String(document.storage_location_id));
     if (toUpperTrimmedString(document.status) !== "OPEN") {
       return piErrorResponse(req, ctx, "PI_ITEM_ADD_BLOCKED", 409, "Items can only be added while PI document is OPEN.");
     }
@@ -600,7 +661,7 @@ export async function addPIItemHandler(
     return okResponse(item, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PI_ITEM_ADD_FAILED";
-    const status = code === "MATERIAL_POSTING_BLOCKED" ? 409 : code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
+    const status = code === "PI_SCOPE_VIOLATION" ? 403 : code === "MATERIAL_POSTING_BLOCKED" ? 409 : code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
     return piErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -621,6 +682,7 @@ export async function enterCountHandler(
     }
 
     const document = await fetchPID(documentId);
+    await assertPIStorageLocationScope(ctx, String(document.storage_location_id));
     const status = toUpperTrimmedString(document.status);
     if (!["OPEN", "COUNTED"].includes(status)) {
       return piErrorResponse(req, ctx, "PI_COUNT_BLOCKED", 409, "Counts can only be entered while PI document is OPEN or COUNTED.");
@@ -662,7 +724,7 @@ export async function enterCountHandler(
     return okResponse(await hydratePID(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PI_COUNT_SAVE_FAILED";
-    const status = code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
+    const status = code === "PI_SCOPE_VIOLATION" ? 403 : code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
     return piErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -676,6 +738,7 @@ export async function requestRecountHandler(
     const documentId = getDocumentIdFromPath(req);
     const itemId = getItemIdFromPath(req);
     const document = await fetchPID(documentId);
+    await assertPIStorageLocationScope(ctx, String(document.storage_location_id));
 
     if (toUpperTrimmedString(document.status) === "POSTED") {
       return piErrorResponse(req, ctx, "PI_RECOUNT_BLOCKED", 409, "Posted PI documents cannot request recount.");
@@ -715,7 +778,7 @@ export async function requestRecountHandler(
     return okResponse(await hydratePID(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PI_RECOUNT_FAILED";
-    const status = code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
+    const status = code === "PI_SCOPE_VIOLATION" ? 403 : code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
     return piErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -728,6 +791,7 @@ export async function postDifferencesHandler(
     assertProcurementReadRole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const document = await fetchPID(documentId);
+    await assertPIStorageLocationScope(ctx, String(document.storage_location_id));
     const status = toUpperTrimmedString(document.status);
     if (!["OPEN", "COUNTED"].includes(status)) {
       return piErrorResponse(req, ctx, "PI_POST_BLOCKED", 409, "PI document must be OPEN or COUNTED before posting differences.");
@@ -830,7 +894,7 @@ export async function postDifferencesHandler(
     return okResponse(await hydratePID(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PI_POST_FAILED";
-    const status = code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
+    const status = code === "PI_SCOPE_VIOLATION" ? 403 : code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
     return piErrorResponse(req, ctx, code, status, code);
   }
 }

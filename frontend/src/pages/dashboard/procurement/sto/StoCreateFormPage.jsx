@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery, useQueries } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
@@ -200,9 +202,10 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
 export default function StoCreateFormPage({ openingMode = false }) {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
+  const runtimeDefaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [form, setForm] = useState({
     sto_type: openingMode ? "INTER_PLANT" : "CONSIGNMENT_DISTRIBUTION",
-    sending_company_id: runtimeContext?.selectedCompanyId || "",
+    sending_company_id: runtimeDefaultCompanyId,
     receiving_company_id: "",
     sending_cost_center_id: "",
     receiving_cost_center_id: "",
@@ -349,15 +352,15 @@ export default function StoCreateFormPage({ openingMode = false }) {
       ...current,
       sending_company_id:
         current.sending_company_id ||
-        runtimeContext?.selectedCompanyId ||
+        runtimeDefaultCompanyId ||
         companies[0]?.id ||
         "",
       receiving_company_id:
         current.receiving_company_id ||
-        companies.find((entry) => entry.id !== (runtimeContext?.selectedCompanyId || ""))?.id ||
+        companies.find((entry) => entry.id !== (runtimeDefaultCompanyId || ""))?.id ||
         "",
     }));
-  }, [companies, runtimeContext?.selectedCompanyId]);
+  }, [companies, runtimeDefaultCompanyId]);
 
   useEffect(() => {
     if (!defaultPaymentTermId) return;
@@ -754,16 +757,12 @@ export default function StoCreateFormPage({ openingMode = false }) {
                 )}
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Sending Company <span className="text-rose-500">*</span>
-                  <select
+                  <TransactionCompanySelector
+                    runtimeContext={runtimeContext}
                     value={form.sending_company_id}
-                    onChange={(event) => updateHeaderField("sending_company_id", event.target.value)}
-                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                  >
-                    <option value="">Select company</option>
-                    {companyOptions.map((entry) => (
-                      <option key={entry.value} value={entry.value}>{entry.label}</option>
-                    ))}
-                  </select>
+                    onChange={(value) => updateHeaderField("sending_company_id", value)}
+                    label="Sending Company"
+                  />
                 </label>
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Receiving Company <span className="text-rose-500">*</span>

@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
@@ -97,30 +99,16 @@ export default function GateEntryCreatePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [successGE, setSuccessGE] = useState(null);
-
-  const companyOptions = useMemo(
-    () =>
-      (runtimeContext?.availableCompanies ?? []).map((c) => ({
-        value: c.id,
-        label: c.company_name || c.company_code || c.id,
-      })),
-    [runtimeContext?.availableCompanies]
-  );
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   useEffect(() => {
-    if (!companyId && companyOptions.length > 0) {
-      setCompanyId(runtimeContext?.selectedCompanyId || companyOptions[0].value);
-    }
-  }, [companyId, companyOptions, runtimeContext?.selectedCompanyId]);
-
-  useEffect(() => {
-    if (!companyId) return;
+    if (!effectiveCompanyId) return;
     let active = true;
     setDataLoading(true);
     Promise.all([
-      listOpenPOsForGE({ company_id: companyId }),
-      listOpenSTOsForGE({ company_id: companyId }),
-      listOpenCSNsForGE({ company_id: companyId }),
+      listOpenPOsForGE({ company_id: effectiveCompanyId }),
+      listOpenSTOsForGE({ company_id: effectiveCompanyId }),
+      listOpenCSNsForGE({ company_id: effectiveCompanyId }),
     ])
       .then(([poRes, stoRes, csnRes]) => {
         if (!active) return;
@@ -136,7 +124,7 @@ export default function GateEntryCreatePage() {
         if (active) setDataLoading(false);
       });
     return () => { active = false; };
-  }, [companyId]);
+  }, [effectiveCompanyId]);
 
   // §111 (2026-07-25) — one search box, either PO or STO number. STO has no
   // po_number of its own (it's a different document, per-company-transfer,
@@ -253,7 +241,7 @@ export default function GateEntryCreatePage() {
 
   async function handleSave() {
     setError("");
-    if (!companyId || !entryDate || !vehicleNumber.trim()) {
+    if (!effectiveCompanyId || !entryDate || !vehicleNumber.trim()) {
       setError("Company, entry date, and vehicle number are required.");
       return;
     }
@@ -298,7 +286,7 @@ export default function GateEntryCreatePage() {
       const qtyTotal = activeLines.reduce((sum, l) => sum + (Number(l.rcvQty) || 0), 0);
       let allocatedGrossWeight = 0;
       const created = await createGateEntry({
-        company_id: companyId,
+        company_id: effectiveCompanyId,
         entry_date: entryDate,
         entry_time: time12to24(entryTime, ampm),
         vehicle_number: vehicleNumber.trim().toUpperCase(),
@@ -381,7 +369,7 @@ export default function GateEntryCreatePage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawer, successGE, lines, saving, companyId, entryDate, vehicleNumber, grossWeight, entryTime, ampm]);
+  }, [drawer, successGE, lines, saving, effectiveCompanyId, entryDate, vehicleNumber, grossWeight, entryTime, ampm]);
 
   // ─── render helpers ──────────────────────────────────────────────────────
 
@@ -656,19 +644,12 @@ export default function GateEntryCreatePage() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
             {/* Company */}
             <div className="col-span-2 lg:col-span-1">
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Company <span className="font-normal text-red-500">*</span>
-                <select
-                  className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-                  value={companyId}
-                  onChange={(e) => setCompanyId(e.target.value)}
-                >
-                  <option value="">Select company</option>
-                  {companyOptions.map((c) => (
-                    <option key={c.value} value={c.value}>{c.label}</option>
-                  ))}
-                </select>
-              </label>
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={companyId}
+                onChange={setCompanyId}
+                label="Company"
+              />
             </div>
 
             {/* GE Number */}

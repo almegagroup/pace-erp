@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
@@ -26,35 +28,23 @@ export default function GateReportPage() {
   const [geType, setGeType] = useState("");
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
-
-  const companyOptions = useMemo(
-    () =>
-      (runtimeContext?.availableCompanies ?? []).map((c) => ({
-        value: c.id,
-        label: c.company_name || c.company_code || c.id,
-      })),
-    [runtimeContext?.availableCompanies]
-  );
-
-  // Auto-select first company
-  useMemo(() => {
-    if (!companyId && companyOptions.length > 0) {
-      setCompanyId(runtimeContext?.selectedCompanyId || companyOptions[0]?.value || "");
-    }
-  }, [companyId, companyOptions, runtimeContext?.selectedCompanyId]);
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const params = useMemo(
-    () => ({ company_id: companyId, date_from: dateFrom, date_to: dateTo, ge_type: geType, status, limit: 500 }),
-    [companyId, dateFrom, dateTo, geType, status]
+    () => ({ company_id: effectiveCompanyId, date_from: dateFrom, date_to: dateTo, ge_type: geType, status, limit: 500 }),
+    [effectiveCompanyId, dateFrom, dateTo, geType, status]
   );
 
   const reportQuery = useQuery({
     queryKey: ["procurement", "gate-report", params],
-    enabled: Boolean(companyId),
+    enabled: Boolean(effectiveCompanyId),
     queryFn: () => getGateReport(params),
   });
 
-  const allRows = Array.isArray(reportQuery.data?.items) ? reportQuery.data.items : [];
+  const allRows = useMemo(
+    () => (Array.isArray(reportQuery.data?.items) ? reportQuery.data.items : []),
+    [reportQuery.data],
+  );
 
   const rows = useMemo(() => {
     if (!search.trim()) return allRows;
@@ -94,19 +84,12 @@ export default function GateReportPage() {
         title: "Filter",
         children: (
           <div className="grid gap-3 lg:grid-cols-[220px_160px_160px_160px_160px_minmax(0,1fr)]">
-            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Company
-              <select
-                value={companyId}
-                onChange={(e) => setCompanyId(e.target.value)}
-                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-              >
-                <option value="">Select company</option>
-                {companyOptions.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </label>
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={setCompanyId}
+              label="Company"
+            />
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Date from
               <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
@@ -165,7 +148,7 @@ export default function GateReportPage() {
             ]}
             rows={rows}
             rowKey={(r, i) => `${r.ge_number}-${r.line_number ?? i}`}
-            emptyMessage={loading ? "Loading…" : companyId ? "No records matched the criteria." : "Select a company to run the report."}
+            emptyMessage={loading ? "Loading…" : effectiveCompanyId ? "No records matched the criteria." : "No company resolved for this session."}
           />
         ),
       }}

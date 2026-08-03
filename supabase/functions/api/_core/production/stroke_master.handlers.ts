@@ -16,10 +16,10 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
-  assertManagerOrSARole,
   parseBody,
   toTrimmedString,
   toUpperTrimmedString,
@@ -139,6 +139,87 @@ async function getStrokeMaster(id: string): Promise<JsonRecord | null> {
     throw new Error("PROD_STROKE_LOOKUP_FAILED");
   }
   return (data as JsonRecord | null) ?? null;
+}
+
+interface ApproverMapRow {
+  approver_user_id: string | null;
+  approver_role_code: string | null;
+  resource_code: string | null;
+  action_code: string | null;
+  scope_type: string | null;
+  subject_user_id: string | null;
+  subject_work_context_id: string | null;
+  subject_role_code: string | null;
+  approval_stage: number;
+}
+
+async function loadStrokeApproverRules(companyId: string): Promise<ApproverMapRow[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("acl")
+    .from("approver_map")
+    .select(
+      "approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage",
+    )
+    .eq("resource_code", "PROD_STROKE_APPROVAL")
+    .eq("action_code", "APPROVE")
+    .eq("company_id", companyId);
+  if (error) throw new Error("PROD_STROKE_APPROVER_LOOKUP_FAILED");
+  return (data as ApproverMapRow[] | null) ?? [];
+}
+
+async function getStrokeUserRoleCode(userId: string): Promise<string | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("user_roles")
+    .select("role_code")
+    .eq("auth_user_id", userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return String((data as Record<string, unknown>).role_code ?? "") || null;
+}
+
+function matchesStrokeApprover(rows: ApproverMapRow[], ctx: ProdHandlerContext): boolean {
+  return rows.some((row) => {
+    if (row.approver_user_id) return row.approver_user_id === ctx.auth_user_id;
+    if (row.approver_role_code) return row.approver_role_code === ctx.roleCode;
+    return false;
+  });
+}
+
+// QA/Operator (L1-L4 User) creates a Stroke DRAFT; Manager/Auditor-tier approves.
+// DIRECTOR is a blanket bypass, not a per-subject-role approver_map row (business
+// owner, 2026-08-03) — see the identical note in opening_stock.handlers.ts /
+// mts_sku_rate.handlers.ts / costing_group.handlers.ts.
+async function assertStrokeApproverRole(
+  ctx: ProdHandlerContext,
+  companyId: string,
+  createdBy?: string | null,
+): Promise<void> {
+  if (ctx.roleCode === "SA" || ctx.roleCode === "GA" || ctx.roleCode === "DIRECTOR") {
+    return;
+  }
+  const rules = await loadStrokeApproverRules(companyId);
+  let isConfiguredApprover: boolean;
+  if (rules.length === 0) {
+    isConfiguredApprover = false; // no approver_map row configured yet, and caller is not SA/GA/DIRECTOR.
+  } else {
+    const creatorRoleCode = createdBy ? await getStrokeUserRoleCode(createdBy) : null;
+    const scopedRules = pickScopedApproverRules(
+      {
+        resource_code: "PROD_STROKE_APPROVAL",
+        action_code: "APPROVE",
+        requester_auth_user_id: createdBy ?? null,
+        requester_role_code: creatorRoleCode,
+      },
+      rules,
+    );
+    isConfiguredApprover = scopedRules.length > 0 ? matchesStrokeApprover(scopedRules, ctx) : false;
+  }
+  if (!isConfiguredApprover) throw new Error("PROD_STROKE_APPROVER_ROLE_REQUIRED");
+  // DIRECTOR already returned above, so this can never fire for DIRECTOR.
+  if (createdBy && createdBy === ctx.auth_user_id) {
+    throw new Error("PROD_STROKE_SELF_APPROVAL_FORBIDDEN");
+  }
 }
 
 function validateLines(lines: JsonRecord[]): string | null {
@@ -662,6 +743,11 @@ export async function approveStrokeMasterHandler(
     if (existing.status !== "DRAFT") {
       return strokeError(req, ctx, "PROD_STROKE_ALREADY_APPROVED", 409, "Only DRAFT strokes can be approved");
     }
+    await assertStrokeApproverRole(
+      ctx,
+      toTrimmedString(existing.company_id as string),
+      existing.created_by as string | null | undefined,
+    );
 
     // Check lines exist and dosage sums to 100
     const { data: lines } = await serviceRoleClient
@@ -713,7 +799,10 @@ export async function approveStrokeMasterHandler(
   } catch (err) {
     console.error("[stroke_master.approveStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_APPROVE_FAILED";
-    return strokeError(req, ctx, code, 500, "Stroke approve failed");
+    const status = code === "PROD_STROKE_APPROVER_ROLE_REQUIRED" || code === "PROD_STROKE_SELF_APPROVAL_FORBIDDEN"
+      ? 403
+      : 500;
+    return strokeError(req, ctx, code, status, "Stroke approve failed");
   }
 }
 
@@ -734,6 +823,11 @@ export async function rejectStrokeMasterHandler(
     if (existing.status !== "DRAFT") {
       return strokeError(req, ctx, "PROD_STROKE_NOT_DRAFT", 422, "Only DRAFT strokes can be rejected");
     }
+    await assertStrokeApproverRole(
+      ctx,
+      toTrimmedString(existing.company_id as string),
+      existing.created_by as string | null | undefined,
+    );
 
     await serviceRoleClient.schema("erp_production").from("stroke_line").delete().eq("stroke_master_id", id);
     const { error } = await serviceRoleClient.schema("erp_production").from("stroke_master").delete().eq("id", id);
@@ -746,7 +840,10 @@ export async function rejectStrokeMasterHandler(
   } catch (err) {
     console.error("[stroke_master.rejectStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_REJECT_FAILED";
-    return strokeError(req, ctx, code, 500, "Stroke reject failed");
+    const status = code === "PROD_STROKE_APPROVER_ROLE_REQUIRED" || code === "PROD_STROKE_SELF_APPROVAL_FORBIDDEN"
+      ? 403
+      : 500;
+    return strokeError(req, ctx, code, status, "Stroke reject failed");
   }
 }
 

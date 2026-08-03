@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
@@ -30,21 +32,7 @@ export default function GRNListPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
-
-  const companyOptions = useMemo(
-    () =>
-      (runtimeContext?.availableCompanies ?? []).map((entry) => ({
-        value: entry.id,
-        label: entry.company_name || entry.company_code || entry.id,
-      })),
-    [runtimeContext?.availableCompanies]
-  );
-
-  useEffect(() => {
-    if (!companyId) {
-      setCompanyId(runtimeContext?.selectedCompanyId || companyOptions[0]?.value || "");
-    }
-  }, [companyId, companyOptions, runtimeContext?.selectedCompanyId]);
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -57,7 +45,7 @@ export default function GRNListPage() {
   const offset = (page - 1) * LIMIT;
   const grnParams = useMemo(
     () => ({
-      company_id: companyId,
+      company_id: effectiveCompanyId,
       status: status || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
@@ -65,12 +53,12 @@ export default function GRNListPage() {
       limit: LIMIT,
       offset,
     }),
-    [companyId, dateFrom, dateTo, status, debouncedSearch, offset]
+    [effectiveCompanyId, dateFrom, dateTo, status, debouncedSearch, offset]
   );
 
   const grnQuery = useQuery({
     queryKey: ["procurement", "grns", grnParams],
-    enabled: Boolean(companyId),
+    enabled: Boolean(effectiveCompanyId),
     queryFn: () => listGRNs(grnParams),
   });
 
@@ -121,19 +109,12 @@ export default function GRNListPage() {
         title: "GRN register lookup",
         children: (
           <div className="grid gap-3 lg:grid-cols-[220px_180px_180px_180px_minmax(0,1fr)]">
-            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Company
-              <select
-                value={companyId}
-                onChange={(e) => { setCompanyId(e.target.value); setPage(1); }}
-                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-              >
-                <option value="">Select company</option>
-                {companyOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </label>
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(nextValue) => { setCompanyId(nextValue); setPage(1); }}
+              label="Company"
+            />
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Status
               <select
@@ -223,6 +204,7 @@ export default function GRNListPage() {
                 },
               ]}
               rows={rows}
+              emptyMessage={loading ? "Loading…" : effectiveCompanyId ? "No GRNs matched the current filters." : "No company resolved for this session."}
               rowKey={(row) => row.id}
               onRowActivate={openDetail}
               getRowProps={() => ({ className: "cursor-pointer hover:bg-sky-50" })}

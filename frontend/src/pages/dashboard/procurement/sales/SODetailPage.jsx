@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -63,6 +64,7 @@ export default function SODetailPage() {
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
+  const resolvedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [issueLines, setIssueLines] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -75,7 +77,7 @@ export default function SODetailPage() {
       const soData = await getSalesOrder(id);
       const soDetail = soData?.data ?? soData;
       const invoiceData = await listSalesInvoices({
-        company_id: soDetail?.company_id || runtimeContext?.selectedCompanyId || undefined,
+        company_id: soDetail?.company_id || resolvedCompanyId || undefined,
         customer_id: soDetail?.customer_id || undefined,
       });
       const invoiceRows = Array.isArray(invoiceData?.items) ? invoiceData.items : [];

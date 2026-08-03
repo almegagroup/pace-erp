@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -59,6 +60,7 @@ export default function LandedCostDetailPage() {
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || routeId);
   const { runtimeContext } = useMenu();
+  const resolvedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [detail, setDetail] = useState(null);
   const [chaRows, setChaRows] = useState([]);
   const [headerForm, setHeaderForm] = useState({
@@ -134,7 +136,7 @@ export default function LandedCostDetailPage() {
     setNotice("");
     try {
       const created = await createLandedCost({
-        company_id: runtimeContext?.selectedCompanyId || "",
+        company_id: resolvedCompanyId || "",
         vendor_id: headerForm.vendor_id,
         grn_id: headerForm.grn_id || null,
         csn_id: headerForm.csn_id || null,

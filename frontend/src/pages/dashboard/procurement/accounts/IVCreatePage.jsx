@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
 import {
@@ -31,9 +33,10 @@ function createLineEntry(grnId, grnLine) {
 export default function IVCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
+  const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [lineEntries, setLineEntries] = useState([]);
   const [form, setForm] = useState({
-    company_id: "",
+    company_id: defaultCompanyId,
     vendor_id: "",
     vendor_invoice_number: "",
     vendor_invoice_date: "",
@@ -41,16 +44,15 @@ export default function IVCreatePage() {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const companyId = runtimeContext?.selectedCompanyId || "";
   const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
   const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
 
   useEffect(() => {
     setForm((current) => ({
       ...current,
-      company_id: current.company_id || companyId || "",
+      company_id: current.company_id || defaultCompanyId || "",
     }));
-  }, [companyId]);
+  }, [defaultCompanyId]);
 
   const grnQuery = useQuery({
     queryKey: ["procurement", "iv-create-grns", { company_id: form.company_id || undefined, vendor_id: form.vendor_id || undefined }],
@@ -109,7 +111,10 @@ export default function IVCreatePage() {
 
   const vendors = vendorQuery.vendors;
   const materials = materialQuery.materials;
-  const grns = Array.isArray(grnQuery.data) ? grnQuery.data : [];
+  const grns = useMemo(
+    () => (Array.isArray(grnQuery.data) ? grnQuery.data : []),
+    [grnQuery.data],
+  );
   const loading =
     vendorQuery.isLoading ||
     materialQuery.isLoading ||
@@ -201,10 +206,11 @@ export default function IVCreatePage() {
           <div className="grid gap-4">
             <div className="grid gap-3 lg:grid-cols-2">
               <ErpDenseFormRow label="Company" required>
-                <input
+                <TransactionCompanySelector
+                  runtimeContext={runtimeContext}
                   value={form.company_id}
-                  onChange={(event) => setForm((current) => ({ ...current, company_id: event.target.value }))}
-                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  onChange={(value) => setForm((current) => ({ ...current, company_id: value, vendor_id: "" }))}
+                  label="Company"
                 />
               </ErpDenseFormRow>
               <ErpDenseFormRow label="Vendor" required>

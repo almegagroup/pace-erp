@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import ErpCompanySelector from "../../../../components/inputs/ErpCompanySelector.jsx";
+import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
@@ -185,6 +187,9 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
 export default function POCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
+  const runtimeCompanyList = buildTransactionCompanyList(runtimeContext);
+  const runtimeDefaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+  const companyReadOnly = String(runtimeContext?.workspaceMode ?? "").toUpperCase() !== "MULTI" || runtimeCompanyList.length <= 1;
   // Company/Vendor/Material cross-filter each other no matter which one is
   // picked first — picking just a Material narrows Company+Vendor to ones
   // with an approved link to it, picking Company+Vendor narrows Material, etc.
@@ -195,7 +200,7 @@ export default function POCreatePage() {
     // Seed from the already-known runtime company instead of waiting on the
     // filter-options round trip to resolve a default — lets Cost Center
     // start loading in parallel with everything else on first mount.
-    company_id: runtimeContext?.selectedCompanyId || "",
+    company_id: runtimeDefaultCompanyId,
     vendor_id: "",
     delivery_type: "STANDARD",
     incoterm: "",
@@ -339,12 +344,11 @@ export default function POCreatePage() {
     if (form.company_id || companyOptions.length === 0) {
       return;
     }
-    const defaultCompanyId = runtimeContext?.selectedCompanyId && companyOptions.some((entry) => entry.value === runtimeContext.selectedCompanyId)
-      ? runtimeContext.selectedCompanyId
+    const defaultCompanyId = runtimeDefaultCompanyId && companyOptions.some((entry) => entry.value === runtimeDefaultCompanyId)
+      ? runtimeDefaultCompanyId
       : companyOptions[0].value;
     setForm((current) => (current.company_id ? current : { ...current, company_id: defaultCompanyId }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyOptions, form.company_id]);
+  }, [companyOptions, form.company_id, runtimeDefaultCompanyId]);
 
   function updateHeaderField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -727,16 +731,18 @@ export default function POCreatePage() {
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Company <span className="text-rose-500">*</span>
-                  <select
+                  <ErpCompanySelector
+                    companies={companyOptions.map((entry) => ({
+                      id: entry.value,
+                      company_code: entry.label.split("|")[0]?.trim() || entry.value,
+                      company_name: entry.label.split("|").slice(1).join("|").trim() || entry.label,
+                    }))}
                     value={form.company_id}
-                    onChange={(event) => updateHeaderField("company_id", event.target.value)}
-                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                  >
-                    <option value="">Select company</option>
-                    {companyOptions.map((entry) => (
-                      <option key={entry.value} value={entry.value}>{entry.label}</option>
-                    ))}
-                  </select>
+                    onChange={(value) => updateHeaderField("company_id", value)}
+                    mode="required"
+                    label=""
+                    readOnly={companyReadOnly}
+                  />
                 </label>
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Vendor <span className="text-rose-500">*</span>

@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
@@ -52,18 +54,19 @@ export default function RTVListPage() {
   const [settlementMode, setSettlementMode] = useState("");
   const [vendorId, setVendorId] = useState("");
   const [page, setPage] = useState(1);
-  const companyId = runtimeContext?.selectedCompanyId || "";
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
   const rtvParams = useMemo(
     () => ({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: status || undefined,
       settlement_mode: settlementMode || undefined,
       vendor_id: vendorId || undefined,
       limit: 200,
     }),
-    [companyId, settlementMode, status, vendorId]
+    [effectiveCompanyId, settlementMode, status, vendorId]
   );
   const rtvQuery = useQuery({
     queryKey: ["procurement", "rtvs", rtvParams],
@@ -87,7 +90,10 @@ export default function RTVListPage() {
       };
     },
   });
-  const rows = Array.isArray(rtvQuery.data?.items) ? rtvQuery.data.items : [];
+  const rows = useMemo(
+    () => (Array.isArray(rtvQuery.data?.items) ? rtvQuery.data.items : []),
+    [rtvQuery.data],
+  );
   const vendors = vendorQuery.vendors;
   const grnMap = useMemo(() => new Map(rtvQuery.data?.grnMapEntries ?? []), [rtvQuery.data?.grnMapEntries]);
   const loading = rtvQuery.isLoading || vendorQuery.isLoading;
@@ -105,10 +111,6 @@ export default function RTVListPage() {
       },
     },
   });
-
-  useEffect(() => {
-    setPage(1);
-  }, [search, status, settlementMode, vendorId]);
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
@@ -197,11 +199,23 @@ export default function RTVListPage() {
         eyebrow: "Search And Filter",
         title: "Vendor return register",
         children: (
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_170px_220px_220px]">
+          <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1.2fr)_170px_220px_220px]">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(nextValue) => {
+                setCompanyId(nextValue);
+                setPage(1);
+              }}
+              label="Company"
+            />
             <QuickFilterInput
               label="Search"
               value={search}
-              onChange={setSearch}
+              onChange={(value) => {
+                setSearch(value);
+                setPage(1);
+              }}
               primaryFocus
               placeholder="Search RTV number, vendor or GRN"
             />
@@ -209,7 +223,10 @@ export default function RTVListPage() {
               Status
               <select
                 value={status}
-                onChange={(event) => setStatus(event.target.value)}
+                onChange={(event) => {
+                  setStatus(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
@@ -224,7 +241,10 @@ export default function RTVListPage() {
               Settlement Mode
               <select
                 value={settlementMode}
-                onChange={(event) => setSettlementMode(event.target.value)}
+                onChange={(event) => {
+                  setSettlementMode(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
@@ -239,7 +259,10 @@ export default function RTVListPage() {
               Vendor
               <select
                 value={vendorId}
-                onChange={(event) => setVendorId(event.target.value)}
+                onChange={(event) => {
+                  setVendorId(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
@@ -314,7 +337,7 @@ export default function RTVListPage() {
                 onDoubleClick: () => openDetail(row),
                 className: "cursor-pointer hover:bg-sky-50",
               })}
-              emptyMessage={loading ? "Loading RTV register..." : "No RTV matched the current filter."}
+              emptyMessage={loading ? "Loading RTV register..." : effectiveCompanyId ? "No RTV matched the current filter." : "No company resolved for this session."}
             />
           </div>
         ),

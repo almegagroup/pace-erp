@@ -11,6 +11,8 @@
 
 import React, { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useMenu } from "../../../context/useMenu.js";
@@ -26,9 +28,6 @@ import {
 
 const PO_TYPES = ["MTO", "HPS"];
 
-function companyLabel(c) {
-  return [c?.company_code, c?.company_name].filter(Boolean).join(" - ");
-}
 function materialLabel(m) {
   if (!m) return "--";
   return [m.pace_code || m.external_code, m.material_name].filter(Boolean).join(" - ");
@@ -70,16 +69,12 @@ export default function PartialBatchReversalPage() {
   }
 
   const { runtimeContext } = useMenu();
-  const companies = runtimeContext?.availableCompanies ?? [];
-  const companyOptions = useMemo(
-    () => companies.map((c) => ({ value: c.id, label: companyLabel(c) || "Company" })),
-    [companies],
-  );
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const prodshadesQ = useQuery({
-    queryKey: ["pr19-prodshades", companyId, poType],
-    queryFn: () => listPartialReversalProdshades({ company_id: companyId, po_type: poType }),
-    enabled: Boolean(companyId && poType),
+    queryKey: ["pr19-prodshades", effectiveCompanyId, poType],
+    queryFn: () => listPartialReversalProdshades({ company_id: effectiveCompanyId, po_type: poType }),
+    enabled: Boolean(effectiveCompanyId && poType),
     select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
   });
   const prodshadeOptions = useMemo(
@@ -88,10 +83,10 @@ export default function PartialBatchReversalPage() {
   );
 
   async function handleResolveBatch() {
-    if (!companyId || !poType || !prodshadeMaterialId || !batchNumber.trim()) return;
+    if (!effectiveCompanyId || !poType || !prodshadeMaterialId || !batchNumber.trim()) return;
     try {
       const po = await resolvePartialReversalBatch({
-        company_id: companyId,
+        company_id: effectiveCompanyId,
         po_type: poType,
         prodshade_material_id: prodshadeMaterialId,
         batch_number: batchNumber.trim(),
@@ -134,12 +129,12 @@ export default function PartialBatchReversalPage() {
   }
 
   const salvageBatchesQ = useQuery({
-    queryKey: ["pr19-salvage-batches", companyId, poType, prodshadeMaterialId, resolvedPo?.id],
+    queryKey: ["pr19-salvage-batches", effectiveCompanyId, poType, prodshadeMaterialId, resolvedPo?.id],
     queryFn: () => listSalvageBatchOptions({
-      company_id: companyId, po_type: poType, prodshade_material_id: prodshadeMaterialId,
+      company_id: effectiveCompanyId, po_type: poType, prodshade_material_id: prodshadeMaterialId,
       exclude_process_order_id: resolvedPo?.id,
     }),
-    enabled: Boolean(companyId && poType && prodshadeMaterialId && step === 3),
+    enabled: Boolean(effectiveCompanyId && poType && prodshadeMaterialId && step === 3),
     select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
   });
 
@@ -220,12 +215,11 @@ export default function PartialBatchReversalPage() {
         <ErpSectionCard title="Identify Batch">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-slate-600">Company</label>
-              <ErpComboboxField
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
                 value={companyId}
                 onChange={(v) => { setCompanyId(v); setPoType(""); setProdshadeMaterialId(""); }}
-                options={companyOptions}
-                placeholder="-- Select company --"
+                label="Company"
               />
             </div>
             <div className="flex flex-col gap-1">
@@ -235,7 +229,7 @@ export default function PartialBatchReversalPage() {
                 onChange={(v) => { setPoType(v); setProdshadeMaterialId(""); }}
                 options={PO_TYPES.map((t) => ({ value: t, label: t }))}
                 placeholder="-- Select type (MTO/HPS) --"
-                disabled={!companyId}
+                disabled={!effectiveCompanyId}
               />
             </div>
             <div className="flex flex-col gap-1">

@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
@@ -25,23 +27,10 @@ export default function CSNAlertsPage() {
   const [reloadTick, setReloadTick] = useState(0);
 
   const activeTab = resolveInitialTab(searchParams.get("tab"));
-  const companyOptions = useMemo(
-    () =>
-      (runtimeContext?.availableCompanies ?? []).map((entry) => ({
-        value: entry.id,
-        label: entry.company_name || entry.company_code || entry.id,
-      })),
-    [runtimeContext?.availableCompanies]
-  );
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   useEffect(() => {
-    if (!companyId) {
-      setCompanyId(runtimeContext?.selectedCompanyId || companyOptions[0]?.value || "");
-    }
-  }, [companyId, companyOptions, runtimeContext?.selectedCompanyId]);
-
-  useEffect(() => {
-    if (!companyId || activeTab !== "lc" || lcRows.length > 0) {
+    if (!effectiveCompanyId || activeTab !== "lc" || lcRows.length > 0) {
       return;
     }
     let active = true;
@@ -49,7 +38,7 @@ export default function CSNAlertsPage() {
       setLoadingLc(true);
       setError("");
       try {
-        const data = await getLCAlertList({ company_id: companyId });
+        const data = await getLCAlertList({ company_id: effectiveCompanyId });
         if (active) {
           setLcRows(Array.isArray(data) ? data : []);
         }
@@ -67,10 +56,10 @@ export default function CSNAlertsPage() {
     return () => {
       active = false;
     };
-  }, [activeTab, companyId, lcRows.length, reloadTick]);
+  }, [activeTab, effectiveCompanyId, lcRows.length, reloadTick]);
 
   useEffect(() => {
-    if (!companyId || activeTab !== "vessel" || vesselRows.length > 0) {
+    if (!effectiveCompanyId || activeTab !== "vessel" || vesselRows.length > 0) {
       return;
     }
     let active = true;
@@ -78,7 +67,7 @@ export default function CSNAlertsPage() {
       setLoadingVessel(true);
       setError("");
       try {
-        const data = await getVesselBookingAlertList({ company_id: companyId });
+        const data = await getVesselBookingAlertList({ company_id: effectiveCompanyId });
         if (active) {
           setVesselRows(Array.isArray(data) ? data : []);
         }
@@ -96,7 +85,7 @@ export default function CSNAlertsPage() {
     return () => {
       active = false;
     };
-  }, [activeTab, companyId, vesselRows.length, reloadTick]);
+  }, [activeTab, effectiveCompanyId, vesselRows.length, reloadTick]);
 
   function switchTab(nextTab) {
     setSearchParams({ tab: nextTab });
@@ -131,25 +120,16 @@ export default function CSNAlertsPage() {
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Alert Scope" title="Open attention items">
           <div className="grid gap-3 lg:grid-cols-[220px_auto]">
-            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Company
-              <select
-                value={companyId}
-                onChange={(event) => {
-                  setCompanyId(event.target.value);
-                  setLcRows([]);
-                  setVesselRows([]);
-                }}
-                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-              >
-                <option value="">Select company</option>
-                {companyOptions.map((entry) => (
-                  <option key={entry.value} value={entry.value}>
-                    {entry.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(nextValue) => {
+                setCompanyId(nextValue);
+                setLcRows([]);
+                setVesselRows([]);
+              }}
+              label="Company"
+            />
             <div className="flex flex-wrap items-end gap-2">
               <button
                 type="button"
@@ -219,7 +199,7 @@ export default function CSNAlertsPage() {
             }
             rows={activeRows}
             rowKey={(row) => row.id}
-            emptyMessage={loading ? "Loading alerts..." : "No alert rows found for this tab."}
+            emptyMessage={loading ? "Loading alerts..." : effectiveCompanyId ? "No alert rows found for this tab." : "No company resolved for this session."}
           />
         </ErpSectionCard>
       </div>

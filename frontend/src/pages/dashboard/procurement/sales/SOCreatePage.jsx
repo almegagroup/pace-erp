@@ -13,6 +13,8 @@
 
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import ErpCompanySelector from "../../../../components/inputs/ErpCompanySelector.jsx";
+import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -237,8 +239,11 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
 export default function SOCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
+  const runtimeCompanyList = buildTransactionCompanyList(runtimeContext);
+  const runtimeDefaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+  const companyReadOnly = String(runtimeContext?.workspaceMode ?? "").toUpperCase() !== "MULTI" || runtimeCompanyList.length <= 1;
   const [form, setForm] = useState({
-    company_id: runtimeContext?.selectedCompanyId || "",
+    company_id: runtimeDefaultCompanyId,
     customer_id: "",
     customer_po_number: "",
     customer_po_date: "",
@@ -576,10 +581,18 @@ export default function SOCreatePage() {
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Company <span className="text-rose-500">*</span>
-                  <select value={form.company_id} onChange={(event) => { updateHeaderField("company_id", event.target.value); updateHeaderField("customer_id", ""); }} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500">
-                    <option value="">Select company</option>
-                    {companyOptions.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-                  </select>
+                  <ErpCompanySelector
+                    companies={companyOptions.map((entry) => ({
+                      id: entry.value,
+                      company_code: entry.label.split("|")[0]?.trim() || entry.value,
+                      company_name: entry.label.split("|").slice(1).join("|").trim() || entry.label,
+                    }))}
+                    value={form.company_id}
+                    onChange={(value) => { updateHeaderField("company_id", value); updateHeaderField("customer_id", ""); }}
+                    mode="required"
+                    label=""
+                    readOnly={companyReadOnly}
+                  />
                 </label>
                 <ErpDenseFormRow label="Customer" required>
                   <div className="flex gap-2">

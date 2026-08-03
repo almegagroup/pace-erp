@@ -8,17 +8,14 @@
  * Authority: Frontend
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
 import { useMenu } from "../../../context/useMenu.js";
 import { listBatchNumbers, releaseBatchNumber } from "./prodApi.js";
-
-function companyLabel(company) {
-  return [company.company_code, company.company_name].filter(Boolean).join(" - ");
-}
 
 function materialLabel(material) {
   return [material?.pace_code, material?.material_name].filter(Boolean).join(" - ");
@@ -38,17 +35,13 @@ export default function BatchNumberReleasePage() {
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
 
   const { runtimeContext } = useMenu();
-  const companies = runtimeContext?.availableCompanies ?? [];
-  const companyOptions = useMemo(
-    () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
-    [companies],
-  );
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const batchNumbersQ = useQuery({
-    queryKey: ["batch-number-release", companyId],
-    queryFn: () => listBatchNumbers({ company_id: companyId || undefined }),
+    queryKey: ["batch-number-release", effectiveCompanyId],
+    queryFn: () => listBatchNumbers({ company_id: effectiveCompanyId || undefined }),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
-    enabled: Boolean(companyId),
+    enabled: Boolean(effectiveCompanyId),
     refetchInterval: 30000,
   });
 
@@ -85,24 +78,23 @@ export default function BatchNumberReleasePage() {
       <ErpSectionCard title="Filters">
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex min-w-[260px] flex-col gap-1">
-            <label className="text-xs text-slate-500">Company</label>
-            <ErpComboboxField
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
               value={companyId}
               onChange={(value) => {
                 setCompanyId(value);
                 setSelectedRowId("");
                 setReleaseModalOpen(false);
               }}
-              options={companyOptions}
-              placeholder="-- Select company --"
-              emptyStateLabel="No companies"
+              label="Company"
+              hint=""
             />
           </div>
         </div>
       </ErpSectionCard>
 
       <ErpSectionCard title={`Batch Numbers (${rows.length})`}>
-        {!companyId ? (
+        {!effectiveCompanyId ? (
           <p className="py-8 text-center text-sm text-slate-400">Select a company to view batch numbers.</p>
         ) : batchNumbersQ.isLoading ? (
           <p className="py-4 text-center text-sm text-slate-500">Loading...</p>

@@ -13,6 +13,8 @@ import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
@@ -62,10 +64,10 @@ function formatQty(value) {
   return Number.isFinite(number) ? number.toFixed(3) : "0.000";
 }
 
-function buildInitialForm(selectedCompanyId) {
+function buildInitialForm(defaultCompanyId) {
   return {
     transfer_type: "ONE_STEP",
-    source_company_id: selectedCompanyId || "",
+    source_company_id: defaultCompanyId || "",
     source_sloc_id: "",
     target_company_id: "",
     target_sloc_id: "",
@@ -85,7 +87,8 @@ function buildInitialForm(selectedCompanyId) {
 export default function PlantTransferListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const selectedCompanyId = runtimeContext?.selectedCompanyId || "";
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -98,7 +101,7 @@ export default function PlantTransferListPage() {
   const [page, setPage] = useState(1);
   const [refreshToken, setRefreshToken] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
-  const [formData, setFormData] = useState(() => buildInitialForm(selectedCompanyId));
+  const [formData, setFormData] = useState(() => buildInitialForm(effectiveCompanyId));
 
   useErpScreenHotkeys({
     refresh: {
@@ -107,10 +110,9 @@ export default function PlantTransferListPage() {
     },
   });
 
-  const companies = runtimeContext?.availableCompanies ?? [];
   const companyOptions = useMemo(
-    () => companies.map((entry) => ({ value: entry.id, label: entry.company_name || entry.company_code || entry.id })),
-    [companies]
+    () => (runtimeContext?.availableCompanies ?? []).map((entry) => ({ value: entry.id, label: entry.company_name || entry.company_code || entry.id })),
+    [runtimeContext?.availableCompanies]
   );
   const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
   const materialOptions = useMemo(
@@ -136,9 +138,9 @@ export default function PlantTransferListPage() {
 
   useEffect(() => {
     setFormData((current) => (
-      current.source_company_id ? current : buildInitialForm(selectedCompanyId)
+      current.source_company_id ? current : buildInitialForm(effectiveCompanyId)
     ));
-  }, [selectedCompanyId]);
+  }, [effectiveCompanyId]);
 
   useEffect(() => {
     let active = true;
@@ -148,7 +150,7 @@ export default function PlantTransferListPage() {
       setError("");
       try {
         const response = await listPTOs({
-          company_id: selectedCompanyId || undefined,
+          company_id: effectiveCompanyId || undefined,
           status: status || undefined,
           transfer_type: transferType || undefined,
           limit: 200,
@@ -178,11 +180,7 @@ export default function PlantTransferListPage() {
     return () => {
       active = false;
     };
-  }, [refreshToken, selectedCompanyId, status, transferType]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [search, status, transferType]);
+  }, [refreshToken, effectiveCompanyId, status, transferType]);
 
   const filteredRows = useMemo(() => {
     const needle = normalizeSearch(search);
@@ -233,7 +231,7 @@ export default function PlantTransferListPage() {
       });
       setNotice("Plant transfer order created.");
       setShowCreate(false);
-      setFormData(buildInitialForm(selectedCompanyId));
+      setFormData(buildInitialForm(effectiveCompanyId));
       setRefreshToken((value) => value + 1);
       openScreen(OPERATION_SCREENS.PROC_PLANT_TRANSFER_DETAIL.screen_code);
       navigate(`/dashboard/procurement/transfer/${encodeURIComponent(created.id)}`);
@@ -246,7 +244,7 @@ export default function PlantTransferListPage() {
 
   function handleCancelCreate() {
     setShowCreate(false);
-    setFormData(buildInitialForm(selectedCompanyId));
+    setFormData(buildInitialForm(effectiveCompanyId));
   }
 
   return (
@@ -276,11 +274,23 @@ export default function PlantTransferListPage() {
         title: "Plant transfer order register",
         children: (
           <div className="grid gap-3">
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_180px_180px]">
+            <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1.2fr)_180px_180px]">
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={companyId}
+                onChange={(nextValue) => {
+                  setCompanyId(nextValue);
+                  setPage(1);
+                }}
+                label="Company"
+              />
               <QuickFilterInput
                 label="Search"
                 value={search}
-                onChange={setSearch}
+                onChange={(value) => {
+                  setSearch(value);
+                  setPage(1);
+                }}
                 primaryFocus
                 placeholder="Search PTO number"
               />
@@ -288,7 +298,10 @@ export default function PlantTransferListPage() {
                 Status
                 <select
                   value={status}
-                  onChange={(event) => setStatus(event.target.value)}
+                  onChange={(event) => {
+                    setStatus(event.target.value);
+                    setPage(1);
+                  }}
                   className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
                 >
                   <option value="">ALL</option>
@@ -303,7 +316,10 @@ export default function PlantTransferListPage() {
                 Transfer Type
                 <select
                   value={transferType}
-                  onChange={(event) => setTransferType(event.target.value)}
+                  onChange={(event) => {
+                    setTransferType(event.target.value);
+                    setPage(1);
+                  }}
                   className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
                 >
                   <option value="">ALL</option>
@@ -330,11 +346,11 @@ export default function PlantTransferListPage() {
                       </select>
                     </ErpDenseFormRow>
                     <ErpDenseFormRow label="Source Company">
-                      <ErpComboboxField
+                      <TransactionCompanySelector
+                        runtimeContext={runtimeContext}
                         value={formData.source_company_id}
                         onChange={(value) => handleFormChange("source_company_id", value)}
-                        options={companyOptions}
-                        blankLabel="Select source company"
+                        label="Source Company"
                       />
                     </ErpDenseFormRow>
                     <ErpDenseFormRow label="Source SLOC">

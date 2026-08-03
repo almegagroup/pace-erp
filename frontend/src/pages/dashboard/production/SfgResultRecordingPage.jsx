@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useEffectEvent, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
@@ -55,12 +57,8 @@ function computePassFail(resultValue, lsl, usl) {
 
 export default function SfgResultRecordingPage() {
   const { runtimeContext, shellProfile } = useMenu();
-  const isMulti = runtimeContext?.workspaceMode === "MULTI";
-  const [selectedCompanyId, setSelectedCompanyId] = useState(runtimeContext?.selectedCompanyId || "");
-  const companyId = isMulti ? selectedCompanyId : runtimeContext?.selectedCompanyId || "";
-  const availableCompanies = Array.isArray(runtimeContext?.availableCompanies)
-    ? runtimeContext.availableCompanies
-    : [];
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -68,19 +66,18 @@ export default function SfgResultRecordingPage() {
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
   const [expandedRowId, setExpandedRowId] = useState("");
-  const [error, setError] = useState("");
 
   const queueQuery = useQuery({
-    queryKey: ["production", "sfg-qa-queue", companyId || null, statusFilter, dateFrom, dateTo],
+    queryKey: ["production", "sfg-qa-queue", effectiveCompanyId || null, statusFilter, dateFrom, dateTo],
     queryFn: () =>
       listSfgQaDocuments({
-        company_id: companyId || undefined,
+        company_id: effectiveCompanyId || undefined,
         status: statusFilter === "ALL" ? undefined : statusFilter,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         limit: 200,
       }),
-    enabled: Boolean(companyId),
+    enabled: Boolean(effectiveCompanyId),
   });
 
   const rows = useMemo(() => (Array.isArray(queueQuery.data) ? queueQuery.data : []), [queueQuery.data]);
@@ -115,7 +112,7 @@ export default function SfgResultRecordingPage() {
   const total = filteredRows.length;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const safePage = Math.min(page, totalPages);
-  const currentError = error || queueQuery.error?.message || "";
+  const currentError = queueQuery.error?.message || "";
   const pageRows = useMemo(
     () => filteredRows.slice((safePage - 1) * LIMIT, safePage * LIMIT),
     [filteredRows, safePage],
@@ -158,26 +155,17 @@ export default function SfgResultRecordingPage() {
         title: "Verified Process POs pending or completed result recording",
         children: (
           <div className="flex flex-wrap items-end gap-3">
-            {isMulti ? (
-              <label className="grid w-56 gap-1 text-[11px] font-medium text-slate-600">
-                Company
-                <select
-                  value={selectedCompanyId}
-                  onChange={(event) => {
-                    setSelectedCompanyId(event.target.value);
-                    setPage(1);
-                  }}
-                  className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-                >
-                  <option value="">Select company...</option>
-                  {availableCompanies.map((company) => (
-                    <option key={company.id} value={company.id}>
-                      {company.company_code} | {company.company_name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
+            <div className="w-56">
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={companyId}
+                onChange={(nextValue) => {
+                  setCompanyId(nextValue);
+                  setPage(1);
+                }}
+                label="Company"
+              />
+            </div>
             <QuickFilterInput
               label="Search"
               value={search}
@@ -235,9 +223,9 @@ export default function SfgResultRecordingPage() {
       listSection={{
         eyebrow: "Result Recording Queue",
         title: loading ? "Loading SFG QA queue" : `${total} verified batch row${total === 1 ? "" : "s"}`,
-        children: !companyId ? (
+        children: !effectiveCompanyId ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            {isMulti ? "Select a company to load the SFG result recording queue." : "No company resolved for this session."}
+            No company resolved for this session.
           </div>
         ) : (
           <div className="grid gap-3">

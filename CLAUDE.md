@@ -69,6 +69,86 @@ generate_menu_snapshot()  →  user_menu_snapshots
 Frontend Sidebar
 ```
 
+### Recurring 11 Bug Patterns — must check before writing code
+
+These 11 patterns are now a mandatory pre-code checklist for ERP business-page,
+ACL, workflow, and company-scope work. If an older note anywhere in this repo
+seems to bless one of the anti-patterns below, this section supersedes that
+older note.
+
+1. **Hardcoded rank-check / role-check bypass**
+   - Never trust `assertManagerOrSARole`, `MANAGER_OR_SA_ROLES`, or direct
+     `roleCode === ...` checks as the real business authority on an ACL page.
+   - If ACL already governs the page/action, handler-level rank gates must not
+     silently narrow it unless the design explicitly requires that exact gate.
+
+2. **Company-scope gap**
+   - Every read and write path must validate company scope, not just create or
+     approve.
+   - For multi-company users, requested company must be validated against the
+     user's allowed companies.
+   - For single-company users, company must auto-resolve safely instead of
+     depending on a manual picker.
+
+3. **Blanket capability leak**
+   - Be suspicious of broad legacy capabilities (`CAP_PROC_*`, old shared QA /
+     Production capabilities, etc.).
+   - Before reusing one, verify that it is still intentionally broad and not a
+     dead / narrowed / ACL-MASTER-only leftover.
+
+4. **`capture_acl_version_source()` one-time trap**
+   - `acl.capture_acl_version_source()` is bootstrap-only. Re-running it on an
+     already-captured ACL version does nothing.
+   - For new capability/menu rows on an already-captured ACL version, verify the
+     version-scoped tables directly and rebuild snapshots intentionally.
+
+5. **ACL-MASTER (P0076) maintenance drift**
+   - P0076 is not SA/GA. It is maintenance-based full access.
+   - Every new page/capability/route family must be checked against ACL-MASTER
+     explicitly, or P0076 can silently miss it.
+
+6. **One resource code reused for two different actions**
+   - Never let two semantically different actions share one `resource_code`
+     just because they look similar in UI.
+   - Shared resource codes destroy independent ACL design later.
+
+7. **Maker-checker empty / fallback-only behavior**
+   - A page having ACL `APPROVE` does not prove the actual approver chain works.
+   - When a feature depends on approver routing, check `acl.approver_map`,
+     self-approval blocking, fallback behavior, and policy presence explicitly.
+
+8. **Route / ACL registry mismatch**
+   - Every new or changed route must be matched against the real
+     `route-acl-registry.ts` method/path pattern.
+   - Never assume the registry already matches the route name.
+
+9. **`acl.approver_map` scope / uniqueness shape**
+   - When creator-specific or role-specific approval chains are involved,
+     re-check that indexes / constraints partition by the correct subject scope.
+   - Do not assume the existing uniqueness shape is correct for a new approval
+     design.
+
+10. **Small config / data traps**
+    - Watch for sentinel junk values (like `**none**`), PostgREST schema-expose
+      misses, stale snapshots, and code-sequence counters after bulk copies.
+    - These small misses can break a correct feature end-to-end.
+
+11. **Wrong company source / single-company auto-resolution bypass**
+    - Business pages must never use admin/global company sources when ACL/runtime
+      company context exists.
+    - Canonical UI rule:
+      - single-company user = company shown explicitly as read-only / locked
+      - multi-company user = choose only from allowed companies
+    - Prefer the shared transaction-company pattern instead of page-local custom
+      company pickers.
+
+### Canonical company rule
+
+- Design authority: `docs/FAST_WORK_ERP_DESIGN_AUTHORITY.md` Law 12
+  (`single-company = read-only text`, `multi-company = dropdown in header`).
+- Operation Management feasibility docs may restate the same rule page by page.
+- `workspace_mode` is a UX hint only — never the authorization truth by itself.
+
 ---
 
 ## 4. এই Session (2026-06-12) এ কী কী হয়েছে

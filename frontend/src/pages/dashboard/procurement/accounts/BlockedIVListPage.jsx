@@ -8,9 +8,11 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
@@ -43,24 +45,24 @@ export default function BlockedIVListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [search, setSearch] = useState("");
+  const [companyId, setCompanyId] = useState("");
   const [page, setPage] = useState(1);
-  const companyId = runtimeContext?.selectedCompanyId || "";
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
   const blockedIvQuery = useQuery({
-    queryKey: ["procurement", "blocked-ivs", { company_id: companyId || undefined, limit: 200 }],
+    queryKey: ["procurement", "blocked-ivs", { company_id: effectiveCompanyId || undefined, limit: 200 }],
     queryFn: () =>
       listBlockedIVs({
-        company_id: companyId || undefined,
+        company_id: effectiveCompanyId || undefined,
         limit: 200,
       }),
   });
 
-  useEffect(() => {
-    setPage(1);
-  }, [search]);
-
-  const rows = Array.isArray(blockedIvQuery.data?.items) ? blockedIvQuery.data.items : [];
+  const rows = useMemo(
+    () => (Array.isArray(blockedIvQuery.data?.items) ? blockedIvQuery.data.items : []),
+    [blockedIvQuery.data],
+  );
   const vendors = vendorQuery.vendors;
   const loading = blockedIvQuery.isLoading || vendorQuery.isLoading;
   const error =
@@ -152,13 +154,27 @@ export default function BlockedIVListPage() {
         eyebrow: "Search",
         title: "Blocked IV review queue",
         children: (
-          <QuickFilterInput
-            label="Search"
-            value={search}
-            onChange={setSearch}
-            primaryFocus
-            placeholder="Search IV number, invoice number, vendor or block reason"
-          />
+          <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(nextValue) => {
+                setCompanyId(nextValue);
+                setPage(1);
+              }}
+              label="Company"
+            />
+            <QuickFilterInput
+              label="Search"
+              value={search}
+              onChange={(value) => {
+                setSearch(value);
+                setPage(1);
+              }}
+              primaryFocus
+              placeholder="Search IV number, invoice number, vendor or block reason"
+            />
+          </div>
         ),
       }}
       listSection={{
@@ -217,7 +233,7 @@ export default function BlockedIVListPage() {
               rowKey={(row) => row.id}
               onRowClick={openDetail}
               emptyMessage={
-                loading ? "Loading blocked invoice verifications..." : "No blocked invoice verifications found."
+                loading ? "Loading blocked invoice verifications..." : effectiveCompanyId ? "No blocked invoice verifications found." : "No company resolved for this session."
               }
             />
           </div>

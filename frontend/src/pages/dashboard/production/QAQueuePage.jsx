@@ -12,6 +12,8 @@ import React, { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
 import { useMenu } from "../../../context/useMenu.js";
 import {
@@ -35,10 +37,6 @@ const ERROR_MESSAGES = {
 
 function friendlyError(error) {
   return ERROR_MESSAGES[error?.code] ?? ERROR_MESSAGES[error?.message] ?? error?.message ?? "Action failed.";
-}
-
-function companyLabel(company) {
-  return [company.company_code, company.company_name].filter(Boolean).join(" - ");
 }
 
 function materialLabel(material) {
@@ -68,19 +66,16 @@ export default function QAQueuePage() {
   const [startBatchOrder, setStartBatchOrder] = useState(null);
 
   const { runtimeContext } = useMenu();
-  const companies = runtimeContext?.availableCompanies ?? [];
-  const companyOptions = useMemo(
-    () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
-    [companies],
-  );
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const queueQ = useQuery({
-    queryKey: ["qa-queue", companyId],
+    queryKey: ["qa-queue", effectiveCompanyId],
     queryFn: () => listProcessOrders({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       po_type_in: "MTO,HPS",
       per_page: 100,
     }),
+    enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
     refetchInterval: 30000,
   });
@@ -184,16 +179,15 @@ export default function QAQueuePage() {
       <ErpSectionCard title="Filters">
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex min-w-[260px] flex-col gap-1">
-            <label className="text-xs text-slate-500">Company</label>
-            <ErpComboboxField
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
               value={companyId}
               onChange={(value) => {
                 setCompanyId(value);
                 setExpandedOrderId("");
               }}
-              options={companyOptions}
-              placeholder="-- Select company --"
-              emptyStateLabel="No companies"
+              label="Company"
+              hint=""
             />
           </div>
           <div className="pb-1 text-xs text-slate-400">Auto-refreshes every 30 seconds</div>
@@ -201,7 +195,9 @@ export default function QAQueuePage() {
       </ErpSectionCard>
 
       <ErpSectionCard title={`Queue (${queue.length})`}>
-        {queueQ.isLoading ? (
+        {!effectiveCompanyId ? (
+          <p className="py-8 text-center text-sm text-slate-400">Select a company to view the QA queue.</p>
+        ) : queueQ.isLoading ? (
           <p className="py-4 text-center text-sm text-slate-500">Loading...</p>
         ) : queue.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-400">No MTO/HPS Process Orders found for this queue.</p>

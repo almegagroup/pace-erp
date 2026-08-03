@@ -7,7 +7,10 @@
 
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { useMenu } from "../../../context/useMenu.js";
 import { listProcessOrders, startBatch } from "./prodApi.js";
 
 const ERRORS = {
@@ -20,10 +23,12 @@ function friendly(code) { return ERRORS[code] ?? code; }
 
 export default function BatchReleasePage() {
   const qc = useQueryClient();
+  const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [releasingId, setReleasingId] = useState(null);
   const [releasedBatches, setReleasedBatches] = useState({});
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -31,11 +36,12 @@ export default function BatchReleasePage() {
   }
 
   const ordersQ = useQuery({
-    queryKey: ["batch-release-queue", companyId],
+    queryKey: ["batch-release-queue", effectiveCompanyId],
     queryFn: () => listProcessOrders({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: "QA_APPROVED",
     }),
+    enabled: Boolean(effectiveCompanyId),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
     refetchInterval: 30000,
   });
@@ -66,13 +72,13 @@ export default function BatchReleasePage() {
     >
       <ErpSectionCard title="Filters">
         <div className="flex gap-3 flex-wrap items-end">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Company ID</label>
-            <input
-              className="border border-slate-300 rounded px-2 py-1 text-sm w-64"
-              placeholder="Filter by company…"
+          <div className="w-72">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
               value={companyId}
-              onChange={(e) => setCompanyId(e.target.value)}
+              onChange={setCompanyId}
+              label="Company"
+              hint=""
             />
           </div>
           <div className="text-xs text-slate-400 pb-1">
@@ -82,7 +88,9 @@ export default function BatchReleasePage() {
       </ErpSectionCard>
 
       <ErpSectionCard title={`Pending Batch Release (${orders.length})`}>
-        {ordersQ.isLoading ? (
+        {!effectiveCompanyId ? (
+          <p className="text-slate-400 text-sm py-4 text-center">Select a company to view pending batch releases.</p>
+        ) : ordersQ.isLoading ? (
           <p className="text-slate-500 text-sm py-4 text-center">Loading…</p>
         ) : orders.length === 0 ? (
           <div className="py-10 text-center">

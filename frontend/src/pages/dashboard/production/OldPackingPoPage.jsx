@@ -15,6 +15,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
 import {
   listOldProcessPoBatches, createOldPackingPo, listPackBoms, getPackBom, listPackCodes,
@@ -33,7 +35,6 @@ const ERRORS = {
 };
 function friendly(code, fallback) { return ERRORS[code] ?? fallback ?? code; }
 
-function companyLabel(c) { return [c?.company_code, c?.company_name].filter(Boolean).join(" - "); }
 function materialLabel(m) {
   if (!m) return "--";
   return [m.pace_code || m.external_code, m.material_name].filter(Boolean).join(" - ");
@@ -62,17 +63,16 @@ export default function OldPackingPoPage() {
   }
 
   const { runtimeContext } = useMenu();
-  const companies = useMemo(() => runtimeContext?.availableCompanies ?? [], [runtimeContext]);
-  const companyOptions = companies.map((c) => ({ value: c.id, label: companyLabel(c) }));
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   useEffect(() => {
-    if (!companyId && companies.length === 1) setCompanyId(companies[0].id);
-  }, [companies, companyId]);
+    if (!companyId && effectiveCompanyId) setCompanyId(effectiveCompanyId);
+  }, [companyId, effectiveCompanyId]);
 
   // Parent batches = opening-origin Process POs (PR22) for this company.
   const parentsQ = useQuery({
-    queryKey: ["old-process-po-batches", companyId],
-    queryFn: () => listOldProcessPoBatches({ company_id: companyId }),
-    enabled: !!companyId,
+    queryKey: ["old-process-po-batches", effectiveCompanyId],
+    queryFn: () => listOldProcessPoBatches({ company_id: effectiveCompanyId }),
+    enabled: !!effectiveCompanyId,
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
   const parents = parentsQ.data ?? [];
@@ -99,9 +99,9 @@ export default function OldPackingPoPage() {
   }));
 
   const locationsQ = useQuery({
-    queryKey: ["old-pack-locations", companyId],
-    queryFn: () => listStorageLocations({ company_id: companyId }),
-    enabled: !!companyId,
+    queryKey: ["old-pack-locations", effectiveCompanyId],
+    queryFn: () => listStorageLocations({ company_id: effectiveCompanyId }),
+    enabled: !!effectiveCompanyId,
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
   const locationOptions = (locationsQ.data ?? []).map((l) => ({
@@ -110,9 +110,9 @@ export default function OldPackingPoPage() {
 
   // Pack BOM for this SKU â†’ PM lines (auto-derived, editable).
   const packBomListQ = useQuery({
-    queryKey: ["old-pack-bom-list", companyId, skuMaterialId],
-    queryFn: () => listPackBoms({ company_id: companyId, sku_material_id: skuMaterialId, status: "ACTIVE" }),
-    enabled: !!companyId && !!skuMaterialId,
+    queryKey: ["old-pack-bom-list", effectiveCompanyId, skuMaterialId],
+    queryFn: () => listPackBoms({ company_id: effectiveCompanyId, sku_material_id: skuMaterialId, status: "ACTIVE" }),
+    enabled: !!effectiveCompanyId && !!skuMaterialId,
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
   const packBomId = (packBomListQ.data ?? [])[0]?.id ?? "";
@@ -150,14 +150,14 @@ export default function OldPackingPoPage() {
   }
 
   const poType = parent?.po_type ? packingPoTypeForProcessType(parent.po_type) : "";
-  const canSave = !!companyId && !!processOrderId && !!skuMaterialId && num(actualQtyKg) > 0 && !!fgSlocId;
+  const canSave = !!effectiveCompanyId && !!processOrderId && !!skuMaterialId && num(actualQtyKg) > 0 && !!fgSlocId;
 
   async function handleSave() {
     if (!canSave) { toast("Fill Company, parent batch, SKU, Actual Qty and FG location.", "error"); return; }
     setSaving(true);
     try {
       const res = await createOldPackingPo({
-        company_id: companyId,
+        company_id: effectiveCompanyId,
         po_type: poType || null,
         process_order_id: processOrderId,
         material_id: skuMaterialId,
@@ -195,8 +195,12 @@ export default function OldPackingPoPage() {
       <ErpSectionCard title="Header">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
-            <ErpComboboxField value={companyId} onChange={(v) => { setCompanyId(v); setProcessOrderId(""); }} options={companyOptions} placeholder="-- Select company --" />
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(v) => { setCompanyId(v); setProcessOrderId(""); }}
+              label="Company"
+            />
           </div>
           <div className="flex flex-col gap-1 md:col-span-2">
             <label className="text-xs font-medium text-slate-600">Parent Old Process PO (batch) <span className="text-rose-500">*</span></label>

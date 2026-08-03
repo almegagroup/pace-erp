@@ -1,4 +1,4 @@
-# PROD ACL — Final Access Decisions (page-by-page, business owner dictated)
+﻿# PROD ACL — Final Access Decisions (page-by-page, business owner dictated)
 
 > Process (locked 2026-07-27): go group by group, page by page. For each page:
 > tx_code + what it does is shown; business owner says who gets View / Create /
@@ -1133,3 +1133,135 @@ resources, full-minus-approve on AC05/AC06; MANAGEMENT = View-only on
 AC05/AC06/MM05; ACL-MASTER = full on everything including the Auditor-only
 Approve action. Symmetric across both companies. Also rebuilt
 `erp_menu.menu_snapshot` for P0076's (company, work_context) pairs.
+
+---
+
+## Task C — Real maker-checker for Opening Stock / AC05 / AC06 (2026-08-03)
+
+**Trigger:** Codex's repo-wide 11-bug audit (Task A) flagged Bug #7 (maker-checker
+empty/fallback-only) as open for these 3 resources — their Approve handlers were
+plain status flips (SUBMITTED→APPROVED / DRAFT→APPROVED) with **no creator-vs-
+approver check and no self-approval guard**, unlike PO/STO/PTO which already had
+the real `acl.approver_map` + `_shared/workflow_scope.ts` engine (Groups 3/5/10,
+earlier this session). Business owner explicitly clarified mid-session: this is
+**not** a request for a new "approval inbox" UI (PO13-style) — those buttons
+already exist on IN05/AC05/AC06; the only gap is the backend permission check
+behind the existing Approve button.
+
+**Design (business owner, verbatim intent):**
+- **Opening Stock (`PROC_OPENING_STOCK_APPROVAL`):** L1_AUDITOR creates →
+  L2_AUDITOR approves; L2_AUDITOR creates → DIRECTOR approves. ACL-MASTER
+  (role=DIRECTOR) always able to act since DIRECTOR is the top of the chain.
+- **AC05 (`ACC_MTS_SKU_MONTHLY_RATE`) / AC06 (`ACC_SLOC_COSTING_GROUP`):**
+  Accounts department (any rank) creates → **either** L1_AUDITOR or L2_AUDITOR
+  may approve; L1_AUDITOR creates → L2_AUDITOR approves; L2_AUDITOR creates →
+  DIRECTOR approves. Revised same session: Auditors also need **WRITE** (not
+  just View+Approve) so they can draft/create themselves, not only approve.
+
+**Implementation (replicates the exact `po.handlers.ts` `assertProcurementHeadRole`
+pattern — SA/GA bypass, `acl.approver_map` SUBJECT_ROLE lookup via
+`pickScopedApproverRules`, DIRECTOR fallback when no rows configured, explicit
+self-approval-forbidden guard exempting DIRECTOR):**
+- `opening_stock.handlers.ts` — added `loadOpeningStockApproverRules`,
+  `getOpeningStockUserRoleCode`, `matchesOpeningStockApprover`,
+  `assertOpeningStockApproverRole`; wired into `approveOpeningStockDocumentHandler`
+  before the status flip, using `document.created_by`.
+- `mts_sku_rate.handlers.ts` — same shape, `assertMtsRateApproverRole`, wired
+  into `approveMtsSkuRateHandler`. **Difference from PO/STO:** this approve
+  action flips *every* DRAFT row for a company+rate_month in one call, and
+  those rows can have been saved by different creators across separate calls
+  — so the check loops over every **distinct** `created_by` in the batch and
+  requires the approver to clear the check for each one (added `created_by`
+  to the row select, which wasn't previously fetched).
+- `costing_group.handlers.ts` — identical batch-aware shape,
+  `assertCostingRateApproverRole`, wired into `approveCostingRateHandler`.
+- All 3 files: `deno check` clean (zero errors) individually and combined.
+- Verified against live prod schema before wiring: `created_by` confirmed to
+  exist on `erp_procurement.opening_stock_document`,
+  `erp_production.mts_sku_monthly_rate`, and `erp_production.costing_rate_line`.
+
+**`acl.approver_map` data (prod, MCP):**
+- New `acl.module_resource_map` rows required first (a DB trigger,
+  `enforce_approver_scope_integrity()`, blocks any `approver_map` insert whose
+  `resource_code` isn't bound to a `module_code`): `MOD_INVENTORY` →
+  `PROC_OPENING_STOCK_APPROVAL`, `MOD_ACCOUNTS` → `ACC_MTS_SKU_MONTHLY_RATE` /
+  `ACC_SLOC_COSTING_GROUP` (both module codes already existed elsewhere in the
+  table, reused as-is).
+- Opening Stock: 2 rows × 2 companies = 4 total (`L1_AUDITOR→L2_AUDITOR`,
+  `L2_AUDITOR→DIRECTOR`, `scope_type='SUBJECT_ROLE'`, `approval_stage=1`).
+- AC05 + AC06: 18 rows × 2 resources × 2 companies = 72 total. Per
+  resource+company: the same 2 auditor-escalation rows, plus 8 "Accounts
+  creator rank" subjects (`L1_USER`..`L4_USER`, `L1_MANAGER`..`L4_MANAGER`) ×
+  2 approver alternatives each (`L1_AUDITOR` and `L2_AUDITOR` — both valid,
+  same `approval_stage=1`, matched via `matchesXApprover`'s `.some()`, i.e.
+  either auditor rank can act). Every rank was included rather than only the
+  ranks currently staffed in Accounts, since department membership (who's
+  actually "Accounts") is governed by `work_context_capabilities`, not by
+  role_code — the approver_map's SUBJECT_ROLE scope (the same mechanism
+  already proven for PO/STO/PTO) can only route by the creator's role rank,
+  so every plausible rank below Auditor/Director needed its own row.
+
+**`CAP_ACC_COSTING_AUDITOR` revision:** was View+Approve only on both AC05/AC06
+menu rows; added `WRITE` on both (`acl.capability_menu_actions` insert). Since
+`acl.capture_acl_version_source()` is one-time-per-version (silent no-op on
+reuse — CLAUDE.md §"দ্বিতীয় সংশোধন"), this required a genuine version bump:
+new `acl_versions` v34 for both CMP003 and CMP006, captured, `generate_acl_snapshot`
+run, then v34 activated (v33 deactivated). **Verified live:** P0010 (L1_AUDITOR,
+CMP003+CMP006) now resolves `WRITE=ALLOW` on both AC05 and AC06 in
+`precomputed_acl_view` at v34; P0074/P0076 (DIRECTOR) still resolve `WRITE=ALLOW`
+as before (unaffected, already had full access).
+
+**Self-approval note:** all 3 `assertXApproverRole` functions exempt DIRECTOR
+from the self-approval block (matching the PO reference pattern) — both P0076
+(ACL-MASTER, confirmed role_code=DIRECTOR via live query, *not* SA/GA) and the
+real business-owner DIRECTOR account rely on this exemption, since DIRECTOR is
+the top of every chain here and has no one above to approve instead.
+
+**Row-count sanity check (post-insert, live DB):** `ACC_MTS_SKU_MONTHLY_RATE`
+= 18/company × 2 companies; `ACC_SLOC_COSTING_GROUP` = 18/company × 2 companies;
+`PROC_OPENING_STOCK_APPROVAL` = 2/company × 2 companies — all match the intended
+design exactly, no accidental duplicates or missing companies.
+
+**Not yet done:** live click-through in the deployed app (no dev login in this
+environment — verified via `deno check` + direct `precomputed_acl_view` queries
+only, per this session's established `[No Localhost Preview]` practice).
+
+---
+
+## Addendum — ACL-MASTER (P0076) APPROVE gap on AC05/AC06, found + fixed (2026-08-03)
+
+Found by a new drift-check tool (`scripts/acl-master-drift-check.mjs`, built
+this session for 11-bug-pattern #5), not by manual review — P0076 was
+missing `APPROVE` on `ACC_MTS_SKU_MONTHLY_RATE`/`ACC_SLOC_COSTING_GROUP` in
+both CMP003 and CMP006, contradicting this doc's own Group 11 design
+("ACL-MASTER granted the full-access capabilities directly... giving it the
+union of every action across all 6 resources including the Auditor-only
+Approve action"). Root cause: `CAP_ACC_COSTING_AUDITOR` was mapped to
+`work_context_capabilities` correctly for P0076's department, but
+`role_capabilities` only ever listed `L1_AUDITOR`/`L2_AUDITOR` for that
+capability code — `generate_acl_snapshot()` requires BOTH gates to pass
+(department capability AND role enrollment), so DIRECTOR fell through.
+Fixed: added `DIRECTOR` to `role_capabilities` for
+`CAP_ACC_COSTING_AUDITOR` (global table, both companies covered by one
+insert), version bumped v34→v35 for CMP003/CMP006 (capture+generate+activate),
+verified live. Full detail in `OM-IMPLEMENTATION-LOG.md`'s "very final"
+2026-08-03 entry.
+
+---
+
+## Appendix — Recurring Regression Patterns
+
+Future ACL/company/approval work must check these recurring bug classes before a page/group is marked done:
+1. Hardcoded rank-check bypass
+2. Company-scope gap
+3. Blanket capability leak
+4. capture_acl_version_source() no-op trap
+5. ACL-MASTER drift
+6. Shared resource-code collision
+7. Maker-checker empty / fallback-only illusion
+8. Route/registry mismatch
+9. cl.approver_map scope/index mismatch
+10. Small config/data trap
+11. Wrong company source / single-company bypass
+
+Use this appendix together with CLAUDE.md's pre-code checklist and OM-IMPLEMENTATION-LOG.md's Bug #n tracking convention. When a new issue fits one of these patterns, log it explicitly instead of treating it as a one-off anomaly.

@@ -7,6 +7,8 @@
 
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useMenu } from "../../../context/useMenu.js";
@@ -16,10 +18,6 @@ import { getFgStockBreakdown } from "./prodApi.js";
 function materialLabel(material) {
   return [material?.pace_code || material?.external_code, material?.material_name].filter(Boolean).join(" - ");
 }
-function companyLabel(company) {
-  return [company?.company_code, company?.company_name].filter(Boolean).join(" - ");
-}
-
 export function FgStockBreakdownTable({ batches }) {
   if (!batches?.length) {
     return <p className="text-sm text-slate-400 py-4 text-center">No FG stock receipt rows found.</p>;
@@ -74,8 +72,7 @@ export default function FgStockBreakdownPage() {
     queryFn: () => listMaterials({ material_type: "FG", limit: 500 }),
     select: (data) => data?.data ?? [],
   });
-  const companies = runtimeContext?.availableCompanies ?? [];
-  const effectiveCompanyId = companyId || (companies.length === 1 ? companies[0].id : "");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const reportQ = useQuery({
     queryKey: ["fg-stock-breakdown", effectiveCompanyId, materialId],
     queryFn: () => getFgStockBreakdown({ company_id: effectiveCompanyId, material_id: materialId }),
@@ -86,13 +83,13 @@ export default function FgStockBreakdownPage() {
     <ErpScreenScaffold title="FG Stock Breakdown" subtitle="Read-only FG stock by batch and Packing PO">
       <ErpSectionCard title="Filters">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <label className="text-xs text-slate-500">
-            Company
-            <select className="mt-1 h-9 w-full border border-slate-300 rounded px-2 text-sm" value={effectiveCompanyId} onChange={(event) => setCompanyId(event.target.value)} disabled={companies.length <= 1}>
-              <option value="">-- Select --</option>
-              {companies.map((company) => <option key={company.id} value={company.id}>{companyLabel(company)}</option>)}
-            </select>
-          </label>
+          <TransactionCompanySelector
+            runtimeContext={runtimeContext}
+            value={companyId}
+            onChange={setCompanyId}
+            label="Company"
+            hint=""
+          />
           <label className="text-xs text-slate-500">
             FG Material
             <ErpComboboxField
@@ -105,7 +102,7 @@ export default function FgStockBreakdownPage() {
         </div>
       </ErpSectionCard>
       <ErpSectionCard title={reportQ.data?.material ? materialLabel(reportQ.data.material) : "Breakdown"}>
-        {reportQ.isFetching ? <p className="text-sm text-slate-400 py-4 text-center">Loading...</p> : <FgStockBreakdownTable batches={reportQ.data?.batches ?? []} />}
+        {!effectiveCompanyId ? <p className="text-sm text-slate-400 py-4 text-center">Select a company to view FG stock breakdown.</p> : reportQ.isFetching ? <p className="text-sm text-slate-400 py-4 text-center">Loading...</p> : <FgStockBreakdownTable batches={reportQ.data?.batches ?? []} />}
       </ErpSectionCard>
     </ErpScreenScaffold>
   );

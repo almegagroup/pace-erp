@@ -11,6 +11,8 @@
 import { useState } from "react";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
@@ -26,7 +28,7 @@ function formatNumber(value, decimals) {
 }
 
 export default function StockValuationPage() {
-  useMenu();
+  const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const [materialId, setMaterialId] = useState("");
   const [rows, setRows] = useState([]);
@@ -34,14 +36,15 @@ export default function StockValuationPage() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   async function handleRun() {
     setLoading(true);
     setError("");
-    setSearched(true);
+      setSearched(true);
     try {
       const response = await getStockValuation({
-        company_id: companyId.trim() || undefined,
+        company_id: effectiveCompanyId || undefined,
         material_id: materialId.trim() || undefined,
       });
       setRows(Array.isArray(response?.data) ? response.data : []);
@@ -73,12 +76,13 @@ export default function StockValuationPage() {
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Filters" title="Valuation filters">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <ErpDenseFormRow label="Company ID">
-              <input
-                type="text"
+            <ErpDenseFormRow label="Company">
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
                 value={companyId}
-                onChange={(event) => setCompanyId(event.target.value)}
-                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                onChange={setCompanyId}
+                label="Company"
+                hint=""
               />
             </ErpDenseFormRow>
             <ErpDenseFormRow label="Material ID">

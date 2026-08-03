@@ -14,6 +14,7 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
 import {
   availabilityPreviewPackingOrder,
@@ -159,17 +160,18 @@ export default function ProductionPOCreatePage() {
 
   const { runtimeContext } = useMenu();
   const companies = runtimeContext?.availableCompanies ?? [];
-  const effectiveCompanyId = processForm.company_id || (companies.length === 1 ? companies[0].id : "");
+  const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+  const effectiveCompanyId = processForm.company_id || defaultCompanyId;
   const companyOptions = useMemo(
     () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Unnamed company" })),
     [companies],
   );
 
   useEffect(() => {
-    if (companies.length === 1 && !processForm.company_id) {
-      setProcessForm((current) => ({ ...current, company_id: companies[0].id }));
+    if (defaultCompanyId && !processForm.company_id) {
+      setProcessForm((current) => ({ ...current, company_id: defaultCompanyId }));
     }
-  }, [companies, processForm.company_id]);
+  }, [defaultCompanyId, processForm.company_id]);
 
   const materialsQ = useMaterialOptionsQuery({ status: "ACTIVE", limit: 500 });
   const materialRows = materialsQ.materials ?? [];
@@ -326,14 +328,14 @@ export default function ProductionPOCreatePage() {
   );
 
   // ── Packing PO tab ──────────────────────────────────────────────────────
-  const effectivePackingCompanyId = packingForm.company_id || (companies.length === 1 ? companies[0].id : "");
+  const effectivePackingCompanyId = packingForm.company_id || defaultCompanyId;
   const packingPoType = packingPoTypeForProcessType(packingForm.source_po_type);
 
   useEffect(() => {
-    if (companies.length === 1 && !packingForm.company_id) {
-      setPackingForm((current) => ({ ...current, company_id: companies[0].id }));
+    if (defaultCompanyId && !packingForm.company_id) {
+      setPackingForm((current) => ({ ...current, company_id: defaultCompanyId }));
     }
-  }, [companies, packingForm.company_id]);
+  }, [defaultCompanyId, packingForm.company_id]);
 
   const packingActiveBomsQ = useQuery({
     queryKey: ["packing-create-active-boms", effectivePackingCompanyId],
@@ -740,7 +742,7 @@ export default function ProductionPOCreatePage() {
   }
 
   function resetPacking() {
-    setPackingForm({ ...EMPTY_PACKING, company_id: companies.length === 1 ? companies[0].id : "" });
+    setPackingForm({ ...EMPTY_PACKING, company_id: defaultCompanyId || "" });
     setPackingStep(1);
     setPackingManualPmLines([]);
   }
@@ -822,7 +824,7 @@ export default function ProductionPOCreatePage() {
       };
       const result = await createProcessOrder(payload);
       toast(`Process PO created${result?.po_number ? `: ${result.po_number}` : "."}`);
-      resetProcess({ company_id: companies.length === 1 ? companies[0].id : "" });
+      resetProcess({ company_id: defaultCompanyId || "" });
       qc.invalidateQueries({ queryKey: ["process-orders"] });
     } catch (error) {
       toast(error.message || "Process PO create failed.", "error");
@@ -1275,7 +1277,7 @@ export default function ProductionPOCreatePage() {
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={() => resetProcess({ company_id: companies.length === 1 ? companies[0].id : "" })}
+                      onClick={() => resetProcess({ company_id: defaultCompanyId || "" })}
                       className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
                     >
                       Clear

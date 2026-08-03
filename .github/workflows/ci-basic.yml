@@ -28,6 +28,28 @@ jobs:
       - name: Stock posting guard
         run: node scripts/stock-posting-guard.mjs
 
+      # Fails if any handler reads a caller-supplied company_id (body or query)
+      # without validating it against the caller's own companies (11-bug #2/#11).
+      - name: Company scope guard
+        run: node scripts/company-scope-guard.mjs
+
+      # Fails if any handler introduces a new hardcoded MANAGER_OR_SA_ROLES-style
+      # role list/function instead of relying on the ACL layer (11-bug #1).
+      - name: Hardcoded role-check guard
+        run: node scripts/hardcoded-role-check-guard.mjs
+
+      # Fails if any new "approve"-style handler skips the real creator-vs-approver
+      # routing engine, allowing self-approval by default (11-bug #7).
+      - name: Approver-chain guard
+        run: node scripts/approver-chain-guard.mjs
+
+      # Fails if any resourceCode in the ACL route registry is used across more
+      # than one route domain (e.g. both procurement and production) — usually a
+      # copy-paste mistake that later causes one feature's ACL change to silently
+      # affect an unrelated one (11-bug #6).
+      - name: Resource-code domain guard
+        run: node scripts/resource-code-domain-guard.mjs
+
       - name: Block accidental deploy
         run: |
           echo "CI OK. No deploy steps allowed at Gate-0 / Gate-1."

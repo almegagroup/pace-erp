@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
@@ -41,19 +43,20 @@ export default function IVListPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
-  const companyId = runtimeContext?.selectedCompanyId || "";
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
   const invoiceQueryParams = useMemo(
     () => ({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: status || undefined,
       vendor_id: vendorId || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       limit: 200,
     }),
-    [companyId, dateFrom, dateTo, status, vendorId]
+    [effectiveCompanyId, dateFrom, dateTo, status, vendorId]
   );
   const ivQuery = useQuery({
     queryKey: ["procurement", "ivs", invoiceQueryParams],
@@ -61,7 +64,7 @@ export default function IVListPage() {
       const [ivData, blockedData] = await Promise.all([
         listIVs(invoiceQueryParams),
         listBlockedIVs({
-          company_id: companyId || undefined,
+          company_id: effectiveCompanyId || undefined,
           limit: 200,
         }),
       ]);
@@ -72,11 +75,10 @@ export default function IVListPage() {
     },
   });
 
-  useEffect(() => {
-    setPage(1);
-  }, [dateFrom, dateTo, search, status, vendorId]);
-
-  const rows = Array.isArray(ivQuery.data?.rows) ? ivQuery.data.rows : [];
+  const rows = useMemo(
+    () => (Array.isArray(ivQuery.data?.rows) ? ivQuery.data.rows : []),
+    [ivQuery.data],
+  );
   const blockedRows = Array.isArray(ivQuery.data?.blockedRows) ? ivQuery.data.blockedRows : [];
   const vendors = vendorQuery.vendors;
   const loading = ivQuery.isLoading || vendorQuery.isLoading;
@@ -184,11 +186,23 @@ export default function IVListPage() {
         eyebrow: "Search And Filter",
         title: "Invoice verification register",
         children: (
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.1fr)_200px_180px_180px_180px]">
+          <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1.1fr)_200px_180px_180px_180px]">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(nextValue) => {
+                setCompanyId(nextValue);
+                setPage(1);
+              }}
+              label="Company"
+            />
             <QuickFilterInput
               label="Search"
               value={search}
-              onChange={setSearch}
+              onChange={(value) => {
+                setSearch(value);
+                setPage(1);
+              }}
               primaryFocus
               placeholder="Search IV number, vendor or invoice"
             />
@@ -196,7 +210,10 @@ export default function IVListPage() {
               Vendor
               <select
                 value={vendorId}
-                onChange={(event) => setVendorId(event.target.value)}
+                onChange={(event) => {
+                  setVendorId(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
@@ -211,7 +228,10 @@ export default function IVListPage() {
               Status
               <select
                 value={status}
-                onChange={(event) => setStatus(event.target.value)}
+                onChange={(event) => {
+                  setStatus(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
@@ -227,7 +247,10 @@ export default function IVListPage() {
               <input
                 type="date"
                 value={dateFrom}
-                onChange={(event) => setDateFrom(event.target.value)}
+                onChange={(event) => {
+                  setDateFrom(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </label>
@@ -236,7 +259,10 @@ export default function IVListPage() {
               <input
                 type="date"
                 value={dateTo}
-                onChange={(event) => setDateTo(event.target.value)}
+                onChange={(event) => {
+                  setDateTo(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </label>
@@ -292,7 +318,7 @@ export default function IVListPage() {
                     ? "cursor-pointer bg-rose-50 hover:bg-rose-100"
                     : "cursor-pointer hover:bg-sky-50",
               })}
-              emptyMessage={loading ? "Loading invoice verifications..." : "No invoice verification matched the current filter."}
+              emptyMessage={loading ? "Loading invoice verifications..." : effectiveCompanyId ? "No invoice verification matched the current filter." : "No company resolved for this session."}
             />
           </div>
         ),

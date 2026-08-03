@@ -8,18 +8,17 @@
  * Authority: Frontend
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { listPartialBatchReversals, getPartialBatchReversal } from "./prodApi.js";
 
 const PO_TYPES = ["MTO", "HPS"];
 
-function companyLabel(c) {
-  return [c?.company_code, c?.company_name].filter(Boolean).join(" - ");
-}
 function materialLabel(m) {
   if (!m) return "--";
   return [m.pace_code || m.external_code, m.material_name].filter(Boolean).join(" - ");
@@ -100,18 +99,14 @@ export default function PartialReversalReportPage() {
   const [expandedId, setExpandedId] = useState("");
 
   const { runtimeContext } = useMenu();
-  const companies = runtimeContext?.availableCompanies ?? [];
-  const companyOptions = useMemo(
-    () => companies.map((c) => ({ value: c.id, label: companyLabel(c) || "Company" })),
-    [companies],
-  );
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const listQ = useQuery({
-    queryKey: ["partial-batch-reversals", companyId, poType, batchNumber],
+    queryKey: ["partial-batch-reversals", effectiveCompanyId, poType, batchNumber],
     queryFn: () => listPartialBatchReversals({
-      company_id: companyId, po_type: poType || undefined, batch_number: batchNumber || undefined,
+      company_id: effectiveCompanyId, po_type: poType || undefined, batch_number: batchNumber || undefined,
     }),
-    enabled: Boolean(companyId),
+    enabled: Boolean(effectiveCompanyId),
     select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
   });
 
@@ -124,12 +119,12 @@ export default function PartialReversalReportPage() {
       <ErpSectionCard title="Filters">
         <div className="grid gap-3 md:grid-cols-3">
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-600">Company</label>
-            <ErpComboboxField
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
               value={companyId}
               onChange={(v) => { setCompanyId(v); setExpandedId(""); }}
-              options={companyOptions}
-              placeholder="-- Select company --"
+              label="Company"
+              hint=""
             />
           </div>
           <div className="flex flex-col gap-1">
@@ -139,7 +134,7 @@ export default function PartialReversalReportPage() {
               onChange={setPoType}
               options={PO_TYPES.map((t) => ({ value: t, label: t }))}
               placeholder="-- All --"
-              disabled={!companyId}
+              disabled={!effectiveCompanyId}
             />
           </div>
           <div className="flex flex-col gap-1">
@@ -149,14 +144,14 @@ export default function PartialReversalReportPage() {
               value={batchNumber}
               onChange={(e) => setBatchNumber(e.target.value)}
               placeholder="Filter by batch number"
-              disabled={!companyId}
+              disabled={!effectiveCompanyId}
             />
           </div>
         </div>
       </ErpSectionCard>
 
       <ErpSectionCard title="Reversal Transactions">
-        {!companyId ? (
+        {!effectiveCompanyId ? (
           <p className="py-4 text-center text-sm text-slate-400">Select a company to view reversals.</p>
         ) : listQ.isLoading ? (
           <p className="py-4 text-center text-sm text-slate-400">Loading...</p>
