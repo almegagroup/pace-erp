@@ -25,7 +25,9 @@ import {
   updateStrokeMaster, approveStrokeMaster, revertStrokeMaster,
   rejectStrokeMaster, deactivateStrokeMaster,
 } from "./prodApi.js";
-import { listCompaniesForOm, listMaterials, listUoms, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
+import { listMaterials, listUoms, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
+import { useMenu } from "../../../context/useMenu.js";
+import { buildTransactionCompanyList } from "../../../components/inputs/transactionCompanyRuntime.js";
 import {
   MATERIAL_TYPE_OPTIONS, PO_TYPE_OPTIONS_BY_MATERIAL_TYPE, EMPTY_LINE,
   friendlyStrokeErr, dosageSumOf, renderDrawerActions, Field,
@@ -42,6 +44,7 @@ const friendlyErr = friendlyStrokeErr;
 
 export default function StrokeMasterPage() {
   const qc = useQueryClient();
+  const { runtimeContext } = useMenu();
   const [companyFilter, setCompanyFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [saving, setSaving] = useState(false);
@@ -81,7 +84,7 @@ export default function StrokeMasterPage() {
     enabled: Boolean(form.company_id),
   });
 
-  const companiesQ = useQuery({ queryKey: ["om-companies"], queryFn: () => listCompaniesForOm() });
+  const companies = buildTransactionCompanyList(runtimeContext);
   const uomsQ = useQuery({ queryKey: ["om-uoms"], queryFn: () => listUoms({ is_active: true, limit: 500 }), select: (d) => d?.data ?? [] });
   const groupsQ = useQuery({ queryKey: ["om-material-groups"], queryFn: () => listMaterialCategoryGroups(), select: (d) => d?.data ?? [] });
   const sfgMaterialsQ = useQuery({ queryKey: ["om-materials", "SFG"], queryFn: () => listMaterials({ material_type: "SFG", limit: 500 }), select: (d) => d?.data ?? [] });
@@ -99,7 +102,6 @@ export default function StrokeMasterPage() {
     enabled: Boolean(activeCompanyId),
   });
 
-  const companies = companiesQ.data ?? [];
   const uoms = uomsQ.data ?? [];
   const groups = groupsQ.data ?? [];
   const storageLocations = storageLocationsQ.data ?? [];

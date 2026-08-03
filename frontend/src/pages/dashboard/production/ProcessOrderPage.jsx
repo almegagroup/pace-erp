@@ -8,11 +8,14 @@
  *          Keyboard-first: Alt+N=New, row-click=open drawer.
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
+import { useMenu } from "../../../context/useMenu.js";
 import {
   listProcessOrders, getProcessOrder, createProcessOrder,
   updateProcessOrderLines, qaApproveProcessOrder, qaRejectProcessOrder,
@@ -54,6 +57,7 @@ const EMPTY_FORM = { company_id: "", material_id: "", production_type: "MTO", st
 
 export default function ProcessOrderPage() {
   const qc = useQueryClient();
+  const { runtimeContext } = useMenu();
   const [companyId, setCompanyId]   = useState("");
   const [statusFilter, setStatus]   = useState("");
   const [saving, setSaving]         = useState(false);
@@ -82,13 +86,24 @@ export default function ProcessOrderPage() {
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
   }
 
+  const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+  const effectiveCompanyId = companyId || defaultCompanyId;
+  const effectiveFormCompanyId = form.company_id || defaultCompanyId;
+
+  useEffect(() => {
+    if (!form.company_id && defaultCompanyId) {
+      setForm((current) => ({ ...current, company_id: defaultCompanyId }));
+    }
+  }, [defaultCompanyId, form.company_id]);
+
   const listQ = useQuery({
-    queryKey: ["proc-orders", companyId, statusFilter],
+    queryKey: ["proc-orders", effectiveCompanyId, statusFilter],
     queryFn: () => listProcessOrders({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: statusFilter || undefined,
       per_page: 100,
     }),
+    enabled: Boolean(effectiveCompanyId),
     select: d => Array.isArray(d) ? d : d?.data ?? [],
   });
 
@@ -109,12 +124,13 @@ export default function ProcessOrderPage() {
     try {
       await createProcessOrder({
         ...form,
+        company_id: effectiveFormCompanyId,
         planned_qty: parseFloat(form.planned_qty),
         stroke_master_id: form.stroke_master_id || null,
       });
       toast("Process Order created.");
       setCreateOpen(false);
-      setForm({ ...EMPTY_FORM });
+      setForm({ ...EMPTY_FORM, company_id: defaultCompanyId });
       qc.invalidateQueries({ queryKey: ["proc-orders"] });
     } catch (err) { toast(friendly(err.message), "error"); }
     finally { setSaving(false); }
@@ -260,16 +276,21 @@ export default function ProcessOrderPage() {
         label: "New Process Order",
         tone: "primary",
         mnemonic: "N",
-        onClick: () => { setForm({ ...EMPTY_FORM }); setCreateOpen(true); },
+        onClick: () => { setForm({ ...EMPTY_FORM, company_id: defaultCompanyId }); setCreateOpen(true); },
       }]}
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       {/* Filters */}
       <ErpSectionCard>
         <div className="flex gap-3 items-end flex-wrap">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Company ID</label>
-            <input className="border border-slate-300 rounded px-2 py-1 text-sm w-56" value={companyId} onChange={e => setCompanyId(e.target.value)} placeholder="Filter by company…" />
+          <div className="w-72">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(value) => setCompanyId(value)}
+              label="Company"
+              hint=""
+            />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs text-slate-500">Status</label>
@@ -284,6 +305,8 @@ export default function ProcessOrderPage() {
       <ErpSectionCard title={`Process Orders${orders.length ? ` (${orders.length})` : ""}`}>
         {listQ.isLoading ? (
           <p className="text-slate-400 text-sm py-6 text-center">Loading…</p>
+        ) : !effectiveCompanyId ? (
+          <p className="text-slate-400 text-sm py-6 text-center">Select a company to view process orders.</p>
         ) : orders.length === 0 ? (
           <p className="text-slate-400 text-sm py-6 text-center">No orders found. Press <kbd className="bg-slate-100 border px-1 rounded text-xs">Alt+N</kbd> to create.</p>
         ) : (
@@ -438,13 +461,16 @@ export default function ProcessOrderPage() {
         onClose={() => setCreateOpen(false)}
       >
         <form onSubmit={handleCreate} className="flex flex-col gap-4 p-4">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-600">Company ID <span className="text-rose-500">*</span></label>
-            <input autoFocus className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.company_id} onChange={e => setForm(f => ({ ...f, company_id: e.target.value }))} required />
-          </div>
+          <TransactionCompanySelector
+            runtimeContext={runtimeContext}
+            value={form.company_id}
+            onChange={(value) => setForm((current) => ({ ...current, company_id: value }))}
+            label="Company"
+            hint=""
+          />
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">FG Material ID <span className="text-rose-500">*</span></label>
-            <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.material_id} onChange={e => setForm(f => ({ ...f, material_id: e.target.value }))} required placeholder="Prodshade material UUID" />
+            <input autoFocus className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.material_id} onChange={e => setForm(f => ({ ...f, material_id: e.target.value }))} required placeholder="Prodshade material UUID" />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Production Type <span className="text-rose-500">*</span></label>

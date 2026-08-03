@@ -9,6 +9,7 @@
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -44,6 +45,102 @@ function getPathId(req: Request, segment: string): string {
   const parts = new URL(req.url).pathname.split("/").filter(Boolean);
   const idx = parts.indexOf(segment);
   return idx >= 0 ? toTrimmedString(parts[idx + 1]) : "";
+}
+
+interface ApproverMapRow {
+  approver_user_id: string | null;
+  approver_role_code: string | null;
+  resource_code: string | null;
+  action_code: string | null;
+  scope_type: string | null;
+  subject_user_id: string | null;
+  subject_work_context_id: string | null;
+  subject_role_code: string | null;
+  approval_stage: number;
+}
+
+async function loadCostingRateApproverRules(companyId: string): Promise<ApproverMapRow[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("acl")
+    .from("approver_map")
+    .select(
+      "approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage",
+    )
+    .eq("resource_code", "ACC_SLOC_COSTING_GROUP")
+    .eq("action_code", "APPROVE")
+    .eq("company_id", companyId);
+  if (error) throw new Error("PROD_COST_RATE_APPROVER_LOOKUP_FAILED");
+  return (data as ApproverMapRow[] | null) ?? [];
+}
+
+async function getCostingRateUserRoleCodes(userIds: string[]): Promise<Map<string, string | null>> {
+  const result = new Map<string, string | null>();
+  if (userIds.length === 0) return result;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("user_roles")
+    .select("auth_user_id, role_code")
+    .in("auth_user_id", userIds);
+  if (error) return result;
+  for (const row of (data as Record<string, unknown>[] | null) ?? []) {
+    result.set(String(row.auth_user_id ?? ""), String(row.role_code ?? "") || null);
+  }
+  return result;
+}
+
+function matchesCostingRateApprover(rows: ApproverMapRow[], ctx: ProdHandlerContext): boolean {
+  return rows.some((row) => {
+    if (row.approver_user_id) return row.approver_user_id === ctx.auth_user_id;
+    if (row.approver_role_code) return row.approver_role_code === ctx.roleCode;
+    return false;
+  });
+}
+
+// Batch approval can cover DRAFT rows saved by different creators — every distinct creator
+// present in the batch must independently clear the approver-role + self-approval check.
+async function assertCostingRateApproverRole(
+  ctx: ProdHandlerContext,
+  companyId: string,
+  creatorIds: Array<string | null | undefined>,
+): Promise<void> {
+  if (ctx.roleCode === "SA" || ctx.roleCode === "GA" || ctx.roleCode === "DIRECTOR") {
+    // SA/GA/DIRECTOR always retain override authority, regardless of approver_map
+    // config — DIRECTOR is deliberately a blanket bypass here, not a per-subject-role
+    // approver_map row (business owner, 2026-08-03): it must approve every creator's
+    // draft directly, and approver_map has a hard max-5-approvers-per-scope limit
+    // that a "DIRECTOR always also approves" row on every subject_role would eat into.
+    return;
+  }
+  const rules = await loadCostingRateApproverRules(companyId);
+  const distinctCreatorIds = [...new Set(creatorIds.map((id) => toTrimmedString(id)).filter(Boolean))];
+  // INDEPENDENT: each creator's role lookup doesn't depend on any other's, so batch
+  // fetch once instead of a sequential await-per-creator loop (CLAUDE.md §8B).
+  const creatorRoleCodes = rules.length === 0
+    ? new Map<string, string | null>()
+    : await getCostingRateUserRoleCodes(distinctCreatorIds);
+  for (const createdBy of distinctCreatorIds) {
+    let isConfiguredApprover: boolean;
+    if (rules.length === 0) {
+      isConfiguredApprover = false; // no approver_map row configured yet, and caller is not SA/GA/DIRECTOR.
+    } else {
+      const creatorRoleCode = creatorRoleCodes.get(createdBy) ?? null;
+      const scopedRules = pickScopedApproverRules(
+        {
+          resource_code: "ACC_SLOC_COSTING_GROUP",
+          action_code: "APPROVE",
+          requester_auth_user_id: createdBy,
+          requester_role_code: creatorRoleCode,
+        },
+        rules,
+      );
+      isConfiguredApprover = scopedRules.length > 0 ? matchesCostingRateApprover(scopedRules, ctx) : false;
+    }
+    if (!isConfiguredApprover) throw new Error("PROD_COST_RATE_APPROVER_ROLE_REQUIRED");
+    // DIRECTOR already returned above, so this can never fire for DIRECTOR.
+    if (createdBy === ctx.auth_user_id) {
+      throw new Error("PROD_COST_RATE_SELF_APPROVAL_FORBIDDEN");
+    }
+  }
 }
 
 function uniqueStrings(values: unknown[]): string[] {
@@ -738,7 +835,7 @@ export async function approveCostingRateHandler(req: Request, ctx: ProdHandlerCo
     const { data: draftRows, error } = await serviceRoleClient
       .schema("erp_production")
       .from("costing_rate_line")
-      .select("id, rate")
+      .select("id, rate, created_by")
       .eq("company_id", companyId)
       .eq("rate_month", rateMonth)
       .eq("status", "DRAFT");
@@ -750,6 +847,11 @@ export async function approveCostingRateHandler(req: Request, ctx: ProdHandlerCo
     if (rows.some((row) => Number(row.rate ?? 0) <= 0)) {
       return costingError(req, ctx, "PROD_COST_RATE_APPROVE_INCOMPLETE", 409, "Every drafted material must have a rate greater than zero before approval.");
     }
+    await assertCostingRateApproverRole(
+      ctx,
+      companyId,
+      rows.map((row) => row.created_by as string | null | undefined),
+    );
     const approvedAt = new Date().toISOString();
     const { error: updateError } = await serviceRoleClient
       .schema("erp_production")
@@ -768,6 +870,9 @@ export async function approveCostingRateHandler(req: Request, ctx: ProdHandlerCo
     return okResponse({ data: { company_id: companyId, rate_month: rateMonth, approved_count: rows.length } }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROD_COST_RATE_APPROVE_FAILED";
-    return costingError(req, ctx, code, 500, "Costing rate approve failed.");
+    const status = code === "PROD_COST_RATE_APPROVER_ROLE_REQUIRED" || code === "PROD_COST_RATE_SELF_APPROVAL_FORBIDDEN"
+      ? 403
+      : 500;
+    return costingError(req, ctx, code, status, "Costing rate approve failed.");
   }
 }

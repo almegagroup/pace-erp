@@ -31,16 +31,6 @@ const PORT_ROLES = new Set(["DISCHARGE", "LOADING", "BOTH"]);
 const TRANSIT_MODES = new Set(["ROAD", "RAIL", "MULTI-MODAL"]);
 const TRANSPORTER_DIRECTIONS = new Set(["IMPORT", "DOMESTIC", "BOTH"]);
 const TRANSPORTER_MODES = new Set(["ROAD", "RAIL", "COURIER", "MULTI-MODAL"]);
-const MANAGER_OR_SA_ROLES = new Set([
-  "SA",
-  "GA",
-  "DIRECTOR",
-  "L4_MANAGER",
-  "L3_MANAGER",
-  "L2_AUDITOR",
-  "L1_AUDITOR",
-  "L2_MANAGER",
-]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -74,12 +64,6 @@ function parseNullableNumber(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function assertManagerOrSARole(ctx: ProcurementHandlerContext): void {
-  if (!MANAGER_OR_SA_ROLES.has(ctx.roleCode)) {
-    throw new Error("MANAGER_OR_SA_REQUIRED");
-  }
 }
 
 function procurementErrorResponse(
@@ -840,7 +824,8 @@ export async function listMaterialCategoriesHandler(req: Request, ctx: Procureme
 
 export async function createMaterialCategoryHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_MATERIAL_CATEGORY_MASTER:WRITE) — no
+    // longer a blanket Manager/SA rank check; department grants are actually enforced.
     const body = await parseBody(req);
     const categoryName = toTrimmedString(body.category_name);
     if (!categoryName) {
@@ -868,7 +853,7 @@ export async function createMaterialCategoryHandler(req: Request, ctx: Procureme
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_MATERIAL_CATEGORY_CREATE_FAILED";
-    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
+    const status = code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Material category create failed");
   }
 }

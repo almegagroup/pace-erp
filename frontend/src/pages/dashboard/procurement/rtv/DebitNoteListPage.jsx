@@ -8,10 +8,12 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
@@ -60,25 +62,22 @@ export default function DebitNoteListPage() {
   const [status, setStatus] = useState("");
   const [vendorId, setVendorId] = useState("");
   const [page, setPage] = useState(1);
-  const companyId = runtimeContext?.selectedCompanyId || "";
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
   const debitNoteParams = useMemo(
     () => ({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       vendor_id: vendorId || undefined,
       status: status || undefined,
       limit: 200,
     }),
-    [companyId, status, vendorId]
+    [effectiveCompanyId, status, vendorId]
   );
   const debitNoteQuery = useQuery({
     queryKey: ["procurement", "debit-notes", debitNoteParams],
     queryFn: () => listDebitNotes(debitNoteParams),
   });
-
-  useEffect(() => {
-    setPage(1);
-  }, [search, status, vendorId]);
 
   const rows = Array.isArray(debitNoteQuery.data?.items) ? debitNoteQuery.data.items : [];
   const vendors = vendorQuery.vendors;
@@ -161,19 +160,34 @@ export default function DebitNoteListPage() {
         eyebrow: "Search And Filter",
         title: "Debit note register",
         children: (
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_220px_220px]">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_220px_220px_220px]">
             <QuickFilterInput
               label="Search"
               value={search}
-              onChange={setSearch}
+              onChange={(nextValue) => {
+                setSearch(nextValue);
+                setPage(1);
+              }}
               primaryFocus
               placeholder="Search DN number, vendor or RTV"
+            />
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(nextValue) => {
+                setCompanyId(nextValue);
+                setPage(1);
+              }}
+              label="Company"
             />
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Status
               <select
                 value={status}
-                onChange={(event) => setStatus(event.target.value)}
+                onChange={(event) => {
+                  setStatus(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
@@ -188,7 +202,10 @@ export default function DebitNoteListPage() {
               Vendor
               <select
                 value={vendorId}
-                onChange={(event) => setVendorId(event.target.value)}
+                onChange={(event) => {
+                  setVendorId(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>

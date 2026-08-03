@@ -15,6 +15,7 @@ import {
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
@@ -170,7 +171,7 @@ export default function STODetailPage() {
     { enabled: Boolean(detail?.receiving_company_id) }
   );
 
-  const selectedCompanyId = runtimeContext?.selectedCompanyId || "";
+  const selectedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const canApprove = STO_APPROVER_ROLES.has(shellProfile?.roleCode);
   const materialMap = useMemo(
     () => new Map(materials.map((entry) => [entry.id, entry])),

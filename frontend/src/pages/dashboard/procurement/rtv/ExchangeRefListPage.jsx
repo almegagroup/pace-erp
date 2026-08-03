@@ -11,6 +11,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
@@ -49,23 +51,25 @@ export default function ExchangeRefListPage() {
   const [page, setPage] = useState(1);
   const [linkingRowId, setLinkingRowId] = useState("");
   const [replacementGrnId, setReplacementGrnId] = useState("");
-  const companyId = runtimeContext?.selectedCompanyId || "";
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
   const exchangeRefParams = useMemo(
     () => ({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: status || undefined,
       limit: 200,
     }),
-    [companyId, status]
+    [effectiveCompanyId, status]
   );
   const exchangeRefQuery = useQuery({
     queryKey: ["procurement", "exchange-refs", exchangeRefParams],
     queryFn: () => listExchangeRefs(exchangeRefParams),
   });
-  const rows = Array.isArray(exchangeRefQuery.data?.items)
-    ? exchangeRefQuery.data.items
-    : [];
+  const rows = useMemo(
+    () => (Array.isArray(exchangeRefQuery.data?.items) ? exchangeRefQuery.data.items : []),
+    [exchangeRefQuery.data],
+  );
   const vendors = vendorQuery.vendors;
   const loading = exchangeRefQuery.isLoading || vendorQuery.isLoading;
 
@@ -184,11 +188,23 @@ export default function ExchangeRefListPage() {
         eyebrow: "Search And Filter",
         title: "Replacement reference register",
         children: (
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_220px]">
+          <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1.2fr)_220px]">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(nextValue) => {
+                setCompanyId(nextValue);
+                setPage(1);
+              }}
+              label="Company"
+            />
             <QuickFilterInput
               label="Search"
               value={search}
-              onChange={setSearch}
+              onChange={(value) => {
+                setSearch(value);
+                setPage(1);
+              }}
               primaryFocus
               placeholder="Search exchange ref, RTV, replacement GRN or vendor"
             />
@@ -196,7 +212,10 @@ export default function ExchangeRefListPage() {
               Status
               <select
                 value={status}
-                onChange={(event) => setStatus(event.target.value)}
+                onChange={(event) => {
+                  setStatus(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
@@ -323,7 +342,7 @@ export default function ExchangeRefListPage() {
               rowKey={(row) => row.id}
               onRowClick={openRtv}
               emptyMessage={
-                loading ? "Loading exchange references..." : "No exchange references found."
+                loading ? "Loading exchange references..." : effectiveCompanyId ? "No exchange references found." : "No company resolved for this session."
               }
             />
           </div>

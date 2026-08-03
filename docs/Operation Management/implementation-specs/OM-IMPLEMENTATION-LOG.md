@@ -2533,6 +2533,44 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 
 **Date:** 2026-07-11 (same-day resolution of the gap flagged in the previous entry)
 
+### Recurring bug-pattern tracking convention (added 2026-08-03)
+
+Use the following numbering whenever a new implementation or prod/dev audit
+hits one of these recurring root-cause classes:
+
+1. Hardcoded rank-check / ACL bypass
+2. Company-scope gap
+3. Blanket capability leak
+4. `capture_acl_version_source()` one-time/no-op trap
+5. ACL-MASTER (P0076) maintenance drift
+6. Shared resource-code collision
+7. Maker-checker empty / fallback-only approval
+8. Route / ACL registry mismatch
+9. `acl.approver_map` scope/index mismatch
+10. Small config/data trap (`**none**`, PostgREST exposure, sequence drift, etc.)
+11. Wrong company source / single-company auto-resolution bypass
+
+**Logging rule from now on:**
+- When one of these patterns appears, write `Bug #<n>` explicitly in the log
+  entry.
+- For each triggered bug, record:
+  - affected page/resource/route
+  - root cause
+  - fix applied
+  - verification performed
+- If a session checks a pattern and confirms it did **not** trigger, that can be
+  logged briefly as "checked, not triggered" when useful.
+
+**Authority split:**
+- CLAUDE.md = mandatory pre-code checklist for new sessions
+- PROD-ACL-Access-Decisions.md = ACL/company/approval rationale and live prod
+  guardrails
+- this file = historical occurrence/fix log using the same numbering
+
+**Important:** older entries in this log may treat some patterns (especially
+`assertManagerOrSARole`-style rank gates) as acceptable. Where that conflicts
+with the new bug-pattern checklist, the new checklist wins unless a later,
+explicit business-owner design note says otherwise.
 **Root cause found:** `acl.capture_acl_version_source()` is a **one-time bootstrap function** — it checks `IF v_source_captured_at IS NOT NULL THEN RETURN; END IF;` and no-ops immediately for any ACL version that was already captured (all 4 active Dev versions were, long ago). So it never re-copies live `acl.capability_menu_actions` rows into the version-scoped `acl.version_capability_menu_actions` table that `generate_acl_snapshot()` actually reads from (confirmed by reading both functions' source directly via `pg_proc.prosrc`). My earlier attempt to "recapture" therefore did nothing, explaining the persistent empty `precomputed_acl_view` result.
 
 **Fix (MCP, Dev):**
@@ -2934,7 +2972,7 @@ integrity `in_sync = true` after reconciling the MCP timestamp per §8A.
 
 ## 2026-07-31 22:24 IST - Gate-27.27 MM05 FG Dispatch Customer Master
 
-**Scope implemented:** MM05 only from the updated `CODEX-GATE27.27-MM05-DISPATCH-CUSTOMER-TASK-BRIEF.md`, after re-reading feasibility �114 and re-checking the live Dev schema before code.
+**Scope implemented:** MM05 only from the updated `CODEX-GATE27.27-MM05-DISPATCH-CUSTOMER-TASK-BRIEF.md`, after re-reading feasibility �114 and re-checking the live Dev schema before code.
 
 - Added `supabase/migrations/20260731183000_gate27_27_fg_dispatch_customer.sql` for the four new MM05 tables:
   `erp_master.fg_parent_company`, `erp_master.fg_depot_code`,
@@ -2950,7 +2988,7 @@ integrity `in_sync = true` after reconciling the MCP timestamp per §8A.
 **Important implementation notes:**
 
 - A runtime-critical bug was caught and fixed before verification: the first MM05 backend pass parsed dynamic ids from `customers` / `addresses`, but the actual MM05 paths are `fg-dispatch-customers` / `fg-dispatch-addresses`. Without that fix, the upgrade and address handlers would not have resolved their target ids correctly.
-- The Direct-flow UI was also corrected to support per-address Parent Company re-pick, matching feasibility �114.13 and the brief's scenario-4 verification. This prevents the page from incorrectly forcing every address under the initial header-level parent selection.
+- The Direct-flow UI was also corrected to support per-address Parent Company re-pick, matching feasibility �114.13 and the brief's scenario-4 verification. This prevents the page from incorrectly forcing every address under the initial header-level parent selection.
 
 **Dev verification / migration state:**
 
@@ -2967,7 +3005,7 @@ integrity `in_sync = true` after reconciling the MCP timestamp per §8A.
 - Confirmed a mismatched `DEPOT` address hard-fails with `MM05_STATE_MISMATCH`.
 - Confirmed a DIRECT customer address with matching parent-company state saves successfully.
 - Confirmed a mismatched DIRECT address hard-fails with `MM05_STATE_MISMATCH`.
-- Confirmed the same customer can hold a second address under a different parent company/state, matching feasibility �114.3 scenario 4.
+- Confirmed the same customer can hold a second address under a different parent company/state, matching feasibility �114.3 scenario 4.
 
 **Verification notes / limitations:**
 
@@ -2980,11 +3018,11 @@ integrity `in_sync = true` after reconciling the MCP timestamp per §8A.
 
 ## 2026-07-31 23:05 IST - Gate-27.26 AC06 SLoc Costing Group Master
 
-**Scope implemented:** AC06 only from the updated `CODEX-GATE27.26-AC06-SLOC-COSTING-GROUP-TASK-BRIEF.md`, after re-reading feasibility �114.21 and re-checking the live Dev schema before code.
+**Scope implemented:** AC06 only from the updated `CODEX-GATE27.26-AC06-SLOC-COSTING-GROUP-TASK-BRIEF.md`, after re-reading feasibility �114.21 and re-checking the live Dev schema before code.
 
 - Added `supabase/migrations/20260731200000_gate27_26_costing_group.sql` for the three new AC06 tables:
   `erp_production.costing_group`, `erp_production.costing_group_member`, and `erp_production.costing_rate_line`.
-- Implemented the locked material-level rule from �114.21:
+- Implemented the locked material-level rule from �114.21:
   `costing_group_member` is unique on `material_id` only, and
   `costing_rate_line` is unique on `(company_id, material_id, rate_month)` only.
   Storage location is not part of either identity; it remains browse-context only.
@@ -3015,7 +3053,7 @@ integrity `in_sync = true` after reconciling the MCP timestamp per §8A.
 
 ## 2026-07-31 23:44 IST - Gate-27.26 AC06 SLoc Costing Group Master (v2 correction)
 
-**Scope implemented:** delta correction only from the updated `CODEX-GATE27.26-AC06-SLOC-COSTING-GROUP-TASK-BRIEF.md`, after re-reading feasibility �114.22 and re-reading the shipped AC06 backend/frontend files in full first.
+**Scope implemented:** delta correction only from the updated `CODEX-GATE27.26-AC06-SLOC-COSTING-GROUP-TASK-BRIEF.md`, after re-reading feasibility �114.22 and re-reading the shipped AC06 backend/frontend files in full first.
 
 - Added `supabase/migrations/20260801020000_gate27_26_costing_group_v2_sloc_group.sql` for the new `erp_production.sloc_group` and `erp_production.sloc_group_member` masters.
 - Extended `supabase/functions/api/_core/production/costing_group.handlers.ts` with SLoc Group create/list/member add/member remove handlers, changed costing-rate browse from `storage_location_id` to `sloc_group_id`, removed `storage_location_id` from costing-group member add, and added `GET /api/production/costing-rate/draft-detail` for month-detail approval workflow.
@@ -3102,3 +3140,516 @@ This entry is a v2 correction on top of the earlier `2026-07-31 23:05 IST` AC06 
 - `node scripts/migration-integrity-check.mjs` ran and produced the current local checksum probe: `count=395`, `md5=c72608823d7d35296d61979d86013ef6`.
 
 **Files:** `frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx`, `frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockApprovalPage.jsx`, `frontend/src/pages/dashboard/production/OldProcessPoPage.jsx`, `frontend/src/pages/dashboard/production/OldPackingPoPage.jsx`, `docs/Codex-Log.md`, `docs/Operation Management/implementation-specs/OM-IMPLEMENTATION-LOG.md`.
+
+## 2026-08-03 16:40 IST - Task D company-rule normalization closed
+
+**Scope closed:** Bug #11 "wrong company source / single-company auto-resolution bypass" is now closed for the active business-page scope.
+
+**What was completed in the close-out wave:**
+
+- The remaining active business pages that still used raw company state or generic company pickers were normalized to the canonical transaction-company pattern (`TransactionCompanySelector` + `resolveDefaultTransactionCompanyId`) so single-company users auto-resolve and multi-company users only see their allowed company list.
+- This close-out explicitly included the two old-but-still-business-facing genealogy pages, `frontend/src/pages/dashboard/production/OldProcessPoPage.jsx` and `frontend/src/pages/dashboard/production/OldPackingPoPage.jsx`, after confirming they are still ACL-user-facing business pages and not dead legacy screens.
+- Detail pages that still used raw `runtimeContext?.selectedCompanyId` fallback for downstream scoped queries or action gating were also normalized, including PO / SO / STO / PI / CSN / Landed Cost detail flows.
+
+**Intentional exceptions kept unchanged:**
+
+- `frontend/src/pages/dashboard/production/ReversalPage.jsx` stays company-picker-free because its locked design resolves orders from globally unique PO numbers instead of company-first selection.
+- `frontend/src/pages/dashboard/procurement/masters/CHAMasterPage.jsx` and `frontend/src/pages/dashboard/procurement/masters/TransporterMasterPage.jsx` keep explicit company selection because they are company-mapping governance pages, not transaction-company business entry pages.
+
+**Boundary clarification for future work:**
+
+- A remaining `availableCompanies` reference is not automatically a Bug #11 failure. Several pages now only use those rows for labels, company-name maps, or secondary behavior after the primary transaction-company rule is already enforced.
+- Future review should treat Bug #11 as reopened only when a business page bypasses the canonical transaction-company runtime for actual selection or scoping behavior.
+
+**Verification / limitations:**
+
+- Source-level residual sweep was rerun after the close-out wave to separate true business-page violations from display-only or governance-only references.
+- This environment still hit the same Windows sandbox / Node path issue when trying to rerun some frontend lint commands (`EPERM: lstat C:\Users\cpalm`), so the closure is based on repeated source inspection plus the earlier targeted file-level lint passes already recorded above, not a fresh full-repo lint run from this final step.
+
+## 2026-08-03 18:05 IST - Task B backend ACL-bypass and company-scope closure
+
+**Scope implemented:** targeted Bug #1 + Bug #2 correction on the two procurement backend files that the repo audit and prod ACL decision log had already elevated as active business risks.
+
+- Updated `supabase/functions/api/_core/procurement/opening_stock.handlers.ts` so the legacy `assertManagerOrSARole` hard gate is removed, route ACL remains the permission source, and company-scope checks now cover list/detail/line mutate/submit/approve/post/recalculate flows.
+- Updated `supabase/functions/api/_core/procurement/physical_inventory.handlers.ts` so company visibility is enforced from the storage location's mapped company on create/detail/add/count/recount/post flows, and PI list results are filtered to storage locations belonging only to the caller's allowed companies.
+- Reused the shared `assertCompanyScope` helper path rather than introducing a second company-membership rule shape.
+
+**Verification:**
+
+- `deno check supabase/functions/api/_core/procurement/opening_stock.handlers.ts` passed.
+- `deno check supabase/functions/api/_core/procurement/physical_inventory.handlers.ts` passed.
+- Source sweep confirmed no remaining `assertManagerOrSARole` references in either touched file.
+
+**Boundary note:**
+
+- This close-out is intentionally narrow. It does not claim every historical approval/rank issue across the repo is fixed; it closes the two backend gaps that were already confirmed and safe to patch without changing business workflow design.
+
+## 2026-08-03 18:08 IST - Task C checkpoint
+
+**Source + existing prod-decision evidence rechecked before touching anything broader:**
+
+- AC05 (`ACC_MTS_SKU_MONTHLY_RATE`) uses `acl.resource_approval_policy` as a draft-vs-direct-approve flip in source; it is not an `acl.approver_map`-driven maker-checker flow.
+- AC06 (`ACC_SLOC_COSTING_GROUP`) has the same source shape: route ACL + separate approve endpoint, but no `acl.approver_map` workflow engine path in the shipped handler.
+- MM05 (`OM_FG_DISPATCH_CUSTOMER`) exposes VIEW/WRITE/EDIT routes only; there is no `APPROVE` action in `route-acl-registry.ts`, so there is no missing source-level maker-checker route to wire.
+- IN06 remains a separate approval resource/page pattern, not a workflow-engine-backed approval chain.
+
+**Decision:**
+
+- Task C should stay limited to runtime ACL / approval-policy / approver-map verification unless a new source mismatch is proven. No blind source refactor was made here just to force a generic "maker-checker" shape onto resources whose design does not actually use it.
+
+## 2026-08-03 (later) — Claude verification pass on Codex's Task B/C handoff
+
+**Scope:** independently re-verify Codex's Task B closure claims and Task C checkpoint against source + live prod DB, per business-owner request, before continuing to Task C/E.
+
+### Task B — VERIFIED CORRECT, no discrepancy found
+
+- `opening_stock.handlers.ts`: confirmed zero `assertManagerOrSARole` references (grep). Confirmed the shared `assertOpeningStockCompanyScope()` wrapper (built on `_shared/companyScope.ts`'s `assertCompanyScope`) is actually called from all 12 exported handlers: create, list (+ `listOpeningStockScopedCompanyIds` non-admin fallback), get-by-id, get-by-number, add-line, update-line, remove-line, batch-update, submit, approve, post, recalculate. List handler correctly short-circuits to `{items:[]}` when a non-admin caller has zero scoped companies, and scopes by `erp_map.user_companies` otherwise (no cross-company leak).
+- `physical_inventory.handlers.ts`: confirmed the shared `assertPIStorageLocationScope()` wrapper is called from create, list (via `listPIScopedStorageLocationIds`), get, add-item, enter-count, request-recount, post-differences. List handler follows the identical empty-scope short-circuit pattern.
+- Re-ran `deno check` on both files independently (not reusing Codex's claim) — both pass with **zero** errors (not even the usual pre-existing repo noise).
+- **Conclusion: Task B claims are accurate. No further action needed on these two files.**
+
+### Task C — checkpoint claim confirmed accurate for *current source*, but a real Bug #7 gap is now proven against *live prod DB + business-owner design intent* (this is the "log the discrepancy, don't guess" case the handoff brief asked for)
+
+Read `acl.resource_approval_policy` directly (prod, schema: `resource_code, action_code, approval_required, approval_type, min_approvers, max_approvers` — no role/department/creator column of any kind exists on this table):
+
+- `ACC_MTS_SKU_MONTHLY_RATE` (AC05): **one row**, `action_code='WRITE'`, `approval_required=true`, `approval_type='ANYONE'`. Confirmed in source (`mts_sku_rate.handlers.ts:118-127`, `loadMtsRateApprovalRequired()`) this is read only to decide whether a draft-save leaves the row in DRAFT (needs a later approve call) vs auto-applying — a pure "is a second step required at all" flip, exactly as Codex's checkpoint said. The separate `approveMtsSkuRateHandler` has **no creator-vs-approver check and no self-approve block** — any caller holding the ACL `APPROVE` action on this resource can approve, including the same person who drafted it.
+- `ACC_SLOC_COSTING_GROUP` (AC06): **zero rows** in `resource_approval_policy`. Confirmed via repo-wide grep that `costing_group.handlers.ts` never queries this table at all — `approveCostingRateHandler` unconditionally flips every DRAFT row for a company+month to APPROVED for any caller with the ACL `APPROVE` action, same no-self-approve-block gap as AC05.
+- `PROC_OPENING_STOCK_LIST` / `PROC_OPENING_STOCK_APPROVAL` (IN05/IN06): **zero rows**. Confirmed `approveOpeningStockDocumentHandler` (opening_stock.handlers.ts:1409-1453) has no creator-vs-approver check either — matches the Group 9 audit note already on record in `PROD-ACL-Access-Decisions.md` ("nothing stops whoever submitted a document from also approving/posting it themselves").
+- `OM_FG_DISPATCH_CUSTOMER` (MM05): confirmed no `APPROVE` route exists in `route-acl-registry.ts` — Codex's "nothing to wire" conclusion for MM05 stands, no discrepancy.
+
+**The discrepancy, stated plainly:** Codex's Task C checkpoint is a correct description of what the *code currently does*. It is **not** a correct description of what the business owner *asked for* in the same live working session as this handoff (recorded in this same conversation, not yet written into `PROD-ACL-Access-Decisions.md` at the time Codex ran):
+
+- **Opening Stock (IN05/IN06):** ACL-MASTER full 100%; else a creator-role-dependent chain — L1_AUDITOR creates → L2_AUDITOR approves; L2_AUDITOR creates → DIRECTOR approves. Self-approve must be impossible.
+- **AC05/AC06:** ACL-MASTER full 100%; Accounts (any rank) creates → L1_AUDITOR **or** L2_AUDITOR may approve; L1_AUDITOR creates → L2_AUDITOR approves; L2_AUDITOR creates → DIRECTOR approves. Self-approve must be impossible (this also revises the earlier same-session ACL-data pass that had granted Auditors View+Approve only — Auditors now also need WRITE/create ability, since the chain explicitly allows an Auditor-authored draft).
+
+None of this exists today in any form — `approval_type='ANYONE'` (AC05) and the complete absence of a policy row (AC06, IN05/IN06) both collapse to "whoever holds the ACL Approve action may approve, no routing, no self-approve guard." This is a genuine, DB-proven Bug #7 (maker-checker empty/fallback-only), not a guess, and it is **not** satisfied by `acl.resource_approval_policy` in its current shape (that table has no way to express "the approver depends on who the creator is," which is exactly what `acl.approver_map`'s `SUBJECT_ROLE` scope type — already built and proven this session for the PO/STO/PTO approval chain — is for).
+
+**Status: Task C is NOT complete.** Codex's checkpoint correctly stopped short of guessing a design; this pass supplies the missing design (from the business owner directly) and confirms via DB+source that real implementation work remains:
+1. Extend `acl.approver_map` with `SUBJECT_ROLE`-scoped rows for `ACC_MTS_SKU_MONTHLY_RATE`, `ACC_SLOC_COSTING_GROUP`, and the Opening Stock approval resource, mirroring the PO/STO/PTO chain pattern already live.
+2. Wire a real approver-check (reusing `_shared/workflow_scope.ts`'s `pickScopedApproverRules`, same engine as PO/STO/PTO) into `approveMtsSkuRateHandler`, `approveCostingRateHandler`, and `approveOpeningStockDocumentHandler` — none of the three call this engine today.
+3. Revise AC05/AC06 ACL grants so Auditors get WRITE (create) in addition to Approve — current live grant (from earlier the same session) is View+Approve only, which blocks the "L1_AUDITOR creates" leg of the chain entirely.
+
+**Not started yet** — flagging as the next task rather than starting without checking in, since it is comparable in scope to the earlier PO/STO/PTO approver-chain build (new `acl.approver_map` rows + a new handler-level approver-check function per resource, not a one-line fix).
+
+**Task E:** not started. Blocked behind the Task C decision above — final logging/snapshot sweep should happen after, not before, the approval-chain work lands, so it captures the real end state instead of an intermediate one.
+
+## 2026-08-03 (later still) — Task C CLOSED (Claude-implemented, all 3 items from the plan above done)
+
+All three outstanding items from the previous entry are now implemented and verified against live prod. Full design writeup: `PROD-ACL-Access-Decisions.md`'s new "Task C — Real maker-checker for Opening Stock / AC05 / AC06" section. Summary here:
+
+1. **`acl.approver_map` extended** — 4 new rows for `PROC_OPENING_STOCK_APPROVAL` (2/company × CMP003/CMP006, `L1_AUDITOR→L2_AUDITOR`/`L2_AUDITOR→DIRECTOR`), 72 new rows for `ACC_MTS_SKU_MONTHLY_RATE`+`ACC_SLOC_COSTING_GROUP` combined (18/resource/company × 2 resources × 2 companies — 2 auditor-escalation rows + 8 Accounts-rank subjects × 2 auditor-approver alternatives). Required first adding `acl.module_resource_map` bindings (`MOD_INVENTORY`/`MOD_ACCOUNTS`) — a DB trigger (`enforce_approver_scope_integrity()`) blocks any `approver_map` row whose `resource_code` isn't bound to a module, not documented anywhere before this session hit it.
+2. **Real approver-check wired into all 3 approve handlers** — `opening_stock.handlers.ts` (`assertOpeningStockApproverRole` → `approveOpeningStockDocumentHandler`), `mts_sku_rate.handlers.ts` (`assertMtsRateApproverRole` → `approveMtsSkuRateHandler`), `costing_group.handlers.ts` (`assertCostingRateApproverRole` → `approveCostingRateHandler`). All three replicate `po.handlers.ts`'s `assertProcurementHeadRole` pattern exactly (SA/GA bypass, `pickScopedApproverRules` SUBJECT_ROLE match, DIRECTOR fallback when unconfigured, self-approval-forbidden except for DIRECTOR). **New wrinkle not present in the PO/STO/PTO reference:** AC05/AC06's approve action flips every DRAFT row for a company+month in one call, and those rows can carry different `created_by` values across separate save calls — so both approver-check functions loop over every *distinct* creator in the batch and require the approver to clear the check against each one, not just the first. `deno check` clean on all 3 files, individually and combined.
+3. **`CAP_ACC_COSTING_AUDITOR` revised** — added `WRITE` action for both `ACC_MTS_SKU_MONTHLY_RATE`/`ACC_SLOC_COSTING_GROUP` menu rows (was View+Approve only). Required a genuine ACL version bump (v33→v34, both companies) since `capture_acl_version_source()` is one-time-per-version — captured, `generate_acl_snapshot` run, v34 activated. Verified live: P0010 (L1_AUDITOR) now resolves `WRITE=ALLOW` on both resources in `precomputed_acl_view` at v34, both companies.
+
+**Verification performed (no dev login available in this environment, per the standing `[No Localhost Preview]` practice):** `deno check` on all 3 edited files (zero errors); direct `precomputed_acl_view` queries confirming the new WRITE grant is live; row-count sanity check on the new `approver_map` inserts (18/18/2/2 across the 4 company×resource combinations, matching design exactly, no duplicates or missing companies). **Not done:** live click-through in the deployed app.
+
+**Task C is now CLOSED.** Task E (final logging/snapshot sweep) is unblocked and can proceed next.
+
+## 2026-08-03 (final) — Task E CLOSED
+
+Per the original Codex handoff's Task E scope ("final logging", "snapshot/ACL
+maintenance sweep", "confirm what is actually closed vs still open"):
+
+**1. Final logging — verified, no gap.** Grepped all 3 Task-C-edited files
+(`opening_stock.handlers.ts`, `mts_sku_rate.handlers.ts`,
+`costing_group.handlers.ts`) for any `new Response(...)` that would bypass
+the centralized logger — zero found. Every error path (including the 6 new
+codes from Task C: `OPENING_STOCK_APPROVER_ROLE_REQUIRED`,
+`OPENING_STOCK_SELF_APPROVAL_FORBIDDEN`, `PROD_MTS_RATE_APPROVER_ROLE_REQUIRED`,
+`PROD_MTS_RATE_SELF_APPROVAL_FORBIDDEN`, `PROD_COST_RATE_APPROVER_ROLE_REQUIRED`,
+`PROD_COST_RATE_SELF_APPROVAL_FORBIDDEN`) routes through each file's local
+wrapper (`openingStockErrorResponse`/`rateError`/`costingError`), which all
+call `response.ts`'s central `errorResponse()` — the single point that logs
+`event: "ERROR_RESPONSE"` with the real internal code, HTTP status, and
+route/gate (searchable in Render logs), built earlier this session. No new
+logging code was needed; this was already correct by construction once Task
+C's new error codes were routed through the existing wrappers.
+
+**2. Snapshot/ACL maintenance sweep — done, prod-wide (not scoped to
+CMP003/CMP006 only).** `PROD-ACL-Access-Decisions.md`'s Group 11 section had
+already flagged `acl.precomputed_acl_view` as accumulating one full copy of
+every historical `acl_version_id` forever (never purged by
+`generate_acl_snapshot()`, which only deletes rows for the specific version
+it regenerates) as a "housekeeping item, not urgent." Measured before
+cleanup: **40,859 total rows, 38,734 (94.8%) belonged to inactive/superseded
+versions**, only 2,125 matched a currently-active version. Deleted every row
+whose `acl_version_id` joins to an `acl.acl_versions` row with
+`is_active IS NOT TRUE` (a plain `DELETE ... USING`, no `acl_versions` rows
+touched, no `acl.version_*` capture tables touched — those remain the real
+historical record if an old version's exact grant shape is ever needed
+again). Re-verified after: **2,125 rows total, 100% match an active version,
+0 stale.** This was safe to do live (not just "eventually," per the earlier
+note) because the runtime read path
+(`_shared/acl_snapshot.ts`'s `readAclSnapshotDecision()`, called from
+`_pipeline/acl.ts`'s `stepAcl()`) always filters
+`.eq("acl_version_id", <the currently-active version>)` — confirmed by
+source read earlier this session — so no live request could ever have been
+served from a stale row in the first place; this was pure disk/index bloat
+with zero correctness dependency on it, and it's fully regenerable from the
+`version_*` tables if ever needed.
+
+**3. Status confirmation — what's actually closed vs open, across all of A-E:**
+
+| Task | Scope | Status |
+|---|---|---|
+| A | Repo-wide 11-bug-pattern audit | ✅ Closed (Codex) |
+| B | Opening Stock + Physical Inventory company-scope backend fix | ✅ Closed — independently re-verified this session (source read + fresh `deno check`, zero errors) |
+| C | Real maker-checker for Opening Stock/AC05/AC06 (MM05 confirmed correctly has no APPROVE action — nothing to build there) | ✅ Closed this session — `acl.approver_map` extended (76 new rows), 3 approve handlers wired to the real check, `CAP_ACC_COSTING_AUDITOR` revised + new ACL version (v34) captured/generated/activated, all verified live |
+| D | Frontend business-page company-selection normalization | ✅ Closed — independently re-verified this session (targeted spot-check + 2 repo-wide greps, all clean, 3 documented intentional exceptions) |
+| E | Final logging + ACL/snapshot maintenance sweep + status confirmation | ✅ Closed this session — logging confirmed already-complete by construction, 38,734 stale `precomputed_acl_view` rows purged prod-wide, this table itself is the confirmation |
+
+**All of A-E are now closed.** Remaining open items are outside this
+handoff's scope and tracked separately: live click-through confirmation in
+the deployed app for Task C's new approval chains (no dev login available in
+this environment), and the Stroke Master self-approve gap noted mid-session
+(same bug class as Task C, but a separate resource never in this handoff's
+scope — needs its own design decision on who creates vs who approves before
+it can be built).
+
+## 2026-08-03 (post-E) — CI guards for the 11 recurring bug patterns
+
+Business owner asked how the 11 recurring bug patterns get prevented from
+coming back in *future* work, not just fixed today. Answer given: some
+patterns already had real CI enforcement (§8D `stock-posting-guard.mjs`),
+some had a script that existed but was **never wired into CI**
+(`company-scope-guard.mjs` — found while checking `.github/workflows/ci-basic.yml`,
+only the stock-posting guard was actually running), and some had no
+automated check at all. Built/wired guards for 3 patterns this pass:
+
+1. **`company-scope-guard.mjs` wired into CI** (was already written, 0
+   violations against current code, but silently not running). Covers
+   pattern #2 (company-scope gap) and overlaps #11 (wrong company source).
+2. **New `scripts/hardcoded-role-check-guard.mjs`** — pattern #1 (hardcoded
+   rank-check bypass). Detects the exact `MANAGER_OR_SA_ROLES`-style
+   constant / `assertManagerOrSARole`-style function naming convention this
+   repo has repeatedly used for this anti-pattern (deliberately NOT a
+   generic `roleCode === "DIRECTOR"` grep — that pattern legitimately
+   appears in the real approver-chain engine's DIRECTOR-fallback/self-approval-exempt
+   logic built for Task C, and would have been pure noise). **Baseline
+   (existing, NOT fixed by this guard, flagged for future audit):**
+   `admin/company/list_companies.handler.ts` (legitimate — real SA-only
+   callers, the 2026-08-03 bug was a business page misusing it, already
+   fixed on the frontend side), `procurement/l2_masters.handlers.ts`,
+   `production/production.shared.ts`, `om/shared.ts` (these three still
+   need the same "does ACL already govern this page" audit Task B did for
+   Opening Stock/Physical Inventory — not done yet).
+3. **New `scripts/approver-chain-guard.mjs`** — pattern #7 (maker-checker
+   empty/fallback-only), the exact bug Task C fixed. File-level heuristic:
+   any file exporting an `approve...Handler`-named function must also
+   reference `pickScopedApproverRules` (`_shared/workflow_scope.ts`), or be
+   in a documented baseline. **Baseline (existing, NOT fixed, flagged for
+   future audit):** 4 admin/SA files (different domain — approver_map CONFIG
+   management and signup approval, not a business document's approve
+   action), plus `pack_bom.handlers.ts`, `pack_config.handlers.ts`,
+   `process_order.handlers.ts`, `stroke_change_request.handlers.ts`, and
+   `stroke_master.handlers.ts` (this last one is the Stroke Master
+   self-approve gap already flagged to the business owner this session).
+
+All 4 guards (`stock-posting-guard.mjs`, `company-scope-guard.mjs`,
+`hardcoded-role-check-guard.mjs`, `approver-chain-guard.mjs`) verified
+passing locally and added to `.github/workflows/ci-basic.yml`.
+
+## 2026-08-03 (post-guards) — Stroke Master maker-checker built + a real Task C gap found and fixed (DIRECTOR bypass)
+
+`approver-chain-guard.mjs` immediately did its job — running it surfaced
+`stroke_master.handlers.ts` as a file with an approve-style handler and no
+real approver-routing engine, which matched a gap the business owner had
+already flagged mid-session. Designed and built it now, and in doing so
+found a real bug in the Task C work from earlier today.
+
+**Live-DB investigation before designing anything (per this session's own
+"verify premise" discipline):** `approveStrokeMasterHandler` was a plain
+status flip (DRAFT→APPROVED), route-ACL-gated only
+(`PROD_STROKE_APPROVAL:APPROVE`), no creator-vs-approver check. Checked
+`acl.capability_menu_actions` for `PROD_STROKE_MASTER` (create, WRITE) vs
+`PROD_STROKE_APPROVAL` (approve) — correctly two separate resources, same
+pattern as PO/STO. But because department capabilities in this repo use a
+"ceiling" inheritance pattern (any rank in a department gets everything up
+to its own tier), cross-referencing `precomputed_acl_view` found **P0009
+(L2_MANAGER, CMP003) holds BOTH create and approve capability today** — a
+live, real self-approve gap, not a hypothetical one. CMP006 had no such
+overlap today (business owner asked specifically — checked, confirmed:
+P0010/P0071/P0073/P0075 each hold only one side, P0076/DIRECTOR the
+expected exception) but that's incidental to the current user roster, not
+a structural guarantee, so the code-level fix was still needed.
+
+**Design locked (business owner, 2026-08-03):** QA's L1-L4 User creates;
+approvers are L2_MANAGER (if they hold QA access), L1_AUDITOR, L2_AUDITOR,
+and that company's L3_MANAGER — any one of the four. DIRECTOR (P0076)
+approves in every case, but explicitly **not** as a chain member: "Director
+top of the chain, but jara jara je jiniser approver tara charao, sob case e
+director approver" (besides whoever the normal approvers are, DIRECTOR is
+additionally always an approver, everywhere).
+
+**A real Task C bug surfaced while implementing this:** to model "DIRECTOR
+always approves, everywhere," the natural instinct was an `approver_map`
+row per subject_role pointing at DIRECTOR — which is exactly how Opening
+Stock/AC05/AC06 had been built a few hours earlier (a `L2_AUDITOR→DIRECTOR`
+row only at the *top* of the escalation chain). Checking that shape against
+today's stated design showed it was wrong: **DIRECTOR could not directly
+approve an L1_AUDITOR-created Opening Stock document** (or an L1_USER/etc.
+-created AC05/AC06 draft) under the original Task C rows — DIRECTOR was only
+reachable by walking the chain, contradicting the "P0076 always full
+access" requirement repeated for every resource this session. Fixed by:
+deleting all 44 `approver_role_code='DIRECTOR'` rows across
+`PROC_OPENING_STOCK_APPROVAL`/`ACC_MTS_SKU_MONTHLY_RATE`/`ACC_SLOC_COSTING_GROUP`,
+and instead adding DIRECTOR as a **code-level bypass** (alongside the
+existing SA/GA bypass) in all 4 `assert*ApproverRole` functions
+(`opening_stock.handlers.ts`, `mts_sku_rate.handlers.ts`,
+`costing_group.handlers.ts`, and the new `stroke_master.handlers.ts`). This
+is both more correct (DIRECTOR really is a blanket exception, not a
+per-subject data row) and avoids permanently consuming one of a scarce
+resource — see next paragraph.
+
+**Real DB constraint hit and raised (business owner's explicit choice):**
+`acl.approver_map` has a trigger, `enforce_approver_bounds()`, hard-capping
+approvers per exact (company, module, subject) scope at **3** — discovered
+when Stroke Master's 4 non-DIRECTOR approvers (L2_MANAGER, L1_AUDITOR,
+L2_AUDITOR, L3_MANAGER) hit it immediately. Two options were presented
+(drop one approver, or raise the limit); business owner chose to raise it.
+Migration `20260803190000_approver_map_raise_max_approvers_5.sql` bumps the
+trigger's ceiling from 3 to 5 (`CREATE OR REPLACE FUNCTION`, no data
+migration needed — pure logic change). Applied via MCP `apply_migration`,
+history reconciled to the local filename's timestamp per the standing
+Migration Integrity rule, `migration-integrity-check.mjs` confirms
+`in_sync = true` (396 migrations, checksums match).
+
+**`acl.approver_map` data (prod, MCP), final state:**
+- Stroke Master (`PROD_STROKE_APPROVAL`): 4 subject roles (L1-L4_USER) × 4
+  approvers (L2_MANAGER, L1_AUDITOR, L2_AUDITOR, L3_MANAGER) × 2 companies =
+  32 rows. Verified: 16 rows/company, 8 rows/subject-role across both
+  companies (4/company), all within the new max-5 bound.
+- Opening Stock/AC05/AC06: the 44 DIRECTOR rows removed (net row count
+  *decreased*, not increased, from this fix — DIRECTOR moved from data to
+  code).
+
+**Code changes:**
+- `stroke_master.handlers.ts` — removed the dead, never-called
+  `assertManagerOrSARole` import; added `loadStrokeApproverRules`/
+  `getStrokeUserRoleCode`/`matchesStrokeApprover`/`assertStrokeApproverRole`
+  (identical shape to the other 3 files); wired into both
+  `approveStrokeMasterHandler` and `rejectStrokeMasterHandler` (reject is
+  the same "review a DRAFT" action as approve, same resource/action ACL
+  gate, so it gets the same check — `revertStrokeMasterHandler`, a
+  different semantic (un-approve an already-APPROVED stroke for
+  correction), was deliberately left untouched).
+- `opening_stock.handlers.ts` / `mts_sku_rate.handlers.ts` /
+  `costing_group.handlers.ts` — SA/GA bypass extended to SA/GA/DIRECTOR;
+  the now-dead `ctx.roleCode === "DIRECTOR"` fallback branches (unreachable
+  once DIRECTOR bypasses at the top) simplified to `false`; the
+  self-approval-forbidden check's now-redundant `&& ctx.roleCode !== "DIRECTOR"`
+  clause removed (DIRECTOR can never reach that line anymore).
+- `deno check` clean on all 4 files, individually and combined.
+- `scripts/approver-chain-guard.mjs` — removed `stroke_master.handlers.ts`
+  from the baseline (no longer an exception, now genuinely fixed).
+  Re-verified: `hardcoded-role-check-guard.mjs`, `approver-chain-guard.mjs`,
+  `company-scope-guard.mjs`, `stock-posting-guard.mjs` all still pass
+  together.
+
+**Lesson for next time (recorded per this session's own established
+practice):** when copying an approver-chain pattern to a new resource,
+re-derive "can the top-of-hierarchy role act on every case" from the
+business owner's actual words rather than assuming the previous
+implementation already got it right — this exact gap existed in Task C for
+several hours before Stroke Master's design session caught it.
+
+## 2026-08-03 (final) — Audited and removed the remaining 3 hardcoded-role-check baseline files; 2 real live bugs found
+
+Following up on `hardcoded-role-check-guard.mjs`'s baseline (3 non-admin
+files flagged as "not yet audited"), checked each one against live
+`precomputed_acl_view` data — same method used to catch the Stroke Master
+gap above — before touching any code.
+
+- **`l2_masters.handlers.ts` — real live bug, fixed.**
+  `createMaterialCategoryHandler` called `assertManagerOrSARole(ctx)`
+  (Manager/Auditor/Director/SA/GA only) on top of the route's own ACL gate
+  (`PROC_MATERIAL_CATEGORY_MASTER:WRITE`). Live check found **11 User-tier
+  people today** (P0005, P0006, P0030, P0054, P0062, P0063, P0069, P0070,
+  P0071, P0072, P0075) hold real ACL WRITE on this resource but would have
+  been silently blocked by the redundant hardcoded check — this was an
+  actively broken feature for most of the users who should have access to
+  it, not a hypothetical risk. Removed the call, the dead
+  `assertManagerOrSARole`/`MANAGER_OR_SA_ROLES` definitions (this file's only
+  caller), and the now-unreachable `MANAGER_OR_SA_REQUIRED` status-mapping
+  branch.
+- **`production.shared.ts` — one real live bug (`segment_location.handlers.ts`),
+  three harmless-but-latent ones, all fixed uniformly.** Four call sites:
+  `packing_order.handlers.ts`'s `reversePackingOrderHandler` (route:
+  `PROD_REVERSAL:APPROVE`), `pack_config.handlers.ts`'s
+  `upsertPackConfigHandler`/`deletePackConfigHandler` (route:
+  `SA_OM_PACK_CODE_MASTER:WRITE`/`DELETE`), and
+  `segment_location.handlers.ts`'s `upsertSegmentLocationHandler` (route:
+  `SA_PROD_SEGMENT_LOCATIONS:WRITE`). Live check: **P0030, P0054, P0062,
+  P0069, P0070, P0072 hold real ACL WRITE on `SA_PROD_SEGMENT_LOCATIONS`
+  today** (all User-tier) — same live-blocking bug as l2_masters. The other
+  three had no live conflict today (no User-tier holder of those specific
+  grants right now), but left as-is they'd silently break the same way the
+  moment a future ACL change granted a User-tier role access — so removed
+  uniformly rather than leaving 3 latent copies of the same bug. Also
+  removed the now-dead `assertManagerOrSARole` import from 4 further files
+  that imported but never called it (`batch_series.handlers.ts`,
+  `partial_reversal.handlers.ts`, `process_order.handlers.ts`,
+  `stroke_change_request.handlers.ts`), then deleted the
+  `assertManagerOrSARole`/`MANAGER_OR_SA_ROLES` definitions from
+  `production.shared.ts` itself once zero callers remained anywhere.
+- **`om/shared.ts` — pure dead code, no bug, just removed.** Repo-wide grep
+  confirmed `assertManagerOrSARole` here was never imported or called by any
+  file at all. Deleted it and its `MANAGER_OR_SA_ROLES` const.
+
+**`hardcoded-role-check-guard.mjs` baseline reduced from 4 files to 1** —
+only `admin/company/list_companies.handler.ts` remains (the confirmed-
+legitimate SA-only case). `deno check` clean on all 14 touched files this
+session, combined (only the same 6 pre-existing `.count`/`.range`/`.ilike`
+typing-noise errors, verified via `git diff --stat` to be nowhere near any
+edited line). All 4 CI guards re-run together, still passing.
+
+**Task C's original per-file recommendation ("does ACL already govern this
+page" — Task B's own standard) is now applied consistently across all 4
+files this guard originally flagged**, not just the ones with a live user
+impact today — matching the principle that a redundant rank-check is a
+latent bug even when no current user happens to trip it.
+
+## 2026-08-03 (very final) — Guards/checks for the remaining 6 bug patterns; 2 more real bugs found and fixed along the way
+
+Business owner asked, before building anything, to first check whether these
+6 remaining guards (#3, #4, #5, #6, #9, #10) could break the current build.
+Answer: none of them can be pure git-diff CI checks the way the first 4
+were — #4/#5/#9 fundamentally need live database state (which
+`ci-basic.yml` has no credentials for, deliberately), and #3/#10 are too
+broad/fuzzy to detect mechanically without high false-positive risk. Only
+#6 turned out to be genuinely static-file-checkable.
+
+**Built and wired into CI (`ci-basic.yml`):**
+- `scripts/resource-code-domain-guard.mjs` (#6, shared resource-code
+  collision) — parses `route-acl-registry.ts`, groups every `resourceCode`
+  by its route domain (`/api/<domain>/...`), flags any code spanning more
+  than one domain. First run found exactly one hit —
+  `PROC_OPENING_STOCK_LIST` used by both `procurement` and a
+  `production`-domain route (`GET /api/production/derived-opening-rate`,
+  §104.8's stroke-derived opening-rate suggestion) — but that one is
+  already documented inline at the route as intentional (a helper endpoint
+  *for* IN05's own entry flow, not a separate feature), so it went into the
+  guard's baseline rather than being "fixed." Zero other violations.
+
+**Built as manual/on-demand scripts, deliberately NOT wired into CI (no DB
+credentials needed, print SQL for MCP/SQL-editor use — same shape as
+`migration-integrity-check.mjs`):**
+- `scripts/acl-version-capture-drift-check.mjs` (#4) — finds live grant
+  rows created after a company's active version's `source_captured_at`.
+  First run found a real hit: **CMP010's active version (v29) has 32+49+28
+  rows across 3 live grant tables created after its capture** — that
+  company's ACL config has drifted and needs a fresh version cut. Flagged
+  for the business owner, not acted on (CMP010 is outside this session's
+  CMP003/CMP006 scope — noting here so it isn't lost).
+- `scripts/acl-master-drift-check.mjs` (#5) — per company, auto-identifies
+  the de-facto ACL-MASTER (highest-ALLOW-count non-SA/GA user — correctly
+  found P0076 both companies) and lists every `(resource_code, action_code)`
+  another user has ALLOW on that ACL-MASTER doesn't. **First run found a
+  real, live gap**, described next.
+- `scripts/approver-map-integrity-check.mjs` (#9) — checks `acl.approver_map`
+  for exact duplicate rows, self-loop rows (subject role = approver role,
+  which can never fire since self-approval is always blocked), and subject
+  roles with zero configured approvers on a resource that clearly uses
+  per-rank routing elsewhere. All 3 checks clean against current data — no
+  action needed, confirmed this session's Task C/Stroke Master builds have a
+  consistent shape.
+
+**Real bug found by `acl-master-drift-check.mjs` and fixed:** P0076
+(DIRECTOR) was missing `APPROVE` on `ACC_MTS_SKU_MONTHLY_RATE` and
+`ACC_SLOC_COSTING_GROUP` in **both** CMP003 and CMP006 — contradicting the
+"ACL-MASTER always full access" design repeated throughout today's session.
+Root cause, traced through `generate_acl_snapshot()`'s actual logic (read
+via `pg_get_functiondef`): a capability only resolves for a user if **both**
+(a) their work_context holds the capability (`work_context_capabilities`)
+**and** (b) their role is separately listed in `role_capabilities` for that
+same capability_code — department membership alone is not sufficient, the
+role must also be explicitly enrolled. `CAP_ACC_COSTING_AUDITOR` (built in
+the earlier Group 11 session, and revised today in Task #24 to add WRITE)
+was only ever mapped to `L1_AUDITOR`/`L2_AUDITOR` in `role_capabilities` —
+DIRECTOR was never added, even though P0076's own work_context legitimately
+holds the capability. Confirmed this wasn't a stale-snapshot issue by
+re-running `generate_acl_snapshot()` on the already-active v34 before
+concluding it was a real data gap, not a caching artifact.
+
+Fix: `INSERT INTO acl.role_capabilities (role_code, capability_code) VALUES
+('DIRECTOR', 'CAP_ACC_COSTING_AUDITOR')` (global table, no company_id, one
+insert covers both companies) — then the usual version-bump sequence (v34→v35
+for CMP003/CMP006, capture, generate, activate), since `role_capabilities`
+is one of the 6 tables `capture_acl_version_source()` freezes and that
+function is one-time-per-version. Verified live: P0076 now resolves
+`APPROVE=ALLOW` on both resources, both companies. Re-ran the drift check
+after the fix — clean except one pre-existing, confirmed-inert finding
+(`ACC_CONVERSION_COST:EDIT` — no route in `route-acl-registry.ts` ever
+checks that resource+action combination, so it's leftover/dead grant data,
+not a live gap; left alone).
+
+**Explicitly not built, by design (told to the business owner directly):**
+- **#3 (blanket capability leak)** — "is this broad grant still
+  intentionally broad" is a judgment call about intent, not a mechanically
+  checkable property. No guard.
+- **#10 (small config/data traps)** — too broad a grab-bag (sentinel junk
+  values, PostgREST schema-expose misses, stale snapshots, sequence
+  counters) to generalize into one check without it being either useless-narrow
+  or false-positive-prone. No guard. Both remain checklist/discipline items
+  only (CLAUDE.md's pre-code checklist), same as before this session.
+
+**CMP010's drift fixed same session (business owner asked immediately
+after seeing the finding):** v30 created, captured, `generate_acl_snapshot`
+run, activated (v29 deactivated). Re-ran the drift check — zero remaining
+drift for CMP010. Also re-swept `precomputed_acl_view` for the newly-stale
+v29 rows (same maintenance habit from the earlier Task E pass) — table now
+2,129 rows, 100% matching active versions across all companies.
+
+**Pre-commit compliance sweep (business owner asked explicitly, before any
+commit/push):** re-checked this session's own work against
+`OM-IMPLEMENTATION-LOG.md`/CLAUDE.md's own rules, not just the 11-bug list.
+Found one real §8B violation (Batch vs Sequential Loop rule) self-introduced
+earlier this session: `mts_sku_rate.handlers.ts`'s and
+`costing_group.handlers.ts`'s `assert*ApproverRole` functions looped over
+`distinctCreatorIds` with a sequential `await getXUserRoleCode(createdBy)`
+inside the loop — each creator's role lookup is INDEPENDENT (no dependency
+on any other creator's result), so per §8B this should have been one batch
+`.in()` fetch, not N sequential round trips. Fixed both:
+`getMtsRateUserRoleCode(id)`/`getCostingRateUserRoleCode(id)` (single-id)
+replaced with `getMtsRateUserRoleCodes(ids)`/`getCostingRateUserRoleCodes(ids)`
+(bulk `.in()`, returns a `Map`), fetched once before the loop, loop body now
+does zero awaits. `opening_stock.handlers.ts` and `stroke_master.handlers.ts`
+were already fine (one document = one creator, never a batch, so never a
+loop to begin with). `deno check` clean on both fixed files; all 5 CI guards
+re-run together, still passing.
+
+**Migration DB-parity check (business owner asked explicitly):** this
+session's one migration
+(`20260803190000_approver_map_raise_max_approvers_5.sql`) had only been
+applied to **prod** — dev was missing it entirely
+(`migration-integrity-check.mjs` confirmed `in_sync: false`, 395 vs 396).
+Applied via MCP `apply_migration` to dev (`ytapuwiqicmvpanmzelb`) too,
+reconciled the recorded version to the local filename's timestamp (same
+standing rule as every other migration this session), re-verified —
+**both dev and prod now report `in_sync: true`** against the same local
+migration files.
+
+**Final state: 5 of 11 bug patterns now have a real CI guard** (stock
+posting §8D, company-scope #2/#11, hardcoded-role-check #1, approver-chain
+#7, resource-code-domain #6). **3 more have an on-demand manual-check
+script** (#4, #5, #9) that isn't wired to CI but is a one-command tool for
+periodic verification. **3 remain checklist-only** (#3, #6-partially-already-covered,
+#10) — no further automation attempted for those, by explicit decision, not
+an oversight.
+
+**Honest scope note (told to the business owner directly, repeating here for
+the record):** these guards are ratchets, not retroactive fixes — they lock
+in today's state and block *regressions or new instances*, they do not fix
+the baseline items listed above. Patterns #3, #4, #5, #6, #9, #10 still have
+no automated guard — #4/#5 need live DB checks (not a pure static-file CI
+check, would need a separate on-demand script in the `migration-integrity-check.mjs`
+style), #3/#6/#9/#10 are harder to detect mechanically without high
+false-positive risk and still rely on the CLAUDE.md checklist being applied
+by discipline. Not claimed as "solved," flagged as a possible future pass if
+wanted. Also found but deliberately NOT wired into CI this pass:
+`migration-order-scan.mjs` and `migration-column-scan.mjs` both currently
+have pre-existing flags against the live migration history (3 and 6
+respectively) that were not triaged in this pass — wiring them into CI now
+would break every future push for unrelated reasons. `migration-integrity-check.mjs`
+never connects to a DB (always exits 0, just prints SQL to run manually) so
+it provides no enforcement value as a CI step in its current form.

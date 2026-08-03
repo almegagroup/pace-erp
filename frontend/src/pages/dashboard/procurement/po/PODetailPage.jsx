@@ -10,6 +10,7 @@ import {
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
@@ -143,6 +144,7 @@ export default function PODetailPage() {
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
+  const resolvedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState(buildEditState(null, ""));
   const [amendmentOpen, setAmendmentOpen] = useState(false);
@@ -158,7 +160,7 @@ export default function PODetailPage() {
     queryFn: () => getPurchaseOrder(id),
   });
   const po = poDetailQuery.data?.data ?? poDetailQuery.data ?? null;
-  const companyId = po?.company_id || runtimeContext?.selectedCompanyId || "";
+  const companyId = po?.company_id || resolvedCompanyId || "";
   const csnQuery = useQuery({
     queryKey: ["procurement", "po-csns", { companyId, id }],
     enabled: Boolean(id && companyId),

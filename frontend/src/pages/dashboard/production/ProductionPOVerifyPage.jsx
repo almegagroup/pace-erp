@@ -10,15 +10,13 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { availabilityPreviewProcessOrder, getProcessOrder, listProcessOrders, verifyProcessOrder } from "./prodApi.js";
-
-function companyLabel(company) {
-  return [company.company_code, company.company_name].filter(Boolean).join(" - ");
-}
 
 function orderLabel(order) {
   return [order.po_number, order.material?.material_name, order.po_type].filter(Boolean).join(" - ");
@@ -120,16 +118,12 @@ export default function ProductionPOVerifyPage() {
   const [debouncedPreviewRows, setDebouncedPreviewRows] = useState([]);
 
   const { runtimeContext } = useMenu();
-  const companies = runtimeContext?.availableCompanies ?? [];
-  const companyOptions = useMemo(
-    () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
-    [companies],
-  );
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const ordersQ = useQuery({
-    queryKey: ["production-verify-orders", companyId],
-    queryFn: () => listProcessOrders({ company_id: companyId || undefined, status: "FINAL", per_page: 100 }),
-    enabled: Boolean(companyId),
+    queryKey: ["production-verify-orders", effectiveCompanyId],
+    queryFn: () => listProcessOrders({ company_id: effectiveCompanyId || undefined, status: "FINAL", per_page: 100 }),
+    enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
   const orderOptions = useMemo(
@@ -162,8 +156,8 @@ export default function ProductionPOVerifyPage() {
     [materialQ.materials],
   );
   const storageLocationQ = useStorageLocationOptionsQuery(
-    { company_id: companyId || undefined },
-    { enabled: Boolean(companyId) },
+    { company_id: effectiveCompanyId || undefined },
+    { enabled: Boolean(effectiveCompanyId) },
   );
   const storageLocationOptions = useMemo(
     () => (storageLocationQ.storageLocations ?? []).map((location) => ({
@@ -204,13 +198,13 @@ export default function ProductionPOVerifyPage() {
   }, [rows]);
 
   const availabilityPreviewQ = useQuery({
-    queryKey: ["production-verify-availability-preview", companyId, activeOrderId, debouncedPreviewRows],
+    queryKey: ["production-verify-availability-preview", effectiveCompanyId, activeOrderId, debouncedPreviewRows],
     queryFn: () => availabilityPreviewProcessOrder({
-      company_id: companyId,
+      company_id: effectiveCompanyId,
       process_order_id: activeOrderId,
       overrides: debouncedPreviewRows,
     }),
-    enabled: Boolean(companyId && activeOrderId),
+    enabled: Boolean(effectiveCompanyId && activeOrderId),
   });
   const availabilityByKey = useMemo(
     () => new Map((availabilityPreviewQ.data ?? []).map((row) => [`${row.material_id}::${row.storage_location_id}`, row])),
@@ -354,12 +348,11 @@ export default function ProductionPOVerifyPage() {
 
           <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-slate-600">Company</label>
-              <ErpComboboxField
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
                 value={companyId}
                 onChange={(value) => resetSelection(value)}
-                options={companyOptions}
-                placeholder="-- Select company --"
+                label="Company"
               />
             </div>
             <div className="flex flex-col gap-1">
@@ -370,7 +363,7 @@ export default function ProductionPOVerifyPage() {
                 options={orderOptions}
                 placeholder="-- Select process PO --"
                 emptyStateLabel={ordersQ.isLoading ? "Loading process orders..." : "No FINAL process POs"}
-                disabled={!companyId}
+                disabled={!effectiveCompanyId}
               />
             </div>
             <div className="flex items-end justify-end">

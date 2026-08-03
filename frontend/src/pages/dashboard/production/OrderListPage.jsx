@@ -10,6 +10,8 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
@@ -29,10 +31,6 @@ const PROCESS_STATUS_COLORS = {
 
 const ALL_PROCESS_STATUSES = ["STANDARD", "QA_APPROVED", "QA_REJECTED", "BATCH_STARTED", "FINAL", "VERIFIED", "REVERSED", "CANCELLED"];
 const TABS = ["Process Orders", "Packing Orders"];
-
-function companyLabel(company) {
-  return [company.company_code, company.company_name].filter(Boolean).join(" - ");
-}
 
 function StatusChips({ selected, onToggle, statuses, colors }) {
   return (
@@ -68,32 +66,28 @@ export default function OrderListPage() {
   const [savingInt, setSavingInt] = useState(false);
 
   const { runtimeContext } = useMenu();
-  const companies = runtimeContext?.availableCompanies ?? [];
-  const companyOptions = useMemo(
-    () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
-    [companies],
-  );
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const processQ = useQuery({
-    queryKey: ["process-orders", companyId, processStatus, search],
+    queryKey: ["process-orders", effectiveCompanyId, processStatus, search],
     queryFn: () => listProcessOrders({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: processStatus || undefined,
       per_page: 100,
     }),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
-    enabled: activeTab === 0,
+    enabled: activeTab === 0 && Boolean(effectiveCompanyId),
   });
 
   const packingQ = useQuery({
-    queryKey: ["packing-orders", companyId, packingStatus, search],
+    queryKey: ["packing-orders", effectiveCompanyId, packingStatus, search],
     queryFn: () => listPackingOrders({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: packingStatus || undefined,
       search: search || undefined,
     }),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
-    enabled: activeTab === 1,
+    enabled: activeTab === 1 && Boolean(effectiveCompanyId),
   });
 
   const intDetailQ = useQuery({
@@ -154,12 +148,11 @@ export default function OrderListPage() {
       <ErpSectionCard title="Filters">
         <div className="flex flex-wrap gap-3">
           <div className="flex min-w-[240px] flex-col gap-1">
-            <label className="text-xs text-slate-500">Company</label>
-            <ErpComboboxField
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
               value={companyId}
               onChange={setCompanyId}
-              options={companyOptions}
-              placeholder="-- Select company --"
+              label="Company"
             />
           </div>
           <div className="flex min-w-[240px] flex-col gap-1">

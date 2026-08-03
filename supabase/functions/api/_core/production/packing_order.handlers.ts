@@ -16,7 +16,6 @@ import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
-  assertManagerOrSARole,
   assertProdReadRole,
   parseBody,
   toTrimmedString,
@@ -2274,7 +2273,8 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
 // POST /api/production/packing-orders/:id/reverse
 export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (PROD_REVERSAL:APPROVE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return packErr(req, ctx, "PROD_PACK_ID_MISSING", 400, "ID required");
 

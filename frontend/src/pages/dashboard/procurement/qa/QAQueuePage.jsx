@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useEffectEvent, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
@@ -75,12 +77,8 @@ export default function QAQueuePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const deepLinkQaId = searchParams.get("qa_id") || "";
   const { runtimeContext, shellProfile } = useMenu();
-  const isMulti = runtimeContext?.workspaceMode === "MULTI";
-  const [selectedCompanyId, setSelectedCompanyId] = useState(runtimeContext?.selectedCompanyId || "");
-  const companyId = isMulti ? selectedCompanyId : runtimeContext?.selectedCompanyId || "";
-  const availableCompanies = Array.isArray(runtimeContext?.availableCompanies)
-    ? runtimeContext.availableCompanies
-    : [];
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -88,24 +86,23 @@ export default function QAQueuePage() {
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
   const [expandedRowId, setExpandedRowId] = useState("");
-  const [error, setError] = useState("");
 
   const queueQuery = useQuery({
-    queryKey: ["procurement", "qa-queue", companyId || null, statusFilter, dateFrom, dateTo],
+    queryKey: ["procurement", "qa-queue", effectiveCompanyId || null, statusFilter, dateFrom, dateTo],
     queryFn: () =>
       listQADocuments({
-        company_id: companyId || undefined,
+        company_id: effectiveCompanyId || undefined,
         status: statusFilter === "ALL" ? undefined : statusFilter,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         limit: 200,
       }),
-    enabled: Boolean(companyId),
+    enabled: Boolean(effectiveCompanyId),
   });
   const grnsQuery = useQuery({
-    queryKey: ["procurement", "qa-queue-grns", companyId || null],
-    queryFn: () => listGRNs({ company_id: companyId || undefined, limit: 200, offset: 0 }),
-    enabled: Boolean(companyId),
+    queryKey: ["procurement", "qa-queue-grns", effectiveCompanyId || null],
+    queryFn: () => listGRNs({ company_id: effectiveCompanyId || undefined, limit: 200, offset: 0 }),
+    enabled: Boolean(effectiveCompanyId),
   });
   const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
 
@@ -124,26 +121,26 @@ export default function QAQueuePage() {
     },
   });
 
-  useEffect(() => {
-    setPage(1);
-  }, [search, statusFilter, dateFrom, dateTo]);
-
-  useEffect(() => {
-    const nextError = queueQuery.error?.message || grnsQuery.error?.message || materialQuery.error?.message || "";
-    setError(nextError);
-  }, [grnsQuery.error, materialQuery.error, queueQuery.error]);
+  const error =
+    queueQuery.error?.message ||
+    grnsQuery.error?.message ||
+    materialQuery.error?.message ||
+    "";
 
   // Deep-link support: other detail pages' Document Flow chain link here with ?qa_id=
   // since QA no longer has its own standalone detail route — expand the matching row.
   useEffect(() => {
     if (!deepLinkQaId || rows.length === 0) return;
     if (rows.some((row) => row.id === deepLinkQaId)) {
-      setExpandedRowId(deepLinkQaId);
-      setSearchParams((current) => {
-        const next = new URLSearchParams(current);
-        next.delete("qa_id");
-        return next;
-      }, { replace: true });
+      const timeoutId = window.setTimeout(() => {
+        setExpandedRowId(deepLinkQaId);
+        setSearchParams((current) => {
+          const next = new URLSearchParams(current);
+          next.delete("qa_id");
+          return next;
+        }, { replace: true });
+      }, 0);
+      return () => window.clearTimeout(timeoutId);
     }
   }, [deepLinkQaId, rows, setSearchParams]);
 
@@ -210,27 +207,21 @@ export default function QAQueuePage() {
         title: "Pending and in-progress QA work",
         children: (
           <div className="flex flex-wrap items-end gap-3">
-            {isMulti ? (
-              <label className="grid w-56 gap-1 text-[11px] font-medium text-slate-600">
-                Company
-                <select
-                  value={selectedCompanyId}
-                  onChange={(event) => setSelectedCompanyId(event.target.value)}
-                  className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-                >
-                  <option value="">Select company…</option>
-                  {availableCompanies.map((company) => (
-                    <option key={company.id} value={company.id}>
-                      {company.company_code} | {company.company_name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
+            <div className="w-56">
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={companyId}
+                onChange={setCompanyId}
+                label="Company"
+              />
+            </div>
             <QuickFilterInput
               label="Search"
               value={search}
-              onChange={setSearch}
+              onChange={(value) => {
+                setSearch(value);
+                setPage(1);
+              }}
               primaryFocus
               placeholder="Search QA, GRN or material"
               className="w-64"
@@ -239,7 +230,10 @@ export default function QAQueuePage() {
               Status
               <select
                 value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
+                onChange={(event) => {
+                  setStatusFilter(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="ALL">ALL</option>
@@ -253,7 +247,10 @@ export default function QAQueuePage() {
               <input
                 type="date"
                 value={dateFrom}
-                onChange={(event) => setDateFrom(event.target.value)}
+                onChange={(event) => {
+                  setDateFrom(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </label>
@@ -262,7 +259,10 @@ export default function QAQueuePage() {
               <input
                 type="date"
                 value={dateTo}
-                onChange={(event) => setDateTo(event.target.value)}
+                onChange={(event) => {
+                  setDateTo(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </label>
@@ -272,9 +272,9 @@ export default function QAQueuePage() {
       listSection={{
         eyebrow: "QA Work Queue",
         title: loading ? "Loading QA queue" : `${total} QA document row${total === 1 ? "" : "s"}`,
-        children: !companyId ? (
+        children: !effectiveCompanyId ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            {isMulti ? "Select a company to load the QA queue." : "No company resolved for this session."}
+            No company resolved for this session.
           </div>
         ) : (
           <div className="grid gap-3">
@@ -346,7 +346,7 @@ export default function QAQueuePage() {
                                 <QaExpandedPanel
                                   row={row}
                                   material={material}
-                                  companyId={companyId}
+                                  companyId={effectiveCompanyId}
                                   roleCode={shellProfile?.roleCode || ""}
                                   onChanged={() => {
                                     void queueQuery.refetch();
@@ -675,7 +675,6 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged, onColl
   useEffect(() => {
     window.addEventListener("keydown", handleExpandedPanelKeyDown);
     return () => window.removeEventListener("keydown", handleExpandedPanelKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function renderMethodGroup(group, configs, methodPool) {

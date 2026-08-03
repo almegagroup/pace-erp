@@ -18,7 +18,6 @@ import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
-  assertManagerOrSARole,
   parseBody,
   toTrimmedString,
   getIdFromPath,

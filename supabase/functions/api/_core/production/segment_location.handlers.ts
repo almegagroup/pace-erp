@@ -14,7 +14,6 @@ import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
-  assertManagerOrSARole,
   assertProdReadRole,
   parseBody,
   toTrimmedString,
@@ -112,7 +111,11 @@ export async function listSegmentLocationsHandler(req: Request, ctx: ProdHandler
 // POST /api/production/segment-locations  (upsert)
 export async function upsertSegmentLocationHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (SA_PROD_SEGMENT_LOCATIONS:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced. This was
+    // a live bug (2026-08-03): P0030/P0054/P0062/P0069/P0070/P0072 all hold real ACL
+    // WRITE on this resource today but are User-tier, so this check was silently
+    // blocking them despite ACL saying they're allowed.
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
     const segmentCode = toUpperTrimmedString(body.segment_code);

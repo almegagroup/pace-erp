@@ -9,7 +9,10 @@
 
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { useMenu } from "../../../context/useMenu.js";
 import { listProcessOrders, listPackingOrders } from "./prodApi.js";
 
 const PO_STATUS_COLORS = {
@@ -39,23 +42,27 @@ function Badge({ status, colorMap }) {
 const ACTIVE_STATUS_OPTIONS = ["", "STANDARD", "QA_APPROVED", "BATCH_STARTED", "FINAL", "VERIFIED"];
 
 export default function OrderOverviewPage() {
+  const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const [poStatus, setPoStatus]   = useState("");
   const [expanded, setExpanded]   = useState(null);
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const processQ = useQuery({
-    queryKey: ["overview-proc", companyId, poStatus],
+    queryKey: ["overview-proc", effectiveCompanyId, poStatus],
     queryFn: () => listProcessOrders({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: poStatus || undefined,
       per_page: 100,
     }),
+    enabled: Boolean(effectiveCompanyId),
     select: d => Array.isArray(d) ? d : d?.data ?? [],
   });
 
   const packQ = useQuery({
-    queryKey: ["overview-pack", companyId],
-    queryFn: () => listPackingOrders({ company_id: companyId || undefined, per_page: 200 }),
+    queryKey: ["overview-pack", effectiveCompanyId],
+    queryFn: () => listPackingOrders({ company_id: effectiveCompanyId || undefined, per_page: 200 }),
+    enabled: Boolean(effectiveCompanyId),
     select: d => Array.isArray(d) ? d : d?.data ?? [],
   });
 
@@ -88,9 +95,14 @@ export default function OrderOverviewPage() {
       {/* Filter bar */}
       <ErpSectionCard>
         <div className="flex gap-3 items-end flex-wrap">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Company ID</label>
-            <input className="border border-slate-300 rounded px-2 py-1 text-sm w-56" value={companyId} onChange={e => setCompanyId(e.target.value)} placeholder="Filter by company…" />
+          <div className="w-72">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={setCompanyId}
+              label="Company"
+              hint=""
+            />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs text-slate-500">Process Order Status</label>
@@ -117,7 +129,9 @@ export default function OrderOverviewPage() {
 
       {/* Main Table */}
       <ErpSectionCard title={`Process Orders${processOrders.length ? ` (${processOrders.length})` : ""}`}>
-        {processQ.isLoading ? (
+        {!effectiveCompanyId ? (
+          <p className="text-slate-400 text-sm py-6 text-center">Select a company to view the order overview.</p>
+        ) : processQ.isLoading ? (
           <p className="text-slate-400 text-sm py-6 text-center">Loading…</p>
         ) : processOrders.length === 0 ? (
           <p className="text-slate-400 text-sm py-6 text-center">No orders found.</p>

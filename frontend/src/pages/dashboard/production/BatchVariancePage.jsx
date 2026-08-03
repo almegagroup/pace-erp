@@ -7,7 +7,10 @@
 
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { useMenu } from "../../../context/useMenu.js";
 import { listProcessOrders } from "./prodApi.js";
 
 function varianceColor(variance) {
@@ -23,18 +26,21 @@ function varianceBg(variance) {
 }
 
 export default function BatchVariancePage() {
+  const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const ordersQ = useQuery({
-    queryKey: ["batch-variance", companyId, dateFrom, dateTo],
+    queryKey: ["batch-variance", effectiveCompanyId, dateFrom, dateTo],
     queryFn: () => listProcessOrders({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: "VERIFIED",
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
     }),
+    enabled: Boolean(effectiveCompanyId),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
 
@@ -62,13 +68,13 @@ export default function BatchVariancePage() {
     >
       <ErpSectionCard title="Filters">
         <div className="flex gap-3 flex-wrap">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Company ID</label>
-            <input
-              className="border border-slate-300 rounded px-2 py-1 text-sm w-56"
-              placeholder="Filter by company…"
+          <div className="w-72">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
               value={companyId}
-              onChange={(e) => setCompanyId(e.target.value)}
+              onChange={setCompanyId}
+              label="Company"
+              hint=""
             />
           </div>
           <div className="flex flex-col gap-1">
@@ -119,7 +125,9 @@ export default function BatchVariancePage() {
       )}
 
       <ErpSectionCard title={`Variance Report (${orders.length} VERIFIED orders)`}>
-        {ordersQ.isLoading ? (
+        {!effectiveCompanyId ? (
+          <p className="text-slate-400 text-sm py-4 text-center">Select a company to view batch variance.</p>
+        ) : ordersQ.isLoading ? (
           <p className="text-slate-500 text-sm py-4 text-center">Loading…</p>
         ) : orders.length === 0 ? (
           <p className="text-slate-400 text-sm py-4 text-center">No verified orders found for the selected filters.</p>

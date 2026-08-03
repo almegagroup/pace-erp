@@ -9,6 +9,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
@@ -48,6 +50,8 @@ function rowTone(value) {
 
 export default function ProcurementPlanningPage() {
   const { runtimeContext } = useMenu();
+  const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+  const [companyId, setCompanyId] = useState("");
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -55,14 +59,20 @@ export default function ProcurementPlanningPage() {
   const [shortageOnly, setShortageOnly] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
 
-  const companyId = runtimeContext?.selectedCompanyId || "";
+  const effectiveCompanyId = companyId || defaultCompanyId;
 
   const loadPlanning = useCallback(async () => {
+    if (!effectiveCompanyId) {
+      setRows([]);
+      setError("");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError("");
     try {
       const data = await getProcurementPlanning({
-        company_id: companyId || undefined,
+        company_id: effectiveCompanyId,
         shortage_only: shortageOnly ? "true" : undefined,
         limit: 200,
       });
@@ -77,7 +87,7 @@ export default function ProcurementPlanningPage() {
     } finally {
       setLoading(false);
     }
-  }, [companyId, shortageOnly]);
+  }, [effectiveCompanyId, shortageOnly]);
 
   useEffect(() => {
     void loadPlanning();
@@ -126,7 +136,13 @@ export default function ProcurementPlanningPage() {
         eyebrow: "Filters",
         title: "Cross-plant shortage planning",
         children: (
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_220px]">
+          <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1.2fr)_220px]">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={setCompanyId}
+              label="Company"
+            />
             <QuickFilterInput
               label="Material Search"
               value={search}
@@ -153,6 +169,11 @@ export default function ProcurementPlanningPage() {
           : `${visibleRows.length} material row${visibleRows.length === 1 ? "" : "s"} shown`,
         children: (
           <div className="grid gap-3">
+            {!effectiveCompanyId ? (
+              <div className="rounded border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                No company resolved for this session.
+              </div>
+            ) : null}
             <div className="flex flex-wrap gap-2">
               <span className="inline-flex rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
                 Total Rows: {visibleRows.length}
@@ -253,7 +274,9 @@ export default function ProcurementPlanningPage() {
               emptyMessage={
                 loading
                   ? "Loading procurement planning rows..."
-                  : "No procurement planning rows matched the current filters."
+                  : effectiveCompanyId
+                  ? "No procurement planning rows matched the current filters."
+                  : "No company resolved for this session."
               }
             />
           </div>

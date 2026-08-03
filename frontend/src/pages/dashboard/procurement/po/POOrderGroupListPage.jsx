@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
@@ -28,10 +30,12 @@ export default function POOrderGroupListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [status, setStatus] = useState("PENDING_APPROVAL");
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
   const groupParams = useMemo(
-    () => ({ status: status || undefined, limit: 100, offset: 0 }),
-    [status]
+    () => ({ company_id: effectiveCompanyId || undefined, status: status || undefined, limit: 100, offset: 0 }),
+    [effectiveCompanyId, status]
   );
   const groupQuery = useQuery({
     queryKey: ["procurement", "po-order-groups", groupParams],
@@ -93,17 +97,25 @@ export default function POOrderGroupListPage() {
       }]}
     >
       <ErpSectionCard eyebrow="Filter" title="Order status">
-        <div className="flex gap-2">
-          {["PENDING_APPROVAL", "DRAFT", "CONFIRMED", ""].map((s) => (
-            <button
-              key={s || "ALL"}
-              type="button"
-              onClick={() => setStatus(s)}
-              className={`border px-3 py-1.5 text-xs font-semibold ${status === s ? "border-sky-600 bg-sky-100 text-sky-900" : "border-slate-300 bg-white text-slate-600"}`}
-            >
-              {s || "ALL"}
-            </button>
-          ))}
+        <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <TransactionCompanySelector
+            runtimeContext={runtimeContext}
+            value={companyId}
+            onChange={setCompanyId}
+            label="Company"
+          />
+          <div className="flex gap-2">
+            {["PENDING_APPROVAL", "DRAFT", "CONFIRMED", ""].map((s) => (
+              <button
+                key={s || "ALL"}
+                type="button"
+                onClick={() => setStatus(s)}
+                className={`border px-3 py-1.5 text-xs font-semibold ${status === s ? "border-sky-600 bg-sky-100 text-sky-900" : "border-slate-300 bg-white text-slate-600"}`}
+              >
+                {s || "ALL"}
+              </button>
+            ))}
+          </div>
         </div>
       </ErpSectionCard>
 

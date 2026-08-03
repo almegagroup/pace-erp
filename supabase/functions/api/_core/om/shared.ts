@@ -29,14 +29,6 @@ export function assertOmAdminContext(ctx: OmHandlerContext): void {
   }
 }
 
-const MANAGER_OR_SA_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
-
-export function assertManagerOrSARole(ctx: OmHandlerContext): void {
-  if (!MANAGER_OR_SA_ROLES.has(ctx.roleCode)) {
-    throw new Error("MANAGER_OR_SA_REQUIRED");
-  }
-}
-
 // Any authenticated user with a resolved company/session context - matches the
 // production domain's own assertProdReadRole pattern for read-only master lookups.
 export function assertOmReadContext(_ctx: OmHandlerContext): void {}

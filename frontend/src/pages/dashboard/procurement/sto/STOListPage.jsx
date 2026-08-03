@@ -13,6 +13,8 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
@@ -46,7 +48,8 @@ function typeTone(stoType) {
 export default function STOListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const selectedCompanyId = runtimeContext?.selectedCompanyId || "";
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const [viewMode, setViewMode] = useState("OUTBOUND");
   const [status, setStatus] = useState("");
@@ -56,7 +59,7 @@ export default function STOListPage() {
 
   const params = useMemo(
     () => ({
-      company_id: selectedCompanyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       direction: viewMode,
       status: status || undefined,
       sto_type: stoType || undefined,
@@ -64,7 +67,7 @@ export default function STOListPage() {
       limit: LIMIT,
       offset: (page - 1) * LIMIT,
     }),
-    [selectedCompanyId, viewMode, status, stoType, search, page]
+    [effectiveCompanyId, viewMode, status, stoType, search, page]
   );
 
   const stoQuery = useQuery({
@@ -115,7 +118,16 @@ export default function STOListPage() {
                 </button>
               ))}
             </div>
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_180px_220px]">
+            <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1.2fr)_180px_220px]">
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={companyId}
+                onChange={(nextValue) => {
+                  setCompanyId(nextValue);
+                  setPage(1);
+                }}
+                label="Company"
+              />
               <QuickFilterInput
                 label="Search"
                 value={search}
@@ -171,7 +183,7 @@ export default function STOListPage() {
               rowKey={(row) => row.id}
               onRowActivate={openDetail}
               getRowProps={(row) => ({ onDoubleClick: () => openDetail(row), className: "cursor-pointer hover:bg-sky-50" })}
-              emptyMessage={loading ? "Loading stock transfers..." : "No stock transfer matched the current filter."}
+              emptyMessage={loading ? "Loading stock transfers..." : effectiveCompanyId ? "No stock transfer matched the current filter." : "No company resolved for this session."}
             />
           </div>
         ),

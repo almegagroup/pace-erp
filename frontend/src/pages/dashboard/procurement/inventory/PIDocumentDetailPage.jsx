@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -75,7 +76,7 @@ export default function PIDocumentDetailPage() {
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
-  const selectedCompanyId = runtimeContext?.selectedCompanyId || "";
+  const selectedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [countDrafts, setCountDrafts] = useState({});
   const [activeCountItemId, setActiveCountItemId] = useState("");
   const [itemForm, setItemForm] = useState({

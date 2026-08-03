@@ -3,6 +3,8 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
@@ -31,6 +33,8 @@ function normalizeSearch(value) {
 export default function RTVCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const [step, setStep] = useState(1);
   const [selectedGrnId, setSelectedGrnId] = useState("");
   const [search, setSearch] = useState("");
@@ -42,17 +46,17 @@ export default function RTVCreatePage() {
   const [lineItems, setLineItems] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const companyId = runtimeContext?.selectedCompanyId || "";
   const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
   const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
   const grnQuery = useQuery({
-    queryKey: ["procurement", "rtv-create-grns", companyId || null],
+    queryKey: ["procurement", "rtv-create-grns", effectiveCompanyId || null],
     queryFn: () =>
       listGRNs({
-        company_id: companyId || undefined,
+        company_id: effectiveCompanyId || undefined,
         status: "POSTED",
         limit: 200,
       }),
+    enabled: Boolean(effectiveCompanyId),
   });
   const selectedGrnQuery = useQuery({
     queryKey: ["procurement", "rtv-create-grn-detail", selectedGrnId || null],
@@ -62,7 +66,10 @@ export default function RTVCreatePage() {
     // the loading placeholder — keep the previous GRN on screen meanwhile.
     placeholderData: keepPreviousData,
   });
-  const grnRows = Array.isArray(grnQuery.data?.items) ? grnQuery.data.items : [];
+  const grnRows = useMemo(
+    () => (Array.isArray(grnQuery.data?.items) ? grnQuery.data.items : []),
+    [grnQuery.data],
+  );
   const vendors = vendorQuery.vendors;
   const materials = materialQuery.materials;
   const selectedGrn = selectedGrnQuery.data ?? null;
@@ -160,7 +167,7 @@ export default function RTVCreatePage() {
     setError("");
     try {
       const created = await createRTV({
-        company_id: companyId,
+        company_id: effectiveCompanyId,
         vendor_id: selectedGrn.vendor_id,
         grn_id: selectedGrn.id,
         po_id: selectedGrn.po_id || null,
@@ -223,6 +230,19 @@ export default function RTVCreatePage() {
           </div>
         ) : step === 1 ? (
           <div className="grid gap-3">
+            <div className="max-w-[280px]">
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={companyId}
+                onChange={(nextValue) => {
+                  setCompanyId(nextValue);
+                  setSelectedGrnId("");
+                  setLineItems([]);
+                  setStep(1);
+                }}
+                label="Company"
+              />
+            </div>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Search GRN
               <input
@@ -331,7 +351,7 @@ export default function RTVCreatePage() {
                   <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
                     <ErpDenseFormRow label="Storage Location">
                       <LocationSelect
-                        companyId={companyId}
+                        companyId={effectiveCompanyId}
                         projectCode="PRJ009"
                         value={line.storage_location_id}
                         onChange={(id) => updateLine(index, { storage_location_id: id })}

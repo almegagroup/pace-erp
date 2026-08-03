@@ -13,6 +13,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -38,7 +40,7 @@ export default function SalesInvoiceListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [rows, setRows] = useState([]);
-  const [companyId, setCompanyId] = useState(runtimeContext?.selectedCompanyId || "");
+  const [companyId, setCompanyId] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -49,10 +51,7 @@ export default function SalesInvoiceListPage() {
   useErpScreenHotkeys({
     refresh: { disabled: loading, perform: () => setReloadTick((tick) => tick + 1) },
   });
-
-  useEffect(() => {
-    setCompanyId(runtimeContext?.selectedCompanyId || "");
-  }, [runtimeContext?.selectedCompanyId]);
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -73,7 +72,7 @@ export default function SalesInvoiceListPage() {
         // trade-off already made for listPOOrderGroupsHandler's own merge)
         // and sorted client-side, then paginated in memory.
         const data = await listDeliveryOrders({
-          company_id: companyId || undefined,
+          company_id: effectiveCompanyId || undefined,
           limit: 2000,
           offset: 0,
         });
@@ -97,15 +96,7 @@ export default function SalesInvoiceListPage() {
     }
     void load();
     return () => { active = false; };
-  }, [companyId, reloadTick]);
-
-  const companyOptions = useMemo(
-    () => (runtimeContext?.availableCompanies ?? []).map((entry) => ({
-      value: entry.id,
-      label: entry.company_name || entry.company_code || entry.id,
-    })),
-    [runtimeContext?.availableCompanies]
-  );
+  }, [effectiveCompanyId, reloadTick]);
 
   const filteredRows = useMemo(() => {
     if (!debouncedSearch) return rows;
@@ -155,17 +146,12 @@ export default function SalesInvoiceListPage() {
         title: "Delivery orders awaiting PGI + Invoice (SO/STO)",
         children: (
           <div className="grid gap-3 xl:grid-cols-[220px_minmax(0,1fr)]">
-            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Company
-              <select
-                value={companyId}
-                onChange={(event) => { setCompanyId(event.target.value); setPage(1); }}
-                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-              >
-                <option value="">ALL</option>
-                {companyOptions.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-              </select>
-            </label>
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(nextValue) => { setCompanyId(nextValue); setPage(1); }}
+              label="Company"
+            />
             <QuickFilterInput label="Search" value={search} onChange={setSearch} primaryFocus placeholder="DO number, SO/STO number, invoice number, or customer" />
           </div>
         ),
@@ -220,7 +206,7 @@ export default function SalesInvoiceListPage() {
               rowKey={(row) => row.id}
               onRowActivate={openDoDetail}
               getRowProps={(row) => ({ onDoubleClick: () => openDoDetail(row), className: "cursor-pointer hover:bg-sky-50" })}
-              emptyMessage={loading ? "Loading delivery orders..." : "No delivery orders matched the current filter."}
+              emptyMessage={loading ? "Loading delivery orders..." : effectiveCompanyId ? "No delivery orders matched the current filter." : "No company resolved for this session."}
             />
           </div>
         ),

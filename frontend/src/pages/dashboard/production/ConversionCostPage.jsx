@@ -14,11 +14,13 @@
  * Authority: Frontend
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { listConversionRates, createConversionRate, listBatchSeries } from "./prodApi.js";
 
@@ -62,18 +64,14 @@ export default function ConversionCostPage() {
   const { runtimeContext } = useMenu();
   const companies = useMemo(() => runtimeContext?.availableCompanies ?? [], [runtimeContext]);
   const companyOptions = companies.map((c) => ({ value: c.id, label: companyLabel(c) }));
-
-  // Auto-select when the user has exactly one work company.
-  useEffect(() => {
-    if (!companyId && companies.length === 1) setCompanyId(companies[0].id);
-  }, [companies, companyId]);
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   // Prodshade options come from THIS company's batch series (real production Prodshades),
   // not the full material master. MTS rows carry a Prodshade; company-level types don't.
   const batchSeriesQ = useQuery({
-    queryKey: ["batch-series", companyId],
-    queryFn: () => listBatchSeries({ company_id: companyId }),
-    enabled: !!companyId,
+    queryKey: ["batch-series", effectiveCompanyId],
+    queryFn: () => listBatchSeries({ company_id: effectiveCompanyId }),
+    enabled: !!effectiveCompanyId,
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
   const prodshadeOptions = useMemo(() => {
@@ -88,16 +86,16 @@ export default function ConversionCostPage() {
   }, [batchSeriesQ.data]);
 
   const listQ = useQuery({
-    queryKey: ["conversion-rates", companyId, segmentFilter],
-    queryFn: () => listConversionRates({ company_id: companyId, segment_code: segmentFilter || undefined }),
-    enabled: !!companyId,
+    queryKey: ["conversion-rates", effectiveCompanyId, segmentFilter],
+    queryFn: () => listConversionRates({ company_id: effectiveCompanyId, segment_code: segmentFilter || undefined }),
+    enabled: !!effectiveCompanyId,
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
   const rows = listQ.data ?? [];
 
   async function handleCreate(e) {
     e.preventDefault();
-    if (!companyId || !form.segment_code || !form.valid_from) {
+    if (!effectiveCompanyId || !form.segment_code || !form.valid_from) {
       toast("Company, segment, and valid-from date are required.", "error");
       return;
     }
@@ -113,7 +111,7 @@ export default function ConversionCostPage() {
     setSaving(true);
     try {
       await createConversionRate({
-        company_id: companyId,
+        company_id: effectiveCompanyId,
         segment_code: form.segment_code,
         prodshade_material_id: form.scope === "OVERRIDE" ? form.prodshade_material_id : null,
         valid_from: form.valid_from,
@@ -143,8 +141,13 @@ export default function ConversionCostPage() {
       <ErpSectionCard>
         <div className="flex gap-3 mb-4">
           <div className="flex flex-col gap-1 w-72">
-            <label className="text-xs text-slate-500">Company <span className="text-rose-500">*</span></label>
-            <ErpComboboxField value={companyId} onChange={setCompanyId} options={companyOptions} placeholder="-- Select company --" />
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={setCompanyId}
+              label="Company"
+              hint=""
+            />
           </div>
           <div className="flex flex-col gap-1 w-56">
             <label className="text-xs text-slate-500">Segment</label>
@@ -155,7 +158,7 @@ export default function ConversionCostPage() {
           </div>
         </div>
 
-        {!companyId ? (
+        {!effectiveCompanyId ? (
           <p className="text-slate-400 text-sm py-6 text-center">Select a company to view its conversion rates.</p>
         ) : listQ.isLoading ? (
           <p className="text-slate-400 text-sm py-6 text-center">Loading…</p>
@@ -201,7 +204,7 @@ export default function ConversionCostPage() {
       <DrawerBase visible={createOpen} title="New Conversion Rate" onClose={() => setCreateOpen(false)}>
         <form onSubmit={handleCreate} className="flex flex-col gap-4 p-4">
           <div className="text-xs text-slate-500 bg-slate-50 rounded px-3 py-2">
-            <span className="font-medium">Company:</span> {companyOptions.find((o) => o.value === companyId)?.label ?? "—"}
+            <span className="font-medium">Company:</span> {companyOptions.find((o) => o.value === effectiveCompanyId)?.label ?? "—"}
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Segment <span className="text-rose-500">*</span></label>

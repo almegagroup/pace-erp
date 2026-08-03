@@ -15,7 +15,6 @@ import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
-  assertManagerOrSARole,
   assertSARole,
   assertProdReadRole,
   parseBody,

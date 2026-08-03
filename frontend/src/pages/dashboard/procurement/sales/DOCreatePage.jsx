@@ -19,6 +19,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
@@ -164,7 +166,6 @@ function TransporterPicker({ transporterId, transporterName, onSelect, onClear, 
 
   useLayoutEffect(() => {
     if (!open) {
-      setPanelRect(null);
       return undefined;
     }
     function updateRect() {
@@ -237,7 +238,7 @@ function TransporterPicker({ transporterId, transporterName, onSelect, onClear, 
 export default function DOCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext, allowedRoutes } = useMenu();
-  const companyId = runtimeContext?.selectedCompanyId || "";
+  const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const canManageTransporters = isRouteAllowed(allowedRoutes ?? new Set(), "/dashboard/procurement/masters/transporters");
 
   // Restored after a round-trip to "Add to Transporter Master" (§113.10 bug #6
@@ -246,6 +247,7 @@ export default function DOCreatePage() {
   const _saved = getActiveScreenContext()?.doFormValues ?? {};
 
   const [sourceType, setSourceType] = useState(_saved.sourceType ?? "SALES_ORDER");
+  const [companyId, setCompanyId] = useState(_saved.companyId ?? "");
   const [source, setSource] = useState(_saved.source ?? null);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [showItemPicker, setShowItemPicker] = useState(false);
@@ -260,18 +262,19 @@ export default function DOCreatePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const effectiveCompanyId = companyId || defaultCompanyId;
 
   function handleAddTransporterToMaster() {
     updateActiveScreenContext({
       doFormValues: {
-        sourceType, source, costCenterId, lines, locationOptionsByLine,
+        sourceType, companyId, source, costCenterId, lines, locationOptionsByLine,
         deliveryFields, transporterId, transporterName,
       },
     });
     openScreen("PROC_TRANSPORTER_MASTER");
   }
 
-  const costCenterQuery = useCostCentersQuery({ company_id: companyId, active: true }, { enabled: Boolean(companyId) });
+  const costCenterQuery = useCostCentersQuery({ company_id: effectiveCompanyId, active: true }, { enabled: Boolean(effectiveCompanyId) });
   const costCenterOptions = useMemo(
     () => (Array.isArray(costCenterQuery.data?.data) ? costCenterQuery.data.data : []).map((entry) => ({
       value: entry.id,
@@ -309,7 +312,7 @@ export default function DOCreatePage() {
     setShowItemPicker(false);
 
     try {
-      const result = await listDOStorageLocationOptions({ company_id: companyId, material_id: item.material_id });
+      const result = await listDOStorageLocationOptions({ company_id: effectiveCompanyId, material_id: item.material_id });
       const options = Array.isArray(result?.items) ? result.items : [];
       setLocationOptionsByLine((current) => ({ ...current, [lineKey]: options }));
     } catch {
@@ -319,6 +322,16 @@ export default function DOCreatePage() {
 
   function updateLine(index, patch) {
     setLines((current) => current.map((line, lineIndex) => (lineIndex === index ? { ...line, ...patch } : line)));
+  }
+
+  function handleCompanyChange(nextValue) {
+    setCompanyId(nextValue);
+    setSource(null);
+    setCostCenterId("");
+    setLines([]);
+    setLocationOptionsByLine({});
+    setTransporterId("");
+    setTransporterName("");
   }
 
   function removeLine(index) {
@@ -463,6 +476,14 @@ export default function DOCreatePage() {
         <div className="grid gap-4">
           <ErpSectionCard eyebrow="Source" title="Choose which order this DO dispatches — one source document per DO (§113.3)">
             <div className="grid gap-3">
+              <div className="max-w-[280px]">
+                <TransactionCompanySelector
+                  runtimeContext={runtimeContext}
+                  value={companyId}
+                  onChange={handleCompanyChange}
+                  label="Company"
+                />
+              </div>
               <div className="flex gap-2">
                 {[{ value: "SALES_ORDER", label: "Sales Order" }, { value: "STO", label: "Stock Transfer Order" }].map((option) => (
                   <button
@@ -508,7 +529,7 @@ export default function DOCreatePage() {
                     <TransporterPicker
                       transporterId={transporterId}
                       transporterName={transporterName}
-                      companyId={companyId}
+                      companyId={effectiveCompanyId}
                       canManageTransporters={canManageTransporters}
                       onSelect={(t) => { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); }}
                       onClear={() => { setTransporterId(""); setTransporterName(""); }}
@@ -541,7 +562,7 @@ export default function DOCreatePage() {
       <SourcePickerDrawer
         visible={showSourcePicker}
         sourceType={sourceType}
-        companyId={companyId}
+        companyId={effectiveCompanyId}
         onClose={() => setShowSourcePicker(false)}
         onPick={handleSourcePicked}
       />

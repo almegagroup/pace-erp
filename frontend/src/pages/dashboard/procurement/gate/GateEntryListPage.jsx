@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
@@ -39,21 +41,7 @@ export default function GateEntryListPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
-
-  const companyOptions = useMemo(
-    () =>
-      (runtimeContext?.availableCompanies ?? []).map((entry) => ({
-        value: entry.id,
-        label: entry.company_name || entry.company_code || entry.id,
-      })),
-    [runtimeContext?.availableCompanies]
-  );
-
-  useEffect(() => {
-    if (!companyId) {
-      setCompanyId(runtimeContext?.selectedCompanyId || companyOptions[0]?.value || "");
-    }
-  }, [companyId, companyOptions, runtimeContext?.selectedCompanyId]);
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -66,10 +54,10 @@ export default function GateEntryListPage() {
   const offset = (page - 1) * LIMIT;
 
   const { data: listResult, isLoading: loading, error: queryError } = useQuery({
-    queryKey: ["procurement", "ge-list", companyId, status, dateFrom, dateTo, page],
-    enabled: Boolean(companyId),
+    queryKey: ["procurement", "ge-list", effectiveCompanyId, status, dateFrom, dateTo, page],
+    enabled: Boolean(effectiveCompanyId),
     queryFn: () => listGateEntries({
-      company_id: companyId,
+      company_id: effectiveCompanyId,
       status: status || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
@@ -85,20 +73,20 @@ export default function GateEntryListPage() {
     },
   });
 
-  const allRows = Array.isArray(listResult?.items) ? listResult.items : [];
   const serverTotal = listResult?.total ?? 0;
   const error = queryError instanceof Error ? queryError.message : (queryError ? "GE_LIST_FAILED" : "");
 
   const rows = useMemo(() => {
-    if (!debouncedSearch) return allRows;
-    return allRows.filter((row) =>
+    const sourceRows = Array.isArray(listResult?.items) ? listResult.items : [];
+    if (!debouncedSearch) return sourceRows;
+    return sourceRows.filter((row) =>
       [row.ge_number, row.vehicle_number, row.driver_name]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
         .includes(debouncedSearch)
     );
-  }, [debouncedSearch, allRows]);
+  }, [debouncedSearch, listResult]);
 
   const total = debouncedSearch ? rows.length : serverTotal;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
@@ -129,19 +117,13 @@ export default function GateEntryListPage() {
         title: "Inbound gate entry lookup",
         children: (
           <div className="grid gap-3 lg:grid-cols-[220px_180px_180px_180px_minmax(0,1fr)]">
-            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Company
-              <select
-                value={companyId}
-                onChange={(event) => { setCompanyId(event.target.value); setPage(1); }}
-                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-              >
-                <option value="">Select company</option>
-                {companyOptions.map((entry) => (
-                  <option key={entry.value} value={entry.value}>{entry.label}</option>
-                ))}
-              </select>
-            </label>
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(value) => { setCompanyId(value); setPage(1); }}
+              label="Company"
+              hint=""
+            />
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Status
               <select
@@ -173,33 +155,37 @@ export default function GateEntryListPage() {
         children: (
           <div className="grid gap-3">
             <ErpPaginationStrip page={page} setPage={setPage} totalPages={totalPages} startIndex={startIndex} endIndex={endIndex} totalItems={total} />
-            <ErpDenseGrid
-              columns={[
-                { key: "ge_number", label: "GE Number", width: "130px" },
-                { key: "ge_date", label: "Entry Date", width: "110px" },
-                { key: "vehicle_number", label: "Vehicle", width: "130px" },
-                {
-                  key: "status",
-                  label: "Status",
-                  width: "120px",
-                  render: (row) => (
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${statusTone(row.status)}`}>
-                      {row.status}
-                    </span>
-                  ),
-                },
-                { key: "num_lines", label: "Lines", width: "90px" },
-                { key: "total_qty", label: "Total Qty", width: "110px" },
-              ]}
-              rows={rows}
-              rowKey={(row) => row.id}
-              onRowActivate={openDetail}
-              getRowProps={(row) => ({
-                onClick: () => openDetail(row),
-                className: "cursor-pointer hover:bg-sky-50",
-              })}
-              emptyMessage={loading ? "Loading gate entries..." : "No gate entry matched the current filter."}
-            />
+            {!effectiveCompanyId ? (
+              <p className="text-slate-400 text-sm py-6 text-center">Select a company to view gate entries.</p>
+            ) : (
+              <ErpDenseGrid
+                columns={[
+                  { key: "ge_number", label: "GE Number", width: "130px" },
+                  { key: "ge_date", label: "Entry Date", width: "110px" },
+                  { key: "vehicle_number", label: "Vehicle", width: "130px" },
+                  {
+                    key: "status",
+                    label: "Status",
+                    width: "120px",
+                    render: (row) => (
+                      <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${statusTone(row.status)}`}>
+                        {row.status}
+                      </span>
+                    ),
+                  },
+                  { key: "num_lines", label: "Lines", width: "90px" },
+                  { key: "total_qty", label: "Total Qty", width: "110px" },
+                ]}
+                rows={rows}
+                rowKey={(row) => row.id}
+                onRowActivate={openDetail}
+                getRowProps={(row) => ({
+                  onClick: () => openDetail(row),
+                  className: "cursor-pointer hover:bg-sky-50",
+                })}
+                emptyMessage={loading ? "Loading gate entries..." : "No gate entry matched the current filter."}
+              />
+            )}
           </div>
         ),
       }}

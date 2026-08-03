@@ -10,6 +10,8 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
@@ -109,16 +111,12 @@ function PackingPoFinalTab() {
   const [newPmRows, setNewPmRows] = useState([]);
 
   const { runtimeContext } = useMenu();
-  const companies = runtimeContext?.availableCompanies ?? [];
-  const companyOptions = useMemo(
-    () => companies.map((company) => ({ value: company.id, label: [company.company_code, company.company_name].filter(Boolean).join(" - ") || "Company" })),
-    [companies],
-  );
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const ordersQ = useQuery({
-    queryKey: ["packing-final-orders", companyId],
-    queryFn: () => listPackingOrders({ company_id: companyId || undefined, status: "STANDARD", per_page: 100 }),
-    enabled: Boolean(companyId),
+    queryKey: ["packing-final-orders", effectiveCompanyId],
+    queryFn: () => listPackingOrders({ company_id: effectiveCompanyId || undefined, status: "STANDARD", per_page: 100 }),
+    enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
   const orderOptions = useMemo(
@@ -412,8 +410,12 @@ function PackingPoFinalTab() {
 
           <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-slate-600">Company</label>
-              <ErpComboboxField value={companyId} onChange={(value) => resetSelection(value)} options={companyOptions} placeholder="-- Select company --" />
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={companyId}
+                onChange={(value) => resetSelection(value)}
+                label="Company"
+              />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-600">Packing PO (STANDARD)</label>
@@ -423,7 +425,7 @@ function PackingPoFinalTab() {
                 options={orderOptions}
                 placeholder="-- Select packing PO --"
                 emptyStateLabel={ordersQ.isLoading ? "Loading packing orders..." : "No STANDARD packing POs"}
-                disabled={!companyId}
+                disabled={!effectiveCompanyId}
               />
             </div>
             <div className="flex items-end justify-end">
@@ -892,16 +894,12 @@ function ProcessPoFinalTab() {
   const [debouncedPreviewRows, setDebouncedPreviewRows] = useState([]);
 
   const { runtimeContext } = useMenu();
-  const companies = runtimeContext?.availableCompanies ?? [];
-  const companyOptions = useMemo(
-    () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
-    [companies],
-  );
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const ordersQ = useQuery({
-    queryKey: ["production-final-orders", companyId],
-    queryFn: () => listProcessOrders({ company_id: companyId || undefined, status: "BATCH_STARTED", per_page: 100 }),
-    enabled: Boolean(companyId),
+    queryKey: ["production-final-orders", effectiveCompanyId],
+    queryFn: () => listProcessOrders({ company_id: effectiveCompanyId || undefined, status: "BATCH_STARTED", per_page: 100 }),
+    enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
   const orderOptions = useMemo(
@@ -933,8 +931,8 @@ function ProcessPoFinalTab() {
     [materialQ.materials],
   );
   const storageLocationQ = useStorageLocationOptionsQuery(
-    { company_id: companyId || undefined },
-    { enabled: Boolean(companyId) },
+    { company_id: effectiveCompanyId || undefined },
+    { enabled: Boolean(effectiveCompanyId) },
   );
   const storageLocationOptions = useMemo(
     () => (storageLocationQ.storageLocations ?? []).map((location) => ({
@@ -979,13 +977,13 @@ function ProcessPoFinalTab() {
   }, [rows]);
 
   const availabilityPreviewQ = useQuery({
-    queryKey: ["production-final-availability-preview", companyId, activeOrderId, debouncedPreviewRows],
+    queryKey: ["production-final-availability-preview", effectiveCompanyId, activeOrderId, debouncedPreviewRows],
     queryFn: () => availabilityPreviewProcessOrder({
-      company_id: companyId,
+      company_id: effectiveCompanyId,
       process_order_id: activeOrderId,
       overrides: debouncedPreviewRows,
     }),
-    enabled: Boolean(companyId && activeOrderId),
+    enabled: Boolean(effectiveCompanyId && activeOrderId),
   });
   const availabilityByKey = useMemo(
     () => new Map((availabilityPreviewQ.data ?? []).map((row) => [`${row.material_id}::${row.storage_location_id}`, row])),
@@ -1130,12 +1128,11 @@ function ProcessPoFinalTab() {
 
           <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-slate-600">Company</label>
-              <ErpComboboxField
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
                 value={companyId}
                 onChange={(value) => resetSelection(value)}
-                options={companyOptions}
-                placeholder="-- Select company --"
+                label="Company"
               />
             </div>
             <div className="flex flex-col gap-1">
@@ -1146,7 +1143,7 @@ function ProcessPoFinalTab() {
                 options={orderOptions}
                 placeholder="-- Select process PO --"
                 emptyStateLabel={ordersQ.isLoading ? "Loading process orders..." : "No BATCH_STARTED process POs"}
-                disabled={!companyId}
+                disabled={!effectiveCompanyId}
               />
             </div>
             <div className="flex items-end justify-end">

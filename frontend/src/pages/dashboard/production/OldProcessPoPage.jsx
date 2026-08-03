@@ -16,6 +16,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { listStrokeMasters, getStrokeMaster, createOldProcessPo } from "./prodApi.js";
 import { listMachines } from "../om/omApi.js";
@@ -33,7 +35,6 @@ const ERRORS = {
 };
 function friendly(code, fallback) { return ERRORS[code] ?? fallback ?? code; }
 
-function companyLabel(c) { return [c?.company_code, c?.company_name].filter(Boolean).join(" - "); }
 function materialLabel(m) {
   if (!m) return "--";
   return [m.pace_code || m.external_code, m.material_name].filter(Boolean).join(" - ");
@@ -59,16 +60,15 @@ export default function OldProcessPoPage() {
   }
 
   const { runtimeContext } = useMenu();
-  const companies = useMemo(() => runtimeContext?.availableCompanies ?? [], [runtimeContext]);
-  const companyOptions = companies.map((c) => ({ value: c.id, label: companyLabel(c) }));
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   useEffect(() => {
-    if (!companyId && companies.length === 1) setCompanyId(companies[0].id);
-  }, [companies, companyId]);
+    if (!companyId && effectiveCompanyId) setCompanyId(effectiveCompanyId);
+  }, [companyId, effectiveCompanyId]);
 
   const strokesQ = useQuery({
-    queryKey: ["old-po-strokes", companyId],
-    queryFn: () => listStrokeMasters({ company_id: companyId, status: "APPROVED" }),
-    enabled: !!companyId,
+    queryKey: ["old-po-strokes", effectiveCompanyId],
+    queryFn: () => listStrokeMasters({ company_id: effectiveCompanyId, status: "APPROVED" }),
+    enabled: !!effectiveCompanyId,
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
   // Only MTO/HPS strokes are eligible (Â§104.9 scope).
@@ -83,9 +83,9 @@ export default function OldProcessPoPage() {
   const selectedStroke = strokes.find((s) => s.id === strokeId) ?? null;
 
   const machinesQ = useQuery({
-    queryKey: ["old-po-machines", companyId],
-    queryFn: () => listMachines({ company_id: companyId, active: true }),
-    enabled: !!companyId,
+    queryKey: ["old-po-machines", effectiveCompanyId],
+    queryFn: () => listMachines({ company_id: effectiveCompanyId, active: true }),
+    enabled: !!effectiveCompanyId,
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
   const machineOptions = (machinesQ.data ?? []).map((m) => ({
@@ -133,14 +133,14 @@ export default function OldProcessPoPage() {
   }
 
   const totalRm = derivedLines.reduce((s, l) => s + l.actual_qty, 0);
-  const canSave = !!companyId && !!strokeId && !!batchNumber.trim() && num(outputQty) > 0 && derivedLines.length > 0;
+  const canSave = !!effectiveCompanyId && !!strokeId && !!batchNumber.trim() && num(outputQty) > 0 && derivedLines.length > 0;
 
   async function handleSave() {
     if (!canSave) { toast("Fill Company, Stroke, Batch Number and Actual Output.", "error"); return; }
     setSaving(true);
     try {
       const res = await createOldProcessPo({
-        company_id: companyId,
+        company_id: effectiveCompanyId,
         po_type: poType,
         material_id: selectedStroke?.prodshade_material_id ?? selectedStroke?.material_id,
         batch_number: batchNumber.trim(),
@@ -179,8 +179,12 @@ export default function OldProcessPoPage() {
       <ErpSectionCard title="Header">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
-            <ErpComboboxField value={companyId} onChange={(v) => { setCompanyId(v); setStrokeId(""); setMachineId(""); }} options={companyOptions} placeholder="-- Select company --" />
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(v) => { setCompanyId(v); setStrokeId(""); setMachineId(""); }}
+              label="Company"
+            />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">PO Type <span className="text-rose-500">*</span></label>

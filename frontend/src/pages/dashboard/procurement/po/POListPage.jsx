@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
@@ -39,6 +41,8 @@ export default function POListPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -51,13 +55,14 @@ export default function POListPage() {
   const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
   const purchaseOrderParams = useMemo(
     () => ({
+      company_id: effectiveCompanyId || undefined,
       status: status || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       limit: LIMIT,
       offset: (page - 1) * LIMIT,
     }),
-    [dateFrom, dateTo, page, status]
+    [dateFrom, dateTo, effectiveCompanyId, page, status]
   );
   const purchaseOrderQuery = useQuery({
     queryKey: ["procurement", "purchase-orders", purchaseOrderParams],
@@ -146,13 +151,22 @@ export default function POListPage() {
         eyebrow: "Search And Filter",
         title: "Purchase order lookup",
         children: (
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_180px_180px_180px]">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_220px_180px_180px_180px]">
             <QuickFilterInput
               label="Vendor Search"
               value={search}
               onChange={setSearch}
               primaryFocus
               placeholder="Search PO number or vendor"
+            />
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(nextValue) => {
+                setCompanyId(nextValue);
+                setPage(1);
+              }}
+              label="Company"
             />
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Status

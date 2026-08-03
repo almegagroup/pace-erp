@@ -7,6 +7,8 @@
 
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../context/useMenu.js";
 import { approvePackBom, getPackBom, listPackBoms, rejectPackBom } from "./prodApi.js";
@@ -30,8 +32,10 @@ function slocLabel(location) { return [location?.code, location?.name].filter(Bo
 
 export default function PackBomApprovalPage() {
   const qc = useQueryClient();
+  const { runtimeContext } = useMenu();
   const [statusFilter, setStatusFilter] = useState("");
   const [companyFilter, setCompanyFilter] = useState("");
+  const effectiveCompanyFilter = companyFilter || resolveDefaultTransactionCompanyId(runtimeContext);
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState("");
@@ -51,11 +55,10 @@ export default function PackBomApprovalPage() {
   }
 
   const bomsQ = useQuery({
-    queryKey: ["pack-boms-approval", statusFilter, companyFilter],
-    queryFn: () => listPackBoms({ status: statusFilter || undefined, company_id: companyFilter || undefined }),
+    queryKey: ["pack-boms-approval", statusFilter, effectiveCompanyFilter],
+    queryFn: () => listPackBoms({ status: statusFilter || undefined, company_id: effectiveCompanyFilter || undefined }),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
-  const { runtimeContext } = useMenu();
   const pmMaterialsQ = useQuery({
     queryKey: ["om-materials", "PM"],
     queryFn: () => listMaterials({ material_type: "PM", limit: 500 }),
@@ -68,7 +71,6 @@ export default function PackBomApprovalPage() {
   });
 
   const boms = bomsQ.data ?? [];
-  const companies = runtimeContext?.availableCompanies ?? [];
   const pmMaterials = pmMaterialsQ.data ?? [];
   const groups = groupsQ.data ?? [];
 
@@ -196,13 +198,14 @@ export default function PackBomApprovalPage() {
     >
       <ErpSectionCard title="Filters">
         <div className="flex flex-wrap gap-3">
-          <label className="flex flex-col gap-1 w-64 text-xs text-slate-500">
-            Company
-            <select className="border border-slate-300 rounded px-2 py-1 text-sm" value={companyFilter} onChange={(e) => setCompanyFilter(e.target.value)}>
-              <option value="">All</option>
-              {companies.map((company) => <option key={company.id} value={company.id}>{companyLabel(company)}</option>)}
-            </select>
-          </label>
+          <div className="w-64">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyFilter}
+              onChange={setCompanyFilter}
+              label="Company"
+            />
+          </div>
           <label className="flex flex-col gap-1 w-40 text-xs text-slate-500">
             Status
             <select className="border border-slate-300 rounded px-2 py-1 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>

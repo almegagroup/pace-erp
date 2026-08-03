@@ -10,9 +10,10 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
-import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
+import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -80,14 +81,6 @@ function openingStockErrorResponse(
   message: string,
 ): Response {
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
-}
-
-const MANAGER_OR_SA_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
-
-function assertManagerOrSARole(ctx: ProcurementHandlerContext): void {
-  if (!MANAGER_OR_SA_ROLES.has(ctx.roleCode)) {
-    throw new Error("MANAGER_OR_SA_REQUIRED");
-  }
 }
 
 function deriveMovementType(stockType: string): string {
@@ -463,37 +456,121 @@ function ensureDocumentMaterialScope(document: OpeningStockDocumentRow, material
 }
 
 function isAdminBypass(ctx: ProcurementHandlerContext): boolean {
-  return ctx.context.isAdmin === true || isSuperAdmin(ctx.roleCode) || isGlobalAdmin(ctx.roleCode);
+  return isCompanyScopeAdminBypass(ctx);
 }
 
 async function assertOpeningStockCompanyScope(
   ctx: ProcurementHandlerContext,
   companyId: string,
 ): Promise<void> {
-  if (isAdminBypass(ctx)) {
-    return;
-  }
-
   const normalizedCompanyId = toTrimmedString(companyId);
-  if (!normalizedCompanyId) {
+  try {
+    await assertCompanyScope(ctx, normalizedCompanyId);
+  } catch {
     throw new Error("OPENING_STOCK_SCOPE_VIOLATION");
   }
+}
 
-  // Matches the trust model every other create flow in this codebase already uses
-  // (e.g. Process PO's own Company dropdown) - any company the user is assigned to
-  // via erp_map.user_companies is fair game, not just their current active session
-  // context. A user with 4 companies (e.g. DIRECTOR) must be able to create for any
-  // of the 4 without first "switching" anything - there is no such switcher today.
+async function listOpeningStockScopedCompanyIds(ctx: ProcurementHandlerContext): Promise<string[] | null> {
+  if (isAdminBypass(ctx)) {
+    return null;
+  }
+
   const { data, error } = await serviceRoleClient
     .schema("erp_map")
     .from("user_companies")
     .select("company_id")
-    .eq("auth_user_id", ctx.auth_user_id)
-    .eq("company_id", normalizedCompanyId)
-    .maybeSingle();
+    .eq("auth_user_id", ctx.auth_user_id);
 
-  if (error || !data) {
-    throw new Error("OPENING_STOCK_SCOPE_VIOLATION");
+  if (error) {
+    throw new Error("OPENING_STOCK_SCOPE_LOOKUP_FAILED");
+  }
+
+  return [...new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.company_id)).filter(Boolean))];
+}
+
+interface ApproverMapRow {
+  approver_user_id: string | null;
+  approver_role_code: string | null;
+  resource_code: string | null;
+  action_code: string | null;
+  scope_type: string | null;
+  subject_user_id: string | null;
+  subject_work_context_id: string | null;
+  subject_role_code: string | null;
+  approval_stage: number;
+}
+
+async function loadOpeningStockApproverRules(companyId: string): Promise<ApproverMapRow[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("acl")
+    .from("approver_map")
+    .select(
+      "approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage",
+    )
+    .eq("resource_code", "PROC_OPENING_STOCK_APPROVAL")
+    .eq("action_code", "APPROVE")
+    .eq("company_id", companyId);
+  if (error) throw new Error("OPENING_STOCK_APPROVER_LOOKUP_FAILED");
+  return (data as ApproverMapRow[] | null) ?? [];
+}
+
+async function getOpeningStockUserRoleCode(userId: string): Promise<string | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("user_roles")
+    .select("role_code")
+    .eq("auth_user_id", userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return String((data as Record<string, unknown>).role_code ?? "") || null;
+}
+
+function matchesOpeningStockApprover(rows: ApproverMapRow[], ctx: ProcurementHandlerContext): boolean {
+  return rows.some((row) => {
+    if (row.approver_user_id) return row.approver_user_id === ctx.auth_user_id;
+    if (row.approver_role_code) return row.approver_role_code === ctx.roleCode;
+    return false;
+  });
+}
+
+async function assertOpeningStockApproverRole(
+  ctx: ProcurementHandlerContext,
+  companyId: string,
+  createdBy?: string | null,
+): Promise<void> {
+  if (ctx.roleCode === "SA" || ctx.roleCode === "GA" || ctx.roleCode === "DIRECTOR") {
+    // SA/GA/DIRECTOR always retain override authority, regardless of approver_map
+    // config — DIRECTOR is deliberately a blanket bypass here, not a per-subject-role
+    // approver_map row: it must be able to approve every creator's draft directly
+    // (business owner, 2026-08-03), and approver_map cannot even represent that
+    // cheaply (a "DIRECTOR always also approves" row on every subject_role would
+    // burn one of the max-5-per-scope approver slots for something that should
+    // just always be true).
+    return;
+  }
+  const rules = await loadOpeningStockApproverRules(companyId);
+  let isConfiguredApprover: boolean;
+  if (rules.length === 0) {
+    isConfiguredApprover = false; // no approver_map row configured yet, and caller is not SA/GA/DIRECTOR.
+  } else {
+    const creatorRoleCode = createdBy ? await getOpeningStockUserRoleCode(createdBy) : null;
+    const scopedRules = pickScopedApproverRules(
+      {
+        resource_code: "PROC_OPENING_STOCK_APPROVAL",
+        action_code: "APPROVE",
+        requester_auth_user_id: createdBy ?? null,
+        requester_role_code: creatorRoleCode,
+      },
+      rules,
+    );
+    isConfiguredApprover = scopedRules.length > 0 ? matchesOpeningStockApprover(scopedRules, ctx) : false;
+  }
+  if (!isConfiguredApprover) throw new Error("OPENING_STOCK_APPROVER_ROLE_REQUIRED");
+  // DIRECTOR already returned above, so this can never fire for DIRECTOR — it only
+  // blocks a non-DIRECTOR approver who also happens to be the document's own creator.
+  if (createdBy && createdBy === ctx.auth_user_id) {
+    throw new Error("OPENING_STOCK_SELF_APPROVAL_FORBIDDEN");
   }
 }
 
@@ -502,7 +579,6 @@ export async function createOpeningStockDocumentHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
     const cutOffDate = toTrimmedString(body.cut_off_date);
@@ -626,7 +702,7 @@ export async function createOpeningStockDocumentHandler(
     return okResponse(await hydrateOpeningStockDocument(String(data.id)), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_DOCUMENT_CREATE_FAILED";
-    const status = code === "SA_REQUIRED" || code === "OPENING_STOCK_SCOPE_VIOLATION" ? 403 : 500;
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION" ? 403 : 500;
     return openingStockErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -636,7 +712,6 @@ export async function listOpeningStockDocumentsHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
@@ -651,7 +726,16 @@ export async function listOpeningStockDocumentsHandler(
       .limit(limit);
 
     if (companyId) {
+      await assertOpeningStockCompanyScope(ctx, companyId);
       query = query.eq("company_id", companyId);
+    } else {
+      const scopedCompanyIds = await listOpeningStockScopedCompanyIds(ctx);
+      if (scopedCompanyIds && scopedCompanyIds.length === 0) {
+        return okResponse({ items: [] }, ctx.request_id, req);
+      }
+      if (scopedCompanyIds) {
+        query = query.in("company_id", scopedCompanyIds);
+      }
     }
     if (status && DOCUMENT_STATUSES.has(status)) {
       query = query.eq("status", status);
@@ -708,7 +792,7 @@ export async function listOpeningStockDocumentsHandler(
     );
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_DOCUMENT_LIST_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : 500;
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION" ? 403 : 500;
     return openingStockErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -718,7 +802,6 @@ export async function getOpeningStockDocumentHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     if (!documentId) {
       return openingStockErrorResponse(
@@ -730,10 +813,12 @@ export async function getOpeningStockDocumentHandler(
       );
     }
 
+    const document = await fetchOpeningStockDocument(documentId);
+    await assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
     return okResponse(await hydrateOpeningStockDocument(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_DOCUMENT_FETCH_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
     return openingStockErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -743,7 +828,6 @@ export async function getOpeningStockDocumentByNumberHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const url = new URL(req.url);
     const documentNumber = toTrimmedString(url.searchParams.get("document_number"));
     if (!documentNumber) {
@@ -784,10 +868,12 @@ export async function getOpeningStockDocumentByNumberHandler(
       );
     }
 
+    const document = await fetchOpeningStockDocument(documentId);
+    await assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
     return okResponse(await hydrateOpeningStockDocument(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_DOCUMENT_FETCH_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
     return openingStockErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -797,7 +883,6 @@ export async function addOpeningStockLineHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const body = await parseBody(req);
     const materialId = toTrimmedString(body.material_id);
@@ -832,6 +917,7 @@ export async function addOpeningStockLineHandler(
     }
 
     const document = await fetchOpeningStockDocument(documentId);
+    await assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
     ensureDraftDocument(document);
     const materialType = await fetchMaterialType(materialId);
     ensureDocumentMaterialScope(document, materialType);
@@ -896,7 +982,7 @@ export async function addOpeningStockLineHandler(
     return okResponse(data, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_LINE_CREATE_FAILED";
-    const status = code === "SA_REQUIRED"
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION"
       ? 403
       : code === "OPENING_STOCK_DOCUMENT_MATERIAL_SCOPE_MISMATCH"
       ? 409
@@ -916,11 +1002,11 @@ export async function updateOpeningStockLineHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const lineId = getLineIdFromPath(req);
     const body = await parseBody(req);
     const document = await fetchOpeningStockDocument(documentId);
+    await assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
     ensureDraftDocument(document);
 
     const patch: JsonRecord = {};
@@ -1042,7 +1128,7 @@ export async function updateOpeningStockLineHandler(
     return okResponse(data, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_LINE_UPDATE_FAILED";
-    const status = code === "SA_REQUIRED"
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION"
       ? 403
       : code === "OPENING_STOCK_SFG_BATCH_NOT_FOUND" || code === "OPENING_STOCK_FG_PACKING_PO_NOT_FOUND"
       ? 422
@@ -1060,10 +1146,10 @@ export async function removeOpeningStockLineHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const lineId = getLineIdFromPath(req);
     const document = await fetchOpeningStockDocument(documentId);
+    await assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
     ensureDraftDocument(document);
 
     const { error } = await serviceRoleClient
@@ -1086,7 +1172,7 @@ export async function removeOpeningStockLineHandler(
     return okResponse({ deleted: true }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_LINE_DELETE_FAILED";
-    const status = code === "SA_REQUIRED"
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION"
       ? 403
       : code.includes("NOT_DRAFT")
       ? 409
@@ -1102,7 +1188,6 @@ export async function batchUpdateOpeningStockLinesHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const body = await parseBody(req);
     const linePatches = Array.isArray(body.lines) ? body.lines : [];
@@ -1118,6 +1203,7 @@ export async function batchUpdateOpeningStockLinesHandler(
     }
 
     const document = await fetchOpeningStockDocument(documentId);
+    await assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
     ensureSubmittedDocument(document);
 
     const lineIds = linePatches
@@ -1326,7 +1412,7 @@ export async function batchUpdateOpeningStockLinesHandler(
     return okResponse(await hydrateOpeningStockDocument(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_LINE_BATCH_UPDATE_FAILED";
-    const status = code === "SA_REQUIRED"
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION"
       ? 403
       : code === "OPENING_STOCK_DOCUMENT_MATERIAL_SCOPE_MISMATCH"
       ? 409
@@ -1346,9 +1432,9 @@ export async function submitOpeningStockDocumentHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const document = await fetchOpeningStockDocument(documentId);
+    await assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
     if (toUpperTrimmedString(document.status) !== "DRAFT") {
       return openingStockErrorResponse(
         req,
@@ -1395,7 +1481,7 @@ export async function submitOpeningStockDocumentHandler(
     return okResponse(await hydrateOpeningStockDocument(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_DOCUMENT_SUBMIT_FAILED";
-    const status = code === "SA_REQUIRED"
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION"
       ? 403
       : code === "OPENING_STOCK_BATCH_QTY_MISMATCH"
       ? 409
@@ -1411,7 +1497,6 @@ export async function approveOpeningStockDocumentHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const document = await fetchOpeningStockDocument(documentId);
     await assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
@@ -1424,6 +1509,11 @@ export async function approveOpeningStockDocumentHandler(
         "Only SUBMITTED opening stock documents can be approved.",
       );
     }
+    await assertOpeningStockApproverRole(
+      ctx,
+      toTrimmedString(document.company_id),
+      (document as Record<string, unknown>).created_by as string | null | undefined,
+    );
 
     const { error } = await serviceRoleClient
       .schema("erp_procurement")
@@ -1448,7 +1538,13 @@ export async function approveOpeningStockDocumentHandler(
     return okResponse(await hydrateOpeningStockDocument(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_DOCUMENT_APPROVE_FAILED";
-    const status = code === "SA_REQUIRED" || code === "OPENING_STOCK_SCOPE_VIOLATION" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION" ||
+        code === "OPENING_STOCK_APPROVER_ROLE_REQUIRED" ||
+        code === "OPENING_STOCK_SELF_APPROVAL_FORBIDDEN"
+      ? 403
+      : code.includes("NOT_FOUND")
+      ? 404
+      : 500;
     return openingStockErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -1458,9 +1554,9 @@ export async function postOpeningStockDocumentHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const document = await fetchOpeningStockDocument(documentId);
+    await assertOpeningStockCompanyScope(ctx, toTrimmedString(document.company_id));
     if (toUpperTrimmedString(document.status) !== "APPROVED") {
       return openingStockErrorResponse(
         req,
@@ -1571,7 +1667,7 @@ export async function postOpeningStockDocumentHandler(
     return okResponse(await hydrateOpeningStockDocument(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "OPENING_STOCK_DOCUMENT_POST_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
     return openingStockErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -1778,7 +1874,6 @@ export async function recalculateValuationHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const reason = toTrimmedString(body.reason);
     const lines = Array.isArray(body.lines) ? body.lines as JsonRecord[] : [];
@@ -1801,7 +1896,7 @@ export async function recalculateValuationHandler(
       const { data: ledgerRow, error: ledgerErr } = await serviceRoleClient
         .schema("erp_inventory")
         .from("stock_ledger")
-        .select("id")
+        .select("id, company_id")
         .eq("stock_document_id", postedStockDocumentId)
         .eq("direction", "IN")
         .limit(1)
@@ -1809,6 +1904,7 @@ export async function recalculateValuationHandler(
       if (ledgerErr || !ledgerRow?.id) {
         return openingStockErrorResponse(req, ctx, "VALUATION_RECALC_LEDGER_NOT_FOUND", 404, `Could not resolve the opening ledger row for line ${lineId}.`);
       }
+      await assertOpeningStockCompanyScope(ctx, toTrimmedString(ledgerRow.company_id));
       roots.push({ lineId, ledgerId: String(ledgerRow.id), newRate });
     }
 
@@ -1831,7 +1927,7 @@ export async function recalculateValuationHandler(
     return okResponse({ results }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "VALUATION_RECALC_FAILED";
-    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
+    const status = code === "OPENING_STOCK_SCOPE_VIOLATION" ? 403 : 500;
     return openingStockErrorResponse(req, ctx, code, status, code);
   }
 }

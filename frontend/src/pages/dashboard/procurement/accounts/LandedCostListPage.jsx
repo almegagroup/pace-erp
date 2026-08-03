@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
@@ -30,15 +32,16 @@ export default function LandedCostListPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
-  const companyId = runtimeContext?.selectedCompanyId || "";
+  const [companyId, setCompanyId] = useState("");
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
   const landedCostParams = useMemo(
     () => ({
-      company_id: companyId || undefined,
+      company_id: effectiveCompanyId || undefined,
       status: status || undefined,
       limit: 200,
     }),
-    [companyId, status]
+    [effectiveCompanyId, status]
   );
   const landedCostQuery = useQuery({
     queryKey: ["procurement", "landed-costs", landedCostParams],
@@ -58,10 +61,6 @@ export default function LandedCostListPage() {
       return { items, grnEntries };
     },
   });
-
-  useEffect(() => {
-    setPage(1);
-  }, [dateFrom, dateTo, status]);
 
   const vendors = vendorQuery.vendors;
   const loading = landedCostQuery.isLoading || vendorQuery.isLoading;
@@ -137,12 +136,24 @@ export default function LandedCostListPage() {
         eyebrow: "Search And Filter",
         title: "Landed cost register",
         children: (
-          <div className="grid gap-3 lg:grid-cols-[180px_180px_180px]">
+          <div className="grid gap-3 lg:grid-cols-[220px_180px_180px_180px]">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={(nextValue) => {
+                setCompanyId(nextValue);
+                setPage(1);
+              }}
+              label="Company"
+            />
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Status
               <select
                 value={status}
-                onChange={(event) => setStatus(event.target.value)}
+                onChange={(event) => {
+                  setStatus(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
@@ -158,7 +169,10 @@ export default function LandedCostListPage() {
               <input
                 type="date"
                 value={dateFrom}
-                onChange={(event) => setDateFrom(event.target.value)}
+                onChange={(event) => {
+                  setDateFrom(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </label>
@@ -167,7 +181,10 @@ export default function LandedCostListPage() {
               <input
                 type="date"
                 value={dateTo}
-                onChange={(event) => setDateTo(event.target.value)}
+                onChange={(event) => {
+                  setDateTo(event.target.value);
+                  setPage(1);
+                }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </label>
@@ -225,7 +242,7 @@ export default function LandedCostListPage() {
                 onDoubleClick: () => openDetail(row),
                 className: "cursor-pointer hover:bg-sky-50",
               })}
-              emptyMessage={loading ? "Loading landed costs..." : "No landed cost matched the current filter."}
+              emptyMessage={loading ? "Loading landed costs..." : effectiveCompanyId ? "No landed cost matched the current filter." : "No company resolved for this session."}
             />
           </div>
         ),

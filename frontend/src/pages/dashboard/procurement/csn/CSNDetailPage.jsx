@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -200,6 +201,7 @@ export default function CSNDetailPage() {
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
+  const resolvedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [detail, setDetail] = useState(null);
   const [relatedCsns, setRelatedCsns] = useState([]);
   const [form, setForm] = useState(buildForm(null));
@@ -238,7 +240,7 @@ export default function CSNDetailPage() {
       setDomesticTransporterDisplay(buildTransporterDisplay(data));
       setImportTransporterDisplay(buildTransporterDisplay(data));
 
-      const scopedCompanyId = data?.company_id || runtimeContext?.selectedCompanyId || "";
+      const scopedCompanyId = data?.company_id || resolvedCompanyId || "";
       const siblingRows = data?.po_id
         ? await listCSNs({
             company_id: scopedCompanyId,
@@ -255,7 +257,7 @@ export default function CSNDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [id, runtimeContext?.selectedCompanyId]);
+  }, [id, resolvedCompanyId]);
 
   useEffect(() => {
     void loadDetail();

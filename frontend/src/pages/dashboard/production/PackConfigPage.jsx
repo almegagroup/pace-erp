@@ -6,10 +6,13 @@
  *          and fill qty per pack. Manager creates/deletes configs. Tabs: Pack Codes (read) | Configs.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
+import { useMenu } from "../../../context/useMenu.js";
 import {
   listPackCodes, listPackConfigs, upsertPackConfig, deletePackConfig, listStrokeMasters,
 } from "./prodApi.js";
@@ -24,6 +27,7 @@ function friendlyErr(code) { return ERRORS[code] ?? code; }
 
 export default function PackConfigPage() {
   const qc = useQueryClient();
+  const { runtimeContext } = useMenu();
   const [tab, setTab] = useState(0);
   const [companyId, setCompanyId] = useState("");
   const [materialId, setMaterialId] = useState("");
@@ -38,6 +42,16 @@ export default function PackConfigPage() {
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3000);
   }
 
+  const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+  const effectiveCompanyId = companyId || defaultCompanyId;
+  const effectiveFormCompanyId = form.company_id || defaultCompanyId;
+
+  useEffect(() => {
+    if (!form.company_id && defaultCompanyId) {
+      setForm((current) => ({ ...current, company_id: defaultCompanyId }));
+    }
+  }, [defaultCompanyId, form.company_id]);
+
   const codesQ = useQuery({
     queryKey: ["prod-pack-codes"],
     queryFn: () => listPackCodes(),
@@ -45,10 +59,10 @@ export default function PackConfigPage() {
   });
 
   const configsQ = useQuery({
-    queryKey: ["prod-pack-configs", companyId, materialId],
-    queryFn: () => listPackConfigs({ company_id: companyId || undefined, material_id: materialId || undefined }),
+    queryKey: ["prod-pack-configs", effectiveCompanyId, materialId],
+    queryFn: () => listPackConfigs({ company_id: effectiveCompanyId || undefined, material_id: materialId || undefined }),
     select: d => Array.isArray(d) ? d : d?.data ?? [],
-    enabled: tab === 1,
+    enabled: tab === 1 && Boolean(effectiveCompanyId),
   });
 
   // §108.2 item 4 — MTS/IWC Prodshades take fill_qty in Liter (physical container
@@ -56,9 +70,9 @@ export default function PackConfigPage() {
   // conversion_factor lives on the Prodshade's own approved Stroke (§83.3, same
   // source as List A item 3 — never on pack_code_master, it's density not pack-code).
   const strokeForFormMaterialQ = useQuery({
-    queryKey: ["prod-pack-config-stroke-lookup", form.material_id],
-    queryFn: () => listStrokeMasters({ material_id: form.material_id, status: "APPROVED" }),
-    enabled: Boolean(form.material_id),
+    queryKey: ["prod-pack-config-stroke-lookup", effectiveFormCompanyId, form.material_id],
+    queryFn: () => listStrokeMasters({ company_id: effectiveFormCompanyId, material_id: form.material_id, status: "APPROVED" }),
+    enabled: Boolean(effectiveFormCompanyId && form.material_id),
     select: d => Array.isArray(d) ? d : d?.data ?? [],
   });
   const approvedStrokeForFormMaterial = strokeForFormMaterialQ.data?.[0] ?? null;
@@ -75,13 +89,15 @@ export default function PackConfigPage() {
     setSaving(true);
     try {
       await upsertPackConfig({
-        company_id: form.company_id,
+        company_id: effectiveFormCompanyId,
         material_id: form.material_id,
         pack_code_id: form.pack_code_id,
         fill_qty: form.fill_qty ? parseFloat(form.fill_qty) : null,
       });
       toast("Config saved.");
       setDrawerOpen(false);
+      setForm({ company_id: defaultCompanyId, material_id: "", pack_code_id: "", fill_qty: "" });
+      setFillQtyLiter("");
       qc.invalidateQueries({ queryKey: ["prod-pack-configs"] });
     } catch (err) { toast(friendlyErr(err.message), "error"); }
     finally { setSaving(false); }
@@ -105,7 +121,7 @@ export default function PackConfigPage() {
     <ErpScreenScaffold
       title="Pack Configuration"
       subtitle="Manage pack codes and prodshade-level pack configs"
-      actions={tab === 1 ? [{ label: "New Config", tone: "primary", mnemonic: "N", onClick: () => { setForm({ company_id: "", material_id: "", pack_code_id: "", fill_qty: "" }); setFillQtyLiter(""); setDrawerOpen(true); } }] : []}
+      actions={tab === 1 ? [{ label: "New Config", tone: "primary", mnemonic: "N", onClick: () => { setForm({ company_id: effectiveCompanyId, material_id: "", pack_code_id: "", fill_qty: "" }); setFillQtyLiter(""); setDrawerOpen(true); } }] : []}
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       {/* Tabs */}
@@ -158,16 +174,21 @@ export default function PackConfigPage() {
         {tab === 1 && (
           <>
             <div className="flex gap-3 mb-4 flex-wrap">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-500">Company ID</label>
-                <input className="border border-slate-300 rounded px-2 py-1 text-sm w-64" value={companyId} onChange={e => setCompanyId(e.target.value)} placeholder="Filter by company…" />
+              <div className="w-72">
+                <TransactionCompanySelector
+                  runtimeContext={runtimeContext}
+                  value={companyId}
+                  onChange={setCompanyId}
+                  label="Company"
+                  hint=""
+                />
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-slate-500">Material ID</label>
                 <input className="border border-slate-300 rounded px-2 py-1 text-sm w-64" value={materialId} onChange={e => setMaterialId(e.target.value)} placeholder="Filter by prodshade…" />
               </div>
             </div>
-            {configsQ.isLoading ? <p className="text-slate-400 text-sm py-4 text-center">Loading…</p> : configs.length === 0 ? (
+            {!effectiveCompanyId ? <p className="text-slate-400 text-sm py-4 text-center">Select a company to view pack configurations.</p> : configsQ.isLoading ? <p className="text-slate-400 text-sm py-4 text-center">Loading…</p> : configs.length === 0 ? (
               <p className="text-slate-400 text-sm py-4 text-center">No configs found. Press <kbd className="bg-slate-100 border px-1 rounded text-xs">Alt+N</kbd> to create.</p>
             ) : (
               <table className="w-full text-sm border-collapse">
@@ -208,13 +229,17 @@ export default function PackConfigPage() {
         ]}
       >
         <form onSubmit={handleCreate} className="flex flex-col gap-4 p-4">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-600 font-medium">Company ID <span className="text-rose-500">*</span></label>
-            <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.company_id} onChange={e => setForm(f => ({ ...f, company_id: e.target.value }))} required />
-          </div>
+          <TransactionCompanySelector
+            runtimeContext={runtimeContext}
+            value={form.company_id}
+            onChange={(value) => setForm((current) => ({ ...current, company_id: value }))}
+            label="Company"
+            hint=""
+          />
           <div className="flex flex-col gap-1">
             <label className="text-xs text-slate-600 font-medium">Prodshade Material ID <span className="text-rose-500">*</span></label>
             <input
+              autoFocus
               className="border border-slate-300 rounded px-2 py-1.5 text-sm"
               value={form.material_id}
               onChange={e => { setForm(f => ({ ...f, material_id: e.target.value })); setFillQtyLiter(""); }}

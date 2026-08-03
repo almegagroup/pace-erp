@@ -13,7 +13,6 @@ import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertSARole,
-  assertManagerOrSARole,
   assertProdReadRole,
   parseBody,
   toTrimmedString,
@@ -456,7 +455,8 @@ export async function listPackConfigsHandler(req: Request, ctx: ProdHandlerConte
 // POST /api/production/pack-configs
 export async function upsertPackConfigHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (SA_OM_PACK_CODE_MASTER:WRITE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const body = await parseBody(req);
     const materialId = toTrimmedString(body.material_id);
     const packCodeId = toTrimmedString(body.pack_code_id);
@@ -531,7 +531,8 @@ export async function upsertPackConfigHandler(req: Request, ctx: ProdHandlerCont
 // DELETE /api/production/pack-configs/:id
 export async function deletePackConfigHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
-    assertManagerOrSARole(ctx);
+    // ACL-gated via route-acl-registry (SA_OM_PACK_CODE_MASTER:DELETE) — no longer a
+    // blanket Manager/SA rank check; department grants are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return packError(req, ctx, "PROD_PACK_CONFIG_ID_MISSING", 400, "ID required");
 
