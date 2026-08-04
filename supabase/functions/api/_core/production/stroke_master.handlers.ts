@@ -15,6 +15,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
@@ -206,7 +207,7 @@ async function assertStrokeApproverRole(
   companyId: string,
   createdBy?: string | null,
 ): Promise<void> {
-  if (ctx.roleCode === "SA" || ctx.roleCode === "GA" || ctx.roleCode === "DIRECTOR") {
+  if (hasBlanketApprovalOverride(ctx)) {
     return;
   }
   const rules = await loadStrokeApproverRules(companyId);
@@ -228,7 +229,7 @@ async function assertStrokeApproverRole(
   }
   if (!isConfiguredApprover) throw new Error("PROD_STROKE_APPROVER_ROLE_REQUIRED");
   // DIRECTOR already returned above, so this can never fire for DIRECTOR.
-  if (createdBy && createdBy === ctx.auth_user_id) {
+  if (createdBy && createdBy === ctx.auth_user_id && !hasBlanketApprovalOverride(ctx)) {
     throw new Error("PROD_STROKE_SELF_APPROVAL_FORBIDDEN");
   }
 }

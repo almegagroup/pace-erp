@@ -11,6 +11,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -184,7 +185,7 @@ async function assertMtsRateApproverRole(
   companyId: string,
   creatorIds: Array<string | null | undefined>,
 ): Promise<void> {
-  if (ctx.roleCode === "SA" || ctx.roleCode === "GA" || ctx.roleCode === "DIRECTOR") {
+  if (hasBlanketApprovalOverride(ctx)) {
     // SA/GA/DIRECTOR always retain override authority, regardless of approver_map
     // config — DIRECTOR is deliberately a blanket bypass here, not a per-subject-role
     // approver_map row (business owner, 2026-08-03): it must approve every creator's
@@ -202,7 +203,7 @@ async function assertMtsRateApproverRole(
   for (const createdBy of distinctCreatorIds) {
     let isConfiguredApprover: boolean;
     if (rules.length === 0) {
-      isConfiguredApprover = false; // no approver_map row configured yet, and caller is not SA/GA/DIRECTOR.
+      isConfiguredApprover = hasBlanketApprovalOverride(ctx); // no approver_map row configured yet, and caller is not a blanket-override approver.
     } else {
       const creatorRoleCode = creatorRoleCodes.get(createdBy) ?? null;
       const scopedRules = pickScopedApproverRules(
@@ -214,11 +215,11 @@ async function assertMtsRateApproverRole(
         },
         rules,
       );
-      isConfiguredApprover = scopedRules.length > 0 ? matchesMtsRateApprover(scopedRules, ctx) : false;
+      isConfiguredApprover = scopedRules.length > 0 ? matchesMtsRateApprover(scopedRules, ctx) : hasBlanketApprovalOverride(ctx);
     }
     if (!isConfiguredApprover) throw new Error("PROD_MTS_RATE_APPROVER_ROLE_REQUIRED");
     // DIRECTOR already returned above, so this can never fire for DIRECTOR.
-    if (createdBy === ctx.auth_user_id) {
+    if (createdBy === ctx.auth_user_id && !hasBlanketApprovalOverride(ctx)) {
       throw new Error("PROD_MTS_RATE_SELF_APPROVAL_FORBIDDEN");
     }
   }

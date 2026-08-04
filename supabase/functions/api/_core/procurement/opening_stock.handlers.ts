@@ -14,6 +14,7 @@ import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/com
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -539,9 +540,9 @@ async function assertOpeningStockApproverRole(
   companyId: string,
   createdBy?: string | null,
 ): Promise<void> {
-  if (ctx.roleCode === "SA" || ctx.roleCode === "GA" || ctx.roleCode === "DIRECTOR") {
-    // SA/GA/DIRECTOR always retain override authority, regardless of approver_map
-    // config — DIRECTOR is deliberately a blanket bypass here, not a per-subject-role
+  if (hasBlanketApprovalOverride(ctx)) {
+    // SA/GA/DIRECTOR/ACL_MASTER always retain override authority, regardless of approver_map
+    // config — DIRECTOR/ACL_MASTER are deliberately blanket bypasses here, not per-subject-role
     // approver_map row: it must be able to approve every creator's draft directly
     // (business owner, 2026-08-03), and approver_map cannot even represent that
     // cheaply (a "DIRECTOR always also approves" row on every subject_role would
@@ -569,7 +570,7 @@ async function assertOpeningStockApproverRole(
   if (!isConfiguredApprover) throw new Error("OPENING_STOCK_APPROVER_ROLE_REQUIRED");
   // DIRECTOR already returned above, so this can never fire for DIRECTOR — it only
   // blocks a non-DIRECTOR approver who also happens to be the document's own creator.
-  if (createdBy && createdBy === ctx.auth_user_id) {
+  if (createdBy && createdBy === ctx.auth_user_id && !hasBlanketApprovalOverride(ctx)) {
     throw new Error("OPENING_STOCK_SELF_APPROVAL_FORBIDDEN");
   }
 }
