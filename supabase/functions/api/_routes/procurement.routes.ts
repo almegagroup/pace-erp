@@ -60,6 +60,8 @@ import { getProcurementPlanningHandler } from "../_core/procurement/planning.han
 import { getDocumentFlowHandler } from "../_core/procurement/document_flow.handlers.ts";
 import {
   getCurrentStockHandler,
+  searchCurrentStockBatchNumbersHandler,
+  searchCurrentStockPackingPoNumbersHandler,
   getStockLedgerReportHandler,
   getStockValuationHandler,
 } from "../_core/procurement/stock_reports.handlers.ts";
@@ -457,6 +459,10 @@ export async function dispatchProcurementRoutes(
       return await getDocumentFlowHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger":
       return await getStockLedgerReportHandler(req, ctx);
+    case "GET:/api/procurement/current-stock/batch-search":
+      return await searchCurrentStockBatchNumbersHandler(req, ctx);
+    case "GET:/api/procurement/current-stock/po-search":
+      return await searchCurrentStockPackingPoNumbersHandler(req, ctx);
     case "GET:/api/procurement/current-stock":
       return await getCurrentStockHandler(req, ctx);
     case "GET:/api/procurement/stock-valuation":

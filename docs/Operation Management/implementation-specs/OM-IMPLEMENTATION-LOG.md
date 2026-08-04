@@ -3629,6 +3629,39 @@ standing rule as every other migration this session), re-verified —
 **both dev and prod now report `in_sync: true`** against the same local
 migration files.
 
+## 2026-08-03 (post-commit) — PO16 (Legacy STO) fix: SCM couldn't see/use it at all
+
+Business owner asked why PO16 was "closed for SCM." Live-DB check found a
+real bug, same shape as the ACL-MASTER drift fix above but on the opposite
+side — `PROC_STO_CREATE_OPENING`'s only capability mapping was
+`CAP_PROC_LOGISTICS:VIEW`, and that capability was held **only by
+ACL-MASTER's work context**, not SCM's real "SUPPLY CHAIN" department. So
+the PO16 sidebar tile never showed for SCM at all, despite them having full
+regular STO access via a different capability (`CAP_PROC_STO`). Also caught
+`PROD-ACL-Access-Decisions.md`'s existing PO14/PO16 note ("no independent
+resource code exists") was stale/wrong — both pages do have their own
+`erp_menu.menu_master` resource codes (since 2026-07-06), gating sidebar
+visibility independently of the shared backend route.
+
+Design (business owner): PO16 Create+Edit belongs to SCM only (same access
+level as their other STO/PO pages), ACL-MASTER always keeps full access,
+**no approval flow for this page at all**. Fixed: mapped `CAP_PROC_STO`
+(VIEW/WRITE/EDIT — the capability SCM's own work context already holds) onto
+`PROC_STO_CREATE_OPENING`, removed the now-redundant
+`CAP_PROC_LOGISTICS` mapping. ACL-MASTER unaffected (already held
+`CAP_PROC_STO` too, from the regular STO page). Version bump v35→v36 both
+companies (capture+generate+activate), verified live: SCM (P0004/P0005/P0006)
+now VIEW+WRITE+EDIT both companies, ACL-MASTER still full access, zero
+APPROVE rows anywhere for this resource (correct, matches "no approval
+page"). `precomputed_acl_view` re-swept for the newly-stale v35 rows.
+
+**Related, not fixed:** PO14 (Old Purchase Order) has the identical
+architecture but its capability (`CAP_PROC_BUYER`) was already correctly
+held by SCM — no live bug there. It does, however, only have `VIEW`
+registered (no `WRITE`/`EDIT` for anyone), so its Create/Edit menu-gate is
+effectively inert today. Flagged in `PROD-ACL-Access-Decisions.md`, left
+alone since it wasn't asked about this round.
+
 **Final state: 5 of 11 bug patterns now have a real CI guard** (stock
 posting §8D, company-scope #2/#11, hardcoded-role-check #1, approver-chain
 #7, resource-code-domain #6). **3 more have an on-demand manual-check
@@ -3653,3 +3686,11 @@ respectively) that were not triaged in this pass — wiring them into CI now
 would break every future push for unrelated reasons. `migration-integrity-check.mjs`
 never connects to a DB (always exits 0, just prints SQL to run manually) so
 it provides no enforcement value as a CI step in its current form.
+
+### 2026-08-04 15:25 IST - IN03 Current Stock Redesign
+- Brief: `CODEX-IN03-CURRENT-STOCK-REDESIGN-TASK-BRIEF.md`
+- Feasibility reference: Section 116 (`PACE_ERP_Operation_Management_SAP_Style_Discovery_and_Feasibility.md`)
+- Scope delivered: full current-stock report rewrite in `stock_reports.handlers.ts`; new autocomplete endpoints for batch number and packing PO number; new reusable `MultiValueFilterField.jsx`; full `CurrentStockPage.jsx` rewrite to the locked Page-1/Page-2 UX; route and ACL registry wiring under existing `PROC_CURRENT_STOCK`.
+- Locked design points implemented: three-path grain split (Path A blended RM/PM/INT plus FG-MTS, Path B SFG batch-level, Path C FG batch plus Packing-PO-level); exact `resolveLotRef()` fallback reuse for Packing PO resolution; document-name-first material label with raw `document_name` preserved separately; reservation total only, no source breakdown; rate/value removed from response and grid.
+- Verification: targeted frontend ESLint passed for the three touched frontend files. Backend `deno check` on `stock_reports.handlers.ts` reduced to pre-existing query-builder typing noise only (`.range()` line 289 and stock-valuation `.gt()` near line 981), with no fresh IN03-local type failures.
+- Follow-up limitation recorded, not hidden: live fixture verification on dev project `ytapuwiqicmvpanmzelb` for `SFG-00004`, `FG-00008`, and `RM-00020` was not completed in-session because no authenticated report-runner or direct DB query surface was callable from this terminal context. This remains the one open validation step after code implementation.

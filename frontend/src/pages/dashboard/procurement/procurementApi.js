@@ -1018,6 +1018,14 @@ export function getCurrentStock(params) {
   return fetchProcurement("GET", "/api/procurement/current-stock", undefined, params);
 }
 
+export function searchCurrentStockBatchNumbers(params) {
+  return fetchProcurement("GET", "/api/procurement/current-stock/batch-search", undefined, params);
+}
+
+export function searchCurrentStockPackingPoNumbers(params) {
+  return fetchProcurement("GET", "/api/procurement/current-stock/po-search", undefined, params);
+}
+
 export function getStockValuation(params) {
   return fetchProcurement("GET", "/api/procurement/stock-valuation", undefined, params);
 }
