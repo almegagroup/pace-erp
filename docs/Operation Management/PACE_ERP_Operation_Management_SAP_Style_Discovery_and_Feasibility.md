@@ -16685,3 +16685,388 @@ batch-এর PR22.actual_qty-র সমান হতে হবে (tolerance §1
 মেলায়, উল্টোটা না) — একটা batch/Packing PO আংশিক opening করে Submit করলে ধরা পড়বে।
 
 ---
+
+## Section 116 — IN03 Current Stock Report: Full MB52-Style Redesign (LOCKED — 2026-08-04)
+
+**প্রেক্ষাপট:** Inventory ACL group (IN01-IN06, PR21) design session শুরু করার আগে business owner
+IN03 (Current Stock, SAP MB52-এর equivalent)-এ "অনেক ভুল আছে" ধরিয়ে দেন। পুরনো IN03 live code
+(`getCurrentStockHandler` in `stock_reports.handlers.ts` + `CurrentStockPage.jsx`) audit করে ও
+real dev data দিয়ে test করে পুরো redesign session-এ যা লক হলো, এখানে পুরোটা।
+
+### 116.1 — পুরনো IN03-এর real bug (code-verified, dev data দিয়ে প্রমাণিত)
+
+1. **"Batch ID" column সম্পূর্ণ মৃত/ভুয়া** — frontend `row.batch_id` পড়ে, backend response-এ
+   (`stock_snapshot.*`) `batch_id` বলে কোনো field-ই নেই (`stock_snapshot` নিজেই batch split করে
+   না, §83.15 addendum-এর locked decision — `post_stock_movement()` snapshot lookup/upsert
+   hardcoded `batch_id IS NULL`)। ফলে column সবসময় "—" দেখাত।
+2. **Material single-select only** — MB52-এর multi-material selection নেই।
+3. **Storage Location filter সম্পূর্ণ নেই** — backend param-ই নেই, অথচ output column-এ location
+   দেখানো হয়।
+4. **Stock Type filter single-select এবং অসম্পূর্ণ** — dropdown-এ ৪টা option
+   (`UNRESTRICTED, QA, BLOCKED, IN_TRANSIT`), ৫ম real stock type `FOR_REPROCESS`
+   (`stock_type_master`-এ ৫টাই active) বাদ পড়ে গিয়েছিল। MB52-এর মতো multi-checkbox না, single
+   dropdown।
+5. **Company selection ভুল component** — `TransactionCompanySelector` (`mode="required"`) সবসময়
+   ঠিক একটা company force করে — transaction page-এর জন্য ঠিক pattern (Law 12), কিন্তু IN03 একটা
+   **report**, backend `resolveCompanyScope` blank company_id-তে multi-company support **already
+   করে**, frontend সেটা ব্যবহারই করতে দেয় না।
+6. কোনো grouping/subtotal নেই, Rate/Value সবসময় দেখায় (toggle নেই)।
+
+### 116.2 — Page 1 (Selection Screen) — LOCKED
+
+সব filter multi-value, SAP MB52-এর "multiple selection" popup-এর মতো একটা **নতুন reusable
+component** দিয়ে (আজ codebase-এ এরকম component নেই, নতুন বানাতে হবে) — click করলে modal খোলে,
+সেখানে (ক) type করলে master data-র সাথে মিলিয়ে **autocomplete/type-ahead suggestion** আসে, (খ)
+delimiter দিয়ে একগুচ্ছ value **paste** করলে সেগুলো auto-split হয়ে chip/tag হিসেবে বসে — plain
+free-text না, dropdown-checklist-ও না।
+
+| Filter | Multi-value | Data source (autocomplete) |
+|---|---|---|
+| Company | ✅ (single-company user-এর জন্য read-only label, popup-ই নেই) | **`useCompaniesForOmQuery` না** — সেটা `GET /api/admin/companies` (`skipAcl: true`, company-scope-unaware, SA/admin screen-এর জন্য) ডাকে, ব্যবহার করলে bug pattern #2 (company-scope leak) হবে। বদলে `useMenu()`-এর `runtimeContext.availableCompanies` (`TransactionCompanySelector` যেটা already ব্যবহার করে, server-side pre-scoped) — এটা 2026-08-04-এ business owner নিজেই ধরিয়ে দেন, IN03 brief-এ correction হিসেবে লেখা হয়েছে |
+| Material Type | ✅ (checkbox: RM/PM/INT/SFG/FG) | static list |
+| Material | ✅ | `useMaterialOptionsQuery` (existing) |
+| Storage Location | ✅ (নতুন filter) | `useStorageLocationOptionsQuery` (existing) |
+| Batch Number | ✅ (নতুন filter) | নতুন backend search endpoint লাগবে (§116.7) |
+| Packing PO Number | ✅ (নতুন filter) | নতুন backend search endpoint লাগবে (§116.7) |
+| Stock Type | Checkbox: Unrestricted / Quality Inspection / Blocked | static — **In-Transit ও For-Reprocess ইচ্ছাকৃতভাবে বাদ** (business owner: "পরে লাগলে design করব") |
+| Show Zero Stock | Checkbox | zero-balance row (RM/PM/INT-এর material+SLoc combo, বা FG-এর zero-net Packing PO row) filter করে |
+| Execute/Search | Button | |
+
+Column visibility picker **Page 1-এ না** — Page 2-তে (§116.4)।
+
+### 116.3 — Page 2 (Output Grid) — column list, LOCKED
+
+Rate/Valuation **সম্পূর্ণ বাদ** (পুরনো IN03-এ ছিল, নতুনটায় নেই — business owner explicit)।
+
+| # | Column | Default | Source |
+|---|---|---|---|
+| 1 | Company | Visible | |
+| 2 | Type | Visible | `material_master.material_type` |
+| 3 | Material | Visible | `material_master.document_name`, **blank হলে `material_name`-এ fallback** |
+| 4 | External Code | Visible | `material_master.external_code`, blank থাকলে blank-ই (কোনো fallback না, §8A) |
+| 5 | Document Name | **Hidden by default** | `material_master.document_name` (raw, fallback ছাড়া) — নতুন column, §116.6-এর সিদ্ধান্ত অনুযায়ী "material_name-কে replace না করে extra column, default hidden" |
+| 6 | UOM | Visible | §116.5 |
+| 7 | SLoc | Visible | code শুধু, নাম না |
+| 8 | Batch Number | Visible | §116.4 grain অনুযায়ী populate/blank |
+| 9 | Packing PO Number | Visible | §116.4 grain অনুযায়ী populate/blank |
+| 10 | Unrestricted | Visible | |
+| 11 | Reserved | Visible | §116.6 — শুধু total সংখ্যা, source breakdown না |
+| 12 | Net Available | Visible | Unrestricted − Reserved |
+| 13 | Quality Inspection | Visible | |
+| 14 | Blocked | Visible | |
+
+**"Columns" button — Page 2-তে (Page 1-এ না)।** Click করলে drawer খোলে, সব ১৪টা column-এর
+checkbox list (Document Name বাদে সব default-checked), user any time toggle করতে পারে, grid
+সাথে সাথে re-render হয় (client-side, নতুন backend call লাগে না)।
+
+`material_master.document_name` সম্পর্কে real finding (dev data দিয়ে যাচাই করা): RM/PM-এ এটা
+`material_name`-এর হুবহু কপি (কোনো নতুন তথ্য নেই), কিন্তু SFG/FG-এ এটা আসল, পড়ার-মতো commercial
+product name (যেমন FG-00008 material_name=`1B60SS67599` কিন্তু document_name=`Maximoplast PC
+250`)। আর SFG/FG-এ `external_code` প্রায় সবসময় `material_name`-এর সাথেই এক (shade/pack code) —
+তাই "Material" column-এ `document_name` দেখালে RM/PM-এ behavior অপরিবর্তিত থাকে, SFG/FG-এ আসল
+নাম দেখায়, আর External Code column-এর সাথে duplicate হয় না।
+
+### 116.4 — Row grain (material type অনুযায়ী আলাদা) — LOCKED
+
+| Type | po_type | Grain | Data path |
+|---|---|---|---|
+| RM/PM/INT | — | Company+Material+SLoc | `stock_snapshot` সরাসরি (blended, সস্তা) |
+| SFG | **সব po_type সহ MTS** | Company+Material+SLoc+**Batch Number** | `stock_ledger` থেকে batch-level derive (§116.5) — `stock_snapshot` ব্যবহার করা যাবে না, batch split করে না |
+| FG | MTO/HPS/MTEST (`packing_order.source_po_type`) | Company+Material+SLoc+Batch Number+**Packing PO Number** | `stock_ledger` → `stock_document` → `packing_order` join (§116.5) |
+| FG | **MTS** (`packing_order.source_po_type = 'MTS'`) | Company+Material+SLoc শুধু — Batch/PPO blank | `stock_snapshot` সরাসরি (SFG-এর মতো ledger-derive লাগে না, কারণ MTS-FG deliberately blend করা হচ্ছে — business owner: "SKU ধরেই count হবে, batch/PPO না") |
+
+**গুরুত্বপূর্ণ correction session-এর মধ্যেই হয়েছিল, দুবার — মনে রাখতে হবে:**
+- প্রথমে ভাবা হয়েছিল MTS SFG-ও batch-blind (§108-এর ভুল সাধারণীকরণ) — **ভুল**, `packing_order.handlers.ts:210`
+  (`isBatchBlindPackingType`) সরাসরি দেখায় শুধু `PTEST` ব্যাচ-blind, `PMTS` না (§108.2, 2026-07-24
+  correction)। SFG সবসময়ই batch-level, po_type নির্বিশেষে।
+  ⚠️ Reread যত্ন সহকারে: এই ব্যাচ-blind ভুল ধারণা IN03 grain design-এও একবার repeat হয়েছিল —
+  ভুলটা এখানে লিখে রাখা হলো যাতে ভবিষ্যতে আবার না হয়।
+- MTS-এর "SKU ধরে count" simplification **শুধু FG-র জন্য**, SFG-র জন্য না — এটাও একবার ভুলভাবে
+  SFG-তে extend করা হয়েছিল, business owner ধরিয়ে দেন।
+
+### 116.5 — UOM / Primary Quantity derivation — LOCKED (real insight, business owner-এর নিজের catch)
+
+**RM/PM/INT/SFG/MTS-FG:** Primary UOM = Base UOM সরাসরি (`stock_snapshot.base_uom_code`/
+`stock_ledger.base_uom_code`), কোনো conversion লাগে না।
+
+**FG (MTO/HPS/MTEST), প্রতি Packing PO row:** ভুল প্রথম প্রস্তাব ছিল — material-level
+`material_uom_conversion` (§113.15 fixed vs `variable_conversion`) দিয়ে convert করার চেষ্টা, আর
+variable-fill (599/000/001) SKU-তে "no factor" বলে শুধু KG দেখানো। **এটা ভুল ছিল, business owner
+ধরিয়ে দেন:** যেহেতু row grain-ই এখন **প্রতি Packing PO**, সেই নির্দিষ্ট PO-র নিজের
+`packing_order.num_packs` আর `fill_qty_per_pack` কলাম সরাসরি পড়েই Primary Quantity বসানো
+যায় — material-level conversion factor **লাগেই না**, fixed-pack আর variable-fill দুটোতেই একই
+approach কাজ করে। UOM কলামে `pack_code_master.outer_uom_code` (BBL/TANKER/ইত্যাদি) বসবে, Primary
+Quantity কলামে সেই row-এর `num_packs`।
+
+Real dev data দিয়ে verify করা (FG-00008):
+
+| Packing PO | Batch | num_packs | fill_qty_per_pack | Primary Qty দেখাবে |
+|---|---|---|---|---|
+| 940005 (legacy fallback ref) | EV02602 | 22 | 230 KG | **22 BBL** |
+| 9400000002 | EV02609 | 25 | 200 KG | **25 BBL** |
+
+### 116.6 — Reserved / Net Available column — LOCKED
+
+`erp_production.reservation_document` থেকে সরাসরি — `status='OPEN'` রো-গুলোর `balance_qty`
+sum করে বসবে, **source breakdown দেখানো হবে না** (শুধু total সংখ্যা, business owner explicit: "reserved
+source ato detail venge dekhanor dorkar nei")। Filter key:
+- RM/PM/INT ও MTS-FG (batch নেই) → material_id + storage_location_id
+- SFG (সব po_type) ও FG(MTO/HPS/MTEST) → material_id + storage_location_id + **batch_number**
+  (§83.5-addendum-এর "Packing PO SFG line batch-specific reservation" rule অনুযায়ী — batch না
+  মেলালে ভুল batch-এর reservation চলে আসবে)
+
+Real dev data দিয়ে যাচাই করা (একাধিক source একসাথে sum হয় ঠিকমতো):
+
+| Material | Unrestricted | Reserved | Net Available |
+|---|---|---|---|
+| RM-00002 Biotreat BT10W | 1,676.64 | 10 (STO) | 1,666.64 |
+| RM-00020 Biotreat-V8 | 1,902.32 | 40.36 (30.36 Process PO + 10 Sales Order) | 1,861.96 |
+
+Column order: **Unrestricted → Reserved → Net Available**, শুধু Unrestricted-এর পাশে (QI/Blocked-এর
+কোনো reservation concept নেই)।
+
+**Zero-balance row handling:** "Show Zero Stock" toggle-ই এটা govern করে, RM/PM/INT আর FG দুটোর
+জন্যই একই toggle — একটা Packing PO পুরোপুরি dispatch/reverse হয়ে net qty=0 হলে (dev-এ real
+example: PO `9400000001`, batch EV02609, status REVERSED, net 0) সেই row toggle off অবস্থায়
+বাদ যাবে।
+
+### 116.7 — নতুন backend surface লাগবে (gap, আগে ছিল না)
+
+1. **Batch Number autocomplete** — `GET /api/procurement/current-stock/batch-search?q=&company_id=`
+   — `stock_ledger.batch_number` থেকে distinct, `q` দিয়ে prefix/contains filter, company scope সহ।
+2. **Packing PO Number autocomplete** — `GET /api/procurement/current-stock/po-search?q=&company_id=`
+   — `erp_production.packing_order.po_number` থেকে distinct।
+3. **Storage Location multi-select** — নতুন backend query param (`storage_location_ids`),
+   handler-এ filter যোগ — endpoint নতুন লাগে না, `useStorageLocationOptionsQuery` আগে থেকেই আছে
+   options-এর জন্য।
+
+### 116.8 — পরবর্তী নির্ভরতা (flagged, এখনই design করা হয়নি) — FG Block/QI page
+
+IN03-এর Quality Inspection/Blocked column FG row-এ derive করতে (KG ÷ `fill_qty_per_pack` = pack
+সংখ্যা) সেই derivation নির্ভরযোগ্য হওয়ার জন্য একটা **শর্ত** আছে: FG-এর stock-type বদলানোর
+**একমাত্র রাস্তা** যেন pack-count-ভিত্তিক হয়, raw-KG এন্ট্রি না — নাহলে blocked/QI KG
+`fill_qty_per_pack`-এর সঠিক গুণিতক না-ও হতে পারে, derive করা pack-সংখ্যা ভাঙা (non-integer)
+আসতে পারে।
+
+**আজ এই পথ কোডে নেই** — `P344` (Unrestricted→Blocked) আজ শুধু Inward QA (RM/PM) আর RTV-তে
+ব্যবহার হয় (grep-verified, production/FG-এর কোনো ব্যবহার নেই)। FG-এর জন্য এই page **নতুন বানাতে
+হবে** (স্কোপ এই session-এ শুধু flag করা হলো, পুরো design পরে):
+
+- User একটা **Packing PO বেছে নেবে** (batch/PO number দিয়ে সার্চ, PR21-এর মতোই lookup),
+  তারপর **কয়টা প্যাক** Block বা QI করতে চায় সেই সংখ্যা লিখবে — raw KG লেখার option থাকবে না।
+- System সেই PO-র নিজের `fill_qty_per_pack` দিয়ে গুণ করে আসল KG বের করবে, তারপর existing
+  posting engine দিয়েই post করবে — Block-এর জন্য `P344` (Unrestricted→Blocked, `rtv.handlers.ts`-এর
+  posting pattern অনুসরণ করে), QI-hold-এর জন্য `P322` (Unrestricted→QA, `inward_qa.handlers.ts`
+  বা `pack_config`-এর existing usage pattern অনুসরণ করে) — দুটো movement type-ই আগে থেকে আছে,
+  শুধু pack-aware wrapper handler লাগবে, নতুন movement type লাগবে না।
+- Reference tagging: `reference_document_type='PACK_PO'`, `reference_document_number=po_number`
+  (existing `stock_document` pattern, §106)।
+- **কোনো নতুন schema/column লাগবে না** — "কোন PO-র কত প্যাক কোন stock-type-এ আছে" derive হবে
+  IN03-এর নিজের read-time logic-এই (§116.5-এর মতো, KG÷fill_qty_per_pack), আলাদা কোনো
+  "pack-level state" table maintain করার দরকার নেই যতক্ষণ block/QI action pack-count-ভিত্তিকই
+  থাকে।
+
+**TX code/route/ACL — এই session-এ ঠিক করা হয়নি, আলাদা design pass লাগবে।**
+
+---
+
+## Section 117 — IN02 Stock Ledger Report: Full ZMB51-Style Redesign (LOCKED — 2026-08-04)
+
+**প্রেক্ষাপট:** IN03 (§116) redesign lock করার পরপরই একই session-এ IN02 (Stock Ledger, SAP
+ZMB51/MB51-এর equivalent) নিয়ে বসা হয়। **⚠️ Process note, নিজেদের ভুল থেকে শেখা:** IN03-এর brief
+লেখার সময় ১১-bug checklist সেশনের শুরুতে একবার পড়া হয়েছিল কিন্তু concrete technical decision
+(কোন hook ব্যবহার হবে) নেওয়ার সময় আবার সক্রিয়ভাবে check করা হয়নি — ফলে Company filter-এ
+`useCompaniesForOmQuery` (company-scope-unaware, `skipAcl:true` admin endpoint) ভুল করে বসানো
+হয়ে গিয়েছিল, business owner নিজে ধরিয়ে দেন (§116.2-এর correction note দ্রষ্টব্য)। এই section
+লেখার সময় প্রতিটা concrete decision-এর বিপরীতে ১১টা pattern explicitly re-check করা হয়েছে —
+§117.9-এ ফলাফল।
+
+### 117.1 — পুরনো IN02-এর real bug (code-verified)
+
+1. **"Material ID" ফিল্ড raw UUID text input** — কোনো picker নেই, user-কে UUID paste করতে বলে
+   (§8A সরাসরি ভাঙে)।
+2. **শুধু ১টা material বাধ্যতামূলক**, multi-select নেই।
+3. **Storage Location/Batch/Movement Type — কোনো filter নেই।**
+4. **Output-এ Material/Company/Storage Location/Batch — কোনো column-ই নেই**, raw ID কখনো resolve
+   হয় না।
+5. **Material Document (business document identity)-ই সম্পূর্ণ অনুপস্থিত** — `stock_ledger.stock_document_id`
+   → `stock_document.document_number`/`item_number`/`document_year` কখনো join হয় না। এটাই ZMB51-এর
+   মূল identity column, IN02-এ নেই।
+6. **Movement Type শুধু code দেখায়, description না** (`movement_type_master` join হয় না)।
+7. **Pagination ভাঙা** — `offset` state-এর কোনো setter নেই, "Next Page" বোতাম নেই।
+8. **Running Balance ভুল** — client-side শুধু fetched rows যোগ করে, date-filter/pagination-এ
+   opening balance বাদ পড়ে যায়।
+9. Company selection-এ IN03-এর মতোই bug — single-company-force।
+
+### 117.2 — Data audit: কী আছে, কী সত্যিই নেই (real gap vs wiring gap)
+
+Detailed audit session-এই হয়েছিল (real dev DB `ytapuwiqicmvpanmzelb` চেক করে) — সংক্ষেপে:
+
+- **প্রায় সবকিছুই "আছে, শুধু join/দেখানো হয়নি"**: Material Document Number/Item/Year
+  (`stock_document.document_number/item_number/document_year`), Material/Company/SLoc/Batch
+  (raw ID column হিসেবে `stock_ledger`-এ আছে), Movement Type description (`movement_type_master`),
+  Reference Document (`stock_document.reference_document_type/number`), Reversed link
+  (`stock_document.reversal_document_id`), User (`created_by`/`posted_by`), Entry time (`created_at`)।
+- **Vendor/Customer** — সরাসরি কোনো column নেই `stock_ledger`/`stock_document`-এ, কিন্তু
+  `goods_receipt.vendor_id` (verified via schema check) আর dispatch-side customer link অন্য
+  টেবিলে আছে — `reference_document_type` অনুযায়ী per-type resolve লাগবে (real, ছোট নতুন কাজ, কিন্তু
+  data PACE-তে কোথাও-না-কোথাও আছেই, নতুন capture করতে হবে না)।
+- **RM/PM "GRN-lot tracking"** — feasibility doc-এ আগে লেখা ছিল এটা "আলাদা mechanism" হিসেবে আছে;
+  যাচাই করে পাওয়া গেল real column আছে (`goods_receipt_line.batch_lot_number`, expiry_date,
+  shelf_life_months সহ) — কিন্তু `stock_ledger`-এ কখনো propagate হয়নি, dev-এ কোনো real GRN line
+  data-ও নেই যাচাই করার জন্য। IN02-এর scope-এর বাইরে (ledger join করলেও শুধু GRN-origin row-এই
+  প্রযোজ্য, ব্যাপক না) — flag করে রাখা হলো, এই session-এ touch করা হয়নি।
+- **সত্যিই সম্পূর্ণ অনুপস্থিত (business-model-এই নেই, gap না):** Special Stock/Consignment
+  indicator, Currency code (PACE single-currency/INR-only design)।
+- **Document Date vs Posting Date** — real dev data দিয়ে যাচাই করা: **224/224 `stock_document`
+  row-এ দুটো তারিখ হুবহু সমান**, কোড দেখেও নিশ্চিত (`grn.handlers.ts` দুটোকেই একই তারিখ পাঠায়)।
+  **সিদ্ধান্ত: আলাদা Document Date filter/column বানানো হবে না** — বাস্তবে কোনো পার্থক্য তৈরিই হয়
+  না আজকে, backdated-entry-এর মতো কোনো flow না এলে এটা যোগ করার দরকার নেই।
+
+### 117.3 — Page 1 (Selection Screen) — LOCKED
+
+| Filter | Multi-value | Data source |
+|---|---|---|
+| Company | ✅ (single-company হলে read-only label, popup-ই নেই) | `runtimeContext.availableCompanies` — **`useCompaniesForOmQuery` না** (§116.2-এর correction, একই ভুল IN02-এও এড়াতে হবে) |
+| Material | ✅ | `useMaterialOptionsQuery` (existing) |
+| Storage Location | ✅ | `useStorageLocationOptionsQuery` (existing) |
+| Batch Number | ✅ | নতুন backend search endpoint — **IN03-এর সাথে shared না**, নিজস্ব (§117.6-এ কারণ) |
+| Movement Type | ✅ | `movement_type_master` থেকে পুরো active list একবারে fetch (ছোট list, search endpoint লাগে না) |
+| Posting Date | Range, **বাধ্যতামূলক, max span ৩৬৫ দিন** | hard validation, both frontend + backend |
+| Execute/Search | Button | |
+
+**বাদ দেওয়া (আলোচনা করে সিদ্ধান্ত, প্রতিটার কারণ):**
+- Document/Entry Date filter — বাদ (§117.2, বাস্তবে কখনো posting date থেকে আলাদা হয় না)
+- Stock Type filter — বাদ (business owner: real ZMB51-এ এটা নেই, Movement Type-ই যথেষ্ট বলে দেয়)
+- Reversed Documents toggle — বাদ (Movement Type + description column-ই এটা স্পষ্ট দেখায়, যেমন
+  "P262 — P261 Reversal"; আলাদা flag/filter দরকার নেই)
+- Material Document Number/Year filter, PO/Reference filter, Vendor/Customer filter — এই session-এ
+  filter হিসেবে design করা হয়নি (শুধু output column হিসেবে, §117.4) — filter হিসেবে দরকার পড়লে
+  পরে যোগ করা যাবে, এখন scope-এ নেই।
+
+### 117.4 — Page 2 (Output Grid) — LOCKED
+
+Running Balance **সম্পূর্ণ বাদ** (standard MB51-এও নেই, PACE-এর নিজস্ব addition ছিল, ভাঙা ছিল,
+business owner explicit সিদ্ধান্তে বাদ)।
+
+| Column | Note |
+|---|---|
+| Material Document Number | `stock_document.document_number` |
+| Material Doc. Item | `stock_document.item_number` |
+| Material Document Year | `stock_document.document_year` |
+| Posting Date | |
+| Company | |
+| Type | Material Type badge |
+| Material | `document_name` fallback `material_name` (§116.3-এর একই rule) |
+| External Code | blank থাকলে blank-ই |
+| Document Name | Hidden by default |
+| Storage Location | code শুধু |
+| Batch Number | |
+| Movement Type | code + `movement_type_master.description` |
+| Quantity (Base UOM) | সবসময় থাকবে |
+| Quantity (Pack/Entry UOM) | শুধু প্রযোজ্য হলে (§117.5) |
+| Value | |
+| Direction | IN/OUT badge |
+| Reference Document | `reference_document_type` + `reference_document_number` |
+| Vendor/Customer | per-`reference_document_type` resolve (§117.2) — internal backend lookup, **কোনো cross-page ACL dependency না** (§117.9-এর pattern #2/#11 check) |
+| User (posted by) | `created_by`/`posted_by` → `employee_code — full_name` (raw UUID না, §8A) |
+| Entry Date/Time | `created_at` |
+
+**Material column-গুলো (Type/Material/External Code/Document Name) সবসময় visible থাকবে** — IN03-এর
+মতো "single-material-filter হলে দরকার নেই" যুক্তি এখানে খাটে না, কারণ IN02 movement-level, প্রতিটা
+row-এই material identity দরকার।
+
+### 117.5 — Quantity: Base + Pack UOM দুটোই (IN03 থেকে ভিন্ন সিদ্ধান্ত)
+
+IN03-এ শুধু Primary UOM দেখানো হয় (§116.5)। IN02-এ ZMB51-এর মতোই **দুটো UOM column পাশাপাশি**:
+
+| Type | Pack/Entry UOM column | Base UOM column |
+|---|---|---|
+| RM/PM/INT | material-level fixed conversion থাকলে (§110 Phase C-এর existing `alt_uom_code`/`alt_quantity` mechanism reuse) | সবসময় |
+| SFG | নেই — SFG কখনো pack হয় না | সবসময় |
+| FG | ওই নির্দিষ্ট ledger row-এর লিংক করা Packing PO-র `fill_qty_per_pack` দিয়ে derive — **row-এর নিজের quantity ÷ fill_qty_per_pack** (IN03-এর মতো PO-র total `num_packs` না, কারণ IN02 movement-level — একটা ledger row PO-র পুরো qty নাও হতে পারে, ভবিষ্যতে partial reversal এলে আলাদা হয়ে যাবে) | সবসময় (KG) |
+
+Multi-hop conversion কোথাও নেই (PACE-এর locked limitation, §83.15/§110) — pack↔KG শুধু single
+collapsed factor দিয়েই resolve হয়, ওটা যে Pack BOM configure করেছে তার দায়িত্ব সঠিক factor বসানো।
+
+### 117.6 — Batch/PPO search endpoint — IN03-এর সাথে shared না (সিদ্ধান্ত reverse করা হলো)
+
+আগের আলোচনায় (IN03 brief লেখার সময়) প্রস্তাব ছিল batch-search/po-search endpoint দুই report-এর
+মধ্যে shared রাখা হবে (duplicate কাজ এড়াতে)। **এই session-এ reverse করা হলো** — bug pattern #6
+(দুটো আলাদা page/resource_code একই endpoint শেয়ার করা) এর ঝুঁকি সরাসরি: IN02 আর IN03-এর ACL
+resource আলাদা (`PROC_STOCK_LEDGER` বনাম `PROC_CURRENT_STOCK`) — কোনো user IN03-এর access পেয়েও
+IN02-এর নাও পেতে পারে (বা উল্টো), তখন shared endpoint-এ কোন resource_code গেট বসাব সেটাই অস্পষ্ট
+হয়ে যায়, আর ভুল করে একটা resource-এর VIEW দিয়ে অন্য resource-এর data-access কার্যত খুলে যাওয়ার
+ঝুঁকি থাকে। **তাই দুটো আলাদা, প্যারালাল endpoint** (`stock-ledger/batch-search` →
+`PROC_STOCK_LEDGER:VIEW`, `current-stock/batch-search` → `PROC_CURRENT_STOCK:VIEW`) — underlying
+SQL logic একটা shared TypeScript helper function দিয়ে reuse করা যায় (কোড duplicate না), কিন্তু
+route+ACL gate আলাদাই থাকবে। PPO-search-এর জন্যও একই যুক্তি।
+
+### 117.7 — Column Layout System (Global + User-specific) — প্রথমবার এখানে বানানো হচ্ছে
+
+IN03-এও দরকার (§116.3-এর "Columns" button/drawer), কিন্তু IN03 এখন Codex-এর হাতে চলছে (§116-এর
+task brief already handed off) — মাঝপথে feature যোগ করলে scope disruption হবে। **তাই এই mechanism-টা
+প্রথমবার IN02-এর brief-এই বানানো হচ্ছে**, generic/reusable করে — IN03 বেসিক rewrite শেষ হলে একটা
+ছোট follow-up brief দিয়ে IN03-ও এটা ব্যবহার করবে।
+
+**Schema (নতুন, migration লাগবে):**
+- `erp_inventory.report_column_layout` — `id`, `report_code` (text, 'IN02'/'IN03'/ভবিষ্যতে অন্য
+  report), `scope` (CHECK IN ('GLOBAL','USER')), `owner_user_id` (uuid NULL — GLOBAL-এ NULL,
+  USER-এ required), `layout_name`, `visible_columns` (jsonb, ordered array of column key),
+  `created_by`, `created_at`।
+  *(নতুন schema বানানো হচ্ছে না — existing exposed `erp_inventory` schema-তেই বসছে, PostgREST
+  exposure নিয়ে নতুন platform-config ধাপ এড়াতে — যদিও mechanism-টা conceptually inventory-নির্দিষ্ট
+  না, ভবিষ্যতে অন্য module-এর report ব্যবহার করলেও এই একই table কাজ করবে, শুধু `report_code`
+  আলাদা হবে।)*
+- `erp_inventory.report_layout_default` — `auth_user_id`, `report_code`, `layout_id`, UNIQUE
+  (`auth_user_id`, `report_code`) — একজন user একটা report-এর জন্য ঠিক একটা default বেছে নিতে
+  পারবে (global বা নিজের personal layout, যেকোনোটা)। কেউ কিছু বেছে না নিলে system baseline
+  (§116.3/§117.4-এ locked default visible-column set) প্রয়োগ হবে।
+
+**Global layout create/edit — কে পারবে (⚠️ dependency flag):** ACL-driven হবে (WRITE/EDIT action
+IN02/IN03-এর নিজস্ব resource_code-এ) — hardcoded role check না (bug pattern #1)। কিন্তু IN01-IN06/PR21-এর
+আসল ACL decision (কোন department কী action পাবে) এখনো হয়নি (§6 workflow-এর item 7, ইচ্ছাকৃতভাবে
+পরে করার কথা)। **তাই এখন provisional: SA/GA-ই শুধু global layout create/edit করতে পারবে** (এটা
+hardcode না — SA/GA সবসময় full-access, Key Architecture Rule অনুযায়ীই এটা true), বাকি সবাই শুধু
+নিজের personal (USER-scope) layout বানাতে পারবে। ACL session (item 7)-এ যখন এই resource-গুলোর
+WRITE/EDIT action সত্যিকারের department-ভিত্তিক ঠিক হবে, তখন এই gate সেই action-এর সাথে rewire
+হবে — এটা একটা flagged follow-up, নতুন feature না।
+
+### 117.8 — Pagination/Export/Performance — IN03-এর মতোই সিদ্ধান্ত
+
+- Pagination বাদ, mandatory date-range cap (৩৬৫ দিন) দিয়ে bound করা "endless" fetch — পুরো filtered
+  result একবারেই state-এ আসবে।
+- Excel export — existing `downloadTabularFile.js`-এর `downloadCsvFile()` reuse (client-side,
+  already-loaded rows থেকে) — নতুন server-side export mechanism লাগবে না, কারণ endless fetch-এর
+  পর state-এই পুরো data থাকে।
+- `ErpDenseGrid`-এ virtualization যোগ করা হবে (কোনো library নেই আজ) — বড় row count-এও screen
+  performant থাকার জন্য। IN02-তেই প্রথম যোগ হচ্ছে, IN03-ও পরে এটা reuse করবে।
+
+### 117.9 — ১১-bug-pattern explicit check (এই session-এর নিজের শেখা অনুযায়ী, প্রতিটা ধরে ধরে)
+
+1. **Hardcoded rank-check** — N/A (এটা read-only report; Global-layout-create SA/GA বাদে বাকি সবার
+   জন্য ACL-driven, hardcode না — §117.7)।
+2. **Company-scope gap** — এটাই IN03-এ ভুল হয়েছিল, এখানে আগে থেকেই ঠিক করা: frontend
+   `runtimeContext.availableCompanies` দিয়ে scoped, **backend-ও independently `company_ids`-এর
+   প্রতিটা value `assertCompanyScope`/allowed-list দিয়ে re-validate করবে** (frontend-কে বিশ্বাস
+   করে বসে থাকা যাবে না, direct API call bypass করতে পারে)।
+3. **Blanket capability leak** — N/A (deferred to item 7, ACL session)।
+4. **capture_acl_version_source one-time trap** — N/A (কোনো ACL data change এই brief-এ নেই)।
+5. **ACL-MASTER drift** — N/A (deferred)।
+6. **Resource-code collision** — সরাসরি ধরা পড়ল ও ঠিক হলো: batch/PPO-search shared endpoint
+   প্রস্তাব reverse করা হলো (§117.6), প্রতিটা report নিজের resource_code-এই থাকবে।
+7. **Maker-checker** — N/A (কোনো approve action নেই)।
+8. **Route/ACL registry mismatch** — নতুন route যোগ করার সময় method+path হুবহু মিলিয়ে register
+   করতে হবে (task brief-এ explicit hard rule হিসেবে থাকবে)।
+9. **approver_map uniqueness** — N/A।
+10. **Small config/data traps** — Movement Type list শুধু `active=true` filter দিয়ে সরাসরি
+    `movement_type_master` থেকে, কোনো sentinel/placeholder দরকার নেই।
+11. **Wrong company source** — §117.3-এর Company filter fix-ই এটার direct প্রয়োগ; single-company
+    user read-only, multi-company user নিজের allowed list থেকেই বেছে নেবে, কোনো global company
+    picker না (Law 12)।
+
+**§8A (raw UUID) আর §8B (batch vs sequential loop) আলাদাভাবে যাচাই করা হয়েছে** — §117.4-এর সব
+raw-ID column resolve হয় (User/Vendor/Customer/Company/Material/SLoc), আর §117.2/§117.4-এর সব
+bulk-resolve (material, storage location, movement type, vendor/customer per reference type,
+employee name) `.in()`-স্টাইল bulk query হবে, per-row loop না — task brief-এ explicit rule হিসেবে
+থাকবে।

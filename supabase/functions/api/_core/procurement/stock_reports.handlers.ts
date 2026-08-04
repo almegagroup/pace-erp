@@ -145,7 +145,10 @@ function resolveMaterialLabel(material: JsonRecord | undefined): string {
   return toTrimmedString(material?.document_name) || toTrimmedString(material?.material_name);
 }
 
-function resolveLotRefForStockLedger(doc: JsonRecord | undefined): string {
+// Shared by both IN02 (stock ledger) and IN03 (current stock) — same
+// fallback chain as fgStockBreakdownHandler's resolveLotRef(). Kept as one
+// function per the task brief's explicit "don't duplicate" instruction.
+function resolveLotRef(doc: JsonRecord | undefined): string {
   if (!doc) return "";
   const lot = toTrimmedString(doc.source_lot_ref);
   if (lot) return lot;
@@ -264,17 +267,6 @@ async function resolveCompanyScopeList(
     throw new Error("COMPANY_SCOPE_VIOLATION");
   }
   return normalizedRequested;
-}
-
-function resolveLotRefForCurrentStock(doc: JsonRecord | undefined): string {
-  if (!doc) return "";
-  const lot = toTrimmedString(doc.source_lot_ref);
-  if (lot) return lot;
-  if (toTrimmedString(doc.reference_document_type) === "PACK_PO") {
-    const ref = toTrimmedString(doc.reference_document_number);
-    if (ref) return ref;
-  }
-  return toTrimmedString(doc.document_number);
 }
 
 function initializeCurrentStockDraftRow(params: {
@@ -527,7 +519,7 @@ export async function getStockLedgerReportHandler(
       }
       const material = materialMap.get(row.material_id);
       if (toTrimmedString(material?.material_type) === "FG") {
-        const poNumber = resolveLotRefForStockLedger(doc);
+        const poNumber = resolveLotRef(doc);
         if (poNumber) fgPoNumbers.add(poNumber);
       }
       const packCode = toTrimmedString(material?.pack_code);
@@ -647,7 +639,7 @@ export async function getStockLedgerReportHandler(
       const baseQuantity = normalizeNumber(row.quantity);
       const conversion = resolveAltUomConversion(material, conversionsByMaterialId.get(row.material_id) ?? []);
       const altFactor = Number(conversion?.conversion_factor ?? 0);
-      const fgPoNumber = materialType === "FG" ? resolveLotRefForStockLedger(doc) : "";
+      const fgPoNumber = materialType === "FG" ? resolveLotRef(doc) : "";
       const fgPo = fgPoNumber ? packingOrderMap.get(fgPoNumber) : null;
       const packUomCode = packCodeMap.get(toTrimmedString(material?.pack_code)) || null;
       let packQuantity: number | null = null;
@@ -867,7 +859,7 @@ export async function getCurrentStockHandler(
       const docMap = new Map(((docRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
       const poNumbers = [...new Set(
         typedLedgerRows
-          .map((row) => resolveLotRefForCurrentStock(docMap.get(toTrimmedString(row.stock_document_id))))
+          .map((row) => resolveLotRef(docMap.get(toTrimmedString(row.stock_document_id))))
           .filter(Boolean),
       )];
       const { data: poRows, error: poError } = poNumbers.length
@@ -890,7 +882,7 @@ export async function getCurrentStockHandler(
           ? Number(ledger.quantity ?? 0)
           : -Number(ledger.quantity ?? 0);
         const batchNumber = toTrimmedString(ledger.batch_number) || null;
-        const resolvedPoNumber = resolveLotRefForCurrentStock(docMap.get(toTrimmedString(ledger.stock_document_id))) || null;
+        const resolvedPoNumber = resolveLotRef(docMap.get(toTrimmedString(ledger.stock_document_id))) || null;
         const packingOrder = resolvedPoNumber ? poMap.get(resolvedPoNumber) : undefined;
         const sourcePoType = toTrimmedString(packingOrder?.source_po_type).toUpperCase();
 

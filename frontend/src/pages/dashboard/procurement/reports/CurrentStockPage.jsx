@@ -8,15 +8,16 @@
  * Authority: Frontend
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useMenu } from "../../../../context/useMenu.js";
+import { buildTransactionCompanyList } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import {
-  useCompaniesForOmQuery,
   useMaterialOptionsQuery,
   useStorageLocationOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -68,16 +69,29 @@ function toggleValue(list, targetValue) {
 }
 
 export default function CurrentStockPage() {
-  const companiesQuery = useCompaniesForOmQuery();
+  const { runtimeContext } = useMenu();
   const materialsQuery = useMaterialOptionsQuery({ status: "ACTIVE", limit: 1000 });
   const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
 
+  // §116.2 correction: Company must never come from `useCompaniesForOmQuery`
+  // (GET /api/admin/companies) — that endpoint is unscoped (returns every
+  // business company, gated only by a hardcoded SA/GA/Manager-tier check) and
+  // would leak the full company list to any report viewer, plus 403 outright
+  // for L1-tier users. `runtimeContext.availableCompanies` is already scoped
+  // server-side to the caller's own erp_map.user_companies (same source
+  // TransactionCompanySelector uses), so it's the only safe source here.
+  const availableCompanies = useMemo(
+    () => buildTransactionCompanyList(runtimeContext),
+    [runtimeContext],
+  );
+  const workspaceMode = String(runtimeContext?.workspaceMode ?? "").toUpperCase();
+  const isSingleCompany = workspaceMode !== "MULTI" || availableCompanies.length <= 1;
   const companyOptions = useMemo(
-    () => (Array.isArray(companiesQuery.data) ? companiesQuery.data : []).map((company) => ({
+    () => availableCompanies.map((company) => ({
       value: company.id,
       label: company.company_code ? `${company.company_code}${company.company_name ? ` — ${company.company_name}` : ""}` : company.company_name || company.id,
     })),
-    [companiesQuery.data],
+    [availableCompanies],
   );
   const materialOptions = useMemo(
     () => (materialsQuery.materials ?? []).map((material) => ({
@@ -108,6 +122,12 @@ export default function CurrentStockPage() {
   const [error, setError] = useState("");
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
+
+  useEffect(() => {
+    if (isSingleCompany && companyOptions.length > 0) {
+      setCompanyValues(companyOptions);
+    }
+  }, [isSingleCompany, companyOptions]);
 
   const columnDefinitions = useMemo(
     () => [
@@ -158,6 +178,21 @@ export default function CurrentStockPage() {
     }
   }
 
+  // SAP-style Execute shortcut (F8) — mirrors ZMB51/MB52's own Execute key,
+  // since this report is explicitly modeled on them.
+  useEffect(() => {
+    function handleExecuteShortcut(event) {
+      if (event.key !== "F8" || loading) {
+        return;
+      }
+      event.preventDefault();
+      void handleSearch();
+    }
+    window.addEventListener("keydown", handleExecuteShortcut);
+    return () => window.removeEventListener("keydown", handleExecuteShortcut);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, companyValues, materialValues, slocValues, batchValues, packingPoValues, materialTypes, stockTypes, showZero]);
+
   return (
     <ErpScreenScaffold
       eyebrow="Inventory Reports"
@@ -174,6 +209,7 @@ export default function CurrentStockPage() {
           key: "search",
           label: loading ? "Searching..." : "Search",
           tone: "primary",
+          hint: "F8",
           onClick: () => void handleSearch(),
           disabled: loading,
         },
@@ -182,13 +218,24 @@ export default function CurrentStockPage() {
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Page 1" title="Filters">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <MultiValueFilterField
-              label="Company"
-              placeholder="All allowed companies"
-              value={companyValues}
-              onChange={setCompanyValues}
-              options={companyOptions}
-            />
+            {isSingleCompany ? (
+              <div className="grid gap-1">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Company
+                </span>
+                <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  {companyOptions[0]?.label ?? "—"}
+                </div>
+              </div>
+            ) : (
+              <MultiValueFilterField
+                label="Company"
+                placeholder="All allowed companies"
+                value={companyValues}
+                onChange={setCompanyValues}
+                options={companyOptions}
+              />
+            )}
             <MultiValueFilterField
               label="Material"
               placeholder="All materials"
