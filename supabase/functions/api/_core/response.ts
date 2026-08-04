@@ -94,14 +94,17 @@ function normalizeCode(code: string): string {
     return "AUTH_INVALID_CREDENTIALS";
   }
 
-  // Everything else is treated as blocked
-  return "REQUEST_BLOCKED";
+  // Everything else is an ordinary business/validation error (not an auth or
+  // session security boundary) — pass the real code through so the frontend's
+  // friendly-error maps (and the user) see what actually went wrong, instead
+  // of a generic wall. Enumeration-safety only matters for AUTH_/SESSION_.
+  return code;
 }
 
 /**
  * Normalize user-facing message (ID-2.6A)
  */
-function normalizeMessage(publicCode: string): string {
+function normalizeMessage(publicCode: string, originalMessage: string): string {
   if (publicCode === "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED") {
     return "Maximum window limit reached";
   }
@@ -110,7 +113,7 @@ function normalizeMessage(publicCode: string): string {
     return GENERIC_AUTH_MESSAGE;
   }
 
-  return GENERIC_BLOCK_MESSAGE;
+  return originalMessage || GENERIC_BLOCK_MESSAGE;
 }
 
 /**
@@ -118,7 +121,7 @@ function normalizeMessage(publicCode: string): string {
  */
 export function errorResponse(
   code: string,
-  _message: string,
+  message: string,
   requestId: string,
   _action: Action = "NONE",
   status = 403,
@@ -156,7 +159,7 @@ export function errorResponse(
       ? "LOGOUT"
       : "NONE";
 
-  const message = normalizeMessage(publicCode);
+  const responseMessage = normalizeMessage(publicCode, message);
 
   const rawWarning =
   (req as any)?.__session_warning ??
@@ -173,7 +176,7 @@ return new Response(
   JSON.stringify({
     ok: false,
     code: publicCode,
-    message,
+    message: responseMessage,
     action,
 
     // 🔥 inject warning

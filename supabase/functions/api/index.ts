@@ -111,7 +111,12 @@ try {
     applyCORS(
       req,
       errorResponse(
-        code,
+        // Last-resort catch for a genuinely unhandled exception anywhere in the
+        // pipeline — unlike a normal handler's deliberate errorResponse() call,
+        // `code` here is an arbitrary thrown Error's .message and could contain
+        // anything, so it must stay masked (SESSION_* still passes through to
+        // allow LOGOUT). The real code is preserved in decisionTrace for logs.
+        code.startsWith("SESSION_") ? code : "REQUEST_BLOCKED",
         "Request blocked by security policy",
         requestId,
         action,
