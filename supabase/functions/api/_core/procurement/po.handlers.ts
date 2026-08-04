@@ -14,6 +14,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { recalculateAndBuildUpdates } from "./csn.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -395,7 +396,7 @@ async function assertProcurementHeadRole(
   companyId: string,
   createdBy?: string | null,
 ): Promise<void> {
-  if (ctx.roleCode === "SA" || ctx.roleCode === "GA") {
+  if (hasBlanketApprovalOverride(ctx)) {
     return; // SA/GA always retain override authority, regardless of approver_map config.
   }
 
@@ -403,7 +404,7 @@ async function assertProcurementHeadRole(
   let isConfiguredApprover: boolean;
 
   if (rules.length === 0) {
-    isConfiguredApprover = ctx.roleCode === "DIRECTOR"; // no approver_map row configured yet — fall back to DIRECTOR.
+    isConfiguredApprover = hasBlanketApprovalOverride(ctx); // no approver_map row configured yet — fall back to blanket override approvers.
   } else {
     const creatorRoleCode = createdBy ? await getUserRoleCode(createdBy) : null;
     const scopedRules = pickScopedApproverRules(
@@ -417,14 +418,14 @@ async function assertProcurementHeadRole(
     );
     isConfiguredApprover = scopedRules.length > 0
       ? matchesApprover(scopedRules, ctx)
-      : ctx.roleCode === "DIRECTOR"; // configured rows exist, but none scoped to this creator — fall back to DIRECTOR.
+      : hasBlanketApprovalOverride(ctx); // configured rows exist, but none scoped to this creator — fall back to blanket override approvers.
   }
 
   if (!isConfiguredApprover) {
     throw new Error("PROCUREMENT_HEAD_REQUIRED");
   }
 
-  if (createdBy && createdBy === ctx.auth_user_id && ctx.roleCode !== "DIRECTOR") {
+  if (createdBy && createdBy === ctx.auth_user_id && !hasBlanketApprovalOverride(ctx)) {
     throw new Error("PROCUREMENT_SELF_APPROVAL_FORBIDDEN");
   }
 }

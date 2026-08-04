@@ -15,6 +15,7 @@ import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -155,7 +156,7 @@ async function assertPtoApproverRole(
   companyId: string,
   createdBy?: string | null,
 ): Promise<void> {
-  if (ctx.roleCode === "SA" || ctx.roleCode === "GA") {
+  if (hasBlanketApprovalOverride(ctx)) {
     return;
   }
 
@@ -163,7 +164,7 @@ async function assertPtoApproverRole(
   let isConfiguredApprover: boolean;
 
   if (rules.length === 0) {
-    isConfiguredApprover = ctx.roleCode === "DIRECTOR";
+    isConfiguredApprover = hasBlanketApprovalOverride(ctx);
   } else {
     const scopedRules = pickScopedApproverRules(
       { resource_code: "PROC_PLANT_TRANSFER_LIST", action_code: "APPROVE", requester_auth_user_id: createdBy ?? null },
@@ -171,14 +172,14 @@ async function assertPtoApproverRole(
     );
     isConfiguredApprover = scopedRules.length > 0
       ? matchesPtoApprover(scopedRules, ctx)
-      : ctx.roleCode === "DIRECTOR";
+      : hasBlanketApprovalOverride(ctx);
   }
 
   if (!isConfiguredApprover) {
     throw new Error("PTO_APPROVER_REQUIRED");
   }
 
-  if (createdBy && createdBy === ctx.auth_user_id && ctx.roleCode !== "DIRECTOR") {
+  if (createdBy && createdBy === ctx.auth_user_id && !hasBlanketApprovalOverride(ctx)) {
     throw new Error("PTO_SELF_APPROVAL_FORBIDDEN");
   }
 }

@@ -15,6 +15,7 @@ import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -255,7 +256,7 @@ async function assertStoApproverRole(
   companyId: string,
   createdBy?: string | null,
 ): Promise<void> {
-  if (ctx.roleCode === "SA" || ctx.roleCode === "GA") {
+  if (hasBlanketApprovalOverride(ctx)) {
     return;
   }
 
@@ -263,7 +264,7 @@ async function assertStoApproverRole(
   let isConfiguredApprover: boolean;
 
   if (rules.length === 0) {
-    isConfiguredApprover = ctx.roleCode === "DIRECTOR";
+    isConfiguredApprover = hasBlanketApprovalOverride(ctx);
   } else {
     const creatorRoleCode = createdBy ? await getUserRoleCode(createdBy) : null;
     const scopedRules = pickScopedApproverRules(
@@ -277,14 +278,14 @@ async function assertStoApproverRole(
     );
     isConfiguredApprover = scopedRules.length > 0
       ? matchesApprover(scopedRules, ctx)
-      : ctx.roleCode === "DIRECTOR";
+      : hasBlanketApprovalOverride(ctx);
   }
 
   if (!isConfiguredApprover) {
     throw new Error("PROCUREMENT_HEAD_REQUIRED");
   }
 
-  if (createdBy && createdBy === ctx.auth_user_id && ctx.roleCode !== "DIRECTOR") {
+  if (createdBy && createdBy === ctx.auth_user_id && !hasBlanketApprovalOverride(ctx)) {
     throw new Error("PROCUREMENT_SELF_APPROVAL_FORBIDDEN");
   }
 }

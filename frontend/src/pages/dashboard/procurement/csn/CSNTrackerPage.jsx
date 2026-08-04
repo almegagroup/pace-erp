@@ -681,7 +681,12 @@ export default function CSNTrackerPage() {
   }
 
   async function saveExpandedRow(row, dispatchAction = null) {
-    if (!companyId || !draft) {
+    const scopedCompanyId = effectiveCompanyId || row?.company_id || "";
+    if (!draft) {
+      return;
+    }
+    if (!scopedCompanyId) {
+      setError("PROCUREMENT_CSN_COMPANY_REQUIRED");
       return;
     }
     setSavingRowId(row.id);
@@ -695,7 +700,7 @@ export default function CSNTrackerPage() {
 
       if (!dispatchAction && dispatchChanged && nextDispatchQty != null) {
         const preview = await previewCSNDispatchQty(row.id, {
-          company_id: companyId,
+          company_id: scopedCompanyId,
           dispatch_qty: nextDispatchQty,
         });
         if (Number(preview?.remainder ?? 0) > 0) {
@@ -718,14 +723,14 @@ export default function CSNTrackerPage() {
 
       if (dispatchAction) {
         await confirmCSNDispatchQty(row.id, {
-          company_id: companyId,
+          company_id: scopedCompanyId,
           dispatch_qty: payload.dispatch_qty,
           ...dispatchAction,
         });
       }
 
       await updateCSN(row.id, {
-        company_id: companyId,
+        company_id: scopedCompanyId,
         ...payload,
       });
 
