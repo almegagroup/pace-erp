@@ -513,7 +513,7 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/amend$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
+    methods: { PUT: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
   },
   {
     pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/approve-amendment$/,

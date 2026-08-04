@@ -574,6 +574,7 @@ export async function createAndPostGRNFromLineHandler(
   let debugGateEntryLineId = "";
   let debugStorageLocationId = "";
   let debugGrnNumber = "";
+  let debugGrnId = "";
   let debugStep = "START";
   let debugContext: Record<string, unknown> = {};
   try {
@@ -794,6 +795,7 @@ export async function createAndPostGRNFromLineHandler(
       return procurementErrorResponse(req, ctx, "GRN_CREATE_FAILED", 500, "Unable to create GRN.");
     }
     console.log("[GRN_FROM_LINE] GRN created DRAFT:", grn.id, "grn_number:", grnNumber);
+    debugGrnId = String(grn.id);
 
     // All steps after this point must succeed. If anything fails, delete the DRAFT GRN so
     // there is no half-created record — the caller can safely retry from scratch.
@@ -1007,6 +1009,30 @@ export async function createAndPostGRNFromLineHandler(
     return okResponse(await hydrateGrn(String(grn.id)), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GRN_CREATE_FAILED";
+    if (debugGrnId) {
+      const rollbackResult = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("goods_receipt")
+        .delete()
+        .eq("id", debugGrnId)
+        .eq("status", "DRAFT");
+      if (rollbackResult.error) {
+        console.error("[GRN_FROM_LINE] ROLLBACK_DELETE_FAILED", JSON.stringify({
+          request_id: ctx.request_id,
+          grn_id: debugGrnId,
+          grn_number: debugGrnNumber || null,
+          step: debugStep,
+          error: rollbackResult.error,
+        }));
+      } else {
+        console.log("[GRN_FROM_LINE] ROLLBACK_DELETE_OK", JSON.stringify({
+          request_id: ctx.request_id,
+          grn_id: debugGrnId,
+          grn_number: debugGrnNumber || null,
+          step: debugStep,
+        }));
+      }
+    }
     console.error("[GRN_FROM_LINE] UNHANDLED ERROR:", JSON.stringify({
       request_id: ctx.request_id,
       auth_user_id: ctx.auth_user_id,
@@ -1014,6 +1040,7 @@ export async function createAndPostGRNFromLineHandler(
       gate_entry_line_id: debugGateEntryLineId || null,
       storage_location_id: debugStorageLocationId || null,
       grn_number: debugGrnNumber || null,
+      grn_id: debugGrnId || null,
       context: debugContext,
       body: debugBody,
       error_message: message,
