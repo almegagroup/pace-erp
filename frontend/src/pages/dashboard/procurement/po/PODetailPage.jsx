@@ -142,7 +142,7 @@ export default function PODetailPage() {
   // Customer detail pages already use) whenever the path param looks wrong.
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
   const resolvedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [editOpen, setEditOpen] = useState(false);

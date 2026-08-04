@@ -1958,11 +1958,21 @@ export async function amendPOHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
+  let debugPoId = "";
+  let debugBody: JsonRecord | null = null;
+  let debugCurrentStatus = "";
+  let debugTargetLine: PurchaseOrderLineRow | null = null;
+  let debugHeaderUpdates: JsonRecord = {};
+  let debugLineUpdates: JsonRecord = {};
+  let debugAmendmentEntries: JsonRecord[] = [];
+  let debugOrderGroupId = "";
   try {
     assertProcurementReadRole(ctx);
 
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
+    debugPoId = poId;
+    debugBody = body;
     const po = await getPOById(poId);
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
@@ -1974,6 +1984,7 @@ export async function amendPOHandler(
     }
 
     const currentStatus = toUpperTrimmedString(po.status);
+    debugCurrentStatus = currentStatus;
     if (currentStatus !== "CONFIRMED" && currentStatus !== "PENDING_APPROVAL") {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_AMEND_BLOCKED", 422, "PO cannot be amended in current state");
     }
@@ -1983,6 +1994,7 @@ export async function amendPOHandler(
     const targetLine = poLineId
       ? existingLines.find((line) => toTrimmedString(line.id) === poLineId) ?? null
       : null;
+    debugTargetLine = targetLine;
 
     if (poLineId && !targetLine) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_LINE_NOT_FOUND", 404, "PO line not found");
@@ -1998,6 +2010,8 @@ export async function amendPOHandler(
     const lineUpdates: JsonRecord = {
       last_updated_at: new Date().toISOString(),
     };
+    debugHeaderUpdates = headerUpdates;
+    debugLineUpdates = lineUpdates;
 
     const pushAmendment = (
       fieldName: string,
@@ -2098,8 +2112,29 @@ export async function amendPOHandler(
     if (amendmentEntries.length === 0) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_NO_AMENDMENT_CHANGES", 400, "No amendment changes provided");
     }
+    debugAmendmentEntries = amendmentEntries;
 
     const effectivePendingStatus = requiresApproval ? "PENDING_APPROVAL" : currentStatus;
+    console.log("PO_AMEND_ATTEMPT", JSON.stringify({
+      request_id: ctx.request_id,
+      auth_user_id: ctx.auth_user_id,
+      po_id: poId,
+      po_number: po.po_number,
+      company_id: po.company_id,
+      current_status: currentStatus,
+      effective_pending_status: effectivePendingStatus,
+      po_line_id: poLineId || null,
+      target_line_number: targetLine?.line_number ?? null,
+      target_line_open_qty: targetLine?.open_qty ?? null,
+      changed_fields: amendmentEntries.map((entry) => ({
+        field_changed: entry.field_changed,
+        old_value: entry.old_value,
+        new_value: entry.new_value,
+        requires_approval: entry.requires_approval,
+      })),
+      header_updates: headerUpdates,
+      line_updates: lineUpdates,
+    }));
 
     const { data: updatedPo, error: poUpdateError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -2113,7 +2148,14 @@ export async function amendPOHandler(
       .single();
 
     if (poUpdateError || !updatedPo) {
-      console.error("PO_AMEND_HEADER_UPDATE_ERROR", JSON.stringify(poUpdateError));
+      console.error("PO_AMEND_HEADER_UPDATE_ERROR", JSON.stringify({
+        request_id: ctx.request_id,
+        po_id: poId,
+        po_line_id: poLineId || null,
+        effective_pending_status: effectivePendingStatus,
+        header_updates: headerUpdates,
+        error: poUpdateError,
+      }));
       throw new Error("PROCUREMENT_PO_AMEND_FAILED");
     }
 
@@ -2127,7 +2169,14 @@ export async function amendPOHandler(
         .single();
 
       if (lineUpdateResult.error) {
-        console.error("PO_AMEND_LINE_UPDATE_ERROR", JSON.stringify(lineUpdateResult.error));
+        console.error("PO_AMEND_LINE_UPDATE_ERROR", JSON.stringify({
+          request_id: ctx.request_id,
+          po_id: poId,
+          po_line_id: targetLine.id,
+          line_number: targetLine.line_number,
+          line_updates: lineUpdates,
+          error: lineUpdateResult.error,
+        }));
         throw new Error("PROCUREMENT_PO_LINE_AMEND_FAILED");
       }
     }
@@ -2138,11 +2187,18 @@ export async function amendPOHandler(
       .insert(amendmentEntries);
 
     if (amendmentInsert.error) {
-      console.error("PO_AMEND_LOG_INSERT_ERROR", JSON.stringify(amendmentInsert.error));
+      console.error("PO_AMEND_LOG_INSERT_ERROR", JSON.stringify({
+        request_id: ctx.request_id,
+        po_id: poId,
+        po_line_id: poLineId || null,
+        amendment_entries: amendmentEntries,
+        error: amendmentInsert.error,
+      }));
       throw new Error("PROCUREMENT_PO_AMEND_LOG_FAILED");
     }
 
     const orderGroupId = toTrimmedString((updatedPo as PurchaseOrderRow).order_group_id);
+    debugOrderGroupId = orderGroupId;
     if (orderGroupId) {
       await syncOrderGroupStatus(orderGroupId, ctx.auth_user_id);
     }
@@ -2155,7 +2211,29 @@ export async function amendPOHandler(
       }),
     }, ctx.request_id, req);
   } catch (err) {
-    console.error("PO_AMEND_HANDLER_ERROR", err);
+    console.error("PO_AMEND_HANDLER_ERROR", JSON.stringify({
+      request_id: ctx.request_id,
+      auth_user_id: ctx.auth_user_id,
+      po_id: debugPoId || null,
+      po_line_id: toTrimmedString(debugBody?.po_line_id) || debugTargetLine?.id || null,
+      current_status: debugCurrentStatus || null,
+      order_group_id: debugOrderGroupId || null,
+      body: debugBody,
+      target_line: debugTargetLine
+        ? {
+            id: debugTargetLine.id,
+            line_number: debugTargetLine.line_number,
+            ordered_qty: debugTargetLine.ordered_qty,
+            open_qty: debugTargetLine.open_qty,
+            unit_rate: debugTargetLine.unit_rate,
+          }
+        : null,
+      header_updates: debugHeaderUpdates,
+      line_updates: debugLineUpdates,
+      amendment_entries: debugAmendmentEntries,
+      error_message: err instanceof Error ? err.message : "UNKNOWN_ERROR",
+      error_stack: err instanceof Error ? err.stack : String(err),
+    }));
     const code = (err as Error).message || "PROCUREMENT_PO_AMEND_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" || code === "PROCUREMENT_PO_LINE_NOT_FOUND" || code === "PROCUREMENT_COST_CENTER_NOT_FOUND"

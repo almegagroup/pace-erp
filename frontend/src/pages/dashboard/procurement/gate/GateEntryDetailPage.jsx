@@ -38,7 +38,7 @@ export default function GateEntryDetailPage() {
   const navigate = useNavigate();
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const { runtimeContext, allowedRoutes } = useMenu();
   const canPruneGe = isRouteAllowed(allowedRoutes ?? new Set(), "/dashboard/procurement/grns/:id");
   const queryClient = useQueryClient();

@@ -33,7 +33,7 @@ function getStatusTone(status) {
 export default function POOrderGroupDetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const navigate = useNavigate();
   const { shellProfile } = useMenu();
   const [saving, setSaving] = useState(false);

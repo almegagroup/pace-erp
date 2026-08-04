@@ -62,7 +62,7 @@ export default function SODetailPage() {
   const navigate = useNavigate();
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
   const resolvedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [issueLines, setIssueLines] = useState([]);

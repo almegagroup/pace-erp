@@ -56,7 +56,7 @@ function createEmptyLineForm() {
 export default function IVDetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const [availableGrns, setAvailableGrns] = useState([]);
   const [lineForm, setLineForm] = useState(createEmptyLineForm());
   const [saving, setSaving] = useState(false);
