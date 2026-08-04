@@ -185,6 +185,10 @@ export default function StockLedgerReportPage() {
   const [activeLayoutId, setActiveLayoutId] = useState("");
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
   const [columnSelectionTouched, setColumnSelectionTouched] = useState(false);
+  // Page 1 (Filters) and Page 2 (Output Grid) are separate full-page views,
+  // like Process PO's step pages or SAP MB52/ZMB51's Execute -> report screen
+  // — never both visible at once.
+  const [page, setPage] = useState(1);
 
   const columnDefinitions = useMemo(
     () => [
@@ -290,10 +294,25 @@ export default function StockLedgerReportPage() {
     });
     if (submittedFilters && JSON.stringify(submittedFilters) === JSON.stringify(nextParams)) {
       await reportQuery.refetch();
+      setPage(2);
       return;
     }
     setSubmittedFilters(nextParams);
+    setPage(2);
   }
+
+  // Esc from the output grid returns to the filter page, mirroring the
+  // app-wide "Esc Back" convention for stepped/drawer navigation.
+  useEffect(() => {
+    if (page !== 2) return undefined;
+    function handleBackShortcut(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setPage(1);
+    }
+    window.addEventListener("keydown", handleBackShortcut);
+    return () => window.removeEventListener("keydown", handleBackShortcut);
+  }, [page]);
 
   function handleApplyLayout(layoutId) {
     setActiveLayoutId(layoutId);
@@ -388,28 +407,46 @@ export default function StockLedgerReportPage() {
         ...(!error && activeError ? [{ key: "stock-ledger-query-error", tone: "error", message: activeError }] : []),
         ...(notice ? [{ key: "stock-ledger-notice", tone: "success", message: notice }] : []),
       ]}
-      actions={[
-        {
-          key: "columns",
-          label: "Columns",
-          onClick: () => setColumnsOpen(true),
-          disabled: false,
-        },
-        {
-          key: "export",
-          label: "Export Excel",
-          onClick: handleExport,
-          disabled: reportRows.length === 0,
-        },
-        {
-          key: "search",
-          label: reportQuery.isFetching ? "Searching..." : "Search",
-          tone: "primary",
-          onClick: () => void handleSearch(),
-          disabled: searchDisabled || reportQuery.isFetching,
-        },
-      ]}
+      actions={
+        page === 1
+          ? [
+              {
+                key: "search",
+                label: reportQuery.isFetching ? "Searching..." : "Search",
+                tone: "primary",
+                onClick: () => void handleSearch(),
+                disabled: searchDisabled || reportQuery.isFetching,
+              },
+            ]
+          : [
+              {
+                key: "back",
+                label: "Back to Filters",
+                hint: "Esc",
+                onClick: () => setPage(1),
+              },
+              {
+                key: "columns",
+                label: "Columns",
+                onClick: () => setColumnsOpen(true),
+              },
+              {
+                key: "export",
+                label: "Export Excel",
+                onClick: handleExport,
+                disabled: reportRows.length === 0,
+              },
+              {
+                key: "search",
+                label: reportQuery.isFetching ? "Searching..." : "Search Again",
+                tone: "primary",
+                onClick: () => void handleSearch(),
+                disabled: searchDisabled || reportQuery.isFetching,
+              },
+            ]
+      }
     >
+      {page === 1 ? (
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Page 1" title="Filters">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -500,13 +537,35 @@ export default function StockLedgerReportPage() {
           {dateSpanTooWide(dateFrom, dateTo) ? (
             <div className="mt-3 text-sm text-rose-700">Posting date range cannot exceed 365 days.</div>
           ) : null}
-        </ErpSectionCard>
 
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              onClick={() => void handleSearch()}
+              disabled={searchDisabled || reportQuery.isFetching}
+              className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {reportQuery.isFetching ? "Searching..." : "Search"}
+            </button>
+          </div>
+        </ErpSectionCard>
+      </div>
+      ) : (
+      <div className="grid gap-4">
         <ErpSectionCard eyebrow="Page 2" title="Stock Ledger Output Grid">
-          <div className="mb-3 text-sm text-slate-600">
-            {submittedFilters
-              ? `${reportRows.length} rows loaded`
-              : "Set filters and click Search to load the stock ledger."}
+          <div className="mb-3 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setPage(1)}
+              className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
+            >
+              Back to Filters
+            </button>
+            <div className="text-sm text-slate-600">
+              {submittedFilters
+                ? `${reportRows.length} rows loaded`
+                : "Set filters and click Search to load the stock ledger."}
+            </div>
           </div>
           <ErpDenseGrid
             columns={gridColumns}
@@ -517,6 +576,7 @@ export default function StockLedgerReportPage() {
           />
         </ErpSectionCard>
       </div>
+      )}
 
       <ErpColumnVisibilityDrawer
         visible={columnsOpen}

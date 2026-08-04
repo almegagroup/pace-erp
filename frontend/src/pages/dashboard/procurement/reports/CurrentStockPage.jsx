@@ -116,6 +116,10 @@ export default function CurrentStockPage() {
   const [error, setError] = useState("");
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
+  // Page 1 (Filters) and Page 2 (Output Grid) are separate full-page views,
+  // like Process PO's step pages or SAP MB52/ZMB51's Execute -> report screen
+  // — never both visible at once.
+  const [page, setPage] = useState(1);
 
   const columnDefinitions = useMemo(
     () => [
@@ -162,6 +166,7 @@ export default function CurrentStockPage() {
         show_zero: showZero ? "true" : "false",
       });
       setRows(Array.isArray(response?.data) ? response.data : []);
+      setPage(2);
     } catch (searchError) {
       setRows([]);
       setError(searchError instanceof Error ? searchError.message : "CURRENT_STOCK_FETCH_FAILED");
@@ -169,6 +174,19 @@ export default function CurrentStockPage() {
       setLoading(false);
     }
   }
+
+  // Esc from the output grid returns to the filter page, mirroring the
+  // app-wide "Esc Back" convention for stepped/drawer navigation.
+  useEffect(() => {
+    if (page !== 2) return undefined;
+    function handleBackShortcut(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setPage(1);
+    }
+    window.addEventListener("keydown", handleBackShortcut);
+    return () => window.removeEventListener("keydown", handleBackShortcut);
+  }, [page]);
 
   // SAP-style Execute shortcut (F8) — mirrors ZMB51/MB52's own Execute key,
   // since this report is explicitly modeled on them.
@@ -190,23 +208,42 @@ export default function CurrentStockPage() {
       eyebrow="Inventory Reports"
       title="Current Stock"
       notices={error ? [{ key: "current-stock-error", tone: "error", message: error }] : []}
-      actions={[
-        {
-          key: "columns",
-          label: "Columns",
-          onClick: () => setColumnsOpen(true),
-          disabled: !searched,
-        },
-        {
-          key: "search",
-          label: loading ? "Searching..." : "Search",
-          tone: "primary",
-          hint: "F8",
-          onClick: () => void handleSearch(),
-          disabled: loading || !companyId,
-        },
-      ]}
+      actions={
+        page === 1
+          ? [
+              {
+                key: "search",
+                label: loading ? "Searching..." : "Search",
+                tone: "primary",
+                hint: "F8",
+                onClick: () => void handleSearch(),
+                disabled: loading || !companyId,
+              },
+            ]
+          : [
+              {
+                key: "back",
+                label: "Back to Filters",
+                hint: "Esc",
+                onClick: () => setPage(1),
+              },
+              {
+                key: "columns",
+                label: "Columns",
+                onClick: () => setColumnsOpen(true),
+              },
+              {
+                key: "search",
+                label: loading ? "Searching..." : "Search Again",
+                tone: "primary",
+                hint: "F8",
+                onClick: () => void handleSearch(),
+                disabled: loading || !companyId,
+              },
+            ]
+      }
     >
+      {page === 1 ? (
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Page 1" title="Filters">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -300,9 +337,31 @@ export default function CurrentStockPage() {
             />
             <span>Show Zero Stock</span>
           </label>
-        </ErpSectionCard>
 
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              onClick={() => void handleSearch()}
+              disabled={loading || !companyId}
+              className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loading ? "Searching..." : "Search"}
+            </button>
+          </div>
+        </ErpSectionCard>
+      </div>
+      ) : (
+      <div className="grid gap-4">
         <ErpSectionCard eyebrow="Page 2" title="Current Stock Output Grid">
+          <div className="mb-3 flex justify-start">
+            <button
+              type="button"
+              onClick={() => setPage(1)}
+              className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
+            >
+              Back to Filters
+            </button>
+          </div>
           {!searched ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
               Set filters and click Search to view current stock.
@@ -317,6 +376,7 @@ export default function CurrentStockPage() {
           )}
         </ErpSectionCard>
       </div>
+      )}
 
       <ErpColumnVisibilityDrawer
         visible={columnsOpen}
