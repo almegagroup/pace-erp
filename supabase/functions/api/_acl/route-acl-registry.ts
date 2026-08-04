@@ -125,6 +125,19 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/planning":                    { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
   "GET:/api/procurement/document-flow":               { skipAcl: false, resourceCode: "PROC_PO_LIST",        action: "VIEW" },
   "GET:/api/procurement/stock-ledger":                { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  "GET:/api/procurement/stock-ledger/movement-types": { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  "GET:/api/procurement/stock-ledger/batch-search":   { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  "GET:/api/procurement/stock-ledger/po-search":      { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  "GET:/api/procurement/report-layouts":              { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  // VIEW, not WRITE: this single route handles both personal (USER-scope,
+  // anyone with VIEW may save their own layout) and Global-scope creation —
+  // the report itself has no business-data WRITE concept, and the real
+  // Global-vs-personal authority already lives inside createReportLayoutHandler
+  // (canManageGlobalLayouts SA/GA check). Gating the route at WRITE would
+  // block every ordinary VIEW-only user from saving even their own layout.
+  "POST:/api/procurement/report-layouts":             { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  "GET:/api/procurement/current-stock/batch-search":  { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
+  "GET:/api/procurement/current-stock/po-search":     { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
   "GET:/api/procurement/current-stock":               { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
   "GET:/api/procurement/stock-valuation":             { skipAcl: false, resourceCode: "PROC_STOCK_VALUATION", action: "VIEW" },
 
@@ -564,6 +577,22 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/confirm$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
+  },
+  {
+    // VIEW here too, same reasoning as the create route above — ownership
+    // (personal) vs SA/GA (Global) is enforced inside updateReportLayoutHandler
+    // / deleteReportLayoutHandler, not at this coarse route gate.
+    pattern: /^\/api\/procurement\/report-layouts\/[^/]+$/,
+    methods: {
+      PATCH: { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER", action: "VIEW" },
+      DELETE: { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER", action: "VIEW" },
+    },
+  },
+  {
+    pattern: /^\/api\/procurement\/report-layouts\/[^/]+\/set-default$/,
+    methods: {
+      POST: { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER", action: "VIEW" },
+    },
   },
   {
     pattern: /^\/api\/procurement\/tracker\/[^/]+\/inline$/,

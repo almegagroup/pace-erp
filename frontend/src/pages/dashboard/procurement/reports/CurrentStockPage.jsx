@@ -4,71 +4,161 @@
  * Gate: 24
  * Phase: 24
  * Domain: PROCUREMENT
- * Purpose: Current stock snapshot grid with plant, material, and stock-type filters.
+ * Purpose: Current stock snapshot grid with multi-value filters and MB52-style output.
  * Authority: Frontend
  */
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
-import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
-import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
-import { getCurrentStock } from "../procurementApi.js";
+import {
+  useMaterialOptionsQuery,
+  useStorageLocationOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
+import {
+  getCurrentStock,
+  searchCurrentStockBatchNumbers,
+  searchCurrentStockPackingPoNumbers,
+} from "../procurementApi.js";
 
-function formatNumber(value, decimals) {
+const MATERIAL_TYPE_OPTIONS = ["RM", "PM", "INT", "SFG", "FG"];
+const STOCK_TYPE_OPTIONS = [
+  { value: "UNRESTRICTED", label: "Unrestricted" },
+  { value: "QUALITY_INSPECTION", label: "Quality Inspection" },
+  { value: "BLOCKED", label: "Blocked" },
+];
+
+const DEFAULT_VISIBLE_COLUMNS = [
+  "company_code",
+  "material_type",
+  "material_label",
+  "external_code",
+  "uom_code",
+  "storage_location_code",
+  "batch_number",
+  "packing_po_number",
+  "unrestricted_qty",
+  "reserved_qty",
+  "net_available_qty",
+  "qi_qty",
+  "blocked_qty",
+];
+
+function formatQuantity(value) {
   const amount = Number(value ?? 0);
   if (!Number.isFinite(amount)) {
-    return decimals === 2 ? "0.00" : "0.000000";
+    return "0.000000";
   }
-  return amount.toFixed(decimals);
+  return amount.toFixed(6);
 }
 
-function stockTypeTone(stockTypeCode) {
-  switch (String(stockTypeCode || "").toUpperCase()) {
-    case "UNRESTRICTED":
-      return "bg-emerald-100 text-emerald-800";
-    case "QA":
-    case "QUALITY_INSPECTION":
-      return "bg-amber-100 text-amber-800";
-    case "BLOCKED":
-      return "bg-rose-100 text-rose-800";
-    case "IN_TRANSIT":
-      return "bg-violet-100 text-violet-800";
-    default:
-      return "bg-slate-100 text-slate-800";
-  }
+function joinValues(entries) {
+  return entries.map((entry) => entry.value).join(",");
+}
+
+function toggleValue(list, targetValue) {
+  return list.includes(targetValue)
+    ? list.filter((entry) => entry !== targetValue)
+    : [...list, targetValue];
 }
 
 export default function CurrentStockPage() {
   const { runtimeContext } = useMenu();
-  const materialQ = useMaterialOptionsQuery({ status: "ACTIVE", limit: 500 });
-  const materialOptions = (materialQ.materials ?? []).map((material) => ({
-    value: material.id,
-    label: `${material.pace_code ?? "—"} — ${material.material_name ?? ""}`,
-  }));
+  const materialsQuery = useMaterialOptionsQuery({ status: "ACTIVE", limit: 1000 });
+  const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
+
+  const materialOptions = useMemo(
+    () => (materialsQuery.materials ?? []).map((material) => ({
+      value: material.id,
+      label: `${material.pace_code ?? "—"} — ${material.document_name || material.material_name || ""}`,
+    })),
+    [materialsQuery.materials],
+  );
+  const slocOptions = useMemo(
+    () => (slocQuery.storageLocations ?? []).map((sloc) => ({
+      value: sloc.id,
+      label: sloc.code ? `${sloc.code}${sloc.name ? ` — ${sloc.name}` : ""}` : sloc.name || sloc.id,
+    })),
+    [slocQuery.storageLocations],
+  );
+
+  // Business decision (2026-08-04): single company at a time, never multi —
+  // this report is one company's stock, not a cross-company roll-up. Single-
+  // company users get it auto-resolved and locked; multi-company users pick
+  // exactly one from their own allowed list, same pattern every transaction
+  // page already uses (Law 12) — reuses TransactionCompanySelector directly
+  // rather than the multi-value picker used for the other filters below.
   const [companyId, setCompanyId] = useState("");
-  const [materialId, setMaterialId] = useState("");
-  const [stockTypeCode, setStockTypeCode] = useState("");
+  useEffect(() => {
+    const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (defaultCompanyId && !companyId) {
+      setCompanyId(defaultCompanyId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeContext]);
+  const [materialValues, setMaterialValues] = useState([]);
+  const [slocValues, setSlocValues] = useState([]);
+  const [batchValues, setBatchValues] = useState([]);
+  const [packingPoValues, setPackingPoValues] = useState([]);
+  const [materialTypes, setMaterialTypes] = useState([...MATERIAL_TYPE_OPTIONS]);
+  const [stockTypes, setStockTypes] = useState(STOCK_TYPE_OPTIONS.map((entry) => entry.value));
   const [showZero, setShowZero] = useState(false);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
+
+  const columnDefinitions = useMemo(
+    () => [
+      { key: "company_code", label: "Company", width: "120px" },
+      { key: "material_type", label: "Type", width: "90px" },
+      { key: "material_label", label: "Material", width: "260px" },
+      { key: "external_code", label: "External Code", width: "180px", render: (row) => row.external_code || "—" },
+      { key: "document_name", label: "Document Name", width: "240px", render: (row) => row.document_name || "—" },
+      { key: "uom_code", label: "UOM", width: "90px" },
+      { key: "storage_location_code", label: "SLoc", width: "100px" },
+      { key: "batch_number", label: "Batch Number", width: "160px", render: (row) => row.batch_number || "—" },
+      { key: "packing_po_number", label: "Packing PO Number", width: "170px", render: (row) => row.packing_po_number || "—" },
+      { key: "unrestricted_qty", label: "Unrestricted", width: "130px", align: "right", render: (row) => formatQuantity(row.unrestricted_qty) },
+      { key: "reserved_qty", label: "Reserved", width: "120px", align: "right", render: (row) => formatQuantity(row.reserved_qty) },
+      { key: "net_available_qty", label: "Net Available", width: "130px", align: "right", render: (row) => formatQuantity(row.net_available_qty) },
+      { key: "qi_qty", label: "Quality Inspection", width: "150px", align: "right", render: (row) => formatQuantity(row.qi_qty) },
+      { key: "blocked_qty", label: "Blocked", width: "120px", align: "right", render: (row) => formatQuantity(row.blocked_qty) },
+    ],
+    [],
+  );
+
+  const gridColumns = useMemo(
+    () => columnDefinitions.filter((column) => visibleColumns.includes(column.key)),
+    [columnDefinitions, visibleColumns],
+  );
 
   async function handleSearch() {
+    if (!companyId) {
+      setError("Select a company first.");
+      return;
+    }
     setLoading(true);
     setError("");
     setSearched(true);
     try {
       const response = await getCurrentStock({
-        company_id: companyId.trim() || undefined,
-        material_id: materialId.trim() || undefined,
-        stock_type_code: stockTypeCode || undefined,
+        company_ids: companyId,
+        material_ids: joinValues(materialValues) || undefined,
+        storage_location_ids: joinValues(slocValues) || undefined,
+        batch_numbers: joinValues(batchValues) || undefined,
+        packing_po_numbers: joinValues(packingPoValues) || undefined,
+        material_types: materialTypes.join(",") || undefined,
+        stock_types: stockTypes.join(",") || undefined,
         show_zero: showZero ? "true" : "false",
       });
       setRows(Array.isArray(response?.data) ? response.data : []);
@@ -80,6 +170,21 @@ export default function CurrentStockPage() {
     }
   }
 
+  // SAP-style Execute shortcut (F8) — mirrors ZMB51/MB52's own Execute key,
+  // since this report is explicitly modeled on them.
+  useEffect(() => {
+    function handleExecuteShortcut(event) {
+      if (event.key !== "F8" || loading) {
+        return;
+      }
+      event.preventDefault();
+      void handleSearch();
+    }
+    window.addEventListener("keydown", handleExecuteShortcut);
+    return () => window.removeEventListener("keydown", handleExecuteShortcut);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, companyId, materialValues, slocValues, batchValues, packingPoValues, materialTypes, stockTypes, showZero]);
+
   return (
     <ErpScreenScaffold
       eyebrow="Inventory Reports"
@@ -87,130 +192,146 @@ export default function CurrentStockPage() {
       notices={error ? [{ key: "current-stock-error", tone: "error", message: error }] : []}
       actions={[
         {
+          key: "columns",
+          label: "Columns",
+          onClick: () => setColumnsOpen(true),
+          disabled: !searched,
+        },
+        {
           key: "search",
           label: loading ? "Searching..." : "Search",
           tone: "primary",
+          hint: "F8",
           onClick: () => void handleSearch(),
-          disabled: loading,
+          disabled: loading || !companyId,
         },
       ]}
     >
       <div className="grid gap-4">
-        <ErpSectionCard eyebrow="Filters" title="Snapshot filters">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <ErpSectionCard eyebrow="Page 1" title="Filters">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <TransactionCompanySelector
               runtimeContext={runtimeContext}
               value={companyId}
               onChange={setCompanyId}
               label="Company"
             />
-            <ErpDenseFormRow label="Material">
-              <ErpComboboxField
-                value={materialId}
-                onChange={setMaterialId}
-                options={materialOptions}
-                blankLabel="All materials"
-                inputClassName="px-2 py-1 text-sm"
-              />
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="Stock Type">
-              <select
-                value={stockTypeCode}
-                onChange={(event) => setStockTypeCode(event.target.value)}
-                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-              >
-                <option value="">All</option>
-                {["UNRESTRICTED", "QA", "BLOCKED", "IN_TRANSIT"].map((entry) => (
-                  <option key={entry} value={entry}>
-                    {entry}
-                  </option>
-                ))}
-              </select>
-            </ErpDenseFormRow>
+            <MultiValueFilterField
+              label="Material"
+              placeholder="All materials"
+              value={materialValues}
+              onChange={setMaterialValues}
+              options={materialOptions}
+            />
+            <MultiValueFilterField
+              label="Storage Location"
+              placeholder="All storage locations"
+              value={slocValues}
+              onChange={setSlocValues}
+              options={slocOptions}
+            />
+            <MultiValueFilterField
+              label="Batch Number"
+              placeholder="All batch numbers"
+              value={batchValues}
+              onChange={setBatchValues}
+              searchFn={async (queryText) => {
+                const response = await searchCurrentStockBatchNumbers({
+                  q: queryText || undefined,
+                  company_ids: companyId || undefined,
+                });
+                return Array.isArray(response?.data) ? response.data : [];
+              }}
+            />
+            <MultiValueFilterField
+              label="Packing PO Number"
+              placeholder="All packing POs"
+              value={packingPoValues}
+              onChange={setPackingPoValues}
+              searchFn={async (queryText) => {
+                const response = await searchCurrentStockPackingPoNumbers({
+                  q: queryText || undefined,
+                  company_ids: companyId || undefined,
+                });
+                return Array.isArray(response?.data) ? response.data : [];
+              }}
+            />
           </div>
-          <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-2">
+              <div className="text-sm font-medium text-slate-800">Material Type</div>
+              <div className="flex flex-wrap gap-3">
+                {MATERIAL_TYPE_OPTIONS.map((entry) => (
+                  <label key={entry} className="inline-flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={materialTypes.includes(entry)}
+                      onChange={() => setMaterialTypes((current) => toggleValue(current, entry))}
+                    />
+                    <span>{entry}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <div className="text-sm font-medium text-slate-800">Stock Type</div>
+              <div className="flex flex-wrap gap-3">
+                {STOCK_TYPE_OPTIONS.map((entry) => (
+                  <label key={entry.value} className="inline-flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={stockTypes.includes(entry.value)}
+                      onChange={() => setStockTypes((current) => toggleValue(current, entry.value))}
+                    />
+                    <span>{entry.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <label className="mt-4 inline-flex items-center gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
               checked={showZero}
               onChange={(event) => setShowZero(event.target.checked)}
             />
-            Show Zero Stock
+            <span>Show Zero Stock</span>
           </label>
         </ErpSectionCard>
 
-        <ErpSectionCard eyebrow="Snapshot" title="Current stock by material and location">
+        <ErpSectionCard eyebrow="Page 2" title="Current Stock Output Grid">
           {!searched ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
               Set filters and click Search to view current stock.
             </div>
           ) : (
             <ErpDenseGrid
-              columns={[
-                {
-                  key: "material_id",
-                  label: "Material",
-                  width: "260px",
-                  render: (row) => (row.material_name ? `${row.material_code ?? "—"} — ${row.material_name}` : "—"),
-                },
-                {
-                  key: "storage_location_id",
-                  label: "Storage Location",
-                  width: "220px",
-                  render: (row) => (row.location_name ? `${row.location_code ?? "—"} — ${row.location_name}` : "—"),
-                },
-                {
-                  key: "stock_type_code",
-                  label: "Stock Type",
-                  width: "130px",
-                  render: (row) => (
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${stockTypeTone(row.stock_type_code)}`}>
-                      {row.stock_type_code || "—"}
-                    </span>
-                  ),
-                },
-                {
-                  key: "batch_id",
-                  label: "Batch ID",
-                  width: "220px",
-                  render: (row) => row.batch_id ?? "—",
-                },
-                {
-                  key: "quantity",
-                  label: "Quantity",
-                  width: "120px",
-                  align: "right",
-                  render: (row) => formatNumber(row.quantity, 6),
-                },
-                { key: "base_uom_code", label: "UOM", width: "90px" },
-                {
-                  key: "alt_quantity",
-                  label: "Alt. Unit (§110)",
-                  width: "140px",
-                  align: "right",
-                  render: (row) => (row.alt_uom_code ? `${formatNumber(row.alt_quantity, 3)} ${row.alt_uom_code}` : "—"),
-                },
-                {
-                  key: "value",
-                  label: "Value",
-                  width: "110px",
-                  align: "right",
-                  render: (row) => formatNumber(row.value, 2),
-                },
-                {
-                  key: "valuation_rate",
-                  label: "Val. Rate",
-                  width: "120px",
-                  align: "right",
-                  render: (row) => formatNumber(row.valuation_rate, 6),
-                },
-              ]}
+              columns={gridColumns}
               rows={rows}
-              rowKey={(row) => row.id ?? `${row.material_id}-${row.company_id}-${row.storage_location_id}-${row.stock_type_code}`}
+              rowKey={(row) => row.row_key}
               emptyMessage={loading ? "Searching current stock..." : "No current stock matched the selected filters."}
             />
           )}
         </ErpSectionCard>
       </div>
+
+      <ErpColumnVisibilityDrawer
+        visible={columnsOpen}
+        columns={columnDefinitions}
+        visibleColumnKeys={visibleColumns}
+        onToggleColumn={(columnKey) =>
+          setVisibleColumns((current) =>
+            current.includes(columnKey)
+              ? current.filter((entry) => entry !== columnKey)
+              : [...current, columnKey],
+          )
+        }
+        onResetColumns={() => setVisibleColumns(DEFAULT_VISIBLE_COLUMNS)}
+        onClose={() => setColumnsOpen(false)}
+      />
     </ErpScreenScaffold>
   );
 }

@@ -728,6 +728,66 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
 
 **Next:** live-audit PR10 through PR18 one at a time against this now-confirmed-accurate doc spec (same rigor as PR09 — do not trust "Claude-verified" log entries without independent live confirmation), then write a Codex brief to rebuild PR09's frontend (add the Material Table, remove Segment/Notes fields) and fix the two ACL bugs above.
 
+**✅ IN03 (Current Stock) — full MB52-style redesign DESIGN LOCKED 2026-08-04 (feasibility §116),
+IMPLEMENTATION NOT STARTED.** Came up while starting the Inventory ACL group session (§6 Inventory
+group work below) — business owner flagged the live IN03 page as buggy before deciding its ACL.
+Real bugs found: dead "Batch ID" column (field doesn't exist in the response), single-select
+Material/no Storage Location filter/incomplete single-select Stock Type (missing `FOR_REPROCESS`),
+and the report wrongly uses the single-company-force `TransactionCompanySelector` even though the
+backend already supports multi-company. New locked design: MB52-style Page 1 (multi-value
+filters via a new type-ahead-+-bulk-paste component — Company/Material Type/Material/Storage
+Location/Batch Number/Packing PO Number, plus a Stock Type checkbox group limited to
+Unrestricted/QI/Blocked for now) → Page 2 grid (Company, Type, Material via `document_name` with
+`material_name` fallback, External Code, hidden-by-default Document Name, UOM, SLoc code,
+Batch Number, Packing PO Number, Unrestricted, Reserved, Net Available, QI, Blocked — no
+Rate/Value at all — plus a "Columns" button+drawer for visibility toggling). Row grain is the
+subtle part: RM/PM/INT and **MTS-typed FG** stay blended (`stock_snapshot` directly, no
+batch/PPO); SFG is **always** batch-level regardless of po_type (MTS included — do not repeat the
+mistake of treating MTS SFG as batch-blind, only `PTEST` actually is per §108.2); FG under
+MTO/HPS/MTEST is batch **and** Packing-PO-level. The FG Primary-Quantity/UOM insight: since each
+FG row is scoped to one specific Packing PO, that PO's own `num_packs`/`fill_qty_per_pack` gives
+the pack-count directly — no material-level `material_uom_conversion` factor needed at all,
+fixed-pack and variable-fill (599/000/001) SKUs both work the same way once grain is per-PO.
+**Flagged, not designed:** IN03's derived QI/Blocked pack-count for FG is only reliable if a
+future dedicated "FG Block/QI" page enters pack-counts (not raw KG) against a specific Packing PO
+— that page doesn't exist in code today (`P344` is only used by Inward QA/RTV) and needs its own
+design pass before it's built; full detail in feasibility §116.8. Task brief:
+`CODEX-IN03-CURRENT-STOCK-REDESIGN-TASK-BRIEF.md`.
+
+**⚠️ Process gap caught mid-session (2026-08-04):** the IN03 brief above was written *after*
+reading the 11-bug-pattern checklist, but the checklist was only read once at the start of the
+session — it was never re-applied at the moment of each concrete technical decision. Result: the
+IN03 brief's Company filter originally pointed at `useCompaniesForOmQuery` (`GET
+/api/admin/companies`, `skipAcl: true`, returns every company with no scoping) — a real bug
+pattern #2 company-scope leak, caught by the business owner, not by this process. Fixed in the
+brief (now sources Company from `useMenu()`'s `runtimeContext.availableCompanies`, same as
+`TransactionCompanySelector`). **Rule going forward: re-run the 11-pattern checklist explicitly
+against every concrete technical choice named in a brief (which hook, which endpoint, which
+table) as a dedicated last step before handing it to Codex — not just once at the start of a
+design conversation.**
+
+**✅ IN02 (Stock Ledger) — full ZMB51-style redesign DESIGN LOCKED 2026-08-04 (feasibility §117),
+IMPLEMENTATION NOT STARTED.** Same session as IN03 above, same real-dev-data-verified rigor,
+explicit 11-pattern checklist re-applied per §117.9 (this is the brief written *after* the process
+gap above was caught). Real bugs in the old IN02: raw-UUID Material-ID text input (no picker),
+single-material-only, no Storage Location/Batch/Movement-Type filters, no Material Document
+identity shown at all (the whole point of a ZMB51-style report), broken pagination (`offset`
+setter never existed), and a Running Balance column that silently produces wrong numbers under
+any date filter or pagination (removed entirely — not in standard MB51 either). New locked
+design: mandatory-date-range (max 365 days) "endless" fetch instead of pagination (so the existing
+client-side `downloadCsvFile()` Excel export just works against the full filtered set), grid
+virtualization added to `ErpDenseGrid` for the first time, dual Base+Pack UOM columns (unlike
+IN03's single-Primary-UOM choice — ZMB51 shows both), and a new reusable **Column Layout system**
+(Global + User-specific saved layouts, new `erp_inventory.report_column_layout` +
+`report_layout_default` tables, global-layout-create gated to SA/GA as a provisional bridge until
+the real IN01-IN06/PR21 ACL session assigns a WRITE/EDIT action per resource) — built here first
+since IN03 is already mid-implementation with Codex and didn't get this feature to avoid scope
+disruption; IN03 picks it up in a small follow-up brief afterward. One earlier IN03-brief
+suggestion (share the batch/PO-number search endpoint between IN02 and IN03) was **reversed** —
+bug pattern #6, the two reports have different ACL resource codes and a shared endpoint would
+make the access gate ambiguous; kept as two parallel endpoints instead. Task brief:
+`CODEX-IN02-STOCK-LEDGER-REDESIGN-TASK-BRIEF.md`.
+
 ---
 
 ## 7. Workflow Plan (Dev → Prod)

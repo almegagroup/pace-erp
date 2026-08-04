@@ -59,8 +59,20 @@ import {
 import { getProcurementPlanningHandler } from "../_core/procurement/planning.handlers.ts";
 import { getDocumentFlowHandler } from "../_core/procurement/document_flow.handlers.ts";
 import {
+  createReportLayoutHandler,
+  deleteReportLayoutHandler,
+  listReportLayoutsHandler,
+  setDefaultReportLayoutHandler,
+  updateReportLayoutHandler,
+} from "../_core/procurement/report_layout.handlers.ts";
+import {
   getCurrentStockHandler,
   getStockLedgerReportHandler,
+  listStockLedgerMovementTypesHandler,
+  searchCurrentStockBatchNumbersHandler,
+  searchCurrentStockPackingPoNumbersHandler,
+  searchStockLedgerBatchNumbersHandler,
+  searchStockLedgerPackingPoNumbersHandler,
   getStockValuationHandler,
 } from "../_core/procurement/stock_reports.handlers.ts";
 import {
@@ -457,6 +469,20 @@ export async function dispatchProcurementRoutes(
       return await getDocumentFlowHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger":
       return await getStockLedgerReportHandler(req, ctx);
+    case "GET:/api/procurement/stock-ledger/movement-types":
+      return await listStockLedgerMovementTypesHandler(req, ctx);
+    case "GET:/api/procurement/stock-ledger/batch-search":
+      return await searchStockLedgerBatchNumbersHandler(req, ctx);
+    case "GET:/api/procurement/stock-ledger/po-search":
+      return await searchStockLedgerPackingPoNumbersHandler(req, ctx);
+    case "GET:/api/procurement/report-layouts":
+      return await listReportLayoutsHandler(req, ctx);
+    case "POST:/api/procurement/report-layouts":
+      return await createReportLayoutHandler(req, ctx);
+    case "GET:/api/procurement/current-stock/batch-search":
+      return await searchCurrentStockBatchNumbersHandler(req, ctx);
+    case "GET:/api/procurement/current-stock/po-search":
+      return await searchCurrentStockPackingPoNumbersHandler(req, ctx);
     case "GET:/api/procurement/current-stock":
       return await getCurrentStockHandler(req, ctx);
     case "GET:/api/procurement/stock-valuation":
@@ -589,6 +615,19 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/tracker\/layouts\/[^/]+$/.test(pathname) && req.method === "DELETE") {
     return await deleteTrackerLayoutHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/report-layouts\/[^/]+\/set-default$/.test(pathname) && req.method === "POST") {
+    return await setDefaultReportLayoutHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/report-layouts\/[^/]+$/.test(pathname)) {
+    if (req.method === "PATCH") {
+      return await updateReportLayoutHandler(req, ctx);
+    }
+    if (req.method === "DELETE") {
+      return await deleteReportLayoutHandler(req, ctx);
+    }
   }
 
   if (/^\/api\/procurement\/payment-terms\/[^/]+$/.test(pathname)) {

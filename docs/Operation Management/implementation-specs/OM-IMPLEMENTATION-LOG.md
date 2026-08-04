@@ -3629,6 +3629,170 @@ standing rule as every other migration this session), re-verified —
 **both dev and prod now report `in_sync: true`** against the same local
 migration files.
 
+## 2026-08-03 (post-commit) — PO16 (Legacy STO) fix: SCM couldn't see/use it at all
+
+Business owner asked why PO16 was "closed for SCM." Live-DB check found a
+real bug, same shape as the ACL-MASTER drift fix above but on the opposite
+side — `PROC_STO_CREATE_OPENING`'s only capability mapping was
+`CAP_PROC_LOGISTICS:VIEW`, and that capability was held **only by
+ACL-MASTER's work context**, not SCM's real "SUPPLY CHAIN" department. So
+the PO16 sidebar tile never showed for SCM at all, despite them having full
+regular STO access via a different capability (`CAP_PROC_STO`). Also caught
+`PROD-ACL-Access-Decisions.md`'s existing PO14/PO16 note ("no independent
+resource code exists") was stale/wrong — both pages do have their own
+`erp_menu.menu_master` resource codes (since 2026-07-06), gating sidebar
+visibility independently of the shared backend route.
+
+Design (business owner): PO16 Create+Edit belongs to SCM only (same access
+level as their other STO/PO pages), ACL-MASTER always keeps full access,
+**no approval flow for this page at all**. Fixed: mapped `CAP_PROC_STO`
+(VIEW/WRITE/EDIT — the capability SCM's own work context already holds) onto
+`PROC_STO_CREATE_OPENING`, removed the now-redundant
+`CAP_PROC_LOGISTICS` mapping. ACL-MASTER unaffected (already held
+`CAP_PROC_STO` too, from the regular STO page). Version bump v35→v36 both
+companies (capture+generate+activate), verified live: SCM (P0004/P0005/P0006)
+now VIEW+WRITE+EDIT both companies, ACL-MASTER still full access, zero
+APPROVE rows anywhere for this resource (correct, matches "no approval
+page"). `precomputed_acl_view` re-swept for the newly-stale v35 rows.
+
+## 2026-08-03 (later still) — Real company-scope leak found + fixed: Stroke Master (6 of 8 handlers had zero company check)
+
+Business owner reported P0063 (single-company, CMP003 only) seeing CMP006's
+stroke on the Stroke Master list page — a live production report, not a
+hypothetical. Investigated and confirmed a real, serious bug, and one that
+this session's own `company-scope-guard.mjs` had already missed — its known,
+documented limitation (file-level heuristic: "if a file has *any*
+`assertCompanyScope` call anywhere, the whole file passes, even if 9 other
+handlers in it never check") is exactly what let this through.
+
+**Root cause:** `listStrokeMastersHandler` — `if (companyId) query =
+query.eq("company_id", companyId)` with **no fallback when `companyId` is
+empty**, so an empty query string param returned every company's rows,
+unfiltered. `stroke_master.handlers.ts` does have one `assertCompanyScope`
+call (in `createStrokeMasterHandler`), which is exactly why the guard's
+file-level check passed the whole file. Confirmed live: both CMP003 and
+CMP006 each have exactly 1 stroke row — the precise shape of what P0063 saw.
+
+**Scope turned out much wider once checked properly — 6 of this file's 8
+exported handlers had zero company-scope check at all:**
+`getStrokeMasterHandler`, `updateStrokeMasterHandler`,
+`approveStrokeMasterHandler`, `rejectStrokeMasterHandler`,
+`deactivateStrokeMasterHandler`, `revertStrokeMasterHandler` — every one of
+these fetches a specific stroke by ID and acts on it, but never validated
+the fetched record's own `company_id` against the caller (CLAUDE.md's
+"Act-on-existing" Shape 2 pattern). Any authenticated Production-read user
+could fetch, edit, approve, reject, deactivate, or revert **any company's**
+stroke directly by ID, regardless of their own `erp_map.user_companies`.
+
+**Fixed, all 8 handlers:**
+- `listStrokeMastersHandler` — added the `opening_stock.handlers.ts`-style
+  pattern: `companyId` provided → `assertCompanyScope` + filter by it;
+  empty → new `listStrokeScopedCompanyIds(ctx)` helper (admin-bypass aware,
+  mirrors `listOpeningStockScopedCompanyIds`) scopes to the caller's own
+  companies, empty-scope short-circuits to `{data: []}`.
+- `getStrokeMasterHandler`, `updateStrokeMasterHandler`,
+  `approveStrokeMasterHandler`, `rejectStrokeMasterHandler`,
+  `deactivateStrokeMasterHandler`, `revertStrokeMasterHandler` — each now
+  calls `await assertCompanyScope(ctx, existing.company_id)` right after the
+  NOT_FOUND check, before any status/business-logic check (approve/reject
+  also keep the existing `assertStrokeApproverRole` call, now running
+  *after* the company-scope check).
+- All 8 catch blocks now map `COMPANY_SCOPE_VIOLATION` to 403.
+- `deno check` clean; all 5 CI guards re-run together, still passing (this
+  fix doesn't change the guard's known file-level-heuristic limitation, but
+  it does close the actual underlying bug the limitation let through).
+
+**Not changed:** the frontend's list-filter default (`companyFilter` state,
+starts `""`). The backend fix alone is the real security boundary and fully
+closes the leak — an empty filter now correctly scopes server-side to the
+caller's own companies rather than showing everything. Left the frontend
+filter UX as-is since it's a reasonable "show all my scoped companies by
+default" list behavior, not a Law 12 violation (the company *options* list
+itself, `buildTransactionCompanyList`, was already fixed earlier this
+session).
+
+**Lesson, worth repeating for future audits:** `company-scope-guard.mjs`'s
+own doc comment already warned about this exact gap ("এটা file-level
+heuristic, function-level না") — this is the first time it actually bit.
+Any file with 3+ exported handlers touching `company_id` deserves a manual
+per-function check, not just a passing guard run, especially for
+"act-on-existing" handlers that only take an `:id` param and never see
+`company_id` directly in the request at all (so the guard's `body.company_id`
+/`searchParams` grep can't even see them as candidates).
+
+## 2026-08-03 (still later) — Material Master read access was silently SCM-only; opened to everyone
+
+Same P0063/Stroke Master investigation surfaced a second, separate bug:
+after fixing the company-scope leak, RM/INT material dropdowns on the
+Stroke Master create form were still empty for P0063, while Storage
+Location dropdowns worked fine. Traced it: `GET /api/om/storage-locations`
+is `skipAcl: true` (no ACL gate at all, works for everyone), but
+`GET /api/om/materials` (`OM_MATERIAL_LIST:VIEW`) was only granted via
+`CAP_OM_MATERIAL_VENDOR`, held by **SUPPLY CHAIN and ACL-MASTER only** — no
+other department (Production, Quality, Accounts, Stores) had it. Business
+owner's reaction, correctly: this isn't a scoped-access design question,
+Material Master is basic reference data every module needs to function —
+Stroke Master, Pack BOM, GRN, Inward QA, Opening Stock, Physical Inventory
+all need to look up materials by name/code. Locking it to one department was
+simply wrong, not a judgment call to litigate page by page.
+
+**Fix:** found `CAP_EVERYONE_REPORTS` already exists and is already held by
+literally every department in both companies (currently used for exactly
+one thing — `PROC_GATE_REPORT:VIEW`) — the intended vehicle for
+"everyone gets this, no per-department decision needed." Added
+`OM_MATERIAL_LIST:VIEW` to it. One insert, fixes every department at once,
+VIEW-only (no new create/edit/delete power granted anywhere). Version bump
+v36→v37 both companies (capture+generate+activate). Verified live:
+P0063 (QUALITY), P0009 (PRODUCTION+QUALITY), P0004 (SUPPLY CHAIN), P0076
+(ACL-MASTER) all resolve `OM_MATERIAL_LIST:VIEW=ALLOW` now, both companies.
+`precomputed_acl_view` re-swept (2,184 rows, 100% active-version).
+
+**Lesson:** when a capability is scoped narrower than the data it gates
+actually warrants (reference/master data needed cross-module, not a
+department-owned business action), check for an existing "everyone" vehicle
+before inventing per-department grants — `CAP_EVERYONE_REPORTS` was already
+sitting there, unused for this.
+
+## 2026-08-03 (still later, part 2) — Alternate Material group create/edit was also silently SCM-only, same page
+
+Immediately following the Material Master VIEW fix, business owner asked
+whether the same P0063 could also create Material Category **Groups**
+(the "Alternate Material" grouping feature used inline on the Stroke
+Master create form) — confirmed no, this is a genuinely separate resource:
+listing groups uses `OM_MATERIAL_LIST:VIEW` (just fixed), but
+create/edit/delete-group and add/remove-member all use `OM_MATERIAL_CREATE:WRITE`,
+still SCM+ACL-MASTER only. Business owner's response, correctly: Stroke
+Master is QUALITY's own page (§83.3 locked design — "QA creates → Manager
+approves"), P0063 is exactly the intended primary user, there's no
+justification for QA needing SCM's help mid-recipe to define an alternate
+material grouping.
+
+**Fix:** `CAP_OM_MATERIAL_CATEGORY_MAINTAIN` already existed and was
+already held by **both QUALITY and PRODUCTION** in both companies (for a
+different, similarly-named resource, `PROC_MATERIAL_CATEGORY_MASTER`) —
+added `OM_MATERIAL_CREATE` VIEW+WRITE to this same capability. One insert,
+covers both departments that actually build Stroke recipes, without
+touching Stores/Accounts/SCM's existing narrower ownership of the
+Material Master record itself. Version bump v37→v38 both companies
+(capture+generate+activate). Verified live: P0063 (QUALITY) and P0009
+(PRODUCTION+QUALITY) both resolve `OM_MATERIAL_CREATE` VIEW+WRITE=ALLOW.
+`precomputed_acl_view` re-swept (2,206 rows, 100% active-version).
+
+**Pattern now established twice in one afternoon:** when a page's own
+documented primary-user department (Task C-style design lock, e.g. §83.3
+for Stroke Master) can't do a normal, expected action on that page, check
+for an existing capability that department already holds for something
+adjacent, before inventing a new one or asking whether it's intentional —
+in both cases (`CAP_EVERYONE_REPORTS`, `CAP_OM_MATERIAL_CATEGORY_MAINTAIN`)
+the right vehicle already existed, just not wired to this specific menu.
+
+**Related, not fixed:** PO14 (Old Purchase Order) has the identical
+architecture but its capability (`CAP_PROC_BUYER`) was already correctly
+held by SCM — no live bug there. It does, however, only have `VIEW`
+registered (no `WRITE`/`EDIT` for anyone), so its Create/Edit menu-gate is
+effectively inert today. Flagged in `PROD-ACL-Access-Decisions.md`, left
+alone since it wasn't asked about this round.
+
 **Final state: 5 of 11 bug patterns now have a real CI guard** (stock
 posting §8D, company-scope #2/#11, hardcoded-role-check #1, approver-chain
 #7, resource-code-domain #6). **3 more have an on-demand manual-check
@@ -3653,3 +3817,17 @@ respectively) that were not triaged in this pass — wiring them into CI now
 would break every future push for unrelated reasons. `migration-integrity-check.mjs`
 never connects to a DB (always exits 0, just prints SQL to run manually) so
 it provides no enforcement value as a CI step in its current form.
+
+### 2026-08-04 15:25 IST - IN03 Current Stock Redesign
+- Brief: `CODEX-IN03-CURRENT-STOCK-REDESIGN-TASK-BRIEF.md`
+- Feasibility reference: Section 116 (`PACE_ERP_Operation_Management_SAP_Style_Discovery_and_Feasibility.md`)
+- Scope delivered: full current-stock report rewrite in `stock_reports.handlers.ts`; new autocomplete endpoints for batch number and packing PO number; new reusable `MultiValueFilterField.jsx`; full `CurrentStockPage.jsx` rewrite to the locked Page-1/Page-2 UX; route and ACL registry wiring under existing `PROC_CURRENT_STOCK`.
+- Locked design points implemented: three-path grain split (Path A blended RM/PM/INT plus FG-MTS, Path B SFG batch-level, Path C FG batch plus Packing-PO-level); exact `resolveLotRef()` fallback reuse for Packing PO resolution; document-name-first material label with raw `document_name` preserved separately; reservation total only, no source breakdown; rate/value removed from response and grid.
+- Verification: targeted frontend ESLint passed for the three touched frontend files. Backend `deno check` on `stock_reports.handlers.ts` reduced to pre-existing query-builder typing noise only (`.range()` line 289 and stock-valuation `.gt()` near line 981), with no fresh IN03-local type failures.
+- Follow-up limitation recorded, not hidden: live fixture verification on dev project `ytapuwiqicmvpanmzelb` for `SFG-00004`, `FG-00008`, and `RM-00020` was not completed in-session because no authenticated report-runner or direct DB query surface was callable from this terminal context. This remains the one open validation step after code implementation.
+
+### 2026-08-04 16:40 IST
+- Task: Implemented `CODEX-IN02-STOCK-LEDGER-REDESIGN-TASK-BRIEF.md` after re-reading the brief and feasibility Sections 117 and 116 in full.
+- Changes: rewrote `supabase/functions/api/_core/procurement/stock_reports.handlers.ts` stock-ledger reporting around server-side company revalidation, mandatory <=365-day date range, bulk human-readable resolution, FG per-row Packing-PO pack math, and direct vendor/customer lookup from source tables. Added `GET /api/procurement/stock-ledger/movement-types`, `GET /api/procurement/stock-ledger/batch-search`, and `GET /api/procurement/stock-ledger/po-search`, plus generic report-layout CRUD/default handlers in new `supabase/functions/api/_core/procurement/report_layout.handlers.ts`. Added `supabase/migrations/20260804113000_report_column_layout.sql`, extended `frontend/src/components/ErpColumnVisibilityDrawer.jsx`, added frontend API helpers in `frontend/src/pages/dashboard/procurement/procurementApi.js`, and rebuilt `frontend/src/pages/dashboard/procurement/reports/StockLedgerReportPage.jsx` to the locked IN02 filter/grid/layout/export UX.
+- Verification: targeted frontend ESLint passed for `StockLedgerReportPage.jsx`, `ErpColumnVisibilityDrawer.jsx`, and `procurementApi.js` when run outside the Windows sandbox. Backend import smoke passed for the touched IN02 backend modules with dummy env values. `deno check` on the touched procurement entrypoints still reports only the older repo-wide baseline typing noise in unrelated imported procurement files; the IN02-local typing issues encountered during implementation were fixed. `node scripts/migration-integrity-check.mjs` produced the local checksum probe (`count=397`, `md5=7542b1c27d5d55eb32dc4e8a9234af06`) and the remote verification SQL, but this terminal context did not expose a callable direct dev-DB SQL execution surface to complete the final `in_sync:true` confirmation.
+- Notes / limits: no stock write path (`stock_ledger`, `stock_document`, `post_stock_movement()`) or ACL table decisioning was changed. IN03 files were intentionally left untouched in this brief, per instruction.
