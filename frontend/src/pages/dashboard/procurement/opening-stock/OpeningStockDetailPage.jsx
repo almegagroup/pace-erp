@@ -233,11 +233,11 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   const [entryDrawerOpen, setEntryDrawerOpen] = useState(false);
   const [editingLineId, setEditingLineId] = useState("");
   const [editForm, setEditForm] = useState(createEmptySingleForm());
-  // Â§109 â€” Opening Rate "Recalculate" (Phase 1, single material, no cascade yet).
+  // §109 — Opening Rate "Recalculate" (Phase 1, single material, no cascade yet).
   // Bulk-table UX per business owner feedback (2026-07-24): every un-recalculated
   // POSTED line gets an inline Corrected Rate input; ONE shared Reason + ONE
   // "Recalculate All" button submits every filled-in line in one action. Each
-  // line is one-time-use (enforced server-side, VALUATION_RECALC_ALREADY_DONE) â€”
+  // line is one-time-use (enforced server-side, VALUATION_RECALC_ALREADY_DONE) —
   // once done it shows as locked, no "reopen" mechanism exists yet.
   const [recalcRates, setRecalcRates] = useState({});
   const [recalcReason, setRecalcReason] = useState("");
@@ -349,12 +349,12 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   );
   const companyLabel = companyMap.get(companyId) ?? companyId;
 
-  // Â§104.8 (LOCKED 2026-07-18): for a produced material (INT today, SFG later) the opening rate can
-  // be derived from its own Stroke â€” Î£(dosage% Ã— that RM's current rate) â€” because opening stock is
-  // loaded bottom-up (RM/PM â†’ INT â†’ SFG â†’ FG), so the inputs are already valued by the time we get
+  // §104.8 (LOCKED 2026-07-18): for a produced material (INT today, SFG later) the opening rate can
+  // be derived from its own Stroke — Σ(dosage% × that RM's current rate) — because opening stock is
+  // loaded bottom-up (RM/PM → INT → SFG → FG), so the inputs are already valued by the time we get
   // here. It is only a SUGGESTION: a *purchased* opening INT must keep its purchase price, and
   // suggesting (not forcing) stops a hand-typed rate from diverging from the formula in-house
-  // production will use â€” which would make the weighted average jump on the first PO after go-live.
+  // production will use — which would make the weighted average jump on the first PO after go-live.
   const derivedRateQuery = useQuery({
     queryKey: ["derived-opening-rate", companyId, singleForm.material_id],
     queryFn: () => getDerivedOpeningRate({ company_id: companyId, material_id: singleForm.material_id }),
@@ -363,10 +363,10 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   });
   const derivedRate = derivedRateQuery.data?.derivable ? derivedRateQuery.data : null;
 
-  // Â§110 Phase B â€” the material's own alternate UoMs (e.g. a purchased-in-bags
+  // §110 Phase B — the material's own alternate UoMs (e.g. a purchased-in-bags
   // RM, or an FG SKU's own outer pack unit), so the user can type "23 bags"
   // instead of hand-computing KG. Falls back to base-UoM-only display when a
-  // material has no material_uom_conversion rows (Â§110.4, deliberate â€” no
+  // material has no material_uom_conversion rows (§110.4, deliberate — no
   // bulk data-entry forced on materials that don't need it).
   const singleConversionsQuery = useQuery({
     queryKey: ["material-uom-conversions", singleForm.material_id],
@@ -467,9 +467,9 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   );
   const computedTotalValue = lines.reduce((sum, line) => sum + Number(line.total_value ?? 0), 0);
 
-  // Â§104-7/Â§109 â€” SFG and INT get the same dosage-derived rate suggestion at
+  // §104-7/§109 — SFG and INT get the same dosage-derived rate suggestion at
   // Recalculate time as they do at original Opening entry (Stroke dosage% x
-  // that RM's CURRENT rate) â€” useful here because the RM side may have just
+  // that RM's CURRENT rate) — useful here because the RM side may have just
   // been corrected in an earlier step of the same sweep. Still only a
   // suggestion: a purchased INT/SFG batch keeps its own real rate.
   const recalcSuggestLines = lines.filter((line) => {
@@ -677,8 +677,8 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     setRecalcRates((current) => ({ ...current, [lineId]: value }));
   }
 
-  // Â§8B: each line's correction touches a different (material, location, stock_type)
-  // snapshot row â€” independent of every other line â€” so this batch runs in parallel,
+  // §8B: each line's correction touches a different (material, location, stock_type)
+  // snapshot row — independent of every other line — so this batch runs in parallel,
   // not a sequential for-loop.
   async function handleRecalculateAll() {
     if (!detail) return;
@@ -695,8 +695,8 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     setError("");
     setNotice("");
     try {
-      // Single batch call â€” the backend cascades RM/PM -> SFG -> FG in one
-      // action (Â§109). Sending each line separately would let two lines that
+      // Single batch call — the backend cascades RM/PM -> SFG -> FG in one
+      // action (§109). Sending each line separately would let two lines that
       // feed the same downstream batch race and silently overwrite each
       // other's correction, so this is never split into per-line calls.
       const { results } = await recalculateValuation({
@@ -872,7 +872,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                       render: (row) =>
                         row.entered_uom_code && row.entered_uom_code !== materialMap.get(row.material_id)?.base_uom_code
                           ? `${row.entered_quantity} ${row.entered_uom_code}`
-                          : "â€”",
+                          : "—",
                     },
                     { key: "rate_per_unit", label: "Rate", width: "100px" },
                     {
@@ -885,7 +885,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                     ...(detail.status === "POSTED"
                       ? [{
                           key: "corrected_rate",
-                          label: "Corrected Rate (Â§109)",
+                          label: "Corrected Rate (§109)",
                           width: "160px",
                           render: (row) => {
                             if (row.already_recalculated) {
@@ -912,7 +912,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                   <button
                                     type="button"
                                     onClick={() => updateRecalcRate(row.id, String(Number(derivable.rate).toFixed(4)))}
-                                    title={`From Stroke ${derivable.stroke_number ?? "--"} dosage: ${Number(derivable.rate).toFixed(4)}/unit. Only a suggestion â€” purchased SFG/INT keeps its own purchase rate.`}
+                                    title={`From Stroke ${derivable.stroke_number ?? "--"} dosage: ${Number(derivable.rate).toFixed(4)}/unit. Only a suggestion — purchased SFG/INT keeps its own purchase rate.`}
                                     className="truncate text-left text-xs text-sky-700 underline decoration-dotted hover:text-sky-900"
                                   >
                                     Suggest {Number(derivable.rate).toFixed(4)} (from dosage)
@@ -946,7 +946,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                             </button>
                           </div>
                         ) : (
-                          "â€”"
+                          "—"
                         ),
                     },
                   ]}
@@ -958,13 +958,13 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                 {detail.status === "POSTED" ? (
                   <div className="grid gap-3 rounded border border-amber-200 bg-amber-50 p-4">
                     <div className="text-sm font-semibold text-amber-900">
-                      Recalculate Valuation (Â§109 â€” one click, fully automatic, one-time-use per line)
+                      Recalculate Valuation (§109 — one click, fully automatic, one-time-use per line)
                     </div>
                     <div className="text-xs text-amber-800">
                       Fill in "Corrected Rate" on whichever lines above need it, give one shared reason, then Recalculate All.
                       The system corrects these materials and then <strong>automatically cascades</strong> into every SFG batch
-                      and FG batch that consumed them â€” no separate manual step. The results below list every step the
-                      cascade actually touched. Already-recalculated lines are locked â€” no "reopen" action exists yet.
+                      and FG batch that consumed them — no separate manual step. The results below list every step the
+                      cascade actually touched. Already-recalculated lines are locked — no "reopen" action exists yet.
                     </div>
                     <ErpDenseFormRow label="Reason (required, applies to all lines recalculated in this action)">
                       <input
@@ -1001,7 +1001,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                 </>
                               ) : (
                                 <span className="text-rose-700">
-                                  <strong>{materialLabel}</strong>: failed â€” {result.error}
+                                  <strong>{materialLabel}</strong>: failed — {result.error}
                                 </span>
                               )}
                             </div>
@@ -1384,7 +1384,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                 </div>
                                 {derivedRate.incomplete && (
                                   <div className="mt-1 text-amber-700">
-                                    One or more inputs have no valued stock yet â€” load their opening stock first,
+                                    One or more inputs have no valued stock yet — load their opening stock first,
                                     or this suggestion is understated.
                                   </div>
                                 )}
@@ -1449,7 +1449,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                     return (
                                       <tr key={row.key} className="align-top even:bg-slate-50/40">
                                         <td className="border-b border-slate-100 px-3 py-2">{index + 1}</td>
-                                        <td className="border-b border-slate-100 px-3 py-2">{material?.material_type ?? "â€”"}</td>
+                                        <td className="border-b border-slate-100 px-3 py-2">{material?.material_type ?? "—"}</td>
                                         <td className="border-b border-slate-100 px-3 py-2 min-w-[260px]">
                                           <ErpComboboxField
                                             value={row.material_id}
@@ -1458,7 +1458,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                             blankLabel="Select material"
                                           />
                                         </td>
-                                        <td className="border-b border-slate-100 px-3 py-2">{material?.pace_code ?? "â€”"}</td>
+                                        <td className="border-b border-slate-100 px-3 py-2">{material?.pace_code ?? "—"}</td>
                                         <td className="border-b border-slate-100 px-3 py-2 min-w-[240px]">
                                           <select
                                             value={row.storage_location_id}
@@ -1486,7 +1486,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                             ))}
                                           </select>
                                         </td>
-                                        <td className="border-b border-slate-100 px-3 py-2">{material?.base_uom_code ?? "â€”"}</td>
+                                        <td className="border-b border-slate-100 px-3 py-2">{material?.base_uom_code ?? "—"}</td>
                                         <td className="border-b border-slate-100 px-3 py-2 min-w-[240px]">
                                           {isSfgGenealogy ? (
                                             <div className="grid gap-1">
