@@ -15,7 +15,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
-import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -125,6 +125,17 @@ async function getStorageLocationMapByIds(ids: string[]): Promise<Map<string, Js
   }
   for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
   return map;
+}
+
+async function listStrokeScopedCompanyIds(ctx: ProdHandlerContext): Promise<string[] | null> {
+  if (isCompanyScopeAdminBypass(ctx)) return null;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id);
+  if (error) throw new Error("PROD_STROKE_SCOPE_LOOKUP_FAILED");
+  return [...new Set(((data ?? []) as JsonRecord[]).map((row) => String(row.company_id ?? "")).filter(Boolean))];
 }
 
 async function getStrokeMaster(id: string): Promise<JsonRecord | null> {
@@ -366,7 +377,18 @@ export async function listStrokeMastersHandler(
       `)
       .order("created_at", { ascending: false });
 
-    if (companyId) query = query.eq("company_id", companyId);
+    if (companyId) {
+      await assertCompanyScope(ctx, companyId);
+      query = query.eq("company_id", companyId);
+    } else {
+      const scopedCompanyIds = await listStrokeScopedCompanyIds(ctx);
+      if (scopedCompanyIds && scopedCompanyIds.length === 0) {
+        return okResponse({ data: [] }, ctx.request_id, req);
+      }
+      if (scopedCompanyIds) {
+        query = query.in("company_id", scopedCompanyIds);
+      }
+    }
     if (materialId) query = query.eq("prodshade_material_id", materialId);
     if (status) query = query.eq("status", status);
 
@@ -398,7 +420,8 @@ export async function listStrokeMastersHandler(
   } catch (err) {
     console.error("[stroke_master.listStrokeMasters] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_LIST_FAILED";
-    return strokeError(req, ctx, code, 500, "Stroke master list failed");
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return strokeError(req, ctx, code, status, "Stroke master list failed");
   }
 }
 
@@ -431,6 +454,7 @@ export async function getStrokeMasterHandler(
     }
     if (!data) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Stroke master not found");
     const stroke = data as JsonRecord;
+    await assertCompanyScope(ctx, String(stroke.company_id ?? ""));
 
     const { data: lineRows, error: linesErr } = await serviceRoleClient
       .schema("erp_production")
@@ -499,7 +523,8 @@ export async function getStrokeMasterHandler(
   } catch (err) {
     console.error("[stroke_master.getStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_FETCH_FAILED";
-    return strokeError(req, ctx, code, 500, "Stroke master fetch failed");
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return strokeError(req, ctx, code, status, "Stroke master fetch failed");
   }
 }
 
@@ -644,6 +669,7 @@ export async function updateStrokeMasterHandler(
 
     const existing = await getStrokeMaster(id);
     if (!existing) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Stroke master not found");
+    await assertCompanyScope(ctx, String(existing.company_id ?? ""));
     if (existing.status !== "DRAFT") {
       return strokeError(req, ctx, "PROD_STROKE_APPROVED_LOCKED", 422, "Only DRAFT strokes can be edited");
     }
@@ -722,7 +748,8 @@ export async function updateStrokeMasterHandler(
   } catch (err) {
     console.error("[stroke_master.updateStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_UPDATE_FAILED";
-    return strokeError(req, ctx, code, 500, "Stroke master update failed");
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return strokeError(req, ctx, code, status, "Stroke master update failed");
   }
 }
 
@@ -740,6 +767,7 @@ export async function approveStrokeMasterHandler(
 
     const existing = await getStrokeMaster(id);
     if (!existing) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Stroke master not found");
+    await assertCompanyScope(ctx, String(existing.company_id ?? ""));
     if (existing.status !== "DRAFT") {
       return strokeError(req, ctx, "PROD_STROKE_ALREADY_APPROVED", 409, "Only DRAFT strokes can be approved");
     }
@@ -799,7 +827,7 @@ export async function approveStrokeMasterHandler(
   } catch (err) {
     console.error("[stroke_master.approveStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_APPROVE_FAILED";
-    const status = code === "PROD_STROKE_APPROVER_ROLE_REQUIRED" || code === "PROD_STROKE_SELF_APPROVAL_FORBIDDEN"
+    const status = code === "PROD_STROKE_APPROVER_ROLE_REQUIRED" || code === "PROD_STROKE_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION"
       ? 403
       : 500;
     return strokeError(req, ctx, code, status, "Stroke approve failed");
@@ -820,6 +848,7 @@ export async function rejectStrokeMasterHandler(
 
     const existing = await getStrokeMaster(id);
     if (!existing) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Not found");
+    await assertCompanyScope(ctx, String(existing.company_id ?? ""));
     if (existing.status !== "DRAFT") {
       return strokeError(req, ctx, "PROD_STROKE_NOT_DRAFT", 422, "Only DRAFT strokes can be rejected");
     }
@@ -840,7 +869,7 @@ export async function rejectStrokeMasterHandler(
   } catch (err) {
     console.error("[stroke_master.rejectStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_REJECT_FAILED";
-    const status = code === "PROD_STROKE_APPROVER_ROLE_REQUIRED" || code === "PROD_STROKE_SELF_APPROVAL_FORBIDDEN"
+    const status = code === "PROD_STROKE_APPROVER_ROLE_REQUIRED" || code === "PROD_STROKE_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION"
       ? 403
       : 500;
     return strokeError(req, ctx, code, status, "Stroke reject failed");
@@ -861,6 +890,7 @@ export async function deactivateStrokeMasterHandler(
 
     const existing = await getStrokeMaster(id);
     if (!existing) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Not found");
+    await assertCompanyScope(ctx, String(existing.company_id ?? ""));
     if (existing.status !== "APPROVED") {
       return strokeError(req, ctx, "PROD_STROKE_NOT_APPROVED", 422, "Only APPROVED strokes can be deactivated");
     }
@@ -878,7 +908,8 @@ export async function deactivateStrokeMasterHandler(
   } catch (err) {
     console.error("[stroke_master.deactivateStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_DEACTIVATE_FAILED";
-    return strokeError(req, ctx, code, 500, "Stroke deactivate failed");
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return strokeError(req, ctx, code, status, "Stroke deactivate failed");
   }
 }
 
@@ -896,6 +927,7 @@ export async function revertStrokeMasterHandler(
 
     const existing = await getStrokeMaster(id);
     if (!existing) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Not found");
+    await assertCompanyScope(ctx, String(existing.company_id ?? ""));
     if (existing.status !== "APPROVED") {
       return strokeError(req, ctx, "PROD_STROKE_NOT_APPROVED", 422, "Only APPROVED strokes can be reverted");
     }
@@ -920,6 +952,7 @@ export async function revertStrokeMasterHandler(
   } catch (err) {
     console.error("[stroke_master.revertStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_REVERT_FAILED";
-    return strokeError(req, ctx, code, 500, "Stroke revert failed");
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return strokeError(req, ctx, code, status, "Stroke revert failed");
   }
 }

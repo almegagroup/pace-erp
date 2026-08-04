@@ -3655,6 +3655,137 @@ now VIEW+WRITE+EDIT both companies, ACL-MASTER still full access, zero
 APPROVE rows anywhere for this resource (correct, matches "no approval
 page"). `precomputed_acl_view` re-swept for the newly-stale v35 rows.
 
+## 2026-08-03 (later still) — Real company-scope leak found + fixed: Stroke Master (6 of 8 handlers had zero company check)
+
+Business owner reported P0063 (single-company, CMP003 only) seeing CMP006's
+stroke on the Stroke Master list page — a live production report, not a
+hypothetical. Investigated and confirmed a real, serious bug, and one that
+this session's own `company-scope-guard.mjs` had already missed — its known,
+documented limitation (file-level heuristic: "if a file has *any*
+`assertCompanyScope` call anywhere, the whole file passes, even if 9 other
+handlers in it never check") is exactly what let this through.
+
+**Root cause:** `listStrokeMastersHandler` — `if (companyId) query =
+query.eq("company_id", companyId)` with **no fallback when `companyId` is
+empty**, so an empty query string param returned every company's rows,
+unfiltered. `stroke_master.handlers.ts` does have one `assertCompanyScope`
+call (in `createStrokeMasterHandler`), which is exactly why the guard's
+file-level check passed the whole file. Confirmed live: both CMP003 and
+CMP006 each have exactly 1 stroke row — the precise shape of what P0063 saw.
+
+**Scope turned out much wider once checked properly — 6 of this file's 8
+exported handlers had zero company-scope check at all:**
+`getStrokeMasterHandler`, `updateStrokeMasterHandler`,
+`approveStrokeMasterHandler`, `rejectStrokeMasterHandler`,
+`deactivateStrokeMasterHandler`, `revertStrokeMasterHandler` — every one of
+these fetches a specific stroke by ID and acts on it, but never validated
+the fetched record's own `company_id` against the caller (CLAUDE.md's
+"Act-on-existing" Shape 2 pattern). Any authenticated Production-read user
+could fetch, edit, approve, reject, deactivate, or revert **any company's**
+stroke directly by ID, regardless of their own `erp_map.user_companies`.
+
+**Fixed, all 8 handlers:**
+- `listStrokeMastersHandler` — added the `opening_stock.handlers.ts`-style
+  pattern: `companyId` provided → `assertCompanyScope` + filter by it;
+  empty → new `listStrokeScopedCompanyIds(ctx)` helper (admin-bypass aware,
+  mirrors `listOpeningStockScopedCompanyIds`) scopes to the caller's own
+  companies, empty-scope short-circuits to `{data: []}`.
+- `getStrokeMasterHandler`, `updateStrokeMasterHandler`,
+  `approveStrokeMasterHandler`, `rejectStrokeMasterHandler`,
+  `deactivateStrokeMasterHandler`, `revertStrokeMasterHandler` — each now
+  calls `await assertCompanyScope(ctx, existing.company_id)` right after the
+  NOT_FOUND check, before any status/business-logic check (approve/reject
+  also keep the existing `assertStrokeApproverRole` call, now running
+  *after* the company-scope check).
+- All 8 catch blocks now map `COMPANY_SCOPE_VIOLATION` to 403.
+- `deno check` clean; all 5 CI guards re-run together, still passing (this
+  fix doesn't change the guard's known file-level-heuristic limitation, but
+  it does close the actual underlying bug the limitation let through).
+
+**Not changed:** the frontend's list-filter default (`companyFilter` state,
+starts `""`). The backend fix alone is the real security boundary and fully
+closes the leak — an empty filter now correctly scopes server-side to the
+caller's own companies rather than showing everything. Left the frontend
+filter UX as-is since it's a reasonable "show all my scoped companies by
+default" list behavior, not a Law 12 violation (the company *options* list
+itself, `buildTransactionCompanyList`, was already fixed earlier this
+session).
+
+**Lesson, worth repeating for future audits:** `company-scope-guard.mjs`'s
+own doc comment already warned about this exact gap ("এটা file-level
+heuristic, function-level না") — this is the first time it actually bit.
+Any file with 3+ exported handlers touching `company_id` deserves a manual
+per-function check, not just a passing guard run, especially for
+"act-on-existing" handlers that only take an `:id` param and never see
+`company_id` directly in the request at all (so the guard's `body.company_id`
+/`searchParams` grep can't even see them as candidates).
+
+## 2026-08-03 (still later) — Material Master read access was silently SCM-only; opened to everyone
+
+Same P0063/Stroke Master investigation surfaced a second, separate bug:
+after fixing the company-scope leak, RM/INT material dropdowns on the
+Stroke Master create form were still empty for P0063, while Storage
+Location dropdowns worked fine. Traced it: `GET /api/om/storage-locations`
+is `skipAcl: true` (no ACL gate at all, works for everyone), but
+`GET /api/om/materials` (`OM_MATERIAL_LIST:VIEW`) was only granted via
+`CAP_OM_MATERIAL_VENDOR`, held by **SUPPLY CHAIN and ACL-MASTER only** — no
+other department (Production, Quality, Accounts, Stores) had it. Business
+owner's reaction, correctly: this isn't a scoped-access design question,
+Material Master is basic reference data every module needs to function —
+Stroke Master, Pack BOM, GRN, Inward QA, Opening Stock, Physical Inventory
+all need to look up materials by name/code. Locking it to one department was
+simply wrong, not a judgment call to litigate page by page.
+
+**Fix:** found `CAP_EVERYONE_REPORTS` already exists and is already held by
+literally every department in both companies (currently used for exactly
+one thing — `PROC_GATE_REPORT:VIEW`) — the intended vehicle for
+"everyone gets this, no per-department decision needed." Added
+`OM_MATERIAL_LIST:VIEW` to it. One insert, fixes every department at once,
+VIEW-only (no new create/edit/delete power granted anywhere). Version bump
+v36→v37 both companies (capture+generate+activate). Verified live:
+P0063 (QUALITY), P0009 (PRODUCTION+QUALITY), P0004 (SUPPLY CHAIN), P0076
+(ACL-MASTER) all resolve `OM_MATERIAL_LIST:VIEW=ALLOW` now, both companies.
+`precomputed_acl_view` re-swept (2,184 rows, 100% active-version).
+
+**Lesson:** when a capability is scoped narrower than the data it gates
+actually warrants (reference/master data needed cross-module, not a
+department-owned business action), check for an existing "everyone" vehicle
+before inventing per-department grants — `CAP_EVERYONE_REPORTS` was already
+sitting there, unused for this.
+
+## 2026-08-03 (still later, part 2) — Alternate Material group create/edit was also silently SCM-only, same page
+
+Immediately following the Material Master VIEW fix, business owner asked
+whether the same P0063 could also create Material Category **Groups**
+(the "Alternate Material" grouping feature used inline on the Stroke
+Master create form) — confirmed no, this is a genuinely separate resource:
+listing groups uses `OM_MATERIAL_LIST:VIEW` (just fixed), but
+create/edit/delete-group and add/remove-member all use `OM_MATERIAL_CREATE:WRITE`,
+still SCM+ACL-MASTER only. Business owner's response, correctly: Stroke
+Master is QUALITY's own page (§83.3 locked design — "QA creates → Manager
+approves"), P0063 is exactly the intended primary user, there's no
+justification for QA needing SCM's help mid-recipe to define an alternate
+material grouping.
+
+**Fix:** `CAP_OM_MATERIAL_CATEGORY_MAINTAIN` already existed and was
+already held by **both QUALITY and PRODUCTION** in both companies (for a
+different, similarly-named resource, `PROC_MATERIAL_CATEGORY_MASTER`) —
+added `OM_MATERIAL_CREATE` VIEW+WRITE to this same capability. One insert,
+covers both departments that actually build Stroke recipes, without
+touching Stores/Accounts/SCM's existing narrower ownership of the
+Material Master record itself. Version bump v37→v38 both companies
+(capture+generate+activate). Verified live: P0063 (QUALITY) and P0009
+(PRODUCTION+QUALITY) both resolve `OM_MATERIAL_CREATE` VIEW+WRITE=ALLOW.
+`precomputed_acl_view` re-swept (2,206 rows, 100% active-version).
+
+**Pattern now established twice in one afternoon:** when a page's own
+documented primary-user department (Task C-style design lock, e.g. §83.3
+for Stroke Master) can't do a normal, expected action on that page, check
+for an existing capability that department already holds for something
+adjacent, before inventing a new one or asking whether it's intentional —
+in both cases (`CAP_EVERYONE_REPORTS`, `CAP_OM_MATERIAL_CATEGORY_MAINTAIN`)
+the right vehicle already existed, just not wired to this specific menu.
+
 **Related, not fixed:** PO14 (Old Purchase Order) has the identical
 architecture but its capability (`CAP_PROC_BUYER`) was already correctly
 held by SCM — no live bug there. It does, however, only have `VIEW`

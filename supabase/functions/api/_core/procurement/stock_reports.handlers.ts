@@ -269,6 +269,37 @@ async function resolveCompanyScopeList(
   return normalizedRequested;
 }
 
+// Business decision (2026-08-04): IN02/IN03 show exactly one company's data
+// per request, never a blended cross-company view — a caller must pass
+// exactly one company_id, and it must be in their own erp_map.user_companies
+// (or SA/GA, who may still pass any single real company). The frontend
+// already enforces "pick one" via TransactionCompanySelector, but that's not
+// a substitute for a server-side check — a direct API call could otherwise
+// omit company_id (falls back to "all my companies", a blend) or pass
+// several. Reuses resolveCompanyScopeList's membership check, then adds the
+// "must be exactly one" rule on top.
+async function resolveMandatorySingleCompanyId(
+  ctx: StockReportHandlerContext,
+  requestedCompanyIds: string[],
+): Promise<string> {
+  const normalizedRequested = [...new Set(requestedCompanyIds.map((value) => toTrimmedString(value)).filter(Boolean))];
+  if (normalizedRequested.length !== 1) {
+    throw new Error("COMPANY_ID_REQUIRED_SINGLE");
+  }
+  const scoped = await resolveCompanyScopeList(ctx, normalizedRequested);
+  // scoped is either the normalized single-entry array (non-admin, passed
+  // membership check) or, for SA/GA/admin, resolveCompanyScopeList returns
+  // normalizedRequested unchanged too (allowedCompanyIds is null for them) —
+  // either way it's the one company_id the caller asked for.
+  return scoped?.[0] ?? normalizedRequested[0];
+}
+
+function companyErrorStatus(code: string): number | null {
+  if (code === "COMPANY_SCOPE_VIOLATION") return 403;
+  if (code === "COMPANY_ID_REQUIRED_SINGLE") return 400;
+  return null;
+}
+
 function initializeCurrentStockDraftRow(params: {
   company_id: string;
   material_id: string;
@@ -383,20 +414,18 @@ export async function getStockLedgerReportHandler(
     const batchNumbers = parseMultiValueParams(url, "batch_numbers", "batch_number");
     const packingPoNumbers = parseMultiValueParams(url, "packing_po_numbers", "packing_po_number");
     const movementTypeCodes = parseMultiValueParams(url, "movement_type_codes", "movement_type_code", (value) => value.toUpperCase());
-    const companyScopeIds = await resolveCompanyScopeList(ctx, companyIds);
+    const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
 
     let query = serviceRoleClient
       .schema("erp_inventory")
       .from("stock_ledger")
       .select("id, ledger_seq, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, base_uom_code, value, valuation_rate, created_at, created_by")
+      .eq("company_id", companyId)
       .order("posting_date", { ascending: true })
       .order("ledger_seq", { ascending: true });
     query = (query as unknown as { gte: (column: string, value: string) => typeof query }).gte("posting_date", dateFrom);
     query = (query as unknown as { lte: (column: string, value: string) => typeof query }).lte("posting_date", dateTo);
 
-    if (companyScopeIds) {
-      query = query.in("company_id", companyScopeIds);
-    }
     if (materialIds.length > 0) {
       query = query.in("material_id", materialIds);
     }
@@ -696,7 +725,7 @@ export async function getStockLedgerReportHandler(
     return okResponse({ data: filteredRows, total: filteredRows.length }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STOCK_LEDGER_FETCH_FAILED";
-    return reportErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Unable to fetch stock ledger report.");
+    return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch stock ledger report.");
   }
 }
 
@@ -728,7 +757,7 @@ export async function getCurrentStockHandler(
     const requestedStockTypes = stockTypes.length
       ? stockTypes.filter((value) => ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"].includes(value))
       : ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
-    const companyScopeIds = await resolveCompanyScopeList(ctx, companyIds);
+    const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
 
     let materialQuery = serviceRoleClient
       .schema("erp_master")
@@ -790,10 +819,8 @@ export async function getCurrentStockHandler(
         .from("stock_snapshot")
         .select("company_id, material_id, storage_location_id, stock_type_code, quantity, base_uom_code")
         .in("material_id", pathAMaterialIds)
-        .in("stock_type_code", requestedStockTypes);
-      if (companyScopeIds) {
-        snapshotQuery = snapshotQuery.in("company_id", companyScopeIds);
-      }
+        .in("stock_type_code", requestedStockTypes)
+        .eq("company_id", companyId);
       if (storageLocationIds.length > 0) {
         snapshotQuery = snapshotQuery.in("storage_location_id", storageLocationIds);
       }
@@ -829,10 +856,8 @@ export async function getCurrentStockHandler(
         .from("stock_ledger")
         .select("company_id, material_id, storage_location_id, stock_type_code, batch_number, quantity, direction, stock_document_id")
         .in("material_id", ledgerMaterialIds)
-        .in("stock_type_code", requestedStockTypes);
-      if (companyScopeIds) {
-        ledgerQuery = ledgerQuery.in("company_id", companyScopeIds);
-      }
+        .in("stock_type_code", requestedStockTypes)
+        .eq("company_id", companyId);
       if (storageLocationIds.length > 0) {
         ledgerQuery = ledgerQuery.in("storage_location_id", storageLocationIds);
       }
@@ -1094,7 +1119,7 @@ export async function getCurrentStockHandler(
     );
   } catch (error) {
     const code = error instanceof Error ? error.message : "CURRENT_STOCK_FETCH_FAILED";
-    return reportErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Unable to fetch current stock.");
+    return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch current stock.");
   }
 }
 

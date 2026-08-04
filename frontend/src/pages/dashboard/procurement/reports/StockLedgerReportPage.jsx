@@ -8,11 +8,13 @@
  * Authority: Frontend
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
@@ -71,28 +73,13 @@ function formatValue(value) {
   return amount.toFixed(4);
 }
 
-function normalizeRuntimeCompanyOptions(availableCompanies) {
-  return (Array.isArray(availableCompanies) ? availableCompanies : [])
-    .map((company) => {
-      const value = String(company?.id ?? "").trim();
-      if (!value) return null;
-      const code = String(company?.company_code ?? "").trim();
-      const name = String(company?.company_name ?? "").trim();
-      return {
-        value,
-        label: code ? `${code}${name ? ` — ${name}` : ""}` : (name || value),
-      };
-    })
-    .filter(Boolean);
-}
-
 function joinSelectedValues(entries) {
   return (Array.isArray(entries) ? entries : []).map((entry) => entry.value).filter(Boolean).join(",");
 }
 
 function buildReportParams(filters) {
   return {
-    company_ids: joinSelectedValues(filters.companyValues) || undefined,
+    company_ids: filters.companyId || undefined,
     material_ids: joinSelectedValues(filters.materialValues) || undefined,
     storage_location_ids: joinSelectedValues(filters.slocValues) || undefined,
     batch_numbers: joinSelectedValues(filters.batchValues) || undefined,
@@ -140,11 +127,6 @@ function dateRangeInvalid(dateFrom, dateTo) {
 export default function StockLedgerReportPage() {
   const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
-  const companyOptions = useMemo(
-    () => normalizeRuntimeCompanyOptions(runtimeContext?.availableCompanies),
-    [runtimeContext?.availableCompanies],
-  );
-  const singleCompanyOption = companyOptions.length === 1 ? companyOptions[0] : null;
   const canSaveGlobalLayout = runtimeContext?.roleCode === "SA" || runtimeContext?.roleCode === "GA";
 
   const materialsQuery = useMaterialOptionsQuery({ status: "ACTIVE", limit: 1000 });
@@ -177,7 +159,18 @@ export default function StockLedgerReportPage() {
     [movementTypesQuery.data],
   );
 
-  const [companyValues, setCompanyValues] = useState([]);
+  // Business decision (2026-08-04): single company at a time, never multi —
+  // same rule as IN03 (see CurrentStockPage.jsx). Single-company users get it
+  // auto-resolved and locked; multi-company users pick exactly one from their
+  // own allowed list via TransactionCompanySelector (Law 12 pattern).
+  const [companyId, setCompanyId] = useState("");
+  useEffect(() => {
+    const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (defaultCompanyId && !companyId) {
+      setCompanyId(defaultCompanyId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeContext]);
   const [materialValues, setMaterialValues] = useState([]);
   const [slocValues, setSlocValues] = useState([]);
   const [batchValues, setBatchValues] = useState([]);
@@ -262,13 +255,16 @@ export default function StockLedgerReportPage() {
   );
 
   const reportRows = Array.isArray(reportQuery.data) ? reportQuery.data : [];
-  const searchDisabled = !dateFrom || !dateTo || dateSpanTooWide(dateFrom, dateTo) || dateRangeInvalid(dateFrom, dateTo);
-  const effectiveCompanyValues = singleCompanyOption ? [singleCompanyOption] : companyValues;
+  const searchDisabled = !companyId || !dateFrom || !dateTo || dateSpanTooWide(dateFrom, dateTo) || dateRangeInvalid(dateFrom, dateTo);
   const activeError = error || (reportQuery.error instanceof Error ? reportQuery.error.message : "");
 
   async function handleSearch() {
     setError("");
     setNotice("");
+    if (!companyId) {
+      setError("Select a company first.");
+      return;
+    }
     if (!dateFrom || !dateTo) {
       setError("Posting date range is required.");
       return;
@@ -283,7 +279,7 @@ export default function StockLedgerReportPage() {
     }
 
     const nextParams = buildReportParams({
-      companyValues: effectiveCompanyValues,
+      companyId,
       materialValues,
       slocValues,
       batchValues,
@@ -417,22 +413,12 @@ export default function StockLedgerReportPage() {
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Page 1" title="Filters">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {singleCompanyOption ? (
-              <label className="grid gap-1 text-sm text-slate-700">
-                <span className="font-medium text-slate-800">Company</span>
-                <div className="min-h-9 border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-900">
-                  {singleCompanyOption.label}
-                </div>
-              </label>
-            ) : (
-              <MultiValueFilterField
-                label="Company"
-                placeholder="All allowed companies"
-                value={companyValues}
-                onChange={setCompanyValues}
-                options={companyOptions}
-              />
-            )}
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={setCompanyId}
+              label="Company"
+            />
 
             <MultiValueFilterField
               label="Material"
@@ -458,7 +444,7 @@ export default function StockLedgerReportPage() {
               searchFn={async (queryText) => {
                 const result = await searchStockLedgerBatchNumbers({
                   q: queryText || undefined,
-                  company_ids: joinSelectedValues(effectiveCompanyValues) || undefined,
+                  company_ids: companyId || undefined,
                 });
                 return Array.isArray(result?.data) ? result.data : [];
               }}
@@ -472,7 +458,7 @@ export default function StockLedgerReportPage() {
               searchFn={async (queryText) => {
                 const result = await searchStockLedgerPackingPoNumbers({
                   q: queryText || undefined,
-                  company_ids: joinSelectedValues(effectiveCompanyValues) || undefined,
+                  company_ids: companyId || undefined,
                 });
                 return Array.isArray(result?.data) ? result.data : [];
               }}

@@ -11,12 +11,13 @@
 import { useEffect, useMemo, useState } from "react";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { buildTransactionCompanyList } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import {
   useMaterialOptionsQuery,
   useStorageLocationOptionsQuery,
@@ -73,26 +74,6 @@ export default function CurrentStockPage() {
   const materialsQuery = useMaterialOptionsQuery({ status: "ACTIVE", limit: 1000 });
   const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
 
-  // §116.2 correction: Company must never come from `useCompaniesForOmQuery`
-  // (GET /api/admin/companies) — that endpoint is unscoped (returns every
-  // business company, gated only by a hardcoded SA/GA/Manager-tier check) and
-  // would leak the full company list to any report viewer, plus 403 outright
-  // for L1-tier users. `runtimeContext.availableCompanies` is already scoped
-  // server-side to the caller's own erp_map.user_companies (same source
-  // TransactionCompanySelector uses), so it's the only safe source here.
-  const availableCompanies = useMemo(
-    () => buildTransactionCompanyList(runtimeContext),
-    [runtimeContext],
-  );
-  const workspaceMode = String(runtimeContext?.workspaceMode ?? "").toUpperCase();
-  const isSingleCompany = workspaceMode !== "MULTI" || availableCompanies.length <= 1;
-  const companyOptions = useMemo(
-    () => availableCompanies.map((company) => ({
-      value: company.id,
-      label: company.company_code ? `${company.company_code}${company.company_name ? ` — ${company.company_name}` : ""}` : company.company_name || company.id,
-    })),
-    [availableCompanies],
-  );
   const materialOptions = useMemo(
     () => (materialsQuery.materials ?? []).map((material) => ({
       value: material.id,
@@ -108,7 +89,20 @@ export default function CurrentStockPage() {
     [slocQuery.storageLocations],
   );
 
-  const [companyValues, setCompanyValues] = useState([]);
+  // Business decision (2026-08-04): single company at a time, never multi —
+  // this report is one company's stock, not a cross-company roll-up. Single-
+  // company users get it auto-resolved and locked; multi-company users pick
+  // exactly one from their own allowed list, same pattern every transaction
+  // page already uses (Law 12) — reuses TransactionCompanySelector directly
+  // rather than the multi-value picker used for the other filters below.
+  const [companyId, setCompanyId] = useState("");
+  useEffect(() => {
+    const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (defaultCompanyId && !companyId) {
+      setCompanyId(defaultCompanyId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeContext]);
   const [materialValues, setMaterialValues] = useState([]);
   const [slocValues, setSlocValues] = useState([]);
   const [batchValues, setBatchValues] = useState([]);
@@ -122,12 +116,6 @@ export default function CurrentStockPage() {
   const [error, setError] = useState("");
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
-
-  useEffect(() => {
-    if (isSingleCompany && companyOptions.length > 0) {
-      setCompanyValues(companyOptions);
-    }
-  }, [isSingleCompany, companyOptions]);
 
   const columnDefinitions = useMemo(
     () => [
@@ -155,12 +143,16 @@ export default function CurrentStockPage() {
   );
 
   async function handleSearch() {
+    if (!companyId) {
+      setError("Select a company first.");
+      return;
+    }
     setLoading(true);
     setError("");
     setSearched(true);
     try {
       const response = await getCurrentStock({
-        company_ids: joinValues(companyValues) || undefined,
+        company_ids: companyId,
         material_ids: joinValues(materialValues) || undefined,
         storage_location_ids: joinValues(slocValues) || undefined,
         batch_numbers: joinValues(batchValues) || undefined,
@@ -191,7 +183,7 @@ export default function CurrentStockPage() {
     window.addEventListener("keydown", handleExecuteShortcut);
     return () => window.removeEventListener("keydown", handleExecuteShortcut);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, companyValues, materialValues, slocValues, batchValues, packingPoValues, materialTypes, stockTypes, showZero]);
+  }, [loading, companyId, materialValues, slocValues, batchValues, packingPoValues, materialTypes, stockTypes, showZero]);
 
   return (
     <ErpScreenScaffold
@@ -211,31 +203,19 @@ export default function CurrentStockPage() {
           tone: "primary",
           hint: "F8",
           onClick: () => void handleSearch(),
-          disabled: loading,
+          disabled: loading || !companyId,
         },
       ]}
     >
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Page 1" title="Filters">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {isSingleCompany ? (
-              <div className="grid gap-1">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Company
-                </span>
-                <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                  {companyOptions[0]?.label ?? "—"}
-                </div>
-              </div>
-            ) : (
-              <MultiValueFilterField
-                label="Company"
-                placeholder="All allowed companies"
-                value={companyValues}
-                onChange={setCompanyValues}
-                options={companyOptions}
-              />
-            )}
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={companyId}
+              onChange={setCompanyId}
+              label="Company"
+            />
             <MultiValueFilterField
               label="Material"
               placeholder="All materials"
@@ -258,7 +238,7 @@ export default function CurrentStockPage() {
               searchFn={async (queryText) => {
                 const response = await searchCurrentStockBatchNumbers({
                   q: queryText || undefined,
-                  company_ids: joinValues(companyValues) || undefined,
+                  company_ids: companyId || undefined,
                 });
                 return Array.isArray(response?.data) ? response.data : [];
               }}
@@ -271,7 +251,7 @@ export default function CurrentStockPage() {
               searchFn={async (queryText) => {
                 const response = await searchCurrentStockPackingPoNumbers({
                   q: queryText || undefined,
-                  company_ids: joinValues(companyValues) || undefined,
+                  company_ids: companyId || undefined,
                 });
                 return Array.isArray(response?.data) ? response.data : [];
               }}
