@@ -1014,6 +1014,38 @@ export function getStockLedgerReport(params) {
   return fetchProcurement("GET", "/api/procurement/stock-ledger", undefined, params);
 }
 
+export function listStockLedgerMovementTypes() {
+  return fetchProcurement("GET", "/api/procurement/stock-ledger/movement-types");
+}
+
+export function searchStockLedgerBatchNumbers(params) {
+  return fetchProcurement("GET", "/api/procurement/stock-ledger/batch-search", undefined, params);
+}
+
+export function searchStockLedgerPackingPoNumbers(params) {
+  return fetchProcurement("GET", "/api/procurement/stock-ledger/po-search", undefined, params);
+}
+
+export function listReportLayouts(params) {
+  return fetchProcurement("GET", "/api/procurement/report-layouts", undefined, params);
+}
+
+export function createReportLayout(payload) {
+  return fetchProcurement("POST", "/api/procurement/report-layouts", payload);
+}
+
+export function updateReportLayout(id, payload) {
+  return fetchProcurement("PATCH", `/api/procurement/report-layouts/${encodeURIComponent(id)}`, payload);
+}
+
+export function deleteReportLayout(id) {
+  return fetchProcurement("DELETE", `/api/procurement/report-layouts/${encodeURIComponent(id)}`);
+}
+
+export function setDefaultReportLayout(id) {
+  return fetchProcurement("POST", `/api/procurement/report-layouts/${encodeURIComponent(id)}/set-default`);
+}
+
 export function getCurrentStock(params) {
   return fetchProcurement("GET", "/api/procurement/current-stock", undefined, params);
 }

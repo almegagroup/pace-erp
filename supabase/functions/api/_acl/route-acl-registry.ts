@@ -125,6 +125,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/planning":                    { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
   "GET:/api/procurement/document-flow":               { skipAcl: false, resourceCode: "PROC_PO_LIST",        action: "VIEW" },
   "GET:/api/procurement/stock-ledger":                { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  "GET:/api/procurement/stock-ledger/movement-types": { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  "GET:/api/procurement/stock-ledger/batch-search":   { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  "GET:/api/procurement/stock-ledger/po-search":      { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  "GET:/api/procurement/report-layouts":              { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  "POST:/api/procurement/report-layouts":             { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "WRITE" },
   "GET:/api/procurement/current-stock/batch-search":  { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
   "GET:/api/procurement/current-stock/po-search":     { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
   "GET:/api/procurement/current-stock":               { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
@@ -566,6 +571,19 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/confirm$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/report-layouts\/[^/]+$/,
+    methods: {
+      PATCH: { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER", action: "WRITE" },
+      DELETE: { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER", action: "WRITE" },
+    },
+  },
+  {
+    pattern: /^\/api\/procurement\/report-layouts\/[^/]+\/set-default$/,
+    methods: {
+      POST: { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER", action: "VIEW" },
+    },
   },
   {
     pattern: /^\/api\/procurement\/tracker\/[^/]+\/inline$/,
