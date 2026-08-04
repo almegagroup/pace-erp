@@ -35,7 +35,7 @@ export default function SalesInvoiceDetailPage() {
   const navigate = useNavigate();
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || routeId);
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const isCreateMode = id === "new";
   const [searchParams] = useSearchParams();
   const [selectedDcId, setSelectedDcId] = useState("");

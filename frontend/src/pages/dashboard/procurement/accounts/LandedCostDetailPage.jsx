@@ -58,7 +58,7 @@ function statusTone(status) {
 export default function LandedCostDetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || routeId);
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
   const resolvedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [detail, setDetail] = useState(null);

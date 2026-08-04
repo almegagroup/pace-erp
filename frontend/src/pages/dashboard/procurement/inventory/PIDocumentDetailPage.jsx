@@ -54,11 +54,6 @@ function formatDateTime(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("en-GB");
 }
 
-function normalizeMaterialRows(payload) {
-  if (Array.isArray(payload?.data)) return payload.data;
-  return Array.isArray(payload) ? payload : [];
-}
-
 function normalizeLocationRows(payload) {
   if (Array.isArray(payload?.data)) return payload.data;
   return Array.isArray(payload) ? payload : [];
@@ -74,7 +69,10 @@ export default function PIDocumentDetailPage() {
   const navigate = useNavigate();
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const id =
+    routeId && routeId !== ":id" && routeId !== "id"
+      ? routeId
+      : (screenContext.id || "");
   const { runtimeContext } = useMenu();
   const selectedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [countDrafts, setCountDrafts] = useState({});

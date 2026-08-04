@@ -121,7 +121,7 @@ function buildAmendmentState(detail) {
 export default function STODetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const { runtimeContext, shellProfile } = useMenu();
   const [tareWeight, setTareWeight] = useState("");
   const [locationDrafts, setLocationDrafts] = useState({});

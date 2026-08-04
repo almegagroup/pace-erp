@@ -20,7 +20,7 @@ export default function DODetailPage() {
   const navigate = useNavigate();
   const routeParams = useParams();
   const routeId = routeParams.id;
-  const id = routeId && routeId !== ":id" ? routeId : getActiveScreenContext()?.id;
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : getActiveScreenContext()?.id;
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");

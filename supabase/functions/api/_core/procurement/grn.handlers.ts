@@ -570,11 +570,19 @@ export async function createAndPostGRNFromLineHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
+  let debugBody: JsonRecord | null = null;
+  let debugGateEntryLineId = "";
+  let debugStorageLocationId = "";
+  let debugGrnNumber = "";
+  let debugStep = "START";
+  let debugContext: Record<string, unknown> = {};
   try {
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
+    debugBody = body;
     console.log("[GRN_FROM_LINE] START user:", ctx.auth_user_id, "body:", JSON.stringify(body));
     const gateEntryLineId = toTrimmedString(body.gate_entry_line_id);
+    debugGateEntryLineId = gateEntryLineId;
     if (!gateEntryLineId) {
       return procurementErrorResponse(req, ctx, "GRN_GATE_ENTRY_LINE_REQUIRED", 400, "gate_entry_line_id is required.");
     }
@@ -649,6 +657,7 @@ export async function createAndPostGRNFromLineHandler(
 
     // Storage location
     const storageLocationId = toTrimmedString(body.storage_location_id) || null;
+    debugStorageLocationId = storageLocationId || "";
     if (!storageLocationId) {
       return procurementErrorResponse(req, ctx, "GRN_STORAGE_REQUIRED", 400, "Storage location is required.");
     }
@@ -686,7 +695,43 @@ export async function createAndPostGRNFromLineHandler(
     const grnDate = toTrimmedString(body.grn_date) || todayIsoDate();
 
     // Create GRN
+    debugStep = "GENERATE_GRN_NUMBER";
     const grnNumber = await generateProcurementDocNumber("GRN");
+    debugGrnNumber = grnNumber;
+    debugContext = {
+      company_id: String(gateEntry.company_id),
+      gate_entry_id: String(geLine.gate_entry_id),
+      gate_entry_line_id: gateEntryLineId,
+      po_id: poId,
+      po_line_id: geLine.po_line_id ?? null,
+      material_id: geLine.material_id,
+      storage_location_id: storageLocationId,
+      ge_qty: geQty,
+      received_qty: receivedQty,
+      stock_qty: stockQty,
+      po_uom_code: poUomCode,
+      base_uom_code: baseUomCode,
+      target_stock_type: targetStockType,
+      po_rate: poRate,
+      invoice_rate: invoiceRate,
+      effective_grn_rate: effectiveGrnRate,
+      base_uom_rate: baseUomRate,
+      discrepancy_qty: discrepancyQty,
+      rate_confirmed: rateConfirmed,
+      uom_mismatch: uomMismatch,
+      per_pack_qty: perPackQty,
+      batch_lot_number: toTrimmedString(body.batch_lot_number) || null,
+      expiry_type: expiryType,
+      expiry_date: expiryDate,
+      grn_date: grnDate,
+    };
+    console.log("[GRN_FROM_LINE] CONTEXT", JSON.stringify({
+      request_id: ctx.request_id,
+      auth_user_id: ctx.auth_user_id,
+      grn_number: grnNumber,
+      ...debugContext,
+    }));
+    debugStep = "INSERT_GRN_DRAFT";
     const { data: grn, error: grnError } = await serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
       .insert({
@@ -739,7 +784,13 @@ export async function createAndPostGRNFromLineHandler(
       .select("*").single();
 
     if (grnError || !grn) {
-      console.error("[GRN_FROM_LINE] GRN INSERT failed:", grnError?.message);
+      console.error("[GRN_FROM_LINE] GRN INSERT failed:", JSON.stringify({
+        request_id: ctx.request_id,
+        grn_number: grnNumber,
+        step: debugStep,
+        context: debugContext,
+        error: grnError,
+      }));
       return procurementErrorResponse(req, ctx, "GRN_CREATE_FAILED", 500, "Unable to create GRN.");
     }
     console.log("[GRN_FROM_LINE] GRN created DRAFT:", grn.id, "grn_number:", grnNumber);
@@ -752,9 +803,11 @@ export async function createAndPostGRNFromLineHandler(
     }
 
     // §106: Material Document for this GRN receipt; grn_number becomes the reference.
+    debugStep = "GENERATE_MATERIAL_DOC_NUMBER";
     const grnMatDoc = await generateMaterialDocNumber(String(gateEntry.company_id));
 
     // Post stock movement
+    debugStep = "POST_STOCK_MOVEMENT";
     const postingResp = await serviceRoleClient.schema("erp_inventory")
       .rpc("post_stock_movement", {
         p_document_number: grnNumber,
@@ -792,7 +845,8 @@ export async function createAndPostGRNFromLineHandler(
     const postingRow = postingResp.data[0] as JsonRecord;
 
     // Mark GRN as POSTED
-    await serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+    debugStep = "MARK_GRN_POSTED";
+    const grnPostedUpdate = await serviceRoleClient.schema("erp_procurement").from("goods_receipt")
       .update({
         status: "POSTED",
         stock_document_id: postingRow.stock_document_id ?? null,
@@ -802,23 +856,58 @@ export async function createAndPostGRNFromLineHandler(
         last_updated_at: new Date().toISOString(),
       })
       .eq("id", String(grn.id));
+    if (grnPostedUpdate.error) {
+      console.error("[GRN_FROM_LINE] MARK_GRN_POSTED_FAILED", JSON.stringify({
+        request_id: ctx.request_id,
+        grn_number: grnNumber,
+        grn_id: grn.id,
+        posting_row: postingRow,
+        error: grnPostedUpdate.error,
+      }));
+      await rollbackGrn();
+      throw new Error("GRN_MARK_POSTED_FAILED");
+    }
 
     // Mark GE line as done
-    await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
+    debugStep = "MARK_GATE_ENTRY_LINE_POSTED";
+    const geLineUpdate = await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
       .update({ grn_posted: true }).eq("id", gateEntryLineId);
+    if (geLineUpdate.error) {
+      console.error("[GRN_FROM_LINE] GATE_ENTRY_LINE_UPDATE_FAILED", JSON.stringify({
+        request_id: ctx.request_id,
+        grn_number: grnNumber,
+        gate_entry_line_id: gateEntryLineId,
+        error: geLineUpdate.error,
+      }));
+      throw new Error("GRN_GATE_ENTRY_LINE_UPDATE_FAILED");
+    }
 
     // PO line update
     if (geLine.po_line_id) {
+      debugStep = "UPDATE_PO_LINE_RECEIPT";
       await updatePoLineReceipt(String(geLine.po_line_id), receivedQty);
       if (poLineData?.vendor_material_info_id) {
-        await serviceRoleClient.schema("erp_master").from("vendor_material_info")
+        debugStep = "UPDATE_VENDOR_MATERIAL_INFO";
+        const vmiUpdate = await serviceRoleClient.schema("erp_master").from("vendor_material_info")
           .update({ last_purchase_price: effectiveGrnRate, last_grn_date: grnDate })
           .eq("id", String(poLineData.vendor_material_info_id));
+        if (vmiUpdate.error) {
+          console.error("[GRN_FROM_LINE] VMI_UPDATE_FAILED", JSON.stringify({
+            request_id: ctx.request_id,
+            grn_number: grnNumber,
+            vendor_material_info_id: poLineData.vendor_material_info_id,
+            effective_grn_rate: effectiveGrnRate,
+            grn_date: grnDate,
+            error: vmiUpdate.error,
+          }));
+          throw new Error("GRN_VENDOR_MATERIAL_INFO_UPDATE_FAILED");
+        }
       }
     }
 
     // QA document
     if (targetStockType === "QUALITY_INSPECTION" || Boolean(material.qa_required_on_inward)) {
+      debugStep = "CREATE_QA_DOCUMENT";
       await createQaDocumentForGrn(
         ctx, grn as GrnRow,
         String(geLine.material_id),
@@ -834,6 +923,7 @@ export async function createAndPostGRNFromLineHandler(
     // CSN sync-back
     const csnId = toTrimmedString(geLine.csn_id);
     if (csnId) {
+      debugStep = "SYNC_CSN";
       const vendorType = toUpperTrimmedString(poData?.vendor_type) || "DOMESTIC";
       const csnPatch: JsonRecord = {
         status: "GRD",
@@ -857,18 +947,40 @@ export async function createAndPostGRNFromLineHandler(
         csnPatch.lr_number_port_to_plant = grn.lr_number ?? null;
         csnPatch.post_clearance_lr_date = grn.lr_date ?? null;
       }
-      await serviceRoleClient.schema("erp_procurement").from("consignment_note")
+      const csnUpdate = await serviceRoleClient.schema("erp_procurement").from("consignment_note")
         .update(csnPatch).eq("id", csnId);
+      if (csnUpdate.error) {
+        console.error("[GRN_FROM_LINE] CSN_SYNC_FAILED", JSON.stringify({
+          request_id: ctx.request_id,
+          grn_number: grnNumber,
+          csn_id: csnId,
+          csn_patch: csnPatch,
+          error: csnUpdate.error,
+        }));
+        throw new Error("GRN_CSN_SYNC_FAILED");
+      }
     }
 
     // Save material_vendor_doc_name if new invoice_name given
     const invoiceName = toTrimmedString(grn.invoice_name);
     if (invoiceName && vendorId && grn.material_id) {
-      await serviceRoleClient.schema("erp_master").from("material_vendor_doc_name")
+      debugStep = "UPSERT_MATERIAL_VENDOR_DOC_NAME";
+      const docNameUpsert = await serviceRoleClient.schema("erp_master").from("material_vendor_doc_name")
         .upsert(
           { material_id: String(grn.material_id), vendor_id: vendorId, doc_name: invoiceName },
           { onConflict: "material_id,vendor_id,doc_name", ignoreDuplicates: true },
         );
+      if (docNameUpsert.error) {
+        console.error("[GRN_FROM_LINE] DOC_NAME_UPSERT_FAILED", JSON.stringify({
+          request_id: ctx.request_id,
+          grn_number: grnNumber,
+          material_id: String(grn.material_id),
+          vendor_id: vendorId,
+          invoice_name: invoiceName,
+          error: docNameUpsert.error,
+        }));
+        throw new Error("GRN_DOC_NAME_UPSERT_FAILED");
+      }
     }
 
     // Check if all GE lines posted → update GE status
@@ -876,16 +988,37 @@ export async function createAndPostGRNFromLineHandler(
       .select("grn_posted").eq("gate_entry_id", String(geLine.gate_entry_id));
     const allPosted = (geLines ?? []).every((l: JsonRecord) => l.grn_posted === true);
     if (allPosted) {
-      await serviceRoleClient.schema("erp_procurement").from("gate_entry")
+      debugStep = "MARK_GATE_ENTRY_POSTED";
+      const geHeaderUpdate = await serviceRoleClient.schema("erp_procurement").from("gate_entry")
         .update({ status: "GRN_POSTED", last_updated_at: new Date().toISOString() })
         .eq("id", String(geLine.gate_entry_id));
+      if (geHeaderUpdate.error) {
+        console.error("[GRN_FROM_LINE] GATE_ENTRY_UPDATE_FAILED", JSON.stringify({
+          request_id: ctx.request_id,
+          grn_number: grnNumber,
+          gate_entry_id: String(geLine.gate_entry_id),
+          error: geHeaderUpdate.error,
+        }));
+        throw new Error("GRN_GATE_ENTRY_UPDATE_FAILED");
+      }
     }
 
     console.log("[GRN_FROM_LINE] SUCCESS grn_number:", grnNumber, "status: POSTED");
     return okResponse(await hydrateGrn(String(grn.id)), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GRN_CREATE_FAILED";
-    console.error("[GRN_FROM_LINE] UNHANDLED ERROR:", message, error instanceof Error ? error.stack : JSON.stringify(error));
+    console.error("[GRN_FROM_LINE] UNHANDLED ERROR:", JSON.stringify({
+      request_id: ctx.request_id,
+      auth_user_id: ctx.auth_user_id,
+      step: debugStep,
+      gate_entry_line_id: debugGateEntryLineId || null,
+      storage_location_id: debugStorageLocationId || null,
+      grn_number: debugGrnNumber || null,
+      context: debugContext,
+      body: debugBody,
+      error_message: message,
+      error_stack: error instanceof Error ? error.stack : String(error),
+    }));
     const status = message.includes("REQUIRED") ? 400 : message.includes("NOT_FOUND") ? 404 : 500;
     return procurementErrorResponse(req, ctx, message, status, message);
   }

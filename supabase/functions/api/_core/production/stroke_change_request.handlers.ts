@@ -14,7 +14,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
-import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
@@ -93,6 +93,17 @@ async function getStrokeMasterMapByIds(ids: string[]): Promise<Map<string, JsonR
   return map;
 }
 
+async function listStrokeChangeRequestScopedCompanyIds(ctx: ProdHandlerContext): Promise<string[] | null> {
+  if (isCompanyScopeAdminBypass(ctx)) return null;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id);
+  if (error) throw new Error("PROD_SCR_SCOPE_LOOKUP_FAILED");
+  return [...new Set(((data ?? []) as JsonRecord[]).map((row) => String(row.company_id ?? "")).filter(Boolean))];
+}
+
 // GET /api/production/stroke-change-requests
 export async function listStrokeChangeRequestsHandler(
   req: Request,
@@ -110,7 +121,18 @@ export async function listStrokeChangeRequestsHandler(
       .select("id, stroke_master_id, company_id, status, created_by, created_at, approved_by, approved_at, reject_reason")
       .order("created_at", { ascending: false });
 
-    if (companyId) query = query.eq("company_id", companyId);
+    if (companyId) {
+      await assertCompanyScope(ctx, companyId);
+      query = query.eq("company_id", companyId);
+    } else {
+      const scopedCompanyIds = await listStrokeChangeRequestScopedCompanyIds(ctx);
+      if (scopedCompanyIds && scopedCompanyIds.length === 0) {
+        return okResponse({ data: [] }, ctx.request_id, req);
+      }
+      if (scopedCompanyIds) {
+        query = query.in("company_id", scopedCompanyIds);
+      }
+    }
     if (status) query = query.eq("status", status);
 
     const { data, error } = await query;
@@ -145,7 +167,8 @@ export async function listStrokeChangeRequestsHandler(
   } catch (err) {
     console.error("[stroke_change_request.listStrokeChangeRequestsHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_SCR_LIST_FAILED";
-    return crError(req, ctx, code, 500, "Stroke change request list failed");
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return crError(req, ctx, code, status, "Stroke change request list failed");
   }
 }
 
@@ -172,6 +195,7 @@ export async function getStrokeChangeRequestHandler(
     }
     if (!data) return crError(req, ctx, "PROD_SCR_NOT_FOUND", 404, "Change request not found");
     const row = data as JsonRecord;
+    await assertCompanyScope(ctx, String(row.company_id ?? ""));
     const strokeMasterId = String(row.stroke_master_id ?? "");
 
     const [strokeRes, lineRes, changeLineRes] = await Promise.all([
@@ -244,7 +268,8 @@ export async function getStrokeChangeRequestHandler(
   } catch (err) {
     console.error("[stroke_change_request.getStrokeChangeRequestHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_SCR_FETCH_FAILED";
-    return crError(req, ctx, code, 500, "Stroke change request fetch failed");
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return crError(req, ctx, code, status, "Stroke change request fetch failed");
   }
 }
 
@@ -386,7 +411,7 @@ export async function approveStrokeChangeRequestHandler(
     const { data: cr, error: crFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("stroke_change_request")
-      .select("id, status, stroke_master_id")
+      .select("id, status, stroke_master_id, company_id")
       .eq("id", id)
       .maybeSingle();
 
@@ -395,6 +420,7 @@ export async function approveStrokeChangeRequestHandler(
       throw new Error("PROD_SCR_FETCH_FAILED");
     }
     if (!cr) return crError(req, ctx, "PROD_SCR_NOT_FOUND", 404, "Change request not found");
+    await assertCompanyScope(ctx, String((cr as JsonRecord).company_id ?? ""));
     if ((cr as JsonRecord).status !== "DRAFT") {
       return crError(req, ctx, "PROD_SCR_NOT_DRAFT", 422, "Only DRAFT change requests can be approved");
     }
@@ -474,7 +500,8 @@ export async function approveStrokeChangeRequestHandler(
   } catch (err) {
     console.error("[stroke_change_request.approveStrokeChangeRequestHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_SCR_APPROVE_FAILED";
-    return crError(req, ctx, code, 500, "Stroke change request approve failed");
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return crError(req, ctx, code, status, "Stroke change request approve failed");
   }
 }
 
@@ -500,7 +527,7 @@ export async function rejectStrokeChangeRequestHandler(
     const { data: cr, error: crFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("stroke_change_request")
-      .select("id, status")
+      .select("id, status, company_id")
       .eq("id", id)
       .maybeSingle();
 
@@ -509,6 +536,7 @@ export async function rejectStrokeChangeRequestHandler(
       throw new Error("PROD_SCR_FETCH_FAILED");
     }
     if (!cr) return crError(req, ctx, "PROD_SCR_NOT_FOUND", 404, "Change request not found");
+    await assertCompanyScope(ctx, String((cr as JsonRecord).company_id ?? ""));
     if ((cr as JsonRecord).status !== "DRAFT") {
       return crError(req, ctx, "PROD_SCR_NOT_DRAFT", 422, "Only DRAFT change requests can be rejected");
     }
@@ -528,6 +556,7 @@ export async function rejectStrokeChangeRequestHandler(
   } catch (err) {
     console.error("[stroke_change_request.rejectStrokeChangeRequestHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_SCR_REJECT_FAILED";
-    return crError(req, ctx, code, 500, "Stroke change request reject failed");
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return crError(req, ctx, code, status, "Stroke change request reject failed");
   }
 }

@@ -199,7 +199,7 @@ function getCsnDisplayLabel(row) {
 export default function CSNDetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
   const resolvedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [detail, setDetail] = useState(null);

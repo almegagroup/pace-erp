@@ -221,7 +221,10 @@ function resolveOpeningRatePerUnit(displayRate, material, conversions, rateUomCo
 export default function OpeningStockDetailPage({ documentId: documentIdProp = "" }) {
   const params = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const routeId = params.id && params.id !== ":id" ? params.id : "";
+  const routeId =
+    params.id && params.id !== ":id" && params.id !== "id"
+      ? params.id
+      : "";
   const documentId = documentIdProp || routeId || screenContext.id || "";
 
   const [entryMode, setEntryMode] = useState(ENTRY_MODES.SINGLE);
@@ -346,17 +349,6 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   );
   const companyLabel = companyMap.get(companyId) ?? companyId;
 
-  const totalValue = useMemo(
-    () => Number(singleForm.quantity || 0) * resolveOpeningRatePerUnit(
-      singleForm.rate_per_unit || 0,
-      selectedSingleMaterial,
-      singleConversionsQuery.data,
-      singleForm.rate_uom_code || selectedSingleMaterial?.base_uom_code,
-      selectedSingleFgOrder?.fill_qty_per_pack,
-    ),
-    [singleForm, selectedSingleFgOrder?.fill_qty_per_pack, selectedSingleMaterial, singleConversionsQuery.data],
-  );
-
   // Â§104.8 (LOCKED 2026-07-18): for a produced material (INT today, SFG later) the opening rate can
   // be derived from its own Stroke â€” Î£(dosage% Ã— that RM's current rate) â€” because opening stock is
   // loaded bottom-up (RM/PM â†’ INT â†’ SFG â†’ FG), so the inputs are already valued by the time we get
@@ -462,6 +454,16 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   const selectedEditFgOrder = useMemo(
     () => (editOpeningFgQuery.data ?? []).find((row) => String(row.id ?? "") === String(editForm.packing_order_id ?? "")) ?? null,
     [editForm.packing_order_id, editOpeningFgQuery.data],
+  );
+  const totalValue = useMemo(
+    () => Number(singleForm.quantity || 0) * resolveOpeningRatePerUnit(
+      singleForm.rate_per_unit || 0,
+      selectedSingleMaterial,
+      singleConversionsQuery.data,
+      singleForm.rate_uom_code || selectedSingleMaterial?.base_uom_code,
+      selectedSingleFgOrder?.fill_qty_per_pack,
+    ),
+    [singleForm, selectedSingleFgOrder?.fill_qty_per_pack, selectedSingleMaterial, singleConversionsQuery.data],
   );
   const computedTotalValue = lines.reduce((sum, line) => sum + Number(line.total_value ?? 0), 0);
 
@@ -1652,6 +1654,4 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     </ErpScreenScaffold>
   );
 }
-
-
 

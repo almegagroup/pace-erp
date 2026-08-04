@@ -62,7 +62,7 @@ function formatNullableNumber(value) {
 export default function PlantTransferDetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const navigate = useNavigate();
   useMenu();
   const [detail, setDetail] = useState(null);

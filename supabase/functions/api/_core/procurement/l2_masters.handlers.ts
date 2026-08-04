@@ -13,7 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { deriveCompanyFieldsFromGstProfile } from "../../_shared/gst_company_fields.ts";
 import { resolveGstProfileWithSource } from "../../_shared/gst_resolver.ts";
-import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -64,6 +64,17 @@ function parseNullableNumber(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function listL2MastersScopedCompanyIds(ctx: ProcurementHandlerContext): Promise<string[] | null> {
+  if (isCompanyScopeAdminBypass(ctx)) return null;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id);
+  if (error) throw new Error("PROCUREMENT_L2_SCOPE_LOOKUP_FAILED");
+  return [...new Set(((data ?? []) as Record<string, unknown>[]).map((row) => String(row.company_id ?? "")).filter(Boolean))];
 }
 
 function procurementErrorResponse(
@@ -711,13 +722,25 @@ export async function listTransitTimesHandler(req: Request, ctx: ProcurementHand
       .select("*")
       .order("created_at", { ascending: false });
     if (portId) query = query.eq("port_id", portId);
-    if (companyId) query = query.eq("company_id", companyId);
+    if (companyId) {
+      await assertCompanyScope(ctx, companyId);
+      query = query.eq("company_id", companyId);
+    } else {
+      const scopedCompanyIds = await listL2MastersScopedCompanyIds(ctx);
+      if (scopedCompanyIds && scopedCompanyIds.length === 0) {
+        return okResponse({ data: [] }, ctx.request_id, req);
+      }
+      if (scopedCompanyIds) {
+        query = query.in("company_id", scopedCompanyIds);
+      }
+    }
     const { data, error } = await query;
     if (error) throw new Error("PROCUREMENT_TRANSIT_LIST_FAILED");
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_TRANSIT_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Transit list failed");
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Transit list failed");
   }
 }
 
@@ -791,12 +814,21 @@ export async function deleteTransitTimeHandler(req: Request, ctx: ProcurementHan
     // Director view-only) are actually enforced.
     const id = getIdFromPath(req);
     if (!id) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_TRANSIT", 400, "Transit id required");
+    const { data: existing, error: fetchErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from("port_plant_transit_master")
+      .select("id, company_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (fetchErr) throw new Error("PROCUREMENT_TRANSIT_DELETE_FAILED");
+    if (!existing) return procurementErrorResponse(req, ctx, "PROCUREMENT_TRANSIT_NOT_FOUND", 404, "Transit record not found");
+    await assertCompanyScope(ctx, String((existing as Record<string, unknown>).company_id ?? ""));
     const { error } = await serviceRoleClient.schema("erp_master").from("port_plant_transit_master").delete().eq("id", id);
     if (error) throw new Error("PROCUREMENT_TRANSIT_DELETE_FAILED");
     return okResponse({ data: { id } }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_TRANSIT_DELETE_FAILED";
-    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Transit delete failed");
   }
 }
@@ -1005,13 +1037,25 @@ export async function listDomesticLeadTimesHandler(req: Request, ctx: Procuremen
     } else {
       query = query.eq("active", true);
     }
-    if (companyId) query = query.eq("company_id", companyId);
+    if (companyId) {
+      await assertCompanyScope(ctx, companyId);
+      query = query.eq("company_id", companyId);
+    } else {
+      const scopedCompanyIds = await listL2MastersScopedCompanyIds(ctx);
+      if (scopedCompanyIds && scopedCompanyIds.length === 0) {
+        return okResponse({ data: [] }, ctx.request_id, req);
+      }
+      if (scopedCompanyIds) {
+        query = query.in("company_id", scopedCompanyIds);
+      }
+    }
     const { data, error } = await query;
     if (error) throw new Error("PROCUREMENT_DOMESTIC_LEAD_TIME_LIST_FAILED");
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_DOMESTIC_LEAD_TIME_LIST_FAILED";
-    return procurementErrorResponse(req, ctx, code, 500, "Domestic lead time list failed");
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Domestic lead time list failed");
   }
 }
 
@@ -1021,6 +1065,15 @@ export async function deleteDomesticLeadTimeHandler(req: Request, ctx: Procureme
     // blanket Manager/SA rank check; department grants (e.g. SCM full power,
     // Director view-only) are actually enforced.
     const id = getLastPathSegment(req);
+    const { data: existing, error: fetchErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from("lead_time_master_domestic")
+      .select("id, company_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (fetchErr) throw new Error("PROCUREMENT_DOMESTIC_LEAD_TIME_DELETE_FAILED");
+    if (!existing) return procurementErrorResponse(req, ctx, "PROCUREMENT_DOMESTIC_LEAD_TIME_NOT_FOUND", 404, "Domestic lead time record not found");
+    await assertCompanyScope(ctx, String((existing as Record<string, unknown>).company_id ?? ""));
     const { error } = await serviceRoleClient
       .schema("erp_master")
       .from("lead_time_master_domestic")
@@ -1030,7 +1083,7 @@ export async function deleteDomesticLeadTimeHandler(req: Request, ctx: Procureme
     return okResponse({ ok: true }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_DOMESTIC_LEAD_TIME_DELETE_FAILED";
-    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Domestic lead time delete failed");
   }
 }
@@ -1042,6 +1095,19 @@ export async function updateDomesticLeadTimeHandler(req: Request, ctx: Procureme
     // Director view-only) are actually enforced.
     const id = getLastPathSegment(req);
     const body = await parseBody(req);
+
+    const { data: existingRow, error: existingErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from("lead_time_master_domestic")
+      .select("id, company_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (existingErr) throw new Error("PROCUREMENT_DOMESTIC_LEAD_TIME_UPDATE_FAILED");
+    if (!existingRow) return procurementErrorResponse(req, ctx, "PROCUREMENT_DOMESTIC_LEAD_TIME_NOT_FOUND", 404, "Domestic lead time record not found");
+    // Caller must have access to the record's CURRENT company regardless of
+    // whether they're also changing it — otherwise omitting company_id from
+    // the body would silently skip scope validation entirely.
+    await assertCompanyScope(ctx, String((existingRow as Record<string, unknown>).company_id ?? ""));
 
     const updates: Record<string, unknown> = {};
     if (body.vendor_id !== undefined) {
@@ -1083,7 +1149,7 @@ export async function updateDomesticLeadTimeHandler(req: Request, ctx: Procureme
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_DOMESTIC_LEAD_TIME_UPDATE_FAILED";
-    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("NO_CHANGES") ? 400 : 500;
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("NO_CHANGES") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Domestic lead time update failed");
   }
 }

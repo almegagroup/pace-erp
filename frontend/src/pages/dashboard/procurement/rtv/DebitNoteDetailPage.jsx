@@ -61,7 +61,7 @@ export default function DebitNoteDetailPage() {
   const navigate = useNavigate();
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
-  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const menu = useMenu();
   void menu;
   const [saving, setSaving] = useState(false);
