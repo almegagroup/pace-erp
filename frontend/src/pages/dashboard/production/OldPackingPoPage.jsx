@@ -2,10 +2,10 @@
  * File-ID: 27.FE-PR23
  * File-Path: frontend/src/pages/dashboard/production/OldPackingPoPage.jsx
  * Gate: 27.104.9 | Domain: PRODUCTION / COSTING
- * Purpose: PR23 "Old Packing PO" (Â§104.9.1). Genealogy for a pre-go-live FG batch: links to its
+ * Purpose: PR23 "Old Packing PO" (§104.9.1). Genealogy for a pre-go-live FG batch: links to its
  *          parent Old Process PO (PR22) and records the SFG + PM breakup that produced the packed
  *          FG. PM lines auto-derive from the Pack BOM and stay editable. Saving writes a FINAL
- *          packing_order + packing_order_line (FG/SFG/PM) and posts NO stock movement â€” the FG's
+ *          packing_order + packing_order_line (FG/SFG/PM) and posts NO stock movement — the FG's
  *          real balance came from IN05's P561 opening posting.
  *          Sequence: this page first -> then Opening Stock (IN05).
  * Authority: Frontend
@@ -78,7 +78,7 @@ export default function OldPackingPoPage() {
   const parents = parentsQ.data ?? [];
   const parentOptions = parents.map((p) => ({
     value: p.id,
-    label: `${p.batch_number} Â· ${materialLabel(p.prodshade)} Â· ${p.po_type} Â· ${fmt(p.actual_qty)} KG`,
+    label: `${p.batch_number} · ${materialLabel(p.prodshade)} · ${p.po_type} · ${fmt(p.actual_qty)} KG`,
   }));
   const parent = parents.find((p) => p.id === processOrderId) ?? null;
 
@@ -108,7 +108,7 @@ export default function OldPackingPoPage() {
     value: l.id, label: [l.location_code, l.location_name].filter(Boolean).join(" - "),
   }));
 
-  // Pack BOM for this SKU â†’ PM lines (auto-derived, editable).
+  // Pack BOM for this SKU → PM lines (auto-derived, editable).
   const packBomListQ = useQuery({
     queryKey: ["old-pack-bom-list", effectiveCompanyId, skuMaterialId],
     queryFn: () => listPackBoms({ company_id: effectiveCompanyId, sku_material_id: skuMaterialId, status: "ACTIVE" }),
@@ -177,7 +177,7 @@ export default function OldPackingPoPage() {
           uom_code: l.uom_code,
         })),
       });
-      toast(`Old Packing PO ${res?.po_number ?? ""} created for batch ${res?.batch_number ?? ""} â€” no stock moved.`);
+      toast(`Old Packing PO ${res?.po_number ?? ""} created for batch ${res?.batch_number ?? ""} — no stock moved.`);
       setSkuMaterialId(""); setNumPacks(""); setFillQty(""); setActualQtyKg(""); setPmEdits({});
       qc.invalidateQueries({ queryKey: ["old-process-po-batches"] });
     } catch (err) {
@@ -188,7 +188,7 @@ export default function OldPackingPoPage() {
   return (
     <ErpScreenScaffold
       title="Old Packing PO"
-      subtitle="PR23 â€” genealogy for a pre-go-live FG batch (Â§104.9). Links to its parent Old Process PO; PM lines auto-derived from the Pack BOM, editable. Saves a FINAL paper order; posts NO stock movement."
+      subtitle="PR23 — genealogy for a pre-go-live FG batch (§104.9). Links to its parent Old Process PO; PM lines auto-derived from the Pack BOM, editable. Saves a FINAL paper order; posts NO stock movement."
       actions={[{ label: "Save", tone: "primary", mnemonic: "S", disabled: !canSave || saving, onClick: handleSave }]}
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
@@ -204,7 +204,7 @@ export default function OldPackingPoPage() {
           </div>
           <div className="flex flex-col gap-1 md:col-span-2">
             <label className="text-xs font-medium text-slate-600">Parent Old Process PO (batch) <span className="text-rose-500">*</span></label>
-            <ErpComboboxField value={processOrderId} onChange={setProcessOrderId} options={parentOptions} placeholder="-- Select parent batch --" emptyStateLabel="No Old Process PO batches â€” create PR22 first" />
+            <ErpComboboxField value={processOrderId} onChange={setProcessOrderId} options={parentOptions} placeholder="-- Select parent batch --" emptyStateLabel="No Old Process PO batches — create PR22 first" />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Packing PO Type</label>
@@ -242,8 +242,8 @@ export default function OldPackingPoPage() {
         </div>
         {parent && (
           <p className="text-xs text-slate-500 mt-3">
-            Parent batch <span className="font-mono font-semibold">{parent.batch_number}</span> Â· SFG{" "}
-            {materialLabel(parent.prodshade)} Â· output {fmt(parent.actual_qty)} KG. The FG line inherits this batch number.
+            Parent batch <span className="font-mono font-semibold">{parent.batch_number}</span> · SFG{" "}
+            {materialLabel(parent.prodshade)} · output {fmt(parent.actual_qty)} KG. The FG line inherits this batch number.
           </p>
         )}
       </ErpSectionCard>
@@ -252,9 +252,9 @@ export default function OldPackingPoPage() {
         {!skuMaterialId ? (
           <p className="text-slate-400 text-sm py-6 text-center">Select an FG SKU to auto-derive PM lines from its Pack BOM.</p>
         ) : packBomListQ.isLoading || packBomQ.isLoading ? (
-          <p className="text-slate-400 text-sm py-6 text-center">Loading Pack BOMâ€¦</p>
+          <p className="text-slate-400 text-sm py-6 text-center">Loading Pack BOM…</p>
         ) : !packBomId ? (
-          <p className="text-slate-400 text-sm py-6 text-center">No active Pack BOM for this SKU â€” save without PM lines, or create the Pack BOM first.</p>
+          <p className="text-slate-400 text-sm py-6 text-center">No active Pack BOM for this SKU — save without PM lines, or create the Pack BOM first.</p>
         ) : derivedPmLines.length === 0 ? (
           <p className="text-slate-400 text-sm py-6 text-center">This Pack BOM carries no PM lines (599/000/001 pack types).</p>
         ) : (
@@ -292,7 +292,7 @@ export default function OldPackingPoPage() {
           </div>
         )}
         <p className="text-xs text-slate-500 mt-3">
-          â›” Saving posts <strong>no stock movement</strong> â€” genealogy/costing record only. The FG balance comes from
+          ⛔ Saving posts <strong>no stock movement</strong> — genealogy/costing record only. The FG balance comes from
           Opening Stock (IN05).
         </p>
       </ErpSectionCard>

@@ -2,11 +2,11 @@
  * File-ID: 27.FE-PR22
  * File-Path: frontend/src/pages/dashboard/production/OldProcessPoPage.jsx
  * Gate: 27.104.9 | Domain: PRODUCTION / COSTING
- * Purpose: PR22 "Old Process PO" (Â§104.9.1). Attaches synthetic genealogy to a pre-go-live
+ * Purpose: PR22 "Old Process PO" (§104.9.1). Attaches synthetic genealogy to a pre-go-live
  *          MTO/HPS batch whose stock was loaded by IN05 Opening Stock. RM/INT lines are
- *          auto-derived from the Stroke (dosage% Ã— output qty) and then editable, because real
+ *          auto-derived from the Stroke (dosage% × output qty) and then editable, because real
  *          historical deviations must be capturable. Saving writes a VERIFIED process_order +
- *          lines + OPENING reco rows â€” and posts NO stock movement (the RM was consumed outside
+ *          lines + OPENING reco rows — and posts NO stock movement (the RM was consumed outside
  *          this system; only IN05's P561 is a real stock event).
  *          Sequence: this page first -> then Opening Stock (IN05) (-> PR23 for FG).
  * Authority: Frontend
@@ -50,7 +50,7 @@ export default function OldProcessPoPage() {
   const [batchNumber, setBatchNumber] = useState("");
   const [machineId, setMachineId] = useState("");
   const [outputQty, setOutputQty] = useState("");
-  const [lineEdits, setLineEdits] = useState({}); // material_id â†’ {actual_qty, approved_status, ap_approved_qty, variance_qty}
+  const [lineEdits, setLineEdits] = useState({}); // material_id → {actual_qty, approved_status, ap_approved_qty, variance_qty}
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
 
@@ -71,14 +71,14 @@ export default function OldProcessPoPage() {
     enabled: !!effectiveCompanyId,
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
-  // Only MTO/HPS strokes are eligible (Â§104.9 scope).
+  // Only MTO/HPS strokes are eligible (§104.9 scope).
   const strokes = useMemo(
     () => (strokesQ.data ?? []).filter((s) => !s.po_type || String(s.po_type).toUpperCase() === poType),
     [strokesQ.data, poType],
   );
   const strokeOptions = strokes.map((s) => ({
     value: s.id,
-    label: `${materialLabel(s.material ?? s.prodshade_material)} Â· Stroke ${s.stroke_number ?? "--"}`,
+    label: `${materialLabel(s.material ?? s.prodshade_material)} · Stroke ${s.stroke_number ?? "--"}`,
   }));
   const selectedStroke = strokes.find((s) => s.id === strokeId) ?? null;
 
@@ -102,7 +102,7 @@ export default function OldProcessPoPage() {
     [strokeDetailQ.data],
   );
 
-  // Auto-derive RM/INT from the Stroke: qty = dosage% Ã— output qty (Â§104.9 "auto-derive, editable").
+  // Auto-derive RM/INT from the Stroke: qty = dosage% × output qty (§104.9 "auto-derive, editable").
   const derivedLines = useMemo(() => strokeLines.map((line, idx) => {
     const standardQty = (num(line.dosage_pct) / 100) * num(outputQty);
     const edit = lineEdits[line.material_id] ?? {};
@@ -161,7 +161,7 @@ export default function OldProcessPoPage() {
           uom_code: l.uom_code,
         })),
       });
-      toast(`Old Process PO ${res?.po_number ?? ""} created for batch ${batchNumber.trim()} â€” no stock moved.`);
+      toast(`Old Process PO ${res?.po_number ?? ""} created for batch ${batchNumber.trim()} — no stock moved.`);
       setBatchNumber(""); setOutputQty(""); setLineEdits({});
       qc.invalidateQueries({ queryKey: ["old-process-po-batches"] });
     } catch (err) {
@@ -172,7 +172,7 @@ export default function OldProcessPoPage() {
   return (
     <ErpScreenScaffold
       title="Old Process PO"
-      subtitle="PR22 â€” genealogy for a pre-go-live MTO/HPS batch (Â§104.9). RM/INT auto-derived from the Stroke, editable. Saves a VERIFIED paper order; posts NO stock movement. Create this record before loading the related Opening Stock (IN05)."
+      subtitle="PR22 — genealogy for a pre-go-live MTO/HPS batch (§104.9). RM/INT auto-derived from the Stroke, editable. Saves a VERIFIED paper order; posts NO stock movement. Create this record before loading the related Opening Stock (IN05)."
       actions={[{ label: "Save", tone: "primary", mnemonic: "S", disabled: !canSave || saving, onClick: handleSave }]}
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
@@ -217,14 +217,14 @@ export default function OldProcessPoPage() {
         {!strokeId ? (
           <p className="text-slate-400 text-sm py-6 text-center">Select a Stroke to auto-derive the RM/INT breakup.</p>
         ) : strokeDetailQ.isLoading ? (
-          <p className="text-slate-400 text-sm py-6 text-center">Loading strokeâ€¦</p>
+          <p className="text-slate-400 text-sm py-6 text-center">Loading stroke…</p>
         ) : derivedLines.length === 0 ? (
           <p className="text-slate-400 text-sm py-6 text-center">This stroke has no RM/INT lines.</p>
         ) : (
           <>
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-3">
-              Auto-derived from the Stroke standard (dosage% Ã— output). Edit any line where the real historical
-              consumption differed â€” un-edited figures are the <strong>standard</strong>, not a true actual.
+              Auto-derived from the Stroke standard (dosage% × output). Edit any line where the real historical
+              consumption differed — un-edited figures are the <strong>standard</strong>, not a true actual.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
@@ -284,7 +284,7 @@ export default function OldProcessPoPage() {
               </table>
             </div>
             <p className="text-xs text-slate-500 mt-3">
-              â›” Saving posts <strong>no stock movement</strong> â€” this is a genealogy/costing record only. The batch's
+              ⛔ Saving posts <strong>no stock movement</strong> — this is a genealogy/costing record only. The batch's
               physical balance comes from Opening Stock (IN05).
             </p>
           </>
