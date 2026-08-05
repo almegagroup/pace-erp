@@ -24,6 +24,12 @@ export type ContextResolution =
       companyId?: string;
       workContextId?: string;
       workContextCode?: string;
+      // Union Work Context model (ACL_SSOT.md §29, locked 2026-08-05): a user's
+      // effective access within a company is the union of every Work Context
+      // assigned to them there, not one selected context. workContextId/Code
+      // above stay populated (primary/first) for legacy display callers;
+      // workContextIds is the authoritative set the ACL/menu layers must use.
+      workContextIds?: string[];
       projectId?: string;
       departmentId?: string;
       roleCode: string;
@@ -288,6 +294,7 @@ async function resolveContextForCompany(
     companyId,
     workContextId: workContext.work_context_id,
     workContextCode: workContext.work_context_code,
+    workContextIds: availableWorkContexts.map((row) => row.work_context_id),
     projectId,
     departmentId,
     roleCode: session.roleCode,

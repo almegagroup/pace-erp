@@ -20,7 +20,7 @@ import type {
 import { getServiceRoleClientWithContext } from "../_shared/serviceRoleClient.ts";
 import type { DbClient } from "../_shared/db_client.ts";
 import { recordSecurityEvent } from "../_security/security_events.ts";
-import { readAclSnapshotDecision } from "../_shared/acl_snapshot.ts";
+import { readAclSnapshotDecisionAny } from "../_shared/acl_snapshot.ts";
 
 async function getActiveAclVersionId(
   db: DbClient,
@@ -68,6 +68,10 @@ export async function stepAcl(
       roleCode?: string;
       companyId?: string;
       workContextId?: string;
+      // Union Work Context model (ACL_SSOT.md §29) — the full set of Work
+      // Contexts assigned to this user in companyId. ALLOW if the checked
+      // resource:action is ALLOW under ANY of them.
+      workContextIds?: string[];
       isAdmin?: boolean;
     };
 
@@ -115,13 +119,24 @@ if (ctx?.context?.isAdmin === true) {
     authUserId,
     companyId,
     workContextId,
+    workContextIds,
   } = ctx.context ?? {};
 
   const { resourceCode, action } = ctx.route ?? {};
 
+  // Union Work Context model (ACL_SSOT.md §29): prefer the full set; fall
+  // back to the single legacy field so any caller that hasn't been updated
+  // to populate workContextIds still behaves exactly as before.
+  const effectiveWorkContextIds =
+    workContextIds && workContextIds.length > 0
+      ? workContextIds
+      : workContextId
+        ? [workContextId]
+        : [];
+
   if (
     !authUserId ||
-    ((!companyId || !workContextId) && !ctx.context?.isAdmin) ||
+    ((!companyId || effectiveWorkContextIds.length === 0) && !ctx.context?.isAdmin) ||
     !resourceCode ||
     !action
   ) {
@@ -154,12 +169,12 @@ const db = getServiceRoleClientWithContext({
 
 const activeAclVersionId = await getActiveAclVersionId(db, companyId as string);
 
-const { data, error } = await readAclSnapshotDecision({
+const { data, error } = await readAclSnapshotDecisionAny({
   db,
   aclVersionId: activeAclVersionId,
   authUserId,
   companyId,
-  workContextId,
+  workContextIds: effectiveWorkContextIds,
   resourceCode,
   actionCode: action,
 });
@@ -182,7 +197,7 @@ if (!data) {
     actor: authUserId,
     meta: {
       company_id: companyId,
-      work_context_id: workContextId,
+      work_context_ids: effectiveWorkContextIds,
       resource_code: resourceCode,
       action,
       acl_version_id: activeAclVersionId,
@@ -205,7 +220,7 @@ if (!data) {
   actor: authUserId,
   meta: {
     company_id: companyId,
-    work_context_id: workContextId,
+    work_context_ids: effectiveWorkContextIds,
     resource_code: resourceCode,
     action,
     decision_reason: data.decision_reason,

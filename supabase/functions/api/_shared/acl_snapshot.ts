@@ -51,3 +51,55 @@ export async function readAclSnapshotDecision(input: {
     error: error ?? null,
   };
 }
+
+/**
+ * Union Work Context model (ACL_SSOT.md §29, locked 2026-08-05): a user's
+ * effective access within a company is the union of every Work Context
+ * assigned to them there. ALLOW if the resource:action is ALLOW under ANY
+ * work_context_id in the set; otherwise fall back to whatever DENY row (if
+ * any) was found, so callers still get a decision_reason to log.
+ */
+export async function readAclSnapshotDecisionAny(input: {
+  db: DbClient;
+  aclVersionId: string;
+  authUserId: string;
+  companyId: string;
+  workContextIds: string[];
+  resourceCode: string;
+  actionCode: string;
+}): Promise<{
+  data: AclSnapshotDecision | null;
+  error: { message?: string } | null;
+}> {
+  if (input.workContextIds.length === 0) {
+    return { data: null, error: null };
+  }
+
+  const { data, error } = await input.db
+    .schema("acl")
+    .from("precomputed_acl_view")
+    .select(`
+      resource_code,
+      action_code,
+      decision,
+      decision_reason
+    `)
+    .eq("acl_version_id", input.aclVersionId)
+    .eq("auth_user_id", input.authUserId)
+    .eq("company_id", input.companyId)
+    .in("work_context_id", input.workContextIds)
+    .eq("resource_code", input.resourceCode)
+    .eq("action_code", input.actionCode);
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const rows = (data ?? []) as AclSnapshotDecision[];
+  const allowRow = rows.find((row) => row.decision === "ALLOW");
+
+  return {
+    data: allowRow ?? rows[0] ?? null,
+    error: null,
+  };
+}

@@ -13,7 +13,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
-import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 
@@ -300,6 +300,23 @@ async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyI
   const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
   if (companyId) await assertCompanyScope(ctx, companyId);
   return companyId;
+}
+
+// listSTOsHandler fallback when neither a requested company_id nor
+// ctx.context.companyId resolves to anything (e.g. a GLOBAL_ACL/MULTI-mode
+// caller with no x-company-id header on this specific request) — without
+// this, the list query's `if (companyId)` filter would be skipped entirely
+// and return every company's STOs. Returns null for SA/GA (no restriction).
+async function listStoScopedCompanyIds(ctx: ProcurementHandlerContext): Promise<string[] | null> {
+  if (isCompanyScopeAdminBypass(ctx)) return null;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id);
+  if (error) throw new Error("COMPANY_SCOPE_VIOLATION");
+  const rows = (data ?? []) as Array<{ company_id: string }>;
+  return [...new Set(rows.map((row) => toTrimmedString(row.company_id)).filter(Boolean))];
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
@@ -1262,6 +1279,20 @@ export async function listSTOsHandler(
         query = query.eq("sending_company_id", companyId);
       } else {
         query = query.or(`sending_company_id.eq.${companyId},receiving_company_id.eq.${companyId}`);
+      }
+    } else {
+      // No single company resolved (see listStoScopedCompanyIds) — scope to
+      // every company the caller belongs to instead of skipping the filter,
+      // which would otherwise return every company's STOs unfiltered.
+      const scopedCompanyIds = await listStoScopedCompanyIds(ctx);
+      if (scopedCompanyIds) {
+        if (scopedCompanyIds.length === 0) {
+          return okResponse({ items: [], total: 0 }, ctx.request_id, req);
+        }
+        const orFilter = scopedCompanyIds
+          .flatMap((id) => [`sending_company_id.eq.${id}`, `receiving_company_id.eq.${id}`])
+          .join(",");
+        query = query.or(orFilter);
       }
     }
     if (status && STO_STATUSES.has(status)) {
@@ -2336,6 +2367,8 @@ export async function updateGateExitOutboundWeightHandler(
       return stoErrorResponse(req, ctx, "GXO_NOT_FOUND", 404, "Outbound gate exit not found.");
     }
 
+    await assertCompanyScope(ctx, toTrimmedString(gateExit.company_id));
+
     const grossWeight = parseNullableNumber(gateExit.gross_weight);
     const netWeight = grossWeight !== null ? Number((grossWeight - tareWeight).toFixed(6)) : null;
     const { data, error } = await serviceRoleClient
@@ -2356,7 +2389,7 @@ export async function updateGateExitOutboundWeightHandler(
     return okResponse(data, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "GXO_WEIGHT_UPDATE_FAILED";
-    const status = code === "GXO_NOT_FOUND" ? 404 : 500;
+    const status = code === "GXO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return stoErrorResponse(req, ctx, code, status, code);
   }
 }
