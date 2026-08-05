@@ -130,7 +130,27 @@ export default function StockLedgerReportPage() {
   const { runtimeContext } = useMenu();
   const canSaveGlobalLayout = runtimeContext?.roleCode === "SA" || runtimeContext?.roleCode === "GA";
 
-  const materialsQuery = useMaterialOptionsQuery({ status: "ACTIVE", limit: 1000 });
+  // Business decision (2026-08-04): single company at a time, never multi —
+  // same rule as IN03 (see CurrentStockPage.jsx). Single-company users get it
+  // auto-resolved and locked; multi-company users pick exactly one from their
+  // own allowed list via TransactionCompanySelector (Law 12 pattern).
+  const [companyId, setCompanyId] = useState("");
+  useEffect(() => {
+    const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (defaultCompanyId && !companyId) {
+      setCompanyId(defaultCompanyId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeContext]);
+
+  // Materials filter dropdown is scoped to the selected company (§8A gap
+  // fix, 2026-08-05) -- material_master itself is global, so without this
+  // the picker leaked every company's materials into every other company's
+  // dropdown even though report execution itself was already scoped.
+  const materialsQuery = useMaterialOptionsQuery(
+    { status: "ACTIVE", limit: 1000, company_id: companyId },
+    { enabled: Boolean(companyId) },
+  );
   const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
   const movementTypesQuery = useQuery({
     queryKey: ["procurement-stock-ledger-movement-types"],
@@ -159,19 +179,6 @@ export default function StockLedgerReportPage() {
     })),
     [movementTypesQuery.data],
   );
-
-  // Business decision (2026-08-04): single company at a time, never multi —
-  // same rule as IN03 (see CurrentStockPage.jsx). Single-company users get it
-  // auto-resolved and locked; multi-company users pick exactly one from their
-  // own allowed list via TransactionCompanySelector (Law 12 pattern).
-  const [companyId, setCompanyId] = useState("");
-  useEffect(() => {
-    const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
-    if (defaultCompanyId && !companyId) {
-      setCompanyId(defaultCompanyId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runtimeContext]);
   const [materialValues, setMaterialValues] = useState([]);
   const [slocValues, setSlocValues] = useState([]);
   const [batchValues, setBatchValues] = useState([]);

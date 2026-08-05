@@ -17149,11 +17149,13 @@ rule as §118.2), Mobile(s), Email(s).
   Confirmed: GST% is applied at GRN time, not at PO/STO stage, so there is nothing else to print here.
 - **Rebate**: same conditional treatment as GST — a line only appears when `has_rebate = true`,
   showing `rebate_rate`/`rebate_rate_uom_basis`/`rebate_remarks`; absent entirely otherwise.
-- **Standard fixed notes** — three lines, always printed verbatim, each its own bullet, identical on
-  every PO and STO copy (not data-driven, static boilerplate):
-  1. Packaging items should be recyclable.
-  2. Vehicles should be with active PUC certificate.
-  3. Material transaction should be as per consignee's health & safety norms.
+- **Standard fixed notes** — four lines, always printed verbatim, each its own bullet, identical on
+  every PO and STO copy (not data-driven, static boilerplate). **Corrected 2026-08-05: a 4th line
+  (COA/Test Certificate) added, always first in the list** — the original three follow it unchanged:
+  1. COA [Test Certificate] is Mandatory Along with the Invoice/Document set.
+  2. Packaging items should be recyclable.
+  3. Vehicles should be with active PUC certificate.
+  4. Material transaction should be as per consignee's health & safety norms.
 - **Remarks**: two independent sources both print on a given PO's copy — `po_order_group.remarks`
   (one header-level remark, shared by every material's PO born from the same create session — e.g.
   "batch created together for the Aug run") and `purchase_order.remarks` (specific to that one PO —

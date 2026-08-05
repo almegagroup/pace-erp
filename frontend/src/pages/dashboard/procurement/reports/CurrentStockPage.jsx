@@ -72,7 +72,29 @@ function toggleValue(list, targetValue) {
 
 export default function CurrentStockPage() {
   const { runtimeContext } = useMenu();
-  const materialsQuery = useMaterialOptionsQuery({ status: "ACTIVE", limit: 1000 });
+  // Business decision (2026-08-04): single company at a time, never multi —
+  // this report is one company's stock, not a cross-company roll-up. Single-
+  // company users get it auto-resolved and locked; multi-company users pick
+  // exactly one from their own allowed list, same pattern every transaction
+  // page already uses (Law 12) — reuses TransactionCompanySelector directly
+  // rather than the multi-value picker used for the other filters below.
+  const [companyId, setCompanyId] = useState("");
+  useEffect(() => {
+    const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (defaultCompanyId && !companyId) {
+      setCompanyId(defaultCompanyId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeContext]);
+
+  // Materials filter dropdown is scoped to the selected company (§8A gap
+  // fix, 2026-08-05) -- material_master itself is global, so without this
+  // the picker leaked every company's materials into every other company's
+  // dropdown even though report execution itself was already scoped.
+  const materialsQuery = useMaterialOptionsQuery(
+    { status: "ACTIVE", limit: 1000, company_id: companyId },
+    { enabled: Boolean(companyId) },
+  );
   const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
 
   const materialOptions = useMemo(
@@ -89,21 +111,6 @@ export default function CurrentStockPage() {
     })),
     [slocQuery.storageLocations],
   );
-
-  // Business decision (2026-08-04): single company at a time, never multi —
-  // this report is one company's stock, not a cross-company roll-up. Single-
-  // company users get it auto-resolved and locked; multi-company users pick
-  // exactly one from their own allowed list, same pattern every transaction
-  // page already uses (Law 12) — reuses TransactionCompanySelector directly
-  // rather than the multi-value picker used for the other filters below.
-  const [companyId, setCompanyId] = useState("");
-  useEffect(() => {
-    const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
-    if (defaultCompanyId && !companyId) {
-      setCompanyId(defaultCompanyId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runtimeContext]);
   const [materialValues, setMaterialValues] = useState([]);
   const [slocValues, setSlocValues] = useState([]);
   const [batchValues, setBatchValues] = useState([]);

@@ -94,9 +94,10 @@ export default function PackBomCreatePage() {
     select: (d) => d?.data ?? [],
   });
   const groupsQ = useQuery({
-    queryKey: ["om-material-groups"],
-    queryFn: () => listMaterialCategoryGroups(),
+    queryKey: ["om-material-groups", effectiveCompanyId],
+    queryFn: () => listMaterialCategoryGroups(effectiveCompanyId),
     select: (d) => d?.data ?? [],
+    enabled: Boolean(effectiveCompanyId),
   });
   const storageLocationsQ = useQuery({
     queryKey: ["om-storage-locations", effectiveCompanyId, "active"],
@@ -121,8 +122,9 @@ export default function PackBomCreatePage() {
 
   async function handleCreateGroup() {
     if (!groupForm.group_name.trim()) { toast("Group name required.", "error"); return; }
+    if (!effectiveCompanyId) { toast("Select a company first.", "error"); return; }
     try {
-      const res = await createMaterialCategoryGroup(groupForm);
+      const res = await createMaterialCategoryGroup({ ...groupForm, company_id: effectiveCompanyId });
       const newGroup = res?.data ?? res;
       await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
       toast("Material group created.");

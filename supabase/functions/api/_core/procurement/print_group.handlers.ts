@@ -71,6 +71,7 @@ async function resolveCompanyScopeList(
 // Full Vendor letterhead block (§118.2) — Name, GSTIN, Registered Address,
 // primary Contact (Name+Phone only, no Designation), primary Email.
 async function resolveVendorLetterheadBlock(vendorId: string): Promise<{
+  vendor_code: string | null;
   vendor_name: string | null;
   gst_number: string | null;
   registered_address: string | null;
@@ -82,7 +83,7 @@ async function resolveVendorLetterheadBlock(vendorId: string): Promise<{
     serviceRoleClient
       .schema("erp_master")
       .from("vendor_master")
-      .select("vendor_name, gst_number, reg_address_line1, reg_address_city, reg_address_state, reg_address_pin")
+      .select("vendor_code, vendor_name, gst_number, reg_address_line1, reg_address_city, reg_address_state, reg_address_pin")
       .eq("id", vendorId)
       .maybeSingle(),
     serviceRoleClient.schema("erp_master").from("vendor_contacts").select("contact_name, phone, is_primary").eq("vendor_id", vendorId),
@@ -102,6 +103,7 @@ async function resolveVendorLetterheadBlock(vendorId: string): Promise<{
   ].filter(Boolean);
 
   return {
+    vendor_code: toTrimmedString(vendor.vendor_code) || null,
     vendor_name: toTrimmedString(vendor.vendor_name) || null,
     gst_number: toTrimmedString(vendor.gst_number) || null,
     registered_address: addressParts.length > 0 ? addressParts.join(", ") : null,
@@ -112,6 +114,7 @@ async function resolveVendorLetterheadBlock(vendorId: string): Promise<{
 }
 
 type CompanyLetterheadBlock = {
+  company_code: string | null;
   company_name: string | null;
   gst_number: string | null;
   cin_number: string | null;
@@ -132,12 +135,13 @@ async function resolveCompanyLetterheadBlocks(companyIds: string[]): Promise<Map
   const { data } = await serviceRoleClient
     .schema("erp_master")
     .from("companies")
-    .select("id, company_name, gst_number, cin_number, mobile_number_1, mobile_number_2, email_1, email_2, full_address")
+    .select("id, company_code, company_name, gst_number, cin_number, mobile_number_1, mobile_number_2, email_1, email_2, full_address")
     .in("id", uniqueIds);
   return new Map(
     ((data ?? []) as Array<Record<string, unknown>>).map((row) => [
       String(row.id),
       {
+        company_code: toTrimmedString(row.company_code) || null,
         company_name: toTrimmedString(row.company_name) || String(row.id),
         gst_number: toTrimmedString(row.gst_number) || null,
         cin_number: toTrimmedString(row.cin_number) || null,
@@ -178,7 +182,8 @@ export async function lookupPrintGroupHandler(req: Request, ctx: ProcurementHand
         .order("created_at", { ascending: false })
         .limit(200);
       if (companyScopeIds) {
-        stoQuery = stoQuery.or(`sending_company_id.in.(${companyScopeIds.join(",")}),receiving_company_id.in.(${companyScopeIds.join(",")})`);
+        stoQuery = (stoQuery as unknown as { or: (filter: string) => typeof stoQuery })
+          .or(`sending_company_id.in.(${companyScopeIds.join(",")}),receiving_company_id.in.(${companyScopeIds.join(",")})`);
       }
 
       const [poGroupResp, stoResp] = await Promise.all([poGroupQuery, stoQuery]);
@@ -353,7 +358,7 @@ export async function lookupPrintGroupHandler(req: Request, ctx: ProcurementHand
         {
           kind: "PO_GROUP",
           group_number: groupNumber,
-          from: companyBlocks.get(companyId) ?? { company_name: companyId },
+          from: companyBlocks.get(companyId) ?? { company_code: null, company_name: companyId },
           to: vendorBlock,
           date: (poGroup as Record<string, unknown>).created_at,
           count: poIds.length,
@@ -409,8 +414,8 @@ export async function lookupPrintGroupHandler(req: Request, ctx: ProcurementHand
       {
         kind: "STO",
         group_number: groupNumber,
-        from: companyBlocks.get(sendingCompanyId) ?? { company_name: sendingCompanyId },
-        to: companyBlocks.get(receivingCompanyId) ?? { company_name: receivingCompanyId },
+        from: companyBlocks.get(sendingCompanyId) ?? { company_code: null, company_name: sendingCompanyId },
+        to: companyBlocks.get(receivingCompanyId) ?? { company_code: null, company_name: receivingCompanyId },
         date: (sto as Record<string, unknown>).sto_date,
         count: PRINTABLE_STATUSES.has(status) ? 1 : 0,
         documents: PRINTABLE_STATUSES.has(status)
@@ -457,7 +462,15 @@ export async function createPrintLogHandler(req: Request, ctx: ProcurementHandle
         printed_by: ctx.auth_user_id,
       });
 
-    if (error) throw new Error("PRINT_LOG_CREATE_FAILED");
+    if (error) {
+      console.error("[PRINT_LOG_CREATE_FAILED]", error.message, {
+        groupNumber,
+        documentKind,
+        documentIds,
+        authUserId: ctx.auth_user_id,
+      });
+      throw new Error("PRINT_LOG_CREATE_FAILED");
+    }
 
     return okResponse({ ok: true }, ctx.request_id, req);
   } catch (err) {

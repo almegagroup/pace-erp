@@ -87,7 +87,12 @@ export default function StrokeApprovalPage() {
   const expandedCompanyId = expandedRow?.company_id ?? "";
 
   const uomsQ = useQuery({ queryKey: ["om-uoms"], queryFn: () => listUoms({ is_active: true, limit: 500 }), select: (d) => d?.data ?? [] });
-  const groupsQ = useQuery({ queryKey: ["om-material-groups"], queryFn: () => listMaterialCategoryGroups(), select: (d) => d?.data ?? [] });
+  const groupsQ = useQuery({
+    queryKey: ["om-material-groups", expandedCompanyId],
+    queryFn: () => listMaterialCategoryGroups(expandedCompanyId),
+    select: (d) => d?.data ?? [],
+    enabled: Boolean(expandedCompanyId),
+  });
   const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 500 }), select: (d) => d?.data ?? [] });
   const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 500 }), select: (d) => d?.data ?? [] });
   const storageLocationsQ = useQuery({
@@ -158,8 +163,9 @@ export default function StrokeApprovalPage() {
 
   async function handleCreateGroup() {
     if (!groupForm.group_name.trim()) { toast("Group name required.", "error"); return; }
+    if (!expandedCompanyId) { toast("Select a stroke first.", "error"); return; }
     try {
-      const res = await createMaterialCategoryGroup(groupForm);
+      const res = await createMaterialCategoryGroup({ ...groupForm, company_id: expandedCompanyId });
       const newGroup = res?.data ?? res;
       await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
       toast("Material group created.");

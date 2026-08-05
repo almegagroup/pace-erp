@@ -69,8 +69,9 @@ export async function listMaterials({
   search,
   limit = 50,
   offset = 0,
+  company_id,
 } = {}) {
-  const params = buildParams({ material_type, status, search, limit, offset });
+  const params = buildParams({ material_type, status, search, limit, offset, company_id });
   return fetchJson(`/api/om/materials?${params.toString()}`, {}, "OM_MATERIAL_LIST_FAILED");
 }
 
@@ -715,8 +716,9 @@ export async function createNumberSeries(payload) {
   );
 }
 
-export async function listMaterialCategoryGroups() {
-  return fetchJson("/api/om/material/category-groups", {}, "OM_MCG_LIST_FAILED");
+export async function listMaterialCategoryGroups(companyId) {
+  const params = buildParams({ company_id: companyId });
+  return fetchJson(`/api/om/material/category-groups?${params.toString()}`, {}, "OM_MCG_LIST_FAILED");
 }
 
 export async function createMaterialCategoryGroup(payload) {

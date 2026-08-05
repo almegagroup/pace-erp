@@ -86,15 +86,20 @@ export default function StrokeMasterPage() {
 
   const companies = buildTransactionCompanyList(runtimeContext);
   const uomsQ = useQuery({ queryKey: ["om-uoms"], queryFn: () => listUoms({ is_active: true, limit: 500 }), select: (d) => d?.data ?? [] });
-  const groupsQ = useQuery({ queryKey: ["om-material-groups"], queryFn: () => listMaterialCategoryGroups(), select: (d) => d?.data ?? [] });
+  // Storage locations and Material Groups are both scoped to whichever
+  // company is in play: the create form's company while creating, or the
+  // stroke's own (immutable) company while viewing/editing an existing DRAFT.
+  const activeCompanyId = drawerMode === "create" ? form.company_id : (detail?.company_id ?? "");
+  const groupsQ = useQuery({
+    queryKey: ["om-material-groups", activeCompanyId],
+    queryFn: () => listMaterialCategoryGroups(activeCompanyId),
+    select: (d) => d?.data ?? [],
+    enabled: Boolean(activeCompanyId),
+  });
   const sfgMaterialsQ = useQuery({ queryKey: ["om-materials", "SFG"], queryFn: () => listMaterials({ material_type: "SFG", limit: 500 }), select: (d) => d?.data ?? [] });
   const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 500 }), select: (d) => d?.data ?? [] });
   const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 500 }), select: (d) => d?.data ?? [] });
 
-  // Storage locations are scoped to whichever company is in play: the create
-  // form's company while creating, or the stroke's own (immutable) company
-  // while viewing/editing an existing DRAFT.
-  const activeCompanyId = drawerMode === "create" ? form.company_id : (detail?.company_id ?? "");
   const storageLocationsQ = useQuery({
     queryKey: ["om-storage-locations", activeCompanyId],
     queryFn: () => listStorageLocations({ company_id: activeCompanyId, is_active: true }),
@@ -194,8 +199,9 @@ export default function StrokeMasterPage() {
 
   async function handleCreateGroup() {
     if (!groupForm.group_name.trim()) { toast("Group name required.", "error"); return; }
+    if (!activeCompanyId) { toast("Select a company first.", "error"); return; }
     try {
-      const res = await createMaterialCategoryGroup(groupForm);
+      const res = await createMaterialCategoryGroup({ ...groupForm, company_id: activeCompanyId });
       const newGroup = res?.data ?? res;
       await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
       toast("Material group created.");

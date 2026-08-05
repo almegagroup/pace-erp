@@ -7,9 +7,12 @@
  * Authority: Frontend
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
+import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import {
@@ -39,16 +42,26 @@ function label(code) {
 }
 
 export default function MaterialCategoryMasterPage() {
+  const { runtimeContext } = useMenu();
+  const [companyId, setCompanyId]     = useState("");
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState("");
   const [notice, setNotice]           = useState("");
+
+  useEffect(() => {
+    if (companyId) return;
+    const defaultId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (defaultId) setCompanyId(defaultId);
+  }, [companyId, runtimeContext]);
+
   const materialQuery = useMaterialOptionsQuery({ limit: 500, offset: 0 });
   const groupQuery = useQuery({
-    queryKey: ["procurement", "material-category-groups"],
+    queryKey: ["procurement", "material-category-groups", companyId],
     queryFn: async () => {
-      const gResult = await listMaterialCategoryGroups();
+      const gResult = await listMaterialCategoryGroups(companyId);
       return Array.isArray(gResult?.data) ? gResult.data : [];
     },
+    enabled: Boolean(companyId),
   });
   const groups = groupQuery.data ?? [];
   const materials = materialQuery.materials;
@@ -200,6 +213,10 @@ export default function MaterialCategoryMasterPage() {
       setError("Group name is required.");
       return;
     }
+    if (!companyId) {
+      setError("Select a company first.");
+      return;
+    }
     setSaving(true);
     setError("");
     setNotice("");
@@ -207,6 +224,7 @@ export default function MaterialCategoryMasterPage() {
       await createMaterialCategoryGroup({
         group_name: form.group_name.trim(),
         description: form.description.trim() || null,
+        company_id: companyId,
       });
       setForm({ group_name: "", description: "" });
       setNotice("Category group created.");
@@ -238,6 +256,14 @@ export default function MaterialCategoryMasterPage() {
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
     >
+      <div className="mb-4 max-w-xs">
+        <TransactionCompanySelector
+          runtimeContext={runtimeContext}
+          value={companyId}
+          onChange={setCompanyId}
+          label="Company"
+        />
+      </div>
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_360px]">
         <ErpSectionCard eyebrow="Group Register" title="All material category groups">
           <div className="overflow-auto">

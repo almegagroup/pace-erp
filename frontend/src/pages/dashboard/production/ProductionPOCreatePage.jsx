@@ -388,9 +388,10 @@ export default function ProductionPOCreatePage() {
   // getGroupMapByIds only returns id/group_code/group_name) — fetch the full
   // group+members list separately, same source the old alternate-group UI used.
   const packingGroupsQ = useQuery({
-    queryKey: ["packing-create-material-groups"],
-    queryFn: () => listMaterialCategoryGroups(),
+    queryKey: ["packing-create-material-groups", effectivePackingCompanyId],
+    queryFn: () => listMaterialCategoryGroups(effectivePackingCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+    enabled: Boolean(effectivePackingCompanyId),
   });
   const packingGroupById = useMemo(
     () => new Map((packingGroupsQ.data ?? []).map((group) => [group.id, group])),
@@ -705,8 +706,12 @@ export default function ProductionPOCreatePage() {
       toast("Group name required.", "error");
       return;
     }
+    if (!effectivePackingCompanyId) {
+      toast("Select a company first.", "error");
+      return;
+    }
     try {
-      const res = await createMaterialCategoryGroup(packingGroupForm);
+      const res = await createMaterialCategoryGroup({ ...packingGroupForm, company_id: effectivePackingCompanyId });
       const newGroup = res?.data ?? res;
       await qc.invalidateQueries({ queryKey: ["packing-create-material-groups"] });
       packingGroupModal?.onCreated?.(newGroup.id);

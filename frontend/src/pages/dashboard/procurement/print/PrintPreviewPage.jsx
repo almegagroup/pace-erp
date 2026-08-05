@@ -8,8 +8,9 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import { getPurchaseOrder, getSTO, createPrintLog, listPorts, lookupPrintGroup } from "../procurementApi.js";
+import QRCode from "qrcode";
+import { openRoute, getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getPurchaseOrder, getSTO, createPrintLog, listPorts } from "../procurementApi.js";
 import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const SHIPMENT_MODE_LABELS = {
@@ -45,6 +46,50 @@ function fmtNumber(value, digits = 3) {
 
 function joinTruthy(parts, sep = " / ") {
   return parts.filter(Boolean).join(sep) || null;
+}
+
+// Approval log rows carry actioned_by_display in "CODE | Full Name" format
+// (attachUserDisplayFields in po.handlers.ts/sto.handlers.ts) — the QR only
+// encodes the code portion (§118.4 "Approver ID").
+function resolveApproverCode(approvalLog) {
+  const approvedRows = Array.isArray(approvalLog)
+    ? approvalLog.filter((row) => String(row?.action || "").toUpperCase() === "APPROVED")
+    : [];
+  if (approvedRows.length === 0) return null;
+  const latest = approvedRows.reduce((a, b) => (
+    new Date(b?.actioned_at || 0) > new Date(a?.actioned_at || 0) ? b : a
+  ));
+  const display = String(latest?.actioned_by_display || "").trim();
+  if (!display) return null;
+  return display.split("|")[0].trim() || null;
+}
+
+// §118.4: DOC/DATE/CPTY(counterpart code)/APPR(approver code)/BUYER(issuer's
+// own code) — from is always the masthead/issuing party, to is always the
+// counterpart, for both PO (Buyer vs Vendor) and STO (Sending vs Receiving).
+function buildQrPayload({ docNumber, date, counterpartCode, approverCode, issuerCode }) {
+  return [
+    `DOC:${docNumber || "--"}`,
+    `DATE:${date || "--"}`,
+    `CPTY:${counterpartCode || "--"}`,
+    `APPR:${approverCode || "--"}`,
+    `BUYER:${issuerCode || "--"}`,
+  ].join("|");
+}
+
+function QrCodeBox({ payload }) {
+  const [dataUrl, setDataUrl] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    QRCode.toDataURL(payload, { margin: 0, width: 72, errorCorrectionLevel: "M" })
+      .then((url) => { if (!cancelled) setDataUrl(url); })
+      .catch(() => { if (!cancelled) setDataUrl(null); });
+    return () => { cancelled = true; };
+  }, [payload]);
+
+  if (!dataUrl) return <div className="qr-box qr-box-empty" />;
+  return <img className="qr-box" src={dataUrl} alt="" width={72} height={72} />;
 }
 
 function CompanyIdBlock({ company }) {
@@ -99,6 +144,13 @@ function POCopy({ po, from, to, portsById }) {
   const cancelled = String(po?.status || "").toUpperCase() === "CANCELLED";
   const isImport = String(po?.vendor_type || "").toUpperCase() === "IMPORT";
   const portName = isImport ? portsById?.[po?.destination_port_id] : null;
+  const qrPayload = buildQrPayload({
+    docNumber: po?.po_number,
+    date: fmtDate(po?.po_date),
+    counterpartCode: to?.vendor_code,
+    approverCode: resolveApproverCode(po?.approval_log),
+    issuerCode: from?.company_code,
+  });
 
   return (
     <div className="paper">
@@ -109,7 +161,10 @@ function POCopy({ po, from, to, portsById }) {
           <p className="brand-name">{from?.company_name || "--"}</p>
           <p className="brand-meta">{from?.full_address || ""}</p>
         </div>
-        <CompanyIdBlock company={from} />
+        <div className="masthead-right">
+          <QrCodeBox payload={qrPayload} />
+          <CompanyIdBlock company={from} />
+        </div>
       </div>
 
       <div className="parties">
@@ -177,6 +232,7 @@ function POCopy({ po, from, to, portsById }) {
 
       <div className="std-notes">
         <ol>
+          <li>COA [Test Certificate] is Mandatory Along with the Invoice/Document set.</li>
           <li>Packaging items should be recyclable.</li>
           <li>Vehicles should be with active PUC certificate.</li>
           <li>Material transaction should be as per consignee&apos;s health &amp; safety norms.</li>
@@ -190,6 +246,13 @@ function STOCopy({ sto, from, to, materialMap }) {
   const lines = Array.isArray(sto?.lines) ? sto.lines : [];
   const revised = Array.isArray(sto?.amendment_log) && sto.amendment_log.length > 0;
   const cancelled = String(sto?.status || "").toUpperCase() === "CANCELLED";
+  const qrPayload = buildQrPayload({
+    docNumber: sto?.sto_number,
+    date: fmtDate(sto?.sto_date),
+    counterpartCode: to?.company_code,
+    approverCode: resolveApproverCode(sto?.approval_log),
+    issuerCode: from?.company_code,
+  });
 
   return (
     <div className="paper">
@@ -200,7 +263,10 @@ function STOCopy({ sto, from, to, materialMap }) {
           <p className="brand-name">{from?.company_name || "--"}</p>
           <p className="brand-meta">{from?.full_address || ""}</p>
         </div>
-        <CompanyIdBlock company={from} />
+        <div className="masthead-right">
+          <QrCodeBox payload={qrPayload} />
+          <CompanyIdBlock company={from} />
+        </div>
       </div>
 
       <div className="parties">
@@ -259,6 +325,7 @@ function STOCopy({ sto, from, to, materialMap }) {
 
       <div className="std-notes">
         <ol>
+          <li>COA [Test Certificate] is Mandatory Along with the Invoice/Document set.</li>
           <li>Packaging items should be recyclable.</li>
           <li>Vehicles should be with active PUC certificate.</li>
           <li>Material transaction should be as per consignee&apos;s health &amp; safety norms.</li>
@@ -269,22 +336,14 @@ function STOCopy({ sto, from, to, materialMap }) {
 }
 
 export default function PrintPreviewPage() {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
-  const state = location.state;
-  const groupNumber = state?.group_number || searchParams.get("group_number") || "";
-  const kind = state?.kind || searchParams.get("kind") || "";
-  const selectedIds = useMemo(() => {
-    if (Array.isArray(state?.selectedIds) && state.selectedIds.length > 0) return state.selectedIds;
-    const raw = searchParams.get("selected_ids") || "";
-    return raw.split(",").map((value) => value.trim()).filter(Boolean);
-  }, [searchParams, state?.selectedIds]);
-  const [printContext, setPrintContext] = useState(() => (
-    state
-      ? { kind: state.kind, group_number: state.group_number, from: state.from, to: state.to, selectedIds: state.selectedIds }
-      : null
-  ));
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const groupNumber = screenContext.group_number || "";
+  const kind = screenContext.kind || "";
+  const selectedIds = useMemo(
+    () => (Array.isArray(screenContext.selectedIds) ? screenContext.selectedIds.filter(Boolean) : []),
+    [screenContext.selectedIds],
+  );
+  const [printContext] = useState(() => screenContext);
 
   const [documents, setDocuments] = useState([]);
   const [portsById, setPortsById] = useState({});
@@ -306,22 +365,7 @@ export default function PrintPreviewPage() {
     let cancelled = false;
     (async () => {
       try {
-        let resolvedContext = printContext;
-        if (!resolvedContext && groupNumber) {
-          const lookupResponse = await lookupPrintGroup(groupNumber);
-          const lookupData = lookupResponse?.data ?? lookupResponse;
-          resolvedContext = {
-            kind: lookupData?.kind || kind,
-            group_number: lookupData?.group_number || groupNumber,
-            from: lookupData?.from,
-            to: lookupData?.to,
-            selectedIds,
-          };
-          if (!cancelled) {
-            setPrintContext(resolvedContext);
-          }
-        }
-        const effectiveKind = resolvedContext?.kind || kind;
+        const effectiveKind = printContext?.kind || kind;
         const fetcher = effectiveKind === "PO_GROUP" ? getPurchaseOrder : getSTO;
         const results = await Promise.all(selectedIds.map((id) => fetcher(id)));
         const portsResponse = effectiveKind === "PO_GROUP" ? await listPorts({ is_active: "all" }) : null;
@@ -362,7 +406,7 @@ export default function PrintPreviewPage() {
     return (
       <div className="p-6 text-sm text-slate-600">
         No print selection found.{" "}
-        <button type="button" className="text-sky-600 underline" onClick={() => navigate("/dashboard/procurement/print")}>
+        <button type="button" className="text-sky-600 underline" onClick={() => openRoute("/dashboard/procurement/print")}>
           Go back
         </button>
       </div>
@@ -373,7 +417,13 @@ export default function PrintPreviewPage() {
     <div className="print-preview-shell">
       <style>{PREVIEW_CSS}</style>
       <div className="toolbar no-print">
-        <button type="button" onClick={() => navigate(-1)}>Back</button>
+        <button type="button" onClick={() => {
+          try {
+            popScreen();
+          } catch {
+            openRoute("/dashboard/procurement/print");
+          }
+        }}>Back</button>
         <button type="button" onClick={() => window.print()}>Download / Print</button>
       </div>
 
@@ -408,7 +458,10 @@ const PREVIEW_CSS = `
   .watermark.cancelled { color:rgba(180,30,30,.28); }
   .watermark.revised { color:rgba(30,90,160,.28); }
 
-  .masthead { display:grid; grid-template-columns:1.35fr 1fr; gap:20px; align-items:end; padding-bottom:12px; border-bottom:2.5px solid #7a2a2a; }
+  .masthead { display:grid; grid-template-columns:1.35fr 1fr; gap:20px; align-items:end; padding-bottom:12px; border-bottom:2.5px solid #7a2a2a; break-inside:avoid; page-break-inside:avoid; }
+  .masthead-right { display:flex; align-items:flex-start; justify-content:flex-end; gap:10px; }
+  .qr-box { width:72px; height:72px; flex:0 0 auto; image-rendering:pixelated; }
+  .qr-box-empty { background:#f1ede9; }
   .brand-name { font-size:22px; font-weight:700; color:#7a2a2a; margin:0 0 5px; }
   .brand-meta { font-family:Arial, sans-serif; font-size:10.5px; color:#8a8078; line-height:1.55; max-width:380px; }
   .brand-ids { width:100%; border-collapse:collapse; font-family:Arial, sans-serif; font-size:11px; }
@@ -416,7 +469,7 @@ const PREVIEW_CSS = `
   .brand-ids td.k { color:#8a8078; text-transform:uppercase; letter-spacing:.05em; font-size:9px; font-weight:700; padding-right:10px; white-space:nowrap; vertical-align:top; }
   .brand-ids td.v { font-weight:600; text-align:right; }
 
-  .parties { display:grid; grid-template-columns:1fr 1fr; gap:28px; margin:20px 0; }
+  .parties { display:grid; grid-template-columns:1fr 1fr; gap:28px; margin:20px 0; break-inside:avoid; page-break-inside:avoid; }
   .party-label { font-family:Arial, sans-serif; font-size:9.5px; font-weight:700; letter-spacing:.11em; text-transform:uppercase; color:#7a2a2a; margin:0 0 6px; }
   .party-name { font-size:14.5px; font-weight:700; margin:0 0 4px; }
   .party-line { font-family:Arial, sans-serif; font-size:11.5px; line-height:1.55; margin:0; }
@@ -429,12 +482,13 @@ const PREVIEW_CSS = `
   .doc-id-table td.k { color:#8a8078; padding-right:14px; text-align:right; }
   .doc-id-table td.v { font-weight:600; text-align:right; }
 
-  table.items { width:100%; border-collapse:collapse; margin:6px 0 18px; font-family:Arial, sans-serif; font-size:11.5px; }
+  table.items { width:100%; border-collapse:collapse; margin:6px 0 18px; font-family:Arial, sans-serif; font-size:11.5px; break-inside:avoid; page-break-inside:avoid; }
   table.items th { background:#f3e8e6; font-size:10px; font-weight:700; text-transform:uppercase; text-align:left; padding:7px 10px; border-top:1px solid #b8ada7; border-bottom:1px solid #b8ada7; }
   table.items th.num, table.items td.num { text-align:right; }
   table.items td { padding:8px 10px; border-bottom:1px solid #ddd5d1; vertical-align:top; }
+  table.items tr { break-inside:avoid; page-break-inside:avoid; }
 
-  .foot-grid { display:grid; grid-template-columns:1.3fr 1fr; gap:28px; margin-top:14px; }
+  .foot-grid { display:grid; grid-template-columns:1.3fr 1fr; gap:28px; margin-top:14px; break-inside:avoid; page-break-inside:avoid; }
   .terms { font-family:Arial, sans-serif; font-size:10.5px; line-height:1.75; color:#8a8078; }
   .terms .h { font-weight:700; color:#22201e; font-size:10px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:5px; }
   .terms .row { display:flex; gap:6px; }
@@ -446,11 +500,11 @@ const PREVIEW_CSS = `
   .std-notes { margin-top:22px; padding-top:12px; border-top:1px dashed #b8ada7; font-family:Arial, sans-serif; font-size:9.5px; color:#8a8078; }
   .std-notes ol { margin:0; padding-left:16px; }
 
-  @page { size:A4; margin:12mm; }
+  @page { size:A4; margin:0; }
   @media print {
     body { background:#fff; }
     .no-print { display:none !important; }
     .print-preview-shell { background:#fff; padding:0; }
-    .paper { width:auto; margin:0; padding:0; box-shadow:none; page-break-after:always; }
+    .paper { width:794px; margin:0 auto; box-shadow:none; break-after:page; page-break-after:always; }
   }
 `;
