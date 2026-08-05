@@ -17170,25 +17170,32 @@ the existing Incoterm requirement). Frontend: `usePortOptionsQuery` (new hook, m
 Verified: zero new `deno check` errors (git-stash before/after, baseline 14 pre-existing errors
 unchanged), frontend `eslint` clean.
 
-**Import Order Type — 🔶 OPEN, three dimensions identified, exact option list not yet finalized:**
-- **(A) Shipment/Transport Mode** — Sea (FCL), Sea (LCL), Sea (Bulk/Tanker), Air Freight, Courier —
-  business owner: include all.
-  **⚠️ Correction (2026-08-05):** original list also had "Sea – Bulk/Break-bulk (for tankers/bulk
-  chemicals)" as one combined option — kept as a placeholder pending final confirmation of which
-  exact labels apply to PACE's own import materials.
-- **(B) Import Transaction/Trade Type** — Direct Import, High Sea Sale (HSS), Bonded Warehouse
-  Import, Import under EPCG/Advance Authorization — business owner: include all.
-- **(C) Customs Clearance / Cargo Movement Type** — business owner recalled hearing of a
-  classification like "CFS movement" that must be declared on the PO; confirmed this is a real,
-  distinct third dimension in Indian import logistics, separate from (A) and (B):
+**Import Order Type — ✅ IMPLEMENTED (2026-08-05), three dimensions, final option list confirmed:**
+- **(A) Shipment/Transport Mode**: `FCL`, `LCL`, `AIR`, `COURIER` — business owner confirmed only
+  these four apply to PACE's own imports (the earlier "Sea – Bulk/Tanker" placeholder was dropped,
+  never confirmed as needed).
+- **(B) Import Transaction/Trade Type**: `DIRECT_IMPORT`, `HIGH_SEA_SALE` — business owner confirmed
+  only these two (Bonded Warehouse / EPCG placeholders dropped, never confirmed as needed).
+  **Clarified via a real example:** the ordinary "shipping line delivers to CFS → CHA clears
+  customs → onward to factory" flow is **Direct Import** — CFS/CHA involvement is just how Direct
+  Import physically executes for sea cargo, not a separate trade type. High Sea Sale is the genuinely
+  different case — PACE buys the goods while still at sea, before the original consignee clears
+  customs.
+- **(C) Customs Clearance / Cargo Movement Type**: `DPD`, `CFS`, `ICD` — confirmed as a real, distinct
+  third dimension (this is where "CFS" as a *movement classification* actually lives, separate from
+  and compatible with Trade Type (B) — a Direct Import PO's Movement Type can legitimately be `CFS`).
   - **DPD** (Direct Port Delivery) — container goes straight from port to factory, no CFS stop.
   - **CFS** (Container Freight Station) — container moved to a CFS near the port for de-stuffing/
     customs examination before onward transport.
   - **ICD** (Inland Container Depot) — similar to CFS but inland, away from the port itself.
 
-  All three dimensions (A, B, C) are to be added as selectable fields on Import PO Create, each its
-  own field (not merged into one dropdown) — **not yet implemented**, pending the business owner's
-  final sign-off that this three-dimension read is correct before schema/UI work starts.
+All three are separate required fields on Import PO Create (not merged into one dropdown), each
+hard-blocked when `vendor_type = IMPORT`, mirroring the existing Incoterm/Destination Port pattern.
+`purchase_order` gained `shipment_mode`/`import_trade_type`/`customs_movement_type` (migration
+`20260805150000_po_import_classification_columns.sql`, CHECK-constrained to the confirmed enum
+values, applied to dev, `migration-integrity-check.mjs` confirms `in_sync=true`). `createPOHandler`
+validates + stores all three; `POCreatePage.jsx` adds three selects alongside Incoterm/Destination
+Port. Verified: zero new `deno check` errors, `eslint` clean.
 
 **CFS as a landed-cost line (separate, already-known concept, NOT the same as dimension C above) —
 still genuinely unknown at PO-creation time** (§111.5) — no field added for this specifically; the
