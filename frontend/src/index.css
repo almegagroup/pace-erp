@@ -229,3 +229,24 @@ body[data-workspace-mode="protected"] *::-webkit-scrollbar-thumb {
 .animate-loader{
 animation: loader 1.8s linear forwards;
 }
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  #erp-content-scroll,
+  #erp-content-scroll * {
+    visibility: visible !important;
+  }
+
+  #erp-content-scroll {
+    position: absolute !important;
+    inset: 0 !important;
+    overflow: visible !important;
+    height: auto !important;
+    width: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+}

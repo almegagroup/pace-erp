@@ -7,13 +7,11 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import ErpCompanySelector from "../../../../components/inputs/ErpCompanySelector.jsx";
 import { buildTransactionCompanyList } from "../../../../components/inputs/transactionCompanyRuntime.js";
-import { openScreen } from "../../../../navigation/screenStackEngine.js";
-import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { openRouteWithContext } from "../../../../navigation/screenStackEngine.js";
 import { listPrintGroups, lookupPrintGroup } from "../procurementApi.js";
 
 function fmtDate(value) {
@@ -25,7 +23,6 @@ function fmtDate(value) {
 
 export default function PrintGroupPage() {
   const { runtimeContext } = useMenu();
-  const navigate = useNavigate();
   const companies = useMemo(() => buildTransactionCompanyList(runtimeContext), [runtimeContext]);
   const [companyFilter, setCompanyFilter] = useState("*");
   const [rows, setRows] = useState([]);
@@ -73,12 +70,10 @@ export default function PrintGroupPage() {
       const response = await lookupPrintGroup(trimmed);
       const data = response?.data ?? response;
       setPrintPromptOpen(false);
-      openScreen(OPERATION_SCREENS.PROC_PO_STO_PRINT_DETAIL.screen_code);
-      navigate(`/dashboard/procurement/print/group/${encodeURIComponent(trimmed)}`, {
-        state: {
-          result: data,
-          group_number: trimmed,
-        },
+      openRouteWithContext(`/dashboard/procurement/print/group/${encodeURIComponent(trimmed)}`, {
+        groupNumber: trimmed,
+        result: data,
+        group_number: trimmed,
       });
     } catch (err) {
       setError(err?.message || "Group Number not found.");

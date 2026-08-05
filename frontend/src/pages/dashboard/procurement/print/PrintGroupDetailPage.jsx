@@ -7,9 +7,9 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openRoute, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { lookupPrintGroup } from "../procurementApi.js";
 
@@ -21,15 +21,14 @@ function fmtDate(value) {
 }
 
 export default function PrintGroupDetailPage() {
-  const location = useLocation();
-  const navigate = useNavigate();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const { groupNumber: routeGroupNumber = "" } = useParams();
-  const groupNumber = decodeURIComponent(routeGroupNumber || location.state?.group_number || "").trim();
+  const groupNumber = decodeURIComponent(routeGroupNumber || screenContext.group_number || "").trim();
 
-  const [loading, setLoading] = useState(!location.state?.result);
+  const [loading, setLoading] = useState(!screenContext.result);
   const [error, setError] = useState("");
-  const [result, setResult] = useState(location.state?.result ?? null);
-  const [selectedIds, setSelectedIds] = useState(() => new Set((location.state?.result?.documents ?? []).map((doc) => doc.id)));
+  const [result, setResult] = useState(screenContext.result ?? null);
+  const [selectedIds, setSelectedIds] = useState(() => new Set((screenContext.result?.documents ?? []).map((doc) => doc.id)));
   const [showVendorModal, setShowVendorModal] = useState(false);
   const [vendorConfirmed, setVendorConfirmed] = useState(false);
 
@@ -38,7 +37,7 @@ export default function PrintGroupDetailPage() {
   const dateLabel = useMemo(() => fmtDate(result?.date), [result?.date]);
 
   useEffect(() => {
-    if (!groupNumber || location.state?.result) return;
+    if (!groupNumber || screenContext.result) return;
     let cancelled = false;
     setLoading(true);
     setError("");
@@ -58,7 +57,7 @@ export default function PrintGroupDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [groupNumber, location.state?.result]);
+  }, [groupNumber, screenContext.result]);
 
   function toggleRow(id) {
     setSelectedIds((current) => {
@@ -79,20 +78,12 @@ export default function PrintGroupDetailPage() {
   function goToPreview() {
     const ids = Array.from(selectedIds);
     if (ids.length === 0 || !result) return;
-    const params = new URLSearchParams({
+    openScreenWithContext(OPERATION_SCREENS.PROC_PO_STO_PRINT_PREVIEW.screen_code, {
+      kind: result.kind,
       group_number: result.group_number || groupNumber,
-      kind: result.kind || "",
-      selected_ids: ids.join(","),
-    });
-    openScreen(OPERATION_SCREENS.PROC_PO_STO_PRINT_PREVIEW.screen_code);
-    navigate(`/dashboard/procurement/print/preview?${params.toString()}`, {
-      state: {
-        kind: result.kind,
-        group_number: result.group_number,
-        from: result.from,
-        to: result.to,
-        selectedIds: ids,
-      },
+      from: result.from,
+      to: result.to,
+      selectedIds: ids,
     });
   }
 
@@ -118,7 +109,7 @@ export default function PrintGroupDetailPage() {
           try {
             popScreen();
           } catch {
-            navigate("/dashboard/procurement/print");
+            openRoute("/dashboard/procurement/print");
           }
         },
       }]}
