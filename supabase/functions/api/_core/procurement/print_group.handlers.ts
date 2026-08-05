@@ -34,6 +34,40 @@ function printGroupErrorResponse(
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
 
+async function loadAllowedCompanyIds(ctx: ProcurementHandlerContext): Promise<string[] | null> {
+  if (ctx.context.isAdmin === true || ctx.roleCode === "SA" || ctx.roleCode === "GA") {
+    return null;
+  }
+  const { data: userCompanies, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id);
+  if (error) {
+    throw new Error("COMPANY_SCOPE_LOOKUP_FAILED");
+  }
+  return [...new Set(((userCompanies ?? []) as Array<Record<string, unknown>>).map((row) => toTrimmedString(row.company_id)).filter(Boolean))];
+}
+
+async function resolveCompanyScopeList(
+  ctx: ProcurementHandlerContext,
+  requestedCompanyIds: string[],
+): Promise<string[] | null> {
+  const normalizedRequested = [...new Set(requestedCompanyIds.map((value) => toTrimmedString(value)).filter(Boolean))];
+  const allowedCompanyIds = await loadAllowedCompanyIds(ctx);
+  if (normalizedRequested.length === 0) {
+    return allowedCompanyIds;
+  }
+  if (!allowedCompanyIds) {
+    return normalizedRequested;
+  }
+  const denied = normalizedRequested.find((companyId) => !allowedCompanyIds.includes(companyId));
+  if (denied) {
+    throw new Error("COMPANY_SCOPE_VIOLATION");
+  }
+  return normalizedRequested;
+}
+
 // Full Vendor letterhead block (§118.2) — Name, GSTIN, Registered Address,
 // primary Contact (Name+Phone only, no Designation), primary Email.
 async function resolveVendorLetterheadBlock(vendorId: string): Promise<{
@@ -122,7 +156,154 @@ export async function lookupPrintGroupHandler(req: Request, ctx: ProcurementHand
     const url = new URL(req.url);
     const groupNumber = toTrimmedString(url.searchParams.get("group_number"));
     if (!groupNumber) {
-      return printGroupErrorResponse(req, ctx, "PRINT_GROUP_NUMBER_REQUIRED", 400, "group_number is required");
+      const requestedCompanyId = toTrimmedString(url.searchParams.get("company_id"));
+      const companyScopeIds = await resolveCompanyScopeList(ctx, requestedCompanyId ? [requestedCompanyId] : []);
+
+      let poGroupQuery = serviceRoleClient
+        .schema("erp_procurement")
+        .from("po_order_group")
+        .select("id, group_number, company_id, vendor_id, created_at")
+        .not("group_number", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (companyScopeIds) {
+        poGroupQuery = poGroupQuery.in("company_id", companyScopeIds);
+      }
+
+      let stoQuery = serviceRoleClient
+        .schema("erp_procurement")
+        .from("stock_transfer_order")
+        .select("id, group_number, sending_company_id, receiving_company_id, sto_date, created_at, status")
+        .not("group_number", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (companyScopeIds) {
+        stoQuery = stoQuery.or(`sending_company_id.in.(${companyScopeIds.join(",")}),receiving_company_id.in.(${companyScopeIds.join(",")})`);
+      }
+
+      const [poGroupResp, stoResp] = await Promise.all([poGroupQuery, stoQuery]);
+      if (poGroupResp.error) throw new Error("PRINT_GROUP_LIST_FAILED");
+      if (stoResp.error) throw new Error("PRINT_GROUP_LIST_FAILED");
+
+      const poGroups = (poGroupResp.data ?? []) as Array<Record<string, unknown>>;
+      const stos = (stoResp.data ?? []) as Array<Record<string, unknown>>;
+
+      const poGroupIds = poGroups.map((row) => toTrimmedString(row.id)).filter(Boolean);
+      const poCompanyIds = poGroups.map((row) => toTrimmedString(row.company_id)).filter(Boolean);
+      const poVendorIds = poGroups.map((row) => toTrimmedString(row.vendor_id)).filter(Boolean);
+      const stoSendingIds = stos.map((row) => toTrimmedString(row.sending_company_id)).filter(Boolean);
+      const stoReceivingIds = stos.map((row) => toTrimmedString(row.receiving_company_id)).filter(Boolean);
+
+      const [poRowsResp, vendorResp, companyBlocks] = await Promise.all([
+        poGroupIds.length > 0
+          ? serviceRoleClient
+            .schema("erp_procurement")
+            .from("purchase_order")
+            .select("id, order_group_id, status")
+            .in("order_group_id", poGroupIds)
+            .in("status", Array.from(PRINTABLE_STATUSES))
+          : Promise.resolve({ data: [] as Array<Record<string, unknown>>, error: null }),
+        poVendorIds.length > 0
+          ? serviceRoleClient
+            .schema("erp_master")
+            .from("vendor_master")
+            .select("id, vendor_name")
+            .in("id", [...new Set(poVendorIds)])
+          : Promise.resolve({ data: [] as Array<Record<string, unknown>>, error: null }),
+        resolveCompanyLetterheadBlocks([...poCompanyIds, ...stoSendingIds, ...stoReceivingIds]),
+      ]);
+
+      if (poRowsResp.error || vendorResp.error) {
+        throw new Error("PRINT_GROUP_LIST_FAILED");
+      }
+
+      const vendorNameById = new Map(
+        ((vendorResp.data ?? []) as Array<Record<string, unknown>>).map((row) => [toTrimmedString(row.id), toTrimmedString(row.vendor_name) || "--"]),
+      );
+      const printablePoRows = (poRowsResp.data ?? []) as Array<Record<string, unknown>>;
+      const printablePoCountByGroupId = new Map<string, number>();
+      for (const row of printablePoRows) {
+        const orderGroupId = toTrimmedString(row.order_group_id);
+        printablePoCountByGroupId.set(orderGroupId, (printablePoCountByGroupId.get(orderGroupId) ?? 0) + 1);
+      }
+
+      const printablePoIds = printablePoRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
+      const stoIds = stos.map((row) => toTrimmedString(row.id)).filter(Boolean);
+      const [poAmendmentResp, stoAmendmentResp] = await Promise.all([
+        printablePoIds.length > 0
+          ? serviceRoleClient
+            .schema("erp_procurement")
+            .from("po_amendment_log")
+            .select("po_id")
+            .in("po_id", printablePoIds)
+          : Promise.resolve({ data: [] as Array<Record<string, unknown>>, error: null }),
+        stoIds.length > 0
+          ? serviceRoleClient
+            .schema("erp_procurement")
+            .from("sto_amendment_log")
+            .select("sto_id")
+            .in("sto_id", stoIds)
+          : Promise.resolve({ data: [] as Array<Record<string, unknown>>, error: null }),
+      ]);
+      if (poAmendmentResp.error || stoAmendmentResp.error) {
+        throw new Error("PRINT_GROUP_LIST_FAILED");
+      }
+
+      const poGroupIdByPoId = new Map<string, string>();
+      for (const row of printablePoRows) {
+        poGroupIdByPoId.set(toTrimmedString(row.id), toTrimmedString(row.order_group_id));
+      }
+      const revisedPoGroupIds = new Set<string>();
+      for (const row of ((poAmendmentResp.data ?? []) as Array<Record<string, unknown>>)) {
+        const orderGroupId = poGroupIdByPoId.get(toTrimmedString(row.po_id)) ?? "";
+        if (orderGroupId) revisedPoGroupIds.add(orderGroupId);
+      }
+      const revisedStoIds = new Set(
+        ((stoAmendmentResp.data ?? []) as Array<Record<string, unknown>>).map((row) => toTrimmedString(row.sto_id)).filter(Boolean),
+      );
+
+      const rows = [
+        ...poGroups
+          .map((row) => {
+            const companyId = toTrimmedString(row.company_id);
+            const company = companyBlocks.get(companyId);
+            const groupId = toTrimmedString(row.id);
+            return {
+              group_number: toTrimmedString(row.group_number),
+              kind: "PO_GROUP",
+              company_id: companyId,
+              company_name: company?.company_name ?? "--",
+              from_name: company?.company_name ?? "--",
+              to_name: vendorNameById.get(toTrimmedString(row.vendor_id)) ?? "--",
+              date: row.created_at,
+              count: printablePoCountByGroupId.get(groupId) ?? 0,
+              revised: revisedPoGroupIds.has(groupId),
+            };
+          })
+          .filter((row) => row.group_number),
+        ...stos.map((row) => {
+          const sendingCompanyId = toTrimmedString(row.sending_company_id);
+          const receivingCompanyId = toTrimmedString(row.receiving_company_id);
+          const status = toTrimmedString(row.status).toUpperCase();
+          const sendingCompany = companyBlocks.get(sendingCompanyId);
+          const receivingCompany = companyBlocks.get(receivingCompanyId);
+          return {
+            group_number: toTrimmedString(row.group_number),
+            kind: "STO",
+            company_id: requestedCompanyId || sendingCompanyId,
+            company_name: sendingCompany?.company_name ?? "--",
+            from_name: sendingCompany?.company_name ?? "--",
+            to_name: receivingCompany?.company_name ?? "--",
+            date: row.sto_date || row.created_at,
+            count: PRINTABLE_STATUSES.has(status) ? 1 : 0,
+            revised: revisedStoIds.has(toTrimmedString(row.id)),
+          };
+        }).filter((row) => row.group_number),
+      ]
+        .sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")))
+        .slice(0, 200);
+
+      return okResponse({ data: rows, total: rows.length }, ctx.request_id, req);
     }
 
     const { data: poGroup } = await serviceRoleClient

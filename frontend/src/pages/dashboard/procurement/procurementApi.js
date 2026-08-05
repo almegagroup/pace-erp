@@ -1070,6 +1070,10 @@ export function lookupPrintGroup(groupNumber) {
   return fetchProcurement("GET", "/api/procurement/print-groups", undefined, { group_number: groupNumber });
 }
 
+export function listPrintGroups(params) {
+  return fetchProcurement("GET", "/api/procurement/print-groups", undefined, params);
+}
+
 export function createPrintLog(payload) {
   return fetchProcurement("POST", "/api/procurement/print-groups/log", payload);
 }
