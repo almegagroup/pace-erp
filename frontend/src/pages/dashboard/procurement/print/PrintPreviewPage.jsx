@@ -232,6 +232,7 @@ function POCopy({ po, from, to, portsById }) {
 
       <div className="std-notes">
         <ol>
+          <li>COA [Test Certificate] is Mandatory Along with the Invoice/Document set.</li>
           <li>Packaging items should be recyclable.</li>
           <li>Vehicles should be with active PUC certificate.</li>
           <li>Material transaction should be as per consignee&apos;s health &amp; safety norms.</li>
@@ -324,6 +325,7 @@ function STOCopy({ sto, from, to, materialMap }) {
 
       <div className="std-notes">
         <ol>
+          <li>COA [Test Certificate] is Mandatory Along with the Invoice/Document set.</li>
           <li>Packaging items should be recyclable.</li>
           <li>Vehicles should be with active PUC certificate.</li>
           <li>Material transaction should be as per consignee&apos;s health &amp; safety norms.</li>
