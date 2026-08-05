@@ -1,0 +1,6 @@
+ALTER TABLE erp_master.companies
+  ADD COLUMN IF NOT EXISTS cin_number TEXT,
+  ADD COLUMN IF NOT EXISTS mobile_number_1 TEXT,
+  ADD COLUMN IF NOT EXISTS mobile_number_2 TEXT,
+  ADD COLUMN IF NOT EXISTS email_1 TEXT,
+  ADD COLUMN IF NOT EXISTS email_2 TEXT;
