@@ -135,6 +135,7 @@ import STOCreatePage from "../pages/dashboard/procurement/sto/STOCreatePage.jsx"
 import STOCreateOpeningPage from "../pages/dashboard/procurement/sto/STOCreateOpeningPage.jsx";
 import STODetailPage from "../pages/dashboard/procurement/sto/STODetailPage.jsx";
 import PrintGroupPage from "../pages/dashboard/procurement/print/PrintGroupPage.jsx";
+import PrintGroupDetailPage from "../pages/dashboard/procurement/print/PrintGroupDetailPage.jsx";
 import PrintPreviewPage from "../pages/dashboard/procurement/print/PrintPreviewPage.jsx";
 import RTVListPage from "../pages/dashboard/procurement/rtv/RTVListPage.jsx";
 import RTVCreatePage from "../pages/dashboard/procurement/rtv/RTVCreatePage.jsx";
@@ -619,6 +620,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/print"
                     element={<PrintGroupPage />}
+                  />
+                  <Route
+                    path="procurement/print/group/:groupNumber"
+                    element={<PrintGroupDetailPage />}
                   />
                   <Route
                     path="procurement/print/preview"

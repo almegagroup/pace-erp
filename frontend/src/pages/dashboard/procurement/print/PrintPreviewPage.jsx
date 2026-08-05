@@ -9,7 +9,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { getPurchaseOrder, getSTO, createPrintLog, listPorts } from "../procurementApi.js";
+import { getPurchaseOrder, getSTO, createPrintLog, listPorts, lookupPrintGroup } from "../procurementApi.js";
 import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const SHIPMENT_MODE_LABELS = {
@@ -271,7 +271,20 @@ function STOCopy({ sto, from, to, materialMap }) {
 export default function PrintPreviewPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const state = location.state;
+  const groupNumber = state?.group_number || searchParams.get("group_number") || "";
+  const kind = state?.kind || searchParams.get("kind") || "";
+  const selectedIds = useMemo(() => {
+    if (Array.isArray(state?.selectedIds) && state.selectedIds.length > 0) return state.selectedIds;
+    const raw = searchParams.get("selected_ids") || "";
+    return raw.split(",").map((value) => value.trim()).filter(Boolean);
+  }, [searchParams, state?.selectedIds]);
+  const [printContext, setPrintContext] = useState(() => (
+    state
+      ? { kind: state.kind, group_number: state.group_number, from: state.from, to: state.to, selectedIds: state.selectedIds }
+      : null
+  ));
 
   const [documents, setDocuments] = useState([]);
   const [portsById, setPortsById] = useState({});
@@ -279,23 +292,39 @@ export default function PrintPreviewPage() {
   const [error, setError] = useState("");
   const [logged, setLogged] = useState(false);
 
-  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 }, { enabled: state?.kind === "STO" });
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 }, { enabled: kind === "STO" });
   const materialMap = useMemo(
     () => new Map((materialQuery.materials ?? []).map((entry) => [String(entry.id), entry])),
     [materialQuery.materials],
   );
 
   useEffect(() => {
-    if (!state?.selectedIds?.length) {
+    if (!selectedIds.length) {
       setLoading(false);
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const fetcher = state.kind === "PO_GROUP" ? getPurchaseOrder : getSTO;
-        const results = await Promise.all(state.selectedIds.map((id) => fetcher(id)));
-        const portsResponse = state.kind === "PO_GROUP" ? await listPorts({ is_active: "all" }) : null;
+        let resolvedContext = printContext;
+        if (!resolvedContext && groupNumber) {
+          const lookupResponse = await lookupPrintGroup(groupNumber);
+          const lookupData = lookupResponse?.data ?? lookupResponse;
+          resolvedContext = {
+            kind: lookupData?.kind || kind,
+            group_number: lookupData?.group_number || groupNumber,
+            from: lookupData?.from,
+            to: lookupData?.to,
+            selectedIds,
+          };
+          if (!cancelled) {
+            setPrintContext(resolvedContext);
+          }
+        }
+        const effectiveKind = resolvedContext?.kind || kind;
+        const fetcher = effectiveKind === "PO_GROUP" ? getPurchaseOrder : getSTO;
+        const results = await Promise.all(selectedIds.map((id) => fetcher(id)));
+        const portsResponse = effectiveKind === "PO_GROUP" ? await listPorts({ is_active: "all" }) : null;
         if (cancelled) return;
         setDocuments(results);
         if (portsResponse?.data) {
@@ -310,27 +339,26 @@ export default function PrintPreviewPage() {
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [groupNumber, kind, printContext, selectedIds]);
 
   useEffect(() => {
-    if (loading || logged || documents.length === 0 || !state) return;
+    if (loading || logged || documents.length === 0 || !groupNumber || !kind || selectedIds.length === 0) return;
     createPrintLog({
-      group_number: state.group_number,
-      document_kind: state.kind,
-      document_ids: state.selectedIds,
+      group_number: groupNumber,
+      document_kind: kind,
+      document_ids: selectedIds,
     }).catch(() => {});
     setLogged(true);
-  }, [loading, logged, documents.length, state]);
+  }, [documents.length, groupNumber, kind, loading, logged, selectedIds]);
 
   useEffect(() => {
-    if (state?.group_number) {
-      document.title = state.group_number;
+    if (groupNumber) {
+      document.title = groupNumber;
     }
     return () => { document.title = "PACE ERP"; };
-  }, [state?.group_number]);
+  }, [groupNumber]);
 
-  if (!state) {
+  if (!selectedIds.length) {
     return (
       <div className="p-6 text-sm text-slate-600">
         No print selection found.{" "}
@@ -346,23 +374,23 @@ export default function PrintPreviewPage() {
       <style>{PREVIEW_CSS}</style>
       <div className="toolbar no-print">
         <button type="button" onClick={() => navigate(-1)}>Back</button>
-        <button type="button" onClick={() => window.print()}>Print / Download PDF</button>
+        <button type="button" onClick={() => window.print()}>Download / Print</button>
       </div>
 
       {loading ? <p className="p-6 text-sm text-slate-600">Loading…</p> : null}
       {error ? <p className="p-6 text-sm text-rose-600">{error}</p> : null}
 
       {documents.map((doc, index) =>
-        state.kind === "PO_GROUP" ? (
+        kind === "PO_GROUP" ? (
           <POCopy
             key={doc.id || index}
             po={doc}
-            from={state.from}
-            to={state.to}
+            from={printContext?.from}
+            to={printContext?.to}
             portsById={portsById}
           />
         ) : (
-          <STOCopy key={doc.id || index} sto={doc} from={state.from} to={state.to} materialMap={materialMap} />
+          <STOCopy key={doc.id || index} sto={doc} from={printContext?.from} to={printContext?.to} materialMap={materialMap} />
         ),
       )}
     </div>

@@ -281,6 +281,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_PO_STO_PRINT_DETAIL: {
+    screen_code: "PROC_PO_STO_PRINT_DETAIL",
+    route: "/dashboard/procurement/print/group/:groupNumber",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_PO_STO_PRINT_PREVIEW: {
     screen_code: "PROC_PO_STO_PRINT_PREVIEW",
     route: "/dashboard/procurement/print/preview",
