@@ -17073,7 +17073,7 @@ employee name) `.in()`-স্টাইল bulk query হবে, per-row loop ন
 
 ---
 
-## Section 118 — PO/STO Printed Copy Design (🔶 IN PROGRESS — 2026-08-05, business owner session, factors decided one at a time)
+## Section 118 — PO/STO Printed Copy Design (✅ DESIGN LOCKED — 2026-08-05, business owner session; §118.10 lists the few still-open sub-items; implementation not started, pending explicit go-ahead per §118.9)
 
 ### 118.1 — Purpose ও প্রকৃত workflow (LOCKED)
 
@@ -17086,6 +17086,15 @@ PDF auto-mail) **provision হিসেবে doc-এ থেকে যাবে,
 ```
 Preview (browser-এ rendered HTML) → PDF download → print → stamp + sign → manually mail/courier
 ```
+
+**Copy count = document count, never item count (LOCKED — 2026-08-05, stress-tested against a
+100-PO/day scenario):** a PO always carries exactly one material (existing "one PO per material"
+rule, §113.4), so N materials raised together = N PO documents = N copies. An STO can carry many
+materials in one document, so N materials on one STO = still just **1** copy (one item table with
+N rows inside it) — copy count tracks documents, never line items. Confirmed this holds even at
+scale (10 vendors × 10 materials/day = 100 PO documents = 100 copies in one day) — solved not by
+changing this rule but by the Group Number bulk-print mechanism (§118.6), which turns "100 copies"
+into one select-all-and-print action, not 100 manual ones.
 
 ### 118.2 — Factor 1 (LOCKED — 2026-08-05): Data source — Vendor vs Company, আর কী কী field
 
@@ -17170,6 +17179,55 @@ rule as §118.2), Mobile(s), Email(s).
   shows only the document. Draft-only markers (column/section "draft" flags used solely during this
   design review) are hidden in print — they were never meant to be part of the real output.
 
+### 118.5 — Import-specific fields (LOCKED + ✅ IMPLEMENTED — 2026-08-05)
+
+**Destination Port — ✅ IMPLEMENTED.** `purchase_order.destination_port_id` (pre-existing column,
+never wired to any UI) is now a required field on PO Create whenever `vendor_type = IMPORT`.
+Options are scoped to the ports actually mapped to that PO's own company via
+`erp_master.port_plant_transit_master` (a pre-existing company↔port mapping table, previously used
+only by the PM03 admin page) — `listPortsHandler` (`l2_masters.handlers.ts`) gained a `company_id`
+query param that resolves the mapped port ids first, then filters `port_master` by them.
+`createPOHandler` (`po.handlers.ts`) validates and stores it (hard-block for IMPORT, same pattern as
+the existing Incoterm requirement). Frontend: `usePortOptionsQuery` (new hook, mirrors
+`usePaymentTermOptionsQuery`) + a Destination Port combobox next to Incoterm in `POCreatePage.jsx`.
+Verified: zero new `deno check` errors (git-stash before/after, baseline 14 pre-existing errors
+unchanged), frontend `eslint` clean.
+
+**Import Order Type — ✅ IMPLEMENTED, three dimensions, final option list confirmed:**
+- **(A) Shipment/Transport Mode**: `FCL`, `LCL`, `AIR`, `COURIER` — business owner confirmed only
+  these four apply to PACE's own imports (the earlier "Sea – Bulk/Tanker" placeholder was dropped,
+  never confirmed as needed).
+- **(B) Import Transaction/Trade Type**: `DIRECT_IMPORT`, `HIGH_SEA_SALE`, `BONDED_WAREHOUSE`,
+  `EPCG_ADVANCE_AUTH` — business owner's final call (second pass): keep all four even
+  though only the first two are in active use today ("who knows if we'll need the rest") — widened
+  the CHECK constraint back open rather than staying at the initially-confirmed two (migration
+  `20260805160000_po_import_trade_type_widen.sql`).
+  **Clarified via a real example:** the ordinary "shipping line delivers to CFS → CHA clears
+  customs → onward to factory" flow is **Direct Import** — CFS/CHA involvement is just how Direct
+  Import physically executes for sea cargo, not a separate trade type. High Sea Sale is the genuinely
+  different case — PACE buys the goods while still at sea, before the original consignee clears
+  customs.
+- **(C) Customs Clearance / Cargo Movement Type**: `DPD`, `CFS`, `ICD` — confirmed as a real, distinct
+  third dimension (this is where "CFS" as a *movement classification* actually lives, separate from
+  and compatible with Trade Type (B) — a Direct Import PO's Movement Type can legitimately be `CFS`).
+  - **DPD** (Direct Port Delivery) — container goes straight from port to factory, no CFS stop.
+  - **CFS** (Container Freight Station) — container moved to a CFS near the port for de-stuffing/
+    customs examination before onward transport.
+  - **ICD** (Inland Container Depot) — similar to CFS but inland, away from the port itself.
+
+All three are separate required fields on Import PO Create (not merged into one dropdown), each
+hard-blocked when `vendor_type = IMPORT`, mirroring the existing Incoterm/Destination Port pattern.
+`purchase_order` gained `shipment_mode`/`import_trade_type`/`customs_movement_type` (migration
+`20260805150000_po_import_classification_columns.sql`, CHECK-constrained to the confirmed enum
+values, applied to dev, `migration-integrity-check.mjs` confirms `in_sync=true`). `createPOHandler`
+validates + stores all three; `POCreatePage.jsx` adds three selects alongside Incoterm/Destination
+Port. Verified: zero new `deno check` errors, `eslint` clean.
+
+**CFS as a landed-cost line (separate, already-known concept, NOT the same as dimension C above) —
+still genuinely unknown at PO-creation time** (§111.5) — no field added for this specifically; the
+dimension-C "CFS movement" classification above is a yes/no *category* decided at PO time, distinct
+from the CFS *cost* which is only known much later at landed-cost stage.
+
 ### 118.6 — Group Number: bulk print + reprint mechanism (LOCKED — 2026-08-05)
 
 **Purpose:** replaces the earlier separate "Reprint" idea entirely — one mechanism covers first
@@ -17193,10 +17251,16 @@ print, bulk print, and reprint/revise, for both PO and STO.
 **Page 1 — Group Number entry.** Single text input, same field for both PO and STO; backend looks up
 both `po_order_group.group_number` and `stock_transfer_order.group_number` (only one will ever match).
 
+**Page 2 — summary header (LOCKED — 2026-08-05), shown above the list, one line:** Group Number,
+From (Buyer Company for a PO group / Sending Company for an STO), To (Vendor Name for a PO group /
+Receiving Company for an STO), Date (the group's/STO's own creation date), and Number of PO/STO
+(count of documents under that Group Number — always 1 for STO, 1-or-more for a PO group).
+
 **Page 2 — resulting list:**
-- If PO group: every PO under that group, **filtered to CONFIRMED + CANCELLED only** (DRAFT/pending
-  approval POs never show here — nothing to print yet).
-- If STO: that one STO (also gated to CONFIRMED + CANCELLED status).
+- If PO group: every PO under that group, **filtered to CONFIRMED + CANCELLED status only —
+  explicitly excluding DRAFT and PENDING_APPROVAL** (nothing not yet confirmed is ever printable).
+- If STO: that one STO, same status gate (CONFIRMED + CANCELLED only, DRAFT/PENDING_APPROVAL
+  excluded).
 - Each row shows a **"Revise"** tag when that document has ≥1 row in `po_amendment_log`/
   `sto_amendment_log` (already-existing tables, confirmed to carry `amendment_number` +
   `amended_by`/`amended_at`/`approved_by`/`approved_at` — no new schema needed for this detection).
@@ -17255,51 +17319,22 @@ combined report/view surfacing it alongside the new print log.
    is genuinely continuous/global, not FY-scoped, before reporting back) — this backfill + self-check
    is a mandatory step of the implementation, not an optional follow-up.
 
-### 118.5 — Import-specific fields
+### 118.10 — Still open, not yet designed (tracked so it isn't forgotten)
 
-**Destination Port — ✅ IMPLEMENTED (2026-08-05).** `purchase_order.destination_port_id` (pre-existing
-column, never wired to any UI) is now a required field on PO Create whenever `vendor_type = IMPORT`.
-Options are scoped to the ports actually mapped to that PO's own company via
-`erp_master.port_plant_transit_master` (a pre-existing company↔port mapping table, previously used
-only by the PM03 admin page) — `listPortsHandler` (`l2_masters.handlers.ts`) gained a `company_id`
-query param that resolves the mapped port ids first, then filters `port_master` by them.
-`createPOHandler` (`po.handlers.ts`) validates and stores it (hard-block for IMPORT, same pattern as
-the existing Incoterm requirement). Frontend: `usePortOptionsQuery` (new hook, mirrors
-`usePaymentTermOptionsQuery`) + a Destination Port combobox next to Incoterm in `POCreatePage.jsx`.
-Verified: zero new `deno check` errors (git-stash before/after, baseline 14 pre-existing errors
-unchanged), frontend `eslint` clean.
+- **Body/line-item columns** (Material, Qty, UOM, Rate, Amount for PO; Material, Qty, UOM, Batch for
+  STO) — the sample used **draft placeholder columns** throughout this whole session; business owner
+  confirmed (2026-08-05) these are "roughly fine as drafted" but they were never formally locked
+  field-by-field the way the masthead/party/terms blocks were. Treat as provisional, not final.
+- **`print_log` table's exact schema** (§118.7) — existence + purpose locked, column list not yet
+  designed.
+- **QR code library/generation approach** — that a QR renders there, and what it encodes, is locked
+  (§118.4); which JS library generates it (client-side at print time) is an implementation detail,
+  not yet chosen.
 
-**Import Order Type — ✅ IMPLEMENTED (2026-08-05), three dimensions, final option list confirmed:**
-- **(A) Shipment/Transport Mode**: `FCL`, `LCL`, `AIR`, `COURIER` — business owner confirmed only
-  these four apply to PACE's own imports (the earlier "Sea – Bulk/Tanker" placeholder was dropped,
-  never confirmed as needed).
-- **(B) Import Transaction/Trade Type**: `DIRECT_IMPORT`, `HIGH_SEA_SALE`, `BONDED_WAREHOUSE`,
-  `EPCG_ADVANCE_AUTH` — business owner's final call (2026-08-05, second pass): keep all four even
-  though only the first two are in active use today ("who knows if we'll need the rest") — widened
-  the CHECK constraint back open rather than staying at the initially-confirmed two (migration
-  `20260805160000_po_import_trade_type_widen.sql`).
-  **Clarified via a real example:** the ordinary "shipping line delivers to CFS → CHA clears
-  customs → onward to factory" flow is **Direct Import** — CFS/CHA involvement is just how Direct
-  Import physically executes for sea cargo, not a separate trade type. High Sea Sale is the genuinely
-  different case — PACE buys the goods while still at sea, before the original consignee clears
-  customs.
-- **(C) Customs Clearance / Cargo Movement Type**: `DPD`, `CFS`, `ICD` — confirmed as a real, distinct
-  third dimension (this is where "CFS" as a *movement classification* actually lives, separate from
-  and compatible with Trade Type (B) — a Direct Import PO's Movement Type can legitimately be `CFS`).
-  - **DPD** (Direct Port Delivery) — container goes straight from port to factory, no CFS stop.
-  - **CFS** (Container Freight Station) — container moved to a CFS near the port for de-stuffing/
-    customs examination before onward transport.
-  - **ICD** (Inland Container Depot) — similar to CFS but inland, away from the port itself.
+### 118.11 — Completeness check (2026-08-05): nothing from this design session left out
 
-All three are separate required fields on Import PO Create (not merged into one dropdown), each
-hard-blocked when `vendor_type = IMPORT`, mirroring the existing Incoterm/Destination Port pattern.
-`purchase_order` gained `shipment_mode`/`import_trade_type`/`customs_movement_type` (migration
-`20260805150000_po_import_classification_columns.sql`, CHECK-constrained to the confirmed enum
-values, applied to dev, `migration-integrity-check.mjs` confirms `in_sync=true`). `createPOHandler`
-validates + stores all three; `POCreatePage.jsx` adds three selects alongside Incoterm/Destination
-Port. Verified: zero new `deno check` errors, `eslint` clean.
-
-**CFS as a landed-cost line (separate, already-known concept, NOT the same as dimension C above) —
-still genuinely unknown at PO-creation time** (§111.5) — no field added for this specifically; the
-dimension-C "CFS movement" classification above is a yes/no *category* decided at PO time, distinct
-from the CFS *cost* which is only known much later at landed-cost stage.
+Two items surfaced during a full re-read that were decided earlier in this same session but hadn't
+been written down yet — both are now captured in §118.6 above (Page 2 summary header,
+Draft/Pending-Approval exclusion) and §118.1/118.10 (item-cardinality rule, still-open body
+columns). No other gaps found — §118.1 through §118.11 together are the complete, current state of
+this design as of 2026-08-05.
