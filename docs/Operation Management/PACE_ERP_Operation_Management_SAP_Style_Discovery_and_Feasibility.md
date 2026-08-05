@@ -17281,6 +17281,13 @@ Receiving Company for an STO), Date (the group's/STO's own creation date), and N
 one page per document; "Print" (a real printer) works from the exact same dialog — these are not two
 separate features, just two destinations of the same standard browser print flow.
 
+**Downloaded PDF filename = the Group Number (LOCKED — 2026-08-05).** Browsers use the page's
+`<title>` as the suggested filename in the "Save as PDF" dialog — so the preview page must set
+`document.title` to the resolved Group Number right before invoking print (e.g. `9700000004`, no
+extension needed, the browser appends `.pdf` itself), not a generic app title. This is the entire
+implementation for this requirement — no backend involvement, a small piece of frontend logic on the
+preview page only.
+
 **Cancelled / Revised — watermark only, never a title change (corrected 2026-08-05):** a diagonal
 translucent watermark ("CANCELLED" or "REVISED") overlays the copy. The document title never changes
 to "Revised Purchase Order" — title always stays plain "Purchase Order"/"Stock Transfer Order"; the
@@ -17318,6 +17325,16 @@ combined report/view surfacing it alongside the new print log.
    Prod** from the same shared global counter, then Claude verifies internally (confirms the counter
    is genuinely continuous/global, not FY-scoped, before reporting back) — this backfill + self-check
    is a mandatory step of the implementation, not an optional follow-up.
+4. **Business owner's explicit standard for this build (2026-08-05): correct the first time, no
+   rework.** Before/while implementing, re-run the CLAUDE.md 11-pattern pre-code checklist
+   (hardcoded rank-check, company-scope gaps on both the new group-lookup endpoint and the new
+   print-log write, blanket-capability leak on the new `PROC_PO_STO_PRINT` capability, the
+   `capture_acl_version_source` one-time-capture trap when registering PO19 in ACL, ACL-MASTER
+   drift, resource-code collision, maker-checker gaps — N/A here, no approval step in this feature —
+   route/ACL registry mismatch for the new print/lookup routes, `approver_map` — N/A, small
+   config/data traps (the new global series' `starting_number`/`pad_width`), and wrong company
+   source on the group-lookup query) against every concrete file/endpoint/table touched, not just
+   once in the abstract — same discipline already established for IN02/IN03 (§116.9/§117.9).
 
 ### 118.10 — Still open, not yet designed (tracked so it isn't forgotten)
 
