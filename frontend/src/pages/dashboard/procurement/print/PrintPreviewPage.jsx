@@ -48,6 +48,17 @@ function joinTruthy(parts, sep = " / ") {
   return parts.filter(Boolean).join(sep) || null;
 }
 
+function stripLeadingCode(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const pipeIndex = text.indexOf("|");
+  if (pipeIndex >= 0) {
+    const rhs = text.slice(pipeIndex + 1).trim();
+    return rhs || text;
+  }
+  return text.replace(/^[A-Z]{1,5}-?\d{1,6}\s+[—|-]?\s*/i, "").trim() || text;
+}
+
 // Approval log rows carry actioned_by_display in "CODE | Full Name" format
 // (attachUserDisplayFields in po.handlers.ts/sto.handlers.ts) — the QR only
 // encodes the code portion (§118.4 "Approver ID").
@@ -144,6 +155,8 @@ function POCopy({ po, from, to, portsById }) {
   const cancelled = String(po?.status || "").toUpperCase() === "CANCELLED";
   const isImport = String(po?.vendor_type || "").toUpperCase() === "IMPORT";
   const portName = isImport ? portsById?.[po?.destination_port_id] : null;
+  const materialLabel = stripLeadingCode(line?.material_display) || "--";
+  const paymentTermLabel = stripLeadingCode(line?.payment_term_display) || "--";
   const qrPayload = buildQrPayload({
     docNumber: po?.po_number,
     date: fmtDate(po?.po_date),
@@ -194,7 +207,7 @@ function POCopy({ po, from, to, portsById }) {
         <tbody>
           <tr>
             <td>1</td>
-            <td>{line?.material_display || "--"}</td>
+            <td>{materialLabel}</td>
             <td className="num">{fmtNumber(line?.ordered_qty)}</td>
             <td>{line?.po_uom_code || "--"}</td>
             <td className="num">{fmtNumber(line?.unit_rate, 2)}</td>
@@ -206,7 +219,7 @@ function POCopy({ po, from, to, portsById }) {
       <div className="foot-grid">
         <div className="terms">
           <p className="h">Terms</p>
-          <div className="row"><span className="lbl">Payment</span><span>{line?.payment_term_display || "--"}</span></div>
+          <div className="row"><span className="lbl">Payment</span><span>{paymentTermLabel}</span></div>
           <div className="row"><span className="lbl">Delivery</span><span>{po?.expected_delivery_date ? fmtDate(po.expected_delivery_date) : DELIVERY_FALLBACK}</span></div>
           <div className="row"><span className="lbl">Freight</span><span>{po?.freight_term || "--"}</span></div>
           <div className="row"><span className="lbl">GST</span><span>{po?.gst_terms === "INCLUSIVE" ? "Inclusive" : po?.gst_terms === "EXCLUSIVE" ? "Exclusive" : "--"}</span></div>
@@ -462,7 +475,7 @@ const PREVIEW_CSS = `
   .masthead-right { display:flex; align-items:flex-start; justify-content:flex-end; gap:10px; }
   .qr-box { width:72px; height:72px; flex:0 0 auto; image-rendering:pixelated; }
   .qr-box-empty { background:#f1ede9; }
-  .brand-name { font-size:22px; font-weight:700; color:#7a2a2a; margin:0 0 5px; }
+  .brand-name { font-size:19px; line-height:1.18; font-weight:700; color:#7a2a2a; margin:0 0 5px; max-width:430px; }
   .brand-meta { font-family:Arial, sans-serif; font-size:10.5px; color:#8a8078; line-height:1.55; max-width:380px; }
   .brand-ids { width:100%; border-collapse:collapse; font-family:Arial, sans-serif; font-size:11px; }
   .brand-ids td { padding:1.5px 0; }
