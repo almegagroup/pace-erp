@@ -49,6 +49,7 @@ import {
 } from "../store/networkActivity.js";
 import { pushToast } from "../store/uiToast.js";
 import { confirmNavigationLeaveIfNeeded } from "../store/navigationLeaveGuard.js";
+import { runScreenBackInterceptor } from "../store/screenBackInterceptor.js";
 import BlockingLayer from "../components/layer/BlockingLayer.jsx";
 import ErpCommandPalette from "../components/ErpCommandPalette.jsx";
 
@@ -1095,6 +1096,10 @@ export default function MenuShell() {
           drawerButtonRefs.current[safeIndex] ?? drawerButtonRefs.current[0]
         );
       });
+      return;
+    }
+
+    if (runScreenBackInterceptor()) {
       return;
     }
 

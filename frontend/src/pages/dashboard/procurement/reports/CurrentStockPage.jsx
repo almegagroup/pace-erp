@@ -22,6 +22,7 @@ import {
   useMaterialOptionsQuery,
   useStorageLocationOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
 import {
   getCurrentStock,
   searchCurrentStockBatchNumbers,
@@ -54,9 +55,9 @@ const DEFAULT_VISIBLE_COLUMNS = [
 function formatQuantity(value) {
   const amount = Number(value ?? 0);
   if (!Number.isFinite(amount)) {
-    return "0.000000";
+    return "0.000";
   }
-  return amount.toFixed(6);
+  return amount.toFixed(3);
 }
 
 function joinValues(entries) {
@@ -175,18 +176,15 @@ export default function CurrentStockPage() {
     }
   }
 
-  // Esc from the output grid returns to the filter page, mirroring the
-  // app-wide "Esc Back" convention for stepped/drawer navigation.
-  useEffect(() => {
-    if (page !== 2) return undefined;
-    function handleBackShortcut(event) {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setPage(1);
-    }
-    window.addEventListener("keydown", handleBackShortcut);
-    return () => window.removeEventListener("keydown", handleBackShortcut);
-  }, [page]);
+  // Esc / shell Back / browser Back from the output grid returns to the
+  // filter page instead of leaving the screen entirely (§ shell back
+  // interceptor — the shell's Escape handling runs in the capture phase,
+  // ahead of any bubble-phase listener a page could register on its own).
+  useScreenBackInterceptor(() => {
+    if (page !== 2) return false;
+    setPage(1);
+    return true;
+  });
 
   // SAP-style Execute shortcut (F8) — mirrors ZMB51/MB52's own Execute key,
   // since this report is explicitly modeled on them.

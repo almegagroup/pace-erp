@@ -17,6 +17,7 @@ import {
 import { isBackAllowed } from "./backValidation.js";
 import { isPublicRoute } from "../router/publicRoutes.js";
 import { confirmAndRequestLogout } from "../store/sessionWarning.js";
+import { runScreenBackInterceptor } from "../store/screenBackInterceptor.js";
 
 let backGuardEnabled = false;
 
@@ -32,6 +33,12 @@ function onBrowserBack(event) {
   const activeRoute = active?.route ?? null;
 
   if (!activeRoute || isPublicRoute(activeRoute)) {
+    return;
+  }
+
+  if (runScreenBackInterceptor()) {
+    event.preventDefault();
+    globalThis.history.pushState(null, "", activeRoute);
     return;
   }
 
