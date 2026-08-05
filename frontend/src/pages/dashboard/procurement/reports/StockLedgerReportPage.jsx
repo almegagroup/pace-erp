@@ -19,6 +19,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useStorageLocationOptionsQuery, useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import {
@@ -62,7 +63,7 @@ function formatQuantity(value) {
   if (!Number.isFinite(amount)) {
     return "—";
   }
-  return amount.toFixed(6);
+  return amount.toFixed(3);
 }
 
 function formatValue(value) {
@@ -70,7 +71,7 @@ function formatValue(value) {
   if (!Number.isFinite(amount)) {
     return "—";
   }
-  return amount.toFixed(4);
+  return amount.toFixed(3);
 }
 
 function joinSelectedValues(entries) {
@@ -301,18 +302,15 @@ export default function StockLedgerReportPage() {
     setPage(2);
   }
 
-  // Esc from the output grid returns to the filter page, mirroring the
-  // app-wide "Esc Back" convention for stepped/drawer navigation.
-  useEffect(() => {
-    if (page !== 2) return undefined;
-    function handleBackShortcut(event) {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setPage(1);
-    }
-    window.addEventListener("keydown", handleBackShortcut);
-    return () => window.removeEventListener("keydown", handleBackShortcut);
-  }, [page]);
+  // Esc / shell Back / browser Back from the output grid returns to the
+  // filter page instead of leaving the screen entirely (§ shell back
+  // interceptor — the shell's Escape handling runs in the capture phase,
+  // ahead of any bubble-phase listener a page could register on its own).
+  useScreenBackInterceptor(() => {
+    if (page !== 2) return false;
+    setPage(1);
+    return true;
+  });
 
   function handleApplyLayout(layoutId) {
     setActiveLayoutId(layoutId);

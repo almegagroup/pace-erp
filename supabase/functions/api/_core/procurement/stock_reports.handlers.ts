@@ -466,10 +466,9 @@ export async function getStockLedgerReportHandler(
     const stockDocumentIds = [...new Set(ledgerRows.map((row) => row.stock_document_id).filter(Boolean))];
     const materialIdsForLookup = [...new Set(ledgerRows.map((row) => row.material_id).filter(Boolean))];
     const slocIdsForLookup = [...new Set(ledgerRows.map((row) => row.storage_location_id).filter(Boolean))];
-    const movementCodesForLookup = [...new Set(ledgerRows.map((row) => row.movement_type_code).filter(Boolean))];
     const companyIdsForLookup = [...new Set(ledgerRows.map((row) => row.company_id).filter(Boolean))];
 
-    const [stockDocResp, materialResp, slocResp, movementResp, companyResp, conversionResp] = await Promise.all([
+    const [stockDocResp, materialResp, slocResp, companyResp, conversionResp] = await Promise.all([
       stockDocumentIds.length > 0
         ? serviceRoleClient
             .schema("erp_inventory")
@@ -491,13 +490,6 @@ export async function getStockLedgerReportHandler(
             .select("id, code")
             .in("id", slocIdsForLookup)
         : Promise.resolve({ data: [], error: null }),
-      movementCodesForLookup.length > 0
-        ? serviceRoleClient
-            .schema("erp_inventory")
-            .from("movement_type_master")
-            .select("code, name")
-            .in("code", movementCodesForLookup)
-        : Promise.resolve({ data: [], error: null }),
       companyIdsForLookup.length > 0
         ? serviceRoleClient
             .schema("erp_master")
@@ -515,14 +507,13 @@ export async function getStockLedgerReportHandler(
         : Promise.resolve({ data: [], error: null }),
     ]);
 
-    if (stockDocResp.error || materialResp.error || slocResp.error || movementResp.error || companyResp.error || conversionResp.error) {
+    if (stockDocResp.error || materialResp.error || slocResp.error || companyResp.error || conversionResp.error) {
       return reportErrorResponse(req, ctx, "STOCK_LEDGER_FETCH_FAILED", 500, "Unable to fetch stock ledger report.");
     }
 
     const docMap = new Map(((stockDocResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
     const materialMap = new Map(((materialResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
     const slocMap = new Map(((slocResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
-    const movementMap = new Map(((movementResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.code).toUpperCase(), row]));
     const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
     const conversionsByMaterialId = new Map<string, JsonRecord[]>();
     for (const row of (conversionResp.data ?? []) as JsonRecord[]) {
@@ -660,7 +651,6 @@ export async function getStockLedgerReportHandler(
       const material = materialMap.get(row.material_id);
       const sloc = slocMap.get(row.storage_location_id);
       const company = companyMap.get(row.company_id);
-      const movement = movementMap.get(row.movement_type_code);
       const materialType = toTrimmedString(material?.material_type);
       const materialLabel = resolveMaterialLabel(material) || "—";
       const materialCode = toTrimmedString(material?.pace_code) || "—";
@@ -697,14 +687,14 @@ export async function getStockLedgerReportHandler(
         material_document_item: toTrimmedString(doc?.item_number) || "—",
         material_document_year: toTrimmedString(doc?.document_year) || "—",
         posting_date: row.posting_date || "—",
-        company: company ? `${toTrimmedString(company.company_code) || "—"} — ${toTrimmedString(company.company_name) || "—"}` : "—",
+        company: company ? toTrimmedString(company.company_code) || "—" : "—",
         material_type: materialType || "—",
         material: `${materialCode} — ${materialLabel}`,
         external_code: toTrimmedString(material?.external_code) || "—",
         document_name: documentName || "—",
         storage_location: toTrimmedString(sloc?.code) || "—",
         batch_number: row.batch_number || "—",
-        movement_type: `${row.movement_type_code}${toTrimmedString(movement?.name) ? ` — ${toTrimmedString(movement?.name)}` : ""}`,
+        movement_type: toTrimmedString(row.movement_type_code) || "—",
         base_quantity: baseQuantity,
         base_uom_code: row.base_uom_code || "—",
         pack_quantity: packQuantity,
