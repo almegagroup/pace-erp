@@ -17159,6 +17159,101 @@ rule as §118.2), Mobile(s), Email(s).
   Import Trade Type, and Customs Movement Type (§118.5) print in their own "Import Detail" block in
   the Terms area (next to Payment/Delivery/Freight/GST/Rebate/Remarks), visible only when the PO's
   vendor is Import type — not in the masthead or party blocks.
+- **QR code — decided 2026-08-05:** small QR box in the masthead's top-right corner (next to
+  GSTIN/CIN/Mobile/Email), both PO and STO. Static data only — encodes PO No./STO No., Date, the
+  counterpart's code (Vendor Code for PO, Sending/Receiving Company Code for STO), Approver ID, and
+  Buyer/Receiving Company Code. **No scan-to-verify lookup page for now** — purely an encoded
+  info-blob, no new backend endpoint. No caption/label text prints under the QR box (the box alone,
+  no explanatory text — a real business document doesn't print its own instructions).
+- **A4 fit — decided 2026-08-05:** `.paper` sized to 794px (CSS-px equivalent of A4 width at 96dpi),
+  `@page { size: A4; margin: 12mm; }`, print stylesheet hides all app chrome (toolbar/tabs/notes),
+  shows only the document. Draft-only markers (column/section "draft" flags used solely during this
+  design review) are hidden in print — they were never meant to be part of the real output.
+
+### 118.6 — Group Number: bulk print + reprint mechanism (LOCKED — 2026-08-05)
+
+**Purpose:** replaces the earlier separate "Reprint" idea entirely — one mechanism covers first
+print, bulk print, and reprint/revise, for both PO and STO.
+
+**Number series — one shared global series for both PO and STO (not two, not company-scoped):**
+- New document type in `erp_procurement.document_number_series` using the same **continuous
+  global** mechanism already used for `PROC_PO`/`PACK_PO` (`generateGlobalDocNumber()` /
+  `generate_doc_number()` RPC, company-independent) — **not** the year-scoped mechanism (§106) used
+  for MATDOC/RECO/Invoice. Must be verified at implementation time to confirm no FY-reset logic
+  leaks in.
+- **PO side:** `po_order_group` gains a `group_number` column, populated once per create-session
+  (every batch of materials raised together already shares one `po_order_group` row — it just had
+  no human-readable number until now).
+- **STO side:** `stock_transfer_order` gains its own `group_number` column, populated at STO create
+  time — **not** an alias for `sto_number`, drawn from the *same* shared series as PO's group number
+  (so a given Group Number value unambiguously resolves to exactly one of the two tables, since the
+  counter never repeats). STO doesn't need any new grouping/session concept — one STO is already the
+  complete printable unit, so its own row is trivially "its own group of one."
+
+**Page 1 — Group Number entry.** Single text input, same field for both PO and STO; backend looks up
+both `po_order_group.group_number` and `stock_transfer_order.group_number` (only one will ever match).
+
+**Page 2 — resulting list:**
+- If PO group: every PO under that group, **filtered to CONFIRMED + CANCELLED only** (DRAFT/pending
+  approval POs never show here — nothing to print yet).
+- If STO: that one STO (also gated to CONFIRMED + CANCELLED status).
+- Each row shows a **"Revise"** tag when that document has ≥1 row in `po_amendment_log`/
+  `sto_amendment_log` (already-existing tables, confirmed to carry `amendment_number` +
+  `amended_by`/`amended_at`/`approved_by`/`approved_at` — no new schema needed for this detection).
+- Checkbox per row + "Select All". User can print the whole group or hand-pick specific documents
+  (e.g., only the just-revised one).
+
+**Print action:**
+- **PO only** — a confirmation modal shows the Vendor's Name/Contact/Email (from Vendor Master,
+  already has this data) with an "I confirm this is correct" checkbox; the actual Preview only opens
+  once checked. **All modal/dialog/button text in English.**
+- **STO — no confirmation modal at all.** An STO is always single-company-scoped and never leaves
+  PACE internally, so there is no external-party mis-send risk to guard against; Print goes straight
+  to Preview.
+
+**Preview:** one HTML document, every selected PO/STO's copy laid out back-to-back with
+`page-break-after` between them — this is what makes a 100-document day printable in one action (see
+§118.7). Browser's native Print dialog's "Save as PDF" destination then produces one multi-page PDF,
+one page per document; "Print" (a real printer) works from the exact same dialog — these are not two
+separate features, just two destinations of the same standard browser print flow.
+
+**Cancelled / Revised — watermark only, never a title change (corrected 2026-08-05):** a diagonal
+translucent watermark ("CANCELLED" or "REVISED") overlays the copy. The document title never changes
+to "Revised Purchase Order" — title always stays plain "Purchase Order"/"Stock Transfer Order"; the
+watermark alone carries the state, so the two signals are never shown redundantly.
+
+**No separate "reprint" flow.** Any Group Number can be looked up and printed again, any number of
+times, choosing all-or-specific documents each time — this alone covers reprint, so no dedicated
+reprint mechanism is being built.
+
+### 118.7 — Print action audit log (LOCKED — 2026-08-05)
+
+**New `print_log` table** (schema TBD at implementation) — records who clicked Print, when, which
+Group Number, and which specific documents were included in that print action. This is genuinely new
+— no print/download action is logged anywhere in the system today. Separate from this: "who
+created/approved/amended" a PO/STO **already exists** (`created_by`/`approved_by` on the base tables,
+`amended_by`/`approved_by` on the amendment logs) — no new schema needed for that half, only a
+combined report/view surfacing it alongside the new print log.
+
+### 118.8 — Menu placement (LOCKED — 2026-08-05)
+
+- **Menu Group:** Procurement (`GRP_ACL_PROCUREMENT`) — same group as PO01 (Purchase Orders), PO07
+  (STO), PO13 (Pending Order Approvals), since this page operates on both document types.
+- **Tx code:** **PO19** (PO01–PO18 already taken, PO15 previously retired/skipped).
+- **Page title:** "Print PO/STO".
+- **Resource/menu code:** `PROC_PO_STO_PRINT`.
+- **ACL:** SCM (full access) + Director (standard view/access) + ACL-MASTER (automatic, per the
+  standing rule that every new page must be explicitly granted to ACL-MASTER too).
+
+### 118.9 — Implementation sequencing (LOCKED — 2026-08-05)
+
+1. Lock this design in the doc (this section) — **done**.
+2. **Do not start building until the business owner explicitly says to start** — this is a standing
+   instruction for this feature specifically, not the general doc-first workflow default.
+3. Once implementation happens: backfill `group_number` for **every existing PO/STO in both Dev and
+   Prod** from the same shared global counter, then Claude verifies internally (confirms the counter
+   is genuinely continuous/global, not FY-scoped, before reporting back) — this backfill + self-check
+   is a mandatory step of the implementation, not an optional follow-up.
 
 ### 118.5 — Import-specific fields
 
