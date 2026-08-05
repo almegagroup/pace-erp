@@ -17151,10 +17151,14 @@ rule as §118.2), Mobile(s), Email(s).
   e.g. "urgent, line stopped"). Both can be present at once; neither overwrites the other.
 - **Transporter/Vehicle**: deliberately **not** on the PO copy — genuinely unknown at PO-creation
   time (vendor arranges transport later; `gate_entry.vehicle_number` is the correct, already-existing
-  place this gets captured, at goods-arrival time). For STO, the opposite is true — PACE controls
-  both ends and could know Transporter/Vehicle at creation time — but `stock_transfer_order` has no
-  such columns today. **Not yet approved to build**; flagged as a real gap pending business
-  owner's go-ahead.
+  place this gets captured, at goods-arrival time). **For STO — decided 2026-08-05: no dedicated
+  column either.** `stock_transfer_order.remarks` (pre-existing header field) is where the user types
+  transporter/vehicle detail manually when relevant; the STO copy just prints that field as typed —
+  no new schema.
+- **Import fields on the printed copy — decided 2026-08-05:** Destination Port, Shipment Mode,
+  Import Trade Type, and Customs Movement Type (§118.5) print in their own "Import Detail" block in
+  the Terms area (next to Payment/Delivery/Freight/GST/Rebate/Remarks), visible only when the PO's
+  vendor is Import type — not in the masthead or party blocks.
 
 ### 118.5 — Import-specific fields
 
