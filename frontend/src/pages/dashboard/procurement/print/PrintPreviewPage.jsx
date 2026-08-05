@@ -93,12 +93,12 @@ function CompanyPartyBlock({ label, company }) {
   );
 }
 
-function POCopy({ po, from, to, groupState }) {
+function POCopy({ po, from, to, portsById }) {
   const line = po?.lines?.[0] ?? null;
   const revised = Array.isArray(po?.amendment_log) && po.amendment_log.length > 0;
   const cancelled = String(po?.status || "").toUpperCase() === "CANCELLED";
   const isImport = String(po?.vendor_type || "").toUpperCase() === "IMPORT";
-  const portName = isImport ? groupState.portsById?.[po?.destination_port_id] : null;
+  const portName = isImport ? portsById?.[po?.destination_port_id] : null;
 
   return (
     <div className="paper">
@@ -158,8 +158,7 @@ function POCopy({ po, from, to, groupState }) {
           {po?.has_rebate ? (
             <div className="row"><span className="lbl">Rebate</span><span>{fmtNumber(po?.rebate_rate, 2)} {po?.rebate_rate_uom_basis === "PO_UOM" ? "/ PO UOM" : "/ Base UOM"}{po?.rebate_remarks ? ` — ${po.rebate_remarks}` : ""}</span></div>
           ) : null}
-          {groupState?.groupRemarks ? <div className="row"><span className="lbl">Remarks</span><span>{groupState.groupRemarks}</span></div> : null}
-          {po?.remarks ? <div className="row"><span className="lbl"></span><span>{po.remarks}</span></div> : null}
+          {po?.remarks ? <div className="row"><span className="lbl">Remarks</span><span>{po.remarks}</span></div> : null}
         </div>
         {isImport ? (
           <div className="terms">
@@ -360,7 +359,7 @@ export default function PrintPreviewPage() {
             po={doc}
             from={state.from}
             to={state.to}
-            groupState={{ portsById, groupRemarks: null }}
+            portsById={portsById}
           />
         ) : (
           <STOCopy key={doc.id || index} sto={doc} from={state.from} to={state.to} materialMap={materialMap} />
