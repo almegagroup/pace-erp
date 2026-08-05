@@ -33,6 +33,21 @@ const REBATE_BASIS_OPTIONS = [
   { value: "BASE_UOM", label: "Base UOM" },
   { value: "PO_UOM", label: "PO UOM" },
 ];
+const SHIPMENT_MODE_OPTIONS = [
+  { value: "FCL", label: "Sea — FCL (Full Container Load)" },
+  { value: "LCL", label: "Sea — LCL (Less than Container Load)" },
+  { value: "AIR", label: "Air Freight" },
+  { value: "COURIER", label: "Courier / Express" },
+];
+const IMPORT_TRADE_TYPE_OPTIONS = [
+  { value: "DIRECT_IMPORT", label: "Direct Import" },
+  { value: "HIGH_SEA_SALE", label: "High Sea Sale (HSS)" },
+];
+const CUSTOMS_MOVEMENT_TYPE_OPTIONS = [
+  { value: "DPD", label: "DPD — Direct Port Delivery" },
+  { value: "CFS", label: "CFS — Container Freight Station" },
+  { value: "ICD", label: "ICD — Inland Container Depot" },
+];
 
 function createEmptyLine(defaultPaymentTermId = "") {
   return {
@@ -205,6 +220,9 @@ export default function POCreatePage() {
     delivery_type: "STANDARD",
     incoterm: "",
     destination_port_id: "",
+    shipment_mode: "",
+    import_trade_type: "",
+    customs_movement_type: "",
     cost_center_id: "",
     extra_fields: [],
   });
@@ -471,6 +489,10 @@ export default function POCreatePage() {
       setError("Destination port is required for import purchase orders.");
       return;
     }
+    if (showIncoterm && (!form.shipment_mode || !form.import_trade_type || !form.customs_movement_type)) {
+      setError("Shipment mode, import trade type, and customs movement type are required for import purchase orders.");
+      return;
+    }
     if (lines.some((line) => !line.material_id || !line.quantity || !line.rate || !line.payment_term_id || !line.freight_term)) {
       setError("Each PO line requires material, quantity, rate, payment term, and freight term.");
       return;
@@ -495,6 +517,9 @@ export default function POCreatePage() {
         delivery_type: form.delivery_type,
         incoterm: showIncoterm ? form.incoterm.trim() : null,
         destination_port_id: showIncoterm ? form.destination_port_id : null,
+        shipment_mode: showIncoterm ? form.shipment_mode : null,
+        import_trade_type: showIncoterm ? form.import_trade_type : null,
+        customs_movement_type: showIncoterm ? form.customs_movement_type : null,
         cost_center_id: form.cost_center_id,
         extra_fields: form.extra_fields.map((entry) => entry.trim()).filter(Boolean),
         // Per feasibility doc 87.12A: each material becomes its own PO, all
@@ -812,6 +837,51 @@ export default function POCreatePage() {
                       options={portOptions}
                       blankLabel={portQuery.isLoading ? "Loading ports…" : "Select port"}
                     />
+                  </label>
+                ) : null}
+                {showIncoterm ? (
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Shipment Mode <span className="text-rose-500">*</span>
+                    <select
+                      value={form.shipment_mode}
+                      onChange={(event) => updateHeaderField("shipment_mode", event.target.value)}
+                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    >
+                      <option value="">Select shipment mode</option>
+                      {SHIPMENT_MODE_OPTIONS.map((entry) => (
+                        <option key={entry.value} value={entry.value}>{entry.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                {showIncoterm ? (
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Import Trade Type <span className="text-rose-500">*</span>
+                    <select
+                      value={form.import_trade_type}
+                      onChange={(event) => updateHeaderField("import_trade_type", event.target.value)}
+                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    >
+                      <option value="">Select trade type</option>
+                      {IMPORT_TRADE_TYPE_OPTIONS.map((entry) => (
+                        <option key={entry.value} value={entry.value}>{entry.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                {showIncoterm ? (
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Customs Movement Type <span className="text-rose-500">*</span>
+                    <select
+                      value={form.customs_movement_type}
+                      onChange={(event) => updateHeaderField("customs_movement_type", event.target.value)}
+                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    >
+                      <option value="">Select movement type</option>
+                      {CUSTOMS_MOVEMENT_TYPE_OPTIONS.map((entry) => (
+                        <option key={entry.value} value={entry.value}>{entry.label}</option>
+                      ))}
+                    </select>
                   </label>
                 ) : null}
               </div>
