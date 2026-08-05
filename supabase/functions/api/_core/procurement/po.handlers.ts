@@ -47,6 +47,9 @@ const PO_VENDOR_TYPES = new Set(["DOMESTIC", "IMPORT"]);
 const FREIGHT_TERMS = new Set(["FOR", "FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS"]);
 const GST_TERMS = new Set(["INCLUSIVE", "EXCLUSIVE"]);
 const REBATE_RATE_UOM_BASIS = new Set(["BASE_UOM", "PO_UOM"]);
+const SHIPMENT_MODES = new Set(["FCL", "LCL", "AIR", "COURIER"]);
+const IMPORT_TRADE_TYPES = new Set(["DIRECT_IMPORT", "HIGH_SEA_SALE", "BONDED_WAREHOUSE", "EPCG_ADVANCE_AUTH"]);
+const CUSTOMS_MOVEMENT_TYPES = new Set(["DPD", "CFS", "ICD"]);
 const MUTABLE_AMENDMENT_FIELDS = new Set([
   "ordered_qty",
   "unit_rate",
@@ -1149,6 +1152,24 @@ export async function createPOHandler(
     if (vendorType === "IMPORT" && !incoterm) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INCOTERM_REQUIRED", 400, "Incoterm required for import PO");
     }
+    const destinationPortId = toTrimmedString(body.destination_port_id) || null;
+    if (vendorType === "IMPORT" && !destinationPortId) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_DESTINATION_PORT_REQUIRED", 400, "Destination port required for import PO");
+    }
+    const shipmentMode = toUpperTrimmedString(body.shipment_mode) || null;
+    const importTradeType = toUpperTrimmedString(body.import_trade_type) || null;
+    const customsMovementType = toUpperTrimmedString(body.customs_movement_type) || null;
+    if (vendorType === "IMPORT") {
+      if (!shipmentMode || !SHIPMENT_MODES.has(shipmentMode)) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_SHIPMENT_MODE_REQUIRED", 400, "Valid shipment mode required for import PO");
+      }
+      if (!importTradeType || !IMPORT_TRADE_TYPES.has(importTradeType)) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_IMPORT_TRADE_TYPE_REQUIRED", 400, "Valid import trade type required for import PO");
+      }
+      if (!customsMovementType || !CUSTOMS_MOVEMENT_TYPES.has(customsMovementType)) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_CUSTOMS_MOVEMENT_TYPE_REQUIRED", 400, "Valid customs movement type required for import PO");
+      }
+    }
 
     const rawMaterials: unknown[] = Array.isArray(body.materials)
       ? body.materials
@@ -1253,6 +1274,10 @@ export async function createPOHandler(
             vendor_id: vendorId,
             vendor_type: vendorType,
             incoterm,
+            destination_port_id: destinationPortId,
+            shipment_mode: shipmentMode,
+            import_trade_type: importTradeType,
+            customs_movement_type: customsMovementType,
             freight_term: freightTerm,
             payment_term_id: paymentTermId,
             lc_required: lcRequired,

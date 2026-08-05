@@ -17070,3 +17070,288 @@ raw-ID column resolve হয় (User/Vendor/Customer/Company/Material/SLoc), �
 bulk-resolve (material, storage location, movement type, vendor/customer per reference type,
 employee name) `.in()`-স্টাইল bulk query হবে, per-row loop না — task brief-এ explicit rule হিসেবে
 থাকবে।
+
+---
+
+## Section 118 — PO/STO Printed Copy Design (✅ DESIGN LOCKED — 2026-08-05, business owner session; §118.10 lists the few still-open sub-items; implementation not started, pending explicit go-ahead per §118.9)
+
+### 118.1 — Purpose ও প্রকৃত workflow (LOCKED)
+
+PO/STO copy একটা **mandatory, physical documentation প্রয়োজন** — "system দেখে ব্যবস্থা করে নেবে" এই
+ধরনের কিছু না, কেউ না কেউ manually এই কাজ করবে। তাই দুটোরই (PO আর STO) নিজস্ব printable copy লাগবে।
+
+**Auto-mail প্রসঙ্গ (আগে §14.6/§85.2.7-এ locked ছিল):** সেই design (PO confirm হলে vendor-কে সরাসরি
+PDF auto-mail) **provision হিসেবে doc-এ থেকে যাবে, কিন্তু এই পাসে build হবে না।** বাস্তবে যা হবে:
+
+```
+Preview (browser-এ rendered HTML) → PDF download → print → stamp + sign → manually mail/courier
+```
+
+**Copy count = document count, never item count (LOCKED — 2026-08-05, stress-tested against a
+100-PO/day scenario):** a PO always carries exactly one material (existing "one PO per material"
+rule, §113.4), so N materials raised together = N PO documents = N copies. An STO can carry many
+materials in one document, so N materials on one STO = still just **1** copy (one item table with
+N rows inside it) — copy count tracks documents, never line items. Confirmed this holds even at
+scale (10 vendors × 10 materials/day = 100 PO documents = 100 copies in one day) — solved not by
+changing this rule but by the Group Number bulk-print mechanism (§118.6), which turns "100 copies"
+into one select-all-and-print action, not 100 manual ones.
+
+### 118.2 — Factor 1 (LOCKED — 2026-08-05): Data source — Vendor vs Company, আর কী কী field
+
+**PO — দুই পক্ষ:**
+
+- **Vendor (Seller)** — Vendor Master (`purchase_order.vendor_id`) থেকে:
+  - Vendor **Name** (Vendor Code দেখাবে না)
+  - GSTIN
+  - **Registered Address** (Correspondence Address না)
+  - Primary Contact — **Name + Phone Number** (Designation দেখাবে না)
+  - Primary Email
+- **Buyer / Consignee (PACE-এর নিজের company)** — Company Master (`purchase_order.company_id`)
+  থেকে, **দুটোই একই entity** (PACE-এর model-এ Buyer আলাদা কোনো Consignee/Ship-To নেই):
+  - Company Name
+  - GSTIN
+  - Address
+  - **CIN — conditional field**: company-র CIN data থাকলেই line-টা (label সহ) print হবে;
+    না থাকলে (যেমন LLP) পুরো লাইনটাই সম্পূর্ণ absent থাকবে, blank/label দেখাবে না
+  - Mobile number(s) — একাধিক থাকলে "/" বা line-break দিয়ে সব দেখাবে
+  - Email(s) — একই নিয়ম
+  - ❌ কোনো Storage Location / "Attn:" লাইন থাকবে না — সম্পূর্ণ বাদ
+
+**STO — দুই পক্ষই Company Master:**
+
+- Sending Company (`stock_transfer_order.sending_company_id`) আর Receiving Company
+  (`stock_transfer_order.receiving_company_id`) — উপরের Buyer/Consignee-এর ঠিক একই field set
+  (Name, GSTIN, Address, conditional CIN, Mobile(s), Email(s))। Vendor Master-এর কোনো involvement
+  নেই — উভয় পক্ষই PACE-এর নিজের company।
+
+**Schema note:** `erp_master.companies`-এ `cin_number`, `mobile_number_1/2`, `email_1/2` column
+migration `20260805120000_company_master_contact_cin_columns.sql`-এ যুক্ত করা হয়েছে (dev + prod
+দুই জায়গাতেই applied), আর CMP003/CMP006-এর actual data (letterhead থেকে verify করে) বসানো হয়েছে।
+
+### 118.3 — Factor 2 (LOCKED — 2026-08-05): masthead = issuer's own letterhead
+
+Business owner correction: the masthead is not a generic "Company" block — it's the **issuing
+company's own letterhead** (Buyer for PO, Sending Company for STO), styled exactly like the real
+letterhead PDFs (big company name left, contact/legal-ID block right). No "Buyer"/"Consignee"/
+"Sending Company" label anywhere near it. Where the document-identity block (PO No./Date or
+STO No./Date) now sits is exactly where the old Buyer/Consignee party-block used to be — Company
+Code is never printed. The masthead's right-side identifier block is GSTIN, CIN (conditional, same
+rule as §118.2), Mobile(s), Email(s).
+
+### 118.4 — Terms-area rules (LOCKED — 2026-08-05)
+
+- **Payment**: print `payment_terms_master.name` ("60 Days from Invoice"), never the code.
+- **Delivery**: print the actual date; if none is captured, print the fixed fallback string
+  *"Delivery dates will be informed accordingly"* — never leave the line blank.
+- **Freight**: print `purchase_order.freight_term` as-is (already a business label, e.g. "To-Pay" —
+  confirmed no internal PACE code ever reaches this field).
+- **GST**: print only the Inclusive/Exclusive **decision** (`gst_terms`) — never a rate/percentage.
+  Confirmed: GST% is applied at GRN time, not at PO/STO stage, so there is nothing else to print here.
+- **Rebate**: same conditional treatment as GST — a line only appears when `has_rebate = true`,
+  showing `rebate_rate`/`rebate_rate_uom_basis`/`rebate_remarks`; absent entirely otherwise.
+- **Standard fixed notes** — three lines, always printed verbatim, each its own bullet, identical on
+  every PO and STO copy (not data-driven, static boilerplate):
+  1. Packaging items should be recyclable.
+  2. Vehicles should be with active PUC certificate.
+  3. Material transaction should be as per consignee's health & safety norms.
+- **Remarks**: two independent sources both print on a given PO's copy — `po_order_group.remarks`
+  (one header-level remark, shared by every material's PO born from the same create session — e.g.
+  "batch created together for the Aug run") and `purchase_order.remarks` (specific to that one PO —
+  e.g. "urgent, line stopped"). Both can be present at once; neither overwrites the other.
+- **Transporter/Vehicle**: deliberately **not** on the PO copy — genuinely unknown at PO-creation
+  time (vendor arranges transport later; `gate_entry.vehicle_number` is the correct, already-existing
+  place this gets captured, at goods-arrival time). **For STO — decided 2026-08-05: no dedicated
+  column either.** `stock_transfer_order.remarks` (pre-existing header field) is where the user types
+  transporter/vehicle detail manually when relevant; the STO copy just prints that field as typed —
+  no new schema.
+- **Import fields on the printed copy — decided 2026-08-05:** Destination Port, Shipment Mode,
+  Import Trade Type, and Customs Movement Type (§118.5) print in their own "Import Detail" block in
+  the Terms area (next to Payment/Delivery/Freight/GST/Rebate/Remarks), visible only when the PO's
+  vendor is Import type — not in the masthead or party blocks.
+- **QR code — decided 2026-08-05:** small QR box in the masthead's top-right corner (next to
+  GSTIN/CIN/Mobile/Email), both PO and STO. Static data only — encodes PO No./STO No., Date, the
+  counterpart's code (Vendor Code for PO, Sending/Receiving Company Code for STO), Approver ID, and
+  Buyer/Receiving Company Code. **No scan-to-verify lookup page for now** — purely an encoded
+  info-blob, no new backend endpoint. No caption/label text prints under the QR box (the box alone,
+  no explanatory text — a real business document doesn't print its own instructions).
+- **A4 fit — decided 2026-08-05:** `.paper` sized to 794px (CSS-px equivalent of A4 width at 96dpi),
+  `@page { size: A4; margin: 12mm; }`, print stylesheet hides all app chrome (toolbar/tabs/notes),
+  shows only the document. Draft-only markers (column/section "draft" flags used solely during this
+  design review) are hidden in print — they were never meant to be part of the real output.
+
+### 118.5 — Import-specific fields (LOCKED + ✅ IMPLEMENTED — 2026-08-05)
+
+**Destination Port — ✅ IMPLEMENTED.** `purchase_order.destination_port_id` (pre-existing column,
+never wired to any UI) is now a required field on PO Create whenever `vendor_type = IMPORT`.
+Options are scoped to the ports actually mapped to that PO's own company via
+`erp_master.port_plant_transit_master` (a pre-existing company↔port mapping table, previously used
+only by the PM03 admin page) — `listPortsHandler` (`l2_masters.handlers.ts`) gained a `company_id`
+query param that resolves the mapped port ids first, then filters `port_master` by them.
+`createPOHandler` (`po.handlers.ts`) validates and stores it (hard-block for IMPORT, same pattern as
+the existing Incoterm requirement). Frontend: `usePortOptionsQuery` (new hook, mirrors
+`usePaymentTermOptionsQuery`) + a Destination Port combobox next to Incoterm in `POCreatePage.jsx`.
+Verified: zero new `deno check` errors (git-stash before/after, baseline 14 pre-existing errors
+unchanged), frontend `eslint` clean.
+
+**Import Order Type — ✅ IMPLEMENTED, three dimensions, final option list confirmed:**
+- **(A) Shipment/Transport Mode**: `FCL`, `LCL`, `AIR`, `COURIER` — business owner confirmed only
+  these four apply to PACE's own imports (the earlier "Sea – Bulk/Tanker" placeholder was dropped,
+  never confirmed as needed).
+- **(B) Import Transaction/Trade Type**: `DIRECT_IMPORT`, `HIGH_SEA_SALE`, `BONDED_WAREHOUSE`,
+  `EPCG_ADVANCE_AUTH` — business owner's final call (second pass): keep all four even
+  though only the first two are in active use today ("who knows if we'll need the rest") — widened
+  the CHECK constraint back open rather than staying at the initially-confirmed two (migration
+  `20260805160000_po_import_trade_type_widen.sql`).
+  **Clarified via a real example:** the ordinary "shipping line delivers to CFS → CHA clears
+  customs → onward to factory" flow is **Direct Import** — CFS/CHA involvement is just how Direct
+  Import physically executes for sea cargo, not a separate trade type. High Sea Sale is the genuinely
+  different case — PACE buys the goods while still at sea, before the original consignee clears
+  customs.
+- **(C) Customs Clearance / Cargo Movement Type**: `DPD`, `CFS`, `ICD` — confirmed as a real, distinct
+  third dimension (this is where "CFS" as a *movement classification* actually lives, separate from
+  and compatible with Trade Type (B) — a Direct Import PO's Movement Type can legitimately be `CFS`).
+  - **DPD** (Direct Port Delivery) — container goes straight from port to factory, no CFS stop.
+  - **CFS** (Container Freight Station) — container moved to a CFS near the port for de-stuffing/
+    customs examination before onward transport.
+  - **ICD** (Inland Container Depot) — similar to CFS but inland, away from the port itself.
+
+All three are separate required fields on Import PO Create (not merged into one dropdown), each
+hard-blocked when `vendor_type = IMPORT`, mirroring the existing Incoterm/Destination Port pattern.
+`purchase_order` gained `shipment_mode`/`import_trade_type`/`customs_movement_type` (migration
+`20260805150000_po_import_classification_columns.sql`, CHECK-constrained to the confirmed enum
+values, applied to dev, `migration-integrity-check.mjs` confirms `in_sync=true`). `createPOHandler`
+validates + stores all three; `POCreatePage.jsx` adds three selects alongside Incoterm/Destination
+Port. Verified: zero new `deno check` errors, `eslint` clean.
+
+**CFS as a landed-cost line (separate, already-known concept, NOT the same as dimension C above) —
+still genuinely unknown at PO-creation time** (§111.5) — no field added for this specifically; the
+dimension-C "CFS movement" classification above is a yes/no *category* decided at PO time, distinct
+from the CFS *cost* which is only known much later at landed-cost stage.
+
+### 118.6 — Group Number: bulk print + reprint mechanism (LOCKED — 2026-08-05)
+
+**Purpose:** replaces the earlier separate "Reprint" idea entirely — one mechanism covers first
+print, bulk print, and reprint/revise, for both PO and STO.
+
+**Number series — one shared global series for both PO and STO (not two, not company-scoped):**
+- New document type in `erp_procurement.document_number_series` using the same **continuous
+  global** mechanism already used for `PROC_PO`/`PACK_PO` (`generateGlobalDocNumber()` /
+  `generate_doc_number()` RPC, company-independent) — **not** the year-scoped mechanism (§106) used
+  for MATDOC/RECO/Invoice. Must be verified at implementation time to confirm no FY-reset logic
+  leaks in.
+- **PO side:** `po_order_group` gains a `group_number` column, populated once per create-session
+  (every batch of materials raised together already shares one `po_order_group` row — it just had
+  no human-readable number until now).
+- **STO side:** `stock_transfer_order` gains its own `group_number` column, populated at STO create
+  time — **not** an alias for `sto_number`, drawn from the *same* shared series as PO's group number
+  (so a given Group Number value unambiguously resolves to exactly one of the two tables, since the
+  counter never repeats). STO doesn't need any new grouping/session concept — one STO is already the
+  complete printable unit, so its own row is trivially "its own group of one."
+
+**Page 1 — Group Number entry.** Single text input, same field for both PO and STO; backend looks up
+both `po_order_group.group_number` and `stock_transfer_order.group_number` (only one will ever match).
+
+**Page 2 — summary header (LOCKED — 2026-08-05), shown above the list, one line:** Group Number,
+From (Buyer Company for a PO group / Sending Company for an STO), To (Vendor Name for a PO group /
+Receiving Company for an STO), Date (the group's/STO's own creation date), and Number of PO/STO
+(count of documents under that Group Number — always 1 for STO, 1-or-more for a PO group).
+
+**Page 2 — resulting list:**
+- If PO group: every PO under that group, **filtered to CONFIRMED + CANCELLED status only —
+  explicitly excluding DRAFT and PENDING_APPROVAL** (nothing not yet confirmed is ever printable).
+- If STO: that one STO, same status gate (CONFIRMED + CANCELLED only, DRAFT/PENDING_APPROVAL
+  excluded).
+- Each row shows a **"Revise"** tag when that document has ≥1 row in `po_amendment_log`/
+  `sto_amendment_log` (already-existing tables, confirmed to carry `amendment_number` +
+  `amended_by`/`amended_at`/`approved_by`/`approved_at` — no new schema needed for this detection).
+- Checkbox per row + "Select All". User can print the whole group or hand-pick specific documents
+  (e.g., only the just-revised one).
+
+**Print action:**
+- **PO only** — a confirmation modal shows the Vendor's Name/Contact/Email (from Vendor Master,
+  already has this data) with an "I confirm this is correct" checkbox; the actual Preview only opens
+  once checked. **All modal/dialog/button text in English.**
+- **STO — no confirmation modal at all.** An STO is always single-company-scoped and never leaves
+  PACE internally, so there is no external-party mis-send risk to guard against; Print goes straight
+  to Preview.
+
+**Preview:** one HTML document, every selected PO/STO's copy laid out back-to-back with
+`page-break-after` between them — this is what makes a 100-document day printable in one action (see
+§118.7). Browser's native Print dialog's "Save as PDF" destination then produces one multi-page PDF,
+one page per document; "Print" (a real printer) works from the exact same dialog — these are not two
+separate features, just two destinations of the same standard browser print flow.
+
+**Downloaded PDF filename = the Group Number (LOCKED — 2026-08-05).** Browsers use the page's
+`<title>` as the suggested filename in the "Save as PDF" dialog — so the preview page must set
+`document.title` to the resolved Group Number right before invoking print (e.g. `9700000004`, no
+extension needed, the browser appends `.pdf` itself), not a generic app title. This is the entire
+implementation for this requirement — no backend involvement, a small piece of frontend logic on the
+preview page only.
+
+**Cancelled / Revised — watermark only, never a title change (corrected 2026-08-05):** a diagonal
+translucent watermark ("CANCELLED" or "REVISED") overlays the copy. The document title never changes
+to "Revised Purchase Order" — title always stays plain "Purchase Order"/"Stock Transfer Order"; the
+watermark alone carries the state, so the two signals are never shown redundantly.
+
+**No separate "reprint" flow.** Any Group Number can be looked up and printed again, any number of
+times, choosing all-or-specific documents each time — this alone covers reprint, so no dedicated
+reprint mechanism is being built.
+
+### 118.7 — Print action audit log (LOCKED — 2026-08-05)
+
+**New `print_log` table** (schema TBD at implementation) — records who clicked Print, when, which
+Group Number, and which specific documents were included in that print action. This is genuinely new
+— no print/download action is logged anywhere in the system today. Separate from this: "who
+created/approved/amended" a PO/STO **already exists** (`created_by`/`approved_by` on the base tables,
+`amended_by`/`approved_by` on the amendment logs) — no new schema needed for that half, only a
+combined report/view surfacing it alongside the new print log.
+
+### 118.8 — Menu placement (LOCKED — 2026-08-05)
+
+- **Menu Group:** Procurement (`GRP_ACL_PROCUREMENT`) — same group as PO01 (Purchase Orders), PO07
+  (STO), PO13 (Pending Order Approvals), since this page operates on both document types.
+- **Tx code:** **PO19** (PO01–PO18 already taken, PO15 previously retired/skipped).
+- **Page title:** "Print PO/STO".
+- **Resource/menu code:** `PROC_PO_STO_PRINT`.
+- **ACL:** SCM (full access) + Director (standard view/access) + ACL-MASTER (automatic, per the
+  standing rule that every new page must be explicitly granted to ACL-MASTER too).
+
+### 118.9 — Implementation sequencing (LOCKED — 2026-08-05)
+
+1. Lock this design in the doc (this section) — **done**.
+2. **Do not start building until the business owner explicitly says to start** — this is a standing
+   instruction for this feature specifically, not the general doc-first workflow default.
+3. Once implementation happens: backfill `group_number` for **every existing PO/STO in both Dev and
+   Prod** from the same shared global counter, then Claude verifies internally (confirms the counter
+   is genuinely continuous/global, not FY-scoped, before reporting back) — this backfill + self-check
+   is a mandatory step of the implementation, not an optional follow-up.
+4. **Business owner's explicit standard for this build (2026-08-05): correct the first time, no
+   rework.** Before/while implementing, re-run the CLAUDE.md 11-pattern pre-code checklist
+   (hardcoded rank-check, company-scope gaps on both the new group-lookup endpoint and the new
+   print-log write, blanket-capability leak on the new `PROC_PO_STO_PRINT` capability, the
+   `capture_acl_version_source` one-time-capture trap when registering PO19 in ACL, ACL-MASTER
+   drift, resource-code collision, maker-checker gaps — N/A here, no approval step in this feature —
+   route/ACL registry mismatch for the new print/lookup routes, `approver_map` — N/A, small
+   config/data traps (the new global series' `starting_number`/`pad_width`), and wrong company
+   source on the group-lookup query) against every concrete file/endpoint/table touched, not just
+   once in the abstract — same discipline already established for IN02/IN03 (§116.9/§117.9).
+
+### 118.10 — Still open, not yet designed (tracked so it isn't forgotten)
+
+- **Body/line-item columns** (Material, Qty, UOM, Rate, Amount for PO; Material, Qty, UOM, Batch for
+  STO) — the sample used **draft placeholder columns** throughout this whole session; business owner
+  confirmed (2026-08-05) these are "roughly fine as drafted" but they were never formally locked
+  field-by-field the way the masthead/party/terms blocks were. Treat as provisional, not final.
+- **`print_log` table's exact schema** (§118.7) — existence + purpose locked, column list not yet
+  designed.
+- **QR code library/generation approach** — that a QR renders there, and what it encodes, is locked
+  (§118.4); which JS library generates it (client-side at print time) is an implementation detail,
+  not yet chosen.
+
+### 118.11 — Completeness check (2026-08-05): nothing from this design session left out
+
+Two items surfaced during a full re-read that were decided earlier in this same session but hadn't
+been written down yet — both are now captured in §118.6 above (Page 2 summary header,
+Draft/Pending-Approval exclusion) and §118.1/118.10 (item-cardinality rule, still-open body
+columns). No other gaps found — §118.1 through §118.11 together are the complete, current state of
+this design as of 2026-08-05.

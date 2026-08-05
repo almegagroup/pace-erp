@@ -519,6 +519,7 @@ export async function listPortsHandler(req: Request, ctx: ProcurementHandlerCont
     const country = toTrimmedString(url.searchParams.get("country"));
     const activeParam = url.searchParams.get("is_active");
     const portRole = toUpperTrimmedString(url.searchParams.get("port_role") ?? "");
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
     let query = serviceRoleClient
       .schema("erp_master")
       .from("port_master")
@@ -533,6 +534,25 @@ export async function listPortsHandler(req: Request, ctx: ProcurementHandlerCont
     }
     if (country) query = query.ilike("country", country);
     if (portRole && PORT_ROLES.has(portRole)) query = query.eq("port_role", portRole);
+    if (companyId) {
+      await assertCompanyScope(ctx, companyId);
+      const { data: transitRows, error: transitError } = await serviceRoleClient
+        .schema("erp_master")
+        .from("port_plant_transit_master")
+        .select("port_id")
+        .eq("company_id", companyId)
+        .eq("active", true);
+      if (transitError) throw new Error("PROCUREMENT_PORT_LIST_FAILED");
+      const mappedPortIds = Array.from(
+        new Set(
+          (transitRows ?? []).map((row: { port_id: unknown }) => toTrimmedString(row.port_id)).filter(Boolean),
+        ),
+      );
+      if (mappedPortIds.length === 0) {
+        return okResponse({ data: [] }, ctx.request_id, req);
+      }
+      query = query.in("id", mappedPortIds);
+    }
     const { data, error } = await query;
     if (error) throw new Error("PROCUREMENT_PORT_LIST_FAILED");
     return okResponse({ data: data ?? [] }, ctx.request_id, req);

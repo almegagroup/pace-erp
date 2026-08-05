@@ -28,6 +28,7 @@ export const queryKeys = {
   procurement: {
     companies: () => ["procurement", "companies"],
     paymentTerms: (params = {}) => ["procurement", "payment-terms", cleanQueryParams(params)],
+    ports: (params = {}) => ["procurement", "ports", cleanQueryParams(params)],
   },
   hr: {
     leaveTypes: (companyId = null) => ["hr", "leave-types", companyId ?? null],

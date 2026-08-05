@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { listCompanies, listPaymentTerms } from "../../pages/dashboard/procurement/procurementApi.js";
+import { listCompanies, listPaymentTerms, listPorts } from "../../pages/dashboard/procurement/procurementApi.js";
 import { queryKeys } from "./queryKeys.js";
 import { cleanQueryParams, maybeArray } from "./queryUtils.js";
 
@@ -26,5 +26,19 @@ export function usePaymentTermOptionsQuery(params = {}, options = {}) {
   return {
     ...query,
     paymentTerms: maybeArray(query.data?.data),
+  };
+}
+
+export function usePortOptionsQuery(params = {}, options = {}) {
+  const normalizedParams = useMemo(() => cleanQueryParams(params), [params]);
+  const query = useQuery({
+    queryKey: queryKeys.procurement.ports(normalizedParams),
+    queryFn: () => listPorts(normalizedParams),
+    enabled: Boolean(normalizedParams.company_id) && options.enabled !== false,
+    ...options,
+  });
+  return {
+    ...query,
+    ports: maybeArray(query.data?.data),
   };
 }
