@@ -8,7 +8,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useCostCentersQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
-import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import { usePaymentTermOptionsQuery, usePortOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -204,6 +204,7 @@ export default function POCreatePage() {
     vendor_id: "",
     delivery_type: "STANDARD",
     incoterm: "",
+    destination_port_id: "",
     cost_center_id: "",
     extra_fields: [],
   });
@@ -301,6 +302,18 @@ export default function POCreatePage() {
     [selectedVendor]
   );
   const deliveryDateLabel = showIncoterm ? "ETA to Port" : "ETD";
+  const portQuery = usePortOptionsQuery(
+    { company_id: form.company_id || undefined, is_active: true },
+    { enabled: showIncoterm && Boolean(form.company_id) }
+  );
+  const portOptions = useMemo(
+    () =>
+      portQuery.ports.map((entry) => ({
+        value: entry.id,
+        label: `${entry.port_code || ""} ${entry.port_name || ""}`.trim(),
+      })),
+    [portQuery.ports]
+  );
 
   useEffect(() => {
     if (!defaultPaymentTermId) {
@@ -454,6 +467,10 @@ export default function POCreatePage() {
       setError("Incoterm is required for import purchase orders.");
       return;
     }
+    if (showIncoterm && !form.destination_port_id) {
+      setError("Destination port is required for import purchase orders.");
+      return;
+    }
     if (lines.some((line) => !line.material_id || !line.quantity || !line.rate || !line.payment_term_id || !line.freight_term)) {
       setError("Each PO line requires material, quantity, rate, payment term, and freight term.");
       return;
@@ -477,6 +494,7 @@ export default function POCreatePage() {
         vendor_type: String(selectedVendor?.vendor_type || "DOMESTIC").toUpperCase(),
         delivery_type: form.delivery_type,
         incoterm: showIncoterm ? form.incoterm.trim() : null,
+        destination_port_id: showIncoterm ? form.destination_port_id : null,
         cost_center_id: form.cost_center_id,
         extra_fields: form.extra_fields.map((entry) => entry.trim()).filter(Boolean),
         // Per feasibility doc 87.12A: each material becomes its own PO, all
@@ -782,6 +800,17 @@ export default function POCreatePage() {
                       onChange={(event) => updateHeaderField("incoterm", event.target.value.toUpperCase())}
                       placeholder="FOB / CIF / CFR / EXW / DAP / DDP"
                       className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    />
+                  </label>
+                ) : null}
+                {showIncoterm ? (
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Destination Port <span className="text-rose-500">*</span>
+                    <ErpComboboxField
+                      value={form.destination_port_id}
+                      onChange={(value) => updateHeaderField("destination_port_id", value)}
+                      options={portOptions}
+                      blankLabel={portQuery.isLoading ? "Loading ports…" : "Select port"}
                     />
                   </label>
                 ) : null}

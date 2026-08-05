@@ -1149,6 +1149,10 @@ export async function createPOHandler(
     if (vendorType === "IMPORT" && !incoterm) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INCOTERM_REQUIRED", 400, "Incoterm required for import PO");
     }
+    const destinationPortId = toTrimmedString(body.destination_port_id) || null;
+    if (vendorType === "IMPORT" && !destinationPortId) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_DESTINATION_PORT_REQUIRED", 400, "Destination port required for import PO");
+    }
 
     const rawMaterials: unknown[] = Array.isArray(body.materials)
       ? body.materials
@@ -1253,6 +1257,7 @@ export async function createPOHandler(
             vendor_id: vendorId,
             vendor_type: vendorType,
             incoterm,
+            destination_port_id: destinationPortId,
             freight_term: freightTerm,
             payment_term_id: paymentTermId,
             lc_required: lcRequired,

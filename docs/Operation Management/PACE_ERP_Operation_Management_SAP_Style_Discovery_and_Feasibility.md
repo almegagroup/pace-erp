@@ -17070,3 +17070,127 @@ raw-ID column resolve হয় (User/Vendor/Customer/Company/Material/SLoc), �
 bulk-resolve (material, storage location, movement type, vendor/customer per reference type,
 employee name) `.in()`-স্টাইল bulk query হবে, per-row loop না — task brief-এ explicit rule হিসেবে
 থাকবে।
+
+---
+
+## Section 118 — PO/STO Printed Copy Design (🔶 IN PROGRESS — 2026-08-05, business owner session, factors decided one at a time)
+
+### 118.1 — Purpose ও প্রকৃত workflow (LOCKED)
+
+PO/STO copy একটা **mandatory, physical documentation প্রয়োজন** — "system দেখে ব্যবস্থা করে নেবে" এই
+ধরনের কিছু না, কেউ না কেউ manually এই কাজ করবে। তাই দুটোরই (PO আর STO) নিজস্ব printable copy লাগবে।
+
+**Auto-mail প্রসঙ্গ (আগে §14.6/§85.2.7-এ locked ছিল):** সেই design (PO confirm হলে vendor-কে সরাসরি
+PDF auto-mail) **provision হিসেবে doc-এ থেকে যাবে, কিন্তু এই পাসে build হবে না।** বাস্তবে যা হবে:
+
+```
+Preview (browser-এ rendered HTML) → PDF download → print → stamp + sign → manually mail/courier
+```
+
+### 118.2 — Factor 1 (LOCKED — 2026-08-05): Data source — Vendor vs Company, আর কী কী field
+
+**PO — দুই পক্ষ:**
+
+- **Vendor (Seller)** — Vendor Master (`purchase_order.vendor_id`) থেকে:
+  - Vendor **Name** (Vendor Code দেখাবে না)
+  - GSTIN
+  - **Registered Address** (Correspondence Address না)
+  - Primary Contact — **Name + Phone Number** (Designation দেখাবে না)
+  - Primary Email
+- **Buyer / Consignee (PACE-এর নিজের company)** — Company Master (`purchase_order.company_id`)
+  থেকে, **দুটোই একই entity** (PACE-এর model-এ Buyer আলাদা কোনো Consignee/Ship-To নেই):
+  - Company Name
+  - GSTIN
+  - Address
+  - **CIN — conditional field**: company-র CIN data থাকলেই line-টা (label সহ) print হবে;
+    না থাকলে (যেমন LLP) পুরো লাইনটাই সম্পূর্ণ absent থাকবে, blank/label দেখাবে না
+  - Mobile number(s) — একাধিক থাকলে "/" বা line-break দিয়ে সব দেখাবে
+  - Email(s) — একই নিয়ম
+  - ❌ কোনো Storage Location / "Attn:" লাইন থাকবে না — সম্পূর্ণ বাদ
+
+**STO — দুই পক্ষই Company Master:**
+
+- Sending Company (`stock_transfer_order.sending_company_id`) আর Receiving Company
+  (`stock_transfer_order.receiving_company_id`) — উপরের Buyer/Consignee-এর ঠিক একই field set
+  (Name, GSTIN, Address, conditional CIN, Mobile(s), Email(s))। Vendor Master-এর কোনো involvement
+  নেই — উভয় পক্ষই PACE-এর নিজের company।
+
+**Schema note:** `erp_master.companies`-এ `cin_number`, `mobile_number_1/2`, `email_1/2` column
+migration `20260805120000_company_master_contact_cin_columns.sql`-এ যুক্ত করা হয়েছে (dev + prod
+দুই জায়গাতেই applied), আর CMP003/CMP006-এর actual data (letterhead থেকে verify করে) বসানো হয়েছে।
+
+### 118.3 — Factor 2 (LOCKED — 2026-08-05): masthead = issuer's own letterhead
+
+Business owner correction: the masthead is not a generic "Company" block — it's the **issuing
+company's own letterhead** (Buyer for PO, Sending Company for STO), styled exactly like the real
+letterhead PDFs (big company name left, contact/legal-ID block right). No "Buyer"/"Consignee"/
+"Sending Company" label anywhere near it. Where the document-identity block (PO No./Date or
+STO No./Date) now sits is exactly where the old Buyer/Consignee party-block used to be — Company
+Code is never printed. The masthead's right-side identifier block is GSTIN, CIN (conditional, same
+rule as §118.2), Mobile(s), Email(s).
+
+### 118.4 — Terms-area rules (LOCKED — 2026-08-05)
+
+- **Payment**: print `payment_terms_master.name` ("60 Days from Invoice"), never the code.
+- **Delivery**: print the actual date; if none is captured, print the fixed fallback string
+  *"Delivery dates will be informed accordingly"* — never leave the line blank.
+- **Freight**: print `purchase_order.freight_term` as-is (already a business label, e.g. "To-Pay" —
+  confirmed no internal PACE code ever reaches this field).
+- **GST**: print only the Inclusive/Exclusive **decision** (`gst_terms`) — never a rate/percentage.
+  Confirmed: GST% is applied at GRN time, not at PO/STO stage, so there is nothing else to print here.
+- **Rebate**: same conditional treatment as GST — a line only appears when `has_rebate = true`,
+  showing `rebate_rate`/`rebate_rate_uom_basis`/`rebate_remarks`; absent entirely otherwise.
+- **Standard fixed notes** — three lines, always printed verbatim, each its own bullet, identical on
+  every PO and STO copy (not data-driven, static boilerplate):
+  1. Packaging items should be recyclable.
+  2. Vehicles should be with active PUC certificate.
+  3. Material transaction should be as per consignee's health & safety norms.
+- **Remarks**: two independent sources both print on a given PO's copy — `po_order_group.remarks`
+  (one header-level remark, shared by every material's PO born from the same create session — e.g.
+  "batch created together for the Aug run") and `purchase_order.remarks` (specific to that one PO —
+  e.g. "urgent, line stopped"). Both can be present at once; neither overwrites the other.
+- **Transporter/Vehicle**: deliberately **not** on the PO copy — genuinely unknown at PO-creation
+  time (vendor arranges transport later; `gate_entry.vehicle_number` is the correct, already-existing
+  place this gets captured, at goods-arrival time). For STO, the opposite is true — PACE controls
+  both ends and could know Transporter/Vehicle at creation time — but `stock_transfer_order` has no
+  such columns today. **Not yet approved to build**; flagged as a real gap pending business
+  owner's go-ahead.
+
+### 118.5 — Import-specific fields
+
+**Destination Port — ✅ IMPLEMENTED (2026-08-05).** `purchase_order.destination_port_id` (pre-existing
+column, never wired to any UI) is now a required field on PO Create whenever `vendor_type = IMPORT`.
+Options are scoped to the ports actually mapped to that PO's own company via
+`erp_master.port_plant_transit_master` (a pre-existing company↔port mapping table, previously used
+only by the PM03 admin page) — `listPortsHandler` (`l2_masters.handlers.ts`) gained a `company_id`
+query param that resolves the mapped port ids first, then filters `port_master` by them.
+`createPOHandler` (`po.handlers.ts`) validates and stores it (hard-block for IMPORT, same pattern as
+the existing Incoterm requirement). Frontend: `usePortOptionsQuery` (new hook, mirrors
+`usePaymentTermOptionsQuery`) + a Destination Port combobox next to Incoterm in `POCreatePage.jsx`.
+Verified: zero new `deno check` errors (git-stash before/after, baseline 14 pre-existing errors
+unchanged), frontend `eslint` clean.
+
+**Import Order Type — 🔶 OPEN, three dimensions identified, exact option list not yet finalized:**
+- **(A) Shipment/Transport Mode** — Sea (FCL), Sea (LCL), Sea (Bulk/Tanker), Air Freight, Courier —
+  business owner: include all.
+  **⚠️ Correction (2026-08-05):** original list also had "Sea – Bulk/Break-bulk (for tankers/bulk
+  chemicals)" as one combined option — kept as a placeholder pending final confirmation of which
+  exact labels apply to PACE's own import materials.
+- **(B) Import Transaction/Trade Type** — Direct Import, High Sea Sale (HSS), Bonded Warehouse
+  Import, Import under EPCG/Advance Authorization — business owner: include all.
+- **(C) Customs Clearance / Cargo Movement Type** — business owner recalled hearing of a
+  classification like "CFS movement" that must be declared on the PO; confirmed this is a real,
+  distinct third dimension in Indian import logistics, separate from (A) and (B):
+  - **DPD** (Direct Port Delivery) — container goes straight from port to factory, no CFS stop.
+  - **CFS** (Container Freight Station) — container moved to a CFS near the port for de-stuffing/
+    customs examination before onward transport.
+  - **ICD** (Inland Container Depot) — similar to CFS but inland, away from the port itself.
+
+  All three dimensions (A, B, C) are to be added as selectable fields on Import PO Create, each its
+  own field (not merged into one dropdown) — **not yet implemented**, pending the business owner's
+  final sign-off that this three-dimension read is correct before schema/UI work starts.
+
+**CFS as a landed-cost line (separate, already-known concept, NOT the same as dimension C above) —
+still genuinely unknown at PO-creation time** (§111.5) — no field added for this specifically; the
+dimension-C "CFS movement" classification above is a yes/no *category* decided at PO time, distinct
+from the CFS *cost* which is only known much later at landed-cost stage.
