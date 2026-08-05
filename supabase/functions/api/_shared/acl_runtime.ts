@@ -10,8 +10,8 @@
 
 import type { DbClient } from "./db_client.ts";
 import {
+  listAvailableWorkContexts,
   listCanonicalCompanyIds,
-  resolveDefaultWorkContextId,
 } from "./canonical_access.ts";
 
 type MenuSnapshotRow = {
@@ -352,37 +352,41 @@ export async function rebuildGlobalAclMenuSnapshot(
 
   if (companyIds.length === 0) return [];
 
-  // 2. For each company: resolve default work context → build ACL menu snapshot
-  //    (no sessionId passed — we don't store per-company session snapshots here)
-  //    Union all results by menu_code. A row is now visible in the union if
-  //    it is visible in ANY of the user's companies — this must be an OR,
-  //    not a naive "first occurrence wins", now that a menu_code can appear
-  //    with is_visible=false in one company's snapshot and true in another
-  //    (e.g. SCM sees Purchase Orders in every company, but a page might be
-  //    granted in Company A only). First-occurrence-wins would incorrectly
-  //    grey out a page the user genuinely has access to in a different
-  //    company, purely based on loop order.
+  // 2. For each company: build ACL menu snapshot for EVERY Work Context
+  //    assigned to this user in that company (Union Work Context model,
+  //    ACL_SSOT.md §29 — not just the primary/default one), then union all
+  //    results by menu_code across BOTH companies and work contexts. A row
+  //    is visible in the union if it is visible in ANY of the user's
+  //    (company, work context) pairs — this must be an OR, not a naive
+  //    "first occurrence wins", now that a menu_code can appear with
+  //    is_visible=false in one pair's snapshot and true in another (e.g.
+  //    SCM sees Purchase Orders in every company, but a page might be
+  //    granted in Company A / Work Context X only). First-occurrence-wins
+  //    would incorrectly grey out a page the user genuinely has access to
+  //    elsewhere, purely based on loop order.
   const rowsByMenuCode = new Map<string, MenuSnapshotRow>();
 
   for (const companyId of companyIds) {
     try {
-      const workContextId = await resolveDefaultWorkContextId(db, authUserId, companyId);
-      if (!workContextId) continue;
+      const workContexts = await listAvailableWorkContexts(db, authUserId, companyId);
+      if (workContexts.length === 0) continue;
 
-      const menuRows = await rebuildAclSessionMenuSnapshot(
-        db,
-        authUserId,
-        companyId,
-        workContextId,
-        // No sessionId — builds erp_menu.menu_snapshot only, no session cache write
-      );
+      for (const workContext of workContexts) {
+        const menuRows = await rebuildAclSessionMenuSnapshot(
+          db,
+          authUserId,
+          companyId,
+          workContext.work_context_id,
+          // No sessionId — builds erp_menu.menu_snapshot only, no session cache write
+        );
 
-      for (const row of menuRows) {
-        const existing = rowsByMenuCode.get(row.menu_code);
-        if (!existing) {
-          rowsByMenuCode.set(row.menu_code, row);
-        } else if (row.is_visible === true && existing.is_visible !== true) {
-          rowsByMenuCode.set(row.menu_code, row);
+        for (const row of menuRows) {
+          const existing = rowsByMenuCode.get(row.menu_code);
+          if (!existing) {
+            rowsByMenuCode.set(row.menu_code, row);
+          } else if (row.is_visible === true && existing.is_visible !== true) {
+            rowsByMenuCode.set(row.menu_code, row);
+          }
         }
       }
     } catch {
