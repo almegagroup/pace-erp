@@ -44,6 +44,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/purchase-orders":             { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"  },
   "POST:/api/procurement/purchase-orders":            { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "WRITE" },
   "GET:/api/procurement/po-order-groups":             { skipAcl: false, resourceCode: "PROC_PO_ORDER_APPROVALS", action: "VIEW" },
+  "GET:/api/procurement/print-groups":                { skipAcl: false, resourceCode: "PROC_PO_STO_PRINT", action: "VIEW" },
+  "POST:/api/procurement/print-groups/log":           { skipAcl: false, resourceCode: "PROC_PO_STO_PRINT", action: "WRITE" },
   "GET:/api/procurement/po-filter-options":           { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"  },
   "GET:/api/procurement/materials/uom-conversion":    { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"  },
 

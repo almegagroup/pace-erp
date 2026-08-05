@@ -234,6 +234,10 @@ import {
   updatePOHandler,
 } from "../_core/procurement/po.handlers.ts";
 import {
+  createPrintLogHandler,
+  lookupPrintGroupHandler,
+} from "../_core/procurement/print_group.handlers.ts";
+import {
   acknowledgeDebitNoteHandler,
   addRTVLineHandler,
   createDebitNoteHandler,
@@ -540,6 +544,10 @@ export async function dispatchProcurementRoutes(
       return await listPOsHandler(req, ctx);
     case "GET:/api/procurement/po-order-groups":
       return await listPOOrderGroupsHandler(req, ctx);
+    case "GET:/api/procurement/print-groups":
+      return await lookupPrintGroupHandler(req, ctx);
+    case "POST:/api/procurement/print-groups/log":
+      return await createPrintLogHandler(req, ctx);
     case "GET:/api/procurement/po-filter-options":
       return await getPoFilterOptionsHandler(req, ctx);
     case "GET:/api/procurement/materials/uom-conversion":
