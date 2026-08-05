@@ -259,6 +259,89 @@ export async function rebuildAclSessionMenuSnapshot(
   return menuRows ?? [];
 }
 
+/**
+ * Union Work Context model (ACL_SSOT.md §29, locked 2026-08-05): a user's
+ * effective menu within one company is the union of every Work Context
+ * assigned to them there, not a single selected one. Mirrors the same
+ * union-by-menu_code / OR-on-is_visible pattern rebuildGlobalAclMenuSnapshot
+ * already uses across companies, just applied across Work Contexts within
+ * one company instead. Writes exactly one session_menu_snapshot row for
+ * (session, universe="ACL", company) with work_context_id = NULL — the
+ * sentinel already used by the GLOBAL_ACL union row below — so
+ * menu.handler.ts's cache read/write no longer needs a single selected
+ * work_context_id to key on.
+ */
+export async function rebuildAclUnionSessionMenuSnapshot(
+  db: DbClient,
+  authUserId: string,
+  companyId: string,
+  workContextIds: string[],
+  sessionId?: string | null,
+): Promise<MenuSnapshotRow[]> {
+  const rowsByMenuCode = new Map<string, MenuSnapshotRow>();
+  let maxSnapshotVersion = 0;
+
+  for (const workContextId of workContextIds) {
+    // No sessionId passed to the per-context call — this builds
+    // erp_menu.menu_snapshot only, no per-context session cache row (the
+    // union row written below is the only session cache row for ACL).
+    const menuRows = await rebuildAclSessionMenuSnapshot(
+      db,
+      authUserId,
+      companyId,
+      workContextId,
+    );
+
+    for (const row of menuRows) {
+      const existing = rowsByMenuCode.get(row.menu_code);
+      if (!existing) {
+        rowsByMenuCode.set(row.menu_code, row);
+      } else if (row.is_visible === true && existing.is_visible !== true) {
+        rowsByMenuCode.set(row.menu_code, row);
+      }
+      const version = row.snapshot_version ?? 0;
+      if (version > maxSnapshotVersion) maxSnapshotVersion = version;
+    }
+  }
+
+  const unionMenuRows: MenuSnapshotRow[] = Array.from(rowsByMenuCode.values());
+
+  if (sessionId) {
+    // No work_context_id filter on delete — clears both any stale
+    // per-context row from before this change and any prior union row.
+    const { error: deleteError } = await db
+      .schema("erp_cache")
+      .from("session_menu_snapshot")
+      .delete()
+      .eq("session_id", sessionId)
+      .eq("universe", "ACL")
+      .eq("company_id", companyId);
+
+    if (deleteError) {
+      throw new Error("ACL_UNION_SESSION_MENU_SNAPSHOT_DELETE_FAILED");
+    }
+
+    const { error: insertError } = await db
+      .schema("erp_cache")
+      .from("session_menu_snapshot")
+      .insert({
+        session_id: sessionId,
+        auth_user_id: authUserId,
+        universe: "ACL",
+        company_id: companyId,
+        work_context_id: null,
+        snapshot_version: maxSnapshotVersion,
+        menu_json: unionMenuRows,
+      });
+
+    if (insertError) {
+      throw new Error("ACL_UNION_SESSION_MENU_SNAPSHOT_INSERT_FAILED");
+    }
+  }
+
+  return unionMenuRows;
+}
+
 export async function rebuildGlobalAclMenuSnapshot(
   db: DbClient,
   authUserId: string,

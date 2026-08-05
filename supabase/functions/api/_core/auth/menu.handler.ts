@@ -17,7 +17,7 @@ import {
   resolveDefaultWorkContextId,
 } from "../../_shared/canonical_access.ts";
 import {
-  rebuildAclSessionMenuSnapshot,
+  rebuildAclUnionSessionMenuSnapshot,
   rebuildAdminSessionMenuSnapshot,
   rebuildGlobalAclMenuSnapshot,
 } from "../../_shared/acl_runtime.ts";
@@ -94,6 +94,18 @@ export async function meMenuHandler(
   const resolvedContext = context;
   const resolvedWorkContextId =
     resolvedContext.isAdmin === true ? null : resolvedContext.workContextId ?? null;
+  // Union Work Context model (ACL_SSOT.md §29) — the full set of Work
+  // Contexts assigned to this user in the resolved company. The ACL
+  // universe's menu is the union across this set, not resolvedWorkContextId
+  // alone (kept above only for logging / non-ACL callers).
+  const resolvedWorkContextIds =
+    resolvedContext.isAdmin === true
+      ? []
+      : resolvedContext.workContextIds && resolvedContext.workContextIds.length > 0
+        ? resolvedContext.workContextIds
+        : resolvedWorkContextId
+          ? [resolvedWorkContextId]
+          : [];
 
   // Universe selection:
   //   SA/GA admin  → "SA"
@@ -112,6 +124,7 @@ console.log("MENU_CONTEXT", {
   universe,
   company_id: resolvedContext.companyId ?? null,
   work_context_id: resolvedWorkContextId,
+  work_context_ids: resolvedWorkContextIds,
 });
 
   const db = getServiceRoleClientWithContext(resolvedContext);
@@ -150,13 +163,17 @@ console.log("MENU_CONTEXT", {
         .eq("session_id", session_id)
         .eq("universe", universe);
 
-      // ACL → company + work_context mandatory
+      // ACL → company mandatory. work_context_id is NULL for the ACL
+      // universe too now (Union Work Context model, ACL_SSOT.md §29) — the
+      // cached row already represents the union across every Work Context
+      // assigned to this user in this company, so there is no single
+      // work_context_id left to filter on.
       // GLOBAL_ACL → no company filter (company_id is NULL in snapshot)
       // SA → no filters (already handled by universe)
       if (!resolvedContext.isAdmin && universe === "ACL") {
         q = q
           .eq("company_id", resolvedContext.companyId)
-          .eq("work_context_id", resolvedWorkContextId);
+          .is("work_context_id", null);
       }
 
       return q;
@@ -200,12 +217,12 @@ console.log("MENU_CONTEXT", {
         await rebuildAdminSessionMenuSnapshot(db, auth_user_id, session_id);
       } else if (universe === "GLOBAL_ACL") {
         await rebuildGlobalAclMenuSnapshot(db, auth_user_id, session_id);
-      } else if (resolvedContext.companyId && resolvedWorkContextId) {
-        await rebuildAclSessionMenuSnapshot(
+      } else if (resolvedContext.companyId && resolvedWorkContextIds.length > 0) {
+        await rebuildAclUnionSessionMenuSnapshot(
           db,
           auth_user_id,
           resolvedContext.companyId,
-          resolvedWorkContextId,
+          resolvedWorkContextIds,
           session_id,
         );
       }

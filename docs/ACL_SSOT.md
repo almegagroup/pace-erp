@@ -757,3 +757,98 @@ This document locks the product direction as follows:
 If any current implementation behaves otherwise,
 the implementation must be realigned to this section,
 not the other way around.
+
+---
+
+## 29. Work Context Access Model — UNION MODEL (SUPERSEDES Sections 23, 25 — LOCKED 2026-08-05)
+
+### 29.1 What changed and why
+
+Sections 23 and 25 above locked a **switcher model**: one Work Context
+selected at a time inside a Work Company, with menu recompute on switch
+(the "Ankan — Production Context vs HR Context" example). The business
+owner discarded this model some time ago in intent, but the runtime never
+matched — the switcher UI, the single-`work_context_id` context resolution,
+and the ACL enforcement check all still assumed exactly one active Work
+Context per session.
+
+This was found on 2026-08-05 via a real case: P0009 (Nilkamal), role
+L2_MANAGER, holds two Work Contexts in CMP003 — QUALITY (secondary) and
+PRODUCTION (primary). All QUALITY-department capabilities were correctly
+granted to him in the ACL tables, but he could never see or use any of
+them, because the runtime resolved and enforced against his primary
+Work Context (PRODUCTION) only, on every request, with no path to reach
+QUALITY's grants short of a context switch — and the switcher itself
+filtered out `DEPT_`-prefixed Work Contexts (which is what every
+department-derived Work Context in this system actually is), so there was
+no way to switch at all. This is a general defect, not specific to P0009:
+any user assigned to more than one Work Context in the same company has
+been silently restricted to only their primary one since Work Contexts
+were introduced.
+
+### 29.2 New rule (LOCKED)
+
+**A user's effective access within a Work Company is the UNION of every
+Work Context assigned to them in that company** — not a single selected
+one. There is no "active Work Context" to switch; whatever the user is
+assigned, they see and can act on, simultaneously, all the time.
+
+- If a resource:action is ALLOW under **any** of the user's assigned Work
+  Contexts for the current Work Company, the action is ALLOWED.
+- The menu is the union of every menu item visible under any of the
+  user's assigned Work Contexts for the current Work Company.
+- This does **not** change Work Company scope (Section 3) — a user still
+  only acts inside their assigned Work Companies, selected explicitly
+  (single-company auto-resolve, multi-company picker — Law 12, unchanged).
+  Union applies strictly *within* one selected Work Company, across that
+  company's multiple assigned Work Contexts.
+- This does **not** change Parent Company / HR scope (Section 2) — unrelated axis.
+- SA/GA/DIRECTOR bypass is unaffected (already full-access, unconditional).
+
+### 29.3 Sections superseded
+
+- **Section 23 ("Work Context Definition")** — the clause "Work Context
+  itself is the runtime selector" and "one user may change menu by
+  changing Work Company or Work Context" no longer apply to Work Context.
+  Work Company selection remains a runtime selector (Section 3/17); Work
+  Context no longer is.
+- **Section 25 ("Automatic Menu Change Rule")** — the Work-Context-switch
+  half is void (no such switch exists anymore). The Work-Company-switch
+  half stays locked as-is.
+- The `MenuShell.jsx` Work Context switcher UI (dropdown + Alt+W/F8) is
+  dead code once this lands and should be removed, not left as an inert
+  control that no longer does anything meaningful.
+
+### 29.4 Technical scope (backend, three layers — DB layer needs no change)
+
+`precomputed_acl_view` and `menu_snapshot` already store one row per
+assigned Work Context — the data layer was never the problem. Only the
+*read/resolution* layer needs to change:
+
+1. **Context resolution** (`_shared/canonical_access.ts`'s
+   `resolveDefaultWorkContextId`, `_pipeline/context.ts`) — resolve the
+   user's **full set** of Work Context IDs for the selected company, not
+   one.
+2. **ACL enforcement** (`_pipeline/acl.ts`, `_shared/acl_snapshot.ts`'s
+   `readAclSnapshotDecision`) — ALLOW if the resource:action is ALLOW
+   under **any** Work Context ID in the set (OR across the set, not a
+   single-row lookup).
+3. **Menu snapshot & cache** (`_core/auth/menu.handler.ts`,
+   `_shared/acl_runtime.ts`, `erp_cache.session_menu_snapshot`) — union
+   menu rows across the set; cache key drops the single `work_context_id`
+   column (keyed by session + universe + company only, since there is no
+   longer a single selected context to key on).
+
+### 29.5 Risks / invariants to preserve while implementing
+
+- Single-Work-Context users (the common case) must see **zero behavior
+  change** — a union of one is that one. Verify explicitly, don't assume.
+- The OR-across-context-set logic in the ACL enforcement layer is the
+  highest-risk piece — a bug there can only make access *too permissive*,
+  never too restrictive, so it gets the most careful review.
+- Changing the `session_menu_snapshot` cache key invalidates every
+  existing cached row on deploy — expected, one-time rebuild cost, not a bug.
+- Do not conflate this with `GLOBAL_ACL` / multi-company `workspace_mode`
+  (Section 17, "union of all companies, navigation only") — that is a
+  different axis (cross-company) and must keep working exactly as-is;
+  this change is scoped to cross-Work-Context-within-one-company only.

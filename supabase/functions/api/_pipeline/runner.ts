@@ -735,6 +735,7 @@ const tAcl0 = performance.now();
   roleCode: contextResult.roleCode,
   companyId: contextResult.companyId,
   workContextId: contextResult.workContextId,
+  workContextIds: contextResult.workContextIds,
   isAdmin: contextResult.isAdmin === true,
 },
       route: {

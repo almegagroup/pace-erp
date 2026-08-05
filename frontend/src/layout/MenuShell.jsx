@@ -396,10 +396,12 @@ export default function MenuShell() {
     shellProfile?.roleCode !== "GA" &&
     runtimeContext?.workspaceMode !== "MULTI" &&
     availableCompanies.length > 1;
-  const showWorkContextSwitcher =
-    shellProfile?.roleCode !== "SA" &&
-    shellProfile?.roleCode !== "GA" &&
-    availableWorkContexts.length > 1;
+  // Union Work Context model (ACL_SSOT.md §29, locked 2026-08-05): a user's
+  // effective access is the union of every Work Context assigned to them in
+  // the current company — there is no "active" Work Context to switch
+  // between anymore, so this control is permanently hidden rather than left
+  // as an inert dropdown that filters out every real (DEPT_-prefixed) option.
+  const showWorkContextSwitcher = false;
   const currentCompanyLabel = runtimeContext?.currentCompany
     ? `${runtimeContext.currentCompany.company_code} | ${runtimeContext.currentCompany.company_name}`
     : "No work company selected";
