@@ -273,6 +273,22 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_PO_STO_PRINT: {
+    screen_code: "PROC_PO_STO_PRINT",
+    route: "/dashboard/procurement/print",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_PO_STO_PRINT_PREVIEW: {
+    screen_code: "PROC_PO_STO_PRINT_PREVIEW",
+    route: "/dashboard/procurement/print/preview",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_RTV_LIST: {
     screen_code: "PROC_RTV_LIST",
     route: "/dashboard/procurement/rtvs",
