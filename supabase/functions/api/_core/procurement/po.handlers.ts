@@ -577,6 +577,13 @@ async function generateProcurementDocNumber(docType: string): Promise<string> {
   return String(data);
 }
 
+// Shared global series (§118.6) — one continuous counter for both PO groups
+// and STOs, deliberately company-independent, so a Group Number resolves
+// unambiguously to exactly one of the two tables.
+async function generatePrintGroupNumber(): Promise<string> {
+  return await generateProcurementDocNumber("PRINT_GROUP");
+}
+
 async function generateCompanyDocNumber(companyId: string, docType: string): Promise<string> {
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
@@ -1189,6 +1196,7 @@ export async function createPOHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_COST_CENTER_NOT_FOUND", 404, "Cost center not found");
     }
 
+    const groupNumber = await generatePrintGroupNumber();
     const { data: groupData, error: groupError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("po_order_group")
@@ -1198,6 +1206,7 @@ export async function createPOHandler(
         status: "DRAFT",
         remarks: toTrimmedString(body.remarks) || null,
         extra_fields: extraFields,
+        group_number: groupNumber,
         created_by: ctx.auth_user_id,
       })
       .select("*")

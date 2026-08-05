@@ -332,6 +332,13 @@ async function generateProcurementDocNumber(docType: string): Promise<string> {
   return String(data);
 }
 
+// Shared global series (§118.6) — one continuous counter for both PO groups
+// and STOs, deliberately company-independent, so a Group Number resolves
+// unambiguously to exactly one of the two tables.
+async function generatePrintGroupNumber(): Promise<string> {
+  return await generateProcurementDocNumber("PRINT_GROUP");
+}
+
 async function generateCompanyDocNumber(companyId: string, docType: string): Promise<string> {
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
@@ -947,6 +954,7 @@ async function buildConsignmentStoFromSubCsns(input: {
 
     if (!sto) {
       const stoNumber = await generateCompanyDocNumber(input.receivingCompanyId, "STO");
+      const stoGroupNumber = await generatePrintGroupNumber();
       const { data: createdSto, error: stoError } = await serviceRoleClient
         .schema("erp_procurement")
         .from("stock_transfer_order")
@@ -961,6 +969,7 @@ async function buildConsignmentStoFromSubCsns(input: {
           related_csn_id: csnId,
           status: "CREATED",
           remarks: input.remarks || `Auto-created from sub CSN ${subCsn.csn_number ?? csnId}`,
+          group_number: stoGroupNumber,
           created_by: input.actionedBy,
           last_updated_by: input.actionedBy,
         })
@@ -1116,6 +1125,7 @@ export async function createSTOHandler(
     const stoNumber = isOpeningSto
       ? openingStoNumber
       : await generateCompanyDocNumber(receivingCompanyId, "STO");
+    const stoGroupNumber = await generatePrintGroupNumber();
     const { data: sto, error: stoError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("stock_transfer_order")
@@ -1131,6 +1141,7 @@ export async function createSTOHandler(
         status: "DRAFT",
         is_opening_sto: isOpeningSto,
         remarks: toTrimmedString(body.remarks) || null,
+        group_number: stoGroupNumber,
         created_by: ctx.auth_user_id,
         last_updated_by: ctx.auth_user_id,
       })
