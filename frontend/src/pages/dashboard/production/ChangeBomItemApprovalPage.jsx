@@ -83,7 +83,12 @@ export default function ChangeBomItemApprovalPage() {
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
 
-  const groupsQ = useQuery({ queryKey: ["om-material-groups"], queryFn: () => listMaterialCategoryGroups(), select: (d) => d?.data ?? [] });
+  const groupsQ = useQuery({
+    queryKey: ["om-material-groups", companyId],
+    queryFn: () => listMaterialCategoryGroups(companyId),
+    select: (d) => d?.data ?? [],
+    enabled: Boolean(companyId),
+  });
   const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 500 }), select: (d) => d?.data ?? [] });
   const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 500 }), select: (d) => d?.data ?? [] });
   const groups = groupsQ.data ?? [];
@@ -136,8 +141,9 @@ export default function ChangeBomItemApprovalPage() {
 
   async function handleCreateGroup() {
     if (!groupForm.group_name.trim()) { toast("Group name required.", "error"); return; }
+    if (!companyId) { toast("Select a company first.", "error"); return; }
     try {
-      const res = await createMaterialCategoryGroup(groupForm);
+      const res = await createMaterialCategoryGroup({ ...groupForm, company_id: companyId });
       const newGroup = res?.data ?? res;
       await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
       toast("Material group created.");

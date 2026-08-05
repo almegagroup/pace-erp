@@ -586,6 +586,15 @@ export async function listMaterialsHandler(
     const search = normalizeSearch(toTrimmedString(url.searchParams.get("search")));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 1000);
     const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
+    // company_id is deliberately optional here (unlike most list endpoints) --
+    // material_master itself is a global master, and this endpoint is reused
+    // by ~20 pages, many of which legitimately need the unfiltered global
+    // list (e.g. SA/GA masters screens). When a caller DOES pass company_id
+    // (IN02/IN03 material filter, Stroke Master, etc.), scope it via
+    // material_company_ext -- previously this parameter was silently ignored
+    // entirely, leaking every company's materials into every other
+    // company's pickers.
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
 
     let query = serviceRoleClient
       .schema("erp_master")
@@ -598,6 +607,25 @@ export async function listMaterialsHandler(
     if (materialType) query = query.eq("material_type", materialType);
     if (statusFilter) query = query.eq("status", statusFilter);
     if (search) query = query.or(`pace_code.ilike.%${search}%,material_name.ilike.%${search}%,external_code.ilike.%${search}%`);
+
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return materialErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+      const { data: extRows, error: extError } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_company_ext")
+        .select("material_id")
+        .eq("company_id", companyId);
+      if (extError) throw new Error("OM_MATERIAL_LIST_FAILED");
+      const mappedIds = [...new Set(((extRows ?? []) as Array<Record<string, unknown>>).map((row) => String(row.material_id)))];
+      if (mappedIds.length === 0) {
+        return okResponse({ data: [], total: 0 }, ctx.request_id, req);
+      }
+      query = query.in("id", mappedIds);
+    }
 
     const { data, error, count } = await query;
     if (error) throw new Error("OM_MATERIAL_LIST_FAILED");
@@ -1301,9 +1329,18 @@ export async function createMaterialCategoryGroupHandler(
       toTrimmedString(body.group_code) ||
       groupName.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 50)
     );
+    const companyId = toTrimmedString(body.company_id) || toTrimmedString(ctx.context.companyId);
 
     if (!groupName || !groupCode) {
       return materialErrorResponse(req, ctx, "OM_INVALID_CATEGORY_GROUP", 400, "Invalid category group");
+    }
+    if (!companyId) {
+      return materialErrorResponse(req, ctx, "OM_COMPANY_ID_REQUIRED", 400, "company_id is required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return materialErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     const { data, error } = await serviceRoleClient
@@ -1312,6 +1349,7 @@ export async function createMaterialCategoryGroupHandler(
       .insert({
         group_name: groupName,
         group_code: groupCode,
+        company_id: companyId,
         description: toTrimmedString(body.description) || null,
         created_by: ctx.auth_user_id,
       })
@@ -1338,10 +1376,22 @@ export async function listMaterialCategoryGroupsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id")) || toTrimmedString(ctx.context.companyId);
+    if (!companyId) {
+      return materialErrorResponse(req, ctx, "OM_COMPANY_ID_REQUIRED", 400, "company_id is required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return materialErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("material_category_group")
       .select("*, members:material_category_group_member(id, material_id, is_primary)")
+      .eq("company_id", companyId)
       .order("group_name", { ascending: true });
 
     if (error) throw new Error("OM_CATEGORY_GROUP_LIST_FAILED");
