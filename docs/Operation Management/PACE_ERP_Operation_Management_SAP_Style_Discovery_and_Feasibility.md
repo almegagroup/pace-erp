@@ -17174,8 +17174,11 @@ unchanged), frontend `eslint` clean.
 - **(A) Shipment/Transport Mode**: `FCL`, `LCL`, `AIR`, `COURIER` — business owner confirmed only
   these four apply to PACE's own imports (the earlier "Sea – Bulk/Tanker" placeholder was dropped,
   never confirmed as needed).
-- **(B) Import Transaction/Trade Type**: `DIRECT_IMPORT`, `HIGH_SEA_SALE` — business owner confirmed
-  only these two (Bonded Warehouse / EPCG placeholders dropped, never confirmed as needed).
+- **(B) Import Transaction/Trade Type**: `DIRECT_IMPORT`, `HIGH_SEA_SALE`, `BONDED_WAREHOUSE`,
+  `EPCG_ADVANCE_AUTH` — business owner's final call (2026-08-05, second pass): keep all four even
+  though only the first two are in active use today ("who knows if we'll need the rest") — widened
+  the CHECK constraint back open rather than staying at the initially-confirmed two (migration
+  `20260805160000_po_import_trade_type_widen.sql`).
   **Clarified via a real example:** the ordinary "shipping line delivers to CFS → CHA clears
   customs → onward to factory" flow is **Direct Import** — CFS/CHA involvement is just how Direct
   Import physically executes for sea cargo, not a separate trade type. High Sea Sale is the genuinely

@@ -42,6 +42,8 @@ const SHIPMENT_MODE_OPTIONS = [
 const IMPORT_TRADE_TYPE_OPTIONS = [
   { value: "DIRECT_IMPORT", label: "Direct Import" },
   { value: "HIGH_SEA_SALE", label: "High Sea Sale (HSS)" },
+  { value: "BONDED_WAREHOUSE", label: "Bonded Warehouse Import" },
+  { value: "EPCG_ADVANCE_AUTH", label: "EPCG / Advance Authorization" },
 ];
 const CUSTOMS_MOVEMENT_TYPE_OPTIONS = [
   { value: "DPD", label: "DPD — Direct Port Delivery" },
