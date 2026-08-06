@@ -14,7 +14,7 @@ import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
-import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
+import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -112,6 +112,7 @@ function assertPtoVisibleToContext(ctx: ProcurementHandlerContext, pto: PtoRow):
 type PtoApproverMapRow = {
   approver_user_id: string | null;
   approver_role_code: string | null;
+  approver_work_context_id: string | null;
   resource_code: string | null;
   action_code: string | null;
   scope_type: string | null;
@@ -125,7 +126,7 @@ async function loadPtoApproverRules(companyId: string): Promise<PtoApproverMapRo
   const { data, error } = await serviceRoleClient
     .schema("acl")
     .from("approver_map")
-    .select("approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage")
+    .select("approver_user_id, approver_role_code, approver_work_context_id, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage")
     .eq("resource_code", "PROC_PLANT_TRANSFER_LIST")
     .eq("action_code", "APPROVE")
     .eq("company_id", companyId);
@@ -134,14 +135,6 @@ async function loadPtoApproverRules(companyId: string): Promise<PtoApproverMapRo
     throw new Error("PTO_APPROVER_LOOKUP_FAILED");
   }
   return (data as PtoApproverMapRow[] | null) ?? [];
-}
-
-function matchesPtoApprover(rows: PtoApproverMapRow[], ctx: ProcurementHandlerContext): boolean {
-  return rows.some((row) => {
-    if (row.approver_user_id) return row.approver_user_id === ctx.auth_user_id;
-    if (row.approver_role_code) return row.approver_role_code === ctx.roleCode;
-    return false;
-  });
 }
 
 // Business rule: the SENDING company's L2/L3 Manager approves a Plant
@@ -171,7 +164,11 @@ async function assertPtoApproverRole(
       rules,
     );
     isConfiguredApprover = scopedRules.length > 0
-      ? matchesPtoApprover(scopedRules, ctx)
+      ? matchesApprover(scopedRules, {
+        auth_user_id: ctx.auth_user_id,
+        roleCode: ctx.roleCode,
+        approverWorkContextIds: await loadApproverWorkContextIds(serviceRoleClient, ctx.auth_user_id, companyId),
+      })
       : hasBlanketApprovalOverride(ctx);
   }
 

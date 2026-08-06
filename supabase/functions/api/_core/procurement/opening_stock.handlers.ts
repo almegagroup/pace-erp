@@ -13,7 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
-import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
+import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -493,6 +493,7 @@ async function listOpeningStockScopedCompanyIds(ctx: ProcurementHandlerContext):
 interface ApproverMapRow {
   approver_user_id: string | null;
   approver_role_code: string | null;
+  approver_work_context_id: string | null;
   resource_code: string | null;
   action_code: string | null;
   scope_type: string | null;
@@ -507,7 +508,7 @@ async function loadOpeningStockApproverRules(companyId: string): Promise<Approve
     .schema("acl")
     .from("approver_map")
     .select(
-      "approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage",
+      "approver_user_id, approver_role_code, approver_work_context_id, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage",
     )
     .eq("resource_code", "PROC_OPENING_STOCK_APPROVAL")
     .eq("action_code", "APPROVE")
@@ -525,14 +526,6 @@ async function getOpeningStockUserRoleCode(userId: string): Promise<string | nul
     .maybeSingle();
   if (error || !data) return null;
   return String((data as Record<string, unknown>).role_code ?? "") || null;
-}
-
-function matchesOpeningStockApprover(rows: ApproverMapRow[], ctx: ProcurementHandlerContext): boolean {
-  return rows.some((row) => {
-    if (row.approver_user_id) return row.approver_user_id === ctx.auth_user_id;
-    if (row.approver_role_code) return row.approver_role_code === ctx.roleCode;
-    return false;
-  });
 }
 
 async function assertOpeningStockApproverRole(
@@ -565,7 +558,13 @@ async function assertOpeningStockApproverRole(
       },
       rules,
     );
-    isConfiguredApprover = scopedRules.length > 0 ? matchesOpeningStockApprover(scopedRules, ctx) : false;
+    isConfiguredApprover = scopedRules.length > 0
+      ? matchesApprover(scopedRules, {
+        auth_user_id: ctx.auth_user_id,
+        roleCode: ctx.roleCode,
+        approverWorkContextIds: await loadApproverWorkContextIds(serviceRoleClient, ctx.auth_user_id, companyId),
+      })
+      : false;
   }
   if (!isConfiguredApprover) throw new Error("OPENING_STOCK_APPROVER_ROLE_REQUIRED");
   // DIRECTOR already returned above, so this can never fire for DIRECTOR — it only

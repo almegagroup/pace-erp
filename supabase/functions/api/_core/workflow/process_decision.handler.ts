@@ -15,6 +15,8 @@ import { getActiveAclVersionIdForCompany } from "../../_shared/acl_runtime.ts";
 import {
   createWorkflowScopeContextMap,
   loadActiveCompanyWorkContexts,
+  loadApproverWorkContextIds,
+  matchesApprover,
   pickScopedApproverRules,
   resolveDepartmentWorkflowScopeId,
 } from "../../_shared/workflow_scope.ts";
@@ -43,6 +45,7 @@ interface ApproverMapRow {
   approval_stage: number;
   approver_role_code: string | null;
   approver_user_id: string | null;
+  approver_work_context_id?: string | null;
 }
 interface DecisionRow {
   stage_number: number;
@@ -174,16 +177,19 @@ if (scopedApprovers.length === 0) {
   );
 }
 
+const approverWorkContextIds = await loadApproverWorkContextIds(
+  serviceRoleClient,
+  ctx.auth_user_id,
+  workflow.company_id,
+);
 const matchingApprovers = scopedApprovers
-  .filter((a) => {
-    if (a.approver_user_id) {
-      return a.approver_user_id === ctx.auth_user_id;
-    }
-    if (a.approver_role_code) {
-      return a.approver_role_code === ctx.roleCode;
-    }
-    return false;
-  })
+  .filter((a) =>
+    matchesApprover([a], {
+      auth_user_id: ctx.auth_user_id,
+      roleCode: ctx.roleCode,
+      approverWorkContextIds,
+    })
+  )
   .sort((left, right) => left.approval_stage - right.approval_stage);
 
 if (matchingApprovers.length === 0) {

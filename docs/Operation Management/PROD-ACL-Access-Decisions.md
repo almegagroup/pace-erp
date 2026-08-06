@@ -21,8 +21,45 @@ Legend: V=View, C=Create, E=Edit, A=Approve, D=Delete. Blank = no access.
    any page that has an approval step.
 3. DIRECTOR always gets everything, every page, no exception — never
    repeated per row.
+   **⚠️ Clarified 2026-08-06 (business owner, applies to every group, not
+   just QA):** in practice this default is rarely invoked — DIRECTOR
+   (Bijon, the real operational Director, as opposed to DIRECTOR-REPORTS)
+   only gets access on a page when this doc **explicitly** states it for
+   that page. If a page's row doesn't mention Director separately, Director
+   gets nothing there. Basic Rule #3 stays written as the nominal default
+   (so a genuinely-forgotten page still falls back to "Director gets
+   everything" rather than nothing), but every group decided from
+   2026-08-06 onward should treat DIRECTOR access as opt-in per page, not
+   assumed.
 4. Pure "report" pages (read-only, e.g. Order List, Gate Report, Batch
    Variance) are open to everyone relevant — viewing carries no risk.
+5. **L4_MANAGER is never included in a department's normal full-access
+   grant** (added 2026-08-06, confirmed applicable to every page, every
+   department, not just Production). L4_MANAGER sits structurally with
+   DIRECTOR-REPORTS (oversight/view, not hands-on operational
+   Create/Edit/Approve) rather than as a normal working rank within their
+   own department.
+6. **L3_MANAGER does not exist as a normal rank inside any department's own
+   ladder — "L3_MANAGER" always means Plant Head** (clarified 2026-08-06,
+   locked). A department's own working ranks top out at L2_MANAGER; any
+   page whose ceiling was previously described as "up to L3_Manager" really
+   means "up to L2_MANAGER within the department, **plus** Plant Head via
+   Structural Fallback (Special Rule #5)" — the two were already
+   implemented together correctly wherever `CAP_QA_PLANTHEAD`/
+   `CAP_PROD_PLANTHEAD_FULL` exist, this just fixes the loose "L3_Manager"
+   label that had been used to describe it.
+7. **DIRECTOR-REPORTS work context (and, by Basic Rule #5, L4_MANAGER) only
+   ever gets access to genuine report-type pages** (clarified 2026-08-06).
+   It does not get blanket View on operational pages just because it's a
+   "Director-adjacent" or "oversight" context — only pages that are
+   themselves reports (Basic Rule #4) carry a DIRECTOR-REPORTS/L4_MANAGER
+   grant, and only when this doc explicitly says so for that page, same
+   opt-in discipline as Basic Rule #3's Director clarification above.
+8. **L1/L2_AUDITOR's real, substantive access is concentrated on specific
+   pages, not spread thin as a small add-on everywhere** (clarified
+   2026-08-06). Where Auditor doesn't have dedicated real work on a page,
+   they get DIRECTOR-REPORTS-style access (Rule #7) at most, not an
+   Approve/Manager-tier-adjacent grant "just in case."
 
 **Special Rule (only stated when it overrides the Basic Rule):**
 1. A page locked narrower than its normal department default (e.g.
@@ -34,6 +71,58 @@ Legend: V=View, C=Create, E=Edit, A=Approve, D=Delete. Blank = no access.
    view-only power).
 4. A named person's exclusive capability (e.g. AC04 create/edit — Soni
    only, everyone else in that department stays view-only).
+5. **Structural Fallback** (named 2026-08-06, generalized from the
+   pre-existing "Plant Head fallback" instance below): a page's owning
+   department gets full access via plain department membership (Basic
+   Rule #1) — but company org structure varies (some companies have a
+   dedicated department manager, others rely on a generalist role like
+   Plant Head to cover it), so a **second, always-on grant** goes to a
+   specific rank+department (e.g. L3_MANAGER within MANAGEMENT), applied
+   **uniformly to every company regardless of whether it's redundant
+   there**. This is role/rank-based, not a named individual (distinct from
+   #2/#3/#4) — it exists to make one rule correct across companies with
+   different staffing shapes, without special-casing any company or
+   person. First seen as "Plant Head fallback" (Group 5, Group 10 — see
+   `CAP_PROD_PLANTHEAD_FULL`/`CAP_QA_PLANTHEAD`); any future page needing
+   the same shape should cite "Structural Fallback" and reuse this
+   reasoning rather than re-deriving it. See PR00's note in Group 10 for
+   the canonical example.
+
+---
+
+## Cross-Module Dependency Taxonomy (established 2026-08-06)
+
+When one page needs data or a write from another department's master/page, classify the
+dependency BEFORE deciding ACL for it — most turn out to need zero standalone page access for
+the dependent department at all:
+
+- **Type ক — Inline quick-create.** An explicit, user-triggered "+New X" action embedded
+  directly inside another page's own UI, creating a **new** record in the other module (e.g.
+  Plan Feed's "+New Party", GRN's "+Add Transporter" link). Handled via a narrow companion
+  CREATE capability wired to the owning resource's CREATE-companion (same pattern as
+  `OM_VENDOR_CREATE`/`OM_MATERIAL_CREATE`), `menu_visible=false` on the owning page for the
+  dependent department. Mechanical wiring — Claude's part, no per-instance user confirmation
+  needed.
+- **Type খ — Read/reference lookup.** Pure read access for display/dropdown/existence-check
+  purposes, no write at all (e.g. Material dropdown in a PO line, Stroke-existence check in Plan
+  Feed). Same treatment as Type ক — narrow VIEW-only companion capability, `menu_visible=false`,
+  no confirmation needed.
+- **Type গ — Genuine co-ownership.** A department navigates **directly** to another page's own
+  UI to do real, standalone work there — not embedded/inline in their own page. This is a real
+  business/ownership decision, not mechanical wiring — **requires explicit user confirmation**
+  every time, never assumed.
+- **Type ঘ — Automatic backend sync-back** (added 2026-08-06, confirmed via GRN/GE↔CSN, Group
+  3). The owning page's own handler directly updates fields on an **existing** record in another
+  module, as a side effect of its own action — never user-initiated on the other module's page,
+  never a create (Type ক), and not a read (Type খ) either. Goes through `serviceRoleClient`
+  straight inside the owning handler, **completely bypassing the other module's ACL** — the
+  dependent department needs **zero** access of any kind to the other module for this to keep
+  working, not even a companion capability. Canonical example: GRN posting writes
+  `invoice_number`/`bl_number`/`lr_number` etc. directly into `consignment_note`
+  (`grn.handlers.ts:925-953`) as a side effect of Stores' own GRN-post permission — Stores never
+  touches CSN Tracker's ACL at all. Note GRN itself has **two different** CSN interactions: the
+  "+Add Transporter" quick-add is Type ক, while this invoice/BL/LR sync-back is Type ঘ — same
+  page, two different dependency shapes on two different targets (Transporter Master vs CSN).
 
 ---
 
@@ -59,7 +148,33 @@ Three prod users hold role_code `DIRECTOR`:
 
 ## Group 1 — Operation Masters
 
-Status: ✅ Decided + implemented in prod (2026-07-28, ACL v8)
+Status: ✅ Decided + implemented in prod (2026-07-28, ACL v8). **⚠️ Revised 2026-08-06 — session-wide rule reconciliation, not yet implemented (see below).**
+
+**⚠️ Revised 2026-08-06:** Group 1 is confirmed genuinely SCM+Director-only — no other
+department gets standalone page access on any Group 1 resource, superseding the MM04
+Stores/Logistics grant and PM04's direct Production/QA grants below.
+
+- **MM04:** Stores/Logistics' earlier View grant removed. Every cross-department need this
+  group serves turns out to be a Type-ক (inline quick-create, e.g. Plan Feed's "+New Party")
+  or Type-খ (read/reference lookup) dependency — both handled via a narrow companion-resource
+  capability + `menu_visible=false` on the dependent page, never standalone access to MM04's
+  own page. No department needs to browse the Customer master directly except SCM+Director.
+- **PM04:** Production's direct `V C E` grant removed — already verified via code (see the
+  original 2026-07-28 note below) that Stroke Master's/Pack BOM's Alternate Material picker
+  resolves category names via its own server-side lookup, bypassing ACL entirely; zero PM04
+  access was already safe for Production, this just formalizes it. QA's direct grant removed
+  too — QA's category-creation happens via an inline "+New Category" quick-create embedded in
+  Stroke Master itself (Type ক), not by navigating to PM04's own page. QA gets a narrow
+  companion CREATE capability wired to that inline flow instead (`menu_visible=false` on PM04).
+  Auditor's existing `V C E D` grant is **unchanged** — pre-existing standalone audit access,
+  not a dependency, out of scope for this revision.
+- **Not yet implemented** — design decision only. Batch-implementation pass covers this
+  alongside Groups 4/5/9/10's pending items (narrow companion capabilities + `menu_visible=false`
+  wiring is Claude's part, per the session's Type-ক/খ/গ dependency taxonomy).
+
+Original table + notes below (2026-07-28) — kept for history and still-accurate implementation
+detail (code fix rationale, capability names, verification results); the revision above is the
+current source of truth for who gets standalone access.
 
 | tx_code | Page | SCM | Stores | Logistics | Production | Director | Director-Reports | Management | Management-Reports | Auditor |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -103,7 +218,20 @@ Status: ✅ Decided + implemented in prod (2026-07-28, ACL v8)
 
 ## Group 2 — Procurement Masters
 
-Status: ✅ Fully decided + implemented in prod (2026-07-28, ACL v14).
+Status: ✅ Fully decided + implemented in prod (2026-07-28, ACL v14). **⚠️ Revised 2026-08-06 — not yet implemented (see below).**
+
+**⚠️ Revised 2026-08-06:** PM06's Stores+Logistics `V C E` grant removed — GRN's "+Add
+Transporter" quick-add (`GRNPostFlow.jsx`'s Transporter tab link, confirmed in the original note
+below) is a Type-ক inline dependency, the exact same pattern as Plan Feed's "+New Party."
+Handled via a narrow companion CREATE capability wired to GRN's inline flow, `menu_visible=false`
+on PM06 itself — not standalone page access for Stores/Logistics. PM06 now matches the rest of
+Group 2 exactly: **SCM full authority, Director View-only, no other department.** All other
+pages in this group (PM01/02/03/05/07) were already SCM+Director-only, unchanged.
+**Not yet implemented** — design decision only; Claude wires the companion capability into GRN
+during the batch-implementation pass.
+
+Original table + notes below (2026-07-28) — kept for history and still-accurate implementation
+detail; the revision above is the current source of truth for PM06.
 
 | tx_code | Page | SCM | Stores | Logistics | Director |
 |---|---|---|---|---|---|
@@ -214,7 +342,36 @@ DIRECTOR = V only, on all 6, in both companies.
 
 ## Group 3 — Procurement
 
-Status: ✅ Decided + implemented in prod (2026-07-28), including PO02.
+Status: ✅ Decided + implemented in prod (2026-07-28), including PO02. **⚠️ Revised 2026-08-06 — PO12 only, not yet implemented (see below).**
+
+**⚠️ Revised 2026-08-06 — PO12 (Plant Transfers):** reclassified as a genuinely different,
+physical-stock-movement function, not part of SCM's Procurement pipeline proper — but it has
+never had a formal redesign session of its own (unlike the rest of Group 3, which is settled
+SCM+Director pipeline work). **Deactivated to ACL-MASTER-only pending a dedicated future
+redesign session.** This removes Stores/Logistics/SCM's currently-LIVE full `V C E D` access
+and the sending-company-`L3_MANAGER` approve chain documented below.
+
+⚠️ **This is the one decision in today's whole reconciliation pass that takes away real,
+currently-working access from real users** (Stores/Logistics staff who use PO12 today) —
+unlike every other change this session, which either adds structure or touches
+already-undesigned/unused surface. **✅ Confirmed by business owner 2026-08-06** — deactivate,
+access limited to ACL-MASTER only, pending a dedicated future PO12 redesign session.
+
+All other Group 3 pages (PO01, PO02, PO03, PO07, PO11, PO13, PO14, PO16) — unchanged, confirmed
+SCM+Director-only pipeline. CSN Tracker's write path re-verified 2026-08-06, code-level, including
+the specific concern that GE/GRN write real CSN detail fields (not just status/qty):
+- **Gate Entry** (`gate_entry.handlers.ts:236-277`, `upsertCsnArrival`) — on GE post, writes
+  `status`→GED, `gate_entry_date`, `gate_entry_id`, `received_qty`, `total_received_qty`.
+- **GRN** (`grn.handlers.ts:925-953`, "CSN sync-back") — on GRN post, writes `status`→GRD,
+  `grn_id`, `grn_date`, **`invoice_number`**, `transporter_id`, and either
+  `lr_number`/`lr_date` (domestic) or **`bl_number`/`bl_date`/`boe_number`/`boe_date`** +
+  port-to-plant LR (import) — i.e. the same Invoice/BL/LR detail fields CSN Tracker itself edits.
+- Both go through `serviceRoleClient.schema("erp_procurement").from("consignment_note").update(...)`
+  directly inside GE's/GRN's own handler — **zero `PROC_CSN_TRACKER` ACL check involved**, so
+  Stores writing these fields via GE/GRN needs no CSN Tracker access at all, confirming
+  SCM+Director-only remains safe even for these detail-field writes.
+
+**Not yet implemented** — design decision only.
 
 ### PO02 — CSN Tracker
 
@@ -240,6 +397,7 @@ Status: ✅ Decided + implemented in prod (2026-07-28), including PO02.
 | PO13 | Pending Order Approvals | Same as PO01 (same underlying resource/handler) | | | Same as PO01 |
 | PO14 | Old Purchase Order | SCM only, Create+Edit (no Approve — see note) | | | SCM only |
 | PO16 | Legacy STO | SCM only, Create+Edit (no Approve — see note) | | | SCM only |
+| PO19 | Print PO/STO | V W | | | |
 
 **PO12 correction mid-session:** business owner initially said "SCM র kache" for the whole group, then corrected PO12 specifically — Plant Transfer isn't SCM's, it's Stores+Logistics+SCM together (all three full V/C/E/D), since it's a physical stock-movement function, not a procurement one. Director stays View-only, matching the rest of the group.
 
@@ -286,12 +444,35 @@ This applies to **anyone** holding that rank in SCM, not just the 3 named indivi
 
 Status: ✅ Decided + implemented in prod (2026-07-29, ACL v19). Director gets nothing in this group — explicit exception, confirmed after the DIRECTOR-identity clarification above (Bijon specifically was asked, answer was "no need").
 
-| tx_code | Page | Stores | Security | Audit |
-|---|---|---|---|---|
-| PO04 | Gate Entries | V C E | V C E | |
-| PO05 | Goods Receipts (GRN) | V W E **A** (Post — no wait, Stores posts it themselves, matches SAP MIGO) | | **D only** (Reversal — separation of duties) |
-| PO17 | Gate Exit | V W | V W | |
-| PO18 | Gate Entry Report | Already universal via `CAP_EVERYONE_REPORTS` (every department, every company they have access to — single-company users see their own company, multi-company users see whichever company is currently selected) | | |
+**⚠️ Revised 2026-08-06 (business owner, role-based, no named individuals)
+— confirms this group mostly unchanged, adds Plant Head Structural Fallback
+(Basic/Special Rule #5/#6) which the original design didn't have. Design-phase
+only, not yet implemented.**
+
+| tx_code | Page | Stores | Security | Plant Head | Audit | Director |
+|---|---|---|---|---|---|---|
+| PO04 | Gate Entries | V C E, up to L2_Manager | V C E (Prune stays Stores-only, see note) | ✅ (new) | — | — |
+| PO05 | Goods Receipts (GRN) | V W E + Approve (Post), up to L2_Manager | — | ✅ (new) | D only (Reversal, unchanged) | — |
+| PO17 | Gate Exit | V W, up to L2_Manager | V W | ✅ (new) | — | — |
+| PO18 | Gate Entry Report | Open to everyone (all ranks, L1_User through Director) via `CAP_EVERYONE_REPORTS` — unchanged, this is a report page (Basic Rule #4) | | | | ✅ (unchanged) |
+
+**What changed:** only the addition of Plant Head Structural Fallback to
+PO04/PO05/PO17 (explicit "Ha kore dao" — company org-structure variance
+now covered here too, same reasoning as Production/QA). GE Prune
+(`pruneGateEntryHandler`) stays Stores-only, not shared with Security, per
+the existing code-level rank check (`isSameOrHigher(ctx.roleCode,
+"L3_USER")` within Stores) — confirmed unchanged. GRN Reversal stays
+L1/L2_Auditor-only (separation of duties preserved here, unlike PR15 in
+Group 5 which moved to QA department). PO18 unchanged — already matches
+Basic Rule #4/#7 exactly (report page, open to everyone, no change needed).
+Director stays at zero on PO04/05/17 (Basic Rule #3's opt-in default,
+nothing stated here so nothing granted), consistent with the original
+"Director gets nothing" note above.
+
+**Not yet implemented** — tracked for the same batch-implementation pass:
+new `work_context_capabilities` grant for MANAGEMENT/Plant-Head role on
+`PROC_GATE_ENTRY_LIST`/`PROC_GRN_LIST`/`PROC_GATE_EXIT`, mirroring
+`CAP_PROD_PLANTHEAD_FULL`/`CAP_QA_PLANTHEAD`'s existing shape.
 
 **Two corrections mid-decision, both against the business owner's own initial assumptions — verified against live code before implementing:**
 1. **"I don't think there's a Delete here" — wrong.** GRN has a real DELETE-registered action: reversal (`POST /api/procurement/grns/:id/reverse` → `PROC_GRN_LIST:DELETE`). Confirmed via `route-acl-registry.ts`. Once surfaced, business owner assigned it deliberately narrower than Stores' own full access: **only L1/L2 Auditor can reverse a GRN** — Stores posts (Approve) freely but cannot undo their own posting, a genuine separation-of-duties control (Stores creates+finalizes, an independent Auditor is the only one who can undo it).
@@ -311,6 +492,80 @@ Status: ✅ Decided + implemented in prod (2026-07-29, ACL v19). Director gets n
 Status: ✅ Decided + implemented in prod (2026-07-29, ACL v20). No report pages
 in this group yet — Director gets **nothing** for now (business owner: report
 pages will be split off this group later and get access at that point).
+
+**⚠️ Revised 2026-08-06 (business owner, role-based, no named individuals)
+— supersedes the table/notes below where they conflict. Design-phase only,
+not yet implemented; see the "Not yet implemented" note at the end of this
+revision block.**
+
+| tx_code | Page | QA ceiling | Plant Head | Director | L4_Mgr / Dir-Reports / Auditor |
+|---|---|---|---|---|---|
+| PO06 | Inward QA | full dept, up to L2_Manager | ✅ | ✅ View (explicit) | ✅ View (explicit) |
+| PR01 | Stroke Master | full dept, up to L2_Manager (raised from L1_Manager) | ✅ (new) | — | — |
+| PR02 | Stroke Approval | Manager-tier only, L1-L2_Manager (Auditor removed) | ✅ | — | — |
+| PR03 | Change BOM Item | = PR01 | ✅ (new) | — | — |
+| PR04 | Change BOM Approval | = PR02 (Auditor removed) | ✅ | — | — |
+| PR12 | Process PO Verify | full dept, up to L2_Manager | ✅ | — | — |
+| PR15 | Reversal (CORS) | full dept, up to L2_Manager (moved from Auditor-only) | ✅ | — | — |
+| PR16 (QA-approve part) | QA Approval Queue | full dept, up to L2_Manager | ✅ | — | — |
+| PR16 (Start Batch part) | QA Approval Queue | Production dept, up to L2_Manager (now capped — was previously Production's uncapped broad access) | ✅ | — | — |
+| PR17 | Batch Number Release | Manager-tier only, L1-L2_Manager | ✅ | — | — |
+| PR18 | SFG Result Recording | full dept, up to L2_Manager (raised from L2_Manager ceiling — see note) | ✅ (new) | — | — |
+| PR19 | Partial Batch Reversal | full dept, up to L2_Manager (raised — see note) | ✅ (new) | — | — |
+
+**What changed and why (business owner instruction, 2026-08-06):**
+- **L3_MANAGER clarified (Basic Rule #6):** it never existed as a QA-internal
+  rank — it always meant Plant Head. "Up to L3_Manager" in the original
+  table (PO06/PR12/PR16-QA-part) is unchanged in effect, just now correctly
+  expressed as "up to L2_Manager + Plant Head via Structural Fallback."
+  PR01/PR03/PR18/PR19 are **genuinely raised** — they previously had no
+  Plant Head fallback at all (PR01/PR03 capped at L1_Manager with zero
+  Management-dept access; PR18/PR19 capped at L2_Manager with zero
+  Management-dept access) — now all four get the same full-dept-ceiling +
+  Plant Head shape as PO06.
+- **PR15 moved from Auditor-exclusive to QA department** (explicit
+  instruction — "PR15 o QA r kachei thak, PO06 er moto"). This removes the
+  separation-of-duties control the original design had (QA could not
+  reverse their own posting; only an independent Auditor could) — flagged
+  to the business owner at decision time, confirmed as intentional.
+- **PR02/PR04 lose their Auditor add-on** — per Basic Rule #8 (Auditor's
+  real work concentrates on specific pages, PR15 now being one of them —
+  not spread as a small add-on across every approval page).
+- **PR16's two parts, decided separately:** QA-approve part follows the same
+  full-dept+Plant-Head shape as PO06 (business owner: "PO06 er moto thik
+  ache"). Start Batch part is explicitly **not** QA's job ("start batch to
+  QA korle hobena") — it's Production's own pipeline action, but is now
+  explicitly capped at "up to L3_Manager" (i.e. up to L2_Manager + Plant
+  Head, Basic Rules #5/#6) rather than left on Production's old uncapped
+  broad grant (`CAP_PROD_STANDARD`/`CAP_PROD_OPERATOR`) — this is a
+  narrowing that also needs to not regress PR09/PR11 (Production's other
+  pages), since those capabilities are shared; likely needs its own
+  resource-level split at implementation time, same shape as the original
+  Start-Batch-vs-Batch-Release split noted below.
+- **Director and DIRECTOR-REPORTS/L4_MANAGER/Auditor default to nothing**
+  on every page in this group **except PO06**, where Director and
+  L4_Manager were explicitly given View (Basic Rules #3/#7's new opt-in
+  discipline — this table's blank cells are deliberate, not omissions).
+
+**Not yet implemented** — this whole revision is a design-phase decision,
+tracked for the same batch-implementation pass as Group 10's revisions
+above. Real implementation needs: `role_capabilities` narrowed to
+L1-L2_Manager wherever "full dept" is stated (drop L3/L4_Manager from the
+department capability, since L3_Manager access must come through the
+already-separate `CAP_QA_PLANTHEAD` mechanism, not the department
+capability itself); `CAP_QA_PLANTHEAD` extended to PR01/PR03/PR15/PR18/PR19
+(new menu-action rows); `CAP_QA_AUDITOR_TIER` menu-action rows removed from
+PR02/PR04; PR15's resource moved off whatever Auditor-only capability it
+used onto the QA department capability instead; PO06's DIRECTOR/L4_MANAGER
+View grants added; PR16 Start Batch's capability/resource split investigated
+before narrowing (must not clip PR09/PR11).
+
+---
+
+**Original design notes below (2026-07-29) — kept for history and
+still-accurate implementation detail (capability names, code fixes,
+verification results); table above is the current source of truth for
+access decisions, not the table immediately below.**
 
 **Business context locked before deciding (business owner, verbatim intent):**
 CMP003 has a dedicated Production+QA manager (Nilkamal, L2_MANAGER, holds
@@ -533,6 +788,37 @@ gets its formal session.
 
 Status: partially decided (2026-07-29, ACL v25/v22). AC04 designed +
 implemented. AC01/AC02/AC03 not ready yet, same treatment as Group 6.
+**⚠️ Revised 2026-08-06 (AC04/AC05/AC06 ownership + rank ceiling) — not yet implemented (see below). AC01/AC02/AC03 deliberately left as ACL-MASTER-only for now, not decided this round.**
+
+**⚠️ Revised 2026-08-06:** AC04's ownership moves from Auditor-does-the-writing (Accounts
+View-only) to a normal department-owned page — Accounts becomes the maker, matching AC05/AC06's
+existing shape instead of being the outlier of the three.
+
+| tx_code | Page | Accounts (L1_USER–L2_MANAGER) | L1/L2 Auditor | L3_MANAGER (Plant Head) / L4_MANAGER / Director | Maker-checker |
+|---|---|---|---|---|---|
+| AC04 | Conversion Cost Config | V C E D | V C E D | V only | **None** — confirmed zero `acl.approver_map` rows exist for `ACC_CONVERSION_COST`; stays solo-write for both Accounts and Auditor, no checker step. |
+| AC05 | MTS SKU Monthly Rate | V C E (maker) | Approver (checker) | V only | **Unchanged** — `acl.approver_map` already has a full `SUBJECT_ROLE` chain (every Accounts rank + both Auditor ranks → L1_AUDITOR/L2_AUDITOR approves), verified live in prod for CMP003+CMP006. Follows as-is. |
+| AC06 | SLoc Costing Group | V C E (maker) | Approver (checker) | V only | **Unchanged** — same `SUBJECT_ROLE` chain shape as AC05, already live for both companies. Follows as-is. |
+
+- Rank ceiling applies uniformly across all three: Accounts' own working ranks (L1_USER through
+  L2_MANAGER) get full Create/Edit; L3_MANAGER (Plant Head, per Basic Rule #6 — deliberately
+  **not** a Structural Fallback full-access grant here, just View), L4_MANAGER, and Director all
+  get View only.
+- AC04's Auditor grant is **additive**, not maker-checker — both Accounts and Auditor can
+  independently create/edit, since no approval step exists for this resource (confirmed via
+  direct `acl.approver_map` query, zero rows). Different from AC05/AC06 where Auditor's role is
+  strictly the checker in a maker-checker pair, not a second independent writer.
+- **Dependency mechanism re-verified safe (2026-08-06):** Process PO Verify reads AC04's rate via
+  `serviceRoleClient.rpc("resolve_conversion_rate")` (`process_order.handlers.ts:573-577`) —
+  server-side, zero ACL check — confirming Production needs no AC04 access at all to consume the
+  conversion rate (same Type-ঘ-shaped backend read pattern as the CSN sync-back finding above).
+  AC05/AC06's consumers (MTS/PMTS costing, SLoc-based costing group resolution) presumed to
+  follow the same pattern; not re-verified line-by-line this session.
+- **Not yet implemented** — design decision only; batch-implementation pass covers this
+  alongside the rest of today's pending groups.
+
+AC01/AC02/AC03 — left exactly as-is (ACL-MASTER only), not decided this round; see the original
+Group 7 notes below for their current (undesigned) state and the earlier code-audit findings.
 
 | tx_code | Page | Accounts (up to L3_Manager) | L1/L2 Auditor | Director |
 |---|---|---|---|---|
@@ -584,7 +870,20 @@ Accounts staff (any rank) = VIEW only on AC04, zero on AC01/02/03; Soni
 on all four. `capabilities`/`role_capabilities` rows for `CAP_PROC_ACCOUNTS`
 left in place (dead reference for now), same convention as Groups 5 and 6.
 
-## Group 8 — Sales (⛔ deliberately deactivated, not designed yet)
+## Group 8 — Sales (⛔ deliberately deactivated, not designed yet — ✅ SUPERSEDED, see below)
+
+**⚠️ Superseded 2026-08-06 — this whole group's "deactivated" status below is STALE.**
+SO01/SO02 (plus SO03, which didn't exist yet when this group was written) were fully designed
+and implemented in **Group 11** (2026-07-31, ACL v33): SO01+SO02 → Accounts, full access,
+proper pipeline **up through L3_MANAGER** (Plant Head treated as a normal pipeline rank here —
+a deliberate exception to Basic Rule #6's usual Structural-Fallback-View-only treatment,
+re-confirmed by business owner 2026-08-06); SO03 → Stores, full access. **Do not re-deactivate
+SO01/SO02/SO03 based on the notes below** — they describe the pre-Group-11 undesigned state,
+kept only for the code-audit findings (route mismatch bug, dead capability, etc.), which are
+still real and still need a code fix. See Group 11 (further down this doc) for the current,
+live, correct access design.
+
+---
 
 SO01 Sales Orders, SO02 Sales Invoices.
 
@@ -622,15 +921,43 @@ other department is zero. `capabilities`/`role_capabilities` row for
 `CAP_PROC_SALES` left in place (dead reference), same convention as
 Groups 5/6/7.
 
-## Group 9 — Inventory (⛔ deliberately deactivated, not designed yet)
+## Group 9 — Inventory
+
+**Status: ✅ Decided 2026-08-06 (role-based, no named individuals) — design
+phase only, not yet implemented.** Was "⛔ deliberately deactivated, not
+designed yet" until this session; original deactivation note and code-audit
+findings kept below for history/reference.
 
 IN01 Physical Inventory, IN02 Stock Ledger, IN03 Current Stock, IN04 Stock
 Valuation, IN05 Opening Stock, IN06 Opening Stock Approval, PR21 FG Stock
 Breakdown.
 
-**Business owner's call (2026-07-29):** same treatment as Groups 6/7/8 —
-not properly designed yet, deactivated for every department except P0076
-(ACL MASTER).
+| tx_code | Page | Decision |
+|---|---|---|
+| IN01 | Physical Inventory | Three-stage, mirrors SAP MI01/02 → MI04/05 → MI07: **PID create/edit** (scope of what's being counted) = L1/L2_Auditor only. **Count entry/edit/submit** (the actual counted quantities) = everyone in that company, any department/rank, **except L4_Manager and Director** (Basic Rules #3/#5 — a future MI20-style report will cover them separately, company-scoped, not built this round). **Final approval/post** (the action that actually writes to the stock ledger) = L1/L2_Auditor only — data sitting in draft/count-entry state never touches the ledger until this step. This design directly fixes the "IN06 not a real maker-checker" bug pattern found in the original audit below, applied here to IN01 instead. |
+| IN02 | Stock Ledger | Open to **everyone** (L1_User through Director, L1/L2_Auditor included), company-scoped — pure report page (Basic Rule #4). The "create/save layout" action (§117's Column Layout system) is **not** restricted either — anyone who can view the report can also create/save their own layout, no Manager-tier gate. This resolves §117's "provisional SA/GA-only bridge" note — real decision is: everyone. |
+| IN03 | Current Stock | Same as IN02 — everyone, company-scoped, pure report page. |
+| IN04 | Stock Valuation | **ACL-MASTER only for now** — not designed this round, stays deactivated for every other department (same treatment as Groups 6/8's still-undesigned pages). |
+| IN05 | Opening Stock | **ACL-MASTER only for now** — not designed this round, deliberately deferred (Opening Stock's own formal design session is a separate, already-known-pending item per CLAUDE.md §6). |
+| IN06 | Opening Stock Approval | Same as IN05 — ACL-MASTER only for now. |
+| PR21 | FG Stock Breakdown | Same as IN02/IN03 — everyone, company-scoped, pure report page. |
+
+**Not yet implemented** — tracked for the batch-implementation pass. Real
+implementation needs: (1) IN01's three-stage split requires new
+resource-code/action separation (create vs count-entry vs approve are
+currently likely bundled under one `PROC_PI_LIST` resource — needs
+verification against `route-acl-registry.ts` before implementing, since
+today's design assumes 3 independently-gatable actions); (2) the
+company-scope bug in `createPIDHandler`/`addPIItemHandler` (flagged in the
+original audit below) **must** be fixed as part of implementing this design,
+not left for later — the whole "everyone in that company, not other
+companies" design depends on it; (3) `assertManagerOrSARole` removed from
+`opening_stock.handlers.ts` is **not** urgent since IN05/IN06 stay
+ACL-MASTER-only this round (the hardcoded check is redundant-but-harmless
+while nobody else has the ACL grant anyway) — revisit when Opening Stock
+gets its own formal session; (4) IN02's Column Layout `global-layout-create`
+gate (currently SA/GA-only per §117) needs revising to allow everyone,
+matching this decision.
 
 **Code audit before deactivating (no edits made, findings logged for a
 future code-fix pass):**
@@ -695,27 +1022,116 @@ Status: ✅ Decided + implemented in prod (2026-07-29, ACL v29/v26).
 
 | tx_code | Page | Production | Quality | SCM | Management | Stores | Audit | Director |
 |---|---|---|---|---|---|---|---|---|
-| PR00 | Plan Feed | V C E (+ Plant Head fallback) | | | V (+Plant Head = V C E) | V | | V |
-| PR05 | Pack BOM Create | V | V | V C E | V | | | V |
-| PR06 | Pack BOM Approval | V | V | V (L1-L2_Mgr: + A) | V | | | V |
-| PR07 | Change Pack BOM | V | V | V C E | V | | | V |
-| PR08 | Change Pack BOM Approval | V | V | V (L1-L2_Mgr: + A) | V | | | V |
-| PR09 | Production PO Create | V C E (+ Plant Head fallback) | | | (Plant Head = V C E) | | | V |
-| PR10 | Production PO Edit | — | V C E A | — | — | — | — | V |
+| PR00 | Plan Feed | V C E† (+ Plant Head fallback) | | | V (+Plant Head = V C E) | V | | V |
+| PR05 | Pack BOM Create | V | V | V C E† | V | | | V |
+| PR06 | Pack BOM Approval | V | V | V (Approve: chain, see note below) | V | | | V (Approve: chain fallback) |
+| PR07 | Change Pack BOM | V | V | V C E† | V | | | V |
+| PR08 | Change Pack BOM Approval | V | V | V (Approve: chain, see note below) | V | | | V (Approve: chain fallback) |
+| PR09 | Production PO Create | V C E† (+ Plant Head fallback) | | | (Plant Head = V C E) | | | V |
+| PR10 | Production PO Edit | — | V C E A† | — | — | — | — | — (see note below — narrower than usual, not even Director) |
 | PR11 | Production PO Final (up to L2_Manager) | V C E | | | | | | V |
-| PR13 | Order List | V (Manager-tier+Director only) | V (Manager-tier+Director only) | | | | V | V |
-| PR14 | Batch Variance Report | same as PR13 | same as PR13 | | | | V | V |
-| PR20 | Partial Reversal Report | same as PR13 | same as PR13 | | | | V | V |
-| PR22 | Old Process PO | V C E | | | | | | V |
-| PR23 | Old Packing PO | V C E | | | | | | V |
+| PR13 | Order List | V (all ranks — see revision note below) | V (all ranks) | | | | V | V (+ Director-Reports WC) |
+| PR14 | Batch Variance Report | same as PR13 | same as PR13 | | | | V | V (+ Director-Reports WC) |
+| PR20 | Partial Reversal Report | same as PR13 | same as PR13 | | | | V | V (+ Director-Reports WC) |
+| PR22 | Old Process PO | V C E† | | | | | | V |
+| PR23 | Old Packing PO | V C E† | | | | | | V |
 
-**Plant Head fallback pattern (same design as Group 5):** since CMP003 has
-Nilkamal (dual QUALITY+PRODUCTION, covers PR00/PR09 via plain PRODUCTION
+**† = Basic Rule #5 applied 2026-08-06:** every "no ceiling" full-access
+grant in this table (Production on PR00/09/22/23, SCM on PR05/07, QUALITY on
+PR10) is capped at **L3_Manager** — L4_Manager is excluded from all of them,
+routed to DIRECTOR-REPORTS instead (view/oversight only, not
+Create/Edit/Approve). Confirmed by business owner as applying to every page
+in this group, not decided page-by-page. Not yet implemented (see the
+batch-implementation tracking note under PR06/PR08 below — this needs the
+same treatment: each capability's `role_capabilities` narrowed to exclude
+L4_MANAGER, and DIRECTOR-REPORTS' own work context granted the equivalent
+view-level access where it doesn't already have it).
+
+**PR10 (Production PO Edit) — revised 2026-08-06, business owner
+instruction:** stays QA-only exactly as originally designed (no change to
+department ownership — Production was considered and explicitly declined,
+this remains QA's independent pre-approval review step). Two corrections
+from the original Group 10 design: (1) **DIRECTOR access removed entirely**
+— a Special Rule #1 narrowing ("locked narrower than normal default, not
+even Director"), same shape as MM01/MM02; (2) QA's own access capped at
+L3_Manager per Basic Rule #5 (L4_Manager excluded). Confirmed: editing via
+PR10 does **not** trigger any separate approval of the edit itself — the
+Process PO stays at STANDARD status after a PR10 edit and still has to pass
+through the normal QA Approval Queue (PR16) afterward, same as any other
+Process PO; PR10 and PR16 are both QA's own job, no other department
+involved in either step. **Not yet implemented** — tracked for the
+batch-implementation pass.
+
+**PR13/PR14/PR20 (Order List / Batch Variance / Partial Reversal Report) —
+revised 2026-08-06, business owner instruction: Basic Rule #4 restored,
+narrowing removed.** These are pure report pages — Basic Rule #4 ("report
+pages are open to everyone relevant — viewing carries no risk") already
+covers this, but Group 10's original implementation narrowed them to
+"Manager-tier + Director only" (see the superseded note below) without
+recording it as a deliberate Special Rule exception — an unflagged
+deviation from the doc's own default. Corrected: **View open to every rank**
+in Production and Quality (L1_User through **L3_Manager** — not just
+Manager-tier, but L4_Manager is excluded per Basic Rule #5, routed to
+DIRECTOR-REPORTS instead), matching plain Basic Rule #4 — access is gated
+only by whether the user already has permission to see that company's data
+at all (normal company-scope check), not by rank within the company. Audit
+and DIRECTOR keep their existing View. **DIRECTOR-REPORTS work context (Himanshu
+Kanabar, P0002 — see the "Identity note" above) now explicitly gets these 3
+resources** — this WC was created 2026-07-28 specifically for report-only
+Director access and deliberately started empty ("to be built up page-by-page
+as groups are decided"); this is its first real grant.
+**⚠️ Not yet implemented** — design-phase decision only, tracked for the
+batch-implementation pass (re-add the 3 `(CAP_EVERYONE_REPORTS, menu)` rows
+that Group 10 deliberately removed, or an equivalent broad-View capability;
+grant DIRECTOR-REPORTS its own row on all 3 resources).
+
+~~**Superseded 2026-08-06 — original PR13/14/20 View design (kept for
+history, no longer in effect):** Production/Quality View restricted to
+Manager-tier (L1/L2/L3_Manager) + Director only, via `CAP_ORDERLIST_MGRTIER`
+— User-tier explicitly excluded, framed as fixing a "leak" from the old
+blanket `CAP_EVERYONE_REPORTS` grant. DIRECTOR-REPORTS held no grant on
+these 3 resources.~~
+
+**PR06/PR08 (Pack BOM Approval / Change Pack BOM Approval) — revised
+2026-08-06, business owner instruction:** originally locked as a flat
+"SCM's L1/L2_Manager only" Approve rule (see the superseded note below).
+Revised to reuse the **exact same rank-escalation chain already locked for
+PO/STO** (Group 3's `acl.approver_map` chain: L2_USER's creation is
+approved by L3_USER **or** L1_MANAGER; L3_USER's by L1_MANAGER; L1_MANAGER's
+by DIRECTOR) — same reasoning as the general "Standard Escalation Ladder"
+default (whoever does the lower-rank job, the rank above approves it),
+applied here via the SCM department's already-proven chain rather than a
+new one. **Also revised:** DIRECTOR upgraded from View-only to a real
+Approve fallback (was a deliberate exception to Basic Rule #3 before;
+restored to the Basic Rule #3 default here since Director sits at the top
+of this same chain — matches PO/STO's own DIRECTOR-fallback design in
+Group 3, not a special case for Pack BOM). View stays open to
+Production/Quality/SCM/Management/Director, unchanged.
+**⚠️ Not yet implemented** — this is a design-phase decision only (per the
+locked "decide every page first, implement once" sequencing). Real
+implementation requires: (1) wiring `pack_bom.handlers.ts`'s approve/reject
+handlers into `_shared/workflow_scope.ts`'s `pickScopedApproverRules`
+(same engine PO/STO/PTO already use), replacing the current flat
+L1-L2_Manager capability check; (2) new `acl.approver_map` SUBJECT_ROLE
+rows for `PROD_PACK_BOM_APPROVAL`/`PROD_CHANGE_PACK_BOM_APPROVAL`, mirroring
+PO/STO's existing rows; (3) capability revision so DIRECTOR's work context
+carries real APPROVE on both resources, not just VIEW. Tracked for the
+batch-implementation pass alongside the rest of this Step-4 sweep.
+
+~~**Superseded 2026-08-06 — original PR06/PR08 Approve design (kept for
+history, no longer in effect):** flat rule, any SCM L1_Manager or
+L2_Manager could approve regardless of who created it; DIRECTOR was
+View-only, a deliberate exception to Basic Rule #3.~~
+
+**Plant Head fallback pattern (same design as Group 5) — formally named
+"Structural Fallback" 2026-08-06, see Special Rule #5 above:** since CMP003
+has Nilkamal (dual QUALITY+PRODUCTION, covers PR00/PR09 via plain PRODUCTION
 dept membership) but other companies have no dedicated Production manager,
 a separate `CAP_PROD_PLANTHEAD_FULL` (MANAGEMENT dept, L3_MANAGER role
 only) gives Pradip/Kishor full PR00+PR09 access too — uniform across both
 companies per the established "grant it everywhere, even where redundant"
-convention from Group 5.
+convention from Group 5. This is PR00's canonical Structural Fallback
+example — cite this note when applying the same pattern to a future page.
 
 **PR09/PR10/PR11 three-way department split, verified against real users:**
 Production creates (PR09, full dept access + Plant Head), QUALITY alone
