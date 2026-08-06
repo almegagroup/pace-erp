@@ -12,6 +12,8 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
+import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -710,6 +712,102 @@ export async function createPackBomHandler(
 }
 
 // POST /api/production/pack-boms/:id/approve
+// Rank-escalation Approve chain for PR06/PR08 -- reuses the exact same
+// engine + chain shape already locked for PO/STO (Group 3): L2_USER's
+// creation is approved by L3_USER or L1_MANAGER; L3_USER's by L1_MANAGER;
+// L1_MANAGER's by DIRECTOR. See po.handlers.ts's assertProcurementHeadRole
+// for the full rationale; this mirrors that shape for Pack BOM/Change
+// Pack BOM instead of PO/STO.
+interface PackBomApproverMapRow {
+  approver_user_id: string | null;
+  approver_role_code: string | null;
+  approver_work_context_id: string | null;
+  resource_code: string | null;
+  action_code: string | null;
+  scope_type: string | null;
+  subject_user_id: string | null;
+  subject_work_context_id: string | null;
+  subject_role_code: string | null;
+  approval_stage: number;
+}
+
+async function loadPackBomApproverRules(
+  resourceCode: string,
+  companyId: string,
+): Promise<PackBomApproverMapRow[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("acl")
+    .from("approver_map")
+    .select("approver_user_id, approver_role_code, approver_work_context_id, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage")
+    .eq("resource_code", resourceCode)
+    .eq("action_code", "APPROVE")
+    .eq("company_id", companyId);
+
+  if (error) {
+    throw new Error("PROD_BOM_APPROVER_LOOKUP_FAILED");
+  }
+  return (data as PackBomApproverMapRow[] | null) ?? [];
+}
+
+async function getPackBomUserRoleCode(userId: string): Promise<string | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("user_roles")
+    .select("role_code")
+    .eq("auth_user_id", userId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return String((data as Record<string, unknown>).role_code ?? "") || null;
+}
+
+// Configured-but-unscoped and fully-unconfigured both fall back to
+// DIRECTOR-only (via hasBlanketApprovalOverride), so a plain company-wide
+// setup keeps working untouched -- same fallback shape as PO/STO/PTO.
+async function assertPackBomApproverRole(
+  ctx: ProdHandlerContext,
+  resourceCode: string,
+  companyId: string,
+  createdBy?: string | null,
+): Promise<void> {
+  if (hasBlanketApprovalOverride(ctx)) {
+    return;
+  }
+
+  const rules = await loadPackBomApproverRules(resourceCode, companyId);
+  let isConfiguredApprover: boolean;
+
+  if (rules.length === 0) {
+    isConfiguredApprover = hasBlanketApprovalOverride(ctx);
+  } else {
+    const creatorRoleCode = createdBy ? await getPackBomUserRoleCode(createdBy) : null;
+    const scopedRules = pickScopedApproverRules(
+      {
+        resource_code: resourceCode,
+        action_code: "APPROVE",
+        requester_auth_user_id: createdBy ?? null,
+        requester_role_code: creatorRoleCode,
+      },
+      rules,
+    );
+    isConfiguredApprover = scopedRules.length > 0
+      ? matchesApprover(scopedRules, {
+        auth_user_id: ctx.auth_user_id,
+        roleCode: ctx.roleCode,
+        approverWorkContextIds: await loadApproverWorkContextIds(serviceRoleClient, ctx.auth_user_id, companyId),
+      })
+      : hasBlanketApprovalOverride(ctx);
+  }
+
+  if (!isConfiguredApprover) {
+    throw new Error("PROD_BOM_APPROVER_ROLE_REQUIRED");
+  }
+
+  if (createdBy && createdBy === ctx.auth_user_id && !hasBlanketApprovalOverride(ctx)) {
+    throw new Error("PROD_BOM_SELF_APPROVAL_FORBIDDEN");
+  }
+}
+
 export async function approvePackBomHandler(
   req: Request,
   ctx: ProdHandlerContext,
@@ -724,13 +822,19 @@ export async function approvePackBomHandler(
     const { data: bom, error: bomFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom")
-      .select("id, status, sku_material_id, company_id")
+      .select("id, status, sku_material_id, company_id, created_by")
       .eq("id", id)
       .maybeSingle();
 
     if (bomFetchErr) throw new Error("PROD_BOM_FETCH_FAILED");
     if (!bom) return bomError(req, ctx, "PROD_BOM_NOT_FOUND", 404, "Pack BOM not found");
     await assertPackBomCompanyScope(ctx, (bom as JsonRecord).company_id as string);
+    await assertPackBomApproverRole(
+      ctx,
+      "PROD_PACK_BOM_APPROVAL",
+      (bom as JsonRecord).company_id as string,
+      (bom as JsonRecord).created_by as string | null,
+    );
     if ((bom as JsonRecord).status !== "DRAFT") {
       return bomError(req, ctx, "PROD_BOM_NOT_DRAFT", 422, "Only DRAFT Pack BOMs can be approved");
     }
@@ -778,7 +882,8 @@ export async function approvePackBomHandler(
     return okResponse({ id, status: "ACTIVE" }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BOM_APPROVE_FAILED";
-    return bomError(req, ctx, code, 500, "Pack BOM approve failed");
+    const status = ["PROD_BOM_SCOPE_VIOLATION", "PROD_BOM_APPROVER_ROLE_REQUIRED", "PROD_BOM_SELF_APPROVAL_FORBIDDEN"].includes(code) ? 403 : 500;
+    return bomError(req, ctx, code, status, "Pack BOM approve failed");
   }
 }
 
@@ -800,13 +905,19 @@ export async function rejectPackBomHandler(
     const { data: bom, error: bomFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom")
-      .select("id, status, company_id")
+      .select("id, status, company_id, created_by")
       .eq("id", id)
       .maybeSingle();
 
     if (bomFetchErr) throw new Error("PROD_BOM_FETCH_FAILED");
     if (!bom) return bomError(req, ctx, "PROD_BOM_NOT_FOUND", 404, "Pack BOM not found");
     await assertPackBomCompanyScope(ctx, (bom as JsonRecord).company_id as string);
+    await assertPackBomApproverRole(
+      ctx,
+      "PROD_PACK_BOM_APPROVAL",
+      (bom as JsonRecord).company_id as string,
+      (bom as JsonRecord).created_by as string | null,
+    );
     if ((bom as JsonRecord).status !== "DRAFT") {
       return bomError(req, ctx, "PROD_BOM_NOT_DRAFT", 422, "Only DRAFT Pack BOMs can be rejected");
     }
@@ -823,7 +934,8 @@ export async function rejectPackBomHandler(
     return okResponse({ id, status: "DRAFT", reject_reason: reason }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BOM_REJECT_FAILED";
-    return bomError(req, ctx, code, 500, "Pack BOM reject failed");
+    const status = ["PROD_BOM_SCOPE_VIOLATION", "PROD_BOM_APPROVER_ROLE_REQUIRED", "PROD_BOM_SELF_APPROVAL_FORBIDDEN"].includes(code) ? 403 : 500;
+    return bomError(req, ctx, code, status, "Pack BOM reject failed");
   }
 }
 
@@ -1200,13 +1312,20 @@ export async function approvePackBomChangeRequestHandler(
     const { data: cr, error: crFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom_change_request")
-      .select("id, status, pack_bom_id, bom:pack_bom!pack_bom_id(company_id)")
+      .select("id, status, pack_bom_id, created_by, bom:pack_bom!pack_bom_id(company_id)")
       .eq("id", id)
       .maybeSingle();
 
     if (crFetchErr) throw new Error("PROD_BCR_FETCH_FAILED");
     if (!cr) return bomError(req, ctx, "PROD_BCR_NOT_FOUND", 404, "Change request not found");
-    await assertPackBomCompanyScope(ctx, ((cr as JsonRecord).bom as JsonRecord | null)?.company_id as string);
+    const crCompanyId = ((cr as JsonRecord).bom as JsonRecord | null)?.company_id as string;
+    await assertPackBomCompanyScope(ctx, crCompanyId);
+    await assertPackBomApproverRole(
+      ctx,
+      "PROD_CHANGE_PACK_BOM_APPROVAL",
+      crCompanyId,
+      (cr as JsonRecord).created_by as string | null,
+    );
     if ((cr as JsonRecord).status !== "DRAFT") {
       return bomError(req, ctx, "PROD_BCR_NOT_DRAFT", 422, "Only DRAFT change requests can be approved");
     }
@@ -1240,7 +1359,8 @@ export async function approvePackBomChangeRequestHandler(
     return okResponse({ id, status: "APPROVED" }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BCR_APPROVE_FAILED";
-    return bomError(req, ctx, code, 500, "Pack BOM change request approve failed");
+    const status = ["PROD_BOM_SCOPE_VIOLATION", "PROD_BOM_APPROVER_ROLE_REQUIRED", "PROD_BOM_SELF_APPROVAL_FORBIDDEN"].includes(code) ? 403 : 500;
+    return bomError(req, ctx, code, status, "Pack BOM change request approve failed");
   }
 }
 
@@ -1262,13 +1382,20 @@ export async function rejectPackBomChangeRequestHandler(
     const { data: cr, error: crFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_bom_change_request")
-      .select("id, status, bom:pack_bom!pack_bom_id(company_id)")
+      .select("id, status, created_by, bom:pack_bom!pack_bom_id(company_id)")
       .eq("id", id)
       .maybeSingle();
 
     if (crFetchErr) throw new Error("PROD_BCR_FETCH_FAILED");
     if (!cr) return bomError(req, ctx, "PROD_BCR_NOT_FOUND", 404, "Change request not found");
-    await assertPackBomCompanyScope(ctx, ((cr as JsonRecord).bom as JsonRecord | null)?.company_id as string);
+    const crCompanyId = ((cr as JsonRecord).bom as JsonRecord | null)?.company_id as string;
+    await assertPackBomCompanyScope(ctx, crCompanyId);
+    await assertPackBomApproverRole(
+      ctx,
+      "PROD_CHANGE_PACK_BOM_APPROVAL",
+      crCompanyId,
+      (cr as JsonRecord).created_by as string | null,
+    );
     if ((cr as JsonRecord).status !== "DRAFT") {
       return bomError(req, ctx, "PROD_BCR_NOT_DRAFT", 422, "Only DRAFT change requests can be rejected");
     }
@@ -1284,6 +1411,7 @@ export async function rejectPackBomChangeRequestHandler(
     return okResponse({ id, status: "REJECTED" }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BCR_REJECT_FAILED";
-    return bomError(req, ctx, code, 500, "Pack BOM change request reject failed");
+    const status = ["PROD_BOM_SCOPE_VIOLATION", "PROD_BOM_APPROVER_ROLE_REQUIRED", "PROD_BOM_SELF_APPROVAL_FORBIDDEN"].includes(code) ? 403 : 500;
+    return bomError(req, ctx, code, status, "Pack BOM change request reject failed");
   }
 }
