@@ -444,10 +444,10 @@ This applies to **anyone** holding that rank in SCM, not just the 3 named indivi
 
 Status: ✅ Decided + implemented in prod (2026-07-29, ACL v19). Director gets nothing in this group — explicit exception, confirmed after the DIRECTOR-identity clarification above (Bijon specifically was asked, answer was "no need").
 
-**⚠️ Revised 2026-08-06 (business owner, role-based, no named individuals)
-— confirms this group mostly unchanged, adds Plant Head Structural Fallback
-(Basic/Special Rule #5/#6) which the original design didn't have. Design-phase
-only, not yet implemented.**
+**✅ Revised + IMPLEMENTED 2026-08-06 (business owner, role-based, no named
+individuals) — confirms this group mostly unchanged, adds Plant Head
+Structural Fallback (Basic/Special Rule #5/#6) which the original design
+didn't have.**
 
 | tx_code | Page | Stores | Security | Plant Head | Audit | Director |
 |---|---|---|---|---|---|---|
@@ -469,10 +469,100 @@ Director stays at zero on PO04/05/17 (Basic Rule #3's opt-in default,
 nothing stated here so nothing granted), consistent with the original
 "Director gets nothing" note above.
 
-**Not yet implemented** — tracked for the same batch-implementation pass:
-new `work_context_capabilities` grant for MANAGEMENT/Plant-Head role on
-`PROC_GATE_ENTRY_LIST`/`PROC_GRN_LIST`/`PROC_GATE_EXIT`, mirroring
-`CAP_PROD_PLANTHEAD_FULL`/`CAP_QA_PLANTHEAD`'s existing shape.
+**✅ Implemented 2026-08-06 — new `CAP_RECEIVING_PLANTHEAD` capability**
+(VIEW on `PROC_GATE_ENTRY_LIST`; VIEW+WRITE+EDIT+APPROVE on `PROC_GRN_LIST`;
+VIEW+WRITE on `PROC_GATE_EXIT` — same action set as Stores' own grant),
+`role_capabilities` = L3_MANAGER+DIRECTOR (mirrors `CAP_QA_PLANTHEAD`'s
+existing shape), `work_context_capabilities` = MANAGEMENT + ACL-MASTER, both
+companies. New ACL version (v49, both companies) captured+generated since
+v48 was already source-captured earlier today (re-running capture on an
+already-captured version is a documented no-op — see §8). Verified via
+`precomputed_acl_view`: the real Plant Head users (P0073/CMP003,
+P0003/CMP006) now resolve ALLOW on all 3 resources with `menu_visible=true`;
+P0076 (ACL-MASTER) still resolves ALLOW on everything (no drift); Stores'
+own existing grant unchanged.
+
+**✅ Dependency wiring 2026-08-06 — Page Dependency Manifest cross-check
+(the step skipped in the first pass, corrected same session).** PO04/05/17's
+frontend pages have 2 cross-module dependencies: `GRNDetailPage.jsx`'s
+Document Flow tab needs `PROC_PO_LIST:VIEW` (Type খ), and
+`GRNPostFlow.jsx`'s Transporter dropdown + "+Add Transporter" needs
+`PROC_TRANSPORTER_MASTER:VIEW/WRITE/EDIT` (Type ক). Two new narrow
+companion capabilities, both `menu_visible=false`:
+- `CAP_GRN_DOCFLOW_VIEW` (VIEW on `PROC_PO_LIST`) — granted to STORES +
+  MANAGEMENT + ACL-MASTER. **Real pre-existing gap found in passing: Stores
+  itself had zero access to `PROC_PO_LIST`** before this — the Document Flow
+  tab has been silently 403ing for Stores in prod, unrelated to anything
+  from today, just never caught until the manifest cross-check ran.
+- `CAP_GRN_TRANSPORTER_DEP` (VIEW+WRITE+EDIT on `PROC_TRANSPORTER_MASTER`) —
+  granted to MANAGEMENT + ACL-MASTER only. Stores keeps its existing
+  full-visible `CAP_PROC_TRANSPORTER_LIMITED` grant for now (Group 2's PM06
+  revision, not yet implemented, will consolidate Stores onto this same
+  companion when it lands — building Plant Head's copy this way now avoids
+  redoing it twice).
+
+**🔴 Second real bug found while verifying the above — `acl.capture_acl_version_source()`
+never copied `menu_visible` into the version-scoped table at all**, and that
+column defaults to `TRUE` (NOT NULL). Every ACL version bump since the
+menu_visible mechanism was built has been silently resetting every hidden
+companion capability back to fully visible in the captured version — the
+bug was invisible until now because nothing had re-captured a hidden
+grant's *first* version bump under close observation. Root-cause fixed in
+`acl.capture_acl_version_source()` (now selects `menu_visible` like every
+other column) — migration `20260806150000`, applied to dev, committed
+(`9db1869e`), **needs the business owner's PR to reach prod**. Prod's
+already-wrong v49/v50 version-table rows for the two new companion
+capabilities were corrected directly via MCP (data-only fix, safe pending
+the function fix) and re-propagated via a fresh v51.
+
+**🔴 Third finding, not a bug — a pre-existing business policy colliding
+with today's new decision.** Both real Plant Head accounts (P0073, P0003)
+carry a blanket per-user `acl.user_overrides` DENY dated 2026-07-27, reason
+*"Mgmt managers: no Procurement section"* / *"no Procurement Masters"*,
+covering ~30 `PROC_*` resources — including `PROC_PO_LIST:VIEW` and
+`PROC_TRANSPORTER_MASTER:VIEW` specifically, exactly the two dependencies
+above. `user_overrides` DENY always outranks capability grants, so both
+companion capabilities were silently doing nothing until this was found.
+**Business owner's instruction (2026-08-06): the who-gets-what decision is
+already made, so resolve conflicts like this permanently, not case-by-case.**
+Revoked (via `revoked_at`, not deleted — history preserved) just those 2
+specific (resource_code, action_code) override rows for P0073/P0003; the
+other ~28 rows in that same 2026-07-27 policy (CSN Tracker, PO/STO create,
+Procurement Masters, etc.) are untouched — this was a narrow, targeted
+resolution, not a blanket revoke. Re-captured as v51 (both companies).
+Verified via `precomputed_acl_view`, v51, active: both dependencies now
+resolve ALLOW with `menu_visible=false`; core Group 4 grant (Gate
+Entry/GRN/Gate Exit) unaffected; P0076 (ACL-MASTER) has zero non-ALLOW rows
+(no drift). **Standing rule going forward:** whenever a new department/user
+gets a fresh capability grant, check `acl.user_overrides` for that
+user/resource combination before declaring the grant complete — a
+correctly-wired capability can still be silently defeated by an older
+per-user DENY, exactly as it was here.
+
+**🔴 Real security gap found and fixed during this implementation pass
+(2026-08-06) — company-scope gap, `grn.handlers.ts` +
+`gate_entry.handlers.ts`.** While checking Bug Pattern #2 as part of the
+13-pattern pre-implementation sweep: `createAndPostGRNFromLineHandler`,
+`reverseGRNHandler`, `getGRNHandler`, `getGELinesForGRNHandler`, and (via
+the shared `fetchGateEntryBundle`/`hydrateGateEntry` helpers)
+`getGateEntryHandler`, `getGateEntryByNumberHandler`,
+`updateGateEntryHandler`, `createGateExitInboundHandler`,
+`pruneGateEntryHandler` all fetched a gate_entry/GRN record by id or
+business number and read/posted/reversed/updated it — **without ever
+validating the record's `company_id` against the caller's own
+`erp_map.user_companies` scope.** A user in one company could view or
+mutate another company's GRN/Gate Entry data by id/number alone, no ACL
+grant on the wrong company needed. Fixed: `assertCompanyScope(ctx,
+record.company_id)` added right after each fetch, before any further
+read/write; the two Gate Entry helpers now take `ctx` so the check covers
+every call site in one place. Each catch block's status-mapping updated so
+`COMPANY_SCOPE_VIOLATION` returns 403 (several previously fell through to a
+generic 500). Verified zero new `deno check` errors via git-stash
+before/after on both files. Committed (`bdc8e797`), pushed to `dev`. This
+was not part of the original Group 4 access-decision scope — found only
+because the 13-bug checklist was applied rigorously per the business
+owner's explicit instruction, not skipped for a "just wire the capability"
+shortcut.
 
 **Two corrections mid-decision, both against the business owner's own initial assumptions — verified against live code before implementing:**
 1. **"I don't think there's a Delete here" — wrong.** GRN has a real DELETE-registered action: reversal (`POST /api/procurement/grns/:id/reverse` → `PROC_GRN_LIST:DELETE`). Confirmed via `route-acl-registry.ts`. Once surfaced, business owner assigned it deliberately narrower than Stores' own full access: **only L1/L2 Auditor can reverse a GRN** — Stores posts (Approve) freely but cannot undo their own posting, a genuine separation-of-duties control (Stores creates+finalizes, an independent Auditor is the only one who can undo it).
