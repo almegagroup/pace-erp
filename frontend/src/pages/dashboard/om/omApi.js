@@ -10,6 +10,7 @@ import { resolveErrorMessage } from "../../../utils/errorMessages.js";
  * Authority: Frontend
  */
 
+// @ts-ignore Vite injects import.meta.env at runtime in this frontend bundle.
 const BASE = import.meta.env.VITE_API_BASE;
 
 async function readJsonSafe(response) {
@@ -23,7 +24,9 @@ async function readJsonSafe(response) {
 function createError(json, response, fallbackCode) {
   const code = json?.code ?? fallbackCode;
   const error = new Error(resolveErrorMessage(code, json?.message, response.status));
+  // @ts-ignore Frontend API helpers attach transport metadata to thrown errors.
   error.code = code;
+  // @ts-ignore Frontend API helpers attach transport metadata to thrown errors.
   error.status = response.status;
   throw error;
 }
@@ -63,6 +66,9 @@ export async function createMaterial(payload) {
   );
 }
 
+/**
+ * @param {Record<string, unknown>} [params]
+ */
 export async function listMaterials({
   material_type,
   status,
@@ -128,6 +134,9 @@ export async function importMaterialsCsv(csvText) {
   );
 }
 
+/**
+ * @param {Record<string, unknown>} [params]
+ */
 export async function listCompanyMapping({ company_id, search } = {}) {
   const params = buildParams({ company_id, search });
   return fetchJson(
@@ -251,7 +260,9 @@ export async function createVendor(payload) {
   );
 }
 
-
+/**
+ * @param {Record<string, unknown>} [params]
+ */
 export async function listVendors({
   vendor_type,
   status,
@@ -376,6 +387,9 @@ export async function upsertVendorEmails(payload) {
   );
 }
 
+/**
+ * @param {Record<string, unknown>} [params]
+ */
 export async function listVendorCompanyMapping({ company_id, search, vendor_type } = {}) {
   const params = buildParams({ company_id, search, vendor_type });
   return fetchJson(`/api/om/vendor/company-mapping?${params.toString()}`, {}, "OM_VENDOR_MAPPING_LIST_FAILED");
@@ -417,6 +431,9 @@ export async function createVendorMaterialInfo(payload) {
   );
 }
 
+/**
+ * @param {Record<string, unknown>} [params]
+ */
 export async function listVendorMaterialInfos({
   vendor_search,
   material_search,
@@ -432,6 +449,9 @@ export async function listVendorMaterialInfos({
   );
 }
 
+/**
+ * @param {Record<string, unknown>} [params]
+ */
 export async function getVendorMaterialInfo({ id, vendor_id, material_id } = {}) {
   const params = buildParams({ id, vendor_id, material_id });
   return fetchJson(
@@ -483,6 +503,29 @@ export async function listMappedMaterialIdsForVendor(vendorId) {
   );
 }
 
+/**
+ * @typedef {Object} CreateCustomerPayload
+ * @property {string} [customer_name] Required unless `vendor_id` is set.
+ * @property {string} [vendor_id] Required unless `customer_name` is set.
+ * @property {string} [parent_customer_id]
+ * @property {"DOMESTIC"|"EXPORT"} customer_type
+ * @property {"MTO_HPS"|"ZTEST"|"MTS"} [fo_customer_type]
+ * @property {string} delivery_address
+ * @property {string} [billing_address]
+ * @property {string} billing_state Required for both DOMESTIC and EXPORT.
+ * @property {string} company_id Required company scope for the initial map row.
+ * @property {string} [gst_number]
+ * @property {"REGISTERED"|"UNREGISTERED"|"COMPOSITION"|"EXPORT"} [gst_category]
+ * @property {string} [pan_number]
+ * @property {string} [primary_contact_person]
+ * @property {string} [phone]
+ * @property {string} [primary_email]
+ * @property {string} [currency_code]
+ */
+
+/**
+ * @param {CreateCustomerPayload} payload
+ */
 export async function createCustomer(payload) {
   return fetchJson(
     "/api/om/customer",
@@ -495,6 +538,10 @@ export async function createCustomer(payload) {
   );
 }
 
+
+/**
+ * @param {Record<string, unknown>} [params]
+ */
 export async function listCustomers({
   customer_type,
   fo_customer_type,
@@ -523,6 +570,27 @@ export async function getCustomer(id) {
   return fetchJson(`/api/om/customer?${params.toString()}`, {}, "OM_CUSTOMER_LOOKUP_FAILED");
 }
 
+/**
+ * @typedef {Object} UpdateCustomerPayload
+ * @property {string} id
+ * @property {string} [customer_name]
+ * @property {string} [gst_number]
+ * @property {string} [parent_customer_id]
+ * @property {string} [delivery_address]
+ * @property {string} [billing_address]
+ * @property {string} [billing_state]
+ * @property {string} [pan_number]
+ * @property {string} [primary_contact_person]
+ * @property {string} [phone]
+ * @property {string} [primary_email]
+ * @property {string} [currency_code]
+ * @property {"REGISTERED"|"UNREGISTERED"|"COMPOSITION"|"EXPORT"|""} [gst_category]
+ * @property {"MTO_HPS"|"ZTEST"|"MTS"|""} [fo_customer_type]
+ */
+
+/**
+ * @param {UpdateCustomerPayload} payload
+ */
 export async function updateCustomer(payload) {
   return fetchJson(
     "/api/om/customer",
@@ -977,6 +1045,9 @@ export async function toggleStorageLocation(payload) {
   );
 }
 
+/**
+ * @param {Record<string, unknown>} [params]
+ */
 export async function listPlantAssignments({ company_id } = {}) {
   const params = buildParams({ company_id });
   return fetchJson(
@@ -1019,7 +1090,9 @@ async function fetchAdminJsonSafe(path, fallbackCode) {
   if (!response.ok || !json?.ok) {
     const code = json?.code ?? fallbackCode;
     const error = new Error(resolveErrorMessage(code, json?.message, response.status));
+    // @ts-ignore Frontend API helpers attach transport metadata to thrown errors.
     error.code = code;
+    // @ts-ignore Frontend API helpers attach transport metadata to thrown errors.
     error.status = response.status;
     throw error;
   }
