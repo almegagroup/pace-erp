@@ -1109,6 +1109,8 @@ any of the 7 resources in either company; every other department is zero.
 ## Group 10 — Production
 
 Status: ✅ Decided + implemented in prod (2026-07-29, ACL v29/v26).
+**✅ 2026-08-06 revision IMPLEMENTED (ACL v52, both companies) — see
+"✅ Implemented 2026-08-06" notes inline below for each sub-decision.**
 
 | tx_code | Page | Production | Quality | SCM | Management | Stores | Audit | Director |
 |---|---|---|---|---|---|---|---|---|
@@ -1131,11 +1133,13 @@ grant in this table (Production on PR00/09/22/23, SCM on PR05/07, QUALITY on
 PR10) is capped at **L3_Manager** — L4_Manager is excluded from all of them,
 routed to DIRECTOR-REPORTS instead (view/oversight only, not
 Create/Edit/Approve). Confirmed by business owner as applying to every page
-in this group, not decided page-by-page. Not yet implemented (see the
-batch-implementation tracking note under PR06/PR08 below — this needs the
-same treatment: each capability's `role_capabilities` narrowed to exclude
-L4_MANAGER, and DIRECTOR-REPORTS' own work context granted the equivalent
-view-level access where it doesn't already have it).
+in this group, not decided page-by-page. **✅ Implemented 2026-08-06** —
+`L4_MANAGER` removed from `role_capabilities` on `CAP_PROD_DEPT_FULL`
+(PR00/09/22/23), `CAP_PACKBOM_CREATE_SCM` (PR05/07), `CAP_PROCPO_EDIT_QA`
+(PR10) — verified each capability's blast radius via
+`capability_menu_actions` first (all 3 scoped exactly to this group's own
+resources, no leakage). `CAP_PROD_PLANTHEAD_FULL` (Plant Head fallback) was
+already `L3_MANAGER`-only by design, no change needed there.
 
 **PR10 (Production PO Edit) — revised 2026-08-06, business owner
 instruction:** stays QA-only exactly as originally designed (no change to
@@ -1149,8 +1153,10 @@ PR10 does **not** trigger any separate approval of the edit itself — the
 Process PO stays at STANDARD status after a PR10 edit and still has to pass
 through the normal QA Approval Queue (PR16) afterward, same as any other
 Process PO; PR10 and PR16 are both QA's own job, no other department
-involved in either step. **Not yet implemented** — tracked for the
-batch-implementation pass.
+involved in either step. **✅ Implemented 2026-08-06** — deleted the
+`CAP_G10_DIRECTOR_VIEW` → `PROD_PO_EDIT` capability_menu_actions row only
+(the capability's other 6 pages untouched); confirmed via
+`precomputed_acl_view` that Bijon (Director) now resolves zero rows on PR10.
 
 **PR13/PR14/PR20 (Order List / Batch Variance / Partial Reversal Report) —
 revised 2026-08-06, business owner instruction: Basic Rule #4 restored,
@@ -1170,10 +1176,17 @@ Kanabar, P0002 — see the "Identity note" above) now explicitly gets these 3
 resources** — this WC was created 2026-07-28 specifically for report-only
 Director access and deliberately started empty ("to be built up page-by-page
 as groups are decided"); this is its first real grant.
-**⚠️ Not yet implemented** — design-phase decision only, tracked for the
-batch-implementation pass (re-add the 3 `(CAP_EVERYONE_REPORTS, menu)` rows
-that Group 10 deliberately removed, or an equivalent broad-View capability;
-grant DIRECTOR-REPORTS its own row on all 3 resources).
+**✅ Implemented 2026-08-06** — rather than re-adding the old blanket
+`CAP_EVERYONE_REPORTS` rows (which is what leaked User-tier access in the
+first place, see the bug note above), added `L1_USER`/`L2_USER`/`L3_USER`/
+`L4_USER` to `CAP_ORDERLIST_MGRTIER`'s `role_capabilities` (removed
+`L4_MANAGER` from the same, per Basic Rule #5) — this keeps the fix on the
+already-correctly-scoped capability instead of reviving the leaky one.
+Confirmed via `capability_menu_actions` this capability is scoped to
+exactly PR13/14/20, no wider blast radius. `DIRECTOR-REPORTS` work context
+granted this same capability (both companies) — it already includes
+`DIRECTOR` role, matching P0002 exactly. Verified via `precomputed_acl_view`:
+Production/Quality L3_USER users (P0069, P0071) now resolve ALLOW on all 3.
 
 ~~**Superseded 2026-08-06 — original PR13/14/20 View design (kept for
 history, no longer in effect):** Production/Quality View restricted to
@@ -1197,16 +1210,22 @@ restored to the Basic Rule #3 default here since Director sits at the top
 of this same chain — matches PO/STO's own DIRECTOR-fallback design in
 Group 3, not a special case for Pack BOM). View stays open to
 Production/Quality/SCM/Management/Director, unchanged.
-**⚠️ Not yet implemented** — this is a design-phase decision only (per the
-locked "decide every page first, implement once" sequencing). Real
-implementation requires: (1) wiring `pack_bom.handlers.ts`'s approve/reject
-handlers into `_shared/workflow_scope.ts`'s `pickScopedApproverRules`
-(same engine PO/STO/PTO already use), replacing the current flat
-L1-L2_Manager capability check; (2) new `acl.approver_map` SUBJECT_ROLE
-rows for `PROD_PACK_BOM_APPROVAL`/`PROD_CHANGE_PACK_BOM_APPROVAL`, mirroring
-PO/STO's existing rows; (3) capability revision so DIRECTOR's work context
-carries real APPROVE on both resources, not just VIEW. Tracked for the
-batch-implementation pass alongside the rest of this Step-4 sweep.
+**✅ Implemented 2026-08-06** (commit `129cf9c7`): (1) `pack_bom.handlers.ts`'s
+`approvePackBomHandler`/`rejectPackBomHandler`/
+`approvePackBomChangeRequestHandler`/`rejectPackBomChangeRequestHandler` now
+call a new `assertPackBomApproverRole()` wired into
+`_shared/workflow_scope.ts`'s `pickScopedApproverRules` +
+`matchesApprover` (the same engine, including today's department-scope fix)
+— replacing the flat capability-only check; all 4 catch blocks updated so
+`PROD_BOM_SCOPE_VIOLATION`/`PROD_BOM_APPROVER_ROLE_REQUIRED`/
+`PROD_BOM_SELF_APPROVAL_FORBIDDEN` return 403, not the previous flat 500.
+(2) 16 new `acl.approver_map` `SUBJECT_ROLE` rows (L2_USER→L3_USER/L1_MANAGER,
+L3_USER→L1_MANAGER, L1_MANAGER→DIRECTOR, × 2 resources × 2 companies),
+approver scoped to the SUPPLY CHAIN work context (matching PO/STO's own
+chain exactly, since Pack BOM's creator department is SCM). (3) `CAP_G10_
+DIRECTOR_VIEW` gained a real `APPROVE` action on both `PROD_PACK_BOM_
+APPROVAL`/`PROD_CHANGE_PACK_BOM_APPROVAL` (was VIEW-only). Verified zero new
+`deno check` errors.
 
 ~~**Superseded 2026-08-06 — original PR06/PR08 Approve design (kept for
 history, no longer in effect):** flat rule, any SCM L1_Manager or
