@@ -533,7 +533,7 @@ export default function PlanFeedPage() {
     <ErpScreenScaffold
       title="Plan Feed"
       subtitle="Firm Order visibility — what customers ordered, and its current production/dispatch state"
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
+      notices={notice.msg ? [{ key: "plan-feed-notice", message: notice.msg, tone: notice.tone }] : []}
     >
       <ErpSectionCard>
         <div className="flex gap-3 items-end flex-wrap">
