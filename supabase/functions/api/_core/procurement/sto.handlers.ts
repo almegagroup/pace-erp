@@ -14,7 +14,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
-import { pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
+import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -29,6 +29,7 @@ type StoLineRow = Record<string, unknown>;
 type ApproverMapRow = {
   approver_user_id: string | null;
   approver_role_code: string | null;
+  approver_work_context_id: string | null;
   resource_code: string | null;
   action_code: string | null;
   scope_type: string | null;
@@ -212,7 +213,7 @@ async function loadStoApproverRules(companyId: string): Promise<ApproverMapRow[]
   const { data, error } = await serviceRoleClient
     .schema("acl")
     .from("approver_map")
-    .select("approver_user_id, approver_role_code, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage")
+    .select("approver_user_id, approver_role_code, approver_work_context_id, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage")
     .eq("resource_code", "PROC_STO_LIST")
     .eq("action_code", "APPROVE")
     .eq("company_id", companyId);
@@ -237,14 +238,6 @@ async function getUserRoleCode(userId: string): Promise<string | null> {
 
   if (error || !data) return null;
   return String((data as Record<string, unknown>).role_code ?? "") || null;
-}
-
-function matchesApprover(rows: ApproverMapRow[], ctx: ProcurementHandlerContext): boolean {
-  return rows.some((row) => {
-    if (row.approver_user_id) return row.approver_user_id === ctx.auth_user_id;
-    if (row.approver_role_code) return row.approver_role_code === ctx.roleCode;
-    return false;
-  });
 }
 
 // Same creator-scoped approval-chain mechanism as po.handlers.ts's
@@ -277,7 +270,11 @@ async function assertStoApproverRole(
       rules,
     );
     isConfiguredApprover = scopedRules.length > 0
-      ? matchesApprover(scopedRules, ctx)
+      ? matchesApprover(scopedRules, {
+        auth_user_id: ctx.auth_user_id,
+        roleCode: ctx.roleCode,
+        approverWorkContextIds: await loadApproverWorkContextIds(serviceRoleClient, ctx.auth_user_id, companyId),
+      })
       : hasBlanketApprovalOverride(ctx);
   }
 

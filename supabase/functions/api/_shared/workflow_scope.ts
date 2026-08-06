@@ -45,12 +45,93 @@ type ActionableApproverRuleRow = {
   approval_stage: number;
   approver_role_code: string | null;
   approver_user_id: string | null;
+  approver_work_context_id?: string | null;
 };
 
 type ActionableDecisionRow = {
   stage_number: number;
   approver_auth_user_id: string;
 };
+
+export type ApproverMatchRow = {
+  approver_user_id: string | null;
+  approver_role_code: string | null;
+  approver_work_context_id?: string | null;
+};
+
+export type ApproverMatchContext = {
+  auth_user_id: string;
+  roleCode: string;
+  approverWorkContextIds: ReadonlySet<string>;
+};
+
+/*
+ * Centralized approver match: named person (approver_user_id) always wins on identity
+ * alone. Rank-based rows (approver_role_code) additionally require the caller to
+ * currently hold membership in approver_work_context_id (the department the rule
+ * declares) -- a same-ranked person in an unrelated department no longer qualifies.
+ * Legacy rows with approver_role_code set but no approver_work_context_id (pre-migration
+ * data not yet backfilled) fall back to the old rank-only behavior so nothing breaks
+ * mid-backfill.
+ */
+export function matchesApprover<T extends ApproverMatchRow>(
+  rows: T[],
+  ctx: ApproverMatchContext,
+): boolean {
+  return rows.some((row) => {
+    if (row.approver_user_id) {
+      return row.approver_user_id === ctx.auth_user_id;
+    }
+
+    if (row.approver_role_code) {
+      if (row.approver_role_code !== ctx.roleCode) {
+        return false;
+      }
+
+      if (!row.approver_work_context_id) {
+        return true; // legacy, not yet backfilled
+      }
+
+      return ctx.approverWorkContextIds.has(row.approver_work_context_id);
+    }
+
+    return false;
+  });
+}
+
+/*
+ * Every work_context the given user currently holds membership in, for one company --
+ * a person can hold more than one department simultaneously (e.g. Nilkamal-style
+ * Production+Quality), so approver-department matching must check set membership, not
+ * a single "primary" work_context.
+ */
+export async function loadApproverWorkContextIds(
+  db: DbClient,
+  authUserId: string,
+  companyId: string,
+): Promise<Set<string>> {
+  const { data, error } = await db
+    .schema("erp_acl")
+    .from("user_work_contexts")
+    .select("work_context_id")
+    .eq("auth_user_id", authUserId)
+    .eq("company_id", companyId);
+
+  if (error) {
+    throw new Error("APPROVER_WORK_CONTEXT_LOOKUP_FAILED");
+  }
+
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const ids: string[] = [];
+  for (const row of rows) {
+    const id = row.work_context_id;
+    if (typeof id === "string" && id) {
+      ids.push(id);
+    }
+  }
+
+  return new Set(ids);
+}
 
 export function isGeneralOpsWorkContextCode(
   workContextCode: string | null | undefined,
@@ -420,6 +501,7 @@ export function isWorkflowActionableForApprover<T extends ActionableApproverRule
     decisions: ActionableDecisionRow[];
     authUserId: string;
     roleCode: string;
+    approverWorkContextIds?: ReadonlySet<string>;
   },
 ): boolean {
   if (input.requesterAuthUserId === input.authUserId) {
@@ -427,17 +509,13 @@ export function isWorkflowActionableForApprover<T extends ActionableApproverRule
   }
 
   const matchedApproverStages = input.scopedApprovers
-    .filter((row) => {
-      if (row.approver_user_id) {
-        return row.approver_user_id === input.authUserId;
-      }
-
-      if (row.approver_role_code) {
-        return row.approver_role_code === input.roleCode;
-      }
-
-      return false;
-    })
+    .filter((row) =>
+      matchesApprover([row], {
+        auth_user_id: input.authUserId,
+        roleCode: input.roleCode,
+        approverWorkContextIds: input.approverWorkContextIds ?? new Set(),
+      })
+    )
     .map((row) => row.approval_stage);
 
   if (matchedApproverStages.length === 0) {
