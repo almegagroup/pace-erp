@@ -395,30 +395,26 @@ const legacyHrRoutes = extractLegacyHrRouteKeys(runnerSource);
 // 2026-08-06 by reading runner.ts directly (search "Gate-2: Workflow
 // decision").
 const dynamicAclRoutes = new Set(["POST:/api/workflow/decision"]);
-// KNOWN_UNAUTHORIZED_ROUTES — deliberately NOT registered, and must stay
-// that way until each handler gets a real caller-side authorization check.
-// Verified live 2026-08-06: none of these 8 handlers check the CALLING
-// user's admin status anywhere in their body (grep + manual read of
-// _core/auth/menu.handler.ts and _core/admin/signup/correct.handler.ts).
-// previewUserHandler in particular only checks the TARGET user's
-// profile.isAdmin, never ctx.context.isAdmin for the caller — meaning it
-// would let any authenticated caller impersonate/preview as anyone.
-// Right now these routes are only "safe" by accident: missing from the
-// registry means Gate-6 throws ROUTE_ACL_NOT_REGISTERED before the handler
-// ever runs. Registering any of these as skipAcl:true (the pattern used by
-// every OTHER /api/admin/* route, which DOES self-gate on ctx.context.isAdmin)
-// would open a real hole. Fix order: add ctx.context.isAdmin checks to each
-// handler first, verify, THEN move its route out of this list into the
-// registry as skipAcl:true — never the reverse.
+// KNOWN_UNAUTHORIZED_ROUTES — deliberately NOT registered.
+//
+// 2026-08-06 update: the 7 Menu Admin Panel routes that used to live here
+// (listMenuRegistryHandler/createMenuHandler/updateMenuHandler/
+// deleteMenuHandler/updateMenuTreeHandler/updateMenuStateHandler/
+// previewUserHandler) now have a real assertMenuAdmin(ctx) check, verified
+// via deno check, and were moved into the real registry as skipAcl:true
+// (Task #54 step 2) — same pattern as every other admin route. Do not move
+// a route the other direction (out of the registry, into this set) without
+// first confirming it still has NO real authorization; this set exists so
+// a route can wait here safely until its handler is actually fixed.
+//
+// signup-requests/correct is the one remaining case: correctSignupHandler
+// DOES have the isAdmin check now too (fixed same day), but it's kept here
+// on purpose — unlike the others, nobody has yet confirmed this route has a
+// real frontend caller. Registering an apparently-dead admin write route
+// without knowing who uses it is a separate risk from the auth gap that
+// justified this set in the first place; verify usage before moving it out.
 const KNOWN_UNAUTHORIZED_ROUTES = new Set([
-  "PATCH:/api/admin/signup-requests/correct", // correct.handler.ts — no auth check at all
-  "GET:/api/admin/menu",                       // listMenuRegistryHandler — no auth check
-  "POST:/api/admin/menu",                      // createMenuHandler — no auth check
-  "PATCH:/api/admin/menu",                     // updateMenuHandler — no auth check
-  "DELETE:/api/admin/menu",                    // deleteMenuHandler — no auth check
-  "PATCH:/api/admin/menu/tree",                // updateMenuTreeHandler — no auth check
-  "PATCH:/api/admin/menu/state",               // updateMenuStateHandler — no auth check
-  "POST:/api/admin/preview-user",              // previewUserHandler — checks TARGET's isAdmin, never CALLER's
+  "PATCH:/api/admin/signup-requests/correct",
 ]);
 const compiledPatternRegistryRoutes = [...patternRegistryRoutes.entries()].map(([patternSource, methods]) => ({
   patternSource,

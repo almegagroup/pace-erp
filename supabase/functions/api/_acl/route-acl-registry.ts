@@ -381,6 +381,22 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/admin/acl/user-overrides/revoke":              { skipAcl: true },
   "POST:/api/admin/acl/versions/rollback":                 { skipAcl: true },
 
+  // ── Admin: Menu Admin Panel (menu.handler.ts) — Task #54 step 2, 2026-08-06.
+  // Step 1 (same commit as step 2's own follow-up) added a real isAdmin
+  // check (assertMenuAdmin) to every one of these 7 handlers, verified via
+  // deno check. Before this, they were dispatched but unregistered — the
+  // registry gap was accidentally the only thing stopping an unauthorized
+  // caller, since the handlers themselves had zero auth. Now registered
+  // AND authorized — do not repeat the "unregistered = safe" mistake for a
+  // handler that still needs its own check written first.
+  "GET:/api/admin/menu":                                   { skipAcl: true },
+  "POST:/api/admin/menu":                                  { skipAcl: true },
+  "PATCH:/api/admin/menu":                                 { skipAcl: true },
+  "DELETE:/api/admin/menu":                                { skipAcl: true },
+  "PATCH:/api/admin/menu/tree":                            { skipAcl: true },
+  "PATCH:/api/admin/menu/state":                           { skipAcl: true },
+  "POST:/api/admin/preview-user":                          { skipAcl: true },
+
   // ── Admin: All routes — SA/GA only, ACL enforced in stepAcl (skipAcl here) ─
   "GET:/api/admin/system-health":                          { skipAcl: true },
   "GET:/api/admin/control-panel":                          { skipAcl: true },
