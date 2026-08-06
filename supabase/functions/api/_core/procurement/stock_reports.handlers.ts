@@ -970,7 +970,7 @@ export async function getCurrentStockHandler(
         ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code").in("id", slocIdsForLookup)
         : Promise.resolve({ data: [], error: null }),
       packCodes.size > 0
-        ? serviceRoleClient.schema("erp_master").from("pack_code_master").select("pack_code, outer_uom_code").in("pack_code", [...packCodes])
+        ? serviceRoleClient.schema("erp_production").from("pack_code_master").select("pack_code, outer_uom_code").in("pack_code", [...packCodes])
         : Promise.resolve({ data: [], error: null }),
     ]);
     if (companyResp.error || slocResp.error || packResp.error) {

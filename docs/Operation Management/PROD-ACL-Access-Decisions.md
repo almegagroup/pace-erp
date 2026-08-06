@@ -148,7 +148,7 @@ Three prod users hold role_code `DIRECTOR`:
 
 ## Group 1 — Operation Masters
 
-Status: ✅ Decided + implemented in prod (2026-07-28, ACL v8). **⚠️ Revised 2026-08-06 — session-wide rule reconciliation, not yet implemented (see below).**
+Status: ✅ Decided + implemented in prod (2026-07-28, ACL v8). **✅ Revised + IMPLEMENTED 2026-08-06 (ACL v57, both companies) — session-wide rule reconciliation, see below.**
 
 **⚠️ Revised 2026-08-06:** Group 1 is confirmed genuinely SCM+Director-only — no other
 department gets standalone page access on any Group 1 resource, superseding the MM04
@@ -168,9 +168,61 @@ Stores/Logistics grant and PM04's direct Production/QA grants below.
   companion CREATE capability wired to that inline flow instead (`menu_visible=false` on PM04).
   Auditor's existing `V C E D` grant is **unchanged** — pre-existing standalone audit access,
   not a dependency, out of scope for this revision.
-- **Not yet implemented** — design decision only. Batch-implementation pass covers this
-  alongside Groups 4/5/9/10's pending items (narrow companion capabilities + `menu_visible=false`
-  wiring is Claude's part, per the session's Type-ক/খ/গ dependency taxonomy).
+**✅ IMPLEMENTED 2026-08-06 (ACL v57, both companies).**
+
+- **MM04 View:** `CAP_OM_CUSTOMER_VIEW` — removed from LOGISTICS + STORES (zero genuine
+  dependency found — searched the Page Dependency Manifest for every DO/Gate/Stores page,
+  none reference `OM_CUSTOMER_LIST`/`OM_CUSTOMER_CREATE` at all). Kept for SCM/Director/
+  **PRODUCTION** (see below — a real dependency the original design missed).
+- **🔴 Real gap found and fixed — Production's own PR00 (Plan Feed) needs Customer
+  access, contradicting this section's original premise:** `PlanFeedPage.jsx` (Production's
+  own page) calls `GET /api/om/customers` (`OM_CUSTOMER_LIST:VIEW`) for its Party dropdown
+  and `POST`/`PATCH /api/om/customer` (`OM_CUSTOMER_CREATE:WRITE`/`EDIT`) for its inline
+  "+New Party" — this is literally the doc's own canonical Type-ক example (Cross-Module
+  Dependency Taxonomy section above), yet Production's genuine need for it was never
+  accounted for when this section was first drafted. Live data already had Production
+  holding a working (if inconsistently-scoped) grant (`CAP_OM_CUSTOMER_CREATE_ONLY`,
+  `menu_visible=true` but harmless since no `erp_menu.menu_master` row exists for the
+  route-only `OM_CUSTOMER_CREATE` resource to show as a page) — left in place, verified
+  correct against the manifest, not removed.
+- **🔴 Second real gap found — Director's Create/Edit on MM04 (`CAP_OM_CUSTOMER_CREATE`)
+  was never actually implemented**, despite the original 2026-07-28 table saying "Director:
+  C E" — `work_context_capabilities` had zero row for DIRECTOR on this capability (only
+  `SUPPLY CHAIN` + `ACL-MASTER` held it). Added.
+- **PM04:** Production's and Quality's `CAP_OM_MATERIAL_CATEGORY_MAINTAIN` (which granted
+  BOTH the inline `OM_MATERIAL_CREATE` companion AND standalone `PROC_MATERIAL_CATEGORY_
+  MASTER`/PM04 page access) removed entirely from both departments.
+- **🔴 Third real gap — the "zero PM04 access is safe for Production" claim (2026-07-28)
+  was wrong when checked against live code, not just Stroke Master's read-only Alternate
+  Material picker.** `ProductionPOCreatePage.jsx` (PR09, Production's own create page) has
+  a real, reachable "+New Category" form (`createMaterialCategoryGroup()`, Packing section)
+  that calls `OM_MATERIAL_CREATE:WRITE` — a genuine write dependency the original claim
+  missed entirely. New narrow capability `CAP_OM_MATERIAL_CATEGORY_INLINE` (WRITE+EDIT only
+  on `OM_MATERIAL_CREATE`, `menu_visible=false`, no VIEW since `OM_MATERIAL_LIST:VIEW`
+  already covers the read side, no `PROC_MATERIAL_CATEGORY_MASTER` access at all) granted
+  to both PRODUCTION and QUALITY (all 11 roles, department-membership-is-the-gate pattern) —
+  covers Stroke Master/Pack BOM/Production PO Create's inline category-create and material-
+  patch flows for both departments correctly.
+- **Lesson (same class of miss as the Group 10/PR09 Plant Head gap earlier today):** a
+  design note claiming "X department needs zero access here" must be checked against the
+  Page Dependency Manifest for every page that department actually uses, not just the one
+  or two pages the note happened to audit — an incomplete per-page code check produces a
+  confidently-wrong "safe to remove" conclusion.
+- **`user_overrides` check:** zero rows for any Group 1 resource, no conflict.
+- **`generate_acl_snapshot()` join mechanics note (found while debugging the companion
+  capability, applies to every future narrow-capability grant this session builds):** a
+  capability only takes effect for a work context if it exists in **both**
+  `acl.role_capabilities` (role → capability) **and** `acl.work_context_capabilities`
+  (work context → capability) — inserting only the work-context row (as first attempted for
+  `CAP_PROD_PLANTHEAD_MATERIAL_COMPANION` earlier today) silently produces zero
+  `precomputed_acl_view` rows, no error. Both inserts are now standard practice for every
+  new companion capability.
+- **Verified (`precomputed_acl_view`, v57, both companies):** Production/Quality L3_USER
+  (P0069/P0071/P0072/P0075) — `OM_MATERIAL_CREATE` WRITE+EDIT only, zero `PROC_MATERIAL_
+  CATEGORY_MASTER`; Production additionally has `OM_CUSTOMER_CREATE` V/W/E +
+  `OM_CUSTOMER_LIST` VIEW (Quality does not, correctly — no Customer dependency for QA).
+  Bijon (Director) — `OM_CUSTOMER_CREATE` V/W/E now correctly present (was missing before).
+  Logistics/Stores — zero rows on either Customer resource. ACL-MASTER drift check — clean.
 
 Original table + notes below (2026-07-28) — kept for history and still-accurate implementation
 detail (code fix rationale, capability names, verification results); the revision above is the
@@ -218,7 +270,7 @@ current source of truth for who gets standalone access.
 
 ## Group 2 — Procurement Masters
 
-Status: ✅ Fully decided + implemented in prod (2026-07-28, ACL v14). **⚠️ Revised 2026-08-06 — not yet implemented (see below).**
+Status: ✅ Fully decided + implemented in prod (2026-07-28, ACL v14). **✅ Revised + IMPLEMENTED 2026-08-06 (ACL v58, both companies) — see below.**
 
 **⚠️ Revised 2026-08-06:** PM06's Stores+Logistics `V C E` grant removed — GRN's "+Add
 Transporter" quick-add (`GRNPostFlow.jsx`'s Transporter tab link, confirmed in the original note
@@ -227,8 +279,40 @@ Handled via a narrow companion CREATE capability wired to GRN's inline flow, `me
 on PM06 itself — not standalone page access for Stores/Logistics. PM06 now matches the rest of
 Group 2 exactly: **SCM full authority, Director View-only, no other department.** All other
 pages in this group (PM01/02/03/05/07) were already SCM+Director-only, unchanged.
-**Not yet implemented** — design decision only; Claude wires the companion capability into GRN
-during the batch-implementation pass.
+**✅ IMPLEMENTED 2026-08-06 (ACL v58, both companies).**
+
+- **Stores:** old broad `CAP_PROC_TRANSPORTER_LIMITED` (standalone PM06 V C E) removed. The
+  narrow GRN-companion capability `CAP_GRN_TRANSPORTER_DEP` (V+W+E on `PROC_TRANSPORTER_MASTER`,
+  `menu_visible=false`) — already built during Group 4's session and already correctly held by
+  MANAGEMENT/Plant Head — granted to STORES too, since Stores is GRN's real creator (confirmed:
+  `PROC_GRN_LIST` write access is Stores + Management only, never Logistics).
+- **Logistics:** old broad `CAP_PROC_TRANSPORTER_LIMITED` removed, **replaced with nothing** —
+  confirmed via the Page Dependency Manifest that Logistics has zero GRN access at all (can't
+  reach the GRN post flow the "+Add Transporter" dependency lives on), and zero access to CSN
+  Tracker (the only other page in the system that reads `PROC_TRANSPORTER_MASTER`) — matches
+  this section's original "no other department" premise correctly for Logistics specifically
+  (unlike Group 1's premise, which was wrong twice).
+- **Bonus find:** Stores' new `CAP_GRN_TRANSPORTER_DEP` grant also happens to satisfy `SO03`/
+  `DOCreatePage.jsx`'s (Group 11, Stores' own Delivery Order page) `PROC_TRANSPORTER_MASTER:VIEW`
+  need — one narrow companion capability correctly serves two independent dependencies for the
+  same department.
+- **Cross-module sweep (7 Group 2 resources against the full manifest):** `PROC_CSN_TRACKER`
+  (reads Port/Transporter/CHA) is SCM+Director-only, already fully covered by Group 2's own SCM
+  grant, no gap. `PROC_LC_LIST`/Landed Cost (reads CHA) is likewise SCM+Director-only, not
+  Accounts as might be assumed from its "accounts" folder path — no gap.
+- **🔴 Real gap found, deferred to Group 11 (out of this group's scope):** Accounts (SO01's
+  creator department) has **zero** grant on `PROC_PAYMENT_TERMS_MASTER`, despite `SOCreatePage.jsx`
+  needing it (`GET /api/procurement/payment-terms`) — flagged for Group 11's dedicated
+  re-verification pass rather than fixed here, to keep this group's change surface contained to
+  Group 2's own resources.
+- **`user_overrides` check:** 58 rows found on Group 2 resources at first glance — investigated,
+  all pre-existing (2026-07-27, predates this session), all a deliberate named-individual DENY
+  ("Mgmt managers: no Procurement Masters") on P0003/P0011/P0064/P0073 covering 6 of the 7
+  resources — **deliberately excludes `PROC_TRANSPORTER_MASTER`**, so it does not conflict with
+  Plant Head's legitimate `CAP_GRN_TRANSPORTER_DEP` grant. No action needed.
+- **Verified (`precomputed_acl_view`, v58, both companies):** Stores (P0009/P0058/P0067) —
+  V/W/E on `PROC_TRANSPORTER_MASTER`. Logistics — zero rows on the resource. ACL-MASTER drift
+  check — clean.
 
 Original table + notes below (2026-07-28) — kept for history and still-accurate implementation
 detail; the revision above is the current source of truth for PM06.
@@ -342,7 +426,7 @@ DIRECTOR = V only, on all 6, in both companies.
 
 ## Group 3 — Procurement
 
-Status: ✅ Decided + implemented in prod (2026-07-28), including PO02. **⚠️ Revised 2026-08-06 — PO12 only, not yet implemented (see below).**
+Status: ✅ Decided + implemented in prod (2026-07-28), including PO02. **✅ Revised + IMPLEMENTED 2026-08-06 (ACL v59, both companies) — PO12 only, see below.**
 
 **⚠️ Revised 2026-08-06 — PO12 (Plant Transfers):** reclassified as a genuinely different,
 physical-stock-movement function, not part of SCM's Procurement pipeline proper — but it has
@@ -371,7 +455,19 @@ the specific concern that GE/GRN write real CSN detail fields (not just status/q
   Stores writing these fields via GE/GRN needs no CSN Tracker access at all, confirming
   SCM+Director-only remains safe even for these detail-field writes.
 
-**Not yet implemented** — design decision only.
+**✅ IMPLEMENTED 2026-08-06 (ACL v59, both companies).** Removed `CAP_PROC_PLANT_TRANSFER`
+(V/W/E/D/Approve) from LOGISTICS/STORES/SUPPLY CHAIN and `CAP_PROC_PLANT_TRANSFER_VIEW` from
+DIRECTOR — every non-ACL-MASTER work context now has zero rows on `PROC_PLANT_TRANSFER_LIST`.
+Removed the 2 `acl.approver_map` rows (L3_MANAGER, `COMPANY_WIDE`, one per company) implementing
+the old sending-company approve chain. Confirmed `CAP_PROC_LOGISTICS` (ACL-MASTER-only, also
+touches PO07) has no blast-radius overlap with the departments losing access — no collateral
+narrowing on PO07. Confirmed via the Page Dependency Manifest that no other page in the system
+reads `PROC_PLANT_TRANSFER_LIST` — fully self-contained removal. Pre-existing `user_overrides`
+(6 rows, same "Mgmt managers: no Procurement section" 2026-07-27 policy as elsewhere) now
+redundant but harmless — the departments it targeted already have zero access via the capability
+removal itself. Verified via `precomputed_acl_view`: zero non-ACL-MASTER rows on
+`PROC_PLANT_TRANSFER_LIST` in either company; ACL-MASTER retains full V/W/E/D/Approve. ACL-MASTER
+drift check — clean.
 
 ### PO02 — CSN Tracker
 
@@ -637,18 +733,62 @@ revision block.**
   L4_Manager were explicitly given View (Basic Rules #3/#7's new opt-in
   discipline — this table's blank cells are deliberate, not omissions).
 
-**Not yet implemented** — this whole revision is a design-phase decision,
-tracked for the same batch-implementation pass as Group 10's revisions
-above. Real implementation needs: `role_capabilities` narrowed to
-L1-L2_Manager wherever "full dept" is stated (drop L3/L4_Manager from the
-department capability, since L3_Manager access must come through the
-already-separate `CAP_QA_PLANTHEAD` mechanism, not the department
-capability itself); `CAP_QA_PLANTHEAD` extended to PR01/PR03/PR15/PR18/PR19
-(new menu-action rows); `CAP_QA_AUDITOR_TIER` menu-action rows removed from
-PR02/PR04; PR15's resource moved off whatever Auditor-only capability it
-used onto the QA department capability instead; PO06's DIRECTOR/L4_MANAGER
-View grants added; PR16 Start Batch's capability/resource split investigated
-before narrowing (must not clip PR09/PR11).
+**✅ 2026-08-06 revision IMPLEMENTED (ACL v53→v54, both CMP003/CMP006).**
+
+- **Tier-capability rank cleanup:** `CAP_QA_TIER_L1MGR`/`_L2MGR`/`_L3MGR`
+  (discovered to be byte-identical role lists despite the tier naming —
+  L1_User through L4_Manager + DIRECTOR all present on all three) stripped
+  of L3_MANAGER/L4_MANAGER/DIRECTOR uniformly — L3_Manager-equivalent access
+  now comes exclusively through the separate `CAP_QA_PLANTHEAD` mechanism
+  (Structural Fallback), never through the department capability itself.
+  `CAP_QA_MGR_TIER` similarly capped at L1/L2_Manager.
+- **`CAP_QA_PLANTHEAD` extended** to PR01/PR03/PR15/PR18/PR19 (new
+  menu-action rows) — Plant Head now gets the same full-dept-ceiling +
+  fallback shape on these five pages as PO06/PR12/PR16 already had.
+- **`CAP_QA_AUDITOR_TIER` menu-action rows removed** from PR02/PR04 (Basic
+  Rule #8 — Auditor's real work concentrates on PR15, not spread thin).
+- **PR15 moved from Auditor-exclusive to the QA department capability**
+  (business owner: "PR15 o QA r kachei thak, PO06 er moto") — QA dept can
+  now self-reverse (CORS), the separation-of-duties control is
+  intentionally removed per instruction.
+- **New `CAP_PO06_VIEW_EXTRA`** (VIEW only) created and granted to
+  DIRECTOR + AUDIT work contexts (both companies) — the explicit
+  Director/L4_Manager/Dir-Reports/Auditor View-only opt-in on PO06 that
+  Basic Rules #3/#7 require, without touching the department's own full
+  grant.
+- **PR16 Start Batch investigated, left as-is (no narrowing needed):**
+  confirmed `CAP_PROD_START_BATCH` is already scoped narrowly to
+  `PROD_START_BATCH:WRITE` only — no PR09/PR11 blast radius exists to
+  protect against. The doc's original worry (shared
+  `CAP_PROD_STANDARD`/`CAP_PROD_OPERATOR`) turned out to only describe the
+  QA-approve half of PR16, not Start Batch.
+- **🔴 Real leak found and fixed during this pass, not in the original
+  design notes above — `CAP_PROD_OPERATOR` (Production's own OM08-10 +
+  PR16 capability) also carried a stray full-CRUD (`VIEW`/`WRITE`/`EDIT`/
+  `DELETE`) grant on **PO06** (`PROC_QA_QUEUE`), inserted 2026-08-05
+  18:29 UTC — i.e. during this same implementation session, not legacy
+  debris. Held by PRODUCTION, MANAGEMENT, AUDIT, and DIRECTOR work
+  contexts in both companies, directly contradicting this section's own
+  "Director gets nothing except View on PO06" lock (Director was resolving
+  full CRUD, not the intended View-only via `CAP_PO06_VIEW_EXTRA`). Fixed
+  by deleting the 4 `(CAP_PROD_OPERATOR, PO06's menu_id, *)` rows from
+  live `capability_menu_actions` — surgical removal, same pattern as the
+  `CAP_PROC_QA`/PO05+PO06 leak found in Group 4's session. `CAP_PROD_OPERATOR`'s
+  legitimate OM08/OM09/OM10/PR16 rows are untouched.
+- **Dependency manifest + `user_overrides` cross-check (per explicit
+  instruction not to repeat Group 4's skipped-dependency miss):** QUALITY
+  dept's `PROC_PO_LIST:VIEW` (PO06's Document Flow tab dependency) already
+  satisfied via `CAP_GRN_DOCFLOW_VIEW`; `PROC_GRN_LIST:VIEW` already
+  satisfied via `CAP_PROC_QA` (scoped only to QUALITY + ACL-MASTER after
+  Group 4's cleanup, no leak). Zero `acl.user_overrides` rows exist for any
+  Group 5 resource code in either company — no blanket-DENY conflict like
+  Group 4's Plant Head case.
+- **Verified on v54 (`precomputed_acl_view`, both companies):** Nilkamal
+  (P0009, L2_MANAGER dual QUALITY+PRODUCTION) — full VIEW/WRITE/EDIT/
+  DELETE/APPROVE on PO06. Pradip/Kishor (Plant Head, L3_MANAGER,
+  MANAGEMENT) — same full access via `CAP_QA_PLANTHEAD`. Bijon Kanabar
+  (real Director) — **VIEW only** on PO06, zero elsewhere in the group.
+  ACL-MASTER (P0076) — full access, both companies, zero drift.
 
 ---
 
@@ -878,7 +1018,7 @@ gets its formal session.
 
 Status: partially decided (2026-07-29, ACL v25/v22). AC04 designed +
 implemented. AC01/AC02/AC03 not ready yet, same treatment as Group 6.
-**⚠️ Revised 2026-08-06 (AC04/AC05/AC06 ownership + rank ceiling) — not yet implemented (see below). AC01/AC02/AC03 deliberately left as ACL-MASTER-only for now, not decided this round.**
+**✅ Revised + IMPLEMENTED 2026-08-06 (ACL v62, both companies) — AC04/AC05/AC06 ownership + rank ceiling, see below. AC01/AC02/AC03 deliberately left as ACL-MASTER-only for now, not decided this round.**
 
 **⚠️ Revised 2026-08-06:** AC04's ownership moves from Auditor-does-the-writing (Accounts
 View-only) to a normal department-owned page — Accounts becomes the maker, matching AC05/AC06's
@@ -904,8 +1044,40 @@ existing shape instead of being the outlier of the three.
   conversion rate (same Type-ঘ-shaped backend read pattern as the CSN sync-back finding above).
   AC05/AC06's consumers (MTS/PMTS costing, SLoc-based costing group resolution) presumed to
   follow the same pattern; not re-verified line-by-line this session.
-- **Not yet implemented** — design decision only; batch-implementation pass covers this
-  alongside the rest of today's pending groups.
+
+**✅ IMPLEMENTED 2026-08-06 (ACL v62, both companies).**
+
+- **AC04 real-action-universe check first:** `route-acl-registry.ts` only defines `VIEW`/`WRITE`
+  for `ACC_CONVERSION_COST` (`POST /api/production/conversion-rates` — append-only, matches the
+  "valid_from-dated, no update/delete, derived Current/Superseded" design already locked
+  elsewhere) — no `EDIT`/`DELETE` action exists in the real system at all. The doc's "V C E D"
+  legend notation for this row means "full write power," which for this specific resource is
+  just VIEW+WRITE — not 4 literal distinct actions to wire.
+  - **Auditor's side needed no change** — `CAP_CONVCOST_AUDITOR` already had VIEW+WRITE, already
+    matching the intended "full" access.
+  - **Accounts needed a new capability.** Accounts previously held only `CAP_CONVCOST_VIEW`
+    (View-only) — and that capability's `role_capabilities` includes `L3_MANAGER`/`DIRECTOR`
+    (needed for their own View-only access), so simply adding `WRITE` to it would have also
+    given Director and Plant Head write power, violating the rank ceiling. Built a properly
+    narrow `CAP_CONVCOST_MAKER` (VIEW+WRITE only, `role_capabilities` = L1_USER through L2_MANAGER
+    inclusive of all User-tier ranks below it, explicitly excluding L3_MANAGER/L4_MANAGER/
+    DIRECTOR/either Auditor rank), granted to ACCOUNTS work context only, both companies.
+  - Confirmed `acl.approver_map` still zero rows for `ACC_CONVERSION_COST` — no maker-checker,
+    matches design (Accounts and Auditor both independently write, no approval step).
+- **AC05/AC06 — confirmed genuinely unchanged, re-verified not just assumed:** live-checked
+  `precomputed_acl_view` post-implementation — Accounts (P0060, L2_MANAGER) still VIEW+WRITE(+
+  DELETE on AC06, no DELETE action exists for AC05), Auditor (P0010) still APPROVE+VIEW+WRITE,
+  Director still VIEW+WRITE(+DELETE on AC06)-no-APPROVE — identical to Group 11's original
+  design, zero regression from the AC04 change.
+- **`user_overrides` check:** the pre-existing Soni-exclusive ALLOW (VIEW+WRITE+EDIT, 2026-07-27)
+  on `ACC_CONVERSION_COST` still present and harmless — it's the *only* source of `EDIT` on this
+  resource (no capability grants it to anyone), unaffected by today's `CAP_CONVCOST_MAKER`
+  addition since overrides are additive per-user, not exclusionary.
+- **Verified (`precomputed_acl_view`, v62, both companies):** P0060 (Accounts, L2_MANAGER) —
+  VIEW+WRITE on AC04. P0007 (Accounts, L3_USER — below Manager tier) — also VIEW+WRITE, correctly
+  included ("L1_USER through L2_MANAGER" ceiling means every working rank up to and including
+  L2_Manager, not just Manager-tier). Director (P0074) — VIEW only, no WRITE, rank ceiling holds.
+  ACL-MASTER (P0076) — VIEW+WRITE. ACL-MASTER drift check — clean.
 
 AC01/AC02/AC03 — left exactly as-is (ACL-MASTER only), not decided this round; see the original
 Group 7 notes below for their current (undesigned) state and the earlier code-audit findings.
@@ -1013,8 +1185,8 @@ Groups 5/6/7.
 
 ## Group 9 — Inventory
 
-**Status: ✅ Decided 2026-08-06 (role-based, no named individuals) — design
-phase only, not yet implemented.** Was "⛔ deliberately deactivated, not
+**Status: ✅ Decided + IMPLEMENTED 2026-08-06 (ACL v61, both companies,
+role-based, no named individuals).** Was "⛔ deliberately deactivated, not
 designed yet" until this session; original deactivation note and code-audit
 findings kept below for history/reference.
 
@@ -1032,22 +1204,95 @@ Breakdown.
 | IN06 | Opening Stock Approval | Same as IN05 — ACL-MASTER only for now. |
 | PR21 | FG Stock Breakdown | Same as IN02/IN03 — everyone, company-scoped, pure report page. |
 
-**Not yet implemented** — tracked for the batch-implementation pass. Real
-implementation needs: (1) IN01's three-stage split requires new
-resource-code/action separation (create vs count-entry vs approve are
-currently likely bundled under one `PROC_PI_LIST` resource — needs
-verification against `route-acl-registry.ts` before implementing, since
-today's design assumes 3 independently-gatable actions); (2) the
-company-scope bug in `createPIDHandler`/`addPIItemHandler` (flagged in the
-original audit below) **must** be fixed as part of implementing this design,
-not left for later — the whole "everyone in that company, not other
-companies" design depends on it; (3) `assertManagerOrSARole` removed from
-`opening_stock.handlers.ts` is **not** urgent since IN05/IN06 stay
-ACL-MASTER-only this round (the hardcoded check is redundant-but-harmless
-while nobody else has the ACL grant anyway) — revisit when Opening Stock
-gets its own formal session; (4) IN02's Column Layout `global-layout-create`
-gate (currently SA/GA-only per §117) needs revising to allow everyone,
-matching this decision.
+**✅ IMPLEMENTED 2026-08-06 (ACL v61, both companies).**
+
+- **(1) IN01's action-split — confirmed real, fixed.** `route-acl-registry.ts`
+  had `POST /api/procurement/physical-inventory` (PID header create,
+  `createPIDHandler`) and `POST .../items` (adding an item to the count
+  scope, `addPIItemHandler`) both mapped to `PROC_PI_LIST:WRITE` — the same
+  action count-entry (`enterCountHandler`/`requestRecountHandler`) also
+  used, making the two-tier design structurally impossible to gate. Changed
+  both routes to `EDIT` (both handlers define **what's being counted** —
+  the PID scope — same tier as each other, distinct from the actual
+  counting). `/post`/`/post-differences` were already their own `APPROVE`
+  action, no change needed there.
+- **(2) 🔴 Company-scope claim was WRONG — corrected, no code change made.**
+  Read `createPIDHandler`/`addPIItemHandler`/`enterCountHandler`/
+  `requestRecountHandler`/`postDifferencesHandler` directly: **all five**
+  already call `assertPIStorageLocationScope()` → `getStorageLocationScope()`
+  (resolves the real `company_id` from `storage_location_plant_map`) →
+  `assertCompanyScope(ctx, scope.company_id)` (validates against the
+  requester's actual `erp_map.user_companies`). The original audit's claim
+  ("derive company purely from the storage location... never verify against
+  the requesting user's companies") does not match the code — every handler
+  in this file already has complete, correct company-scope protection.
+  Also confirmed `assertProcurementReadRole` is a clean no-op stub ("protected
+  by upstream ACL"), not a hardcoded rank-check. **Lesson: a prior session's
+  code-audit finding is not automatically still true — re-verify against the
+  actual current file before building a "fix" for a bug that may not exist.**
+- **(3) `assertManagerOrSARole` in `opening_stock.handlers.ts`** — confirmed
+  still not urgent, left untouched (IN05/IN06 stay ACL-MASTER-only this
+  round; revisit at Opening Stock's own formal session).
+- **(4) IN02's Column Layout `global-layout-create` SA/GA-only gate —
+  confirmed real, fixed.** `report_layout.handlers.ts`'s
+  `canManageGlobalLayouts()`/`assertGlobalLayoutAccess()` hard-blocked
+  `scope=GLOBAL` create/update/delete to SA/GA only, independent of ACL —
+  the exact comment even named this as the thing to resolve
+  ("Provisional lock... until NEXT-SESSION-PROMPT-Inventory-ACL-Design.md").
+  Removed both helper functions and all 3 call sites (create/update/delete);
+  GLOBAL-scope layouts are now governed purely by the same `PROC_STOCK_
+  LEDGER`/`PROC_CURRENT_STOCK:VIEW` gate the whole endpoint already sits
+  behind — matches "everyone who can view can also create/save layouts, no
+  Manager-tier gate." USER-scope layout ownership checks (only the creator
+  can edit/delete their own) unchanged. Verified zero new `deno check`
+  errors (git-stash before/after, 0 baseline both times).
+- **ACL data:**
+  - **IN02/IN03/PR21 (`PROC_STOCK_LEDGER`/`PROC_CURRENT_STOCK`/`PROD_FG_
+    STOCK_BREAKDOWN`):** added `VIEW` rows to the **existing**
+    `CAP_EVERYONE_REPORTS` capability (already correctly held by every
+    department including DIRECTOR/L4_MANAGER/DIRECTOR-REPORTS/MANAGEMENT-
+    REPORTS) rather than building 3 new capabilities — exact same "everyone"
+    semantics this design calls for, zero new capability needed. (PR21 had
+    a `CAP_EVERYONE_REPORTS` row here once before, deliberately removed
+    during Group 9's original "deactivate, undesigned" pass — re-adding it
+    now is the correct, intentional implementation of today's actual
+    decision, not a repeat of that earlier leak.)
+  - **IN01 (`PROC_PI_LIST`), two new capabilities:** `CAP_PI_AUDITOR`
+    (VIEW+EDIT+WRITE+APPROVE — PID scope create/edit + final post,
+    `role_capabilities` L1_AUDITOR/L2_AUDITOR, granted to AUDIT +
+    ACL-MASTER work contexts) and `CAP_PI_COUNT_ENTRY` (VIEW+WRITE — count
+    entry/recount, `role_capabilities` every role except L4_MANAGER and
+    DIRECTOR, granted to every operational work context — ACCOUNTS,
+    ACL-MASTER, AUDIT, ENGINEERING, ENGINEERING STORES, LOGISTICS,
+    MANAGEMENT, PRODUCTION, QUALITY, SECURITY, STORES, SUPPLY CHAIN —
+    excluding DIRECTOR/DIRECTOR-REPORTS/MANAGEMENT-REPORTS, matching Basic
+    Rule #7 since count-entry isn't a report page). Auditor doesn't need
+    `CAP_PI_COUNT_ENTRY` separately — `CAP_PI_AUDITOR`'s own WRITE already
+    is a superset.
+  - **🔴 Real gap found and fixed mid-verification — same class of miss as
+    Group 10's Plant Head issue earlier today:** ACL-MASTER (P0076,
+    `role_code=DIRECTOR`) initially resolved APPROVE/VIEW/WRITE but **not
+    EDIT** on `PROC_PI_LIST` — traced to `CAP_PI_AUDITOR`'s
+    `role_capabilities` only listing L1_AUDITOR/L2_AUDITOR, never DIRECTOR
+    (P0076's actual `role_code`), so the capability never actually applied
+    to ACL-MASTER at all. The other 3 actions only appeared to work because
+    a separate, pre-existing capability (`CAP_PROC_INVENTORY` — the
+    leftover from Group 9's original "deactivate to ACL-MASTER-only" pass,
+    left untouched and still doing real work) happened to grant
+    VIEW+WRITE+APPROVE (not EDIT) on the same resource, masking the gap.
+    Added `DIRECTOR` to `CAP_PI_AUDITOR`'s `role_capabilities` — this only
+    unlocks the capability for ACL-MASTER specifically (the only work
+    context holding both `CAP_PI_AUDITOR` in `work_context_capabilities`
+    **and** `role_code=DIRECTOR`); the real Director (Bijon) still resolves
+    zero IN01 access, since the `DIRECTOR` work context itself never holds
+    `CAP_PI_AUDITOR`.
+- **`user_overrides` check:** zero rows on any of the 4 touched resources.
+- **Verified (`precomputed_acl_view`, v61, both companies):** P0010 (real
+  L1_AUDITOR) — full VIEW/EDIT/WRITE/APPROVE on IN01. P0069 (Production
+  L3_USER) — VIEW/WRITE only (count-entry tier), correctly no EDIT/APPROVE.
+  P0074 (Director) — zero on IN01, VIEW on IN02/IN03/PR21. P0076
+  (ACL-MASTER) — full VIEW/EDIT/WRITE/APPROVE on IN01, VIEW on IN02/IN03/
+  PR21. ACL-MASTER drift check — clean.
 
 **Code audit before deactivating (no edits made, findings logged for a
 future code-fix pass):**
@@ -1109,6 +1354,8 @@ any of the 7 resources in either company; every other department is zero.
 ## Group 10 — Production
 
 Status: ✅ Decided + implemented in prod (2026-07-29, ACL v29/v26).
+**✅ 2026-08-06 revision IMPLEMENTED (ACL v52, both companies) — see
+"✅ Implemented 2026-08-06" notes inline below for each sub-decision.**
 
 | tx_code | Page | Production | Quality | SCM | Management | Stores | Audit | Director |
 |---|---|---|---|---|---|---|---|---|
@@ -1131,11 +1378,13 @@ grant in this table (Production on PR00/09/22/23, SCM on PR05/07, QUALITY on
 PR10) is capped at **L3_Manager** — L4_Manager is excluded from all of them,
 routed to DIRECTOR-REPORTS instead (view/oversight only, not
 Create/Edit/Approve). Confirmed by business owner as applying to every page
-in this group, not decided page-by-page. Not yet implemented (see the
-batch-implementation tracking note under PR06/PR08 below — this needs the
-same treatment: each capability's `role_capabilities` narrowed to exclude
-L4_MANAGER, and DIRECTOR-REPORTS' own work context granted the equivalent
-view-level access where it doesn't already have it).
+in this group, not decided page-by-page. **✅ Implemented 2026-08-06** —
+`L4_MANAGER` removed from `role_capabilities` on `CAP_PROD_DEPT_FULL`
+(PR00/09/22/23), `CAP_PACKBOM_CREATE_SCM` (PR05/07), `CAP_PROCPO_EDIT_QA`
+(PR10) — verified each capability's blast radius via
+`capability_menu_actions` first (all 3 scoped exactly to this group's own
+resources, no leakage). `CAP_PROD_PLANTHEAD_FULL` (Plant Head fallback) was
+already `L3_MANAGER`-only by design, no change needed there.
 
 **PR10 (Production PO Edit) — revised 2026-08-06, business owner
 instruction:** stays QA-only exactly as originally designed (no change to
@@ -1149,8 +1398,10 @@ PR10 does **not** trigger any separate approval of the edit itself — the
 Process PO stays at STANDARD status after a PR10 edit and still has to pass
 through the normal QA Approval Queue (PR16) afterward, same as any other
 Process PO; PR10 and PR16 are both QA's own job, no other department
-involved in either step. **Not yet implemented** — tracked for the
-batch-implementation pass.
+involved in either step. **✅ Implemented 2026-08-06** — deleted the
+`CAP_G10_DIRECTOR_VIEW` → `PROD_PO_EDIT` capability_menu_actions row only
+(the capability's other 6 pages untouched); confirmed via
+`precomputed_acl_view` that Bijon (Director) now resolves zero rows on PR10.
 
 **PR13/PR14/PR20 (Order List / Batch Variance / Partial Reversal Report) —
 revised 2026-08-06, business owner instruction: Basic Rule #4 restored,
@@ -1170,10 +1421,17 @@ Kanabar, P0002 — see the "Identity note" above) now explicitly gets these 3
 resources** — this WC was created 2026-07-28 specifically for report-only
 Director access and deliberately started empty ("to be built up page-by-page
 as groups are decided"); this is its first real grant.
-**⚠️ Not yet implemented** — design-phase decision only, tracked for the
-batch-implementation pass (re-add the 3 `(CAP_EVERYONE_REPORTS, menu)` rows
-that Group 10 deliberately removed, or an equivalent broad-View capability;
-grant DIRECTOR-REPORTS its own row on all 3 resources).
+**✅ Implemented 2026-08-06** — rather than re-adding the old blanket
+`CAP_EVERYONE_REPORTS` rows (which is what leaked User-tier access in the
+first place, see the bug note above), added `L1_USER`/`L2_USER`/`L3_USER`/
+`L4_USER` to `CAP_ORDERLIST_MGRTIER`'s `role_capabilities` (removed
+`L4_MANAGER` from the same, per Basic Rule #5) — this keeps the fix on the
+already-correctly-scoped capability instead of reviving the leaky one.
+Confirmed via `capability_menu_actions` this capability is scoped to
+exactly PR13/14/20, no wider blast radius. `DIRECTOR-REPORTS` work context
+granted this same capability (both companies) — it already includes
+`DIRECTOR` role, matching P0002 exactly. Verified via `precomputed_acl_view`:
+Production/Quality L3_USER users (P0069, P0071) now resolve ALLOW on all 3.
 
 ~~**Superseded 2026-08-06 — original PR13/14/20 View design (kept for
 history, no longer in effect):** Production/Quality View restricted to
@@ -1197,16 +1455,22 @@ restored to the Basic Rule #3 default here since Director sits at the top
 of this same chain — matches PO/STO's own DIRECTOR-fallback design in
 Group 3, not a special case for Pack BOM). View stays open to
 Production/Quality/SCM/Management/Director, unchanged.
-**⚠️ Not yet implemented** — this is a design-phase decision only (per the
-locked "decide every page first, implement once" sequencing). Real
-implementation requires: (1) wiring `pack_bom.handlers.ts`'s approve/reject
-handlers into `_shared/workflow_scope.ts`'s `pickScopedApproverRules`
-(same engine PO/STO/PTO already use), replacing the current flat
-L1-L2_Manager capability check; (2) new `acl.approver_map` SUBJECT_ROLE
-rows for `PROD_PACK_BOM_APPROVAL`/`PROD_CHANGE_PACK_BOM_APPROVAL`, mirroring
-PO/STO's existing rows; (3) capability revision so DIRECTOR's work context
-carries real APPROVE on both resources, not just VIEW. Tracked for the
-batch-implementation pass alongside the rest of this Step-4 sweep.
+**✅ Implemented 2026-08-06** (commit `129cf9c7`): (1) `pack_bom.handlers.ts`'s
+`approvePackBomHandler`/`rejectPackBomHandler`/
+`approvePackBomChangeRequestHandler`/`rejectPackBomChangeRequestHandler` now
+call a new `assertPackBomApproverRole()` wired into
+`_shared/workflow_scope.ts`'s `pickScopedApproverRules` +
+`matchesApprover` (the same engine, including today's department-scope fix)
+— replacing the flat capability-only check; all 4 catch blocks updated so
+`PROD_BOM_SCOPE_VIOLATION`/`PROD_BOM_APPROVER_ROLE_REQUIRED`/
+`PROD_BOM_SELF_APPROVAL_FORBIDDEN` return 403, not the previous flat 500.
+(2) 16 new `acl.approver_map` `SUBJECT_ROLE` rows (L2_USER→L3_USER/L1_MANAGER,
+L3_USER→L1_MANAGER, L1_MANAGER→DIRECTOR, × 2 resources × 2 companies),
+approver scoped to the SUPPLY CHAIN work context (matching PO/STO's own
+chain exactly, since Pack BOM's creator department is SCM). (3) `CAP_G10_
+DIRECTOR_VIEW` gained a real `APPROVE` action on both `PROD_PACK_BOM_
+APPROVAL`/`PROD_CHANGE_PACK_BOM_APPROVAL` (was VIEW-only). Verified zero new
+`deno check` errors.
 
 ~~**Superseded 2026-08-06 — original PR06/PR08 Approve design (kept for
 history, no longer in effect):** flat rule, any SCM L1_Manager or
@@ -1641,6 +1905,51 @@ resources, full-minus-approve on AC05/AC06; MANAGEMENT = View-only on
 AC05/AC06/MM05; ACL-MASTER = full on everything including the Auditor-only
 Approve action. Symmetric across both companies. Also rebuilt
 `erp_menu.menu_snapshot` for P0076's (company, work_context) pairs.
+
+**✅ Re-verified against today's session-wide rules 2026-08-06 (ACL v63, both
+companies)** — this group was decided 2026-07-31, before Basic Rules #5-#8
+and the Cross-Module Dependency Taxonomy existed, and per the pattern
+already found in Groups 1/2/10 this session, it had drifted from them:
+
+- **🔴 Basic Rule #5 violation found and fixed:** `CAP_SALES_ACCOUNTS`
+  (SO01/SO02), `CAP_SALES_STORES` (SO03), `CAP_OM_FG_DISPATCH` (MM05), and
+  `CAP_ACC_COSTING` (AC05/AC06) all had `L4_MANAGER` in their `role_
+  capabilities` — none of these are report pages, so per Basic Rule #7
+  L4_MANAGER should get nothing on them (not even a DIRECTOR-REPORTS-style
+  View), same as the fix already applied to Groups 1/10's equivalent
+  capabilities. Removed `L4_MANAGER` from all 4. No real user held this
+  combination today (no Accounts/Stores L4_MANAGER exists in either
+  company), but fixed for correctness/future-proofing, same discipline as
+  every other group.
+- **Basic Rule #7 check (DIRECTOR-REPORTS/MANAGEMENT-REPORTS):** confirmed
+  zero access on any of the 4 Group 11 pages — correct, none are report
+  pages.
+- **🔴 Real dependency gap confirmed and fixed — the exact gap flagged
+  during Group 2's audit, now resolved:** Accounts (SO01/SO02's creator
+  department) had **zero** grant on `OM_CUSTOMER_CREATE`, `OM_CUSTOMER_
+  LIST`, `PROC_PAYMENT_TERMS_MASTER`, `PROC_PO_LIST`, or `PROC_DO_LIST` —
+  all five are real, code-confirmed dependencies of `SOCreatePage.jsx`
+  (party dropdown + inline "+New Party", payment-terms dropdown, UOM-
+  conversion lookup), `SODetailPage.jsx`/`SalesInvoiceDetailPage.jsx`
+  (document-flow tab, customer/material display), and `PgiInvoiceCreatePage.
+  jsx`/`SalesInvoiceListPage.jsx` (reading Delivery Orders to process PGI).
+  Without these, Accounts could reach SO01 as a page but would 403 on its
+  own party dropdown and payment-terms field — the exact same class of miss
+  found in Groups 1/10 earlier today. New narrow, hidden companion
+  capability `CAP_SALES_ACCOUNTS_DEPENDENCY` (VIEW on `OM_CUSTOMER_LIST`/
+  `PROC_PAYMENT_TERMS_MASTER`/`PROC_PO_LIST`/`PROC_DO_LIST`, VIEW+WRITE+EDIT
+  on `OM_CUSTOMER_CREATE`), granted to ACCOUNTS work context both
+  companies, `role_capabilities` matching `CAP_SALES_ACCOUNTS`'s own scope
+  (all ranks except L4_MANAGER).
+- **Stores (SO03) checked separately — no gap.** `DOCreatePage.jsx`'s only
+  cross-module need is `PROC_TRANSPORTER_MASTER:VIEW`, already satisfied by
+  the `CAP_GRN_TRANSPORTER_DEP` grant added during Group 2's session (same
+  capability serves both dependencies). Stores' own `PROC_DO_CREATE`
+  V/W/E confirmed intact.
+- **`user_overrides` check:** zero rows on any of the 6 Group 11 resources.
+- **Verified (`precomputed_acl_view`, v63, both companies):** P0060
+  (Accounts, L2_MANAGER) — all 5 dependency resources now resolve ALLOW
+  with the correct actions. ACL-MASTER drift check — clean.
 
 ---
 

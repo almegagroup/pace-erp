@@ -59,10 +59,6 @@ function normalizeScope(value: unknown): string {
   return toTrimmedString(value).toUpperCase();
 }
 
-function canManageGlobalLayouts(ctx: ReportLayoutHandlerContext): boolean {
-  return ctx.context.isAdmin === true || ctx.roleCode === "SA" || ctx.roleCode === "GA";
-}
-
 async function fetchLayoutById(layoutId: string) {
   return await serviceRoleClient
     .schema("erp_inventory")
@@ -70,19 +66,6 @@ async function fetchLayoutById(layoutId: string) {
     .select("id, report_code, scope, owner_user_id, layout_name, visible_columns, created_by, created_at")
     .eq("id", layoutId)
     .maybeSingle();
-}
-
-function assertGlobalLayoutAccess(req: Request, ctx: ReportLayoutHandlerContext): Response | null {
-  if (canManageGlobalLayouts(ctx)) {
-    return null;
-  }
-  return reportLayoutError(
-    req,
-    ctx,
-    "REPORT_LAYOUT_SCOPE_FORBIDDEN",
-    403,
-    "Only SA/GA can manage Global report layouts in this provisional phase.",
-  );
 }
 
 export async function listReportLayoutsHandler(
@@ -163,15 +146,6 @@ export async function createReportLayoutHandler(
       );
     }
 
-    if (scope === "GLOBAL") {
-      // Provisional lock: SA/GA-only until NEXT-SESSION-PROMPT-Inventory-ACL-Design.md
-      // assigns explicit layout-write actions to PROC_STOCK_LEDGER / PROC_CURRENT_STOCK.
-      const forbidden = assertGlobalLayoutAccess(req, ctx);
-      if (forbidden) {
-        return forbidden;
-      }
-    }
-
     const { data, error } = await serviceRoleClient
       .schema("erp_inventory")
       .from("report_column_layout")
@@ -216,12 +190,7 @@ export async function updateReportLayoutHandler(
     }
 
     const scope = normalizeScope(existing.scope);
-    if (scope === "GLOBAL") {
-      const forbidden = assertGlobalLayoutAccess(req, ctx);
-      if (forbidden) {
-        return forbidden;
-      }
-    } else if (toTrimmedString(existing.owner_user_id) !== ctx.auth_user_id) {
+    if (scope !== "GLOBAL" && toTrimmedString(existing.owner_user_id) !== ctx.auth_user_id) {
       return reportLayoutError(req, ctx, "REPORT_LAYOUT_SCOPE_FORBIDDEN", 403, "You can edit only your own report layouts.");
     }
 
@@ -283,12 +252,7 @@ export async function deleteReportLayoutHandler(
     }
 
     const scope = normalizeScope(existing.scope);
-    if (scope === "GLOBAL") {
-      const forbidden = assertGlobalLayoutAccess(req, ctx);
-      if (forbidden) {
-        return forbidden;
-      }
-    } else if (toTrimmedString(existing.owner_user_id) !== ctx.auth_user_id) {
+    if (scope !== "GLOBAL" && toTrimmedString(existing.owner_user_id) !== ctx.auth_user_id) {
       return reportLayoutError(req, ctx, "REPORT_LAYOUT_SCOPE_FORBIDDEN", 403, "You can delete only your own report layouts.");
     }
 
