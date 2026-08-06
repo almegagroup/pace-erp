@@ -24,6 +24,11 @@ export type ContextResolution =
       companyId?: string;
       workContextId?: string;
       workContextCode?: string;
+      // work_context_name (not code) is the only reliable way to detect the
+      // ACL-MASTER work context -- its work_context_code is a per-company
+      // DEPT_DPTxxx value (e.g. "DEPT_DPT030"), never a fixed string, but its
+      // name is always literally "ACL-MASTER" regardless of company.
+      workContextName?: string;
       // Union Work Context model (ACL_SSOT.md §29, locked 2026-08-05): a user's
       // effective access within a company is the union of every Work Context
       // assigned to them there, not one selected context. workContextId/Code
@@ -177,6 +182,7 @@ async function resolveContextForCompany(
         work_context_id,
         company_id,
         work_context_code,
+        work_context_name,
         department_id,
         is_active
       )
@@ -195,6 +201,7 @@ async function resolveContextForCompany(
     work_context_id: string;
     company_id: string;
     work_context_code: string;
+    work_context_name: string | null;
     department_id: string | null;
     is_active: boolean;
   } | null => {
@@ -205,6 +212,7 @@ async function resolveContextForCompany(
       work_context_id: string;
       company_id: string;
       work_context_code: string;
+      work_context_name: string | null;
       department_id: string | null;
       is_active: boolean;
     };
@@ -218,6 +226,7 @@ async function resolveContextForCompany(
       work_context_id: string;
       company_id: string;
       work_context_code: string;
+      work_context_name: string | null;
       department_id: string | null;
       is_active: boolean;
     } => Boolean(row && row.is_active === true));
@@ -294,6 +303,7 @@ async function resolveContextForCompany(
     companyId,
     workContextId: workContext.work_context_id,
     workContextCode: workContext.work_context_code,
+    workContextName: workContext.work_context_name ?? undefined,
     workContextIds: availableWorkContexts.map((row) => row.work_context_id),
     projectId,
     departmentId,
