@@ -270,7 +270,7 @@ current source of truth for who gets standalone access.
 
 ## Group 2 — Procurement Masters
 
-Status: ✅ Fully decided + implemented in prod (2026-07-28, ACL v14). **⚠️ Revised 2026-08-06 — not yet implemented (see below).**
+Status: ✅ Fully decided + implemented in prod (2026-07-28, ACL v14). **✅ Revised + IMPLEMENTED 2026-08-06 (ACL v58, both companies) — see below.**
 
 **⚠️ Revised 2026-08-06:** PM06's Stores+Logistics `V C E` grant removed — GRN's "+Add
 Transporter" quick-add (`GRNPostFlow.jsx`'s Transporter tab link, confirmed in the original note
@@ -279,8 +279,40 @@ Handled via a narrow companion CREATE capability wired to GRN's inline flow, `me
 on PM06 itself — not standalone page access for Stores/Logistics. PM06 now matches the rest of
 Group 2 exactly: **SCM full authority, Director View-only, no other department.** All other
 pages in this group (PM01/02/03/05/07) were already SCM+Director-only, unchanged.
-**Not yet implemented** — design decision only; Claude wires the companion capability into GRN
-during the batch-implementation pass.
+**✅ IMPLEMENTED 2026-08-06 (ACL v58, both companies).**
+
+- **Stores:** old broad `CAP_PROC_TRANSPORTER_LIMITED` (standalone PM06 V C E) removed. The
+  narrow GRN-companion capability `CAP_GRN_TRANSPORTER_DEP` (V+W+E on `PROC_TRANSPORTER_MASTER`,
+  `menu_visible=false`) — already built during Group 4's session and already correctly held by
+  MANAGEMENT/Plant Head — granted to STORES too, since Stores is GRN's real creator (confirmed:
+  `PROC_GRN_LIST` write access is Stores + Management only, never Logistics).
+- **Logistics:** old broad `CAP_PROC_TRANSPORTER_LIMITED` removed, **replaced with nothing** —
+  confirmed via the Page Dependency Manifest that Logistics has zero GRN access at all (can't
+  reach the GRN post flow the "+Add Transporter" dependency lives on), and zero access to CSN
+  Tracker (the only other page in the system that reads `PROC_TRANSPORTER_MASTER`) — matches
+  this section's original "no other department" premise correctly for Logistics specifically
+  (unlike Group 1's premise, which was wrong twice).
+- **Bonus find:** Stores' new `CAP_GRN_TRANSPORTER_DEP` grant also happens to satisfy `SO03`/
+  `DOCreatePage.jsx`'s (Group 11, Stores' own Delivery Order page) `PROC_TRANSPORTER_MASTER:VIEW`
+  need — one narrow companion capability correctly serves two independent dependencies for the
+  same department.
+- **Cross-module sweep (7 Group 2 resources against the full manifest):** `PROC_CSN_TRACKER`
+  (reads Port/Transporter/CHA) is SCM+Director-only, already fully covered by Group 2's own SCM
+  grant, no gap. `PROC_LC_LIST`/Landed Cost (reads CHA) is likewise SCM+Director-only, not
+  Accounts as might be assumed from its "accounts" folder path — no gap.
+- **🔴 Real gap found, deferred to Group 11 (out of this group's scope):** Accounts (SO01's
+  creator department) has **zero** grant on `PROC_PAYMENT_TERMS_MASTER`, despite `SOCreatePage.jsx`
+  needing it (`GET /api/procurement/payment-terms`) — flagged for Group 11's dedicated
+  re-verification pass rather than fixed here, to keep this group's change surface contained to
+  Group 2's own resources.
+- **`user_overrides` check:** 58 rows found on Group 2 resources at first glance — investigated,
+  all pre-existing (2026-07-27, predates this session), all a deliberate named-individual DENY
+  ("Mgmt managers: no Procurement Masters") on P0003/P0011/P0064/P0073 covering 6 of the 7
+  resources — **deliberately excludes `PROC_TRANSPORTER_MASTER`**, so it does not conflict with
+  Plant Head's legitimate `CAP_GRN_TRANSPORTER_DEP` grant. No action needed.
+- **Verified (`precomputed_acl_view`, v58, both companies):** Stores (P0009/P0058/P0067) —
+  V/W/E on `PROC_TRANSPORTER_MASTER`. Logistics — zero rows on the resource. ACL-MASTER drift
+  check — clean.
 
 Original table + notes below (2026-07-28) — kept for history and still-accurate implementation
 detail; the revision above is the current source of truth for PM06.
