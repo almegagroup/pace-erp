@@ -377,6 +377,11 @@ export async function getGELinesForGRNHandler(
     if (geError || !gateEntry) {
       return procurementErrorResponse(req, ctx, "GE_NOT_FOUND", 404, "Gate entry not found.");
     }
+    try {
+      await assertCompanyScope(ctx, String(gateEntry.company_id));
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     const { data: lines, error: linesError } = await serviceRoleClient
       .schema("erp_procurement").from("gate_entry_line")
@@ -612,6 +617,11 @@ export async function createAndPostGRNFromLineHandler(
       .select("*").eq("id", String(geLine.gate_entry_id)).single();
     if (geError || !gateEntry) {
       return procurementErrorResponse(req, ctx, "GE_NOT_FOUND", 404, "Gate entry not found.");
+    }
+    try {
+      await assertCompanyScope(ctx, String(gateEntry.company_id));
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
     // Fetch material
@@ -1179,6 +1189,17 @@ export async function getGRNHandler(
     if (!grnId) {
       return procurementErrorResponse(req, ctx, "GRN_ID_REQUIRED", 400, "GRN id is required.");
     }
+    const { data: grnScope, error: grnScopeError } = await serviceRoleClient
+      .schema("erp_procurement").from("goods_receipt")
+      .select("company_id").eq("id", grnId).maybeSingle();
+    if (grnScopeError || !grnScope) {
+      return procurementErrorResponse(req, ctx, "GRN_NOT_FOUND", 404, "GRN not found.");
+    }
+    try {
+      await assertCompanyScope(ctx, String(grnScope.company_id));
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
     return okResponse(await hydrateGrn(grnId), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GRN_FETCH_FAILED";
@@ -1206,6 +1227,11 @@ export async function reverseGRNHandler(
       .select("*").eq("id", grnId).single();
     if (grnError || !grn) {
       return procurementErrorResponse(req, ctx, "GRN_NOT_FOUND", 404, "GRN not found.");
+    }
+    try {
+      await assertCompanyScope(ctx, String(grn.company_id));
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
     if (toUpperTrimmedString(grn.status) !== "POSTED") {
       return procurementErrorResponse(req, ctx, "GRN_NOT_POSTED", 400, "Only POSTED GRNs can be reversed.");

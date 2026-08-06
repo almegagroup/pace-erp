@@ -157,7 +157,7 @@ function effectiveNetWeight(exitRow: Record<string, unknown>): number | null {
   return parseNullableNumber(exitRow.net_weight_calculated);
 }
 
-async function fetchGateEntryBundle(gateEntryId: string): Promise<{
+async function fetchGateEntryBundle(ctx: ProcurementHandlerContext, gateEntryId: string): Promise<{
   gateEntry: GateEntryRow;
   lines: GateEntryLineRow[];
 }> {
@@ -171,6 +171,8 @@ async function fetchGateEntryBundle(gateEntryId: string): Promise<{
   if (gateEntryError || !gateEntry) {
     throw new Error("GATE_ENTRY_NOT_FOUND");
   }
+
+  await assertCompanyScope(ctx, String((gateEntry as GateEntryRow).company_id));
 
   const { data: lines, error: linesError } = await serviceRoleClient
     .schema("erp_procurement")
@@ -186,8 +188,8 @@ async function fetchGateEntryBundle(gateEntryId: string): Promise<{
   return { gateEntry, lines: (lines ?? []) as GateEntryLineRow[] };
 }
 
-async function hydrateGateEntry(gateEntryId: string): Promise<JsonRecord> {
-  const { gateEntry, lines } = await fetchGateEntryBundle(gateEntryId);
+async function hydrateGateEntry(ctx: ProcurementHandlerContext, gateEntryId: string): Promise<JsonRecord> {
+  const { gateEntry, lines } = await fetchGateEntryBundle(ctx, gateEntryId);
 
   const csnIds = Array.from(new Set(lines.map((l) => toTrimmedString(l.csn_id)).filter(Boolean)));
   const matIds = Array.from(new Set(lines.map((l) => toTrimmedString(l.material_id)).filter(Boolean)));
@@ -475,7 +477,7 @@ export async function createGateEntryHandler(
       }
     }
 
-    return okResponse(await hydrateGateEntry(String(gateEntry.id)), ctx.request_id, req);
+    return okResponse(await hydrateGateEntry(ctx, String(gateEntry.id)), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GE_CREATE_FAILED";
     const status = message.includes("NOT_FOUND") ? 404 : message === "COMPANY_SCOPE_VIOLATION" ? 403 : message.includes("REQUIRED") || message.includes("INVALID") ? 400 : 500;
@@ -557,10 +559,10 @@ export async function getGateEntryHandler(
     if (!gateEntryId) {
       return procurementErrorResponse(req, ctx, "GE_ID_REQUIRED", 400, "Gate entry id is required.");
     }
-    return okResponse(await hydrateGateEntry(gateEntryId), ctx.request_id, req);
+    return okResponse(await hydrateGateEntry(ctx, gateEntryId), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GE_FETCH_FAILED";
-    const status = message.includes("NOT_FOUND") ? 404 : 500;
+    const status = message.includes("NOT_FOUND") ? 404 : message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return procurementErrorResponse(req, ctx, message, status, message);
   }
 }
@@ -588,10 +590,10 @@ export async function getGateEntryByNumberHandler(
       return procurementErrorResponse(req, ctx, "GE_NOT_FOUND", 404, "Gate entry not found.");
     }
 
-    return okResponse(await hydrateGateEntry(String(gateEntry.id)), ctx.request_id, req);
+    return okResponse(await hydrateGateEntry(ctx, String(gateEntry.id)), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GE_FETCH_FAILED";
-    const status = message.includes("NOT_FOUND") ? 404 : 500;
+    const status = message.includes("NOT_FOUND") ? 404 : message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return procurementErrorResponse(req, ctx, message, status, message);
   }
 }
@@ -604,7 +606,7 @@ export async function updateGateEntryHandler(
     assertProcurementReadRole(ctx);
     const gateEntryId = getIdFromPath(req);
     const body = await parseBody(req);
-    const { gateEntry } = await fetchGateEntryBundle(gateEntryId);
+    const { gateEntry } = await fetchGateEntryBundle(ctx, gateEntryId);
 
     if (toUpperTrimmedString(gateEntry.status) !== "OPEN") {
       return procurementErrorResponse(req, ctx, "GE_NOT_OPEN", 400, "Only OPEN gate entries can be updated.");
@@ -707,10 +709,10 @@ export async function updateGateEntryHandler(
       }
     }
 
-    return okResponse(await hydrateGateEntry(gateEntryId), ctx.request_id, req);
+    return okResponse(await hydrateGateEntry(ctx, gateEntryId), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GE_UPDATE_FAILED";
-    const status = message.includes("NOT_FOUND") ? 404 : message.includes("OPEN") ? 400 : 500;
+    const status = message.includes("NOT_FOUND") ? 404 : message === "COMPANY_SCOPE_VIOLATION" ? 403 : message.includes("OPEN") ? 400 : 500;
     return procurementErrorResponse(req, ctx, message, status, message);
   }
 }
@@ -909,7 +911,7 @@ export async function createGateExitInboundHandler(
       return procurementErrorResponse(req, ctx, "GEX_GATE_ENTRY_REQUIRED", 400, "gate_entry_id is required.");
     }
 
-    const { gateEntry, lines } = await fetchGateEntryBundle(gateEntryId);
+    const { gateEntry, lines } = await fetchGateEntryBundle(ctx, gateEntryId);
     const existingResp = await serviceRoleClient
       .schema("erp_procurement")
       .from("gate_exit_inbound")
@@ -991,7 +993,7 @@ export async function createGateExitInboundHandler(
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "GEX_CREATE_FAILED";
-    const status = message.includes("REQUIRED") ? 400 : message.includes("NOT_FOUND") ? 404 : 500;
+    const status = message.includes("REQUIRED") ? 400 : message.includes("NOT_FOUND") ? 404 : message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return procurementErrorResponse(req, ctx, message, status, message);
   }
 }
@@ -1016,7 +1018,7 @@ export async function pruneGateEntryHandler(
       return procurementErrorResponse(req, ctx, "GE_ID_REQUIRED", 400, "Gate entry id is required.");
     }
 
-    const { gateEntry, lines } = await fetchGateEntryBundle(gateEntryId);
+    const { gateEntry, lines } = await fetchGateEntryBundle(ctx, gateEntryId);
     const geStatus = toUpperTrimmedString(gateEntry.status);
 
     if (geStatus === "PRUNED") {
@@ -1098,7 +1100,7 @@ export async function pruneGateEntryHandler(
       return procurementErrorResponse(req, ctx, "GE_PRUNE_FAILED", 500, "Unable to prune gate entry.");
     }
 
-    return okResponse(await hydrateGateEntry(gateEntryId), ctx.request_id, req);
+    return okResponse(await hydrateGateEntry(ctx, gateEntryId), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GE_PRUNE_FAILED";
     return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
