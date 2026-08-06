@@ -852,3 +852,275 @@ assigned Work Context — the data layer was never the problem. Only the
   (Section 17, "union of all companies, navigation only") — that is a
   different axis (cross-company) and must keep working exactly as-is;
   this change is scoped to cross-Work-Context-within-one-company only.
+
+---
+
+## 30. Page Visibility vs Data Access Separation — `menu_visible` (LOCKED design 2026-08-05, ✅ IMPLEMENTED 2026-08-06 — dev + prod both live)
+
+### 30.1 Problem
+
+Today, one `resource_code:action` decision does two jobs at once: it
+decides whether the **page** appears in the sidebar, and it decides
+whether the **data/write** behind that resource is allowed. These are
+not the same question. A page routinely needs read access to *another*
+module's resource purely as a background lookup — a dropdown, a
+cross-reference, a validation check — with no intention of that other
+module's full page ever appearing in the user's sidebar.
+
+Because the system has no way to grant "data yes, page no," every such
+lookup has historically been solved by granting the **whole page-level
+capability** of the other module instead (2026-08-05 examples: Production
+given full `OM_CUSTOMER_LIST`/`OM_CUSTOMER_CREATE` just so Plan Feed's
+Customer dropdown/create-modal would work; QUALITY given `PROC_GRN_LIST`
+just so the QA queue page could resolve a GRN's storage location). Each
+fix was individually correct and narrow in *scope* (right department,
+right resource), but structurally wrong in *shape* — it always grants a
+navigable page as a side effect, whether or not that's wanted, because
+there is no other lever to pull.
+
+This is the direct cause of Section 26's failure mode in practice:
+"most users require many custom edits" was starting to become true not
+because access decisions were wrong, but because the tooling forces
+every cross-module data need to be solved by capability-widening at the
+page level.
+
+### 30.2 New rule (LOCKED)
+
+**A capability's grant on `resource_code:action` decides data access.
+A separate `menu_visible` flag on that same grant decides whether the
+resource's page is offered in the sidebar.** Both flow from the exact
+same capability row — nothing new to assign, just one more bit per grant.
+
+This mirrors SAP's own separation: `S_TCODE` (can this transaction/menu
+entry be opened) is independent of Authorization Objects (can this
+activity — Create/Change/Display — succeed on this data), and F4 search
+helps inside any transaction rely on the Authorization Object check
+alone, never on holding the full master-data-maintenance transaction.
+
+- `menu_visible = true` (default, matches every existing row): behaves
+  exactly as today — ALLOW on VIEW makes the page appear in the sidebar.
+- `menu_visible = false`: the resource:action still resolves ALLOW for
+  any backend call that checks it (dropdown, lookup, cross-reference,
+  validation) — but `generate_menu_snapshot()` does not insert a page row
+  for it. The page does not appear, greyed or otherwise.
+- Whether a given grant should carry `menu_visible = true` or `false` is
+  a **per-grant business decision**, not automatic from the resource's
+  "VIEW-only vs write" shape — Section 31's audit decides this per case
+  (e.g. QUALITY's `PROC_GRN_LIST` grant stays `true`, because QA staff
+  genuinely benefit from browsing GRNs directly, not just as a lookup —
+  see Section 31.2's Split-Authority discussion for the reasoning class
+  this belongs to).
+
+### 30.3 Schema change
+
+- `acl.capability_menu_actions` and its versioned copy
+  `acl.version_capability_menu_actions` each gain
+  `menu_visible boolean not null default true`.
+- Default `true` on both means **zero behavior change for every existing
+  row** the moment the column lands — this is additive, not a migration
+  of meaning.
+
+### 30.4 Propagation (two functions, both must carry the flag through)
+
+1. **`acl.generate_acl_snapshot()`** — `precomputed_acl_view` currently
+   has no column tracking which capability produced a given resolved
+   decision (Section 3 background: the `resolved_base` /
+   `override_candidates` / `final_ranked` CTE chain dedups down to one
+   winning row per user+context+resource+action via `ROW_NUMBER()`).
+   `menu_visible` must ride along through that same resolution and land
+   as a column on `precomputed_acl_view`.
+2. **`erp_menu.generate_menu_snapshot()`** — today inserts a page row
+   whenever ALLOW + VIEW is present. Must add `menu_visible = true` as a
+   third required condition before inserting a page row. The
+   ALLOW+VIEW-but-`menu_visible=false` case must **not** insert a page
+   row, visible or greyed — it simply does not become a menu entry.
+
+### 30.5 Precedence-resolution risk (must be resolved before implementation, not during)
+
+If two different capabilities grant the **same** `resource_code:action`
+to the **same** user+context with **different** `menu_visible` values
+(e.g. one narrow lookup-only grant with `false`, one legitimate
+page-owning grant with `true`), the existing `ROW_NUMBER()` dedup keeps
+only one row — and today's precedence rules (deny-wins, override beats
+role, etc.) were never designed with a `menu_visible` tiebreak in mind.
+
+**Resolution rule (LOCKED):** `menu_visible` must be OR-reduced across
+every ALLOW-decision-contributing row for that user+context+resource+
+action pair, not carried through the single winning row. If *any*
+grant the user holds for that exact resource:action says `true`, the
+page shows. This mirrors Section 29's Work-Context union logic — a
+capability that wants the page hidden can only narrow *itself*, never
+suppress a page another one of the user's own grants legitimately wants
+visible.
+
+### 30.6 What does NOT change
+
+- Union Work Context model (Section 29) — orthogonal axis, both apply
+  independently.
+- Company scope, Work Company selection (Law 12) — untouched.
+- Every existing capability's current page-visibility behavior — all
+  default to `true`, identical to today, until Section 31's audit
+  deliberately flips specific grants to `false`.
+- The underlying `resource_code:action` ALLOW/DENY semantics — unchanged.
+
+### 30.7 Rollout plan
+
+Given this touches core precedence-resolution SQL
+(`generate_acl_snapshot()`), build and verify in **dev**
+(`ytapuwiqicmvpanmzelb`) first — schema change, both function changes,
+the OR-reduce fix from 30.5, and a live before/after check on
+`precomputed_acl_view` for at least one multi-grant-collision case —
+before touching prod. Only after dev verification does this get applied
+to prod as a migration (schema) + the same function changes (also
+migration, since these are `SECURITY DEFINER` functions, not data).
+
+### 30.8 Relationship to Sections 26/27
+
+Sections 26 ("Exception Rule") and 27 ("Scalability Rule") already
+locked the *intent* — override/exception should stay rare, Work Context
++ Capability Pack should drive access, not per-user stitching. This
+section is the missing *mechanism* that makes that intent achievable in
+practice: without it, every legitimate cross-module data need forces a
+page-level capability grant as an unwanted side effect, which is exactly
+the pressure that pushes toward "many custom edits" Section 26 warns
+against. Section 30 is a prerequisite for Section 31.
+
+---
+
+## 31. Capability Pyramid Restructure (LOCKED intent 2026-08-05, design pending Section 30)
+
+### 31.1 Why
+
+Capability grants have accreted incident-by-incident (`CAP_PROC_QA`,
+`CAP_OM_CUSTOMER_CREATE_ONLY`, `CAP_OM_CUSTOMER_VIEW`, and others across
+this project's history) — each individually correct, none designed as
+part of a single coherent picture of what any one department actually
+needs. The business owner's explicit direction (2026-08-05): stop
+patch-work, rebuild the capability set into one concrete pyramid,
+department by department, deleting and recreating capabilities freely
+where needed — exceptions only where a real exception exists.
+
+### 31.2 Target four-layer model
+
+1. **Universal Baseline** — pure reference/master data, safe for any
+   department regardless of function (Material, Customer, Vendor,
+   Transporter, CHA, Payment Terms, Port, IN02/IN03). One bundle
+   (`CAP_EVERYONE_REPORTS`-style), granted to everyone uniformly. Not
+   decided per-incident going forward — a resource either qualifies for
+   this baseline on its own merits (true reference data, already
+   company-scoped safely) or it doesn't.
+2. **Department Operations Bundle** — one bundle per department,
+   designed once from that department's actual job function (not grown
+   bug-by-bug), including its own primary pages plus any `menu_visible:
+   false` cross-module lookups it genuinely needs (Section 30). Example
+   target: `CAP_QUALITY_OPERATIONS`, `CAP_PRODUCTION_OPERATIONS`.
+3. **Split-Authority (Maker-Checker) Bundle** — two named departments
+   paired by deliberate design, one as maker, one as checker, on a
+   specific resource family. **Already exists correctly in two live
+   cases, confirmed 2026-08-05, consistent across both CMP003 and
+   CMP006** — this is not a new invention, just a name for an already-
+   correct pattern to keep using deliberately rather than by accident:
+   - Pack BOM (PR05-08): SUPPLY CHAIN = maker (`CAP_PACKBOM_CREATE_SCM`
+     + `CAP_PACKBOM_APPROVE_SCM`), PRODUCTION = view-only
+     (`CAP_PACKBOM_VIEW`).
+   - Costing config (AC05/AC06): ACCOUNTS = maker (`CAP_ACC_COSTING`),
+     AUDIT = independent checker (`CAP_ACC_COSTING_AUDITOR`, VIEW+WRITE+
+     APPROVE) — deliberately a *different* department from Accounts,
+     not Accounts reviewing itself.
+   **Known loose end to resolve in the audit:** `CAP_PROD_PACKBOM_CREATE`
+   / `CAP_PROD_PACKBOM_APPROVE` capabilities exist but are currently
+   wired only to ACL-MASTER, never to real PRODUCTION — determine
+   during the audit whether this is intentional unused scaffolding (to
+   delete) or an unfinished intent to someday give Production its own
+   create path (to either wire up or delete, not leave ambiguous).
+4. **Individual Exception** — `acl.version_user_overrides`, person-
+   specific only, per Section 26. Not a department-wide grant under a
+   different name.
+
+### 31.3 Migration approach
+
+Audit every existing capability row, classify each into exactly one of
+the four layers above, and for each department produce one clean target
+bundle. Consolidate/rename/delete freely — the business owner has
+explicitly authorized deleting and recreating capabilities rather than
+preserving today's names for continuity's sake.
+
+### 31.4 Explicit dependency on Section 30
+
+This restructure cannot produce a *clean* pyramid without `menu_visible`
+already existing — otherwise every Department Operations Bundle (layer
+2) that includes a cross-module lookup is forced to also grant that
+other module's full page, reintroducing the exact problem this
+restructure is meant to fix. **Section 30 must land and be verified
+(dev, then prod) before Section 31's audit/rebuild begins.**
+
+### 31.5 Sequencing (LOCKED)
+
+**Phase 1 — Section 30:** schema + function changes, dev-verified, then
+prod. **Phase 2 — Section 31:** full capability audit and pyramid
+rebuild, department by department, only after Phase 1 is live in prod.
+
+### Implementation record (2026-08-06)
+
+**Phase 1 (§30) is live in both dev and prod.** 3 migrations
+(`20260805210000_capability_menu_actions_menu_visible.sql`,
+`20260805220000_generate_acl_snapshot_menu_visible.sql`,
+`20260805230000_generate_menu_snapshot_menu_visible.sql`) — schema column
+on both `capability_menu_actions` tables + `precomputed_acl_view`, the
+OR-reduce propagation in `generate_acl_snapshot()`, and the
+`menu_visible = TRUE` gate in `generate_menu_snapshot()`'s
+`allowed_resource_codes` CTE. Verified in dev via a real toggle
+(`OM_CUSTOMER_LIST:VIEW`) and a genuine two-source collision
+(capability=false, role=true → page stayed visible, confirming the
+OR-reduce). Verified in prod: `generate_acl_snapshot()` re-run for
+CMP003 (1286 rows) and CMP006 (1177 rows) — 100% `menu_visible=true`,
+zero behavior change, exactly as designed since no grant has been
+deliberately narrowed to `false` yet.
+
+**⚠️ Deployment mistake caught same-day, corrected before any real
+damage:** applying migration 2 to prod, the `ALTER TABLE
+acl.precomputed_acl_view ADD COLUMN menu_visible ...` line (which lived
+inside that same migration file alongside the function replace) was
+dropped when the SQL was copied into the prod `apply_migration` call —
+only the `CREATE OR REPLACE FUNCTION` part went through. This surfaced
+immediately as a hard error the moment `generate_acl_snapshot()` was
+re-run on real prod data (`column "menu_visible" ... does not exist`),
+not silently. Fixed by running the missing `ALTER TABLE` directly
+(the local migration file was already correct — only the copy into the
+prod tool call was incomplete), then re-verifying both companies clean.
+**Lesson:** when a migration file bundles a schema change with a
+function replace, copy the *entire* file into the migration tool call,
+not just the part that looks like "the real change" — a schema
+prerequisite silently split off from its function can pass a naive
+`{"success": true}` apply and only fail later, on first real use.
+
+Same session, Section 30 also drove a **Step 1 gap-closure pass**: the
+page-dependency manifest (`PAGE-DEPENDENCY-MANIFEST.json` /
+`PAGE-CROSS-MODULE-DEPENDENCIES.json`, `docs/Operation Management/
+implementation-specs/`) was walked end-to-end against live prod grants,
+not just the one page that had been reported. Real gaps found and fixed
+(all via the standard ACL version-bump cycle, CMP003+CMP006, versions
+44→46): `OM_CUSTOMER_CREATE:EDIT` for Production (Plan Feed's party-type
+edit, 403'd despite VIEW+WRITE being present), `OM_VENDOR_LIST:VIEW`
+made universal via `CAP_EVERYONE_REPORTS` (Accounts had zero access —
+19 pages depend on it), `OM_MATERIAL_CREATE:EDIT` for Production
+(Pack BOM / Stroke pages), `SA_OM_PACK_CODE_MASTER` for Production
+(had **zero** grants for anyone, including ACL-MASTER — PackConfigPage
+was unusable for everyone), `PROC_QA_QUEUE` for Production (SFG Result
+Recording / PR18 was completely inaccessible). Confirmed already-correct
+and left untouched: `OM_MATERIAL_LIST:VIEW` (already universal),
+`SA_PROD_BATCH_SERIES`/`SA_PROD_SEGMENT_LOCATIONS` (Production already
+had full access), `PROC_PAYMENT_TERMS_MASTER` (correctly SCM-only, ASL
+is SCM's own page), `PROD_OLD_PACKING_PO`/`PROC_SO_CREATE` (correctly
+ACL-MASTER-only — Opening Stock and Sales Order Create are both still
+pre-launch, not yet rolled out to any real department by design).
+
+**Not yet done (Phase 2, §31):** no existing grant has actually been
+flipped to `menu_visible=false` yet — every grant added or already
+present still defaults to `true`, so today's sidebar behavior is
+unchanged for every user. The mechanism is live and proven; deciding
+*which* specific grants should narrow to `false` (e.g. Production's new
+`OM_MATERIAL_CREATE`/`SA_OM_PACK_CODE_MASTER`/`PROC_QA_QUEUE` access —
+all lookup-only from Plan Feed/PR18's perspective, arguably should not
+surface their own standalone pages in Production's sidebar) is deferred
+to the full §31 capability-pyramid audit, not decided ad hoc here.

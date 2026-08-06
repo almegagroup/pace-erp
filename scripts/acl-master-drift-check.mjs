@@ -23,6 +23,19 @@
  * একাধিক company-তে ACL-MASTER আলাদা ইউজার হলে, ফলাফল company-ভিত্তিক আলাদা
  * সারিতে আসবে।
  *
+ * ⚠️ ২০২৬-০৮-০৬ prod-এ প্রথমবার চালিয়ে একটা false-positive পাওয়া গেছে:
+ * `ACC_CONVERSION_COST:EDIT` — এটা bug না, ইচ্ছাকৃত business-exclusivity
+ * (`version_user_overrides.override_reason`: "AC04 create/edit exclusive to
+ * Soni (business owner 2026-07-27)" — শুধু P0010-কে দেওয়া, ACL-MASTER-কেও না)।
+ * নিচের `KNOWN_INTENTIONAL_EXCLUSIONS` CTE দিয়ে এটা বাদ দেওয়া হয়েছে যাতে প্রতিবার
+ * এই একই false-positive আবার investigate করতে না হয় — নতুন কোনো সত্যিকারের
+ * exclusive-grant design এলে এখানে এক লাইন যোগ করো, reason-সহ।
+ * (একই session-এ `PROC_OPENING_STOCK_APPROVAL:WRITE` ধরা পড়েছিল আর real gap
+ * প্রমাণিত হয়ে fix হয়েছে — P0076 CAP_OPENING_STOCK_AUDITOR পায়নি, capability
+ * ভুলটা `acl.menu_master`/`erp_menu.menu_master` দুটো আলাদা table, ভুল টেবিলে
+ * join করলে empty আসে বলে প্রথমে ধরা কঠিন হয়েছিল — capability_menu_actions সবসময়
+ * `acl.menu_master.id` refer করে, `erp_menu.menu_master.id` না।)
+ *
  * চালাও:  node scripts/acl-master-drift-check.mjs
  */
 
@@ -33,8 +46,17 @@ console.log(`-- ACL-MASTER drift check — run against dev AND prod separately.
 -- has ALLOW on, but the ACL-MASTER user does not. Non-empty result = a real
 -- gap: some page/action was added to another role's grants but never checked
 -- against ACL-MASTER.
+--
+-- KNOWN_INTENTIONAL_EXCLUSIONS = documented business decisions to deny
+-- ACL-MASTER a specific grant on purpose (e.g. a named-person-exclusive
+-- action). Verified 2026-08-06 against acl.version_user_overrides before
+-- being added here — do not add an entry without that same verification.
 
-WITH ranked AS (
+WITH known_intentional_exclusions (resource_code, action_code, reason) AS (
+  VALUES
+    ('ACC_CONVERSION_COST', 'EDIT', 'AC04 create/edit exclusive to Soni (business owner 2026-07-27) — see acl.version_user_overrides override_reason')
+),
+ranked AS (
   SELECT pav.company_id, c.company_code, pav.auth_user_id, u.user_code,
          count(*) FILTER (WHERE pav.decision = 'ALLOW') AS allow_count,
          row_number() OVER (
@@ -71,5 +93,9 @@ JOIN acl_master am ON am.company_id = e.company_id
 WHERE NOT EXISTS (
   SELECT 1 FROM acl_master_allow ma
   WHERE ma.company_id = e.company_id AND ma.resource_code = e.resource_code AND ma.action_code = e.action_code
+)
+AND NOT EXISTS (
+  SELECT 1 FROM known_intentional_exclusions kie
+  WHERE kie.resource_code = e.resource_code AND kie.action_code = e.action_code
 )
 ORDER BY am.company_code, e.resource_code, e.action_code;`);

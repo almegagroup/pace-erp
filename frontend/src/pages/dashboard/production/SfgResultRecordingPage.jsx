@@ -26,7 +26,6 @@ import {
 } from "./prodApi.js";
 
 const LIMIT = 50;
-const QA_MANAGER_ROLE_CODES = new Set(["SA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -56,7 +55,7 @@ function computePassFail(resultValue, lsl, usl) {
 }
 
 export default function SfgResultRecordingPage() {
-  const { runtimeContext, shellProfile } = useMenu();
+  const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
@@ -286,7 +285,6 @@ export default function SfgResultRecordingPage() {
                                 <SfgQaExpandedPanel
                                   row={row}
                                   companyId={companyId}
-                                  roleCode={shellProfile?.roleCode || ""}
                                   onChanged={() => {
                                     void queueQuery.refetch();
                                   }}
@@ -309,9 +307,15 @@ export default function SfgResultRecordingPage() {
   );
 }
 
-function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse }) {
+function SfgQaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
   const queryClient = useQueryClient();
-  const canManage = QA_MANAGER_ROLE_CODES.has(roleCode);
+  // Pattern #12 fix (2026-08-06): write/approve is ACL-governed server-side
+  // (PUT test-lines -> EDIT, POST decision -> APPROVE, both on
+  // PROD_SFG_RESULT_RECORDING; no local role check exists in the backend
+  // handler). A hardcoded rank list here could wrongly hide the panel from
+  // an ACL-authorized lower-rank user (same shape as the PO/STO bug) — trust
+  // the backend's own decision instead.
+  const canManage = true;
   const materialCategory = row.material?.material_category || "";
 
   const [saving, setSaving] = useState(false);

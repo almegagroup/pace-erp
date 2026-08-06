@@ -4,7 +4,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
-import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, openScreen, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
@@ -14,8 +13,6 @@ import {
   getPOOrderGroup,
   rejectPOOrderGroup,
 } from "../procurementApi.js";
-
-const PO_APPROVER_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
 
 function getStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -35,7 +32,6 @@ export default function POOrderGroupDetailPage() {
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const navigate = useNavigate();
-  const { shellProfile } = useMenu();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -54,7 +50,6 @@ export default function POOrderGroupDetailPage() {
     },
   });
 
-  const canApprove = PO_APPROVER_ROLES.has(shellProfile?.roleCode);
   useEffect(() => {
     setError(groupQuery.error?.message || "");
   }, [groupQuery.error?.message]);
@@ -142,7 +137,7 @@ export default function POOrderGroupDetailPage() {
           disabled: groupQuery.isFetching,
         },
         ...(group?.status === "DRAFT" ? [{ key: "confirm", label: saving ? "Sending..." : "Confirm Order", tone: "primary", onClick: () => void handleConfirm(), disabled: saving }] : []),
-        ...(group?.status === "PENDING_APPROVAL" && canApprove
+        ...(group?.status === "PENDING_APPROVAL"
           ? [
               { key: "approve", label: saving ? "Approving..." : "Approve Order", tone: "primary", onClick: () => void handleApprove(), disabled: saving },
               { key: "reject", label: "Reject Order", tone: "danger", onClick: () => void handleReject(), disabled: saving },

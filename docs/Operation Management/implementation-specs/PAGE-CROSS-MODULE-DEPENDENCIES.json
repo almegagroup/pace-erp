@@ -1,0 +1,1627 @@
+[
+  {
+    "page": "frontend/src/admin/sa/screens/SAMaterialMaster.jsx",
+    "pageModule": "ADMIN",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterialUomConversions",
+          "method": "GET",
+          "path": "/api/om/material/uom-conversions?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:EDIT",
+        {
+          "fn": "changeMaterialStatus",
+          "method": "POST",
+          "path": "/api/om/material/status",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "EDIT",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:WRITE",
+        {
+          "fn": "updateMaterialUomConversion",
+          "method": "PATCH",
+          "path": "/api/om/material/uom-conversion",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:VIEW",
+        {
+          "fn": "listCompanyMapping",
+          "method": "GET",
+          "path": "/api/om/material/company-mapping?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/admin/sa/screens/SAPackCodeMasterPage.jsx",
+    "pageModule": "ADMIN",
+    "foreign": [
+      [
+        "PROD_PO_CREATE:VIEW",
+        {
+          "fn": "listApprovedProdshades",
+          "method": "GET",
+          "path": "/api/production/prodshades",
+          "resourceCode": "PROD_PO_CREATE",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "SA_OM_PACK_CODE_MASTER:WRITE",
+        {
+          "fn": "upsertPackConfig",
+          "method": "POST",
+          "path": "/api/production/pack-configs",
+          "resourceCode": "SA_OM_PACK_CODE_MASTER",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "SA_OM_PACK_CODE_MASTER:EDIT",
+        {
+          "fn": "togglePackCode",
+          "method": "POST",
+          "path": "/api/production/pack-codes/toggle",
+          "resourceCode": "SA_OM_PACK_CODE_MASTER",
+          "action": "EDIT",
+          "skipAcl": false
+        }
+      ],
+      [
+        "SA_OM_PACK_CODE_MASTER:VIEW",
+        {
+          "fn": "listPackConfigs",
+          "method": "GET",
+          "path": "/api/production/pack-configs",
+          "resourceCode": "SA_OM_PACK_CODE_MASTER",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "SA_OM_PACK_CODE_MASTER:DELETE",
+        {
+          "fn": "deletePackConfig",
+          "method": "DELETE",
+          "path": "/api/production/pack-configs/${id}",
+          "resourceCode": "SA_OM_PACK_CODE_MASTER",
+          "action": "DELETE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/admin/sa/screens/SAProductionBatchSeriesPage.jsx",
+    "pageModule": "ADMIN",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "SA_PROD_BATCH_SERIES:VIEW",
+        {
+          "fn": "listBatchSeries",
+          "method": "GET",
+          "path": "/api/production/batch-series",
+          "resourceCode": "SA_PROD_BATCH_SERIES",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "SA_PROD_BATCH_SERIES:WRITE",
+        {
+          "fn": "createBatchSeries",
+          "method": "POST",
+          "path": "/api/production/batch-series",
+          "resourceCode": "SA_PROD_BATCH_SERIES",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "SA_PROD_BATCH_SERIES:EDIT",
+        {
+          "fn": "updateBatchSeries",
+          "method": "PATCH",
+          "path": "/api/production/batch-series/${id}",
+          "resourceCode": "SA_PROD_BATCH_SERIES",
+          "action": "EDIT",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/admin/sa/screens/SAProductionSegmentLocationPage.jsx",
+    "pageModule": "ADMIN",
+    "foreign": [
+      [
+        "SA_PROD_SEGMENT_LOCATIONS:VIEW",
+        {
+          "fn": "listSegmentLocations",
+          "method": "GET",
+          "path": "/api/production/segment-locations",
+          "resourceCode": "SA_PROD_SEGMENT_LOCATIONS",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "SA_PROD_SEGMENT_LOCATIONS:WRITE",
+        {
+          "fn": "upsertSegmentLocation",
+          "method": "POST",
+          "path": "/api/production/segment-locations",
+          "resourceCode": "SA_PROD_SEGMENT_LOCATIONS",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/admin/sa/screens/SAVendorMaster.jsx",
+    "pageModule": "ADMIN",
+    "foreign": [
+      [
+        "OM_VENDOR_CREATE:WRITE",
+        {
+          "fn": "bulkUnmapVendors",
+          "method": "DELETE",
+          "path": "/api/om/vendor/company-unmap-bulk",
+          "resourceCode": "OM_VENDOR_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendorCompanyMapping",
+          "method": "GET",
+          "path": "/api/om/vendor/company-mapping?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_VENDOR_CREATE:EDIT",
+        {
+          "fn": "changeVendorStatus",
+          "method": "POST",
+          "path": "/api/om/vendor/status",
+          "resourceCode": "OM_VENDOR_CREATE",
+          "action": "EDIT",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/om/asl/AslCreatePage.jsx",
+    "pageModule": "OM",
+    "foreign": [
+      [
+        "PROC_PAYMENT_TERMS_MASTER:VIEW",
+        {
+          "fn": "listPaymentTerms",
+          "method": "GET",
+          "path": "/api/procurement/payment-terms",
+          "resourceCode": "PROC_PAYMENT_TERMS_MASTER",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/om/asl/AslDetailPage.jsx",
+    "pageModule": "OM",
+    "foreign": [
+      [
+        "PROC_PAYMENT_TERMS_MASTER:VIEW",
+        {
+          "fn": "listPaymentTerms",
+          "method": "GET",
+          "path": "/api/procurement/payment-terms",
+          "resourceCode": "PROC_PAYMENT_TERMS_MASTER",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/accounts/BlockedIVListPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/accounts/IVCreatePage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/accounts/IVDetailPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/accounts/IVListPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/accounts/LandedCostListPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/masters/ImportLeadTimeMasterPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/masters/MaterialCategoryMasterPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:WRITE",
+        {
+          "fn": "removeMaterialCategoryMember",
+          "method": "DELETE",
+          "path": "/api/om/material/category-group/member",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockApprovalPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "PROD_OLD_PACKING_PO:VIEW",
+        {
+          "fn": "listOldPackingPoBatches",
+          "method": "GET",
+          "path": "/api/production/old-packing-po/batches",
+          "resourceCode": "PROD_OLD_PACKING_PO",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "PROD_OLD_PACKING_PO:VIEW",
+        {
+          "fn": "listOldPackingPoBatches",
+          "method": "GET",
+          "path": "/api/production/old-packing-po/batches",
+          "resourceCode": "PROD_OLD_PACKING_PO",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/po/POCreateOpeningPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "getVendorMaterialInfo",
+          "method": "GET",
+          "path": "/api/om/vendor-material-info?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/po/POCreatePage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "getVendorMaterialInfo",
+          "method": "GET",
+          "path": "/api/om/vendor-material-info?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/po/PODetailPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/po/POListPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/po/POOrderGroupListPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/print/PrintPreviewPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/qa/QAQueuePage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/reports/CurrentStockPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/reports/StockLedgerReportPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/rtv/DebitNoteDetailPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/rtv/DebitNoteListPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/rtv/ExchangeRefListPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/rtv/RTVCreatePage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/rtv/RTVDetailPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/rtv/RTVListPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_CUSTOMER_LIST:VIEW",
+        {
+          "fn": "listCustomers",
+          "method": "GET",
+          "path": "/api/om/customers?${params.toString()}",
+          "resourceCode": "OM_CUSTOMER_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/SOCreatePage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_CUSTOMER_CREATE:VIEW",
+        {
+          "fn": "lookupCustomerGstProfile",
+          "method": "GET",
+          "path": "/api/om/customer/gst-profile?${params.toString()}",
+          "resourceCode": "OM_CUSTOMER_CREATE",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_VENDOR_LIST:VIEW",
+        {
+          "fn": "listVendors",
+          "method": "GET",
+          "path": "/api/om/vendors?${params.toString()}",
+          "resourceCode": "OM_VENDOR_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_CUSTOMER_CREATE:WRITE",
+        {
+          "fn": "createParentCustomer",
+          "method": "POST",
+          "path": "/api/om/parent-customer",
+          "resourceCode": "OM_CUSTOMER_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_CUSTOMER_LIST:VIEW",
+        {
+          "fn": "listCustomers",
+          "method": "GET",
+          "path": "/api/om/customers?${params.toString()}",
+          "resourceCode": "OM_CUSTOMER_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/SODetailPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_CUSTOMER_LIST:VIEW",
+        {
+          "fn": "listCustomers",
+          "method": "GET",
+          "path": "/api/om/customers?${params.toString()}",
+          "resourceCode": "OM_CUSTOMER_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sto/StoCreateFormPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sto/STOCreateOpeningPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sto/STOCreatePage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sto/STODetailPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/transfer/PlantTransferListPage.jsx",
+    "pageModule": "PROC",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/ChangeBomItemApprovalPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterialCategoryGroups",
+          "method": "GET",
+          "path": "/api/om/material/category-groups?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:WRITE",
+        {
+          "fn": "addMaterialCategoryMember",
+          "method": "POST",
+          "path": "/api/om/material/category-group/member",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/ChangeBomItemPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterialCategoryGroups",
+          "method": "GET",
+          "path": "/api/om/material/category-groups?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:WRITE",
+        {
+          "fn": "addMaterialCategoryMember",
+          "method": "POST",
+          "path": "/api/om/material/category-group/member",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/ChangePackBomApprovalPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterialCategoryGroups",
+          "method": "GET",
+          "path": "/api/om/material/category-groups?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:WRITE",
+        {
+          "fn": "addMaterialCategoryMember",
+          "method": "POST",
+          "path": "/api/om/material/category-group/member",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:EDIT",
+        {
+          "fn": "updateMaterial",
+          "method": "PATCH",
+          "path": "/api/om/material",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "EDIT",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/ChangePackBomPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterialCategoryGroups",
+          "method": "GET",
+          "path": "/api/om/material/category-groups?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:WRITE",
+        {
+          "fn": "addMaterialCategoryMember",
+          "method": "POST",
+          "path": "/api/om/material/category-group/member",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:EDIT",
+        {
+          "fn": "updateMaterial",
+          "method": "PATCH",
+          "path": "/api/om/material",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "EDIT",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/ConversionCostPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "SA_PROD_BATCH_SERIES:VIEW",
+        {
+          "fn": "listBatchSeries",
+          "method": "GET",
+          "path": "/api/production/batch-series",
+          "resourceCode": "SA_PROD_BATCH_SERIES",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_CONVERSION_COST:VIEW",
+        {
+          "fn": "listConversionRates",
+          "method": "GET",
+          "path": "/api/production/conversion-rates",
+          "resourceCode": "ACC_CONVERSION_COST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_CONVERSION_COST:WRITE",
+        {
+          "fn": "createConversionRate",
+          "method": "POST",
+          "path": "/api/production/conversion-rates",
+          "resourceCode": "ACC_CONVERSION_COST",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/FgStockBreakdownPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/MtsSkuMonthlyRatePage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "ACC_MTS_SKU_MONTHLY_RATE:VIEW",
+        {
+          "fn": "listPendingMtsSkuRateDrafts",
+          "method": "GET",
+          "path": "/api/production/mts-sku-rates/pending-drafts",
+          "resourceCode": "ACC_MTS_SKU_MONTHLY_RATE",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_MTS_SKU_MONTHLY_RATE:WRITE",
+        {
+          "fn": "saveMtsSkuRateDraft",
+          "method": "POST",
+          "path": "/api/production/mts-sku-rates/draft",
+          "resourceCode": "ACC_MTS_SKU_MONTHLY_RATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_MTS_SKU_MONTHLY_RATE:APPROVE",
+        {
+          "fn": "approveMtsSkuRate",
+          "method": "POST",
+          "path": "/api/production/mts-sku-rates/approve",
+          "resourceCode": "ACC_MTS_SKU_MONTHLY_RATE",
+          "action": "APPROVE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/OldPackingPoPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/PackBomApprovalPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterialCategoryGroups",
+          "method": "GET",
+          "path": "/api/om/material/category-groups?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:WRITE",
+        {
+          "fn": "addMaterialCategoryMember",
+          "method": "POST",
+          "path": "/api/om/material/category-group/member",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:EDIT",
+        {
+          "fn": "updateMaterial",
+          "method": "PATCH",
+          "path": "/api/om/material",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "EDIT",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/PackBomCreatePage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterialCategoryGroups",
+          "method": "GET",
+          "path": "/api/om/material/category-groups?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:WRITE",
+        {
+          "fn": "addMaterialCategoryMember",
+          "method": "POST",
+          "path": "/api/om/material/category-group/member",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:EDIT",
+        {
+          "fn": "updateMaterial",
+          "method": "PATCH",
+          "path": "/api/om/material",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "EDIT",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/PackConfigPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "SA_OM_PACK_CODE_MASTER:VIEW",
+        {
+          "fn": "listPackConfigs",
+          "method": "GET",
+          "path": "/api/production/pack-configs",
+          "resourceCode": "SA_OM_PACK_CODE_MASTER",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "SA_OM_PACK_CODE_MASTER:WRITE",
+        {
+          "fn": "upsertPackConfig",
+          "method": "POST",
+          "path": "/api/production/pack-configs",
+          "resourceCode": "SA_OM_PACK_CODE_MASTER",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "SA_OM_PACK_CODE_MASTER:DELETE",
+        {
+          "fn": "deletePackConfig",
+          "method": "DELETE",
+          "path": "/api/production/pack-configs/${id}",
+          "resourceCode": "SA_OM_PACK_CODE_MASTER",
+          "action": "DELETE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/PlanFeedPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_CUSTOMER_CREATE:WRITE",
+        {
+          "fn": "createCustomer",
+          "method": "POST",
+          "path": "/api/om/customer",
+          "resourceCode": "OM_CUSTOMER_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_CUSTOMER_LIST:VIEW",
+        {
+          "fn": "listCustomers",
+          "method": "GET",
+          "path": "/api/om/customers?${params.toString()}",
+          "resourceCode": "OM_CUSTOMER_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_CUSTOMER_CREATE:EDIT",
+        {
+          "fn": "updateCustomer",
+          "method": "PATCH",
+          "path": "/api/om/customer",
+          "resourceCode": "OM_CUSTOMER_CREATE",
+          "action": "EDIT",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterialCategoryGroups",
+          "method": "GET",
+          "path": "/api/om/material/category-groups?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:WRITE",
+        {
+          "fn": "addMaterialCategoryMember",
+          "method": "POST",
+          "path": "/api/om/material/category-group/member",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "SA_PROD_SEGMENT_LOCATIONS:VIEW",
+        {
+          "fn": "listSegmentLocations",
+          "method": "GET",
+          "path": "/api/production/segment-locations",
+          "resourceCode": "SA_PROD_SEGMENT_LOCATIONS",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/ProductionPOFinalPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/ProductionPOVerifyPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterials",
+          "method": "GET",
+          "path": "/api/om/materials?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/SfgResultRecordingPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "PROC_QA_QUEUE:VIEW",
+        {
+          "fn": "listQaCategoryTestConfig",
+          "method": "GET",
+          "path": "/api/procurement/qa-category-test-config",
+          "resourceCode": "PROC_QA_QUEUE",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "PROC_QA_QUEUE:WRITE",
+        {
+          "fn": "createQaCategoryTestConfig",
+          "method": "POST",
+          "path": "/api/procurement/qa-category-test-config",
+          "resourceCode": "PROC_QA_QUEUE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "PROC_QA_QUEUE:EDIT",
+        {
+          "fn": "updateQaCategoryTestConfig",
+          "method": "PATCH",
+          "path": "/api/procurement/qa-category-test-config/${encodeURIComponent(id)}",
+          "resourceCode": "PROC_QA_QUEUE",
+          "action": "EDIT",
+          "skipAcl": false
+        }
+      ],
+      [
+        "PROC_QA_QUEUE:DELETE",
+        {
+          "fn": "deleteQaCategoryTestConfig",
+          "method": "DELETE",
+          "path": "/api/procurement/qa-category-test-config/${encodeURIComponent(id)}",
+          "resourceCode": "PROC_QA_QUEUE",
+          "action": "DELETE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/SlocCostingGroupPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "ACC_SLOC_COSTING_GROUP:WRITE",
+        {
+          "fn": "saveCostingRateDraft",
+          "method": "POST",
+          "path": "/api/production/costing-rate/draft",
+          "resourceCode": "ACC_SLOC_COSTING_GROUP",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_SLOC_COSTING_GROUP:VIEW",
+        {
+          "fn": "listDraftCostingRateDetail",
+          "method": "GET",
+          "path": "/api/production/costing-rate/draft-detail",
+          "resourceCode": "ACC_SLOC_COSTING_GROUP",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_SLOC_COSTING_GROUP:DELETE",
+        {
+          "fn": "removeCostingGroupMember",
+          "method": "DELETE",
+          "path": "/api/production/costing-groups/${groupId}/members/${memberId}",
+          "resourceCode": "ACC_SLOC_COSTING_GROUP",
+          "action": "DELETE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_SLOC_COSTING_GROUP:APPROVE",
+        {
+          "fn": "approveCostingRate",
+          "method": "POST",
+          "path": "/api/production/costing-rate/approve",
+          "resourceCode": "ACC_SLOC_COSTING_GROUP",
+          "action": "APPROVE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/StrokeApprovalPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterialCategoryGroups",
+          "method": "GET",
+          "path": "/api/om/material/category-groups?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:WRITE",
+        {
+          "fn": "addMaterialCategoryMember",
+          "method": "POST",
+          "path": "/api/om/material/category-group/member",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/StrokeMasterPage.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_LIST:VIEW",
+        {
+          "fn": "listMaterialCategoryGroups",
+          "method": "GET",
+          "path": "/api/om/material/category-groups?${params.toString()}",
+          "resourceCode": "OM_MATERIAL_LIST",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "OM_MATERIAL_CREATE:WRITE",
+        {
+          "fn": "addMaterialCategoryMember",
+          "method": "POST",
+          "path": "/api/om/material/category-group/member",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ]
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/strokeShared.jsx",
+    "pageModule": "PROD",
+    "foreign": [
+      [
+        "OM_MATERIAL_CREATE:EDIT",
+        {
+          "fn": "updateMaterial",
+          "method": "PATCH",
+          "path": "/api/om/material",
+          "resourceCode": "OM_MATERIAL_CREATE",
+          "action": "EDIT",
+          "skipAcl": false
+        }
+      ]
+    ]
+  }
+]

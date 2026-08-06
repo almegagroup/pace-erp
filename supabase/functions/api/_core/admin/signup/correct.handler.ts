@@ -29,7 +29,9 @@ export async function correctSignupHandler(
   req: Request,
   ctx: HandlerContext
 ): Promise<Response> {
-  if (ctx.context.status !== "RESOLVED") {
+  // Security fix (2026-08-06): see approve.handler.ts — same missing
+  // caller-authorization gap, same fix.
+  if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
     return okResponse({ corrected: false, reason: "CONTEXT_NOT_RESOLVED" }, ctx.request_id);
   }
 

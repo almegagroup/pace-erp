@@ -37,7 +37,11 @@ export async function listPendingSignupHandler(
   // --------------------------------------------------
   // Context gate (NO resolution here)
   // --------------------------------------------------
-  if (ctx.context.status !== "RESOLVED") {
+  // Security fix (2026-08-06): the "SA-only (enforced earlier in pipeline /
+  // ACL)" claim in this file's own header comment was false — nothing
+  // upstream actually checked isAdmin for this route. Was leaking pending
+  // signup PII (name, phone, company) to any authenticated caller.
+  if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
     return okResponse([], ctx.request_id);
   }
 

@@ -382,6 +382,23 @@ interface MenuAdminCtx {
   session_id?: string;
 }
 
+/*
+ * Security fix (2026-08-06, route-acl-registry-guard investigation):
+ * every Menu Admin handler below previously had ZERO caller-side
+ * authorization — they were only "protected" by accident, because their
+ * routes were missing from route-acl-registry.ts (Gate-6 threw
+ * ROUTE_ACL_NOT_REGISTERED before the handler ever ran). Same pattern used
+ * by every _core/admin/acl/*.ts handler (see e.g.
+ * enable_company_module.handler.ts's assertAdmin()) — check the CALLER's
+ * own context.isAdmin, not any other user's.
+ */
+function assertMenuAdmin(ctx: MenuAdminCtx, requestId: string): Response | null {
+  if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
+    return errorResponse("ADMIN_ONLY", "Admin access required", requestId, "NONE", 403);
+  }
+  return null;
+}
+
 function mapMenuMutationErrorCode(error: { code?: string; message?: string; details?: string | null }) {
   const combined = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
 
@@ -480,6 +497,8 @@ export async function createMenuHandler(
   req: Request,
   ctx: MenuAdminCtx
 ): Promise<Response> {
+  const authError = assertMenuAdmin(ctx, ctx.request_id);
+  if (authError) return authError;
 
   const body = await req.json();
 
@@ -570,6 +589,8 @@ export async function updateMenuHandler(
   req: Request,
   ctx: MenuAdminCtx
 ): Promise<Response> {
+  const authError = assertMenuAdmin(ctx, ctx.request_id);
+  if (authError) return authError;
 
   const body = await req.json();
 
@@ -630,6 +651,9 @@ export async function deleteMenuHandler(
   req: Request,
   ctx: MenuAdminCtx
 ): Promise<Response> {
+  const authError = assertMenuAdmin(ctx, ctx.request_id);
+  if (authError) return authError;
+
   const body = await req.json();
   const db = getServiceRoleClientWithContext(ctx.context);
 
@@ -739,6 +763,8 @@ export async function updateMenuTreeHandler(
   req: Request,
   ctx: MenuAdminCtx
 ): Promise<Response> {
+  const authError = assertMenuAdmin(ctx, ctx.request_id);
+  if (authError) return authError;
 
   const body = await req.json();
 
@@ -800,6 +826,9 @@ export async function listMenuRegistryHandler(
   req: Request,
   ctx: MenuAdminCtx
 ): Promise<Response> {
+  const authError = assertMenuAdmin(ctx, ctx.request_id);
+  if (authError) return authError;
+
   const url = new URL(req.url);
   const universe = url.searchParams.get("universe");
   const db = getServiceRoleClientWithContext(ctx.context);
@@ -889,6 +918,8 @@ export async function updateMenuStateHandler(
   req: Request,
   ctx: MenuAdminCtx
 ): Promise<Response> {
+  const authError = assertMenuAdmin(ctx, ctx.request_id);
+  if (authError) return authError;
 
   const body = await req.json();
 
@@ -934,6 +965,12 @@ export async function previewUserHandler(
   req: Request,
   ctx: MenuAdminCtx
 ): Promise<Response> {
+  // Caller-side check — distinct from the target-user isAdmin branching
+  // further down, which decides how to resolve the PREVIEWED user's own
+  // context and never authorized the CALLER. Without this, any
+  // authenticated user could preview/impersonate as anyone.
+  const authError = assertMenuAdmin(ctx, ctx.request_id);
+  if (authError) return authError;
 
   const body = await req.json();
   const targetUserId = body.target_user_id;
