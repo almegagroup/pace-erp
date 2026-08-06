@@ -1153,8 +1153,8 @@ Groups 5/6/7.
 
 ## Group 9 — Inventory
 
-**Status: ✅ Decided 2026-08-06 (role-based, no named individuals) — design
-phase only, not yet implemented.** Was "⛔ deliberately deactivated, not
+**Status: ✅ Decided + IMPLEMENTED 2026-08-06 (ACL v61, both companies,
+role-based, no named individuals).** Was "⛔ deliberately deactivated, not
 designed yet" until this session; original deactivation note and code-audit
 findings kept below for history/reference.
 
@@ -1172,22 +1172,95 @@ Breakdown.
 | IN06 | Opening Stock Approval | Same as IN05 — ACL-MASTER only for now. |
 | PR21 | FG Stock Breakdown | Same as IN02/IN03 — everyone, company-scoped, pure report page. |
 
-**Not yet implemented** — tracked for the batch-implementation pass. Real
-implementation needs: (1) IN01's three-stage split requires new
-resource-code/action separation (create vs count-entry vs approve are
-currently likely bundled under one `PROC_PI_LIST` resource — needs
-verification against `route-acl-registry.ts` before implementing, since
-today's design assumes 3 independently-gatable actions); (2) the
-company-scope bug in `createPIDHandler`/`addPIItemHandler` (flagged in the
-original audit below) **must** be fixed as part of implementing this design,
-not left for later — the whole "everyone in that company, not other
-companies" design depends on it; (3) `assertManagerOrSARole` removed from
-`opening_stock.handlers.ts` is **not** urgent since IN05/IN06 stay
-ACL-MASTER-only this round (the hardcoded check is redundant-but-harmless
-while nobody else has the ACL grant anyway) — revisit when Opening Stock
-gets its own formal session; (4) IN02's Column Layout `global-layout-create`
-gate (currently SA/GA-only per §117) needs revising to allow everyone,
-matching this decision.
+**✅ IMPLEMENTED 2026-08-06 (ACL v61, both companies).**
+
+- **(1) IN01's action-split — confirmed real, fixed.** `route-acl-registry.ts`
+  had `POST /api/procurement/physical-inventory` (PID header create,
+  `createPIDHandler`) and `POST .../items` (adding an item to the count
+  scope, `addPIItemHandler`) both mapped to `PROC_PI_LIST:WRITE` — the same
+  action count-entry (`enterCountHandler`/`requestRecountHandler`) also
+  used, making the two-tier design structurally impossible to gate. Changed
+  both routes to `EDIT` (both handlers define **what's being counted** —
+  the PID scope — same tier as each other, distinct from the actual
+  counting). `/post`/`/post-differences` were already their own `APPROVE`
+  action, no change needed there.
+- **(2) 🔴 Company-scope claim was WRONG — corrected, no code change made.**
+  Read `createPIDHandler`/`addPIItemHandler`/`enterCountHandler`/
+  `requestRecountHandler`/`postDifferencesHandler` directly: **all five**
+  already call `assertPIStorageLocationScope()` → `getStorageLocationScope()`
+  (resolves the real `company_id` from `storage_location_plant_map`) →
+  `assertCompanyScope(ctx, scope.company_id)` (validates against the
+  requester's actual `erp_map.user_companies`). The original audit's claim
+  ("derive company purely from the storage location... never verify against
+  the requesting user's companies") does not match the code — every handler
+  in this file already has complete, correct company-scope protection.
+  Also confirmed `assertProcurementReadRole` is a clean no-op stub ("protected
+  by upstream ACL"), not a hardcoded rank-check. **Lesson: a prior session's
+  code-audit finding is not automatically still true — re-verify against the
+  actual current file before building a "fix" for a bug that may not exist.**
+- **(3) `assertManagerOrSARole` in `opening_stock.handlers.ts`** — confirmed
+  still not urgent, left untouched (IN05/IN06 stay ACL-MASTER-only this
+  round; revisit at Opening Stock's own formal session).
+- **(4) IN02's Column Layout `global-layout-create` SA/GA-only gate —
+  confirmed real, fixed.** `report_layout.handlers.ts`'s
+  `canManageGlobalLayouts()`/`assertGlobalLayoutAccess()` hard-blocked
+  `scope=GLOBAL` create/update/delete to SA/GA only, independent of ACL —
+  the exact comment even named this as the thing to resolve
+  ("Provisional lock... until NEXT-SESSION-PROMPT-Inventory-ACL-Design.md").
+  Removed both helper functions and all 3 call sites (create/update/delete);
+  GLOBAL-scope layouts are now governed purely by the same `PROC_STOCK_
+  LEDGER`/`PROC_CURRENT_STOCK:VIEW` gate the whole endpoint already sits
+  behind — matches "everyone who can view can also create/save layouts, no
+  Manager-tier gate." USER-scope layout ownership checks (only the creator
+  can edit/delete their own) unchanged. Verified zero new `deno check`
+  errors (git-stash before/after, 0 baseline both times).
+- **ACL data:**
+  - **IN02/IN03/PR21 (`PROC_STOCK_LEDGER`/`PROC_CURRENT_STOCK`/`PROD_FG_
+    STOCK_BREAKDOWN`):** added `VIEW` rows to the **existing**
+    `CAP_EVERYONE_REPORTS` capability (already correctly held by every
+    department including DIRECTOR/L4_MANAGER/DIRECTOR-REPORTS/MANAGEMENT-
+    REPORTS) rather than building 3 new capabilities — exact same "everyone"
+    semantics this design calls for, zero new capability needed. (PR21 had
+    a `CAP_EVERYONE_REPORTS` row here once before, deliberately removed
+    during Group 9's original "deactivate, undesigned" pass — re-adding it
+    now is the correct, intentional implementation of today's actual
+    decision, not a repeat of that earlier leak.)
+  - **IN01 (`PROC_PI_LIST`), two new capabilities:** `CAP_PI_AUDITOR`
+    (VIEW+EDIT+WRITE+APPROVE — PID scope create/edit + final post,
+    `role_capabilities` L1_AUDITOR/L2_AUDITOR, granted to AUDIT +
+    ACL-MASTER work contexts) and `CAP_PI_COUNT_ENTRY` (VIEW+WRITE — count
+    entry/recount, `role_capabilities` every role except L4_MANAGER and
+    DIRECTOR, granted to every operational work context — ACCOUNTS,
+    ACL-MASTER, AUDIT, ENGINEERING, ENGINEERING STORES, LOGISTICS,
+    MANAGEMENT, PRODUCTION, QUALITY, SECURITY, STORES, SUPPLY CHAIN —
+    excluding DIRECTOR/DIRECTOR-REPORTS/MANAGEMENT-REPORTS, matching Basic
+    Rule #7 since count-entry isn't a report page). Auditor doesn't need
+    `CAP_PI_COUNT_ENTRY` separately — `CAP_PI_AUDITOR`'s own WRITE already
+    is a superset.
+  - **🔴 Real gap found and fixed mid-verification — same class of miss as
+    Group 10's Plant Head issue earlier today:** ACL-MASTER (P0076,
+    `role_code=DIRECTOR`) initially resolved APPROVE/VIEW/WRITE but **not
+    EDIT** on `PROC_PI_LIST` — traced to `CAP_PI_AUDITOR`'s
+    `role_capabilities` only listing L1_AUDITOR/L2_AUDITOR, never DIRECTOR
+    (P0076's actual `role_code`), so the capability never actually applied
+    to ACL-MASTER at all. The other 3 actions only appeared to work because
+    a separate, pre-existing capability (`CAP_PROC_INVENTORY` — the
+    leftover from Group 9's original "deactivate to ACL-MASTER-only" pass,
+    left untouched and still doing real work) happened to grant
+    VIEW+WRITE+APPROVE (not EDIT) on the same resource, masking the gap.
+    Added `DIRECTOR` to `CAP_PI_AUDITOR`'s `role_capabilities` — this only
+    unlocks the capability for ACL-MASTER specifically (the only work
+    context holding both `CAP_PI_AUDITOR` in `work_context_capabilities`
+    **and** `role_code=DIRECTOR`); the real Director (Bijon) still resolves
+    zero IN01 access, since the `DIRECTOR` work context itself never holds
+    `CAP_PI_AUDITOR`.
+- **`user_overrides` check:** zero rows on any of the 4 touched resources.
+- **Verified (`precomputed_acl_view`, v61, both companies):** P0010 (real
+  L1_AUDITOR) — full VIEW/EDIT/WRITE/APPROVE on IN01. P0069 (Production
+  L3_USER) — VIEW/WRITE only (count-entry tier), correctly no EDIT/APPROVE.
+  P0074 (Director) — zero on IN01, VIEW on IN02/IN03/PR21. P0076
+  (ACL-MASTER) — full VIEW/EDIT/WRITE/APPROVE on IN01, VIEW on IN02/IN03/
+  PR21. ACL-MASTER drift check — clean.
 
 **Code audit before deactivating (no edits made, findings logged for a
 future code-fix pass):**

@@ -114,8 +114,12 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
 
   // ── Procurement: Physical Inventory ──────────────────────────────────────
+  // Group 9 (2026-08-06): PID header create is the "scope of what's being counted"
+  // stage, deliberately split from count-entry (WRITE below) so it can be gated
+  // Auditor-only while count-entry stays open to everyone -- was bundled under one
+  // WRITE action before this, which made the two-tier design unimplementable.
   "GET:/api/procurement/physical-inventory":          { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "VIEW"  },
-  "POST:/api/procurement/physical-inventory":         { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "WRITE" },
+  "POST:/api/procurement/physical-inventory":         { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT"  },
 
   // ── Procurement: Opening Stock ────────────────────────────────────────────
   "GET:/api/procurement/opening-stock":               { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW"  },
@@ -978,8 +982,11 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { GET: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "VIEW" } },
   },
   {
+    // Group 9 (2026-08-06): adding an item defines what's being counted (PID
+    // scope), same tier as header create above -- EDIT, not WRITE, so it stays
+    // Auditor-only and doesn't accidentally open up to the count-entry tier.
     pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/items$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "WRITE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT" } },
   },
   {
     pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/count$/,
