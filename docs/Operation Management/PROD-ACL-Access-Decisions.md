@@ -148,7 +148,7 @@ Three prod users hold role_code `DIRECTOR`:
 
 ## Group 1 — Operation Masters
 
-Status: ✅ Decided + implemented in prod (2026-07-28, ACL v8). **⚠️ Revised 2026-08-06 — session-wide rule reconciliation, not yet implemented (see below).**
+Status: ✅ Decided + implemented in prod (2026-07-28, ACL v8). **✅ Revised + IMPLEMENTED 2026-08-06 (ACL v57, both companies) — session-wide rule reconciliation, see below.**
 
 **⚠️ Revised 2026-08-06:** Group 1 is confirmed genuinely SCM+Director-only — no other
 department gets standalone page access on any Group 1 resource, superseding the MM04
@@ -168,9 +168,61 @@ Stores/Logistics grant and PM04's direct Production/QA grants below.
   companion CREATE capability wired to that inline flow instead (`menu_visible=false` on PM04).
   Auditor's existing `V C E D` grant is **unchanged** — pre-existing standalone audit access,
   not a dependency, out of scope for this revision.
-- **Not yet implemented** — design decision only. Batch-implementation pass covers this
-  alongside Groups 4/5/9/10's pending items (narrow companion capabilities + `menu_visible=false`
-  wiring is Claude's part, per the session's Type-ক/খ/গ dependency taxonomy).
+**✅ IMPLEMENTED 2026-08-06 (ACL v57, both companies).**
+
+- **MM04 View:** `CAP_OM_CUSTOMER_VIEW` — removed from LOGISTICS + STORES (zero genuine
+  dependency found — searched the Page Dependency Manifest for every DO/Gate/Stores page,
+  none reference `OM_CUSTOMER_LIST`/`OM_CUSTOMER_CREATE` at all). Kept for SCM/Director/
+  **PRODUCTION** (see below — a real dependency the original design missed).
+- **🔴 Real gap found and fixed — Production's own PR00 (Plan Feed) needs Customer
+  access, contradicting this section's original premise:** `PlanFeedPage.jsx` (Production's
+  own page) calls `GET /api/om/customers` (`OM_CUSTOMER_LIST:VIEW`) for its Party dropdown
+  and `POST`/`PATCH /api/om/customer` (`OM_CUSTOMER_CREATE:WRITE`/`EDIT`) for its inline
+  "+New Party" — this is literally the doc's own canonical Type-ক example (Cross-Module
+  Dependency Taxonomy section above), yet Production's genuine need for it was never
+  accounted for when this section was first drafted. Live data already had Production
+  holding a working (if inconsistently-scoped) grant (`CAP_OM_CUSTOMER_CREATE_ONLY`,
+  `menu_visible=true` but harmless since no `erp_menu.menu_master` row exists for the
+  route-only `OM_CUSTOMER_CREATE` resource to show as a page) — left in place, verified
+  correct against the manifest, not removed.
+- **🔴 Second real gap found — Director's Create/Edit on MM04 (`CAP_OM_CUSTOMER_CREATE`)
+  was never actually implemented**, despite the original 2026-07-28 table saying "Director:
+  C E" — `work_context_capabilities` had zero row for DIRECTOR on this capability (only
+  `SUPPLY CHAIN` + `ACL-MASTER` held it). Added.
+- **PM04:** Production's and Quality's `CAP_OM_MATERIAL_CATEGORY_MAINTAIN` (which granted
+  BOTH the inline `OM_MATERIAL_CREATE` companion AND standalone `PROC_MATERIAL_CATEGORY_
+  MASTER`/PM04 page access) removed entirely from both departments.
+- **🔴 Third real gap — the "zero PM04 access is safe for Production" claim (2026-07-28)
+  was wrong when checked against live code, not just Stroke Master's read-only Alternate
+  Material picker.** `ProductionPOCreatePage.jsx` (PR09, Production's own create page) has
+  a real, reachable "+New Category" form (`createMaterialCategoryGroup()`, Packing section)
+  that calls `OM_MATERIAL_CREATE:WRITE` — a genuine write dependency the original claim
+  missed entirely. New narrow capability `CAP_OM_MATERIAL_CATEGORY_INLINE` (WRITE+EDIT only
+  on `OM_MATERIAL_CREATE`, `menu_visible=false`, no VIEW since `OM_MATERIAL_LIST:VIEW`
+  already covers the read side, no `PROC_MATERIAL_CATEGORY_MASTER` access at all) granted
+  to both PRODUCTION and QUALITY (all 11 roles, department-membership-is-the-gate pattern) —
+  covers Stroke Master/Pack BOM/Production PO Create's inline category-create and material-
+  patch flows for both departments correctly.
+- **Lesson (same class of miss as the Group 10/PR09 Plant Head gap earlier today):** a
+  design note claiming "X department needs zero access here" must be checked against the
+  Page Dependency Manifest for every page that department actually uses, not just the one
+  or two pages the note happened to audit — an incomplete per-page code check produces a
+  confidently-wrong "safe to remove" conclusion.
+- **`user_overrides` check:** zero rows for any Group 1 resource, no conflict.
+- **`generate_acl_snapshot()` join mechanics note (found while debugging the companion
+  capability, applies to every future narrow-capability grant this session builds):** a
+  capability only takes effect for a work context if it exists in **both**
+  `acl.role_capabilities` (role → capability) **and** `acl.work_context_capabilities`
+  (work context → capability) — inserting only the work-context row (as first attempted for
+  `CAP_PROD_PLANTHEAD_MATERIAL_COMPANION` earlier today) silently produces zero
+  `precomputed_acl_view` rows, no error. Both inserts are now standard practice for every
+  new companion capability.
+- **Verified (`precomputed_acl_view`, v57, both companies):** Production/Quality L3_USER
+  (P0069/P0071/P0072/P0075) — `OM_MATERIAL_CREATE` WRITE+EDIT only, zero `PROC_MATERIAL_
+  CATEGORY_MASTER`; Production additionally has `OM_CUSTOMER_CREATE` V/W/E +
+  `OM_CUSTOMER_LIST` VIEW (Quality does not, correctly — no Customer dependency for QA).
+  Bijon (Director) — `OM_CUSTOMER_CREATE` V/W/E now correctly present (was missing before).
+  Logistics/Stores — zero rows on either Customer resource. ACL-MASTER drift check — clean.
 
 Original table + notes below (2026-07-28) — kept for history and still-accurate implementation
 detail (code fix rationale, capability names, verification results); the revision above is the
