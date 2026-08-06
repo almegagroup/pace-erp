@@ -1512,6 +1512,11 @@ Core flow frozen, implement শুরু করো। দুটো gap আছে
 
 | File | Purpose |
 |------|---------|
+| `docs/Operation Management/PROD-ACL-Access-Decisions.md` | **প্রতিটা ACL group/page-এর page-by-page decision, SSOT for prod ACL.** এতেই আছে: Rules (Basic #1-8, Special #1-5), Cross-Module Dependency Taxonomy (Type ক/খ/গ/ঘ), **Post-Implementation Checklist** (২০২৬-০৮-০৬-এ যোগ হয়েছে — প্রতিটা ACL group implement করার পর ঠিক কী কী check করতে হবে, কোন order-এ), আর Appendix-এ ১৩টা recurring bug pattern-এর নম্বর-নাম (বিস্তারিত description CLAUDE.md-এই, নিচের patterns অংশে) |
+| `docs/Operation Management/implementation-specs/PAGE-DEPENDENCY-MANIFEST.json` | প্রতিটা frontend page কোন ACL resource/action-এর উপর নির্ভর করে — Dependency Taxonomy check করার সময় এটা refer করতে হয় (হতে পারে stale, নতুন page যোগ হলে re-verify করো) |
+| `docs/CODEX-SU24-DEPENDENCY-PROVISIONING-TASK-BRIEF.md` | Manifest-এর সাথে live ACL data মিলিয়ে missing dependency auto-detect করার script-এর brief (এখনো build হয়নি, Codex-কে দেওয়ার জন্য প্রস্তুত) |
+| `scripts/acl-master-drift-check.mjs` | ACL-MASTER (P0076)-এর coverage gap খুঁজে বের করার SQL — প্রতিটা ACL data change-এর পর চালাতে হয় |
+| `supabase/functions/api/_acl/route-acl-registry.ts` | প্রতিটা backend route আসলে কোন resource_code+action দিয়ে ACL-gated — ground truth, ধরে নেওয়া চলবে না |
 | `docs/ACL_SETUP_PROGRESS.md` | Full 16-step ACL setup plan with SQL |
 | `docs/ACL_SSOT.md` | ACL architecture (LOCKED) |
 | `docs/GATE_6_G0_ACL_AUTHORITY_LOCK.md` | Gate 6 lock |
