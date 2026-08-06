@@ -1018,7 +1018,7 @@ gets its formal session.
 
 Status: partially decided (2026-07-29, ACL v25/v22). AC04 designed +
 implemented. AC01/AC02/AC03 not ready yet, same treatment as Group 6.
-**⚠️ Revised 2026-08-06 (AC04/AC05/AC06 ownership + rank ceiling) — not yet implemented (see below). AC01/AC02/AC03 deliberately left as ACL-MASTER-only for now, not decided this round.**
+**✅ Revised + IMPLEMENTED 2026-08-06 (ACL v62, both companies) — AC04/AC05/AC06 ownership + rank ceiling, see below. AC01/AC02/AC03 deliberately left as ACL-MASTER-only for now, not decided this round.**
 
 **⚠️ Revised 2026-08-06:** AC04's ownership moves from Auditor-does-the-writing (Accounts
 View-only) to a normal department-owned page — Accounts becomes the maker, matching AC05/AC06's
@@ -1044,8 +1044,40 @@ existing shape instead of being the outlier of the three.
   conversion rate (same Type-ঘ-shaped backend read pattern as the CSN sync-back finding above).
   AC05/AC06's consumers (MTS/PMTS costing, SLoc-based costing group resolution) presumed to
   follow the same pattern; not re-verified line-by-line this session.
-- **Not yet implemented** — design decision only; batch-implementation pass covers this
-  alongside the rest of today's pending groups.
+
+**✅ IMPLEMENTED 2026-08-06 (ACL v62, both companies).**
+
+- **AC04 real-action-universe check first:** `route-acl-registry.ts` only defines `VIEW`/`WRITE`
+  for `ACC_CONVERSION_COST` (`POST /api/production/conversion-rates` — append-only, matches the
+  "valid_from-dated, no update/delete, derived Current/Superseded" design already locked
+  elsewhere) — no `EDIT`/`DELETE` action exists in the real system at all. The doc's "V C E D"
+  legend notation for this row means "full write power," which for this specific resource is
+  just VIEW+WRITE — not 4 literal distinct actions to wire.
+  - **Auditor's side needed no change** — `CAP_CONVCOST_AUDITOR` already had VIEW+WRITE, already
+    matching the intended "full" access.
+  - **Accounts needed a new capability.** Accounts previously held only `CAP_CONVCOST_VIEW`
+    (View-only) — and that capability's `role_capabilities` includes `L3_MANAGER`/`DIRECTOR`
+    (needed for their own View-only access), so simply adding `WRITE` to it would have also
+    given Director and Plant Head write power, violating the rank ceiling. Built a properly
+    narrow `CAP_CONVCOST_MAKER` (VIEW+WRITE only, `role_capabilities` = L1_USER through L2_MANAGER
+    inclusive of all User-tier ranks below it, explicitly excluding L3_MANAGER/L4_MANAGER/
+    DIRECTOR/either Auditor rank), granted to ACCOUNTS work context only, both companies.
+  - Confirmed `acl.approver_map` still zero rows for `ACC_CONVERSION_COST` — no maker-checker,
+    matches design (Accounts and Auditor both independently write, no approval step).
+- **AC05/AC06 — confirmed genuinely unchanged, re-verified not just assumed:** live-checked
+  `precomputed_acl_view` post-implementation — Accounts (P0060, L2_MANAGER) still VIEW+WRITE(+
+  DELETE on AC06, no DELETE action exists for AC05), Auditor (P0010) still APPROVE+VIEW+WRITE,
+  Director still VIEW+WRITE(+DELETE on AC06)-no-APPROVE — identical to Group 11's original
+  design, zero regression from the AC04 change.
+- **`user_overrides` check:** the pre-existing Soni-exclusive ALLOW (VIEW+WRITE+EDIT, 2026-07-27)
+  on `ACC_CONVERSION_COST` still present and harmless — it's the *only* source of `EDIT` on this
+  resource (no capability grants it to anyone), unaffected by today's `CAP_CONVCOST_MAKER`
+  addition since overrides are additive per-user, not exclusionary.
+- **Verified (`precomputed_acl_view`, v62, both companies):** P0060 (Accounts, L2_MANAGER) —
+  VIEW+WRITE on AC04. P0007 (Accounts, L3_USER — below Manager tier) — also VIEW+WRITE, correctly
+  included ("L1_USER through L2_MANAGER" ceiling means every working rank up to and including
+  L2_Manager, not just Manager-tier). Director (P0074) — VIEW only, no WRITE, rank ceiling holds.
+  ACL-MASTER (P0076) — VIEW+WRITE. ACL-MASTER drift check — clean.
 
 AC01/AC02/AC03 — left exactly as-is (ACL-MASTER only), not decided this round; see the original
 Group 7 notes below for their current (undesigned) state and the earlier code-audit findings.
