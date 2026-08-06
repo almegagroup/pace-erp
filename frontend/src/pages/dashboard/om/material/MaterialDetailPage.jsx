@@ -42,16 +42,16 @@ function getAllowedStatusTargets(status) {
   return transitions[String(status || "").toUpperCase()] ?? [];
 }
 
-// §110-adjacent ACL fix (2026-07-25): mirrors backend's assertManagerOrSARole
-// exactly (see supabase/functions/api/_core/om/shared.ts) — the write actions
-// on this page must be invisible to anyone the backend would 403 anyway, not
-// just SA. Below this set (e.g. SCM's L1_MANAGER/L4_USER test users), the
-// page is a true read-only duplicate of the SA Material Master.
-const MANAGER_OR_SA_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
-
 export default function MaterialDetailPage() {
-  const { shellProfile, runtimeContext } = useMenu();
-  const canEdit = MANAGER_OR_SA_ROLES.has(shellProfile?.roleCode);
+  const { runtimeContext } = useMenu();
+  // Pattern #12 fix (2026-08-06): the previous MANAGER_OR_SA_ROLES rank list
+  // (mirroring a since-removed backend assertManagerOrSARole) mapped rank to
+  // access, but real access here is ACL-governed (PATCH:/api/om/material ->
+  // OM_MATERIAL_CREATE:EDIT) — a lower-rank user can still hold that grant
+  // via capability assignment, and the old list would have wrongly hidden
+  // edit UI from such a user (same shape as the PO/STO approve-button bug).
+  // Always show the edit UI; the backend's own ACL decision is the real gate.
+  const canEdit = true;
   const [searchParams] = useSearchParams();
   const context = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchId = searchParams.get("id");

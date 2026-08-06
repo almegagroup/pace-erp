@@ -38,6 +38,16 @@ jobs:
       - name: Hardcoded role-check guard
         run: node scripts/hardcoded-role-check-guard.mjs
 
+      # Fails if any business page uses an admin/global company source instead
+      # of the runtime-scoped company list (11-bug #11).
+      - name: Wrong company source guard
+        run: node scripts/wrong-company-source-guard.mjs
+
+      # Fails if any dispatched route is missing from the ACL registry/runtime
+      # exemption path (11-bug #8).
+      - name: Route/ACL registry guard
+        run: node scripts/route-acl-registry-guard.mjs
+
       # Fails if any new "approve"-style handler skips the real creator-vs-approver
       # routing engine, allowing self-approval by default (11-bug #7).
       - name: Approver-chain guard
@@ -49,6 +59,13 @@ jobs:
       # affect an unrelated one (11-bug #6).
       - name: Resource-code domain guard
         run: node scripts/resource-code-domain-guard.mjs
+
+      # Fails if a write-API call site builds a payload object literal that's
+      # missing a field the backend handler treats as mandatory — an ACL-
+      # unrelated bug class (11-bug #13, e.g. Plan Feed's "+New Party" modal
+      # missing company_id/billing_state despite fully correct ACL).
+      - name: Frontend payload guard
+        run: node scripts/frontend-payload-guard.mjs
 
       - name: Block accidental deploy
         run: |

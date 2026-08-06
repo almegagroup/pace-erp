@@ -69,9 +69,9 @@ generate_menu_snapshot()  →  user_menu_snapshots
 Frontend Sidebar
 ```
 
-### Recurring 11 Bug Patterns — must check before writing code
+### Recurring 13 Bug Patterns — must check before writing code
 
-These 11 patterns are now a mandatory pre-code checklist for ERP business-page,
+These 13 patterns are now a mandatory pre-code checklist for ERP business-page,
 ACL, workflow, and company-scope work. If an older note anywhere in this repo
 seems to bless one of the anti-patterns below, this section supersedes that
 older note.
@@ -141,6 +141,86 @@ older note.
       - multi-company user = choose only from allowed companies
     - Prefer the shared transaction-company pattern instead of page-local custom
       company pickers.
+
+12. **Local, per-file hardcoded role-array bypassing ACL (a second shape of #1)**
+    - #1 covers the shared `assertManagerOrSARole`/`MANAGER_OR_SA_ROLES` utility —
+      that one is centrally defined and was already audited (Gate-26, 12 handlers).
+      This is the OTHER, sneakier shape: an individual handler file defines its
+      **own local** role-code array (e.g. `QA_ALLOWED_ROLES`, `QA_MANAGER_ROLES` in
+      `qa_test_method.handlers.ts`) and gates writes against it directly, instead
+      of trusting the resource's own ACL decision — nobody sweeps for these
+      because each one is a one-off, not a shared/reusable name to grep for.
+    - These local arrays often contain role codes that don't even exist in the
+      real catalog (SA/GA/DIRECTOR/L4_MANAGER/L3_MANAGER/L2_MANAGER/L1_USER/
+      L1_AUDITOR/L2_AUDITOR) — legacy/fictional names like `PROCUREMENT_HEAD`,
+      `QA_OFFICER`, `STORE_MANAGER` — so a real user with full ACL `WRITE`/`EDIT`
+      access on that exact resource still gets a flat 403 from the handler itself.
+    - **Found live 2026-08-05:** `qa_test_method.handlers.ts`'s `assertQARole()`
+      403'd P0063 (QUALITY, role `L3_USER`) on QA test-method create, even though
+      `precomputed_acl_view` showed `PROC_QA_QUEUE:WRITE = ALLOW` for that user
+      (via `CAP_QA_TIER_L3MGR`) — the handler never checked ACL at all, it only
+      checked its own hardcoded list. Same anti-pattern also present in the
+      frontend's `QAQueuePage.jsx` (`QA_MANAGER_ROLE_CODES`).
+    - Before trusting "this page has the right ACL grant, so it must work,"
+      grep the specific handler file itself for any local `_ROLES`/`_ROLE_CODES`
+      array or a raw `roleCode === "..."` chain — ACL being correct upstream does
+      not guarantee the handler actually consults it.
+    - **⚠️ `scripts/hardcoded-role-check-guard.mjs` does NOT catch this shape
+      today — confirmed live 2026-08-06.** Two real gaps in that guard: (1) it
+      only scans `supabase/functions/api/_core` — `frontend/src` is never
+      touched, so a frontend button-visibility gate (the exact shape below)
+      is invisible to it; (2) its regex only matches names ending in
+      `_OR_SA_ROLES`/`_OR_ADMIN_ROLES` — variants like `PO_APPROVER_ROLES`,
+      `STO_APPROVER_ROLES`, `QA_MANAGER_ROLE_CODES`, `QA_ALLOWED_ROLES` all
+      fall outside that naming net, backend or frontend. **A guard that only
+      checks backend is not sufficient for this pattern** — do not treat the
+      guard's green result as proof this bug class is covered; it currently
+      is not, on either axis. Extending it (frontend scan + broader naming
+      match) is tracked separately — see task tracker.
+    - **Found live 2026-08-06, frontend flavor:** `POOrderGroupDetailPage.jsx`
+      (`PO_APPROVER_ROLES`) and `STODetailPage.jsx` (`STO_APPROVER_ROLES`)
+      both hardcoded a role list for showing the Approve/Reject buttons that
+      stopped at `L2_MANAGER` and never included `L1_MANAGER` — even though
+      `L1_MANAGER` is a valid approver rank in the real `acl.approver_map`
+      escalation chain (L3_USER creates → L1_MANAGER approves). A real
+      L1_MANAGER user (P0004) with fully correct backend authorization
+      (ACL grant + approver_map chain both confirmed `ALLOW`) never saw the
+      buttons at all — had to be worked around via the SA/ACL-MASTER account.
+      Both fixed by deleting the local list entirely and gating the buttons
+      on document status alone, letting the backend's own authorization call
+      (which already implements the full rank-escalation chain correctly) be
+      the real authority — not by widening the hardcoded list, which would
+      only re-open the same hole for the next rank someone forgets to add.
+      Same shape still open in at least 4 more frontend files as of this
+      writing (`SfgResultRecordingPage.jsx`, `VendorDetailPage.jsx`,
+      `MaterialDetailPage.jsx`, `QAQueuePage.jsx` — the last one's list also
+      contains role codes, `PROCUREMENT_HEAD`/`STORE_MANAGER`, that do not
+      exist in the real role catalog at all) — see task tracker for the
+      full sweep.
+
+13. **Frontend payload missing a backend-required field (not an ACL problem at all)**
+    - A write/create call can hold fully correct ACL (right resource:action grant,
+      right company scope, right role) and still fail with a 403/400 — because the
+      request body itself is missing a field the handler treats as mandatory. This
+      has nothing to do with permission; it is a plain payload-completeness bug.
+    - **Found live 2026-08-05:** Plan Feed's inline "+New Party" modal
+      (`PlanFeedPage.jsx`'s `handleCreateNewParty()`) called `createCustomer()`
+      without `company_id` or `billing_state` — both hard-required by
+      `createCustomerHandler`. P0062 had full ACL (`PROD_PLAN_FEED`,
+      `OM_CUSTOMER_CREATE:WRITE`, `OM_CUSTOMER_LIST:VIEW` all confirmed `ALLOW` in
+      `precomputed_acl_view`) and the create still failed — the access-control layer
+      was never the problem.
+    - This codebase has no shared type/schema between frontend and backend (plain
+      JS, no TypeScript) — so a frontend call silently missing a field a handler
+      requires produces **no compile-time or lint-time signal today**, only a
+      runtime error once someone actually clicks it.
+    - Before trusting "the ACL grant is correct, so the page should work," also
+      check: does every frontend call site to a given endpoint send every field
+      that endpoint's handler treats as mandatory (`if (!body.X) return error(...)`
+      style checks)? A 6th CI guard for this — cross-checking handler-side
+      required-field validation against frontend payload construction, same
+      static-analysis approach as the existing 5 guards (§8B/§8C/§8D reference) —
+      is planned but not yet built.
 
 ### Canonical company rule
 

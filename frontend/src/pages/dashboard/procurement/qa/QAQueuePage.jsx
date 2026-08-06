@@ -29,7 +29,6 @@ import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const LIMIT = 50;
-const QA_MANAGER_ROLE_CODES = new Set(["SA", "DIRECTOR", "PROCUREMENT_HEAD", "STORE_MANAGER"]);
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -76,7 +75,7 @@ function newDecisionRow(defaultDecision) {
 export default function QAQueuePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const deepLinkQaId = searchParams.get("qa_id") || "";
-  const { runtimeContext, shellProfile } = useMenu();
+  const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
@@ -347,7 +346,6 @@ export default function QAQueuePage() {
                                   row={row}
                                   material={material}
                                   companyId={effectiveCompanyId}
-                                  roleCode={shellProfile?.roleCode || ""}
                                   onChanged={() => {
                                     void queueQuery.refetch();
                                   }}
@@ -370,9 +368,21 @@ export default function QAQueuePage() {
   );
 }
 
-function QaExpandedPanel({ row, material, companyId, roleCode, onChanged, onCollapse }) {
+function QaExpandedPanel({ row, material, companyId, onChanged, onCollapse }) {
   const queryClient = useQueryClient();
-  const canManage = QA_MANAGER_ROLE_CODES.has(roleCode);
+  // Pattern #12 fix (2026-08-06): the old QA_MANAGER_ROLE_CODES list gated on
+  // "SA", "DIRECTOR", "PROCUREMENT_HEAD", "STORE_MANAGER" — the last two are
+  // not real role codes in this system's catalog at all, so in practice this
+  // panel was only ever reachable by SA/DIRECTOR, silently locking out any
+  // L2/L3/L4_MANAGER (or ACL-capability-granted L3_USER) with real
+  // PROC_QA_QUEUE:EDIT/APPROVE access (confirmed live earlier this session:
+  // P0063, role L3_USER, had PROC_QA_QUEUE:WRITE = ALLOW in
+  // precomputed_acl_view and still got 403'd by a different local gate on
+  // this same resource — see CLAUDE.md pattern #12). Write/decision actions
+  // here are ACL-governed server-side (PUT/DELETE test-lines -> EDIT/DELETE,
+  // POST decision -> APPROVE, all on PROC_QA_QUEUE) with no local role check
+  // in inward_qa.handlers.ts — trust that decision instead.
+  const canManage = true;
   const materialCategory = material?.material_category || "";
 
   const [saving, setSaving] = useState(false);

@@ -37,7 +37,6 @@ import {
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
-const STO_APPROVER_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
 const FREIGHT_TERM_OPTIONS = [
   { value: "FOR", label: "FOR" },
   { value: "FREIGHT_SEPARATE", label: "Freight Separate" },
@@ -122,7 +121,7 @@ export default function STODetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
-  const { runtimeContext, shellProfile } = useMenu();
+  const { runtimeContext } = useMenu();
   const [tareWeight, setTareWeight] = useState("");
   const [locationDrafts, setLocationDrafts] = useState({});
   const [editOpen, setEditOpen] = useState(false);
@@ -172,7 +171,6 @@ export default function STODetailPage() {
   );
 
   const selectedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
-  const canApprove = STO_APPROVER_ROLES.has(shellProfile?.roleCode);
   const materialMap = useMemo(
     () => new Map(materials.map((entry) => [entry.id, entry])),
     [materials]
@@ -238,15 +236,15 @@ export default function STODetailPage() {
   // unresolved amendments on the same STO.
   const canAmend = ["CREATED", "PENDING_APPROVAL"].includes(String(detail?.status || "").toUpperCase())
     && !hasPendingAmendment;
-  const canApproveAmendment = String(detail?.status || "").toUpperCase() === "PENDING_APPROVAL" && canApprove && hasPendingAmendment;
+  const canApproveAmendment = String(detail?.status || "").toUpperCase() === "PENDING_APPROVAL" && hasPendingAmendment;
   const canConfirmReceipt =
     String(detail?.status || "").toUpperCase() === "DISPATCHED" &&
     String(selectedCompanyId || "") === String(detail?.receiving_company_id || "");
   const canClose = String(detail?.status || "").toUpperCase() === "RECEIVED";
   const canCancel = ["DRAFT", "PENDING_APPROVAL", "CREATED"].includes(String(detail?.status || "").toUpperCase());
   const canDispatch = String(detail?.status || "").toUpperCase() === "CREATED";
-  const canReject = String(detail?.status || "").toUpperCase() === "PENDING_APPROVAL" && canApprove && !hasPendingAmendment;
-  const canApproveSto = String(detail?.status || "").toUpperCase() === "PENDING_APPROVAL" && canApprove && !hasPendingAmendment;
+  const canReject = String(detail?.status || "").toUpperCase() === "PENDING_APPROVAL" && !hasPendingAmendment;
+  const canApproveSto = String(detail?.status || "").toUpperCase() === "PENDING_APPROVAL" && !hasPendingAmendment;
   const showTareForm =
     String(detail?.status || "").toUpperCase() === "DISPATCHED" &&
     isBulkLike(detail?.sto_type) &&

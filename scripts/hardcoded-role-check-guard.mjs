@@ -39,12 +39,14 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 const ROOT = process.cwd();
-const SCAN_DIR = join(ROOT, "supabase", "functions", "api", "_core");
+const BACKEND_SCAN_DIR = join(ROOT, "supabase", "functions", "api", "_core");
+const FRONTEND_SCAN_DIR = join(ROOT, "frontend", "src");
 
-// Matches: const MANAGER_OR_SA_ROLES = ...   /   const SOMETHING_OR_ADMIN_ROLES = ...
-const ROLE_CONST_PATTERN = /\b[A-Z][A-Z0-9_]*_OR_(SA|ADMIN)_ROLES\s*=/;
+// Matches: const QA_ALLOWED_ROLES = [...] / const QA_MANAGER_ROLE_CODES = new Set([...])
+const ROLE_CONST_PATTERN = /\b(?:const|let|var)\s+([A-Z][A-Z0-9_]*(?:_ROLES|_ROLE_CODES))\s*=\s*(?:new\s+Set\s*\(\s*)?\[/g;
 // Matches: function assertManagerOrSARole(...)  /  export function assertAdminOrXRole(...)
 const ROLE_FN_PATTERN = /\bfunction\s+assert(Manager|Admin)Or\w*Role\s*\(/;
+const ROLE_LITERAL_HINT_PATTERN = /["'`](?:SA|GA|DIRECTOR|L[1-4]_[A-Z0-9_]+|[A-Z0-9_]*MANAGER|[A-Z0-9_]*HEAD|[A-Z0-9_]*OFFICER|[A-Z0-9_]*USER|[A-Z0-9_]*AUDITOR)["'`]/;
 
 /*
  * BASELINE — আজকে (2026-08-03) live-code-এ যা পাওয়া গেছে, প্রতিটার reason সহ।
@@ -61,13 +63,25 @@ const BASELINE = new Set([
   // not by removing this backend check, which stays correct for its real
   // SA-only callers. See CLAUDE.md "Wrong company source" note.
   "supabase/functions/api/_core/admin/company/list_companies.handler.ts",
+  // Known violation, not yet fixed — flagged 2026-08-06 by the expanded guard.
+  // See CLAUDE.md pattern #1/#12 for the fix pattern. Tracked as task #32.
+  "supabase/functions/api/_core/procurement/qa_test_method.handlers.ts",
+  // QAQueuePage.jsx, SfgResultRecordingPage.jsx, VendorDetailPage.jsx,
+  // MaterialDetailPage.jsx — all 4 fixed 2026-08-06 (removed the local role
+  // list, trust the backend's ACL decision) — no longer baselined here.
 ]);
 
-function walk(dir, out = []) {
+function walk(dir, matcher, out = []) {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, out);
-    else if (/\.(handlers|handler|shared)\.ts$/.test(entry)) out.push(full);
+    const rel = relPath(full);
+    if (statSync(full).isDirectory()) {
+      if (rel.startsWith("frontend/src/admin/")) continue;
+      if (rel.includes("/__tests__/")) continue;
+      walk(full, matcher, out);
+    } else if (matcher(full, entry, rel)) {
+      out.push(full);
+    }
   }
   return out;
 }
@@ -76,28 +90,66 @@ function relPath(file) {
   return relative(ROOT, file).split(sep).join("/");
 }
 
-const violations = [];
+function hasRoleArrayConstant(src) {
+  ROLE_CONST_PATTERN.lastIndex = 0;
+  let match;
+  while ((match = ROLE_CONST_PATTERN.exec(src)) !== null) {
+    const snippet = src.slice(match.index, match.index + 400);
+    if (ROLE_LITERAL_HINT_PATTERN.test(snippet)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const backendViolations = [];
+const frontendViolations = [];
 let filesScanned = 0;
 
-for (const file of walk(SCAN_DIR)) {
-  filesScanned += 1;
-  const src = readFileSync(file, "utf8");
-  const hasConst = ROLE_CONST_PATTERN.test(src);
-  const hasFn = ROLE_FN_PATTERN.test(src);
-  if (!hasConst && !hasFn) continue;
+for (const [groupName, files] of [
+  [
+    "backend",
+    walk(BACKEND_SCAN_DIR, (_full, entry) => /\.(handlers|handler|shared)\.ts$/.test(entry)),
+  ],
+  [
+    "frontend",
+    walk(
+      FRONTEND_SCAN_DIR,
+      (_full, entry, rel) => /\.(jsx|js)$/.test(entry) && !/\.test\.(jsx|js)$/.test(entry) && rel.startsWith("frontend/src/"),
+    ),
+  ],
+]) {
+  for (const file of files) {
+    filesScanned += 1;
+    const src = readFileSync(file, "utf8");
+    const hasConst = hasRoleArrayConstant(src);
+    const hasFn = ROLE_FN_PATTERN.test(src);
+    if (!hasConst && !hasFn) continue;
 
-  const rel = relPath(file);
-  if (!BASELINE.has(rel)) {
-    violations.push({ file: rel, hasConst, hasFn });
+    const rel = relPath(file);
+    if (BASELINE.has(rel)) continue;
+    const target = groupName === "backend" ? backendViolations : frontendViolations;
+    target.push({ file: rel, hasConst, hasFn });
   }
 }
 
-console.log(`Hardcoded role-check guard — scanned ${filesScanned} file(s), ${violations.length} new hardcoded rank-check pattern(s) found`);
+const violationCount = backendViolations.length + frontendViolations.length;
 
-if (violations.length > 0) {
+console.log(`Hardcoded role-check guard — scanned ${filesScanned} file(s), ${violationCount} new hardcoded rank-check pattern(s) found`);
+
+if (violationCount > 0) {
   console.error("\nFAIL — these files introduce a new hardcoded MANAGER_OR_SA_ROLES-style constant or assertManagerOrSARole-style function:");
-  for (const { file, hasConst, hasFn } of violations) {
-    console.error(`  ${file}${hasConst ? "  [role-array constant]" : ""}${hasFn ? "  [assert*Or*Role function]" : ""}`);
+  if (backendViolations.length > 0) {
+    console.error("\nBackend:");
+    for (const { file, hasConst, hasFn } of backendViolations) {
+      console.error(`  ${file}${hasConst ? "  [role-array constant]" : ""}${hasFn ? "  [assert*Or*Role function]" : ""}`);
+    }
+  }
+  if (frontendViolations.length > 0) {
+    console.error("\nFrontend:");
+    for (const { file, hasConst, hasFn } of frontendViolations) {
+      console.error(`  ${file}${hasConst ? "  [role-array constant]" : ""}${hasFn ? "  [assert*Or*Role function]" : ""}`);
+    }
   }
   console.error(`
 This exact naming pattern is 11-bug-pattern #1 ("Hardcoded rank-check /

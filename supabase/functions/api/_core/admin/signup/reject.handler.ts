@@ -35,7 +35,9 @@ export async function rejectSignupHandler(
   // --------------------------------------------------
   // 1️⃣ Context Gate (deterministic)
   // --------------------------------------------------
-  if (ctx.context.status !== "RESOLVED") {
+  // Security fix (2026-08-06): see approve.handler.ts — same missing
+  // caller-authorization gap, same fix.
+  if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
     return okResponse(null, ctx.request_id);
   }
 

@@ -46,12 +46,11 @@ function getAllowedStatusTargets(status) {
   return transitions[String(status || "").toUpperCase()] ?? [];
 }
 
-// Mirrors backend's assertManagerOrSARole exactly (supabase/functions/api/_core/om/shared.ts).
-const MANAGER_OR_SA_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
-
 export default function VendorDetailPage() {
-  const { shellProfile, runtimeContext } = useMenu();
-  const canEdit = MANAGER_OR_SA_ROLES.has(shellProfile?.roleCode);
+  const { runtimeContext } = useMenu();
+  // Edit is ACL-governed server-side (PATCH:/api/om/vendor -> OM_VENDOR_CREATE:EDIT).
+  // Always show the edit UI; the backend's own ACL decision is the real gate.
+  const canEdit = true;
   const [searchParams] = useSearchParams();
   const context = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchId = searchParams.get("id");

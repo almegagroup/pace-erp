@@ -21,6 +21,7 @@ import {
   findPlanFeedByNumber,
 } from "./prodApi.js";
 import { listMaterials, listCustomers, createCustomer, updateCustomer } from "../om/omApi.js";
+import { INDIAN_STATES } from "../../../data/indianStates.js";
 
 const TABS = [
   { key: "create", label: "Create FO" },
@@ -201,7 +202,7 @@ export default function PlanFeedPage() {
   // ── Create tab state ──────────────────────────────────────────────────────
   const [form, setForm] = useState({ ...EMPTY_FO });
   const [newPartyOpen, setNewPartyOpen] = useState(false);
-  const [newPartyForm, setNewPartyForm] = useState({ customer_name: "", delivery_address: "", fo_customer_type: "" });
+  const [newPartyForm, setNewPartyForm] = useState({ customer_name: "", delivery_address: "", fo_customer_type: "", billing_state: "" });
   const [newPartySaving, setNewPartySaving] = useState(false);
 
   const selectedParty = customerMap.get(form.party_id) ?? null;
@@ -230,20 +231,22 @@ export default function PlanFeedPage() {
   });
 
   async function handleCreateNewParty() {
-    if (!newPartyForm.customer_name.trim() || !newPartyForm.delivery_address.trim()) return;
+    if (!newPartyForm.customer_name.trim() || !newPartyForm.delivery_address.trim() || !newPartyForm.billing_state.trim()) return;
     setNewPartySaving(true);
     try {
       const created = await createCustomer({
         customer_name: newPartyForm.customer_name.trim(),
         delivery_address: newPartyForm.delivery_address.trim(),
+        billing_state: newPartyForm.billing_state.trim(),
         customer_type: "DOMESTIC",
+        company_id: effectiveCompanyId,
         fo_customer_type: newPartyForm.fo_customer_type || poTypeFilter || undefined,
       });
       const newId = created?.data?.id ?? created?.id;
       await qc.invalidateQueries({ queryKey: ["plan-feed-customers"] });
       if (newId) setForm((f) => ({ ...f, party_id: newId, party_name: newPartyForm.customer_name.trim() }));
       setNewPartyOpen(false);
-      setNewPartyForm({ customer_name: "", delivery_address: "", fo_customer_type: "" });
+      setNewPartyForm({ customer_name: "", delivery_address: "", fo_customer_type: "", billing_state: "" });
       toast("Party created.");
     } catch (err) {
       toast(err.message || "Party create failed.", "error");
@@ -619,6 +622,12 @@ export default function PlanFeedPage() {
                   placeholder="PO Type (optional)"
                 />
                 <input className="col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm" placeholder="Delivery address" value={newPartyForm.delivery_address} onChange={e => setNewPartyForm(f => ({ ...f, delivery_address: e.target.value }))} />
+                <select className="col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm" value={newPartyForm.billing_state} onChange={e => setNewPartyForm(f => ({ ...f, billing_state: e.target.value }))}>
+                  <option value="">Billing State *</option>
+                  {INDIAN_STATES.map((state) => (
+                    <option key={state} value={state}>{state}</option>
+                  ))}
+                </select>
                 <div className="col-span-2 flex gap-2">
                   <button type="button" disabled={newPartySaving} onClick={handleCreateNewParty} className="px-3 py-1.5 bg-sky-600 text-white text-xs rounded hover:bg-sky-700 disabled:opacity-50">Save Party</button>
                   <button type="button" onClick={() => setNewPartyOpen(false)} className="px-3 py-1.5 border border-slate-300 text-xs rounded">Cancel</button>

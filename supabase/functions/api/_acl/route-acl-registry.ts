@@ -361,6 +361,26 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/production/old-packing-po":                  { skipAcl: false, resourceCode: "PROD_OLD_PACKING_PO", action: "WRITE" },
   "GET:/api/production/old-packing-po/batches":           { skipAcl: false, resourceCode: "PROD_OLD_PACKING_PO", action: "VIEW" },
 
+  // ── Admin: ACL governance routes (acl.routes.ts) — verified 2026-08-06 that
+  // every one of these 13 handlers gates on ctx.context.isAdmin internally
+  // (grep confirmed for all _core/admin/acl/*.ts files touched here), same
+  // pattern as every other skipAcl:true admin route below. Route-registry
+  // guard (11-bug #8) found these were dispatched but never registered —
+  // they were 500ing (ROUTE_ACL_NOT_REGISTERED) for everyone, including SA.
+  "POST:/api/admin/acl/company-module/enable":             { skipAcl: true },
+  "POST:/api/admin/acl/company-module/disable":            { skipAcl: true },
+  "GET:/api/admin/acl/company-modules":                    { skipAcl: true },
+  "GET:/api/admin/acl/role-permissions":                   { skipAcl: true },
+  "POST:/api/admin/acl/role-permissions":                  { skipAcl: true },
+  "POST:/api/admin/acl/role-permissions/disable":          { skipAcl: true },
+  "GET:/api/admin/acl/role-capabilities":                  { skipAcl: true },
+  "POST:/api/admin/acl/role-capabilities/assign":          { skipAcl: true },
+  "POST:/api/admin/acl/role-capabilities/unassign":        { skipAcl: true },
+  "GET:/api/admin/acl/user-overrides":                     { skipAcl: true },
+  "POST:/api/admin/acl/user-overrides":                    { skipAcl: true },
+  "POST:/api/admin/acl/user-overrides/revoke":              { skipAcl: true },
+  "POST:/api/admin/acl/versions/rollback":                 { skipAcl: true },
+
   // ── Admin: All routes — SA/GA only, ACL enforced in stepAcl (skipAcl here) ─
   "GET:/api/admin/system-health":                          { skipAcl: true },
   "GET:/api/admin/control-panel":                          { skipAcl: true },
@@ -689,7 +709,16 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { DELETE: { skipAcl: false, resourceCode: "PROC_IV_CREATE", action: "DELETE" } },
   },
   {
+    // Route-registry guard (11-bug #8), verified 2026-08-06: the real
+    // dispatcher route is `/run-match` (see runMatchHandler in
+    // procurement.routes.ts) — this `/match` entry has no matching dispatch
+    // at all (rename drift). Kept for now (guard's stale-entry report will
+    // flag it as unused); `/run-match` below is the one real callers hit.
     pattern: /^\/api\/procurement\/invoice-verifications\/[^/]+\/match$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_IV_CREATE", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/invoice-verifications\/[^/]+\/run-match$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_IV_CREATE", action: "WRITE" } },
   },
   {
@@ -704,6 +733,14 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
       GET: { skipAcl: false, resourceCode: "PROC_LC_LIST", action: "VIEW" },
       PUT: { skipAcl: false, resourceCode: "PROC_LC_LIST", action: "EDIT" },
     },
+  },
+  {
+    // Route-registry guard (11-bug #8), verified 2026-08-06: the real
+    // dispatcher route is `/by-grn/` (see procurement.routes.ts line ~843) —
+    // `/grn/` below has no matching dispatch at all (rename drift). Kept for
+    // now (guard's stale-entry report will flag it as unused).
+    pattern: /^\/api\/procurement\/landed-costs\/by-grn\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_LC_LIST", action: "VIEW" } },
   },
   {
     pattern: /^\/api\/procurement\/landed-costs\/grn\/[^/]+$/,
@@ -784,8 +821,24 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROC_DEBIT_NOTE_LIST", action: "APPROVE" } },
   },
   {
+    // Route-registry guard (11-bug #8): confirmed live, dispatched but never
+    // registered (found 2026-08-06) — updateGateExitOutboundWeightHandler.
+    pattern: /^\/api\/procurement\/gate-exits\/outbound\/[^/]+\/weight$/,
+    methods: { PUT: { skipAcl: false, resourceCode: "PROC_GATE_EXIT", action: "EDIT" } },
+  },
+  {
+    // Route-registry guard (11-bug #8), verified 2026-08-06 against
+    // supabase/functions/api/_routes/procurement.routes.ts: the real
+    // dispatcher uses PUT for this path (`linkReplacementGRNHandler`), not
+    // POST — this entry never actually matched any real request until the
+    // PUT method line below was added. POST kept in case something else
+    // still relies on it; if the guard's stale-entry report ever shows POST
+    // unused here, remove it then.
     pattern: /^\/api\/procurement\/exchange-refs\/[^/]+\/link-grn$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_EXCHANGE_REF_LIST", action: "WRITE" } },
+    methods: {
+      POST: { skipAcl: false, resourceCode: "PROC_EXCHANGE_REF_LIST", action: "WRITE" },
+      PUT:  { skipAcl: false, resourceCode: "PROC_EXCHANGE_REF_LIST", action: "WRITE" },
+    },
   },
 
   // ── STO ───────────────────────────────────────────────────────────────────
@@ -919,6 +972,15 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/recount$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "WRITE" } },
+  },
+  {
+    // Route-registry guard (11-bug #8), verified 2026-08-06: the real
+    // dispatcher route is `/post` (see postDifferencesHandler in
+    // procurement.routes.ts) — `/post-differences` below has no matching
+    // dispatch at all (rename drift). Kept for now (guard's stale-entry
+    // report will flag it as unused); `/post` above is the real one.
+    pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/post$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "APPROVE" } },
   },
   {
     pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/post-differences$/,
@@ -1225,6 +1287,13 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/production\/pack-boms\/[^/]+\/change-request$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_CHANGE_PACK_BOM", action: "WRITE" } },
+  },
+  {
+    // Route-registry guard (11-bug #8): confirmed live, dispatched but never
+    // registered (found 2026-08-06) — single-record GET, list/approve/reject
+    // on this same resource already registered, this one was just missed.
+    pattern: /^\/api\/production\/pack-bom-change-requests\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROD_CHANGE_PACK_BOM_APPROVAL", action: "VIEW" } },
   },
   {
     pattern: /^\/api\/production\/pack-bom-change-requests\/[^/]+\/approve$/,

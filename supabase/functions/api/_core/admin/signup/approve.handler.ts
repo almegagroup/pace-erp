@@ -36,7 +36,11 @@ export async function approveSignupHandler(
   // --------------------------------------------------
   // 1️⃣ Context Gate (deterministic)
   // --------------------------------------------------
-  if (ctx.context.status !== "RESOLVED") {
+  // Security fix (2026-08-06): this handler and erp_meta.approve_signup_atomic()
+  // never validated the CALLER's own admin status — p_actor_auth_user_id was
+  // only ever used to stamp reviewed_by/audit columns, never checked. Any
+  // authenticated user could approve/activate an arbitrary pending signup.
+  if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
     return okResponse(null, ctx.request_id);
   }
 
