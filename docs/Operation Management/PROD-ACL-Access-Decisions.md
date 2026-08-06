@@ -637,18 +637,62 @@ revision block.**
   L4_Manager were explicitly given View (Basic Rules #3/#7's new opt-in
   discipline — this table's blank cells are deliberate, not omissions).
 
-**Not yet implemented** — this whole revision is a design-phase decision,
-tracked for the same batch-implementation pass as Group 10's revisions
-above. Real implementation needs: `role_capabilities` narrowed to
-L1-L2_Manager wherever "full dept" is stated (drop L3/L4_Manager from the
-department capability, since L3_Manager access must come through the
-already-separate `CAP_QA_PLANTHEAD` mechanism, not the department
-capability itself); `CAP_QA_PLANTHEAD` extended to PR01/PR03/PR15/PR18/PR19
-(new menu-action rows); `CAP_QA_AUDITOR_TIER` menu-action rows removed from
-PR02/PR04; PR15's resource moved off whatever Auditor-only capability it
-used onto the QA department capability instead; PO06's DIRECTOR/L4_MANAGER
-View grants added; PR16 Start Batch's capability/resource split investigated
-before narrowing (must not clip PR09/PR11).
+**✅ 2026-08-06 revision IMPLEMENTED (ACL v53→v54, both CMP003/CMP006).**
+
+- **Tier-capability rank cleanup:** `CAP_QA_TIER_L1MGR`/`_L2MGR`/`_L3MGR`
+  (discovered to be byte-identical role lists despite the tier naming —
+  L1_User through L4_Manager + DIRECTOR all present on all three) stripped
+  of L3_MANAGER/L4_MANAGER/DIRECTOR uniformly — L3_Manager-equivalent access
+  now comes exclusively through the separate `CAP_QA_PLANTHEAD` mechanism
+  (Structural Fallback), never through the department capability itself.
+  `CAP_QA_MGR_TIER` similarly capped at L1/L2_Manager.
+- **`CAP_QA_PLANTHEAD` extended** to PR01/PR03/PR15/PR18/PR19 (new
+  menu-action rows) — Plant Head now gets the same full-dept-ceiling +
+  fallback shape on these five pages as PO06/PR12/PR16 already had.
+- **`CAP_QA_AUDITOR_TIER` menu-action rows removed** from PR02/PR04 (Basic
+  Rule #8 — Auditor's real work concentrates on PR15, not spread thin).
+- **PR15 moved from Auditor-exclusive to the QA department capability**
+  (business owner: "PR15 o QA r kachei thak, PO06 er moto") — QA dept can
+  now self-reverse (CORS), the separation-of-duties control is
+  intentionally removed per instruction.
+- **New `CAP_PO06_VIEW_EXTRA`** (VIEW only) created and granted to
+  DIRECTOR + AUDIT work contexts (both companies) — the explicit
+  Director/L4_Manager/Dir-Reports/Auditor View-only opt-in on PO06 that
+  Basic Rules #3/#7 require, without touching the department's own full
+  grant.
+- **PR16 Start Batch investigated, left as-is (no narrowing needed):**
+  confirmed `CAP_PROD_START_BATCH` is already scoped narrowly to
+  `PROD_START_BATCH:WRITE` only — no PR09/PR11 blast radius exists to
+  protect against. The doc's original worry (shared
+  `CAP_PROD_STANDARD`/`CAP_PROD_OPERATOR`) turned out to only describe the
+  QA-approve half of PR16, not Start Batch.
+- **🔴 Real leak found and fixed during this pass, not in the original
+  design notes above — `CAP_PROD_OPERATOR` (Production's own OM08-10 +
+  PR16 capability) also carried a stray full-CRUD (`VIEW`/`WRITE`/`EDIT`/
+  `DELETE`) grant on **PO06** (`PROC_QA_QUEUE`), inserted 2026-08-05
+  18:29 UTC — i.e. during this same implementation session, not legacy
+  debris. Held by PRODUCTION, MANAGEMENT, AUDIT, and DIRECTOR work
+  contexts in both companies, directly contradicting this section's own
+  "Director gets nothing except View on PO06" lock (Director was resolving
+  full CRUD, not the intended View-only via `CAP_PO06_VIEW_EXTRA`). Fixed
+  by deleting the 4 `(CAP_PROD_OPERATOR, PO06's menu_id, *)` rows from
+  live `capability_menu_actions` — surgical removal, same pattern as the
+  `CAP_PROC_QA`/PO05+PO06 leak found in Group 4's session. `CAP_PROD_OPERATOR`'s
+  legitimate OM08/OM09/OM10/PR16 rows are untouched.
+- **Dependency manifest + `user_overrides` cross-check (per explicit
+  instruction not to repeat Group 4's skipped-dependency miss):** QUALITY
+  dept's `PROC_PO_LIST:VIEW` (PO06's Document Flow tab dependency) already
+  satisfied via `CAP_GRN_DOCFLOW_VIEW`; `PROC_GRN_LIST:VIEW` already
+  satisfied via `CAP_PROC_QA` (scoped only to QUALITY + ACL-MASTER after
+  Group 4's cleanup, no leak). Zero `acl.user_overrides` rows exist for any
+  Group 5 resource code in either company — no blanket-DENY conflict like
+  Group 4's Plant Head case.
+- **Verified on v54 (`precomputed_acl_view`, both companies):** Nilkamal
+  (P0009, L2_MANAGER dual QUALITY+PRODUCTION) — full VIEW/WRITE/EDIT/
+  DELETE/APPROVE on PO06. Pradip/Kishor (Plant Head, L3_MANAGER,
+  MANAGEMENT) — same full access via `CAP_QA_PLANTHEAD`. Bijon Kanabar
+  (real Director) — **VIEW only** on PO06, zero elsewhere in the group.
+  ACL-MASTER (P0076) — full access, both companies, zero drift.
 
 ---
 
