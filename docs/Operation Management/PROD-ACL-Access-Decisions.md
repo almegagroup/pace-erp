@@ -1906,6 +1906,51 @@ AC05/AC06/MM05; ACL-MASTER = full on everything including the Auditor-only
 Approve action. Symmetric across both companies. Also rebuilt
 `erp_menu.menu_snapshot` for P0076's (company, work_context) pairs.
 
+**✅ Re-verified against today's session-wide rules 2026-08-06 (ACL v63, both
+companies)** — this group was decided 2026-07-31, before Basic Rules #5-#8
+and the Cross-Module Dependency Taxonomy existed, and per the pattern
+already found in Groups 1/2/10 this session, it had drifted from them:
+
+- **🔴 Basic Rule #5 violation found and fixed:** `CAP_SALES_ACCOUNTS`
+  (SO01/SO02), `CAP_SALES_STORES` (SO03), `CAP_OM_FG_DISPATCH` (MM05), and
+  `CAP_ACC_COSTING` (AC05/AC06) all had `L4_MANAGER` in their `role_
+  capabilities` — none of these are report pages, so per Basic Rule #7
+  L4_MANAGER should get nothing on them (not even a DIRECTOR-REPORTS-style
+  View), same as the fix already applied to Groups 1/10's equivalent
+  capabilities. Removed `L4_MANAGER` from all 4. No real user held this
+  combination today (no Accounts/Stores L4_MANAGER exists in either
+  company), but fixed for correctness/future-proofing, same discipline as
+  every other group.
+- **Basic Rule #7 check (DIRECTOR-REPORTS/MANAGEMENT-REPORTS):** confirmed
+  zero access on any of the 4 Group 11 pages — correct, none are report
+  pages.
+- **🔴 Real dependency gap confirmed and fixed — the exact gap flagged
+  during Group 2's audit, now resolved:** Accounts (SO01/SO02's creator
+  department) had **zero** grant on `OM_CUSTOMER_CREATE`, `OM_CUSTOMER_
+  LIST`, `PROC_PAYMENT_TERMS_MASTER`, `PROC_PO_LIST`, or `PROC_DO_LIST` —
+  all five are real, code-confirmed dependencies of `SOCreatePage.jsx`
+  (party dropdown + inline "+New Party", payment-terms dropdown, UOM-
+  conversion lookup), `SODetailPage.jsx`/`SalesInvoiceDetailPage.jsx`
+  (document-flow tab, customer/material display), and `PgiInvoiceCreatePage.
+  jsx`/`SalesInvoiceListPage.jsx` (reading Delivery Orders to process PGI).
+  Without these, Accounts could reach SO01 as a page but would 403 on its
+  own party dropdown and payment-terms field — the exact same class of miss
+  found in Groups 1/10 earlier today. New narrow, hidden companion
+  capability `CAP_SALES_ACCOUNTS_DEPENDENCY` (VIEW on `OM_CUSTOMER_LIST`/
+  `PROC_PAYMENT_TERMS_MASTER`/`PROC_PO_LIST`/`PROC_DO_LIST`, VIEW+WRITE+EDIT
+  on `OM_CUSTOMER_CREATE`), granted to ACCOUNTS work context both
+  companies, `role_capabilities` matching `CAP_SALES_ACCOUNTS`'s own scope
+  (all ranks except L4_MANAGER).
+- **Stores (SO03) checked separately — no gap.** `DOCreatePage.jsx`'s only
+  cross-module need is `PROC_TRANSPORTER_MASTER:VIEW`, already satisfied by
+  the `CAP_GRN_TRANSPORTER_DEP` grant added during Group 2's session (same
+  capability serves both dependencies). Stores' own `PROC_DO_CREATE`
+  V/W/E confirmed intact.
+- **`user_overrides` check:** zero rows on any of the 6 Group 11 resources.
+- **Verified (`precomputed_acl_view`, v63, both companies):** P0060
+  (Accounts, L2_MANAGER) — all 5 dependency resources now resolve ALLOW
+  with the correct actions. ACL-MASTER drift check — clean.
+
 ---
 
 ## Task C — Real maker-checker for Opening Stock / AC05 / AC06 (2026-08-03)
