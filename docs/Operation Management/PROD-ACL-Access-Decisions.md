@@ -426,7 +426,7 @@ DIRECTOR = V only, on all 6, in both companies.
 
 ## Group 3 — Procurement
 
-Status: ✅ Decided + implemented in prod (2026-07-28), including PO02. **⚠️ Revised 2026-08-06 — PO12 only, not yet implemented (see below).**
+Status: ✅ Decided + implemented in prod (2026-07-28), including PO02. **✅ Revised + IMPLEMENTED 2026-08-06 (ACL v59, both companies) — PO12 only, see below.**
 
 **⚠️ Revised 2026-08-06 — PO12 (Plant Transfers):** reclassified as a genuinely different,
 physical-stock-movement function, not part of SCM's Procurement pipeline proper — but it has
@@ -455,7 +455,19 @@ the specific concern that GE/GRN write real CSN detail fields (not just status/q
   Stores writing these fields via GE/GRN needs no CSN Tracker access at all, confirming
   SCM+Director-only remains safe even for these detail-field writes.
 
-**Not yet implemented** — design decision only.
+**✅ IMPLEMENTED 2026-08-06 (ACL v59, both companies).** Removed `CAP_PROC_PLANT_TRANSFER`
+(V/W/E/D/Approve) from LOGISTICS/STORES/SUPPLY CHAIN and `CAP_PROC_PLANT_TRANSFER_VIEW` from
+DIRECTOR — every non-ACL-MASTER work context now has zero rows on `PROC_PLANT_TRANSFER_LIST`.
+Removed the 2 `acl.approver_map` rows (L3_MANAGER, `COMPANY_WIDE`, one per company) implementing
+the old sending-company approve chain. Confirmed `CAP_PROC_LOGISTICS` (ACL-MASTER-only, also
+touches PO07) has no blast-radius overlap with the departments losing access — no collateral
+narrowing on PO07. Confirmed via the Page Dependency Manifest that no other page in the system
+reads `PROC_PLANT_TRANSFER_LIST` — fully self-contained removal. Pre-existing `user_overrides`
+(6 rows, same "Mgmt managers: no Procurement section" 2026-07-27 policy as elsewhere) now
+redundant but harmless — the departments it targeted already have zero access via the capability
+removal itself. Verified via `precomputed_acl_view`: zero non-ACL-MASTER rows on
+`PROC_PLANT_TRANSFER_LIST` in either company; ACL-MASTER retains full V/W/E/D/Approve. ACL-MASTER
+drift check — clean.
 
 ### PO02 — CSN Tracker
 
