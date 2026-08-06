@@ -625,7 +625,7 @@ export default function PlanFeedPage() {
                 <select className="col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm" value={newPartyForm.billing_state} onChange={e => setNewPartyForm(f => ({ ...f, billing_state: e.target.value }))}>
                   <option value="">Billing State *</option>
                   {INDIAN_STATES.map((state) => (
-                    <option key={state} value={state}>{state}</option>
+                    <option key={state.code} value={state.name}>{state.name}</option>
                   ))}
                 </select>
                 <div className="col-span-2 flex gap-2">
