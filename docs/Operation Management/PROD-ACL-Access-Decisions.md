@@ -126,6 +126,104 @@ the dependent department at all:
 
 ---
 
+## Post-Implementation Checklist (established 2026-08-06)
+
+**This section exists because it didn't before** — the business owner asked,
+after ~9 groups were implemented in one session, whether the verification
+process itself was written down anywhere a future session could follow
+without re-deriving it from scratch. It wasn't; it lived only in that
+session's own practice. This is the fix: the exact ordered sequence every
+group/page decision must go through, from "design decided" to "committed."
+Skipping a step here is exactly how Group 4's dependency-check got missed
+the first time this session (caught later, redone properly — see Group 4's
+own section for that history).
+
+1. **Verify the premise before touching data.** Any existing note claiming
+   "department X needs zero access" or "this is already safe" is a claim,
+   not a fact — re-check it against the actual current code (handler files,
+   `route-acl-registry.ts`) and the Page Dependency Manifest before trusting
+   it. This session found that exact premise wrong twice (Group 1's
+   Production "zero PM04/MM04 access" claims) and once the other direction
+   (Group 9's IN01 "no company-scope check" claim — the code was already
+   correct, no fix was needed). Trust neither direction blindly.
+2. **Run the 13-bug-pattern checklist** (CLAUDE.md, "Recurring 13 Bug
+   Patterns" section — the canonical numbered list; do not maintain a
+   second copy of the descriptions elsewhere, see the Appendix note below)
+   against every handler file the group's pages touch.
+3. **Cross-Module Dependency check.** For every page a department now has
+   real (`menu_visible=true`) access to, walk its entry in
+   `docs/Operation Management/implementation-specs/PAGE-DEPENDENCY-MANIFEST.json`
+   and classify each dependency (ক/খ/গ/ঘ, taxonomy above). Wire narrow,
+   `menu_visible=false` companion capabilities for ক/খ; get explicit
+   confirmation for গ; do nothing for ঘ. (The
+   `CODEX-SU24-DEPENDENCY-PROVISIONING-TASK-BRIEF.md` script, once built,
+   automates the detection half of this step — it does not replace the
+   judgment half.)
+4. **Wire the ACL data.** New/changed `acl.capabilities`,
+   `acl.capability_menu_actions`, `acl.role_capabilities`,
+   `acl.work_context_capabilities`. **Both `role_capabilities` (role → capability)
+   and `work_context_capabilities` (work context → capability) are required**
+   — `generate_acl_snapshot()` joins on both; a capability with only one of
+   the two silently resolves to zero rows for that holder, no error (found
+   live this session with `CAP_PROD_PLANTHEAD_MATERIAL_COMPANION` and
+   `CAP_PI_AUDITOR` — both initially missing the `DIRECTOR` role row needed
+   for ACL-MASTER, since P0076's actual `role_code` is `DIRECTOR`).
+5. **Version bump.** Deactivate the company's current active
+   `acl.acl_versions` row, insert a new one with a clear `description`.
+   `capture_acl_version_source()` is capture-once per `acl_version_id` — a
+   second call on the same version silently does nothing (no error). Every
+   round of data changes, however small, needs its own new version.
+6. **Capture, then generate.** `acl.capture_acl_version_source(...)` then
+   `acl.generate_acl_snapshot(...)`, per company.
+7. **Verify via `precomputed_acl_view`, filtered to the active version.**
+   This table accumulates rows from every historical version forever —
+   always join `acl.acl_versions` on `is_active = true` (or filter to the
+   specific new `acl_version_id`), or stale rows from deactivated versions
+   produce false readings in both directions (found live this session,
+   Group 11's "false alarm" note). Check real representative users per
+   role/department, not just "a row exists somewhere."
+8. **`user_overrides` check.** Query for any `ALLOW`/`DENY` override on the
+   resources touched, for both directions — a pre-existing `DENY` silently
+   defeats a brand-new capability grant (Group 4's Plant Head case), and a
+   pre-existing per-user `ALLOW` may already cover something you're about
+   to build a capability for (Group 7's Soni/AC04 case). Investigate every
+   row found — most turn out to be pre-existing and unrelated, but confirm
+   that, don't assume it.
+9. **ACL-MASTER drift check.** Run `scripts/acl-master-drift-check.mjs`'s
+   printed SQL. Zero unexplained gaps required — anything found means a
+   capability grant reached other departments but never reached
+   ACL-MASTER's own work context.
+10. **Rebuild menu snapshots** (`public.rebuild_acl_menu_snapshot`) for
+    every verification user's `(user, company, work_context)` triple
+    touched by the change — this is not automatic, a stale snapshot shows
+    the old sidebar even after the ACL data is correct.
+11. **Code changes, if any:** `deno check` on every touched file, before
+    (`git stash`) and after, confirm the error count didn't grow.
+12. **Update this doc.** Mark the group/page's status line
+    `✅ IMPLEMENTED`, with the ACL version number, date, and what was
+    verified. Prior "not yet implemented" language should be replaced, not
+    left alongside the new note.
+13. **Commit + push**, with a commit message that states what changed and,
+    if a premise turned out to be wrong or a real gap was found mid-pass,
+    says so — that's what makes the next session's "verify the premise"
+    step (#1) actually possible instead of just repeating the same trust
+    ad infinitum.
+
+Steps 2-9 apply to *ACL data* changes and can be re-run any time via MCP —
+they are not gated by a code deploy. Steps 11-13 apply only when the pass
+also touched application code.
+
+**A note on scope beyond CMP003/CMP006:** every group above was scoped to
+"both companies" meaning CMP003/CMP006 specifically. Other prod companies
+(e.g. CMP014, bootstrapped for the first time 2026-08-06 to unblock P0077 —
+see that session's own notes, not yet written up as a numbered group here)
+may have a different, partial, or entirely absent department/capability
+structure. Never assume a company beyond CMP003/CMP006 has the same ACL
+foundation — check `acl.acl_versions` and `erp_acl.work_contexts` for that
+specific `company_id` before assuming anything resolves there.
+
+---
+
 ## Identity note (locked 2026-07-29) — who "DIRECTOR" means in this doc
 
 Three prod users hold role_code `DIRECTOR`:
@@ -2068,17 +2166,31 @@ verified live. Full detail in `OM-IMPLEMENTATION-LOG.md`'s "very final"
 
 ## Appendix — Recurring Regression Patterns
 
-Future ACL/company/approval work must check these recurring bug classes before a page/group is marked done:
-1. Hardcoded rank-check bypass
+**⚠️ Corrected 2026-08-06 — this list previously had 11 items and had
+silently drifted out of sync with CLAUDE.md's real list of 13.** Rather
+than maintain a second copy of the descriptions here (which is exactly how
+it drifted the first time), this appendix now just names and numbers them,
+matching CLAUDE.md's "Recurring 13 Bug Patterns" section exactly — **read
+CLAUDE.md for the actual description of each**, that is the canonical copy:
+
+1. Hardcoded rank-check / role-check bypass
 2. Company-scope gap
 3. Blanket capability leak
-4. capture_acl_version_source() no-op trap
-5. ACL-MASTER drift
-6. Shared resource-code collision
-7. Maker-checker empty / fallback-only illusion
-8. Route/registry mismatch
-9. cl.approver_map scope/index mismatch
-10. Small config/data trap
-11. Wrong company source / single-company bypass
+4. `capture_acl_version_source()` one-time trap
+5. ACL-MASTER (P0076) maintenance drift
+6. One resource code reused for two different actions
+7. Maker-checker empty / fallback-only behavior
+8. Route / ACL registry mismatch
+9. `acl.approver_map` scope / uniqueness shape
+10. Small config / data traps
+11. Wrong company source / single-company auto-resolution bypass
+12. Local, per-file hardcoded role-array bypassing ACL (frontend or backend
+    — a second, sneakier shape of #1, not caught by the same guard)
+13. Frontend payload missing a backend-required field (not an ACL problem
+    at all — a plain payload-completeness bug that looks like one)
 
-Use this appendix together with CLAUDE.md's pre-code checklist and OM-IMPLEMENTATION-LOG.md's Bug #n tracking convention. When a new issue fits one of these patterns, log it explicitly instead of treating it as a one-off anomaly.
+See the "Post-Implementation Checklist" section above for *when* to run
+this list (step 2) — this appendix is the *what*, that section is the
+*when/how*. Use both together with OM-IMPLEMENTATION-LOG.md's Bug #n
+tracking convention. When a new issue fits one of these patterns, log it
+explicitly instead of treating it as a one-off anomaly.
