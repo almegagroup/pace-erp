@@ -788,6 +788,46 @@ async function resolveProdshadeMapForMaterials(materialIds: string[]): Promise<M
   return map;
 }
 
+// Free-text SKU fallback (2026-08-06 fix): when a Plan Feed row's SKU has no Material
+// Master row yet (material_id null), resolveProdshadeMapForMaterials above returns nothing
+// for it -- but the FG naming convention itself still lets us derive the Prodshade. Verified
+// against every existing FG SKU in prod: FG external_code = <Prodshade SFG external_code> +
+// <3-char pack_code> (e.g. "6766SN80" + "000" = "6766SN80000"). Strip the last 3 characters
+// and look that string up as an SFG material's own external_code. Without this, every
+// not-yet-mastered SKU falsely reports "NOT IN STROKE MASTER" even when the exact Stroke
+// already exists and is APPROVED for that Prodshade.
+function deriveSfgCandidateCode(sku: string): string | null {
+  const trimmed = sku.trim().toUpperCase();
+  if (trimmed.length <= 3) return null;
+  return trimmed.slice(0, -3);
+}
+
+async function resolveProdshadeIdsFromSkuText(skus: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const candidateCodes = [...new Set(skus.map(deriveSfgCandidateCode).filter((c): c is string => Boolean(c)))];
+  if (candidateCodes.length === 0) return map;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master").from("material_master")
+    .select("id, external_code")
+    .eq("material_type", "SFG");
+  if (error) {
+    console.error("[plan_feed.resolveProdshadeIdsFromSkuText] query failed:", JSON.stringify(error));
+    throw new Error("PROD_PLAN_FEED_PRODSHADE_LOOKUP_FAILED");
+  }
+  const byExternalCode = new Map<string, string>();
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const code = toTrimmedString(row.external_code).toUpperCase();
+    if (code) byExternalCode.set(code, String(row.id));
+  }
+  for (const sku of skus) {
+    const candidate = deriveSfgCandidateCode(sku);
+    const prodshadeId = candidate ? byExternalCode.get(candidate) : undefined;
+    if (prodshadeId) map.set(sku, prodshadeId);
+  }
+  return map;
+}
+
 function computeProductionStatus(orderedQtyKg: number, allocatedQtyKg: number): string {
   if (allocatedQtyKg <= QTY_TOL) return "UNMAPPED";
   if (allocatedQtyKg >= orderedQtyKg - QTY_TOL) return "FULLY_MAPPED";
@@ -820,11 +860,16 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     // §83.18-REVISED: flag rows whose Ordered Stroke isn't (yet) in Stroke Master --
     // live check, so the flag clears itself the moment someone creates that Stroke,
     // no manual update needed here.
-    const materialIdsWithStroke = (fos as JsonRecord[])
-      .filter((f) => toTrimmedString(f.ordered_stroke_number))
-      .map((f) => String(f.material_id ?? ""));
-    const prodshadeMap = await resolveProdshadeMapForMaterials(materialIdsWithStroke);
-    const prodshadeIds = [...new Set([...prodshadeMap.values()])];
+    const rowsWithStroke = (fos as JsonRecord[]).filter((f) => toTrimmedString(f.ordered_stroke_number));
+    const materialIdsWithStroke = rowsWithStroke.map((f) => String(f.material_id ?? ""));
+    const skusWithStrokeNoMaterial = rowsWithStroke
+      .filter((f) => !toTrimmedString(f.material_id) && toTrimmedString(f.sku))
+      .map((f) => String(f.sku));
+    const [prodshadeMap, skuProdshadeMap] = await Promise.all([
+      resolveProdshadeMapForMaterials(materialIdsWithStroke),
+      resolveProdshadeIdsFromSkuText(skusWithStrokeNoMaterial),
+    ]);
+    const prodshadeIds = [...new Set([...prodshadeMap.values(), ...skuProdshadeMap.values()])];
     const existingStrokePairs = new Set<string>();
     if (prodshadeIds.length > 0) {
       const { data: strokeRows, error: strokeErr } = await serviceRoleClient
@@ -860,7 +905,10 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       const orderedKg = Number(fo.ordered_qty_kg) || 0;
       const dispatchedKg = 0;
       const strokeNumber = toTrimmedString(fo.ordered_stroke_number);
-      const prodshadeId = prodshadeMap.get(String(fo.material_id ?? ""));
+      const materialId = toTrimmedString(fo.material_id);
+      const prodshadeId = materialId
+        ? prodshadeMap.get(materialId)
+        : skuProdshadeMap.get(String(fo.sku ?? ""));
       const orderedStrokeMissing = Boolean(strokeNumber) &&
         !existingStrokePairs.has(`${fo.company_id}|${prodshadeId}|${strokeNumber}`);
       return {
