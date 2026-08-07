@@ -85,6 +85,125 @@ async function fetchStrokeNumbers(strokeIds: string[]): Promise<Map<string, stri
   return map;
 }
 
+async function fetchUnrestrictedRates(
+  companyId: string,
+  keys: Array<{ materialId: string; slocId: string }>,
+): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  const pairs = keys.filter((key) => key.materialId && key.slocId);
+  if (pairs.length === 0) return map;
+  const materialIds = [...new Set(pairs.map((pair) => pair.materialId))];
+  const slocIds = [...new Set(pairs.map((pair) => pair.slocId))];
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_snapshot")
+    .select("material_id, storage_location_id, valuation_rate")
+    .eq("company_id", companyId)
+    .eq("stock_type_code", "UNRESTRICTED")
+    .is("batch_id", null)
+    .in("material_id", materialIds)
+    .in("storage_location_id", slocIds);
+  if (error) {
+    console.error("[opening_genealogy.fetchUnrestrictedRates] query failed:", JSON.stringify(error));
+    throw new Error("PROD_OLD_PACKING_PO_LIST_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) {
+    map.set(`${String(row.material_id)}|${String(row.storage_location_id)}`, Number(row.valuation_rate ?? 0));
+  }
+  return map;
+}
+
+async function enrichOldPackingRows(companyId: string, rows: JsonRecord[]): Promise<JsonRecord[]> {
+  if (rows.length === 0) return rows;
+
+  const poIds = rows.map((row) => String(row.id ?? "")).filter(Boolean);
+  const packCodeIds = [...new Set(rows.map((row) => toTrimmedString(row.pack_code_id)).filter(Boolean))];
+
+  const [{ data: lineRows, error: lineErr }, { data: packCodes, error: packCodeErr }] = await Promise.all([
+    serviceRoleClient
+      .schema("erp_production")
+      .from("packing_order_line")
+      .select("packing_order_id, line_type, material_id, actual_material_id, total_qty, actual_qty, issue_sloc_id")
+      .in("packing_order_id", poIds),
+    packCodeIds.length === 0
+      ? Promise.resolve({ data: [], error: null })
+      : serviceRoleClient
+        .schema("erp_production")
+        .from("pack_code_master")
+        .select("id, pack_code")
+        .in("id", packCodeIds),
+  ]);
+  if (lineErr) {
+    console.error("[opening_genealogy.enrichOldPackingRows] line query failed:", JSON.stringify(lineErr));
+    throw new Error("PROD_OLD_PACKING_PO_LIST_FAILED");
+  }
+  if (packCodeErr) {
+    console.error("[opening_genealogy.enrichOldPackingRows] pack code query failed:", JSON.stringify(packCodeErr));
+    throw new Error("PROD_OLD_PACKING_PO_LIST_FAILED");
+  }
+
+  const linesByPoId = new Map<string, JsonRecord[]>();
+  for (const row of (lineRows ?? []) as JsonRecord[]) {
+    const poId = String(row.packing_order_id ?? "");
+    if (!poId) continue;
+    const current = linesByPoId.get(poId) ?? [];
+    current.push(row);
+    linesByPoId.set(poId, current);
+  }
+
+  const packCodeById = new Map<string, string>();
+  for (const row of (packCodes ?? []) as JsonRecord[]) {
+    packCodeById.set(String(row.id ?? ""), toTrimmedString(row.pack_code));
+  }
+
+  const inputRateKeys = rows.flatMap((row) => {
+    const poLines = linesByPoId.get(String(row.id ?? "")) ?? [];
+    return poLines
+      .filter((line) => String(line.line_type ?? "") !== "FG" && Number(line.actual_qty ?? line.total_qty ?? 0) > 0)
+      .map((line) => ({
+        materialId: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
+        slocId: toTrimmedString(line.issue_sloc_id),
+      }))
+      .filter((key) => key.materialId && key.slocId);
+  });
+  const rateMap = await fetchUnrestrictedRates(companyId, inputRateKeys);
+
+  return rows.map((row) => {
+    const poId = String(row.id ?? "");
+    const poLines = linesByPoId.get(poId) ?? [];
+    const fgQty = Number(row.actual_qty_kg ?? 0);
+    const packCode = packCodeById.get(toTrimmedString(row.pack_code_id)) ?? "";
+
+    let totalInputValue = 0;
+    let incomplete = false;
+    for (const line of poLines) {
+      if (String(line.line_type ?? "") === "FG") continue;
+      const qty = Number(line.actual_qty ?? line.total_qty ?? 0);
+      const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
+      const slocId = toTrimmedString(line.issue_sloc_id);
+      if (!qty || !materialId || !slocId) continue;
+      const lineRate = rateMap.get(`${materialId}|${slocId}`) ?? 0;
+      if (lineRate <= 0) incomplete = true;
+      totalInputValue += qty * lineRate;
+    }
+
+    const derivedRatePerKg = fgQty > 0 ? totalInputValue / fgQty : 0;
+    const usePackRate = packCode !== "000" && Number(row.fill_qty_per_pack ?? 0) > 0;
+    const derivedRateEntryValue = usePackRate
+      ? derivedRatePerKg * Number(row.fill_qty_per_pack ?? 0)
+      : derivedRatePerKg;
+
+    return {
+      ...row,
+      pack_code: packCode || null,
+      derived_rate_per_kg: derivedRatePerKg,
+      derived_rate_entry_value: derivedRateEntryValue,
+      derived_rate_entry_mode: usePackRate ? "PACK" : "KG",
+      derived_rate_incomplete: incomplete,
+    };
+  });
+}
+
 export async function createOldProcessPoHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
@@ -549,22 +668,22 @@ export async function listOldPackingPoBatchesHandler(req: Request, ctx: ProdHand
       return genErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
-    const { data: recoPoIds, error: recoErr } = await serviceRoleClient
+    const { data: openingProcessPoIds, error: recoErr } = await serviceRoleClient
       .schema("erp_production")
-      .from("packing_order_line_reco")
-      .select("packing_order_id")
+      .from("process_order_line_reco")
+      .select("process_order_id")
       .eq("company_id", companyId)
       .eq("source_txn_type", "OPENING");
     if (recoErr) throw new Error("PROD_OLD_PACKING_PO_LIST_FAILED");
 
-    const poIds = [...new Set(((recoPoIds ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.packing_order_id)).filter(Boolean))];
-    if (poIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+    const processOrderIds = [...new Set(((openingProcessPoIds ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.process_order_id)).filter(Boolean))];
+    if (processOrderIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
     let query = serviceRoleClient
       .schema("erp_production")
       .from("packing_order")
-      .select("id, po_number, po_type, source_po_type, batch_number, material_id, actual_qty_kg, fill_qty_per_pack, num_packs")
-      .in("id", poIds)
+      .select("id, po_number, po_type, source_po_type, batch_number, material_id, pack_code_id, actual_qty_kg, fill_qty_per_pack, num_packs")
+      .in("process_order_id", processOrderIds)
       .eq("status", "FINAL")
       .order("created_at", { ascending: false });
     if (materialId) {
@@ -575,9 +694,10 @@ export async function listOldPackingPoBatchesHandler(req: Request, ctx: ProdHand
     if (poErr) throw new Error("PROD_OLD_PACKING_PO_LIST_FAILED");
     const rows = (pos ?? []) as JsonRecord[];
     const matMap = await fetchMaterialLabels(rows.map((row) => toTrimmedString(row.material_id)));
+    const enrichedRows = await enrichOldPackingRows(companyId, rows);
 
     return okResponse({
-      data: rows.map((row) => ({
+      data: enrichedRows.map((row) => ({
         ...row,
         sku: matMap.get(toTrimmedString(row.material_id)) ?? null,
       })),
