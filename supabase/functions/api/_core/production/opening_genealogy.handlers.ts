@@ -112,6 +112,15 @@ export async function createOldProcessPoHandler(req: Request, ctx: ProdHandlerCo
     if (lines.length === 0) {
       return genErr(req, ctx, "PROD_OLD_PROCESS_PO_NO_LINES", 400, "At least one RM/INT line is required");
     }
+    const hasInvalidLine = lines.some((line) => {
+      const materialId = toTrimmedString(line.material_id);
+      const actualQty = parsePositiveNumber(line.actual_qty);
+      const issueSlocId = toTrimmedString(line.issue_sloc_id);
+      return !materialId || !actualQty || !issueSlocId;
+    });
+    if (hasInvalidLine) {
+      return genErr(req, ctx, "PROD_OLD_PROCESS_PO_LINE_INVALID", 400, "Every PR22 line needs material, actual qty, and storage location");
+    }
 
     const { data: dup } = await serviceRoleClient
       .schema("erp_production")
@@ -334,6 +343,19 @@ export async function createOldPackingPoHandler(req: Request, ctx: ProdHandlerCo
     }
     if (!fgSlocId) {
       return genErr(req, ctx, "PROD_OLD_PACKING_PO_FG_SLOC_REQUIRED", 400, "FG storage location required");
+    }
+    if (sfgMaterialId && !sfgSlocId) {
+      return genErr(req, ctx, "PROD_OLD_PACKING_PO_SFG_SLOC_REQUIRED", 400, "SFG storage location required");
+    }
+    const hasInvalidPmLine = pmLines.some((line) => {
+      const qty = parsePositiveNumber(line.actual_qty ?? line.total_qty);
+      if (!qty) return false;
+      const materialId = toTrimmedString(line.material_id);
+      const issueSlocId = toTrimmedString(line.issue_sloc_id);
+      return !materialId || !issueSlocId;
+    });
+    if (hasInvalidPmLine) {
+      return genErr(req, ctx, "PROD_OLD_PACKING_PO_PM_LINE_INVALID", 400, "Every PM line with quantity needs material and storage location");
     }
 
     const { data: parentPo, error: parentErr } = await serviceRoleClient

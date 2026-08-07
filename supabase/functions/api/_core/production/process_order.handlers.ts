@@ -3252,6 +3252,17 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
 
     if (po.status === "VERIFIED") {
       const lines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
+      const { count: openingRecoCount, error: openingRecoErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("process_order_line_reco")
+        .select("id", { count: "exact", head: true })
+        .eq("process_order_id", id)
+        .eq("source_txn_type", "OPENING") as { count?: number; error?: unknown };
+      if (openingRecoErr) {
+        console.error("[process_order.reverse] opening reco check failed:", JSON.stringify(openingRecoErr));
+        throw new Error("PROD_PO_REVERSE_FAILED");
+      }
+      const isOpeningGenealogy = (openingRecoCount ?? 0) > 0;
       const today = todayIso();
       // §106: the CORS reversal is its own Material Document event (no more "-REV" suffix
       // hack) — all three reversal movements (P262 / P322 / P102) are items under it, and
@@ -3278,7 +3289,10 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
           : line.material) as JsonRecord | null;
         const baseUom = String(movementMaterial?.base_uom_code ?? "KG");
         const lineRef = stockLedgerRefById.get(toTrimmedString(line.stock_ledger_id)) ?? null;
-        if (!lineRef) throw new Error("PROD_PO_REVERSAL_SOURCE_NOT_FOUND");
+        if (!lineRef) {
+          if (isOpeningGenealogy) continue;
+          throw new Error("PROD_PO_REVERSAL_SOURCE_NOT_FOUND");
+        }
 
         const posting = await postStockMovement({
           documentNumber: revDocNum,

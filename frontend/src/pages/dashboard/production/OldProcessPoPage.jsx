@@ -12,7 +12,7 @@
  * Authority: Frontend
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
@@ -20,7 +20,7 @@ import TransactionCompanySelector from "../../../components/inputs/TransactionCo
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { listStrokeMasters, getStrokeMaster, createOldProcessPo } from "./prodApi.js";
-import { listMachines } from "../om/omApi.js";
+import { listMachines, listMaterials, listStorageLocations } from "../om/omApi.js";
 
 const PO_TYPES = ["MTO", "HPS"];
 const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"];
@@ -41,6 +41,9 @@ function materialLabel(m) {
 }
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function fmt(v) { return num(v).toFixed(3); }
+function lineTypeFromMaterial(material) {
+  return String(material?.material_type ?? "").toUpperCase() === "INT" ? "INT" : "RM";
+}
 
 export default function OldProcessPoPage() {
   const qc = useQueryClient();
@@ -50,9 +53,11 @@ export default function OldProcessPoPage() {
   const [batchNumber, setBatchNumber] = useState("");
   const [machineId, setMachineId] = useState("");
   const [outputQty, setOutputQty] = useState("");
-  const [lineEdits, setLineEdits] = useState({}); // material_id → {actual_qty, approved_status, ap_approved_qty, variance_qty}
+  const [lineEdits, setLineEdits] = useState({});
+  const [manualLines, setManualLines] = useState([]);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
+  const nextManualId = useRef(1);
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -92,6 +97,34 @@ export default function OldProcessPoPage() {
     value: m.id, label: [m.machine_code, m.machine_name].filter(Boolean).join(" - "),
   }));
 
+  const materialsQ = useQuery({
+    queryKey: ["old-po-materials"],
+    queryFn: () => listMaterials({ limit: 1000 }),
+    select: (d) => d?.data ?? [],
+  });
+  const locationQ = useQuery({
+    queryKey: ["old-po-locations", effectiveCompanyId],
+    queryFn: () => listStorageLocations({ company_id: effectiveCompanyId, is_active: true }),
+    enabled: !!effectiveCompanyId,
+    select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
+  });
+  const rmIntMaterials = useMemo(
+    () => (materialsQ.data ?? []).filter((m) => ["RM", "INT"].includes(String(m.material_type ?? "").toUpperCase())),
+    [materialsQ.data],
+  );
+  const materialOptions = useMemo(
+    () => rmIntMaterials.map((m) => ({ value: m.id, label: materialLabel(m) })),
+    [rmIntMaterials],
+  );
+  const materialById = useMemo(
+    () => new Map(rmIntMaterials.map((m) => [m.id, m])),
+    [rmIntMaterials],
+  );
+  const locationOptions = useMemo(
+    () => (locationQ.data ?? []).map((l) => ({ value: l.id, label: [l.code || l.location_code, l.name || l.location_name].filter(Boolean).join(" - ") })),
+    [locationQ.data],
+  );
+
   const strokeDetailQ = useQuery({
     queryKey: ["old-po-stroke-detail", strokeId],
     queryFn: () => getStrokeMaster(strokeId),
@@ -104,39 +137,100 @@ export default function OldProcessPoPage() {
 
   // Auto-derive RM/INT from the Stroke: qty = dosage% × output qty (§104.9 "auto-derive, editable").
   const derivedLines = useMemo(() => strokeLines.map((line, idx) => {
+    const key = `stroke:${line.id || idx}:${line.material_id}`;
     const standardQty = (num(line.dosage_pct) / 100) * num(outputQty);
-    const edit = lineEdits[line.material_id] ?? {};
+    const edit = lineEdits[key] ?? {};
     const actualQty = edit.actual_qty !== undefined && edit.actual_qty !== "" ? num(edit.actual_qty) : standardQty;
     const approved = edit.approved_status ?? "YES";
     const apQty = edit.ap_approved_qty !== undefined && edit.ap_approved_qty !== ""
       ? num(edit.ap_approved_qty)
       : (approved === "NO" ? 0 : actualQty);
     return {
-      key: line.id || line.material_id,
+      key,
       material_id: line.material_id,
       material_label: materialLabel(line.material),
       line_material_type: String(line.line_material_type || line.material?.material_type || "RM").toUpperCase() === "INT" ? "INT" : "RM",
       dosage_pct: num(line.dosage_pct),
-      issue_sloc_id: line.default_storage_location_id || null,
+      issue_sloc_id: edit.issue_sloc_id ?? line.default_storage_location_id ?? "",
       display_order: idx + 1,
       standard_qty: standardQty,
       actual_qty: actualQty,
       approved_status: approved,
       ap_approved_qty: apQty,
-      variance_qty: num(edit.variance_qty ?? (actualQty - standardQty)),
+      variance_qty: edit.variance_qty !== undefined && edit.variance_qty !== "" ? num(edit.variance_qty) : (actualQty - standardQty),
       uom_code: line.material?.base_uom_code || "KG",
+      is_formulation_line: true,
     };
   }), [strokeLines, outputQty, lineEdits]);
 
-  function patchLine(materialId, patch) {
-    setLineEdits((cur) => ({ ...cur, [materialId]: { ...(cur[materialId] ?? {}), ...patch } }));
+  const normalizedManualLines = useMemo(() => manualLines.map((line, idx) => {
+    const material = materialById.get(line.material_id) ?? null;
+    const actualQty = line.actual_qty !== "" ? num(line.actual_qty) : 0;
+    const approved = line.approved_status || "YES";
+    const apQty = line.ap_approved_qty !== "" ? num(line.ap_approved_qty) : (approved === "NO" ? 0 : actualQty);
+    const varianceQty = line.variance_qty !== "" ? num(line.variance_qty) : actualQty;
+    return {
+      key: line.id,
+      material_id: line.material_id,
+      material_label: materialLabel(material),
+      line_material_type: line.line_material_type || lineTypeFromMaterial(material),
+      dosage_pct: 0,
+      issue_sloc_id: line.issue_sloc_id || "",
+      display_order: derivedLines.length + idx + 1,
+      standard_qty: 0,
+      actual_qty: actualQty,
+      approved_status: approved,
+      ap_approved_qty: apQty,
+      variance_qty: varianceQty,
+      uom_code: line.uom_code || material?.base_uom_code || "KG",
+      is_formulation_line: false,
+      is_manual: true,
+    };
+  }), [derivedLines.length, manualLines, materialById]);
+
+  function patchLine(lineKey, patch) {
+    setLineEdits((cur) => ({ ...cur, [lineKey]: { ...(cur[lineKey] ?? {}), ...patch } }));
   }
 
-  const totalRm = derivedLines.reduce((s, l) => s + l.actual_qty, 0);
-  const canSave = !!effectiveCompanyId && !!strokeId && !!batchNumber.trim() && num(outputQty) > 0 && derivedLines.length > 0;
+  function addManualLine() {
+    const id = `manual-${nextManualId.current++}`;
+    setManualLines((cur) => [...cur, {
+      id,
+      material_id: "",
+      line_material_type: "RM",
+      issue_sloc_id: "",
+      actual_qty: "",
+      approved_status: "YES",
+      ap_approved_qty: "",
+      variance_qty: "",
+      uom_code: "KG",
+    }]);
+  }
+
+  function patchManualLine(lineId, patch) {
+    setManualLines((cur) => cur.map((line) => {
+      if (line.id !== lineId) return line;
+      const next = { ...line, ...patch };
+      if (Object.prototype.hasOwnProperty.call(patch, "material_id")) {
+        const material = materialById.get(patch.material_id) ?? null;
+        next.line_material_type = lineTypeFromMaterial(material);
+        next.uom_code = material?.base_uom_code || "KG";
+      }
+      return next;
+    }));
+  }
+
+  function removeManualLine(lineId) {
+    setManualLines((cur) => cur.filter((line) => line.id !== lineId));
+  }
+
+  const allLines = useMemo(() => [...derivedLines, ...normalizedManualLines], [derivedLines, normalizedManualLines]);
+  const totalRm = allLines.reduce((s, l) => s + l.actual_qty, 0);
+  const hasInvalidLine = allLines.some((line) => !line.material_id || num(line.actual_qty) <= 0 || !line.issue_sloc_id);
+  const canSave = !!effectiveCompanyId && !!strokeId && !!batchNumber.trim() && num(outputQty) > 0 && allLines.length > 0 && !hasInvalidLine;
 
   async function handleSave() {
-    if (!canSave) { toast("Fill Company, Stroke, Batch Number and Actual Output.", "error"); return; }
+    if (!canSave) { toast("Fill Company, Stroke, Batch Number, Actual Output, and every line's storage location.", "error"); return; }
     setSaving(true);
     try {
       const res = await createOldProcessPo({
@@ -147,7 +241,7 @@ export default function OldProcessPoPage() {
         stroke_master_id: strokeId,
         machine_id: machineId || null,
         actual_qty: num(outputQty),
-        lines: derivedLines.map((l) => ({
+        lines: allLines.map((l) => ({
           material_id: l.material_id,
           line_material_type: l.line_material_type,
           dosage_pct: l.dosage_pct,
@@ -159,10 +253,11 @@ export default function OldProcessPoPage() {
           ap_approved_qty: l.ap_approved_qty,
           variance_qty: l.variance_qty,
           uom_code: l.uom_code,
+          is_formulation_line: l.is_formulation_line,
         })),
       });
       toast(`Old Process PO ${res?.po_number ?? ""} created for batch ${batchNumber.trim()} — no stock moved.`);
-      setBatchNumber(""); setOutputQty(""); setLineEdits({});
+      setBatchNumber(""); setOutputQty(""); setLineEdits({}); setManualLines([]);
       qc.invalidateQueries({ queryKey: ["old-process-po-batches"] });
     } catch (err) {
       toast(friendly(err.code, err.message), "error");
@@ -172,7 +267,7 @@ export default function OldProcessPoPage() {
   return (
     <ErpScreenScaffold
       title="Old Process PO"
-      subtitle="PR22 — genealogy for a pre-go-live MTO/HPS batch (§104.9). RM/INT auto-derived from the Stroke, editable. Saves a VERIFIED paper order; posts NO stock movement. Create this record before loading the related Opening Stock (IN05)."
+      subtitle="PR22 — genealogy for a pre-go-live MTO/HPS batch (§104.9). RM/INT auto-derived from the Stroke, editable, and expandable with manual extra lines. Saves a VERIFIED paper order; posts NO stock movement. Create this record before loading the related Opening Stock (IN05)."
       actions={[{ label: "Save", tone: "primary", mnemonic: "S", disabled: !canSave || saving, onClick: handleSave }]}
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
@@ -199,7 +294,7 @@ export default function OldProcessPoPage() {
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Batch Number <span className="text-rose-500">*</span></label>
             <input className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={batchNumber} onChange={(e) => setBatchNumber(e.target.value.toUpperCase())} placeholder="as loaded in IN05" />
-            <p className="text-xs text-slate-400">Use the historical batch number that this old process order should carry into Opening Stock (IN05).</p>
+            <p className="text-xs text-slate-400">This historical batch number is what Opening Stock (IN05) will reference later.</p>
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Machine</label>
@@ -208,17 +303,17 @@ export default function OldProcessPoPage() {
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Actual Output Qty (KG) <span className="text-rose-500">*</span></label>
             <input type="number" min="0" step="0.001" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={outputQty} onChange={(e) => setOutputQty(e.target.value)} />
-            <p className="text-xs text-slate-400">Enter the historical SFG output quantity for this batch.</p>
+            <p className="text-xs text-slate-400">Enter the historical SFG output quantity for this batch so later opening and reversal flows use the same genealogy basis.</p>
           </div>
         </div>
       </ErpSectionCard>
 
-      <ErpSectionCard title={`RM / INT Lines${derivedLines.length ? ` (${derivedLines.length})` : ""}`}>
+      <ErpSectionCard title={`RM / INT Lines${allLines.length ? ` (${allLines.length})` : ""}`}>
         {!strokeId ? (
           <p className="text-slate-400 text-sm py-6 text-center">Select a Stroke to auto-derive the RM/INT breakup.</p>
         ) : strokeDetailQ.isLoading ? (
           <p className="text-slate-400 text-sm py-6 text-center">Loading stroke…</p>
-        ) : derivedLines.length === 0 ? (
+        ) : allLines.length === 0 ? (
           <p className="text-slate-400 text-sm py-6 text-center">This stroke has no RM/INT lines.</p>
         ) : (
           <>
@@ -226,6 +321,19 @@ export default function OldProcessPoPage() {
               Auto-derived from the Stroke standard (dosage% × output). Edit any line where the real historical
               consumption differed — un-edited figures are the <strong>standard</strong>, not a true actual.
             </p>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <p className="text-xs text-slate-500">
+                Add manual RM/INT rows when the historical batch used extra materials beyond the Stroke standard. Every line must carry its own storage location for future reversal safety.
+              </p>
+              <button type="button" className="border border-slate-300 rounded px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50" onClick={addManualLine}>
+                Add Item Line
+              </button>
+            </div>
+            {!locationOptions.length && (
+              <p className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded px-3 py-2 mb-3">
+                No active storage locations are mapped to this company yet, so reversal-safe line capture cannot be completed.
+              </p>
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
                 <thead>
@@ -235,42 +343,78 @@ export default function OldProcessPoPage() {
                     <th className="text-right py-2 px-3 border-b">Dosage %</th>
                     <th className="text-right py-2 px-3 border-b">Standard Qty</th>
                     <th className="text-right py-2 px-3 border-b">Actual Qty</th>
+                    <th className="text-left py-2 px-3 border-b">Storage Location</th>
                     <th className="text-left py-2 px-3 border-b">Approved</th>
                     <th className="text-right py-2 px-3 border-b">AP Approved Qty</th>
                     <th className="text-right py-2 px-3 border-b">Variance</th>
+                    <th className="text-right py-2 px-3 border-b">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {derivedLines.map((l) => (
+                  {allLines.map((l) => (
                     <tr key={l.key} className="border-b border-slate-100">
-                      <td className="py-2 px-3 text-slate-700">{l.material_label}</td>
+                      <td className="py-2 px-3 text-slate-700">
+                        {l.is_manual ? (
+                          <ErpComboboxField
+                            value={l.material_id}
+                            onChange={(value) => patchManualLine(l.key, { material_id: value })}
+                            options={materialOptions}
+                            placeholder="-- Select material --"
+                            emptyStateLabel={materialsQ.isLoading ? "Loading materials..." : "No RM/INT materials"}
+                          />
+                        ) : l.material_label}
+                      </td>
                       <td className="py-2 px-3">
                         <span className={`text-xs px-2 py-0.5 rounded ${l.line_material_type === "INT" ? "bg-violet-50 text-violet-700" : "bg-sky-50 text-sky-700"}`}>{l.line_material_type}</span>
                       </td>
-                      <td className="py-2 px-3 text-right font-mono text-slate-500">{l.dosage_pct.toFixed(3)}</td>
+                      <td className="py-2 px-3 text-right font-mono text-slate-500">{l.is_manual ? "--" : l.dosage_pct.toFixed(3)}</td>
                       <td className="py-2 px-3 text-right font-mono text-slate-400">{fmt(l.standard_qty)}</td>
                       <td className="py-2 px-3 text-right">
                         <input type="number" min="0" step="0.001"
                           className="w-28 border border-slate-300 rounded px-2 py-1 text-sm font-mono text-right"
-                          value={lineEdits[l.material_id]?.actual_qty ?? ""}
+                          value={l.is_manual ? (manualLines.find((line) => line.id === l.key)?.actual_qty ?? "") : (lineEdits[l.key]?.actual_qty ?? "")}
                           placeholder={fmt(l.standard_qty)}
-                          onChange={(e) => patchLine(l.material_id, { actual_qty: e.target.value })} />
+                          onChange={(e) => (l.is_manual ? patchManualLine(l.key, { actual_qty: e.target.value }) : patchLine(l.key, { actual_qty: e.target.value }))} />
+                      </td>
+                      <td className="py-2 px-3 w-64">
+                        <ErpComboboxField
+                          value={l.issue_sloc_id}
+                          onChange={(value) => (l.is_manual ? patchManualLine(l.key, { issue_sloc_id: value }) : patchLine(l.key, { issue_sloc_id: value }))}
+                          options={locationOptions}
+                          placeholder="-- Select storage location --"
+                          emptyStateLabel={locationQ.isLoading ? "Loading storage locations..." : "No storage locations mapped to this company"}
+                        />
                       </td>
                       <td className="py-2 px-3">
                         <select className="border border-slate-300 rounded px-2 py-1 text-sm"
                           value={l.approved_status}
-                          onChange={(e) => patchLine(l.material_id, { approved_status: e.target.value })}>
+                          onChange={(e) => (l.is_manual ? patchManualLine(l.key, { approved_status: e.target.value }) : patchLine(l.key, { approved_status: e.target.value }))}>
                           {APPROVED_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
                         </select>
                       </td>
                       <td className="py-2 px-3 text-right">
                         <input type="number" min="0" step="0.001"
                           className="w-28 border border-slate-300 rounded px-2 py-1 text-sm font-mono text-right"
-                          value={lineEdits[l.material_id]?.ap_approved_qty ?? ""}
+                          value={l.is_manual ? (manualLines.find((line) => line.id === l.key)?.ap_approved_qty ?? "") : (lineEdits[l.key]?.ap_approved_qty ?? "")}
                           placeholder={fmt(l.ap_approved_qty)}
-                          onChange={(e) => patchLine(l.material_id, { ap_approved_qty: e.target.value })} />
+                          onChange={(e) => (l.is_manual ? patchManualLine(l.key, { ap_approved_qty: e.target.value }) : patchLine(l.key, { ap_approved_qty: e.target.value }))} />
                       </td>
-                      <td className={`py-2 px-3 text-right font-mono ${Math.abs(l.variance_qty) > 0.0005 ? "text-amber-700" : "text-slate-400"}`}>{fmt(l.variance_qty)}</td>
+                      <td className={`py-2 px-3 text-right font-mono ${Math.abs(l.variance_qty) > 0.0005 ? "text-amber-700" : "text-slate-400"}`}>
+                        {l.is_manual ? (
+                          <input type="number" min="0" step="0.001"
+                            className="w-24 border border-slate-300 rounded px-2 py-1 text-sm font-mono text-right"
+                            value={manualLines.find((line) => line.id === l.key)?.variance_qty ?? ""}
+                            placeholder={fmt(l.variance_qty)}
+                            onChange={(e) => patchManualLine(l.key, { variance_qty: e.target.value })} />
+                        ) : fmt(l.variance_qty)}
+                      </td>
+                      <td className="py-2 px-3 text-right">
+                        {l.is_manual ? (
+                          <button type="button" className="text-rose-600 hover:text-rose-700 text-sm font-medium" onClick={() => removeManualLine(l.key)}>
+                            Remove
+                          </button>
+                        ) : <span className="text-slate-300">—</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -278,7 +422,7 @@ export default function OldProcessPoPage() {
                   <tr className="bg-slate-50 font-semibold">
                     <td className="py-2 px-3" colSpan={4}>Total RM / INT</td>
                     <td className="py-2 px-3 text-right font-mono">{fmt(totalRm)}</td>
-                    <td colSpan={3} />
+                    <td colSpan={5} />
                   </tr>
                 </tfoot>
               </table>
