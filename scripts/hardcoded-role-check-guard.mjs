@@ -63,9 +63,6 @@ const BASELINE = new Set([
   // not by removing this backend check, which stays correct for its real
   // SA-only callers. See CLAUDE.md "Wrong company source" note.
   "supabase/functions/api/_core/admin/company/list_companies.handler.ts",
-  // Known violation, not yet fixed — flagged 2026-08-06 by the expanded guard.
-  // See CLAUDE.md pattern #1/#12 for the fix pattern. Tracked as task #32.
-  "supabase/functions/api/_core/procurement/qa_test_method.handlers.ts",
   // QAQueuePage.jsx, SfgResultRecordingPage.jsx, VendorDetailPage.jsx,
   // MaterialDetailPage.jsx — all 4 fixed 2026-08-06 (removed the local role
   // list, trust the backend's ACL decision) — no longer baselined here.

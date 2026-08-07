@@ -21,10 +21,6 @@ type QATestMethodHandlerContext = {
   roleCode: string;
 };
 
-// Kept identical to inward_qa.handlers.ts role sets — Test Method Config creation is
-// available to any QA-capable role; edit/delete requires manager-level (incl. DIRECTOR).
-const QA_ALLOWED_ROLES = ["SA", "DIRECTOR", "PROCUREMENT_HEAD", "QA_OFFICER", "STORE_MANAGER"];
-const QA_MANAGER_ROLES = ["SA", "DIRECTOR", "PROCUREMENT_HEAD", "STORE_MANAGER"];
 // Gate-27.17: widened to include CT (Concrete Trial) for SFG Result Recording. This handler
 // is shared with Procurement's Inward QA page, which never renders a CT section, so no
 // behavior changes there — this only unblocks the SFG page's own Concrete Trial group.
@@ -41,18 +37,6 @@ class ApiError extends Error {
 /** Logs the real Supabase/Postgres error server-side so root causes aren't lost behind a generic message. */
 function logDbError(context: string, error: unknown): void {
   console.error(`[QA_TEST_METHOD_DB_ERROR] ${context}:`, JSON.stringify(error));
-}
-
-function assertQARole(ctx: QATestMethodHandlerContext): void {
-  if (!QA_ALLOWED_ROLES.includes(ctx.roleCode)) {
-    throw new ApiError(403, "QA access required");
-  }
-}
-
-function assertQAManagerRole(ctx: QATestMethodHandlerContext): void {
-  if (!QA_MANAGER_ROLES.includes(ctx.roleCode)) {
-    throw new ApiError(403, "QA manager access required");
-  }
 }
 
 function parseBody(req: Request): Promise<JsonRecord> {
@@ -97,7 +81,9 @@ export async function listTestMethodsHandler(
   ctx: QATestMethodHandlerContext,
 ): Promise<Response> {
   try {
-    assertQARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:VIEW) — was a
+    // hardcoded role check against role codes that don't exist in the real
+    // role ladder, which wrongly blocked legitimate ACL-allowed QA users.
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const testGroup = toUpperTrimmedString(url.searchParams.get("test_group"));
@@ -144,7 +130,9 @@ export async function createTestMethodHandler(
   ctx: QATestMethodHandlerContext,
 ): Promise<Response> {
   try {
-    assertQARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:WRITE) — was a
+    // hardcoded role check against role codes that don't exist in the real
+    // role ladder, which wrongly blocked legitimate ACL-allowed QA users.
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
     const testGroup = toUpperTrimmedString(body.test_group);
@@ -209,7 +197,9 @@ export async function listCategoryTestConfigHandler(
   ctx: QATestMethodHandlerContext,
 ): Promise<Response> {
   try {
-    assertQARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:VIEW) — was a
+    // hardcoded role check against role codes that don't exist in the real
+    // role ladder, which wrongly blocked legitimate ACL-allowed QA users.
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const materialCategory = toTrimmedString(url.searchParams.get("material_category"));
@@ -248,7 +238,9 @@ export async function createCategoryTestConfigHandler(
   ctx: QATestMethodHandlerContext,
 ): Promise<Response> {
   try {
-    assertQARole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:WRITE) — was a
+    // hardcoded role check against role codes that don't exist in the real
+    // role ladder, which wrongly blocked legitimate ACL-allowed QA users.
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
     const materialCategory = toTrimmedString(body.material_category);
@@ -301,7 +293,9 @@ export async function updateCategoryTestConfigHandler(
   ctx: QATestMethodHandlerContext,
 ): Promise<Response> {
   try {
-    assertQAManagerRole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:WRITE) — was a
+    // hardcoded role check against role codes that don't exist in the real
+    // role ladder, which wrongly blocked legitimate ACL-allowed QA users.
     const configId = getIdFromPath(req);
     if (!configId) throw new ApiError(400, "Config id is required");
 
@@ -343,7 +337,9 @@ export async function deleteCategoryTestConfigHandler(
   ctx: QATestMethodHandlerContext,
 ): Promise<Response> {
   try {
-    assertQAManagerRole(ctx);
+    // ACL-gated via route-acl-registry (PROC_QA_QUEUE:WRITE) — was a
+    // hardcoded role check against role codes that don't exist in the real
+    // role ladder, which wrongly blocked legitimate ACL-allowed QA users.
     const configId = getIdFromPath(req);
     if (!configId) throw new ApiError(400, "Config id is required");
 

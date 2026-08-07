@@ -217,10 +217,65 @@ older note.
     - Before trusting "the ACL grant is correct, so the page should work," also
       check: does every frontend call site to a given endpoint send every field
       that endpoint's handler treats as mandatory (`if (!body.X) return error(...)`
-      style checks)? A 6th CI guard for this — cross-checking handler-side
-      required-field validation against frontend payload construction, same
-      static-analysis approach as the existing 5 guards (§8B/§8C/§8D reference) —
-      is planned but not yet built.
+      style checks)? **✅ Built — `scripts/frontend-payload-guard.mjs`**,
+      cross-checks handler-side required-field validation against frontend
+      payload construction, same static-analysis approach as the other
+      guards. (This note previously said "planned but not yet built" —
+      corrected 2026-08-06, found stale while writing the playbook below.)
+
+### Bug-Pattern Guard Playbook — the reusable process (added 2026-08-06)
+
+Every one of the 13 patterns above that has a `scripts/*-guard.mjs` file
+was closed the same way. This is that process, written down once instead
+of re-derived per pattern — **use this whenever a pattern needs a
+permanent, CI-enforced fix, whether you're Claude or Codex:**
+
+1. **Detect, don't fix yet.** Build (or extend) a script that scans the
+   relevant files and flags every occurrence of the pattern. High
+   precision matters more than completeness at this stage — a
+   narrow-but-exact regex/check that misses edge cases is far better than
+   a broad one that drowns real signal in false positives (see
+   `hardcoded-role-check-guard.mjs`'s own header comment for why its regex
+   is deliberately narrow).
+2. **BASELINE, don't block on history.** Every pre-existing occurrence
+   found on first run goes into a `BASELINE` set/list inside the script,
+   **each with a one-line reason comment** — either "legitimate, not a
+   bug, here's why" (permanent) or "known violation, not yet fixed,
+   tracked as task #N" (temporary). The script fails only on *new*,
+   *unbaselined* occurrences — this makes it safe to turn on immediately
+   without a prerequisite mass-fix, and it's a ratchet: the baseline may
+   only shrink over time (a file leaving the baseline because it got
+   fixed is fine; a file leaving because someone deleted its baseline
+   entry without fixing it defeats the whole mechanism).
+3. **Wire it into CI** (`.github/workflows/ci-basic.yml`), matching the
+   existing steps' exact style — one `node scripts/whatever-guard.mjs`
+   line, named after what it guards.
+4. **Fix each temporary BASELINE entry as its own separate task**, one at
+   a time — this is a judgment call per file (does ACL actually govern
+   this page already? what breaks if the local check is removed?), not
+   mechanical, and is usually a *different* task/session than the one
+   that built the guard. Remove the entry from `BASELINE` only once the
+   file is actually fixed and verified (`deno check` before/after, or the
+   frontend equivalent).
+5. **Zero tolerance is the end state, not the start.** Once `BASELINE` is
+   empty for a pattern, consider whether the underlying unsafe path can
+   be closed structurally (e.g. `REVOKE EXECUTE` on a raw RPC once every
+   caller has migrated to the safe wrapper — see §8D's `stock-posting-
+   guard.mjs` for a worked example of a guard whose baseline reaching
+   zero is the trigger for a follow-up structural lock).
+
+**Worked examples already in this repo, read any of these as a template:**
+`scripts/hardcoded-role-check-guard.mjs` (pattern #1/#12),
+`scripts/route-acl-registry-guard.mjs` (pattern #8),
+`scripts/wrong-company-source-guard.mjs` (pattern #11),
+`scripts/frontend-payload-guard.mjs` (pattern #13),
+`scripts/stock-posting-guard.mjs` (§8D, not one of the 13 patterns but
+the same shape). For patterns that don't fit a mechanical script (e.g.
+#3 blanket-capability-leak, #7 maker-checker-illusion — these need
+judgment about *design intent*, not just a syntax scan), the "Post-
+Implementation Checklist" in `docs/Operation Management/PROD-ACL-Access-
+Decisions.md` is the equivalent playbook — same idea, applied to ACL data
+review instead of static code analysis.
 
 ### Canonical company rule
 
@@ -1512,6 +1567,11 @@ Core flow frozen, implement শুরু করো। দুটো gap আছে
 
 | File | Purpose |
 |------|---------|
+| `docs/Operation Management/PROD-ACL-Access-Decisions.md` | **প্রতিটা ACL group/page-এর page-by-page decision, SSOT for prod ACL.** এতেই আছে: Rules (Basic #1-8, Special #1-5), Cross-Module Dependency Taxonomy (Type ক/খ/গ/ঘ), **Post-Implementation Checklist** (২০২৬-০৮-০৬-এ যোগ হয়েছে — প্রতিটা ACL group implement করার পর ঠিক কী কী check করতে হবে, কোন order-এ), আর Appendix-এ ১৩টা recurring bug pattern-এর নম্বর-নাম (বিস্তারিত description CLAUDE.md-এই, নিচের patterns অংশে) |
+| `docs/Operation Management/implementation-specs/PAGE-DEPENDENCY-MANIFEST.json` | প্রতিটা frontend page কোন ACL resource/action-এর উপর নির্ভর করে — Dependency Taxonomy check করার সময় এটা refer করতে হয় (হতে পারে stale, নতুন page যোগ হলে re-verify করো) |
+| `docs/CODEX-SU24-DEPENDENCY-PROVISIONING-TASK-BRIEF.md` | Manifest-এর সাথে live ACL data মিলিয়ে missing dependency auto-detect করার script-এর brief (এখনো build হয়নি, Codex-কে দেওয়ার জন্য প্রস্তুত) |
+| `scripts/acl-master-drift-check.mjs` | ACL-MASTER (P0076)-এর coverage gap খুঁজে বের করার SQL — প্রতিটা ACL data change-এর পর চালাতে হয় |
+| `supabase/functions/api/_acl/route-acl-registry.ts` | প্রতিটা backend route আসলে কোন resource_code+action দিয়ে ACL-gated — ground truth, ধরে নেওয়া চলবে না |
 | `docs/ACL_SETUP_PROGRESS.md` | Full 16-step ACL setup plan with SQL |
 | `docs/ACL_SSOT.md` | ACL architecture (LOCKED) |
 | `docs/GATE_6_G0_ACL_AUTHORITY_LOCK.md` | Gate 6 lock |
