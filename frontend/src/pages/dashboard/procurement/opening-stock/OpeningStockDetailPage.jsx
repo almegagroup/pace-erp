@@ -188,6 +188,22 @@ function packingOptionLabel(packingOrder) {
   return `${packingOrder.po_number} · Batch ${packingOrder.batch_number} · ${normalizeNumeric(packingOrder.actual_qty_kg).toFixed(3)} KG`;
 }
 
+function isFgPackingRateEntry(packingOrder) {
+  return Boolean(packingOrder) && String(packingOrder?.pack_code ?? "") !== "000" && Number(packingOrder?.fill_qty_per_pack) > 0;
+}
+
+function fgRateEntryLabel(packingOrder) {
+  return isFgPackingRateEntry(packingOrder) ? "Rate Per Pack" : "Rate Per KG";
+}
+
+function baseRateToOpeningDisplay(baseRate, material, conversions, uomCode, packingOrder = null) {
+  const numericBaseRate = normalizeNumeric(baseRate);
+  if (isFgPackingRateEntry(packingOrder)) {
+    return numericBaseRate * Number(packingOrder.fill_qty_per_pack);
+  }
+  return baseRateToDisplay(numericBaseRate, material, conversions, uomCode);
+}
+
 function resolveSfgRemaining(batch, lines, excludeLineId = "") {
   const usedQty = sumOtherLineQuantities(lines, (line) => String(line.batch_number ?? "") === String(batch.batch_number ?? ""), excludeLineId);
   return Math.max(normalizeNumeric(batch.actual_qty) - usedQty, 0);
@@ -210,10 +226,10 @@ function resolveBulkFgRemaining(packingOrder, lines, bulkRows, rowKey) {
   return Math.max(normalizeNumeric(packingOrder.actual_qty_kg) - postedQty - draftQty, 0);
 }
 
-function resolveOpeningRatePerUnit(displayRate, material, conversions, rateUomCode, fillQtyPerPack) {
+function resolveOpeningRatePerUnit(displayRate, material, conversions, rateUomCode, packingOrder = null) {
   const numericRate = normalizeNumeric(displayRate);
-  if (Number(fillQtyPerPack) > 0) {
-    return numericRate / Number(fillQtyPerPack);
+  if (isFgPackingRateEntry(packingOrder)) {
+    return numericRate / Number(packingOrder.fill_qty_per_pack);
   }
   return displayRateToBase(numericRate, material, conversions, rateUomCode || material?.base_uom_code);
 }
@@ -233,6 +249,8 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   const [entryDrawerOpen, setEntryDrawerOpen] = useState(false);
   const [editingLineId, setEditingLineId] = useState("");
   const [editForm, setEditForm] = useState(createEmptySingleForm());
+  const [editBaseRatePerUnit, setEditBaseRatePerUnit] = useState(null);
+  const [editRateHydrated, setEditRateHydrated] = useState(false);
   // §109 — Opening Rate "Recalculate" (Phase 1, single material, no cascade yet).
   // Bulk-table UX per business owner feedback (2026-07-24): every un-recalculated
   // POSTED line gets an inline Corrected Rate input; ONE shared Reason + ONE
@@ -461,9 +479,9 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       selectedSingleMaterial,
       singleConversionsQuery.data,
       singleForm.rate_uom_code || selectedSingleMaterial?.base_uom_code,
-      selectedSingleFgOrder?.fill_qty_per_pack,
+      selectedSingleFgOrder,
     ),
-    [singleForm, selectedSingleFgOrder?.fill_qty_per_pack, selectedSingleMaterial, singleConversionsQuery.data],
+    [singleForm, selectedSingleFgOrder, selectedSingleMaterial, singleConversionsQuery.data],
   );
   const computedTotalValue = lines.reduce((sum, line) => sum + Number(line.total_value ?? 0), 0);
 
@@ -516,6 +534,29 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     setEntryDrawerOpen(false);
   }
 
+  useEffect(() => {
+    if (!editingLineId || !isFgGenealogy || editRateHydrated || editBaseRatePerUnit == null || !selectedEditFgOrder) return;
+    setEditForm((current) => ({
+      ...current,
+      rate_per_unit: String(baseRateToOpeningDisplay(
+        editBaseRatePerUnit,
+        selectedEditMaterial,
+        editConversionsQuery.data,
+        current.rate_uom_code || selectedEditMaterial?.base_uom_code,
+        selectedEditFgOrder,
+      )),
+    }));
+    setEditRateHydrated(true);
+  }, [
+    editBaseRatePerUnit,
+    editConversionsQuery.data,
+    editRateHydrated,
+    editingLineId,
+    isFgGenealogy,
+    selectedEditFgOrder,
+    selectedEditMaterial,
+  ]);
+
   async function handleAddSingleLine() {
     if (!detail || detail.status !== "DRAFT") return;
     if (!singleForm.material_id || !singleForm.storage_location_id || !singleForm.quantity || singleForm.rate_per_unit === "") {
@@ -544,7 +585,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
           selectedSingleMaterial,
           singleConversionsQuery.data,
           singleForm.rate_uom_code || selectedSingleMaterial?.base_uom_code,
-          selectedSingleFgOrder?.fill_qty_per_pack,
+          selectedSingleFgOrder,
         ),
       });
       setNotice("Opening stock line added.");
@@ -593,7 +634,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                 material,
                 bulkConversionQueries[rowIndex]?.data,
                 row.rate_uom_code || material?.base_uom_code,
-                selectedFgOrder?.fill_qty_per_pack,
+                selectedFgOrder,
               ),
             is_zero_stock: Boolean(row.is_zero_stock),
             entered_uom_code: row.is_zero_stock ? baseUom : (row.entered_uom_code || baseUom),
@@ -618,6 +659,9 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
 
   function startEditLine(line) {
     const material = materialMap.get(line.material_id);
+    const selectedExistingFgOrder = isFgGenealogy
+      ? (editOpeningFgQuery.data ?? []).find((row) => String(row.id ?? "") === String(line.packing_order_id ?? "")) ?? null
+      : null;
     setEditingLineId(line.id);
     setEditForm({
       material_id: line.material_id,
@@ -627,15 +671,18 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       entered_uom_code: line.entered_uom_code ?? "",
       entered_quantity: line.entered_quantity != null ? String(line.entered_quantity) : "",
       rate_uom_code: material?.base_uom_code || "",
-      rate_per_unit: String(baseRateToDisplay(
+      rate_per_unit: String(baseRateToOpeningDisplay(
         line.rate_per_unit ?? "",
         material,
-        editConversionsQuery.data,
+        [],
         material?.base_uom_code,
+        selectedExistingFgOrder,
       )),
       packing_order_id: String(line.packing_order_id ?? ""),
       batch_number: String(line.batch_number ?? ""),
     });
+    setEditBaseRatePerUnit(normalizeNumeric(line.rate_per_unit));
+    setEditRateHydrated(Boolean(selectedExistingFgOrder));
   }
 
   async function handleSaveEdit() {
@@ -660,7 +707,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
           selectedEditMaterial,
           editConversionsQuery.data,
           editForm.rate_uom_code || selectedEditMaterial?.base_uom_code,
-          selectedEditFgOrder?.fill_qty_per_pack,
+          selectedEditFgOrder,
         ),
       });
       setEditingLineId("");
@@ -1080,9 +1127,11 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                   packing_order_id: String(value ?? ""),
                                   batch_number: selectedOrder?.batch_number ?? "",
                                   quantity: selectedOrder ? String(remaining) : current.quantity,
+                                  rate_per_unit: selectedOrder ? String(Number(selectedOrder.derived_rate_entry_value ?? 0).toFixed(4)) : current.rate_per_unit,
                                   entered_uom_code: selectedEditMaterial?.base_uom_code || current.entered_uom_code,
                                   entered_quantity: selectedOrder ? String(remaining) : current.entered_quantity,
                                 }));
+                                setEditRateHydrated(true);
                               }}
                               options={(editOpeningFgQuery.data ?? []).map((row) => ({ value: row.id, label: packingOptionLabel(row) }))}
                               blankLabel="Select PR23 packing PO"
@@ -1090,6 +1139,12 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                             <div className="text-xs text-slate-500">
                               Batch {selectedEditFgOrder?.batch_number ?? "--"} · {selectedEditFgOrder?.num_packs ?? "--"} packs · {selectedEditFgOrder?.fill_qty_per_pack ?? "--"} KG/pack · Remaining {resolveFgRemaining(selectedEditFgOrder ?? {}, lines, editingLineId).toFixed(3)} KG
                             </div>
+                            {selectedEditFgOrder ? (
+                              <div className="text-xs text-sky-700">
+                                Derived current {fgRateEntryLabel(selectedEditFgOrder)}: {Number(selectedEditFgOrder.derived_rate_entry_value ?? 0).toFixed(4)}
+                                {selectedEditFgOrder.derived_rate_incomplete ? " (incomplete: one or more source inputs have no valued stock yet)" : ""}
+                              </div>
+                            ) : null}
                           </div>
                         </ErpDenseFormRow>
                       ) : null}
@@ -1108,7 +1163,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                           }))}
                         />
                       </ErpDenseFormRow>
-                      <ErpDenseFormRow label={isFgGenealogy && Number(selectedEditFgOrder?.fill_qty_per_pack) > 0 ? "Rate Per Pack" : "Rate Per Unit"}>
+                      <ErpDenseFormRow label={isFgGenealogy ? fgRateEntryLabel(selectedEditFgOrder) : "Rate Per Unit"}>
                         <div className="flex items-center gap-2">
                           <input
                             type="number"
@@ -1294,6 +1349,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                       packing_order_id: String(value ?? ""),
                                       batch_number: selectedOrder?.batch_number ?? "",
                                       quantity: selectedOrder ? String(remaining) : current.quantity,
+                                      rate_per_unit: selectedOrder ? String(Number(selectedOrder.derived_rate_entry_value ?? 0).toFixed(4)) : current.rate_per_unit,
                                       entered_uom_code: selectedSingleMaterial?.base_uom_code || current.entered_uom_code,
                                       entered_quantity: selectedOrder ? String(remaining) : current.entered_quantity,
                                     }));
@@ -1304,6 +1360,12 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                 <div className="text-xs text-slate-500">
                                   Batch {selectedSingleFgOrder?.batch_number ?? "--"} · {selectedSingleFgOrder?.num_packs ?? "--"} packs · {selectedSingleFgOrder?.fill_qty_per_pack ?? "--"} KG/pack · Remaining {resolveFgRemaining(selectedSingleFgOrder ?? {}, lines).toFixed(3)} KG
                                 </div>
+                                {selectedSingleFgOrder ? (
+                                  <div className="text-xs text-sky-700">
+                                    Derived current {fgRateEntryLabel(selectedSingleFgOrder)}: {Number(selectedSingleFgOrder.derived_rate_entry_value ?? 0).toFixed(4)}
+                                    {selectedSingleFgOrder.derived_rate_incomplete ? " (incomplete: one or more source inputs have no valued stock yet)" : ""}
+                                  </div>
+                                ) : null}
                               </div>
                             </ErpDenseFormRow>
                           ) : (selectedSingleMaterial?.material_type === "SFG" || selectedSingleMaterial?.material_type === "FG") ? (
@@ -1332,7 +1394,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                 }))}
                               />
                             </ErpDenseFormRow>
-                            <ErpDenseFormRow label={isFgGenealogy && Number(selectedSingleFgOrder?.fill_qty_per_pack) > 0 ? "Rate Per Pack" : "Rate Per Unit"} required>
+                            <ErpDenseFormRow label={isFgGenealogy ? fgRateEntryLabel(selectedSingleFgOrder) : "Rate Per Unit"} required>
                               <div className="flex items-center gap-2">
                                 <input
                                   type="number"
@@ -1520,6 +1582,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                                     packing_order_id: String(value ?? ""),
                                                     batch_number: selectedOrder?.batch_number ?? "",
                                                     quantity: selectedOrder ? String(remaining) : row.quantity,
+                                                    rate_per_unit: selectedOrder ? String(Number(selectedOrder.derived_rate_entry_value ?? 0).toFixed(4)) : row.rate_per_unit,
                                                     entered_uom_code: material?.base_uom_code || row.entered_uom_code,
                                                     entered_quantity: selectedOrder ? String(remaining) : row.entered_quantity,
                                                   });
@@ -1530,6 +1593,12 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                               <div className="text-[11px] text-slate-500">
                                                 Batch {selectedFgOrder?.batch_number ?? "--"} · {selectedFgOrder?.num_packs ?? "--"} packs · {selectedFgOrder?.fill_qty_per_pack ?? "--"} KG/pack · Remaining {resolveBulkFgRemaining(selectedFgOrder ?? {}, lines, bulkRows, row.key).toFixed(3)} KG
                                               </div>
+                                              {selectedFgOrder ? (
+                                                <div className="text-[11px] text-sky-700">
+                                                  Derived current {fgRateEntryLabel(selectedFgOrder)}: {Number(selectedFgOrder.derived_rate_entry_value ?? 0).toFixed(4)}
+                                                  {selectedFgOrder.derived_rate_incomplete ? " (incomplete)" : ""}
+                                                </div>
+                                              ) : null}
                                             </div>
                                           ) : material?.material_type === "SFG" || material?.material_type === "FG" ? (
                                             <input
@@ -1577,7 +1646,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                               placeholder="Optional"
                                               value={row.rate_per_unit}
                                               onChange={(event) => updateBulkRow(row.key, { rate_per_unit: event.target.value })}
-                                              aria-label={isFgGenealogy && Number(selectedFgOrder?.fill_qty_per_pack) > 0 ? "Rate Per Pack" : "Rate Per Unit"}
+                                              aria-label={isFgGenealogy ? fgRateEntryLabel(selectedFgOrder) : "Rate Per Unit"}
                                               className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                                             />
                                             {showRateUomSelector ? (
@@ -1600,7 +1669,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                               material,
                                               bulkConversionQueries[index]?.data,
                                               row.rate_uom_code || material?.base_uom_code,
-                                              selectedFgOrder?.fill_qty_per_pack,
+                                              selectedFgOrder,
                                             ),
                                             currencyCode,
                                           )}
@@ -1654,4 +1723,3 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     </ErpScreenScaffold>
   );
 }
-

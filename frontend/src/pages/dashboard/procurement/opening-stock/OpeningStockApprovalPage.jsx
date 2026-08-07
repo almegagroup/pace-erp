@@ -74,9 +74,26 @@ function displayRateToBase(displayRate, material, conversions, uomCode) {
   return factor > 0 ? Number(displayRate ?? 0) / factor : Number(displayRate ?? 0);
 }
 
-function resolveOpeningRatePerUnit(displayRate, material, conversions, rateUomCode, fillQtyPerPack) {
+function isFgPackingRateEntry(packingOrder) {
+  return Boolean(packingOrder) && String(packingOrder?.pack_code ?? "") !== "000" && Number(packingOrder?.fill_qty_per_pack) > 0;
+}
+
+function fgRateEntryLabel(packingOrder) {
+  return isFgPackingRateEntry(packingOrder) ? "Rate Per Pack" : "Rate Per KG";
+}
+
+function baseRateToOpeningDisplay(baseRate, material, conversions, uomCode, packingOrder = null) {
+  const numericBaseRate = Number(baseRate ?? 0);
+  if (isFgPackingRateEntry(packingOrder)) {
+    return numericBaseRate * Number(packingOrder.fill_qty_per_pack);
+  }
+  const factor = findRateFactor(material, conversions, uomCode || material?.base_uom_code);
+  return numericBaseRate * factor;
+}
+
+function resolveOpeningRatePerUnit(displayRate, material, conversions, rateUomCode, packingOrder = null) {
   const numericRate = Number(displayRate ?? 0);
-  if (Number(fillQtyPerPack) > 0) return numericRate / Number(fillQtyPerPack);
+  if (isFgPackingRateEntry(packingOrder)) return numericRate / Number(packingOrder.fill_qty_per_pack);
   return displayRateToBase(numericRate, material, conversions, rateUomCode || material?.base_uom_code);
 }
 
@@ -119,6 +136,7 @@ function mapLineForEditing(line) {
     stock_type: String(line.stock_type ?? "UNRESTRICTED"),
     quantity: String(line.quantity ?? ""),
     rate_per_unit: String(line.rate_per_unit ?? "0"),
+    stored_base_rate_per_unit: Number(line.rate_per_unit ?? 0),
     rate_uom_code: "",
     packing_order_id: String(line.packing_order_id ?? ""),
     is_zero_stock: line.is_zero_stock === true || Number(line.quantity ?? 0) === 0,
@@ -150,6 +168,7 @@ export default function OpeningStockApprovalPage() {
   const [searchedDocumentNumber, setSearchedDocumentNumber] = useState("");
   const [editableLines, setEditableLines] = useState([]);
   const [savedSnapshot, setSavedSnapshot] = useState(new Map());
+  const [fgRatesHydrated, setFgRatesHydrated] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
@@ -185,6 +204,7 @@ export default function OpeningStockApprovalPage() {
     const nextLines = Array.isArray(detail.lines) ? detail.lines.map(mapLineForEditing) : [];
     setEditableLines(nextLines);
     setSavedSnapshot(new Map(nextLines.map((line) => [line.row_key, serializeEditableLine(line)])));
+    setFgRatesHydrated(false);
     setCurrentPage(0);
   }, [detail]);
 
@@ -211,6 +231,36 @@ export default function OpeningStockApprovalPage() {
       select: (response) => response?.data ?? response ?? [],
     })),
   });
+
+  useEffect(() => {
+    if (!isFgGenealogy || fgRatesHydrated || editableLines.length === 0 || openingQueries.length !== editableLines.length) return;
+    const hydratedLines = editableLines.map((line, index) => {
+      const selectedFgOrder = (openingQueries[index]?.data ?? []).find((entry) => String(entry.id ?? "") === String(line.packing_order_id ?? "")) ?? null;
+      if (!selectedFgOrder) return line;
+      const material = materialMap.get(line.material_id);
+      const conversions = conversionQueries[index]?.data ?? [];
+      return {
+        ...line,
+        rate_per_unit: String(baseRateToOpeningDisplay(
+          line.stored_base_rate_per_unit ?? line.rate_per_unit ?? 0,
+          material,
+          conversions,
+          line.rate_uom_code || material?.base_uom_code,
+          selectedFgOrder,
+        )),
+      };
+    });
+    setEditableLines(hydratedLines);
+    setSavedSnapshot(new Map(hydratedLines.map((line) => [line.row_key, serializeEditableLine(line)])));
+    setFgRatesHydrated(true);
+  }, [
+    conversionQueries,
+    editableLines,
+    fgRatesHydrated,
+    isFgGenealogy,
+    materialMap,
+    openingQueries,
+  ]);
 
   const editedLineIds = useMemo(() => editableLines.filter((line) => serializeEditableLine(line) !== savedSnapshot.get(line.row_key)).map((line) => line.row_key), [editableLines, savedSnapshot]);
   const editedLineSet = useMemo(() => new Set(editedLineIds), [editedLineIds]);
@@ -294,7 +344,7 @@ export default function OpeningStockApprovalPage() {
           batch_number: line.batch_number || null,
           packing_order_id: line.packing_order_id || null,
           quantity: line.is_zero_stock ? 0 : Number(line.quantity),
-          rate_per_unit: resolveOpeningRatePerUnit(line.rate_per_unit || 0, material, conversionRows, line.rate_uom_code || material?.base_uom_code, selectedFgOrder?.fill_qty_per_pack),
+          rate_per_unit: resolveOpeningRatePerUnit(line.rate_per_unit || 0, material, conversionRows, line.rate_uom_code || material?.base_uom_code, selectedFgOrder),
           is_zero_stock: Boolean(line.is_zero_stock),
           entered_uom_code: line.entered_uom_code || null,
           entered_quantity: line.is_zero_stock ? 0 : Number(line.entered_quantity || line.quantity || 0),
@@ -406,8 +456,16 @@ export default function OpeningStockApprovalPage() {
                                   </div>
                                 ) : isFgGenealogy ? (
                                   <div className="grid gap-1">
-                                    <ErpComboboxField value={line.packing_order_id} onChange={(value) => updateLine(line.row_key, { packing_order_id: String(value ?? ""), batch_number: openingRows.find((entry) => String(entry.id ?? "") === String(value))?.batch_number ?? "" })} options={openingRows.map((entry) => ({ value: entry.id, label: packingOptionLabel(entry) }))} blankLabel="Select PR23 packing PO" />
+                                    <ErpComboboxField value={line.packing_order_id} onChange={(value) => {
+                                      const selectedOrder = openingRows.find((entry) => String(entry.id ?? "") === String(value)) ?? null;
+                                      updateLine(line.row_key, {
+                                        packing_order_id: String(value ?? ""),
+                                        batch_number: selectedOrder?.batch_number ?? "",
+                                        rate_per_unit: selectedOrder ? String(Number(selectedOrder.derived_rate_entry_value ?? 0).toFixed(4)) : line.rate_per_unit,
+                                      });
+                                    }} options={openingRows.map((entry) => ({ value: entry.id, label: packingOptionLabel(entry) }))} blankLabel="Select PR23 packing PO" />
                                     <div className="text-[11px] text-slate-500">Batch {selectedFgOrder?.batch_number ?? "--"} · {selectedFgOrder?.num_packs ?? "--"} packs · {selectedFgOrder?.fill_qty_per_pack ?? "--"} KG/pack</div>
+                                    {selectedFgOrder ? <div className="text-[11px] text-sky-700">Derived current {fgRateEntryLabel(selectedFgOrder)}: {Number(selectedFgOrder.derived_rate_entry_value ?? 0).toFixed(4)}{selectedFgOrder.derived_rate_incomplete ? " (incomplete)" : ""}</div> : null}
                                   </div>
                                 ) : material?.material_type === "SFG" || material?.material_type === "FG" ? (
                                   <input type="text" value={line.batch_number} onChange={(event) => updateLine(line.row_key, { batch_number: event.target.value.toUpperCase() })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
@@ -415,8 +473,8 @@ export default function OpeningStockApprovalPage() {
                               </td>
                               <td className="border-b border-slate-100 px-3 py-2 min-w-[220px]"><UomQuantityInput key={`${line.row_key}-${line.material_id}-${line.batch_number}-${line.packing_order_id}`} baseUomCode={material?.base_uom_code} conversions={conversions} defaultUomCode={line.entered_uom_code || material?.purchase_uom_code} value={line.quantity} disabled={line.is_zero_stock} onChange={(baseQty, meta) => updateLine(line.row_key, { quantity: line.is_zero_stock ? "0" : (baseQty != null ? String(baseQty) : ""), entered_uom_code: meta.enteredUomCode, entered_quantity: Number.isFinite(meta.enteredQty) ? String(meta.enteredQty) : "" })} /></td>
                               <td className="border-b border-slate-100 px-3 py-2"><input type="checkbox" checked={Boolean(line.is_zero_stock)} onChange={(event) => updateLine(line.row_key, { is_zero_stock: event.target.checked })} className="h-4 w-4" /></td>
-                              <td className="border-b border-slate-100 px-3 py-2 min-w-[220px]"><div className="grid gap-1"><input type="number" min="0" step="any" value={line.rate_per_unit} onChange={(event) => updateLine(line.row_key, { rate_per_unit: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />{showRateUomSelector ? <select value={line.rate_uom_code || material?.base_uom_code || ""} onChange={(event) => updateLine(line.row_key, { rate_uom_code: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500">{rateOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : null}</div></td>
-                              <td className="border-b border-slate-100 px-3 py-2">{formatCurrency(Number(line.quantity || 0) * resolveOpeningRatePerUnit(line.rate_per_unit || 0, material, conversions, line.rate_uom_code || material?.base_uom_code, selectedFgOrder?.fill_qty_per_pack), currencyCode)}</td>
+                              <td className="border-b border-slate-100 px-3 py-2 min-w-[220px]"><div className="grid gap-1"><input type="number" min="0" step="any" aria-label={isFgGenealogy ? fgRateEntryLabel(selectedFgOrder) : "Rate Per Unit"} value={line.rate_per_unit} onChange={(event) => updateLine(line.row_key, { rate_per_unit: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />{showRateUomSelector ? <select value={line.rate_uom_code || material?.base_uom_code || ""} onChange={(event) => updateLine(line.row_key, { rate_uom_code: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500">{rateOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : null}</div></td>
+                              <td className="border-b border-slate-100 px-3 py-2">{formatCurrency(Number(line.quantity || 0) * resolveOpeningRatePerUnit(line.rate_per_unit || 0, material, conversions, line.rate_uom_code || material?.base_uom_code, selectedFgOrder), currencyCode)}</td>
                             </tr>
                           );
                         })}
