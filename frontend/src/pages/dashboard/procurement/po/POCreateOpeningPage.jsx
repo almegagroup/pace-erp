@@ -41,6 +41,7 @@ function createEmptyLine(defaultPaymentTermId = "") {
     quantity: "",
     uom_code: "",
     uomOptions: [],
+    paymentTermOptions: [],
     rate: "",
     currency_code: "INR",
     delivery_date: "",
@@ -55,6 +56,24 @@ function createEmptyLine(defaultPaymentTermId = "") {
     aslWarning: "",
     aslChecked: false,
   };
+}
+
+function buildPaymentTermOptionsFromVmi(paymentTerms = []) {
+  return paymentTerms
+    .map((entry) => {
+      const paymentTermId = String(entry?.payment_term_id || "").trim();
+      if (!paymentTermId) {
+        return null;
+      }
+      const code = String(entry?.payment_term_code || "").trim();
+      const name = String(entry?.payment_term_name || "").trim();
+      return {
+        value: paymentTermId,
+        label: code && name ? `${code} | ${name}` : code || name || paymentTermId,
+        is_default: entry?.is_default === true,
+      };
+    })
+    .filter(Boolean);
 }
 
 function LineMoreDrawer({ line, visible, onClose, onChange }) {
@@ -420,12 +439,22 @@ export default function POCreateOpeningPage() {
       }
       const uomOptions = Array.isArray(vmi?.uoms) ? vmi.uoms.map((entry) => entry.uom_code) : [];
       const defaultUom = vmi?.default_uom_code || uomOptions[0] || vmi?.base_uom_code || "";
+      const vmiPaymentTermOptions = buildPaymentTermOptionsFromVmi(vmi?.payment_terms);
+      const defaultMappedPaymentTermId =
+        vmiPaymentTermOptions.find((entry) => entry.is_default)?.value ||
+        vmiPaymentTermOptions[0]?.value ||
+        "";
+      const existingMappedPaymentTermId = vmiPaymentTermOptions.some((entry) => entry.value === line.payment_term_id)
+        ? line.payment_term_id
+        : "";
       updateLine(index, {
         aslChecked: true,
         aslWarning: "",
         uomOptions,
+        paymentTermOptions: vmiPaymentTermOptions,
         uom_code: line.uom_code || defaultUom,
         rate: line.rate || (vmi?.last_purchase_price != null ? String(vmi.last_purchase_price) : ""),
+        payment_term_id: existingMappedPaymentTermId || defaultMappedPaymentTermId || line.payment_term_id || defaultPaymentTermId || "",
       });
     } catch (lookupError) {
       const code = lookupError instanceof Error ? lookupError.message : "";
@@ -573,7 +602,15 @@ export default function POCreateOpeningPage() {
         <ErpComboboxField
           value={lines[index].material_id}
           onChange={(value) => {
-            updateLine(index, { material_id: value, aslWarning: "", aslChecked: false });
+            updateLine(index, {
+              material_id: value,
+              aslWarning: "",
+              aslChecked: false,
+              uom_code: "",
+              uomOptions: [],
+              payment_term_id: "",
+              paymentTermOptions: [],
+            });
             // Fire the VMI/UOM lookup immediately instead of waiting for blur —
             // the combobox deliberately keeps focus on the field after a
             // selection, so onBlur alone left UOM feeling delayed.
@@ -664,18 +701,23 @@ export default function POCreateOpeningPage() {
       key: "payment_term_id",
       label: "Payment Term",
       width: "180px",
-      render: (_row, index) => (
-        <select
-          value={lines[index].payment_term_id}
-          onChange={(event) => updateLine(index, { payment_term_id: event.target.value })}
-          className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
-        >
-          <option value="">Select payment term</option>
-          {paymentTermOptions.map((option) => (
-            <option key={option.value} value={option.value}>{option.label}</option>
-          ))}
-        </select>
-      ),
+      render: (_row, index) => {
+        const linePaymentTermOptions = Array.isArray(lines[index].paymentTermOptions) && lines[index].paymentTermOptions.length > 0
+          ? lines[index].paymentTermOptions
+          : paymentTermOptions;
+        return (
+          <select
+            value={lines[index].payment_term_id}
+            onChange={(event) => updateLine(index, { payment_term_id: event.target.value })}
+            className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+          >
+            <option value="">Select payment term</option>
+            {linePaymentTermOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        );
+      },
     },
     {
       key: "freight_term",
