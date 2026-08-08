@@ -25,6 +25,7 @@ import { PackBomLinesTable, GroupCreateModal, MemberAddModal } from "./strokeSha
 
 const PO_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
 const COMPANY_STORAGE_KEY = "pace.production.packBomCreate.companyId";
+const TYPE_STORAGE_KEY = "pace.production.packBomCreate.poType";
 
 const ERRORS = {
   PROD_BOM_INVALID: "Company, PO type and FG SKU are required.",
@@ -51,6 +52,11 @@ function readStoredCompanyId() {
   if (typeof window === "undefined") return "";
   return String(window.localStorage.getItem(COMPANY_STORAGE_KEY) ?? "").trim();
 }
+function readStoredPoType() {
+  if (typeof window === "undefined") return "MTO";
+  const storedType = String(window.localStorage.getItem(TYPE_STORAGE_KEY) ?? "").trim();
+  return PO_TYPES.includes(storedType) ? storedType : "MTO";
+}
 
 export default function PackBomCreatePage() {
   const qc = useQueryClient();
@@ -58,7 +64,7 @@ export default function PackBomCreatePage() {
 
   const [step, setStep] = useState(1);
   const [companyId, setCompanyId] = useState(readStoredCompanyId);
-  const [poType, setPoType] = useState("MTO");
+  const [poType, setPoType] = useState(readStoredPoType);
   const [skuMaterialId, setSkuMaterialId] = useState("");
   const [outputStorageLocationId, setOutputStorageLocationId] = useState("");
   const [sfgQty, setSfgQty] = useState("");
@@ -100,6 +106,11 @@ export default function PackBomCreatePage() {
       setCompanyId(fallbackCompanyId);
     }
   }, [companyId, runtimeContext]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(TYPE_STORAGE_KEY, poType);
+  }, [poType]);
 
   const eligibleQ = useQuery({
     queryKey: ["pack-bom-eligible-skus", effectiveCompanyId, poType],
@@ -164,12 +175,20 @@ export default function PackBomCreatePage() {
 
   const submitMutation = useMutation({
     mutationFn: (payload) => createPackBom(payload),
-    onSuccess: (result) => {
+    onSuccess: async (result, variables) => {
+      qc.setQueriesData(
+        { queryKey: ["pack-bom-eligible-skus"] },
+        (current) => Array.isArray(current)
+          ? current.filter((sku) => sku?.id !== variables?.sku_material_id)
+          : current,
+      );
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["pack-boms"] }),
+        qc.invalidateQueries({ queryKey: ["pack-bom-eligible-skus"] }),
+      ]);
       toast(result?.auto_approved ? "Pack BOM created and activated." : "Pack BOM submitted for PR06 approval.");
       setStep(1);
-      setPoType("MTO");
       resetDownstream();
-      qc.invalidateQueries({ queryKey: ["pack-boms"] });
     },
     onError: (err) => toast(friendly(err.code) || err.message, "error"),
   });
