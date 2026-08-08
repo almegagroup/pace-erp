@@ -16,7 +16,7 @@ import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import {
   listPlanFeed, getPlanFeed, createPlanFeed, updatePlanFeed,
-  cancelPlanFeed, getPlanFeedSummary, upsertFoAllocation,
+  cancelPlanFeed, reactivatePlanFeed, getPlanFeedSummary, upsertFoAllocation,
   getUnmappedStock, checkOrderedStroke, listStrokeOptions, listPackingOrders,
   findPlanFeedByNumber,
 } from "./prodApi.js";
@@ -42,6 +42,7 @@ const ERRORS = {
   PROD_PLAN_FEED_CANCELLED: "Cancelled FO cannot be edited.",
   PROD_PLAN_FEED_ALLOCATION_EXCEEDS_STOCK: "Allocation exceeds this Packing PO's available qty.",
   PROD_PLAN_FEED_MATERIAL_MISMATCH: "Packing PO material differs from this FO's SKU.",
+  PROD_PLAN_FEED_CANCEL_BLOCKED_BY_DO: "Cancel the linked Delivery Order first, then cancel this FO.",
   PROD_PACK_NOT_FOUND: "Packing PO not found.",
   PROD_PACK_REVERSED: "Cannot allocate a reversed/cancelled Packing PO.",
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
@@ -434,7 +435,7 @@ export default function PlanFeedPage() {
     const confirmed = await openActionConfirm({
       eyebrow: "Plan Feed",
       title: `Cancel FO ${editData.fo_number}?`,
-      message: "All Packing PO allocations against this FO will be removed (the Packing POs themselves are unaffected, just unlinked).",
+      message: "All mapped Packing PO allocations will be released. If this FO is linked to any active Delivery Order through Sales Order mapping, cancel that Delivery Order first.",
       confirmLabel: "Cancel FO",
     });
     if (!confirmed) return;
@@ -442,9 +443,30 @@ export default function PlanFeedPage() {
     try {
       await cancelPlanFeed(editData.id);
       toast("FO cancelled.");
-      setEditData(null);
+      await loadEditFo(editData.id);
       qc.invalidateQueries({ queryKey: ["prod-plan-feed-list"] });
-    } catch (err) { toast(friendlyErr(err.message), "error"); }
+      qc.invalidateQueries({ queryKey: ["prod-plan-feed-summary"] });
+    } catch (err) { toast(friendlyErr(err.code ?? err.message), "error"); }
+    finally { setSaving(false); }
+  }
+
+  async function handleReactivate() {
+    if (!editData) return;
+    const confirmed = await openActionConfirm({
+      eyebrow: "Plan Feed",
+      title: `Reactivate FO ${editData.fo_number}?`,
+      message: "This FO will become serviceable again, but previously released Packing PO or Sales Order mappings will not be restored automatically.",
+      confirmLabel: "Reactivate FO",
+    });
+    if (!confirmed) return;
+    setSaving(true);
+    try {
+      await reactivatePlanFeed(editData.id);
+      toast("FO reactivated.");
+      await loadEditFo(editData.id);
+      qc.invalidateQueries({ queryKey: ["prod-plan-feed-list"] });
+      qc.invalidateQueries({ queryKey: ["prod-plan-feed-summary"] });
+    } catch (err) { toast(friendlyErr(err.code ?? err.message), "error"); }
     finally { setSaving(false); }
   }
 
@@ -781,7 +803,7 @@ export default function PlanFeedPage() {
               <ErpSectionCard title={`Editing: ${editData.fo_number}`} tone={editData.status === "CANCELLED" ? "warning" : "default"}>
                 {editData.status === "CANCELLED" && (
                   <div className="mb-4 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-amber-800 text-sm">
-                    This FO is cancelled and cannot be edited.
+                    This FO is cancelled. You can reactivate it, but Packing PO and Sales Order mappings will need to be rebuilt manually afterwards.
                   </div>
                 )}
                 <form onSubmit={handleSaveEdit} className="grid grid-cols-2 gap-4 max-w-3xl">
@@ -877,12 +899,16 @@ export default function PlanFeedPage() {
                         : "-- none yet --"}
                     </div>
                   </div>
-                  {editData.status !== "CANCELLED" && (
-                    <div className="col-span-2 flex gap-3 pt-2">
-                      <button type="submit" disabled={saving} className="px-5 py-2 bg-sky-600 text-white text-sm font-medium rounded hover:bg-sky-700 disabled:opacity-50">Save Changes</button>
-                      <button type="button" onClick={handleCancel} disabled={saving} className="px-4 py-2 border border-rose-300 text-rose-700 text-sm rounded hover:bg-rose-50 disabled:opacity-50">Cancel FO</button>
-                    </div>
-                  )}
+                  <div className="col-span-2 flex gap-3 pt-2">
+                    {editData.status !== "CANCELLED" ? (
+                      <>
+                        <button type="submit" disabled={saving} className="px-5 py-2 bg-sky-600 text-white text-sm font-medium rounded hover:bg-sky-700 disabled:opacity-50">Save Changes</button>
+                        <button type="button" onClick={handleCancel} disabled={saving} className="px-4 py-2 border border-rose-300 text-rose-700 text-sm rounded hover:bg-rose-50 disabled:opacity-50">Cancel FO</button>
+                      </>
+                    ) : (
+                      <button type="button" onClick={handleReactivate} disabled={saving} className="px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 disabled:opacity-50">Reactivate FO</button>
+                    )}
+                  </div>
                 </form>
               </ErpSectionCard>
 
@@ -1003,7 +1029,7 @@ export default function PlanFeedPage() {
             <p className="text-slate-400 text-sm py-6 text-center">No active FOs found.</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse min-w-[1100px]">
+              <table className="w-full text-sm border-collapse min-w-[1240px]">
                 <thead>
                   <tr className="bg-slate-50 text-slate-500 text-xs uppercase">
                     <th className="text-left py-2 px-3 border-b">FO #</th>
@@ -1013,6 +1039,7 @@ export default function PlanFeedPage() {
                     <th className="text-right py-2 px-3 border-b">Ordered KG</th>
                     <th className="text-right py-2 px-3 border-b">Pack Qty</th>
                     <th className="text-right py-2 px-3 border-b">Mapped KG</th>
+                    <th className="text-left py-2 px-3 border-b">Mapped Batch No(s)</th>
                     <th className="text-center py-2 px-3 border-b">Production</th>
                     <th className="text-right py-2 px-3 border-b">Dispatched KG</th>
                     <th className="text-center py-2 px-3 border-b">Dispatch</th>
@@ -1037,6 +1064,13 @@ export default function PlanFeedPage() {
                       <td className="py-2 px-3 text-right font-mono">{fmt(row.ordered_qty_kg)}</td>
                       <td className="py-2 px-3 text-right font-mono">{row.pack_qty ?? "--"}</td>
                       <td className="py-2 px-3 text-right font-mono">{fmt(row.allocated_qty_kg)}</td>
+                      <td className="py-2 px-3 font-mono text-xs text-slate-600">
+                        {(row.mapped_batch_numbers ?? []).length > 0
+                          ? row.mapped_batch_numbers.map((batchNo) => (
+                            <div key={batchNo}>{batchNo}</div>
+                          ))
+                          : ""}
+                      </td>
                       <td className="py-2 px-3 text-center">
                         <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${productionStatusTone(row.production_status)}`}>
                           {row.production_status?.replace("_", " ")}

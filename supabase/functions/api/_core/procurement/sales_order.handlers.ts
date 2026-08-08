@@ -671,6 +671,7 @@ export async function createSOHandler(
       const gstRate = parseNullableNumber(line.gst_rate);
       const freightTerm = toTrimmedString(line.freight_term) || null;
       const remarks = toTrimmedString(line.remarks) || null;
+      const planFeedId = toTrimmedString(line.plan_feed_id) || null;
       const hasRebate = Boolean(line.has_rebate);
       const rebateRate = hasRebate ? parseNullableNumber(line.rebate_rate) : null;
       const rebateBasis = hasRebate ? toTrimmedString(line.rebate_rate_uom_basis).toUpperCase() || null : null;
@@ -720,6 +721,7 @@ export async function createSOHandler(
         gst_amount: computed.gstAmount,
         total_value: computed.totalValue,
         balance_qty: quantity,
+        plan_feed_id: planFeedId,
         freight_term: freightTerm,
         remarks,
         has_rebate: hasRebate,
@@ -1040,6 +1042,7 @@ export async function updateSOLinesHandler(
       const gstRate = parseNullableNumber(reqLine.gst_rate);
       const freightTerm = toTrimmedString(reqLine.freight_term) || null;
       const remarks = toTrimmedString(reqLine.remarks) || null;
+      const planFeedId = toTrimmedString(reqLine.plan_feed_id) || null;
       const hasRebate = Boolean(reqLine.has_rebate);
       const rebateRate = hasRebate ? parseNullableNumber(reqLine.rebate_rate) : null;
       const rebateBasis = hasRebate ? toTrimmedString(reqLine.rebate_rate_uom_basis).toUpperCase() || null : null;
@@ -1088,6 +1091,7 @@ export async function updateSOLinesHandler(
         gst_amount: computed.gstAmount,
         total_value: computed.totalValue,
         balance_qty: quantity,
+        plan_feed_id: planFeedId,
         freight_term: freightTerm,
         remarks,
         has_rebate: hasRebate,

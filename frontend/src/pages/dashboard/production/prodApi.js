@@ -111,6 +111,7 @@ export const getPlanFeed = (id) => fetchProd("GET", `/api/production/plan-feed/$
 export const createPlanFeed = (body) => fetchProd("POST", "/api/production/plan-feed", body);
 export const updatePlanFeed = (id, body) => fetchProd("PATCH", `/api/production/plan-feed/${id}`, body);
 export const cancelPlanFeed = (id) => fetchProd("POST", `/api/production/plan-feed/${id}/cancel`);
+export const reactivatePlanFeed = (id) => fetchProd("POST", `/api/production/plan-feed/${id}/reactivate`);
 export const getPlanFeedSummary = (p) => fetchProd("GET", "/api/production/plan-feed/summary", undefined, p);
 export const listFoAllocations = (foId) => fetchProd("GET", `/api/production/plan-feed/${foId}/allocations`);
 export const upsertFoAllocation = (foId, body) => fetchProd("POST", `/api/production/plan-feed/${foId}/allocations`, body);

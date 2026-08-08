@@ -81,6 +81,7 @@ import {
   createPlanFeedHandler,
   updatePlanFeedHandler,
   cancelPlanFeedHandler,
+  reactivatePlanFeedHandler,
   planFeedSummaryHandler,
   listFoAllocationsHandler,
   upsertFoAllocationHandler,
@@ -382,6 +383,9 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/plan-feed\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
     return await cancelPlanFeedHandler(req, ctx);
+  }
+  if (/^\/api\/production\/plan-feed\/[^/]+\/reactivate$/.test(pathname) && req.method === "POST") {
+    return await reactivatePlanFeedHandler(req, ctx);
   }
   if (/^\/api\/production\/plan-feed\/[^/]+\/allocations$/.test(pathname)) {
     if (req.method === "GET") return await listFoAllocationsHandler(req, ctx);

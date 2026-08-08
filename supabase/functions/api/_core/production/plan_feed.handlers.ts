@@ -282,6 +282,45 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
   });
 }
 
+async function getMappedSalesOrderLineIds(planFeedId: string): Promise<string[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement").from("sales_order_line")
+    .select("id")
+    .eq("plan_feed_id", planFeedId);
+  if (error) {
+    console.error("[plan_feed.getMappedSalesOrderLineIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_PLAN_FEED_SO_LOOKUP_FAILED");
+  }
+  return ((data ?? []) as JsonRecord[]).map((row) => String(row.id ?? "")).filter(Boolean);
+}
+
+async function getBlockingDeliveryOrdersForSoLines(soLineIds: string[]): Promise<JsonRecord[]> {
+  if (soLineIds.length === 0) return [];
+
+  const { data: dcLines, error: dcLineErr } = await serviceRoleClient
+    .schema("erp_procurement").from("delivery_challan_line")
+    .select("dc_id, so_line_id")
+    .in("so_line_id", soLineIds);
+  if (dcLineErr) {
+    console.error("[plan_feed.getBlockingDeliveryOrdersForSoLines] line query failed:", JSON.stringify(dcLineErr));
+    throw new Error("PROD_PLAN_FEED_DO_LOOKUP_FAILED");
+  }
+
+  const dcIds = [...new Set(((dcLines ?? []) as JsonRecord[]).map((row) => String(row.dc_id ?? "")).filter(Boolean))];
+  if (dcIds.length === 0) return [];
+
+  const { data: dcs, error: dcErr } = await serviceRoleClient
+    .schema("erp_procurement").from("delivery_challan")
+    .select("id, dc_number, status")
+    .in("id", dcIds);
+  if (dcErr) {
+    console.error("[plan_feed.getBlockingDeliveryOrdersForSoLines] dc query failed:", JSON.stringify(dcErr));
+    throw new Error("PROD_PLAN_FEED_DO_LOOKUP_FAILED");
+  }
+
+  return ((dcs ?? []) as JsonRecord[]).filter((row) => toUpperTrimmedString(row.status) !== "CANCELLED");
+}
+
 // GET /api/production/plan-feed/:id
 export async function getPlanFeedHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
@@ -463,9 +502,12 @@ export async function updatePlanFeedHandler(req: Request, ctx: ProdHandlerContex
 }
 
 // POST /api/production/plan-feed/:id/cancel
-// §83.18-REVISED: cancel deletes every allocation row for this FO (Packing POs become
-// free/unallocated again, never themselves cancelled or altered) then marks the FO
-// CANCELLED. No more "delink manually first" block.
+// §83.18-REVISED base rule still holds: cancel deletes every allocation row for this FO
+// (Packing POs become free/unallocated again, never themselves cancelled or altered)
+// then marks the FO CANCELLED. 2026-08-08 extension: if this FO is already mapped to
+// Sales Order lines, those links are also cleared on cancel -- but ONLY if no active
+// Delivery Order still exists against those SO lines. Once a DO exists, user must cancel
+// that DO first; only then can the FO be cancelled and the SO unlinked.
 export async function cancelPlanFeedHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     const id = getIdFromPath(req);
@@ -484,6 +526,23 @@ export async function cancelPlanFeedHandler(req: Request, ctx: ProdHandlerContex
       return foErr(req, ctx, "PROD_PLAN_FEED_ALREADY_CANCELLED", 409, "Already cancelled");
     }
 
+    const soLineIds = await getMappedSalesOrderLineIds(id);
+    const blockingDcs = await getBlockingDeliveryOrdersForSoLines(soLineIds);
+    if (blockingDcs.length > 0) {
+      const dcNumbers = blockingDcs
+        .map((row) => toTrimmedString(row.dc_number))
+        .filter(Boolean)
+        .slice(0, 5);
+      const suffix = blockingDcs.length > 5 ? " ..." : "";
+      return foErr(
+        req,
+        ctx,
+        "PROD_PLAN_FEED_CANCEL_BLOCKED_BY_DO",
+        422,
+        `Cancel the linked Delivery Order first${dcNumbers.length ? ` (${dcNumbers.join(", ")}${suffix})` : ""}.`,
+      );
+    }
+
     const { error: deleteAllocError } = await serviceRoleClient
       .schema("erp_production").from("plan_feed_packing_order_allocation")
       .delete().eq("plan_feed_id", id);
@@ -492,15 +551,68 @@ export async function cancelPlanFeedHandler(req: Request, ctx: ProdHandlerContex
       throw new Error("PROD_PLAN_FEED_CANCEL_FAILED");
     }
 
+    if (soLineIds.length > 0) {
+      const { error: soUnmapError } = await serviceRoleClient
+        .schema("erp_procurement").from("sales_order_line")
+        .update({ plan_feed_id: null, last_updated_at: new Date().toISOString() })
+        .in("id", soLineIds);
+      if (soUnmapError) {
+        console.error("[plan_feed.cancelPlanFeed] sales-order unlink failed:", JSON.stringify(soUnmapError));
+        throw new Error("PROD_PLAN_FEED_CANCEL_FAILED");
+      }
+    }
+
     const now = new Date().toISOString();
     const { error } = await serviceRoleClient.schema("erp_production").from("plan_feed")
       .update({ status: "CANCELLED", cancelled_by: ctx.auth_user_id, cancelled_at: now, last_updated_at: now, last_updated_by: ctx.auth_user_id })
       .eq("id", id);
     if (error) throw new Error("PROD_PLAN_FEED_CANCEL_FAILED");
-    return okResponse({ id, status: "CANCELLED" }, ctx.request_id, req);
+    return okResponse({ id, status: "CANCELLED", unmapped_sales_order_line_count: soLineIds.length }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_CANCEL_FAILED";
     return foErr(req, ctx, code, 500, "Plan feed cancel failed");
+  }
+}
+
+// POST /api/production/plan-feed/:id/reactivate
+// 2026-08-08 extension: cancelled FO can be restored to ACTIVE so it becomes
+// serviceable again, but no allocations or SO links are auto-restored. User must map
+// Packing PO(s) again manually afterwards.
+export async function reactivatePlanFeedHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    const id = getIdFromPath(req);
+    if (!id) return foErr(req, ctx, "PROD_PLAN_FEED_ID_MISSING", 400, "FO ID required");
+
+    const { data: existing } = await serviceRoleClient
+      .schema("erp_production").from("plan_feed")
+      .select("id, status, company_id").eq("id", id).maybeSingle();
+    if (!existing) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
+    try {
+      await assertCompanyScope(ctx, (existing as JsonRecord).company_id as string);
+    } catch {
+      return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if ((existing as JsonRecord).status !== "CANCELLED") {
+      return foErr(req, ctx, "PROD_PLAN_FEED_NOT_CANCELLED", 422, "Only CANCELLED FO can be reactivated");
+    }
+
+    const now = new Date().toISOString();
+    const { error } = await serviceRoleClient
+      .schema("erp_production").from("plan_feed")
+      .update({
+        status: "ACTIVE",
+        cancelled_by: null,
+        cancelled_at: null,
+        last_updated_at: now,
+        last_updated_by: ctx.auth_user_id,
+      })
+      .eq("id", id);
+    if (error) throw new Error("PROD_PLAN_FEED_REACTIVATE_FAILED");
+
+    return okResponse({ id, status: "ACTIVE" }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_REACTIVATE_FAILED";
+    return foErr(req, ctx, code, 500, "Plan feed reactivate failed");
   }
 }
 
@@ -895,6 +1007,35 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       allocByFo[foId].push(a);
     }
 
+    const poIds = [...new Set(((allocs ?? []) as JsonRecord[]).map((row) => String(row.packing_order_id ?? "")).filter(Boolean))];
+    const batchByPoId = new Map<string, string>();
+    if (poIds.length > 0) {
+      const { data: packingOrders, error: poErr } = await serviceRoleClient
+        .schema("erp_production").from("packing_order")
+        .select("id, process_order_id")
+        .in("id", poIds);
+      if (poErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
+
+      const processOrderIds = [...new Set(((packingOrders ?? []) as JsonRecord[]).map((row) => String(row.process_order_id ?? "")).filter(Boolean))];
+      const batchByProcessOrderId = new Map<string, string>();
+      if (processOrderIds.length > 0) {
+        const { data: processOrders, error: procErr } = await serviceRoleClient
+          .schema("erp_production").from("process_order")
+          .select("id, batch_number")
+          .in("id", processOrderIds);
+        if (procErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
+        for (const row of (processOrders ?? []) as JsonRecord[]) {
+          const batchNumber = toTrimmedString(row.batch_number);
+          if (batchNumber) batchByProcessOrderId.set(String(row.id), batchNumber);
+        }
+      }
+
+      for (const row of (packingOrders ?? []) as JsonRecord[]) {
+        const batchNumber = batchByProcessOrderId.get(String(row.process_order_id ?? ""));
+        if (batchNumber) batchByPoId.set(String(row.id), batchNumber);
+      }
+    }
+
     // Dispatch (L5) does not exist yet -- dispatched_qty_kg/dispatch dates are
     // placeholders until that module lands (§83.18-REVISED note). Never inferred from
     // Packing PO FINAL status; that would misreport "produced" as "shipped."
@@ -902,6 +1043,12 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       const foId = fo.id as string;
       const foAllocs = allocByFo[foId] ?? [];
       const allocatedKg = foAllocs.reduce((s, a) => s + (Number(a.allocated_qty_kg) || 0), 0);
+      const mappedBatchNumbers = [...new Set(
+        foAllocs
+          .map((a) => batchByPoId.get(String(a.packing_order_id ?? "")) ?? "")
+          .map((batch) => batch.trim())
+          .filter(Boolean),
+      )];
       const orderedKg = Number(fo.ordered_qty_kg) || 0;
       const dispatchedKg = 0;
       const strokeNumber = toTrimmedString(fo.ordered_stroke_number);
@@ -926,6 +1073,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         ordered_stroke_missing: orderedStrokeMissing,
         allocated_qty_kg: allocatedKg,
         packing_po_count: foAllocs.length,
+        mapped_batch_numbers: mappedBatchNumbers,
         production_status: computeProductionStatus(orderedKg, allocatedKg),
         dispatched_qty_kg: dispatchedKg,
         dispatch_status: "UNDISPATCHED",
