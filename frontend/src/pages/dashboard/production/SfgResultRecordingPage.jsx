@@ -54,6 +54,14 @@ function computePassFail(resultValue, lsl, usl) {
   return belowLsl || aboveUsl ? "FAIL" : "PASS";
 }
 
+function friendlyQaConfigError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (message.includes("company_id is required")) {
+    return "Select or resolve a company before managing QA methods.";
+  }
+  return message || "Unable to save QA configuration.";
+}
+
 export default function SfgResultRecordingPage() {
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
@@ -284,7 +292,7 @@ export default function SfgResultRecordingPage() {
                               <td colSpan={columns.length} className="border-t border-slate-200 p-0">
                                 <SfgQaExpandedPanel
                                   row={row}
-                                  companyId={companyId}
+                                  companyId={effectiveCompanyId}
                                   onChanged={() => {
                                     void queueQuery.refetch();
                                   }}
@@ -475,7 +483,7 @@ function SfgQaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
       ]);
       toast(`Method added to ${materialCategory} (${group}).`);
     } catch (saveError) {
-      toast(saveError instanceof Error ? saveError.message : "SFG_QA_METHOD_ADD_FAILED", "error");
+      toast(friendlyQaConfigError(saveError), "error");
     } finally {
       setSaving(false);
     }
@@ -495,7 +503,7 @@ function SfgQaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
       });
       await queryClient.invalidateQueries({ queryKey: ["production", "sfg-qa-category-config", companyId, materialCategory] });
     } catch (saveError) {
-      toast(saveError instanceof Error ? saveError.message : "SFG_QA_LIMIT_UPDATE_FAILED", "error");
+      toast(friendlyQaConfigError(saveError), "error");
     } finally {
       setSaving(false);
     }
@@ -515,7 +523,7 @@ function SfgQaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
       await queryClient.invalidateQueries({ queryKey: ["production", "sfg-qa-category-config", companyId, materialCategory] });
       toast("Method removed from category.");
     } catch (deleteError) {
-      toast(deleteError instanceof Error ? deleteError.message : "SFG_QA_METHOD_DELETE_FAILED", "error");
+      toast(friendlyQaConfigError(deleteError), "error");
     } finally {
       setSaving(false);
     }
