@@ -23,7 +23,7 @@ import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import {
   listStrokeMasters, getStrokeMaster, createStrokeMaster,
   updateStrokeMaster, approveStrokeMaster, revertStrokeMaster,
-  rejectStrokeMaster, deactivateStrokeMaster,
+  rejectStrokeMaster, deactivateStrokeMaster, reactivateStrokeMaster,
 } from "./prodApi.js";
 import { listMaterials, listUoms, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
 import { useMenu } from "../../../context/useMenu.js";
@@ -549,6 +549,9 @@ export default function StrokeMasterPage() {
             { label: "Deactivate", tone: "danger", onClick: () => runAction(deactivateStrokeMaster, detail.id, "Stroke deactivated."), disabled: saving },
             { label: "Revert to Draft", tone: "neutral", onClick: () => runAction(revertStrokeMaster, detail.id, "Reverted to DRAFT."), disabled: saving },
           ] : []),
+          ...(detail.status === "DEACTIVATED" ? [
+            { label: "Reactivate to Draft", tone: "primary", onClick: () => runAction(reactivateStrokeMaster, detail.id, "Stroke moved back to DRAFT."), disabled: saving },
+          ] : []),
           { label: "Close", tone: "neutral", onClick: () => setDrawerOpen(false) },
         ] : [{ label: "Close", tone: "neutral", onClick: () => setDrawerOpen(false) }])}
       >
@@ -587,7 +590,19 @@ export default function StrokeMasterPage() {
               ) : (
                 <div><span className="text-slate-400 text-xs">Default Storage Location (Output)</span><p>{detail.default_storage_location ? `${detail.default_storage_location.code} — ${detail.default_storage_location.name}` : "—"}</p></div>
               )}
-              <div><span className="text-slate-400 text-xs">Description</span><p>{detail.description ?? "—"}</p></div>
+              {detail.status === "DRAFT" ? (
+                <div>
+                  <span className="text-slate-400 text-xs">Description</span>
+                  <input
+                    className="mt-1 border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-full"
+                    value={detail.description ?? ""}
+                    onChange={(e) => setDetail((d) => ({ ...d, description: e.target.value }))}
+                    placeholder="Optional"
+                  />
+                </div>
+              ) : (
+                <div><span className="text-slate-400 text-xs">Description</span><p>{detail.description ?? "—"}</p></div>
+              )}
               {detail.approved_by && <div><span className="text-slate-400 text-xs">Approved</span><p>{detail.approved_at?.slice(0, 10)}</p></div>}
               {detail.deactivated_by && <div><span className="text-slate-400 text-xs">Deactivated</span><p>{detail.deactivated_at?.slice(0, 10)}</p></div>}
             </div>

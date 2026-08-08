@@ -18,6 +18,7 @@ import {
   approveStrokeMasterHandler,
   rejectStrokeMasterHandler,
   deactivateStrokeMasterHandler,
+  reactivateStrokeMasterHandler,
   revertStrokeMasterHandler,
 } from "../_core/production/stroke_master.handlers.ts";
 import {
@@ -369,6 +370,9 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/stroke-masters\/[^/]+\/deactivate$/.test(pathname) && req.method === "POST") {
     return await deactivateStrokeMasterHandler(req, ctx);
+  }
+  if (/^\/api\/production\/stroke-masters\/[^/]+\/reactivate$/.test(pathname) && req.method === "POST") {
+    return await reactivateStrokeMasterHandler(req, ctx);
   }
 
   // Plan Feed /:id actions

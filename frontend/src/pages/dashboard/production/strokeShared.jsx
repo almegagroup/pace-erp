@@ -39,6 +39,7 @@ export const STROKE_ERRORS = {
   PROD_STROKE_NOT_DRAFT: "Only DRAFT strokes can be rejected.",
   PROD_STROKE_ALREADY_APPROVED: "Only DRAFT strokes can be approved.",
   PROD_STROKE_NOT_APPROVED: "Only APPROVED strokes can be deactivated/reverted.",
+  PROD_STROKE_NOT_DEACTIVATED: "Only DEACTIVATED strokes can be reactivated.",
   PROD_STROKE_MATERIAL_TYPE_INVALID: "Material Type must be SFG or INT.",
   PROD_STROKE_PO_TYPE_INVALID: "PO Type is not valid for the selected Material Type.",
   PROD_STROKE_BASE_UOM_REQUIRED: "Base UOM is required.",
