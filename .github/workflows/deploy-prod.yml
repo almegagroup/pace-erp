@@ -16,7 +16,9 @@ jobs:
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pin the CLI to a known stable release so deploys don't suddenly
+          # start failing when the latest action picks up a breaking parser change.
+          version: 2.101.0
 
       - name: Link Supabase project
         env:
