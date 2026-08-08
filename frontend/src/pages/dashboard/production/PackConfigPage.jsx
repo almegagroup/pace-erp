@@ -14,7 +14,7 @@ import TransactionCompanySelector from "../../../components/inputs/TransactionCo
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
 import {
-  listPackCodes, listPackConfigs, upsertPackConfig, deletePackConfig, listStrokeMasters,
+  listPackCodes, listPackConfigs, upsertPackConfig, deletePackConfig, listStrokeMasters, listApprovedProdshades,
 } from "./prodApi.js";
 
 const TABS = ["Pack Codes", "Prodshade Configs"];
@@ -24,6 +24,12 @@ const ERRORS = {
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
 };
 function friendlyErr(code) { return ERRORS[code] ?? code; }
+
+function getPackConfigCountLabel(count) {
+  if (!count) return "No pack code attached";
+  if (count === 1) return "1 pack code attached";
+  return `${count} pack codes attached`;
+}
 
 export default function PackConfigPage() {
   const qc = useQueryClient();
@@ -63,6 +69,18 @@ export default function PackConfigPage() {
     queryFn: () => listPackConfigs({ company_id: effectiveCompanyId || undefined, material_id: materialId || undefined }),
     select: d => Array.isArray(d) ? d : d?.data ?? [],
     enabled: tab === 1 && Boolean(effectiveCompanyId),
+  });
+  const allConfigsQ = useQuery({
+    queryKey: ["prod-pack-configs-all"],
+    queryFn: () => listPackConfigs(),
+    select: d => Array.isArray(d) ? d : d?.data ?? [],
+    enabled: tab === 1 || drawerOpen,
+  });
+  const prodshadesQ = useQuery({
+    queryKey: ["prod-pack-approved-prodshades"],
+    queryFn: () => listApprovedProdshades(),
+    select: d => Array.isArray(d) ? d : d?.data ?? [],
+    enabled: tab === 1 || drawerOpen,
   });
 
   // §108.2 item 4 — MTS/IWC Prodshades take fill_qty in Liter (physical container
@@ -120,6 +138,27 @@ export default function PackConfigPage() {
 
   const codes = codesQ.data ?? [];
   const configs = configsQ.data ?? [];
+  const allConfigs = allConfigsQ.data ?? [];
+  const prodshades = prodshadesQ.data ?? [];
+  const configCountByMaterialId = allConfigs.reduce((map, config) => {
+    const key = String(config.material_id ?? "");
+    if (!key) return map;
+    map.set(key, (map.get(key) ?? 0) + 1);
+    return map;
+  }, new Map());
+  const prodshadeOptions = prodshades
+    .map((prodshade) => ({
+      ...prodshade,
+      configCount: configCountByMaterialId.get(String(prodshade.material_id ?? "")) ?? 0,
+    }))
+    .sort((a, b) => {
+      const countDiff = (b.configCount ?? 0) - (a.configCount ?? 0);
+      if (countDiff !== 0) return countDiff;
+      return String(a.external_code ?? "").localeCompare(String(b.external_code ?? ""));
+    });
+  const selectedProdshade = prodshadeOptions.find((prodshade) => String(prodshade.material_id) === String(form.material_id)) ?? null;
+  const selectedProdshadeConfigCount = selectedProdshade?.configCount ?? 0;
+  const selectedProdshadeHasConfigs = selectedProdshadeConfigCount > 0;
 
   return (
     <ErpScreenScaffold
@@ -241,14 +280,43 @@ export default function PackConfigPage() {
             hint=""
           />
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-600 font-medium">Prodshade Material ID <span className="text-rose-500">*</span></label>
-            <input
+            <label className="text-xs text-slate-600 font-medium">Prodshade <span className="text-rose-500">*</span></label>
+            <select
               autoFocus
-              className="border border-slate-300 rounded px-2 py-1.5 text-sm"
+              className={`border rounded px-2 py-1.5 text-sm ${selectedProdshadeHasConfigs ? "border-amber-300 bg-amber-50 text-amber-900" : "border-slate-300"}`}
               value={form.material_id}
               onChange={e => { setForm(f => ({ ...f, material_id: e.target.value })); setFillQtyLiter(""); }}
               required
-            />
+            >
+              <option value="">Select prodshade...</option>
+              {prodshadeOptions.map((prodshade) => (
+                <option
+                  key={prodshade.material_id}
+                  value={prodshade.material_id}
+                  style={prodshade.configCount > 0 ? { backgroundColor: "#fef3c7", color: "#92400e" } : undefined}
+                >
+                  {`${prodshade.external_code || prodshade.shade_code || prodshade.material_id} | ${prodshade.pace_code || "—"} | ${getPackConfigCountLabel(prodshade.configCount)}`}
+                </option>
+              ))}
+            </select>
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="text-slate-500">
+                {prodshadesQ.isLoading ? "Loading prodshades..." : "Dropdown shows current attached pack-code count for each prodshade."}
+              </span>
+              <span className={`rounded-full px-2 py-0.5 font-medium ${selectedProdshadeHasConfigs ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}`}>
+                {getPackConfigCountLabel(selectedProdshadeConfigCount)}
+              </span>
+            </div>
+            <div className="flex items-center gap-4 text-[11px]">
+              <span className="flex items-center gap-1 text-slate-500">
+                <span className="inline-block h-2.5 w-2.5 rounded-full bg-white border border-slate-300" />
+                No pack code yet
+              </span>
+              <span className="flex items-center gap-1 text-amber-700">
+                <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-300" />
+                Has attached pack code
+              </span>
+            </div>
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs text-slate-600 font-medium">Pack Code <span className="text-rose-500">*</span></label>
