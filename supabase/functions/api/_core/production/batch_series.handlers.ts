@@ -335,9 +335,11 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
     const companyId = toTrimmedString(body.company_id);
     const batchType = toUpperTrimmedString(body.batch_type);
     const prefix = toTrimmedString(body.prefix);
+    const rawCurrentCount = body.current_count;
     // MTS (IWC+Powder) is per-Prodshade; MTO/HPS/MTEST are company-level (83.7, corrected 2026-07-11).
     const isCompanyLevel = batchType === "MTO" || batchType === "HPS" || batchType === "MTEST";
     const materialId = isCompanyLevel ? null : (toTrimmedString(body.prodshade_material_id) || null);
+    let currentCount = 0;
 
     const VALID_TYPES = new Set(["MTO","HPS","MTS","MTEST"]);
     if (!companyId || !VALID_TYPES.has(batchType) || !prefix) {
@@ -345,6 +347,13 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
     }
     if (!isCompanyLevel && !materialId) {
       return batchError(req, ctx, "PROD_BATCH_SERIES_PRODSHADE_REQUIRED", 400, "prodshade_material_id required for MTS");
+    }
+    if (rawCurrentCount !== undefined && rawCurrentCount !== null && String(rawCurrentCount).trim() !== "") {
+      const parsedCurrentCount = Number(rawCurrentCount);
+      if (!Number.isInteger(parsedCurrentCount) || parsedCurrentCount < 0 || parsedCurrentCount > 99999) {
+        return batchError(req, ctx, "PROD_BATCH_SERIES_INVALID", 400, "current_count must be an integer between 0 and 99999");
+      }
+      currentCount = parsedCurrentCount;
     }
 
     const { data, error } = await serviceRoleClient
@@ -354,7 +363,7 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
         prodshade_material_id: materialId,
         batch_type: batchType,
         prefix,
-        current_count: 0,
+        current_count: currentCount,
         active: true,
         created_by: ctx.auth_user_id,
       })
