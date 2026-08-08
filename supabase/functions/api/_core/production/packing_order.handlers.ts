@@ -1376,16 +1376,9 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       "id, material_type, base_uom_code",
     );
 
-    // SFG check at Create is batch-BLIND (§83.4.1): the specific batch is chosen
-    // at Final, but asking for more than the material's total FREE SFG (total
-    // Unrestricted − all open reservations) is always wrong regardless of batch,
-    // so it is a hard block here — hygiene, to stop impossible Packing POs piling
-    // up. The batch-SPECIFIC guarantee still happens at Final (unchanged).
-    const sfgFree = await computeSfgTotalFree(companyId, String(sfgBomLine.material_id), plannedQtyKg);
-    if (sfgFree.short > 0) {
-      return packErr(req, ctx, "PROD_PACK_SFG_SHORTAGE", 422,
-        `Not enough free SFG stock: need ${plannedQtyKg}, only ${sfgFree.free} free (total on hand minus existing reservations).`);
-    }
+    // SFG batch selection remains a Final-only step. Create should not block on
+    // batch-blind total SFG availability; the exact batch/stock validation still
+    // happens at Final before posting.
 
     // PM availability is checked against the effective (actual/substitute if
     // given, else formulation) material — that's what will really be drawn.
