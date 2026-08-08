@@ -5,7 +5,7 @@
  * Purpose: SA-only Pack Code Master — Tab 1: Pack Code Catalog, Tab 2: Prodshade Pack Config.
  */
 
-import React, { useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
@@ -57,6 +57,12 @@ function prodshadeLabel(prodshade) {
   if (shadeCode) return shadeCode;
   if (materialName) return materialName;
   return String(prodshade.external_code ?? prodshade.material_id ?? "").trim();
+}
+
+function getProdshadePackCountLabel(count) {
+  if (!count) return "0 linked";
+  if (count === 1) return "1 linked";
+  return `${count} linked`;
 }
 
 const EMPTY_CONFIG_FORM = {
@@ -117,17 +123,38 @@ export default function SAPackCodeMasterPage() {
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
     enabled: activeTab === 1 && Boolean(filterMaterialId),
   });
+  const allConfigsQ = useQuery({
+    queryKey: ["pack-configs-all-sa"],
+    queryFn: () => listPackConfigs({}),
+    select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
+    enabled: activeTab === 1 || configDrawerOpen,
+  });
 
   const codes = codesQ.data ?? [];
   const prodshades = prodshadesQ.data ?? [];
   const configs = configsQ.data ?? [];
+  const allConfigs = allConfigsQ.data ?? [];
   const selectedProdshade = prodshades.find((entry) => entry.material_id === filterMaterialId) ?? null;
 
   const packTypeOptions = [...new Set([...PACK_TYPE_OPTIONS, ...codes.map((code) => code.pack_type).filter(Boolean)])];
-  const prodshadeOptions = prodshades.map((entry) => ({
-    value: entry.material_id,
-    label: prodshadeLabel(entry),
-  }));
+  const prodshadeOptions = useMemo(() => {
+    const countByMaterialId = allConfigs.reduce((map, config) => {
+      const key = String(config.material_id ?? "");
+      if (!key) return map;
+      map.set(key, (map.get(key) ?? 0) + 1);
+      return map;
+    }, new Map());
+
+    return prodshades.map((entry) => {
+      const count = countByMaterialId.get(String(entry.material_id ?? "")) ?? 0;
+      return {
+        value: entry.material_id,
+        label: `${prodshadeLabel(entry)} (${getProdshadePackCountLabel(count)})`,
+        badge: getProdshadePackCountLabel(count),
+        tone: count > 0 ? "warning" : "neutral",
+      };
+    });
+  }, [allConfigs, prodshades]);
   const packCodeOptions = codes
     .filter((code) => code.active)
     .map((code) => ({
@@ -386,6 +413,9 @@ export default function SAPackCodeMasterPage() {
                   }
                   inputClassName="rounded px-2 py-2 text-sm"
                 />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Dropdown shows how many pack codes are already linked. Highlighted rows mean the prodshade already has one or more linked pack codes.
+                </p>
               </div>
               <button
                 onClick={openAddConfig}

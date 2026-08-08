@@ -22,6 +22,22 @@ function normalise(str) {
     .trim();
 }
 
+function optionToneClass(opt, highlighted, selected) {
+  if (opt.disabled) return "cursor-not-allowed text-slate-400";
+  if (highlighted) return "cursor-pointer bg-sky-600 text-white";
+  if (selected) return "cursor-pointer bg-sky-50 text-slate-900";
+  if (opt.tone === "warning") return "cursor-pointer bg-amber-50 text-amber-900 hover:bg-amber-100";
+  if (opt.tone === "success") return "cursor-pointer bg-emerald-50 text-emerald-900 hover:bg-emerald-100";
+  return "cursor-pointer text-slate-700 hover:bg-slate-100";
+}
+
+function optionBadgeClass(opt, highlighted) {
+  if (highlighted) return "bg-white/20 text-white";
+  if (opt.tone === "warning") return "bg-amber-100 text-amber-700";
+  if (opt.tone === "success") return "bg-emerald-100 text-emerald-700";
+  return "bg-slate-100 text-slate-500";
+}
+
 /**
  * ErpComboboxField
  *
@@ -31,7 +47,7 @@ function normalise(str) {
  * -----
  * value          string | ""          – currently selected option value
  * onChange       (value: string) => void
- * options        { value: string, label: string, disabled?: boolean }[]
+ * options        { value: string, label: string, disabled?: boolean, badge?: string, tone?: "warning" | "success" | "neutral" }[]
  *                                       – an option with disabled: true cannot be
  *                                         selected (skipped by keyboard nav and
  *                                         pointer clicks) and renders visually muted
@@ -274,17 +290,16 @@ export default function ErpComboboxField({
                   if (opt.disabled) return;
                   selectOption(opt.value);
                 }}
-                className={`px-2 py-1 text-sm ${
-                  opt.disabled
-                    ? "cursor-not-allowed text-slate-400"
-                    : idx === highlightIndex
-                      ? "cursor-pointer bg-sky-600 text-white"
-                      : opt.value === value
-                        ? "cursor-pointer bg-sky-50 text-slate-900"
-                        : "cursor-pointer text-slate-700 hover:bg-slate-100"
-                }`}
+                className={`px-2 py-1 text-sm ${optionToneClass(opt, idx === highlightIndex, opt.value === value)}`}
               >
-                {opt.label}
+                <div className="flex items-center justify-between gap-3">
+                  <span className="min-w-0 truncate">{opt.label}</span>
+                  {opt.badge ? (
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${optionBadgeClass(opt, idx === highlightIndex)}`}>
+                      {opt.badge}
+                    </span>
+                  ) : null}
+                </div>
               </li>
             ))}
           </ul>,
