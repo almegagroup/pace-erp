@@ -6754,6 +6754,14 @@
         "skipAcl": false
       },
       {
+        "fn": "reactivatePlanFeed",
+        "method": "POST",
+        "path": "/api/production/plan-feed/${id}/reactivate",
+        "resourceCode": "PROD_PLAN_FEED",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
         "fn": "getPlanFeedSummary",
         "method": "GET",
         "path": "/api/production/plan-feed/summary",
