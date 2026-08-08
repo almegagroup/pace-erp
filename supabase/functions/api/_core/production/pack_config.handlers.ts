@@ -9,6 +9,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -122,6 +123,7 @@ async function ensureFgMaterialForConfig(
   materialId: string,
   packCodeId: string,
   variant: string,
+  companyId: string,
   ctx: ProdHandlerContext,
 ): Promise<{ fgMaterialId: string | null; fgPaceCode: string | null }> {
   const resolved = await resolveFgMaterial(materialId, packCodeId, variant);
@@ -143,30 +145,28 @@ async function ensureFgMaterialForConfig(
         document_name: desiredDocName,
       })
       .eq("id", resolved.fgMaterialId);
+    await ensureMaterialCompanyMappings(resolved.fgMaterialId, materialId, companyId, ctx.auth_user_id);
     return { fgMaterialId: resolved.fgMaterialId, fgPaceCode: resolved.fgPaceCode };
   }
 
-  const prodshade = resolved.prodshade;
-  const packCodeRow = resolved.packCodeRow;
   const skuString = resolved.skuString;
-  const shadeCode = normalizeNullableString(prodshade.shade_code);
-  const packCode = normalizeNullableString(packCodeRow.pack_code);
-
-  const fgCountResult = await serviceRoleClient
-    .schema("erp_master")
-    .from("material_master")
-    .select("id", { count: "exact", head: true })
-    .eq("material_type", "FG") as { count?: number };
-
-  const nextNum = (fgCountResult.count ?? 0) + 1;
-  const newPaceCode = `FG-${String(nextNum).padStart(5, "0")}`;
+  const shadeCode = normalizeNullableString(resolved.prodshade.shade_code);
+  const packCode = normalizeNullableString(resolved.packCodeRow.pack_code);
   const shortName = skuString.length > 50 ? skuString.slice(0, 50) : skuString;
+  const { data: newPaceCode, error: paceErr } = await serviceRoleClient.rpc(
+    "generate_material_pace_code",
+    { p_material_type: "FG" },
+  );
+  if (paceErr || !newPaceCode) {
+    console.error("[pack_config.ensureFgMaterialForConfig] pace code rpc failed:", JSON.stringify(paceErr));
+    throw new Error("PROD_PACK_CONFIG_FG_PACE_CODE_FAILED");
+  }
 
   const { data: newFg, error: fgInsertErr } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
     .insert({
-      pace_code: newPaceCode,
+      pace_code: String(newPaceCode),
       external_code: skuString,
       material_name: skuString,
       short_name: shortName,
@@ -192,13 +192,95 @@ async function ensureFgMaterialForConfig(
     .single();
 
   if (fgInsertErr || !newFg) {
-    return { fgMaterialId: null, fgPaceCode: null };
+    console.error("[pack_config.ensureFgMaterialForConfig] FG insert failed:", JSON.stringify(fgInsertErr));
+    throw new Error("PROD_PACK_CONFIG_FG_CREATE_FAILED");
   }
 
+  const newFgId = String((newFg as JsonRecord).id);
+  await ensureMaterialCompanyMappings(newFgId, materialId, companyId, ctx.auth_user_id);
+
   return {
-    fgMaterialId: String((newFg as JsonRecord).id),
+    fgMaterialId: newFgId,
     fgPaceCode: String((newFg as JsonRecord).pace_code),
   };
+}
+
+async function ensureMaterialCompanyMappings(
+  fgMaterialId: string,
+  prodshadeMaterialId: string,
+  requestedCompanyId: string,
+  authUserId: string,
+): Promise<void> {
+  const { data: sourceRows, error: sourceErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_company_ext")
+    .select("company_id, procurement_allowed, status")
+    .eq("material_id", prodshadeMaterialId)
+    .eq("status", "ACTIVE");
+  if (sourceErr) {
+    console.error("[pack_config.ensureMaterialCompanyMappings] source lookup failed:", JSON.stringify(sourceErr));
+    throw new Error("PROD_PACK_CONFIG_COMPANY_MAPPING_LOOKUP_FAILED");
+  }
+
+  const desiredMap = new Map<string, boolean>();
+  for (const row of (sourceRows ?? []) as JsonRecord[]) {
+    const companyId = toTrimmedString(row.company_id);
+    if (companyId) desiredMap.set(companyId, row.procurement_allowed === true);
+  }
+  if (!desiredMap.has(requestedCompanyId)) desiredMap.set(requestedCompanyId, false);
+
+  const companyIds = [...desiredMap.keys()];
+  const { data: existingRows, error: existingErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_company_ext")
+    .select("id, company_id, status")
+    .eq("material_id", fgMaterialId)
+    .in("company_id", companyIds);
+  if (existingErr) {
+    console.error("[pack_config.ensureMaterialCompanyMappings] existing lookup failed:", JSON.stringify(existingErr));
+    throw new Error("PROD_PACK_CONFIG_COMPANY_MAPPING_LOOKUP_FAILED");
+  }
+
+  const existingByCompany = new Map(
+    ((existingRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.company_id), row]),
+  );
+
+  const inserts: JsonRecord[] = [];
+  for (const [companyId, procurementAllowed] of desiredMap.entries()) {
+    const existing = existingByCompany.get(companyId);
+    if (!existing) {
+      inserts.push({
+        material_id: fgMaterialId,
+        company_id: companyId,
+        procurement_allowed: procurementAllowed,
+        status: "ACTIVE",
+        created_by: authUserId,
+      });
+      continue;
+    }
+    if (normalizeNullableString(existing.status).toUpperCase() !== "ACTIVE") {
+      const { error: updateErr } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_company_ext")
+        .update({ status: "ACTIVE" })
+        .eq("id", String(existing.id));
+      if (updateErr) {
+        console.error("[pack_config.ensureMaterialCompanyMappings] activate failed:", JSON.stringify(updateErr));
+        throw new Error("PROD_PACK_CONFIG_COMPANY_MAPPING_FAILED");
+      }
+    }
+  }
+
+  if (inserts.length === 0) return;
+
+  const { error: insertErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_company_ext")
+    .insert(inserts);
+  if (insertErr) {
+    console.error("[pack_config.ensureMaterialCompanyMappings] insert failed:", JSON.stringify(insertErr));
+    throw new Error("PROD_PACK_CONFIG_COMPANY_MAPPING_FAILED");
+  }
 }
 
 // GET /api/production/pack-codes
@@ -458,14 +540,18 @@ export async function upsertPackConfigHandler(req: Request, ctx: ProdHandlerCont
     // ACL-gated via route-acl-registry (SA_OM_PACK_CODE_MASTER:WRITE) — no longer a
     // blanket Manager/SA rank check; department grants are actually enforced.
     const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id) || toTrimmedString(ctx.context.companyId);
     const materialId = toTrimmedString(body.material_id);
     const packCodeId = toTrimmedString(body.pack_code_id);
     const variant = toTrimmedString(body.variant ?? "");
     const fillQty = body.fill_qty != null && body.fill_qty !== "" ? parsePositiveNumber(body.fill_qty) : null;
 
-    if (!materialId || !packCodeId) {
-      return packError(req, ctx, "PROD_PACK_CONFIG_INVALID", 400, "material_id and pack_code_id required");
+    if (!companyId || !materialId || !packCodeId) {
+      return packError(req, ctx, "PROD_PACK_CONFIG_INVALID", 400, "company_id, material_id and pack_code_id required");
     }
+    await assertCompanyScope(ctx, companyId);
+
+    const fg = await ensureFgMaterialForConfig(materialId, packCodeId, variant, companyId, ctx);
 
     const { data: existingRows, error: lookupErr } = await serviceRoleClient
       .schema("erp_production")
@@ -510,17 +596,7 @@ export async function upsertPackConfigHandler(req: Request, ctx: ProdHandlerCont
       configId = String((inserted as JsonRecord).id);
     }
 
-    let fgMaterialId: string | null = null;
-    let fgPaceCode: string | null = null;
-    try {
-      const fg = await ensureFgMaterialForConfig(materialId, packCodeId, variant, ctx);
-      fgMaterialId = fg.fgMaterialId;
-      fgPaceCode = fg.fgPaceCode;
-    } catch {
-      // FG auto-create is best-effort; pack config success is the primary result.
-    }
-
-    return okResponse({ id: configId, fg_material_id: fgMaterialId, fg_pace_code: fgPaceCode }, ctx.request_id, req);
+    return okResponse({ id: configId, fg_material_id: fg.fgMaterialId, fg_pace_code: fg.fgPaceCode }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CONFIG_UPSERT_FAILED";
     console.error("[pack_config.upsertPackConfig] request_id:", ctx.request_id, "error:", err);
