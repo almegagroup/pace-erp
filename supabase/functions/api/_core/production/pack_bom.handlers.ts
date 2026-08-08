@@ -142,6 +142,26 @@ async function getPackCodeByCode(packCode: string): Promise<JsonRecord | null> {
   return (data as JsonRecord | null) ?? null;
 }
 
+async function getPackCodeMapByCodes(packCodes: string[]): Promise<Map<string, JsonRecord>> {
+  const uniqueCodes = [...new Set(packCodes.map((code) => toTrimmedString(code)).filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (uniqueCodes.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("pack_code_master")
+    .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, outer_uom_code, active")
+    .in("pack_code", uniqueCodes);
+  if (error) {
+    console.error("[pack_bom.getPackCodeMapByCodes] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BOM_PACK_CODE_LOOKUP_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const code = toTrimmedString(row.pack_code);
+    if (code) map.set(code, row);
+  }
+  return map;
+}
+
 async function resolveProdshadeForSku(sku: JsonRecord): Promise<JsonRecord | null> {
   const shadeCode = toTrimmedString(sku.shade_code);
   const packCode = toTrimmedString(sku.pack_code);
@@ -229,6 +249,10 @@ async function resolveApprovedStroke(prodshadeMaterialId: string, companyId: str
     ...stroke,
     default_storage_location: slocMap.get(String(stroke.default_storage_location_id ?? "")) ?? null,
   };
+}
+
+function buildSkuProdshadeKey(shadeCode: string, packCode: string): string {
+  return `${toTrimmedString(shadeCode).toUpperCase()}::${toTrimmedString(packCode).toUpperCase()}`;
 }
 
 function normalizeLine(line: JsonRecord, idx: number): JsonRecord {
@@ -373,15 +397,106 @@ export async function listPackBomEligibleSkusHandler(
       .eq("status", "ACTIVE");
     if (skuErr) throw new Error("PROD_BOM_ELIGIBLE_SKU_FAILED");
 
+    const skuList = (skuRows ?? []) as JsonRecord[];
+    if (skuList.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const packCodeMap = await getPackCodeMapByCodes(
+      skuList.map((sku) => toTrimmedString(sku.pack_code)),
+    );
+    const packCodeIds = [...new Set(
+      [...packCodeMap.values()].map((packCode) => toTrimmedString(packCode.id)).filter(Boolean),
+    )];
+    if (packCodeIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const { data: prodshadeConfigs, error: prodshadeConfigErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("prodshade_pack_config")
+      .select(`
+        id, material_id, pack_code_id, fill_qty, active,
+        pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, bom_required, outer_uom_code)
+      `)
+      .eq("active", true)
+      .in("pack_code_id", packCodeIds);
+    if (prodshadeConfigErr) {
+      console.error("[pack_bom.listPackBomEligibleSkus] prodshade config query failed:", JSON.stringify(prodshadeConfigErr));
+      throw new Error("PROD_BOM_PRODSHADE_LOOKUP_FAILED");
+    }
+
+    const configRows = (prodshadeConfigs ?? []) as JsonRecord[];
+    if (configRows.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const prodshadeMap = await getMaterialMapByIds(
+      configRows.map((row) => String(row.material_id ?? "")),
+      "[pack_bom.listPackBomEligibleSkus]",
+      "PROD_BOM_PRODSHADE_LOOKUP_FAILED",
+      "id, pace_code, external_code, material_name, document_name, shade_code, base_uom_code",
+    );
+
+    const prodshadeBySkuKey = new Map<string, JsonRecord>();
+    for (const row of configRows) {
+      const pack = (row.pack_code ?? {}) as JsonRecord;
+      const prodshade = prodshadeMap.get(String(row.material_id ?? ""));
+      const packCode = toTrimmedString(pack.pack_code);
+      const shadeCode = toTrimmedString(prodshade?.shade_code);
+      if (!packCode || !shadeCode) continue;
+      const key = buildSkuProdshadeKey(shadeCode, packCode);
+      if (!prodshadeBySkuKey.has(key)) {
+        prodshadeBySkuKey.set(key, { ...row, prodshade });
+      }
+    }
+
+    const matchedProdshadeIds = [...new Set(
+      skuList
+        .map((sku) => {
+          const key = buildSkuProdshadeKey(
+            toTrimmedString(sku.shade_code),
+            toTrimmedString(sku.pack_code),
+          );
+          const match = prodshadeBySkuKey.get(key);
+          return toTrimmedString(match?.prodshade?.id);
+        })
+        .filter(Boolean),
+    )];
+    if (matchedProdshadeIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const { data: strokeRows, error: strokeErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("stroke_master")
+      .select("id, company_id, prodshade_material_id, stroke_number, default_storage_location_id, status")
+      .eq("company_id", companyId)
+      .eq("po_type", poType)
+      .eq("status", "APPROVED")
+      .in("prodshade_material_id", matchedProdshadeIds)
+      .order("stroke_number", { ascending: true });
+    if (strokeErr) {
+      console.error("[pack_bom.listPackBomEligibleSkus] stroke query failed:", JSON.stringify(strokeErr));
+      throw new Error("PROD_BOM_STROKE_LOOKUP_FAILED");
+    }
+
+    const strokeList = (strokeRows ?? []) as JsonRecord[];
+    const strokeByProdshadeId = new Map<string, JsonRecord>();
+    for (const stroke of strokeList) {
+      const prodshadeMaterialId = toTrimmedString(stroke.prodshade_material_id);
+      if (!prodshadeMaterialId || strokeByProdshadeId.has(prodshadeMaterialId)) continue;
+      strokeByProdshadeId.set(prodshadeMaterialId, stroke);
+    }
+    const slocMap = await getStorageLocationMapByIds(
+      strokeList.map((stroke) => String(stroke.default_storage_location_id ?? "")),
+    );
+
     const output: JsonRecord[] = [];
-    for (const sku of (skuRows ?? []) as JsonRecord[]) {
-      const prodshadeConfig = await resolveProdshadeForSku(sku);
+    for (const sku of skuList) {
+      const packCode = packCodeMap.get(toTrimmedString(sku.pack_code));
+      if (!packCode) continue;
+      const key = buildSkuProdshadeKey(
+        toTrimmedString(sku.shade_code),
+        toTrimmedString(sku.pack_code),
+      );
+      const prodshadeConfig = prodshadeBySkuKey.get(key);
       const prodshade = (prodshadeConfig?.prodshade ?? null) as JsonRecord | null;
       if (!prodshade) continue;
-      const stroke = await resolveApprovedStroke(String(prodshade.id), companyId, poType);
+      const stroke = strokeByProdshadeId.get(String(prodshade.id));
       if (!stroke) continue;
-      const packCode = await getPackCodeByCode(toTrimmedString(sku.pack_code));
-      if (!packCode) continue;
       output.push({
         ...sku,
         company_id: companyId,
@@ -389,7 +504,10 @@ export async function listPackBomEligibleSkusHandler(
         prodshade_material_id: prodshade.id,
         prodshade,
         pack_code_row: packCode,
-        stroke_master: stroke,
+        stroke_master: {
+          ...stroke,
+          default_storage_location: slocMap.get(String(stroke.default_storage_location_id ?? "")) ?? null,
+        },
       });
     }
 
