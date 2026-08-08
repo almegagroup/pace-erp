@@ -742,18 +742,7 @@ export async function listOpenCSNsForGEHandler(
       return procurementErrorResponse(req, ctx, "CSN_OPEN_LIST_FAILED", 500, "Unable to list open CSNs.");
     }
 
-    const csns = data ?? [];
-    const matIds = [...new Set(csns.map((c) => c.material_id).filter(Boolean))] as string[];
-    const matMap = new Map<string, string>();
-    if (matIds.length > 0) {
-      const { data: mats } = await serviceRoleClient
-        .schema("erp_master")
-        .from("material_master")
-        .select("id, material_name")
-        .in("id", matIds);
-      for (const m of mats ?? []) matMap.set(String(m.id), String(m.material_name ?? ""));
-    }
-    const items = csns.map((c) => ({ ...c, material_name: matMap.get(String(c.material_id)) ?? null }));
+    const items = await enrichCsnUserDisplays((data ?? []) as CsnRow[]);
 
     return okResponse({ items }, ctx.request_id, req);
   } catch (error) {
