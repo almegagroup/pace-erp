@@ -53,6 +53,40 @@ const EMPTY_LINE = () => ({
   lrDate: "",
 });
 
+function buildFallbackRefSuggestions(allCsns, openPoIds, openStoIds) {
+  const suggestions = new Map();
+
+  for (const csn of allCsns) {
+    if (csn.sto_id) {
+      const key = `STO:${csn.sto_id}`;
+      if (openStoIds.has(csn.sto_id) || suggestions.has(key)) continue;
+      suggestions.set(key, {
+        id: csn.sto_id,
+        sto_number: csn.sto_number || csn.display_reference_number || csn.csn_number,
+        vendor_name: csn.vendor_name || null,
+        delivery_type: csn.delivery_type || null,
+        __kind: "STO",
+        __number: csn.sto_number || csn.display_reference_number || csn.csn_number,
+      });
+      continue;
+    }
+
+    if (!csn.po_id) continue;
+    const key = `PO:${csn.po_id}`;
+    if (openPoIds.has(csn.po_id) || suggestions.has(key)) continue;
+    suggestions.set(key, {
+      id: csn.po_id,
+      po_number: csn.po_number || csn.display_reference_number || csn.csn_number,
+      vendor_name: csn.vendor_name || null,
+      delivery_type: csn.delivery_type || null,
+      __kind: "PO",
+      __number: csn.po_number || csn.display_reference_number || csn.csn_number,
+    });
+  }
+
+  return [...suggestions.values()];
+}
+
 // ─── component ──────────────────────────────────────────────────────────────
 
 export default function GateEntryCreatePage() {
@@ -134,7 +168,12 @@ export default function GateEntryCreatePage() {
   function getRefSuggestions(query) {
     const poItems = allPos.map((p) => ({ ...p, __kind: "PO", __number: p.po_number }));
     const stoItems = allStos.map((s) => ({ ...s, __kind: "STO", __number: s.sto_number }));
-    const all = [...poItems, ...stoItems];
+    const fallbackItems = buildFallbackRefSuggestions(
+      allCsns,
+      new Set(allPos.map((p) => p.id)),
+      new Set(allStos.map((s) => s.id)),
+    );
+    const all = [...poItems, ...stoItems, ...fallbackItems];
     if (!query) return all.slice(0, 8);
     const q = query.toLowerCase();
     return all
@@ -195,7 +234,9 @@ export default function GateEntryCreatePage() {
     setDrawer({
       open: true,
       rowIndex,
-      refLabel: kind === "STO" ? refItem.sto_number : (refItem.po_number ?? null),
+      refLabel: kind === "STO"
+        ? (refItem.sto_number ?? refItem.display_reference_number ?? null)
+        : (refItem.po_number ?? refItem.display_reference_number ?? null),
       refKind: kind,
       refItem,
       csns,
@@ -378,8 +419,8 @@ export default function GateEntryCreatePage() {
     const matDisplay = csn.material_name || csn.material_id || "—";
     const refLabel = csn.po_id ? "PO number" : "STO number";
     const refNumber = csn.po_id
-      ? allPos.find((p) => p.id === csn.po_id)?.po_number || "—"
-      : allStos.find((s) => s.id === csn.sto_id)?.sto_number || "—";
+      ? (csn.po_number || csn.display_reference_number || "—")
+      : (csn.sto_number || csn.display_reference_number || "—");
     const isSelected = drawer.selected?.id === csn.id;
     const isHi = idx === drawer.hiIdx;
 
