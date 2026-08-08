@@ -85,7 +85,11 @@ export default function PackConfigPage() {
   const fillQtyLiterConversionMissing = isMtsFormMaterial && !strokeForFormMaterialQ.isLoading && fillQtyLiterFactor === null;
 
   async function handleCreate(e) {
-    e.preventDefault();
+    e?.preventDefault?.();
+    if (!form.material_id || !form.pack_code_id) {
+      toast("Material and pack code are required.", "error");
+      return;
+    }
     setSaving(true);
     try {
       await upsertPackConfig({
@@ -224,7 +228,7 @@ export default function PackConfigPage() {
         title="New Pack Config"
         onClose={() => setDrawerOpen(false)}
         actions={[
-          { label: "Save", tone: "primary", onClick: handleCreate, disabled: saving },
+          { label: "Save", tone: "primary", onClick: handleCreate, disabled: saving || !form.material_id || !form.pack_code_id },
           { label: "Cancel", tone: "neutral", onClick: () => setDrawerOpen(false) },
         ]}
       >

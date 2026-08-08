@@ -9,7 +9,6 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
-import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -123,7 +122,6 @@ async function ensureFgMaterialForConfig(
   materialId: string,
   packCodeId: string,
   variant: string,
-  companyId: string,
   ctx: ProdHandlerContext,
 ): Promise<{ fgMaterialId: string | null; fgPaceCode: string | null }> {
   const resolved = await resolveFgMaterial(materialId, packCodeId, variant);
@@ -145,7 +143,7 @@ async function ensureFgMaterialForConfig(
         document_name: desiredDocName,
       })
       .eq("id", resolved.fgMaterialId);
-    await ensureMaterialCompanyMappings(resolved.fgMaterialId, materialId, companyId, ctx.auth_user_id);
+    await ensureMaterialCompanyMappings(resolved.fgMaterialId, materialId, ctx.auth_user_id);
     return { fgMaterialId: resolved.fgMaterialId, fgPaceCode: resolved.fgPaceCode };
   }
 
@@ -197,7 +195,7 @@ async function ensureFgMaterialForConfig(
   }
 
   const newFgId = String((newFg as JsonRecord).id);
-  await ensureMaterialCompanyMappings(newFgId, materialId, companyId, ctx.auth_user_id);
+  await ensureMaterialCompanyMappings(newFgId, materialId, ctx.auth_user_id);
 
   return {
     fgMaterialId: newFgId,
@@ -208,7 +206,6 @@ async function ensureFgMaterialForConfig(
 async function ensureMaterialCompanyMappings(
   fgMaterialId: string,
   prodshadeMaterialId: string,
-  requestedCompanyId: string,
   authUserId: string,
 ): Promise<void> {
   const { data: sourceRows, error: sourceErr } = await serviceRoleClient
@@ -227,7 +224,8 @@ async function ensureMaterialCompanyMappings(
     const companyId = toTrimmedString(row.company_id);
     if (companyId) desiredMap.set(companyId, row.procurement_allowed === true);
   }
-  if (!desiredMap.has(requestedCompanyId)) desiredMap.set(requestedCompanyId, false);
+
+  if (desiredMap.size === 0) return;
 
   const companyIds = [...desiredMap.keys()];
   const { data: existingRows, error: existingErr } = await serviceRoleClient
@@ -540,18 +538,16 @@ export async function upsertPackConfigHandler(req: Request, ctx: ProdHandlerCont
     // ACL-gated via route-acl-registry (SA_OM_PACK_CODE_MASTER:WRITE) — no longer a
     // blanket Manager/SA rank check; department grants are actually enforced.
     const body = await parseBody(req);
-    const companyId = toTrimmedString(body.company_id) || toTrimmedString(ctx.context.companyId);
     const materialId = toTrimmedString(body.material_id);
     const packCodeId = toTrimmedString(body.pack_code_id);
     const variant = toTrimmedString(body.variant ?? "");
     const fillQty = body.fill_qty != null && body.fill_qty !== "" ? parsePositiveNumber(body.fill_qty) : null;
 
-    if (!companyId || !materialId || !packCodeId) {
-      return packError(req, ctx, "PROD_PACK_CONFIG_INVALID", 400, "company_id, material_id and pack_code_id required");
+    if (!materialId || !packCodeId) {
+      return packError(req, ctx, "PROD_PACK_CONFIG_INVALID", 400, "material_id and pack_code_id required");
     }
-    await assertCompanyScope(ctx, companyId);
 
-    const fg = await ensureFgMaterialForConfig(materialId, packCodeId, variant, companyId, ctx);
+    const fg = await ensureFgMaterialForConfig(materialId, packCodeId, variant, ctx);
 
     const { data: existingRows, error: lookupErr } = await serviceRoleClient
       .schema("erp_production")
