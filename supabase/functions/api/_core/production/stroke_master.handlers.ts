@@ -4,7 +4,7 @@
  * Gate: 27
  * Phase: 27
  * Domain: PRODUCTION
- * Purpose: Stroke Master CRUD, approve, deactivate and reject handlers.
+ * Purpose: Stroke Master CRUD, approve, deactivate, reactivate and reject handlers.
  *          QA/Operator creates (DRAFT), Manager/Auditor approves (APPROVED) or
  *          rejects (hard delete). APPROVED strokes can be deactivated (terminal,
  *          hidden from Process PO dropdown) or reverted to DRAFT for correction.
@@ -877,8 +877,9 @@ export async function rejectStrokeMasterHandler(
 }
 
 // POST /api/production/stroke-masters/:id/deactivate
-// QA or Manager deactivates an APPROVED stroke — terminal, hidden from Process PO
-// dropdown, existing Process Orders referencing it are unaffected.
+// QA or Manager deactivates an APPROVED stroke — hidden from Process PO
+// dropdown, existing Process Orders referencing it are unaffected until an
+// explicit Reactivate-to-Draft decision is taken later.
 export async function deactivateStrokeMasterHandler(
   req: Request,
   ctx: ProdHandlerContext,
@@ -910,6 +911,57 @@ export async function deactivateStrokeMasterHandler(
     const code = err instanceof Error ? err.message : "PROD_STROKE_DEACTIVATE_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return strokeError(req, ctx, code, status, "Stroke deactivate failed");
+  }
+}
+
+// POST /api/production/stroke-masters/:id/reactivate
+// Manager can reactivate a DEACTIVATED stroke back to DRAFT so it can be
+// edited and approved again.
+export async function reactivateStrokeMasterHandler(
+  req: Request,
+  ctx: ProdHandlerContext,
+): Promise<Response> {
+  try {
+    const id = getIdFromPath(req);
+    if (!id) return strokeError(req, ctx, "PROD_STROKE_ID_MISSING", 400, "ID required");
+
+    const existing = await getStrokeMaster(id);
+    if (!existing) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Not found");
+    await assertCompanyScope(ctx, String(existing.company_id ?? ""));
+    if (existing.status !== "DEACTIVATED") {
+      return strokeError(req, ctx, "PROD_STROKE_NOT_DEACTIVATED", 422, "Only DEACTIVATED strokes can be reactivated");
+    }
+    await assertStrokeApproverRole(
+      ctx,
+      toTrimmedString(existing.company_id as string),
+      existing.created_by as string | null | undefined,
+    );
+
+    const now = new Date().toISOString();
+    const { error } = await serviceRoleClient.schema("erp_production").from("stroke_master")
+      .update({
+        status: "DRAFT",
+        approved_by: null,
+        approved_at: null,
+        deactivated_by: null,
+        deactivated_at: null,
+        last_updated_at: now,
+        last_updated_by: ctx.auth_user_id,
+      })
+      .eq("id", id);
+    if (error) {
+      console.error("[stroke_master.reactivateStrokeMaster] update failed:", JSON.stringify(error));
+      throw new Error("PROD_STROKE_REACTIVATE_FAILED");
+    }
+
+    return okResponse({ id, status: "DRAFT" }, ctx.request_id, req);
+  } catch (err) {
+    console.error("[stroke_master.reactivateStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
+    const code = err instanceof Error ? err.message : "PROD_STROKE_REACTIVATE_FAILED";
+    const status = code === "PROD_STROKE_APPROVER_ROLE_REQUIRED" || code === "PROD_STROKE_SELF_APPROVAL_FORBIDDEN" || code === "COMPANY_SCOPE_VIOLATION"
+      ? 403
+      : 500;
+    return strokeError(req, ctx, code, status, "Stroke reactivate failed");
   }
 }
 

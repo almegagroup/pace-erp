@@ -1166,6 +1166,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "EDIT" } },
   },
   {
+    pattern: /^\/api\/production\/stroke-masters\/[^/]+\/reactivate$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_STROKE_APPROVAL", action: "APPROVE" } },
+  },
+  {
     pattern: /^\/api\/production\/plan-feed\/[^/]+$/,
     methods: {
       GET:   { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },

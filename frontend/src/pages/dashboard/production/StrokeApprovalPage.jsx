@@ -22,7 +22,7 @@ import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from 
 import { useMenu } from "../../../context/useMenu.js";
 import {
   listStrokeMasters, getStrokeMaster, updateStrokeMaster,
-  approveStrokeMaster, revertStrokeMaster, rejectStrokeMaster, deactivateStrokeMaster,
+  approveStrokeMaster, revertStrokeMaster, rejectStrokeMaster, deactivateStrokeMaster, reactivateStrokeMaster,
 } from "./prodApi.js";
 import { listUoms, listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
 import {
@@ -254,6 +254,17 @@ export default function StrokeApprovalPage() {
     try {
       await revertStrokeMaster(row.id);
       toast("Reverted to DRAFT.");
+      setExpandedId("");
+      await invalidate();
+    } catch (err) { toast(friendlyStrokeErr(err.code) || err.message, "error"); }
+    finally { setSaving(false); }
+  }
+
+  async function handleReactivate(row) {
+    setSaving(true);
+    try {
+      await reactivateStrokeMaster(row.id);
+      toast("Stroke moved back to DRAFT for edit and approval.");
       setExpandedId("");
       await invalidate();
     } catch (err) { toast(friendlyStrokeErr(err.code) || err.message, "error"); }
@@ -501,6 +512,16 @@ export default function StrokeApprovalPage() {
                                     Revert to Draft
                                   </button>
                                 </>
+                              )}
+                              {s.status === "DEACTIVATED" && (
+                                <button
+                                  type="button"
+                                  disabled={saving}
+                                  className="h-8 border border-sky-600 bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+                                  onClick={() => handleReactivate(s)}
+                                >
+                                  Reactivate to Draft
+                                </button>
                               )}
                             </div>
                           </div>
