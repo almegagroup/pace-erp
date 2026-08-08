@@ -291,7 +291,7 @@ function attachUserDisplayFields<T>(
   return enriched as T;
 }
 
-async function enrichCsnUserDisplays<T>(payload: T): Promise<T> {
+export async function enrichCsnUserDisplays<T>(payload: T): Promise<T> {
   const authUserIds = new Set<string>();
   collectAuthUserIds(payload, authUserIds);
   const displayNameMap = await resolveUserDisplayNames([...authUserIds]);
