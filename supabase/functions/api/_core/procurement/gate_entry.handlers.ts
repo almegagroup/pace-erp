@@ -118,7 +118,10 @@ async function generateProcurementDocNumber(docType: string): Promise<string> {
   return String(data);
 }
 
-async function fetchPoLineBundle(poLineId: string): Promise<{
+async function fetchPoLineBundle(
+  poLineId: string,
+  options: { requireOpen?: boolean } = {},
+): Promise<{
   poLine: PurchaseOrderLineRow;
   po: PurchaseOrderRow;
 }> {
@@ -133,8 +136,9 @@ async function fetchPoLineBundle(poLineId: string): Promise<{
     throw new Error("PO_LINE_NOT_FOUND");
   }
 
+  const requireOpen = options.requireOpen !== false;
   const lineStatus = toUpperTrimmedString(poLine.line_status);
-  if (!OPEN_PO_LINE_STATUSES.has(lineStatus)) {
+  if (requireOpen && !OPEN_PO_LINE_STATUSES.has(lineStatus)) {
     throw new Error("PO_LINE_NOT_OPEN");
   }
 
@@ -150,6 +154,26 @@ async function fetchPoLineBundle(poLineId: string): Promise<{
   }
 
   return { poLine, po };
+}
+
+async function fetchActiveCsnForGateEntry(csnId: string): Promise<CsnRow> {
+  const { data: csn, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .select("id, po_id, po_line_id, sto_id, status")
+    .eq("id", csnId)
+    .single();
+
+  if (error || !csn) {
+    throw new Error("CSN_NOT_FOUND");
+  }
+
+  const status = toUpperTrimmedString(csn.status);
+  if (!OPEN_CSN_STATUSES.includes(status)) {
+    throw new Error("CSN_NOT_OPEN");
+  }
+
+  return csn as CsnRow;
 }
 
 function effectiveNetWeight(exitRow: Record<string, unknown>): number | null {
@@ -346,6 +370,7 @@ export async function createGateEntryHandler(
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
       const poLineId = toTrimmedString(line.po_line_id);
+      const csnId = toTrimmedString(line.csn_id);
       const stoId = toTrimmedString(line.sto_id);
       const stoLineId = toTrimmedString(line.sto_line_id);
       const geQty = parsePositiveNumber(line.ge_qty);
@@ -362,8 +387,23 @@ export async function createGateEntryHandler(
 
       let poId: string | null = null;
       if (poLineId) {
-        const { poLine, po } = await fetchPoLineBundle(poLineId);
+        const hasCsnReference = Boolean(csnId);
+        let activeCsn: CsnRow | null = null;
+        if (hasCsnReference) {
+          try {
+            activeCsn = await fetchActiveCsnForGateEntry(csnId);
+          } catch (error) {
+            const code = error instanceof Error ? error.message : "CSN_NOT_OPEN";
+            const message = code === "CSN_NOT_FOUND" ? "Selected CSN was not found." : "Selected CSN is no longer open for Gate Entry.";
+            return procurementErrorResponse(req, ctx, code, code === "CSN_NOT_FOUND" ? 404 : 400, message);
+          }
+        }
+
+        const { poLine, po } = await fetchPoLineBundle(poLineId, { requireOpen: !hasCsnReference });
         poId = String(poLine.po_id);
+        if (activeCsn && toTrimmedString(activeCsn.po_line_id) !== poLineId) {
+          return procurementErrorResponse(req, ctx, "GE_CSN_PO_LINE_MISMATCH", 400, `Line ${index + 1} selected CSN does not belong to the referenced PO line.`);
+        }
         if (String(po.company_id) !== companyId) {
           return procurementErrorResponse(req, ctx, "GE_COMPANY_SCOPE", 403, `PO line on line ${index + 1} is outside company scope.`);
         }
