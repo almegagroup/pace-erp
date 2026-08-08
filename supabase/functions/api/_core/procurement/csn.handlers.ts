@@ -819,7 +819,7 @@ async function syncSubCsnsFromMother(motherId: string, updates: JsonRecord): Pro
   }
 }
 
-async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
+export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   if (rows.length === 0) {
     return [];
   }

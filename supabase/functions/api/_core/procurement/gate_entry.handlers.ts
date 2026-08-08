@@ -13,7 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { isSameOrHigher } from "../../_shared/role_ladder.ts";
-import { enrichCsnUserDisplays } from "./csn.handlers.ts";
+import { enrichTrackerRows } from "./csn.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -743,7 +743,7 @@ export async function listOpenCSNsForGEHandler(
       return procurementErrorResponse(req, ctx, "CSN_OPEN_LIST_FAILED", 500, "Unable to list open CSNs.");
     }
 
-    const items = await enrichCsnUserDisplays((data ?? []) as CsnRow[]);
+    const items = await enrichTrackerRows((data ?? []) as CsnRow[]);
 
     return okResponse({ items }, ctx.request_id, req);
   } catch (error) {
