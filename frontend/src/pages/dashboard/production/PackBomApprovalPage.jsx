@@ -5,7 +5,7 @@
  * Purpose: Review company-scoped Pack BOMs and approve DRAFT BOMs.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
@@ -19,6 +19,7 @@ const STATUS_COLORS = {
   DRAFT: "bg-amber-100 text-amber-800",
   ACTIVE: "bg-emerald-100 text-emerald-800",
 };
+const COMPANY_FILTER_STORAGE_KEY = "pace.production.packBomApproval.companyId";
 
 const ERRORS = {
   PROD_BOM_NOT_DRAFT: "Only DRAFT Pack BOMs can be approved.",
@@ -29,12 +30,16 @@ function friendly(code) { return ERRORS[code] ?? code; }
 function materialLabel(material) { return [material?.pace_code, material?.material_name].filter(Boolean).join(" - "); }
 function companyLabel(company) { return [company?.company_code, company?.company_name].filter(Boolean).join(" - "); }
 function slocLabel(location) { return [location?.code, location?.name].filter(Boolean).join(" - "); }
+function readStoredCompanyFilter() {
+  if (typeof window === "undefined") return "";
+  return String(window.localStorage.getItem(COMPANY_FILTER_STORAGE_KEY) ?? "").trim();
+}
 
 export default function PackBomApprovalPage() {
   const qc = useQueryClient();
   const { runtimeContext } = useMenu();
   const [statusFilter, setStatusFilter] = useState("");
-  const [companyFilter, setCompanyFilter] = useState("");
+  const [companyFilter, setCompanyFilter] = useState(readStoredCompanyFilter);
   const effectiveCompanyFilter = companyFilter || resolveDefaultTransactionCompanyId(runtimeContext);
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
@@ -53,6 +58,19 @@ export default function PackBomApprovalPage() {
     setNotice({ msg, tone });
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (companyFilter) {
+      window.localStorage.setItem(COMPANY_FILTER_STORAGE_KEY, companyFilter);
+      return;
+    }
+    const fallbackCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (fallbackCompanyId) {
+      window.localStorage.setItem(COMPANY_FILTER_STORAGE_KEY, fallbackCompanyId);
+      setCompanyFilter(fallbackCompanyId);
+    }
+  }, [companyFilter, runtimeContext]);
 
   const bomsQ = useQuery({
     queryKey: ["pack-boms-approval", statusFilter, effectiveCompanyFilter],

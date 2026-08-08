@@ -5,7 +5,7 @@
  * Purpose: Company-scoped Pack BOM create flow with server-synthesized OUTPUT/SFG rows.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
@@ -24,6 +24,7 @@ import {
 import { PackBomLinesTable, GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 
 const PO_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
+const COMPANY_STORAGE_KEY = "pace.production.packBomCreate.companyId";
 
 const ERRORS = {
   PROD_BOM_INVALID: "Company, PO type and FG SKU are required.",
@@ -46,13 +47,17 @@ function skuLabel(sku) {
   ].filter((value, index, list) => Boolean(value) && list.indexOf(value) === index).join(" - ");
 }
 function slocLabel(location) { return [location?.code, location?.name].filter(Boolean).join(" - "); }
+function readStoredCompanyId() {
+  if (typeof window === "undefined") return "";
+  return String(window.localStorage.getItem(COMPANY_STORAGE_KEY) ?? "").trim();
+}
 
 export default function PackBomCreatePage() {
   const qc = useQueryClient();
   const { runtimeContext } = useMenu();
 
   const [step, setStep] = useState(1);
-  const [companyId, setCompanyId] = useState("");
+  const [companyId, setCompanyId] = useState(readStoredCompanyId);
   const [poType, setPoType] = useState("MTO");
   const [skuMaterialId, setSkuMaterialId] = useState("");
   const [outputStorageLocationId, setOutputStorageLocationId] = useState("");
@@ -82,6 +87,19 @@ export default function PackBomCreatePage() {
     setPmLines([]);
     setStep(1);
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (companyId) {
+      window.localStorage.setItem(COMPANY_STORAGE_KEY, companyId);
+      return;
+    }
+    const fallbackCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (fallbackCompanyId) {
+      window.localStorage.setItem(COMPANY_STORAGE_KEY, fallbackCompanyId);
+      setCompanyId(fallbackCompanyId);
+    }
+  }, [companyId, runtimeContext]);
 
   const eligibleQ = useQuery({
     queryKey: ["pack-bom-eligible-skus", effectiveCompanyId, poType],
@@ -149,7 +167,6 @@ export default function PackBomCreatePage() {
     onSuccess: (result) => {
       toast(result?.auto_approved ? "Pack BOM created and activated." : "Pack BOM submitted for PR06 approval.");
       setStep(1);
-      setCompanyId("");
       setPoType("MTO");
       resetDownstream();
       qc.invalidateQueries({ queryKey: ["pack-boms"] });
