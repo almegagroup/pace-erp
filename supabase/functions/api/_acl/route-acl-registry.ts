@@ -129,6 +129,13 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
 
   // ── Procurement: Reports ──────────────────────────────────────────────────
   "GET:/api/procurement/planning":                    { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
+  "POST:/api/procurement/planning/lines/bulk-upsert": { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "EDIT" },
+  "GET:/api/procurement/planning/sloc-groups":        { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
+  "POST:/api/procurement/planning/sloc-groups":       { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "EDIT" },
+  "GET:/api/procurement/planning/item-groups":        { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
+  "POST:/api/procurement/planning/item-groups":       { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "EDIT" },
+  "POST:/api/procurement/planning/close":             { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "EDIT" },
+  "GET:/api/procurement/planning/history":            { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
   "GET:/api/procurement/document-flow":               { skipAcl: false, resourceCode: "PROC_PO_LIST",        action: "VIEW" },
   "GET:/api/procurement/stock-ledger":                { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
   "GET:/api/procurement/stock-ledger/movement-types": { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
@@ -634,6 +641,20 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     pattern: /^\/api\/procurement\/report-layouts\/[^/]+\/set-default$/,
     methods: {
       POST: { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER", action: "VIEW" },
+    },
+  },
+  {
+    pattern: /^\/api\/procurement\/planning\/sloc-groups\/[^/]+$/,
+    methods: {
+      PUT: { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW", action: "EDIT" },
+      DELETE: { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/procurement\/planning\/item-groups\/[^/]+$/,
+    methods: {
+      PUT: { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW", action: "EDIT" },
+      DELETE: { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW", action: "EDIT" },
     },
   },
   {

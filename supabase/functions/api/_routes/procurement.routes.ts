@@ -56,7 +56,20 @@ import {
   reverseGRNHandler,
   updateGRNDraftHandler,
 } from "../_core/procurement/grn.handlers.ts";
-import { getProcurementPlanningHandler } from "../_core/procurement/planning.handlers.ts";
+import {
+  closeProcurementPlanningMonthHandler,
+  createPlanningItemGroupHandler,
+  createPlanningSlocGroupHandler,
+  deletePlanningItemGroupHandler,
+  deletePlanningSlocGroupHandler,
+  getProcurementPlanningHandler,
+  getProcurementPlanningHistoryHandler,
+  listPlanningItemGroupsHandler,
+  listPlanningSlocGroupsHandler,
+  updatePlanningItemGroupHandler,
+  updatePlanningSlocGroupHandler,
+  upsertProcurementPlanningLinesHandler,
+} from "../_core/procurement/planning.handlers.ts";
 import { getDocumentFlowHandler } from "../_core/procurement/document_flow.handlers.ts";
 import {
   createReportLayoutHandler,
@@ -469,6 +482,20 @@ export async function dispatchProcurementRoutes(
       return await listBlockedIVsHandler(req, ctx);
     case "GET:/api/procurement/planning":
       return await getProcurementPlanningHandler(req, ctx);
+    case "POST:/api/procurement/planning/lines/bulk-upsert":
+      return await upsertProcurementPlanningLinesHandler(req, ctx);
+    case "GET:/api/procurement/planning/sloc-groups":
+      return await listPlanningSlocGroupsHandler(req, ctx);
+    case "POST:/api/procurement/planning/sloc-groups":
+      return await createPlanningSlocGroupHandler(req, ctx);
+    case "GET:/api/procurement/planning/item-groups":
+      return await listPlanningItemGroupsHandler(req, ctx);
+    case "POST:/api/procurement/planning/item-groups":
+      return await createPlanningItemGroupHandler(req, ctx);
+    case "POST:/api/procurement/planning/close":
+      return await closeProcurementPlanningMonthHandler(req, ctx);
+    case "GET:/api/procurement/planning/history":
+      return await getProcurementPlanningHistoryHandler(req, ctx);
     case "GET:/api/procurement/document-flow":
       return await getDocumentFlowHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger":
@@ -627,6 +654,24 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/report-layouts\/[^/]+\/set-default$/.test(pathname) && req.method === "POST") {
     return await setDefaultReportLayoutHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/planning\/sloc-groups\/[^/]+$/.test(pathname)) {
+    if (req.method === "PUT") {
+      return await updatePlanningSlocGroupHandler(req, ctx);
+    }
+    if (req.method === "DELETE") {
+      return await deletePlanningSlocGroupHandler(req, ctx);
+    }
+  }
+
+  if (/^\/api\/procurement\/planning\/item-groups\/[^/]+$/.test(pathname)) {
+    if (req.method === "PUT") {
+      return await updatePlanningItemGroupHandler(req, ctx);
+    }
+    if (req.method === "DELETE") {
+      return await deletePlanningItemGroupHandler(req, ctx);
+    }
   }
 
   if (/^\/api\/procurement\/report-layouts\/[^/]+$/.test(pathname)) {
