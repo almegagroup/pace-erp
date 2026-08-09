@@ -131,6 +131,19 @@ function planningError(
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
 
+function logPlanningDebug(
+  ctx: ProcurementHandlerContext,
+  event: string,
+  meta: Record<string, unknown>,
+): void {
+  console.info("PO11_DEBUG", {
+    request_id: ctx.request_id,
+    auth_user_id: ctx.auth_user_id,
+    event,
+    ...meta,
+  });
+}
+
 async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
   const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
@@ -378,7 +391,16 @@ async function loadSlocGroups(companyId: string): Promise<JsonRecord[]> {
     .eq("company_id", companyId)
     .eq("active", true)
     .order("group_name", { ascending: true });
-  if (groupError) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUPS_FAILED");
+  if (groupError) {
+    console.error("PO11_LOAD_SLOC_GROUPS_FAILED", {
+      company_id: companyId,
+      message: groupError.message,
+      details: groupError.details,
+      hint: groupError.hint,
+      code: groupError.code,
+    });
+    throw new Error("PROCUREMENT_PLANNING_SLOC_GROUPS_FAILED");
+  }
   return (groups ?? []) as JsonRecord[];
 }
 
@@ -623,7 +645,14 @@ async function getEligibleMaterialRows(companyId: string): Promise<Array<{ mater
       .map((row) => toTrimmedString(row.storage_location_id))
       .filter(Boolean),
   )];
-  if (activeSlocIds.length === 0) return [];
+  if (activeSlocIds.length === 0) {
+    console.info("PO11_ELIGIBLE_SCOPE_EMPTY", {
+      company_id: companyId,
+      sloc_member_rows: slocRows.length,
+      active_sloc_ids: 0,
+    });
+    return [];
+  }
 
   const slocGroupByLocationId = new Map<string, string>();
   for (const row of slocRows) {
@@ -641,7 +670,17 @@ async function getEligibleMaterialRows(companyId: string): Promise<Array<{ mater
     .select("material_id, storage_location_id, quantity")
     .eq("company_id", companyId)
     .in("storage_location_id", activeSlocIds);
-  if (stockScopeError) throw new Error("PROCUREMENT_PLANNING_ELIGIBLE_STOCK_SCOPE_FAILED");
+  if (stockScopeError) {
+    console.error("PO11_ELIGIBLE_STOCK_SCOPE_FAILED", {
+      company_id: companyId,
+      active_sloc_ids: activeSlocIds.length,
+      message: stockScopeError.message,
+      details: stockScopeError.details,
+      hint: stockScopeError.hint,
+      code: stockScopeError.code,
+    });
+    throw new Error("PROCUREMENT_PLANNING_ELIGIBLE_STOCK_SCOPE_FAILED");
+  }
 
   const eligibleStockRows = ((stockScopeRows ?? []) as JsonRecord[])
     .filter((row) => normalizeQty(row.quantity) > 0)
@@ -652,7 +691,15 @@ async function getEligibleMaterialRows(companyId: string): Promise<Array<{ mater
     .filter((row) => row.material_id && row.storage_location_id);
 
   const materialIds = [...new Set(eligibleStockRows.map((row) => row.material_id))];
-  if (materialIds.length === 0) return [];
+  if (materialIds.length === 0) {
+    console.info("PO11_ELIGIBLE_STOCK_ROWS_EMPTY", {
+      company_id: companyId,
+      active_sloc_ids: activeSlocIds.length,
+      stock_scope_rows: ((stockScopeRows ?? []) as JsonRecord[]).length,
+      eligible_stock_rows: 0,
+    });
+    return [];
+  }
 
   const { data: materialRows, error: materialError } = await serviceRoleClient
     .schema("erp_master")
@@ -660,7 +707,17 @@ async function getEligibleMaterialRows(companyId: string): Promise<Array<{ mater
     .select("id, material_type")
     .in("id", materialIds)
     .in("material_type", ["RM", "PM"]);
-  if (materialError) throw new Error("PROCUREMENT_PLANNING_ELIGIBLE_MATERIAL_FAILED");
+  if (materialError) {
+    console.error("PO11_ELIGIBLE_MATERIAL_FAILED", {
+      company_id: companyId,
+      material_ids: materialIds.length,
+      message: materialError.message,
+      details: materialError.details,
+      hint: materialError.hint,
+      code: materialError.code,
+    });
+    throw new Error("PROCUREMENT_PLANNING_ELIGIBLE_MATERIAL_FAILED");
+  }
 
   const allowedMaterialIds = new Set(((materialRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)).filter(Boolean));
 
@@ -672,7 +729,17 @@ async function getEligibleMaterialRows(companyId: string): Promise<Array<{ mater
     .eq("status", "ACTIVE")
     .eq("procurement_allowed", true)
     .in("material_id", [...allowedMaterialIds]);
-  if (companyExtError) throw new Error("PROCUREMENT_PLANNING_ELIGIBLE_COMPANY_EXT_FAILED");
+  if (companyExtError) {
+    console.error("PO11_ELIGIBLE_COMPANY_EXT_FAILED", {
+      company_id: companyId,
+      allowed_material_ids: allowedMaterialIds.size,
+      message: companyExtError.message,
+      details: companyExtError.details,
+      hint: companyExtError.hint,
+      code: companyExtError.code,
+    });
+    throw new Error("PROCUREMENT_PLANNING_ELIGIBLE_COMPANY_EXT_FAILED");
+  }
 
   const companyAllowed = new Set(((companyExtRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean));
   const resultMap = new Map<string, { material_id: string; source_sloc_group_id: string | null }>();
@@ -687,7 +754,18 @@ async function getEligibleMaterialRows(companyId: string): Promise<Array<{ mater
       source_sloc_group_id: sourceSlocGroupId,
     });
   }
-  return [...resultMap.values()];
+  const eligibleResults = [...resultMap.values()];
+  console.info("PO11_ELIGIBLE_SUMMARY", {
+    company_id: companyId,
+    sloc_member_rows: slocRows.length,
+    active_sloc_ids: activeSlocIds.length,
+    stock_scope_rows: ((stockScopeRows ?? []) as JsonRecord[]).length,
+    eligible_stock_rows: eligibleStockRows.length,
+    rm_pm_material_ids: allowedMaterialIds.size,
+    company_allowed_material_ids: companyAllowed.size,
+    eligible_scope_rows: eligibleResults.length,
+  });
+  return eligibleResults;
 }
 
 async function ensureAutoIncludedPlanLines(
@@ -746,7 +824,18 @@ async function ensureAutoIncludedPlanLines(
   }
 
   const missingRows = eligibleRows.filter((row) => !existingScopeKeys.has(buildMaterialScopeKey(row.material_id, row.source_sloc_group_id)));
-  if (missingRows.length === 0) return;
+  if (missingRows.length === 0) {
+    logPlanningDebug(ctx, "AUTO_INCLUDE_SYNC", {
+      company_id: companyId,
+      plan_month: planMonth,
+      plan_id: planId,
+      existing_line_count: existingLines.length,
+      eligible_row_count: eligibleRows.length,
+      item_group_count: itemGroups.length,
+      missing_row_count: 0,
+    });
+    return;
+  }
 
   const leadTimeMap = await getMaterialDefaultLeadTimes(companyId, missingRows.map((row) => row.material_id));
   const priorPlan = await getPreviousPlan(companyId, planMonth);
@@ -794,6 +883,16 @@ async function ensureAutoIncludedPlanLines(
     .from("procurement_monthly_plan_line")
     .insert(inserts);
   if (error) throw new Error("PROCUREMENT_PLANNING_AUTO_INCLUDE_FAILED");
+  logPlanningDebug(ctx, "AUTO_INCLUDE_INSERT", {
+    company_id: companyId,
+    plan_month: planMonth,
+    plan_id: planId,
+    existing_line_count: existingLines.length,
+    eligible_row_count: eligibleRows.length,
+    item_group_count: itemGroups.length,
+    missing_row_count: missingRows.length,
+    inserted_row_count: inserts.length,
+  });
 }
 
 async function loadMaterialMap(materialIds: string[]): Promise<Map<string, JsonRecord>> {
@@ -1012,6 +1111,21 @@ async function loadWorkspaceRows(
     return left.material_name.localeCompare(right.material_name);
   });
 
+  logPlanningDebug(ctx, "WORKSPACE_COUNTS", {
+    company_id: companyId,
+    plan_month: planMonth,
+    plan_id: planId,
+    plan_line_count: planLines.length,
+    sloc_group_raw_count: slocGroupsRaw.length,
+    sloc_member_count: slocRows.length,
+    sloc_group_summary_count: slocGroups.length,
+    item_group_count: itemGroups.length,
+    group_config_count: groupConfigs.length,
+    eligible_row_count: eligibleRows.length,
+    material_count: materialIds.length,
+    workspace_row_count: rows.length,
+  });
+
   return { rows, slocGroups, itemGroups, groupConfigs };
 }
 
@@ -1023,11 +1137,35 @@ export async function getProcurementPlanningHandler(
     const url = new URL(req.url);
     const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
     if (!companyId) {
+      logPlanningDebug(ctx, "WORKSPACE_EMPTY_COMPANY_SCOPE", {
+        requested_company_id: url.searchParams.get("company_id") ?? "",
+      });
       return okResponse(req, { plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [] }, ctx.request_id);
     }
     const planMonth = normalizePlanMonth(url.searchParams.get("plan_month")) ?? getCurrentPlanMonth();
+    logPlanningDebug(ctx, "WORKSPACE_REQUEST", {
+      requested_company_id: url.searchParams.get("company_id") ?? "",
+      resolved_company_id: companyId,
+      requested_plan_month: url.searchParams.get("plan_month") ?? "",
+      resolved_plan_month: planMonth,
+    });
     const plan = await ensurePlanExists(ctx, companyId, planMonth);
+    logPlanningDebug(ctx, "WORKSPACE_PLAN_READY", {
+      company_id: companyId,
+      plan_month: planMonth,
+      plan_id: plan.id,
+      plan_status: plan.status,
+    });
     const workspace = await loadWorkspaceRows(ctx, companyId, planMonth, plan.id);
+    logPlanningDebug(ctx, "WORKSPACE_RESPONSE", {
+      company_id: companyId,
+      plan_month: planMonth,
+      plan_id: plan.id,
+      row_count: workspace.rows.length,
+      sloc_group_count: workspace.slocGroups.length,
+      item_group_count: workspace.itemGroups.length,
+      group_config_count: workspace.groupConfigs.length,
+    });
     return okResponse(req, {
       plan,
       plan_month: planMonth,
@@ -1038,6 +1176,12 @@ export async function getProcurementPlanningHandler(
     }, ctx.request_id);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_WORKSPACE_FAILED";
+    console.error("PO11_WORKSPACE_HANDLER_FAILED", {
+      request_id: ctx.request_id,
+      auth_user_id: ctx.auth_user_id,
+      code,
+      error: error instanceof Error ? error.message : "PROCUREMENT_PLANNING_WORKSPACE_FAILED",
+    });
     return planningError(req, ctx, code, 500, "Unable to load procurement planning workspace.");
   }
 }

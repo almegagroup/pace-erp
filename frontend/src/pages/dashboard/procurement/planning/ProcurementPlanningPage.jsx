@@ -14,6 +14,8 @@ import {
   deleteProcurementPlanningSlocGroup,
   getProcurementPlanning,
   getProcurementPlanningHistory,
+  listProcurementPlanningItemGroups,
+  listProcurementPlanningSlocGroups,
   saveProcurementPlanningLines,
   updateProcurementPlanningItemGroup,
   updateProcurementPlanningSlocGroup,
@@ -82,6 +84,10 @@ function normalizeHistoryData(payload) {
 
 function normalizeStorageLocationPayload(payload) {
   return Array.isArray(payload) ? payload : payload?.data ?? [];
+}
+
+function normalizeCollectionPayload(payload) {
+  return extractCollectionItems(payload);
 }
 
 function getStatusLabel(tone) {
@@ -995,6 +1001,8 @@ export default function ProcurementPlanningPage() {
   const workspaceQueryKey = ["po11", "workspace", effectiveCompanyId || "", planMonthValue];
   const historyQueryKey = ["po11", "history", effectiveCompanyId || "", planMonthValue];
   const storageLocationsQueryKey = ["po11", "storage-locations", effectiveCompanyId || ""];
+  const slocGroupsQueryKey = ["po11", "sloc-groups", effectiveCompanyId || ""];
+  const itemGroupsQueryKey = ["po11", "item-groups", effectiveCompanyId || ""];
 
   function fetchWorkspace() {
     return getProcurementPlanning({
@@ -1017,6 +1025,18 @@ export default function ProcurementPlanningPage() {
     });
   }
 
+  function fetchSlocGroups() {
+    return listProcurementPlanningSlocGroups({
+      company_id: effectiveCompanyId,
+    });
+  }
+
+  function fetchItemGroups() {
+    return listProcurementPlanningItemGroups({
+      company_id: effectiveCompanyId,
+    });
+  }
+
   const workspaceQuery = useQuery({
     queryKey: workspaceQueryKey,
     queryFn: fetchWorkspace,
@@ -1031,6 +1051,20 @@ export default function ProcurementPlanningPage() {
     select: normalizeStorageLocationPayload,
   });
 
+  const slocGroupsQuery = useQuery({
+    queryKey: slocGroupsQueryKey,
+    queryFn: fetchSlocGroups,
+    enabled: Boolean(effectiveCompanyId),
+    select: normalizeCollectionPayload,
+  });
+
+  const itemGroupsQuery = useQuery({
+    queryKey: itemGroupsQueryKey,
+    queryFn: fetchItemGroups,
+    enabled: Boolean(effectiveCompanyId),
+    select: normalizeCollectionPayload,
+  });
+
   const historyQuery = useQuery({
     queryKey: historyQueryKey,
     queryFn: fetchPlanningHistory,
@@ -1040,6 +1074,8 @@ export default function ProcurementPlanningPage() {
 
   const workspace = workspaceQuery.data ?? EMPTY_WORKSPACE;
   const storageLocations = storageLocationsQuery.data ?? [];
+  const slocGroups = slocGroupsQuery.data ?? workspace.sloc_groups ?? [];
+  const itemGroups = itemGroupsQuery.data ?? workspace.item_groups ?? [];
   const historyData = historyQuery.data ?? EMPTY_HISTORY;
   const historyRows = historyData.rows;
   const historyGroupConfigs = historyData.group_configs;
@@ -1047,11 +1083,15 @@ export default function ProcurementPlanningPage() {
   const queryError =
     (workspaceQuery.error instanceof Error ? workspaceQuery.error.message : "") ||
     (storageLocationsQuery.error instanceof Error ? storageLocationsQuery.error.message : "") ||
+    (slocGroupsQuery.error instanceof Error ? slocGroupsQuery.error.message : "") ||
+    (itemGroupsQuery.error instanceof Error ? itemGroupsQuery.error.message : "") ||
     (activeTab === "history" && historyQuery.error instanceof Error ? historyQuery.error.message : "");
   const activeError = error || queryError;
   const refreshing =
     workspaceQuery.isFetching ||
     storageLocationsQuery.isFetching ||
+    slocGroupsQuery.isFetching ||
+    itemGroupsQuery.isFetching ||
     (activeTab === "history" && historyQuery.isFetching);
   useEffect(() => {
     if (!companyId) {
@@ -1118,7 +1158,7 @@ export default function ProcurementPlanningPage() {
 
   useEffect(() => {
     const nextGroupConfigDrafts = {};
-    (workspace.item_groups || []).forEach((group) => {
+    itemGroups.forEach((group) => {
       const existing = (workspace.group_configs || []).find(
         (config) => config.planning_item_group_id === group.id
       );
@@ -1139,31 +1179,33 @@ export default function ProcurementPlanningPage() {
       };
     });
     setGroupConfigDrafts(nextGroupConfigDrafts);
-  }, [workspace.group_configs, workspace.item_groups]);
+  }, [itemGroups, workspace.group_configs]);
 
   useEffect(() => {
     setDashboardFilters((current) => ({
       ...current,
-      slocGroups: workspace.sloc_groups || [],
+      slocGroups,
     }));
-  }, [workspace.sloc_groups]);
+  }, [slocGroups]);
 
   useEffect(() => {
-    if (!workspace.sloc_groups.length) {
+    if (!slocGroups.length) {
       setItemManagerSlocGroupId("");
       return;
     }
     setItemManagerSlocGroupId((current) => {
-      if (current && workspace.sloc_groups.some((group) => group.id === current)) return current;
-      return workspace.sloc_groups[0]?.id || "";
+      if (current && slocGroups.some((group) => group.id === current)) return current;
+      return slocGroups[0]?.id || "";
     });
-  }, [workspace.sloc_groups]);
+  }, [slocGroups]);
 
   async function refreshWorkspaceView() {
     if (!effectiveCompanyId) return;
     await Promise.all([
       workspaceQuery.refetch(),
       storageLocationsQuery.refetch(),
+      slocGroupsQuery.refetch(),
+      itemGroupsQuery.refetch(),
       activeTab === "history" ? historyQuery.refetch() : Promise.resolve(),
     ]);
   }
@@ -1284,6 +1326,7 @@ export default function ProcurementPlanningPage() {
         }));
       }
       if (savedGroups.length > 0) {
+        queryClient.setQueryData(slocGroupsQueryKey, savedGroups);
         queryClient.setQueryData(workspaceQueryKey, (current) => ({
           ...normalizeWorkspaceData(current),
           sloc_groups: savedGroups,
@@ -1291,7 +1334,10 @@ export default function ProcurementPlanningPage() {
       }
       setSlocGroupForm({ id: "", group_name: "", storage_location_ids: [] });
       setMessage("Planning SLOC group saved.");
-      await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
+        queryClient.invalidateQueries({ queryKey: slocGroupsQueryKey }),
+      ]);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Unable to save SLOC group.");
     } finally {
@@ -1305,7 +1351,8 @@ export default function ProcurementPlanningPage() {
     setMessage("");
     try {
       const savedGroups = extractCollectionItems(await deleteProcurementPlanningSlocGroup(id));
-      if (savedGroups.length > 0 || workspace.sloc_groups.length > 0) {
+      if (savedGroups.length > 0 || slocGroups.length > 0) {
+        queryClient.setQueryData(slocGroupsQueryKey, savedGroups);
         queryClient.setQueryData(workspaceQueryKey, (current) => ({
           ...normalizeWorkspaceData(current),
           sloc_groups: savedGroups,
@@ -1313,7 +1360,11 @@ export default function ProcurementPlanningPage() {
       }
       setSlocGroupForm({ id: "", group_name: "", storage_location_ids: [] });
       setMessage("Planning SLOC group deleted.");
-      await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
+        queryClient.invalidateQueries({ queryKey: slocGroupsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: itemGroupsQueryKey }),
+      ]);
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Unable to delete SLOC group.");
     } finally {
@@ -1344,6 +1395,7 @@ export default function ProcurementPlanningPage() {
         }));
       }
       if (savedItemGroups.length > 0) {
+        queryClient.setQueryData(itemGroupsQueryKey, savedItemGroups);
         queryClient.setQueryData(workspaceQueryKey, (current) => ({
           ...normalizeWorkspaceData(current),
           item_groups: savedItemGroups,
@@ -1351,7 +1403,10 @@ export default function ProcurementPlanningPage() {
       }
       setItemGroupForm({ id: "", group_name: "", sloc_group_id: "" });
       setMessage("Planning item group saved.");
-      await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
+        queryClient.invalidateQueries({ queryKey: itemGroupsQueryKey }),
+      ]);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Unable to save item group.");
     } finally {
@@ -1365,7 +1420,8 @@ export default function ProcurementPlanningPage() {
     setMessage("");
     try {
       const savedItemGroups = extractCollectionItems(await deleteProcurementPlanningItemGroup(id));
-      if (savedItemGroups.length > 0 || workspace.item_groups.length > 0) {
+      if (savedItemGroups.length > 0 || itemGroups.length > 0) {
+        queryClient.setQueryData(itemGroupsQueryKey, savedItemGroups);
         queryClient.setQueryData(workspaceQueryKey, (current) => ({
           ...normalizeWorkspaceData(current),
           item_groups: savedItemGroups,
@@ -1374,7 +1430,10 @@ export default function ProcurementPlanningPage() {
       setItemGroupForm({ id: "", group_name: "", sloc_group_id: "" });
       if (selectedItemGroupId === id) setSelectedItemGroupId("");
       setMessage("Planning item group deleted.");
-      await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
+        queryClient.invalidateQueries({ queryKey: itemGroupsQueryKey }),
+      ]);
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Unable to delete item group.");
     } finally {
@@ -1449,8 +1508,8 @@ export default function ProcurementPlanningPage() {
   );
 
   const itemGroupsById = useMemo(() => {
-    return new Map((workspace.item_groups || []).map((group) => [group.id, group]));
-  }, [workspace.item_groups]);
+    return new Map(itemGroups.map((group) => [group.id, group]));
+  }, [itemGroups]);
 
   const effectiveRows = useMemo(() => {
     return (workspace.rows || []).map((row) =>
@@ -1462,17 +1521,17 @@ export default function ProcurementPlanningPage() {
     const rows = effectiveRows || [];
     return {
       totalRows: rows.length,
-      slocGroups: workspace.sloc_groups.length,
-      itemGroups: workspace.item_groups.length,
+      slocGroups: slocGroups.length,
+      itemGroups: itemGroups.length,
       groupedRows: rows.filter((row) => row.planning_item_group_id).length,
       standaloneRows: rows.filter((row) => !row.planning_item_group_id).length,
       excludedRows: rows.filter((row) => row.excluded_from_dashboard).length,
       criticalRows: rows.filter((row) => row.status_tone === "CRITICAL").length,
       warningRows: rows.filter((row) => row.status_tone === "WARNING").length,
     };
-  }, [effectiveRows, workspace.item_groups.length, workspace.sloc_groups.length]);
+  }, [effectiveRows, itemGroups.length, slocGroups.length]);
   const slocGroupInsights = useMemo(() => {
-    return workspace.sloc_groups.map((group) => {
+    return slocGroups.map((group) => {
       const linkedRows = effectiveRows.filter((row) => row.source_sloc_group_id === group.id);
       return {
         ...group,
@@ -1486,10 +1545,10 @@ export default function ProcurementPlanningPage() {
           .slice(0, 10),
       };
     });
-  }, [effectiveRows, workspace.sloc_groups]);
+  }, [effectiveRows, slocGroups]);
 
   const itemGroupInsights = useMemo(() => {
-    return workspace.item_groups.map((group) => {
+    return itemGroups.map((group) => {
       const memberRows = effectiveRows.filter((row) => row.planning_item_group_id === group.id);
       return {
         ...group,
@@ -1504,11 +1563,11 @@ export default function ProcurementPlanningPage() {
           .slice(0, 10),
       };
     });
-  }, [effectiveRows, workspace.item_groups]);
+  }, [effectiveRows, itemGroups]);
 
   const selectedItemGroup = useMemo(() => {
-    return workspace.item_groups.find((group) => group.id === selectedItemGroupId) || null;
-  }, [selectedItemGroupId, workspace.item_groups]);
+    return itemGroups.find((group) => group.id === selectedItemGroupId) || null;
+  }, [selectedItemGroupId, itemGroups]);
 
   useEffect(() => {
     if (selectedItemGroup?.sloc_group_id) {
@@ -1516,7 +1575,7 @@ export default function ProcurementPlanningPage() {
     }
   }, [selectedItemGroup]);
 
-  const selectedSlocGroupIdForItems = itemManagerSlocGroupId || workspace.sloc_groups[0]?.id || "";
+  const selectedSlocGroupIdForItems = itemManagerSlocGroupId || slocGroups[0]?.id || "";
 
   const itemTabRows = useMemo(() => {
     return effectiveRows
@@ -1538,8 +1597,8 @@ export default function ProcurementPlanningPage() {
     );
   }, [availableItemPool]);
   const scopedItemGroups = useMemo(() => {
-    return workspace.item_groups.filter((group) => group.sloc_group_id === selectedSlocGroupIdForItems);
-  }, [selectedSlocGroupIdForItems, workspace.item_groups]);
+    return itemGroups.filter((group) => group.sloc_group_id === selectedSlocGroupIdForItems);
+  }, [itemGroups, selectedSlocGroupIdForItems]);
 
   const historyBlocks = useMemo(() => {
     return computeDashboardBlocks(
@@ -1715,7 +1774,7 @@ export default function ProcurementPlanningPage() {
                         className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
                       >
                         <option value="">All SLOC groups</option>
-                        {workspace.sloc_groups.map((group) => (
+                        {slocGroups.map((group) => (
                           <option key={group.id} value={group.id}>
                             {group.group_name}
                           </option>
@@ -1754,8 +1813,8 @@ export default function ProcurementPlanningPage() {
             {activeTab === "input" ? (
               <MonthlyInputTable
                 rows={effectiveRows}
-                itemGroups={workspace.item_groups}
-                slocGroups={workspace.sloc_groups}
+                itemGroups={itemGroups}
+                slocGroups={slocGroups}
                 drafts={lineDrafts}
                 groupConfigDrafts={groupConfigDrafts}
                 filters={{ ...inputFilters, monthValue: planMonthValue }}
@@ -1884,7 +1943,7 @@ export default function ProcurementPlanningPage() {
                         className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
                       >
                         <option value="">Select SLOC group</option>
-                        {workspace.sloc_groups.map((group) => (
+                        {slocGroups.map((group) => (
                           <option key={group.id} value={group.id}>
                             {group.group_name}
                           </option>
@@ -1966,7 +2025,7 @@ export default function ProcurementPlanningPage() {
                           className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
                         >
                           <option value="">Select SLOC group</option>
-                          {workspace.sloc_groups.map((group) => (
+                          {slocGroups.map((group) => (
                             <option key={group.id} value={group.id}>
                               {group.group_name}
                             </option>
@@ -1981,7 +2040,7 @@ export default function ProcurementPlanningPage() {
                           className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
                         >
                           <option value="">Select item group</option>
-                          {workspace.item_groups
+                          {itemGroups
                             .filter((group) => group.sloc_group_id === selectedSlocGroupIdForItems)
                             .map((group) => (
                               <option key={group.id} value={group.id}>
