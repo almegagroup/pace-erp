@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
@@ -12,8 +13,6 @@ import {
   deleteProcurementPlanningSlocGroup,
   getProcurementPlanning,
   getProcurementPlanningHistory,
-  listProcurementPlanningItemGroups,
-  listProcurementPlanningSlocGroups,
   saveProcurementPlanningLines,
   updateProcurementPlanningItemGroup,
   updateProcurementPlanningSlocGroup,
@@ -46,6 +45,42 @@ function extractCollectionItems(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.items)) return payload.items;
   return [];
+}
+
+const EMPTY_WORKSPACE = {
+  plan: null,
+  rows: [],
+  sloc_groups: [],
+  item_groups: [],
+  group_configs: [],
+};
+
+const EMPTY_HISTORY = {
+  archive: null,
+  rows: [],
+  group_configs: [],
+};
+
+function normalizeWorkspaceData(payload) {
+  return {
+    plan: payload?.plan ?? null,
+    rows: Array.isArray(payload?.rows) ? payload.rows : [],
+    sloc_groups: Array.isArray(payload?.sloc_groups) ? payload.sloc_groups : [],
+    item_groups: Array.isArray(payload?.item_groups) ? payload.item_groups : [],
+    group_configs: Array.isArray(payload?.group_configs) ? payload.group_configs : [],
+  };
+}
+
+function normalizeHistoryData(payload) {
+  return {
+    archive: payload?.archive ?? null,
+    rows: Array.isArray(payload?.rows) ? payload.rows : [],
+    group_configs: Array.isArray(payload?.group_configs) ? payload.group_configs : [],
+  };
+}
+
+function normalizeStorageLocationPayload(payload) {
+  return Array.isArray(payload) ? payload : payload?.data ?? [];
 }
 
 function getStatusLabel(tone) {
@@ -511,6 +546,7 @@ function MonthlyInputTable({
   onGroupConfigChange,
   onFilterChange,
   onClearFilters,
+  readOnly = false,
 }) {
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
@@ -738,6 +774,7 @@ function MonthlyInputTable({
                           onChange={(event) =>
                             onGroupConfigChange(row.planning_item_group_id, field, event.target.value)
                           }
+                          disabled={readOnly}
                           className="w-full border border-slate-300 px-2 py-1 text-right outline-none focus:border-sky-500"
                         />
                       ) : isGroupedMember ? (
@@ -749,6 +786,7 @@ function MonthlyInputTable({
                           step="0.001"
                           value={draft[field]}
                           onChange={(event) => onChange(row.material_id, field, event.target.value)}
+                          disabled={readOnly}
                           className="w-full border border-slate-300 px-2 py-1 text-right outline-none focus:border-sky-500"
                         />
                       )}
@@ -763,6 +801,7 @@ function MonthlyInputTable({
                         onChange={(event) =>
                           onChange(row.material_id, "planning_item_group_id", event.target.value)
                         }
+                        disabled={readOnly}
                         className="w-full border border-slate-300 px-2 py-1 outline-none focus:border-sky-500"
                       >
                         <option value="">Standalone</option>
@@ -784,6 +823,7 @@ function MonthlyInputTable({
                         onChange={(event) =>
                           onChange(row.material_id, "excluded_from_dashboard", event.target.checked)
                         }
+                        disabled={readOnly}
                         className="h-4 w-4"
                       />
                     )}
@@ -883,21 +923,11 @@ function GroupCard({
 
 export default function ProcurementPlanningPage() {
   const { runtimeContext } = useMenu();
+  const queryClient = useQueryClient();
   const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [companyId, setCompanyId] = useState("");
   const [planMonth, setPlanMonth] = useState(getMonthValue(""));
   const [activeTab, setActiveTab] = useState("dashboard");
-  const [workspace, setWorkspace] = useState({
-    plan: null,
-    rows: [],
-    sloc_groups: [],
-    item_groups: [],
-    group_configs: [],
-  });
-  const [historyRows, setHistoryRows] = useState([]);
-  const [historyGroupConfigs, setHistoryGroupConfigs] = useState([]);
-  const [historyMeta, setHistoryMeta] = useState(null);
-  const [storageLocations, setStorageLocations] = useState([]);
   const [lineDrafts, setLineDrafts] = useState({});
   const [groupConfigDrafts, setGroupConfigDrafts] = useState({});
   const [slocGroupForm, setSlocGroupForm] = useState({
@@ -921,14 +951,73 @@ export default function ProcurementPlanningPage() {
     showUngroupedOnly: false,
     showExcludedOnly: false,
   });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
   const effectiveCompanyId = companyId || defaultCompanyId;
   const planMonthValue = getMonthValue(planMonth);
+  const workspaceQueryKey = ["po11", "workspace", effectiveCompanyId || "", planMonthValue];
+  const historyQueryKey = ["po11", "history", effectiveCompanyId || "", planMonthValue];
+  const storageLocationsQueryKey = ["po11", "storage-locations", effectiveCompanyId || ""];
 
+  function fetchWorkspace() {
+    return getProcurementPlanning({
+      company_id: effectiveCompanyId,
+      plan_month: `${planMonthValue}-01`,
+    });
+  }
+
+  function fetchPlanningHistory() {
+    return getProcurementPlanningHistory({
+      company_id: effectiveCompanyId,
+      plan_month: `${planMonthValue}-01`,
+    });
+  }
+
+  function fetchStorageLocations() {
+    return listStorageLocations({
+      company_id: effectiveCompanyId,
+      is_active: true,
+    });
+  }
+
+  const workspaceQuery = useQuery({
+    queryKey: workspaceQueryKey,
+    queryFn: fetchWorkspace,
+    enabled: Boolean(effectiveCompanyId),
+    select: normalizeWorkspaceData,
+  });
+
+  const storageLocationsQuery = useQuery({
+    queryKey: storageLocationsQueryKey,
+    queryFn: fetchStorageLocations,
+    enabled: Boolean(effectiveCompanyId),
+    select: normalizeStorageLocationPayload,
+  });
+
+  const historyQuery = useQuery({
+    queryKey: historyQueryKey,
+    queryFn: fetchPlanningHistory,
+    enabled: Boolean(effectiveCompanyId) && activeTab === "history",
+    select: normalizeHistoryData,
+  });
+
+  const workspace = workspaceQuery.data ?? EMPTY_WORKSPACE;
+  const storageLocations = storageLocationsQuery.data ?? [];
+  const historyData = historyQuery.data ?? EMPTY_HISTORY;
+  const historyRows = historyData.rows;
+  const historyGroupConfigs = historyData.group_configs;
+  const historyMeta = historyData.archive;
+  const queryError =
+    (workspaceQuery.error instanceof Error ? workspaceQuery.error.message : "") ||
+    (storageLocationsQuery.error instanceof Error ? storageLocationsQuery.error.message : "") ||
+    (activeTab === "history" && historyQuery.error instanceof Error ? historyQuery.error.message : "");
+  const activeError = error || queryError;
+  const refreshing =
+    workspaceQuery.isFetching ||
+    storageLocationsQuery.isFetching ||
+    (activeTab === "history" && historyQuery.isFetching);
   useEffect(() => {
     if (!companyId) {
       const selectedCompany = String(runtimeContext?.selectedCompanyId ?? "").trim();
@@ -961,79 +1050,6 @@ export default function ProcurementPlanningPage() {
       showExcludedOnly: false,
     });
   }, [companyId]);
-
-  async function loadWorkspace() {
-    if (!effectiveCompanyId) {
-      setWorkspace({ plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [] });
-      setStorageLocations([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const [workspaceResult, locationsResult, slocGroupsResult, itemGroupsResult] = await Promise.allSettled([
-        getProcurementPlanning({
-          company_id: effectiveCompanyId,
-          plan_month: `${planMonthValue}-01`,
-        }),
-        listStorageLocations({
-          company_id: effectiveCompanyId,
-          is_active: true,
-        }),
-        listProcurementPlanningSlocGroups({
-          company_id: effectiveCompanyId,
-        }),
-        listProcurementPlanningItemGroups({
-          company_id: effectiveCompanyId,
-        }),
-      ]);
-      if (workspaceResult.status !== "fulfilled") throw workspaceResult.reason;
-      if (locationsResult.status !== "fulfilled") throw locationsResult.reason;
-      if (slocGroupsResult.status !== "fulfilled") throw slocGroupsResult.reason;
-      if (itemGroupsResult.status !== "fulfilled") throw itemGroupsResult.reason;
-
-      const workspaceData = workspaceResult.value;
-      const fallbackSlocGroups = extractCollectionItems(slocGroupsResult.value);
-      const fallbackItemGroups = extractCollectionItems(itemGroupsResult.value);
-      setWorkspace({
-        plan: workspaceData?.plan ?? null,
-        rows: Array.isArray(workspaceData?.rows) ? workspaceData.rows : [],
-        sloc_groups:
-          fallbackSlocGroups.length > 0
-            ? fallbackSlocGroups
-            : Array.isArray(workspaceData?.sloc_groups)
-              ? workspaceData.sloc_groups
-              : [],
-        item_groups:
-          fallbackItemGroups.length > 0
-            ? fallbackItemGroups
-            : Array.isArray(workspaceData?.item_groups)
-              ? workspaceData.item_groups
-              : [],
-        group_configs: Array.isArray(workspaceData?.group_configs)
-          ? workspaceData.group_configs
-          : [],
-      });
-
-      if (locationsResult.status === "fulfilled") {
-        const locations = locationsResult.value;
-        setStorageLocations(Array.isArray(locations) ? locations : locations?.data ?? []);
-      } else {
-        setStorageLocations([]);
-      }
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to load PO11 workspace.");
-      setWorkspace({ plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [] });
-      setStorageLocations([]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadWorkspace();
-  }, [effectiveCompanyId, planMonthValue]);
 
   useEffect(() => {
     const nextDrafts = {};
@@ -1086,33 +1102,14 @@ export default function ProcurementPlanningPage() {
     });
   }, [workspace.sloc_groups]);
 
-  async function loadHistory() {
+  async function refreshWorkspaceView() {
     if (!effectiveCompanyId) return;
-    setLoading(true);
-    setError("");
-    try {
-      const history = await getProcurementPlanningHistory({
-        company_id: effectiveCompanyId,
-        plan_month: `${planMonthValue}-01`,
-      });
-      setHistoryRows(Array.isArray(history?.rows) ? history.rows : []);
-      setHistoryGroupConfigs(Array.isArray(history?.group_configs) ? history.group_configs : []);
-      setHistoryMeta(history?.archive ?? null);
-    } catch (historyError) {
-      setError(historyError instanceof Error ? historyError.message : "Unable to load PO11 history.");
-      setHistoryRows([]);
-      setHistoryGroupConfigs([]);
-      setHistoryMeta(null);
-    } finally {
-      setLoading(false);
-    }
+    await Promise.all([
+      workspaceQuery.refetch(),
+      storageLocationsQuery.refetch(),
+      activeTab === "history" ? historyQuery.refetch() : Promise.resolve(),
+    ]);
   }
-
-  useEffect(() => {
-    if (activeTab === "history") {
-      void loadHistory();
-    }
-  }, [activeTab, effectiveCompanyId, planMonthValue]);
 
   function handleDraftChange(materialId, field, value) {
     setLineDrafts((current) => ({
@@ -1165,14 +1162,17 @@ export default function ProcurementPlanningPage() {
         group_configs: Object.values(groupConfigDrafts),
       };
       const result = await saveProcurementPlanningLines(payload);
-      setWorkspace((current) => ({
-        ...current,
-        rows: Array.isArray(result?.rows) ? result.rows : current.rows,
-        group_configs: Array.isArray(result?.group_configs)
-          ? result.group_configs
-          : current.group_configs,
-      }));
-      await loadWorkspace();
+      queryClient.setQueryData(workspaceQueryKey, (current) => {
+        const base = normalizeWorkspaceData(current);
+        return {
+          ...base,
+          rows: Array.isArray(result?.rows) ? result.rows : base.rows,
+          group_configs: Array.isArray(result?.group_configs)
+            ? result.group_configs
+            : base.group_configs,
+        };
+      });
+      await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
       setMessage("Monthly plan saved.");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Unable to save monthly plan.");
@@ -1192,9 +1192,11 @@ export default function ProcurementPlanningPage() {
         plan_month: `${planMonthValue}-01`,
       });
       setMessage(`Month ${planMonthValue} archived and closed.`);
-      await loadWorkspace();
       setActiveTab("history");
-      await loadHistory();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
+        queryClient.invalidateQueries({ queryKey: historyQueryKey }),
+      ]);
     } catch (closeError) {
       setError(closeError instanceof Error ? closeError.message : "Unable to close month.");
     } finally {
@@ -1225,14 +1227,14 @@ export default function ProcurementPlanningPage() {
         }));
       }
       if (savedGroups.length > 0) {
-        setWorkspace((current) => ({
-          ...current,
+        queryClient.setQueryData(workspaceQueryKey, (current) => ({
+          ...normalizeWorkspaceData(current),
           sloc_groups: savedGroups,
         }));
       }
       setSlocGroupForm({ id: "", group_name: "", storage_location_ids: [] });
       setMessage("Planning SLOC group saved.");
-      await loadWorkspace();
+      await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Unable to save SLOC group.");
     } finally {
@@ -1247,14 +1249,14 @@ export default function ProcurementPlanningPage() {
     try {
       const savedGroups = extractCollectionItems(await deleteProcurementPlanningSlocGroup(id));
       if (savedGroups.length > 0 || workspace.sloc_groups.length > 0) {
-        setWorkspace((current) => ({
-          ...current,
+        queryClient.setQueryData(workspaceQueryKey, (current) => ({
+          ...normalizeWorkspaceData(current),
           sloc_groups: savedGroups,
         }));
       }
       setSlocGroupForm({ id: "", group_name: "", storage_location_ids: [] });
       setMessage("Planning SLOC group deleted.");
-      await loadWorkspace();
+      await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Unable to delete SLOC group.");
     } finally {
@@ -1271,21 +1273,28 @@ export default function ProcurementPlanningPage() {
     setError("");
     setMessage("");
     try {
+      let savedItemGroups = [];
       if (itemGroupForm.id) {
-        await updateProcurementPlanningItemGroup(itemGroupForm.id, {
+        savedItemGroups = extractCollectionItems(await updateProcurementPlanningItemGroup(itemGroupForm.id, {
           sloc_group_id: itemGroupForm.sloc_group_id,
           group_name: itemGroupForm.group_name,
-        });
+        }));
       } else {
-        await createProcurementPlanningItemGroup({
+        savedItemGroups = extractCollectionItems(await createProcurementPlanningItemGroup({
           company_id: effectiveCompanyId,
           sloc_group_id: itemGroupForm.sloc_group_id,
           group_name: itemGroupForm.group_name,
-        });
+        }));
+      }
+      if (savedItemGroups.length > 0) {
+        queryClient.setQueryData(workspaceQueryKey, (current) => ({
+          ...normalizeWorkspaceData(current),
+          item_groups: savedItemGroups,
+        }));
       }
       setItemGroupForm({ id: "", group_name: "", sloc_group_id: "" });
       setMessage("Planning item group saved.");
-      await loadWorkspace();
+      await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Unable to save item group.");
     } finally {
@@ -1298,11 +1307,17 @@ export default function ProcurementPlanningPage() {
     setError("");
     setMessage("");
     try {
-      await deleteProcurementPlanningItemGroup(id);
+      const savedItemGroups = extractCollectionItems(await deleteProcurementPlanningItemGroup(id));
+      if (savedItemGroups.length > 0 || workspace.item_groups.length > 0) {
+        queryClient.setQueryData(workspaceQueryKey, (current) => ({
+          ...normalizeWorkspaceData(current),
+          item_groups: savedItemGroups,
+        }));
+      }
       setItemGroupForm({ id: "", group_name: "", sloc_group_id: "" });
       if (selectedItemGroupId === id) setSelectedItemGroupId("");
       setMessage("Planning item group deleted.");
-      await loadWorkspace();
+      await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Unable to delete item group.");
     } finally {
@@ -1337,13 +1352,16 @@ export default function ProcurementPlanningPage() {
     handleDraftChange(materialId, "planning_item_group_id", "");
   }
 
-  const tabs = [
-    { id: "dashboard", label: "Planning Dashboard" },
-    { id: "input", label: "Monthly Plan Input" },
-    { id: "sloc", label: "SLOC Group Setup" },
-    { id: "item", label: "Item Group Setup" },
-    { id: "history", label: "History / Archive" },
-  ];
+  const tabs = useMemo(
+    () => [
+      { id: "dashboard", label: "Planning Dashboard" },
+      { id: "input", label: "Monthly Plan Input" },
+      { id: "sloc", label: "SLOC Group Setup" },
+      { id: "item", label: "Item Group Setup" },
+      { id: "history", label: "History / Archive" },
+    ],
+    []
+  );
 
   const itemGroupsById = useMemo(() => {
     return new Map((workspace.item_groups || []).map((group) => [group.id, group]));
@@ -1368,15 +1386,6 @@ export default function ProcurementPlanningPage() {
       warningRows: rows.filter((row) => row.status_tone === "WARNING").length,
     };
   }, [effectiveRows, workspace.item_groups.length, workspace.sloc_groups.length]);
-  const workspaceDecisionBlocks = useMemo(
-    () => computeDashboardBlocks(effectiveRows, planMonthValue, Object.values(groupConfigDrafts)),
-    [effectiveRows, groupConfigDrafts, planMonthValue]
-  );
-  const workspaceDecisionSummary = useMemo(
-    () => summarizeDecisionBlocks(workspaceDecisionBlocks),
-    [workspaceDecisionBlocks]
-  );
-
   const slocGroupInsights = useMemo(() => {
     return workspace.sloc_groups.map((group) => {
       const linkedRows = effectiveRows.filter((row) => row.source_sloc_group_id === group.id);
@@ -1412,12 +1421,6 @@ export default function ProcurementPlanningPage() {
     });
   }, [effectiveRows, workspace.item_groups]);
 
-  const standaloneRows = useMemo(() => {
-    return effectiveRows
-      .filter((row) => !row.planning_item_group_id)
-      .sort((left, right) => String(left.material_code).localeCompare(String(right.material_code)));
-  }, [effectiveRows]);
-
   const selectedItemGroup = useMemo(() => {
     return workspace.item_groups.find((group) => group.id === selectedItemGroupId) || null;
   }, [selectedItemGroupId, workspace.item_groups]);
@@ -1444,6 +1447,11 @@ export default function ProcurementPlanningPage() {
   const availableItemPool = useMemo(() => {
     return itemTabRows.filter((row) => !row.planning_item_group_id);
   }, [itemTabRows]);
+  const scopedStandaloneRows = useMemo(() => {
+    return [...availableItemPool].sort((left, right) =>
+      String(left.material_code).localeCompare(String(right.material_code))
+    );
+  }, [availableItemPool]);
   const scopedItemGroups = useMemo(() => {
     return workspace.item_groups.filter((group) => group.sloc_group_id === selectedSlocGroupIdForItems);
   }, [selectedSlocGroupIdForItems, workspace.item_groups]);
@@ -1457,6 +1465,12 @@ export default function ProcurementPlanningPage() {
   }, [historyGroupConfigs, historyRows, planMonthValue]);
   const historySummary = useMemo(() => summarizeDecisionBlocks(historyBlocks), [historyBlocks]);
 
+  useEffect(() => {
+    if (!tabs.some((tab) => tab.id === activeTab)) {
+      setActiveTab("dashboard");
+    }
+  }, [activeTab, tabs]);
+
   return (
     <ErpMasterListTemplate
       eyebrow="Procurement"
@@ -1464,9 +1478,9 @@ export default function ProcurementPlanningPage() {
       actions={[
         {
           key: "refresh",
-          label: loading ? "Refreshing..." : "Refresh",
+          label: refreshing ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => void loadWorkspace(),
+          onClick: () => void refreshWorkspaceView(),
         },
         ...(activeTab === "input"
           ? [
@@ -1500,7 +1514,7 @@ export default function ProcurementPlanningPage() {
           : []),
       ]}
       notices={[
-        ...(error ? [{ key: "planning-error", tone: "error", message: error }] : []),
+        ...(activeError ? [{ key: "planning-error", tone: "error", message: activeError }] : []),
         ...(message ? [{ key: "planning-message", tone: "success", message }] : []),
       ]}
       filterSection={{
@@ -1897,15 +1911,20 @@ export default function ProcurementPlanningPage() {
                       </div>
                       <button
                         type="button"
-                        onClick={() => jumpToMonthlyInput({ showUngroupedOnly: true })}
+                        onClick={() =>
+                          jumpToMonthlyInput({
+                            slocGroupId: selectedSlocGroupIdForItems,
+                            showUngroupedOnly: true,
+                          })
+                        }
                         className="border border-sky-300 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800"
                       >
                         Review Standalone
                       </button>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {standaloneRows.length > 0 ? (
-                        standaloneRows.slice(0, 16).map((row) => (
+                      {scopedStandaloneRows.length > 0 ? (
+                        scopedStandaloneRows.slice(0, 16).map((row) => (
                           <span
                             key={row.material_id}
                             className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700"
@@ -1915,7 +1934,7 @@ export default function ProcurementPlanningPage() {
                         ))
                       ) : (
                         <span className="text-xs text-slate-500">
-                          Every visible material is already assigned to a planning item group.
+                          Every visible material in this SLOC scope is already assigned to a planning item group.
                         </span>
                       )}
                     </div>
