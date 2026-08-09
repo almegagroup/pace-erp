@@ -131,14 +131,28 @@ The current implementation is still incomplete because:
 
 ### Authority Scope
 
-Full PO11 workspace authority for:
+PO11 report visibility:
+- Everyone with page access can open the workspace
+- Viewers can:
+  - toggle month
+  - toggle SLOC group
+  - review grouped / standalone planning rows
+  - use the standard company selector exactly like other company-scoped report pages
+
+Company-scope rule:
+- single-company users can only view their own company's data
+- multi-company users can switch company and only see data for companies already available to them in the standard transaction company selector flow
+
+Full PO11 maintenance authority for:
 - SCM
 - Director
+- ACL Master
 
 Do not accidentally widen operational write access beyond the approved ACL scope.
 
 Audit note:
 - Local route ACL wiring now maps PO11 setup/save/close writes under `PROC_PLANNING_VIEW` with `EDIT`.
+- Local route ACL wiring already supports report-style reads separately under `VIEW`.
 - Production ACL snapshot / role-data must still be reconciled during publish if prod currently shows PO11 as read-only for some roles.
 
 ## Out Of Scope
