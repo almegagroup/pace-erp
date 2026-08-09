@@ -674,6 +674,10 @@ export default function AppRouter() {
                     element={<ProcurementPlanningPage />}
                   />
                   <Route
+                    path="procurement/planning/report"
+                    element={<ProcurementPlanningPage />}
+                  />
+                  <Route
                     path="procurement/transfer"
                     element={<PlantTransferListPage />}
                   />

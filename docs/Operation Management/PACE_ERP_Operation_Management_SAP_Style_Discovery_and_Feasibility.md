@@ -3156,18 +3156,39 @@ This decides which storage locations contribute items into a planning scope.
 
 Rules:
 - Users define which storage locations belong to a planning storage-location group.
+- A company may maintain multiple planning SLOC groups at the same time.
+- Planning SLOC groups are company-scoped, not global.
+- Users with maintenance authority must be able to create, edit, and delete existing planning SLOC groups.
+- Editing a planning SLOC group includes adding or removing storage locations from that existing group.
 - Items eligible for PO11 come from the storage locations assigned to that planning SLOC group.
 - If a new RM / PM item starts appearing in an included storage location, it must automatically become available in PO11 immediately for the active month.
+- The operational sequence is:
+  1. create company-scoped SLOC group
+  2. system shows that SLOC group's eligible RM / PM item pool
+  3. user optionally creates one or more item groups under that same SLOC group
+  4. user assigns some items into item groups
+  5. remaining items stay stand-alone under that same SLOC group
+- One storage location cannot belong to more than one active planning SLOC group in the same company.
 
 #### 35.11.2 Planning Item Group
 
 This decides which materials should be evaluated together as alternate / pooled materials.
 
 Rules:
+- Each item group belongs to exactly one parent planning SLOC group.
+- Item groups are company-scoped through their parent planning SLOC group, not global free-floating masters.
+- The item-management UI must first select a planning SLOC group, then show that SLOC group's eligible RM / PM item pool for membership control.
 - Each group is monthly-decision driven from the PO11 workspace.
 - A material may be included, excluded, or moved between item groups in a given month.
+- The same material cannot belong to more than one item group in the same month.
 - Excluded items remain visible as stand-alone rows.
+- Removing a material from an item group returns it to stand-alone visibility immediately for the active month.
+- A stand-alone material may later be added into another item group within the same parent SLOC-group scope.
 - Group logic is for planning visibility and aggregate replenishment judgment; member-level data remains individually visible and editable.
+- The final planning slice for one SLOC group is:
+  - stand-alone items under that SLOC group
+  - plus all item-group members under that SLOC group
+- Requirement, safety days, processing time, lead time, and the other monthly planning inputs are saved month-wise for that selected planning slice.
 
 ### 35.12 Group Display Rules
 
@@ -3187,6 +3208,7 @@ Archive rules:
 - The archive snapshot must store the final day-end stock state of the last date of that month.
 - This includes the month-end EOD values for available stock, TRN, GE, in-QA, and total stock as they stood at close.
 - History views must show the saved snapshot, not recalculate against current live stock.
+- Month close may be user-triggered, and if the implementation later supports an automatic month-end close at the system's month boundary, that automatic close must produce the same frozen snapshot result.
 
 The live dashboard remains dynamic for the active month. The history screen remains frozen.
 
@@ -3202,13 +3224,21 @@ For this redesigned PO11 workspace:
 
 | Action | Who Can Do |
 |---|---|
-| View Planning Dashboard | SCM / Director / ACL-authorized equivalent |
-| Maintain Monthly Plan Input | SCM / Director / ACL-authorized equivalent |
-| Maintain Planning SLOC Group | SCM / Director / ACL-authorized equivalent |
-| Maintain Planning Item Group | SCM / Director / ACL-authorized equivalent |
-| View History / Archive | SCM / Director / ACL-authorized equivalent |
+| View Planning Dashboard | Anyone with PO11 page access, company-scoped by normal selector / ACL |
+| View Monthly Plan Input | Anyone with PO11 page access, company-scoped by normal selector / ACL |
+| View History / Archive | Anyone with PO11 page access, company-scoped by normal selector / ACL |
+| Maintain Monthly Plan Input | SCM / Director / ACL Master |
+| Maintain Planning SLOC Group | SCM / Director / ACL Master |
+| Maintain Planning Item Group | SCM / Director / ACL Master |
+| Close Month | SCM / Director / ACL Master |
 
-For the current approved business scope, full PO11 access is intended only for SCM and Director.
+View rules:
+- Single-company users only see their own company data.
+- Multi-company users may change company through the normal company selector, but only within companies already available in their runtime access.
+- View-only users may still change month and SLOC-group toggle / filter for reporting.
+
+Maintenance rules:
+- For the current approved business scope, write / setup / close authority is intended only for SCM, Director, and ACL Master.
 
 ### 35.16 UX Rule
 
@@ -3220,7 +3250,26 @@ The design should optimize:
 - clear grouped-material visibility
 - quick access to item / group detail without leaving the page
 
+Additional locked UX requirements:
+- The report workspace must support company toggle, month toggle, and SLOC-group toggle / filter.
+- The Monthly Plan Input table must itself render in grouped planning shape, not as a disconnected flat maintenance list.
+- The monthly input view must support `RM / PM / All` filtering so users can focus on one material class or review everything together.
+- SLOC-group and item-group maintenance must include clear management surfaces for existing groups, not only create-new forms.
+
 This page must not behave like a minimal legacy table if that reduces planning usability.
+
+### 35.17 Known Current Unresolved Implementation Issue (as of 2026-08-09)
+
+The business design for PO11 is considered final, but one implementation issue remains unresolved:
+
+- Newly created or recently updated company-scoped `Planning SLOC Group` records are not yet consistently becoming visible immediately in the same PO11 session and in the `Planning Item Group` parent-SLOC dropdown for follow-up mapping.
+
+Expected behavior:
+- User creates a SLOC group.
+- The same screen immediately shows that SLOC group in the existing-group list.
+- The Item Group Setup tab immediately shows that SLOC group as a selectable parent scope for item-group creation and member management.
+
+This is an implementation gap, not a business-design ambiguity.
 
 ---
 
