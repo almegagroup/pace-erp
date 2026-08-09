@@ -403,14 +403,6 @@ function DashboardTable({ rows, monthValue, filters, onFilterChange, groupConfig
           { label: "Normal", value: summary.normal },
         ]}
       />
-      <GuidancePanel
-        title="Dashboard Reading Guide"
-        items={[
-          "Group member rows show live stock visibility item-wise. Final warning / critical decision is taken from the group total row.",
-          "Standalone rows carry their own requirement and threshold calculation. Group total rows carry pooled planning values.",
-          "To change requirement, safety days, processing time, lead time, or fixed overrides, use the Monthly Plan Input tab.",
-        ]}
-      />
       <div className="overflow-x-auto border border-slate-200 bg-white">
         <table className="min-w-full text-xs">
           <thead className="bg-slate-100 text-slate-700">
@@ -650,16 +642,6 @@ function MonthlyInputTable({
           { label: "Member Rows", value: filteredRows.filter((row) => row.planning_item_group_id).length },
           { label: "Total Rows", value: rows.length },
           { label: "Excluded", value: rows.filter((row) => row.excluded_from_dashboard).length },
-        ]}
-      />
-      <GuidancePanel
-        title="Monthly Input Rules"
-        columns={4}
-        items={[
-          "Edit grouped planning only on the Group Total row.",
-          "Group member rows inherit requirement / safety / replenishment logic from their group total and stay visible for traceability.",
-          "Standalone rows remain independently editable. Moving an item into a group immediately changes how it is planned for the open month.",
-          "`0` is a valid value. Save the month after any change to refresh the final dashboard decision state.",
         ]}
       />
 
