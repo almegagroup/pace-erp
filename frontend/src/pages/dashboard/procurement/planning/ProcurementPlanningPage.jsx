@@ -46,6 +46,43 @@ function getStatusLabel(tone) {
   return "Normal";
 }
 
+function summarizeDecisionBlocks(blocks) {
+  return blocks
+    .filter((entry) => !isGroupedMemberEntry(entry))
+    .reduce(
+      (acc, entry) => {
+        const row = entry.row;
+        acc.total += 1;
+        if (entry.type === "group-total") acc.grouped += 1;
+        else acc.standalone += 1;
+        if (row.status_tone === "CRITICAL") acc.critical += 1;
+        else if (row.status_tone === "WARNING") acc.warning += 1;
+        else acc.normal += 1;
+        return acc;
+      },
+      { total: 0, grouped: 0, standalone: 0, critical: 0, warning: 0, normal: 0 }
+    );
+}
+
+function isGroupedMemberEntry(entry) {
+  return entry?.type === "item" && Boolean(entry?.groupName);
+}
+
+function renderPlanningCell(entry, value, emptyLabel = "-") {
+  if (isGroupedMemberEntry(entry)) {
+    return <span className="text-[11px] text-slate-500">Via group total</span>;
+  }
+  if (value == null) return emptyLabel;
+  return formatQty(value);
+}
+
+function renderOptionalPlanningCell(entry, value) {
+  if (isGroupedMemberEntry(entry)) {
+    return <span className="text-[11px] text-slate-500">Via group total</span>;
+  }
+  return value == null ? "-" : formatQty(value);
+}
+
 function getInitialDraft(row) {
   return {
     material_id: row.material_id,
@@ -65,6 +102,34 @@ function getInitialDraft(row) {
   };
 }
 
+function toNumberOrZero(value) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function applyDraftToRow(row, draft, itemGroupsById) {
+  if (!draft) return row;
+  const nextItemGroupId = String(draft.planning_item_group_id || "");
+  const nextItemGroup = nextItemGroupId ? itemGroupsById.get(nextItemGroupId) : null;
+  return {
+    ...row,
+    monthly_requirement_qty: toNumberOrZero(draft.monthly_requirement_qty),
+    safety_days: toNumberOrZero(draft.safety_days),
+    processing_time_days: toNumberOrZero(draft.processing_time_days),
+    lead_time_days: toNumberOrZero(draft.lead_time_days),
+    fixed_safety_stock_qty:
+      draft.fixed_safety_stock_qty === "" ? null : toNumberOrZero(draft.fixed_safety_stock_qty),
+    fixed_replenishment_stock_qty:
+      draft.fixed_replenishment_stock_qty === ""
+        ? null
+        : toNumberOrZero(draft.fixed_replenishment_stock_qty),
+    planning_item_group_id: nextItemGroupId || null,
+    planning_item_group_name: nextItemGroup?.group_name || null,
+    excluded_from_dashboard: Boolean(draft.excluded_from_dashboard),
+    display_order: toNumberOrZero(draft.display_order),
+  };
+}
+
 function getDaysInMonth(monthValue) {
   const [year, month] = String(monthValue || "").split("-").map(Number);
   if (!year || !month) return 30;
@@ -79,10 +144,16 @@ function matchesSearch(row, query) {
     .some((value) => value.includes(needle));
 }
 
-function computeDashboardBlocks(rows, monthValue) {
+function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
   const visibleRows = rows.filter((row) => !row.excluded_from_dashboard);
   const grouped = new Map();
   const standalone = [];
+  const groupConfigById = new Map(
+    groupConfigs.map((config) => [String(config.planning_item_group_id || ""), config])
+  );
+  const groupConfigByName = new Map(
+    groupConfigs.map((config) => [String(config.planning_item_group_name || ""), config])
+  );
   for (const row of visibleRows) {
     if (row.planning_item_group_name) {
       const bucket = grouped.get(row.planning_item_group_name) || [];
@@ -104,21 +175,38 @@ function computeDashboardBlocks(rows, monthValue) {
       });
       sortedItems.forEach((row) => blocks.push({ type: "item", row, groupName }));
       const count = sortedItems.length || 1;
-      const totalRequirement = sortedItems.reduce(
-        (sum, row) => sum + Number(row.monthly_requirement_qty || 0),
-        0
-      );
-      const avgSafetyDays =
-        sortedItems.reduce((sum, row) => sum + Number(row.safety_days || 0), 0) / count;
-      const avgProcessingDays =
-        sortedItems.reduce((sum, row) => sum + Number(row.processing_time_days || 0), 0) / count;
-      const avgLeadDays =
-        sortedItems.reduce((sum, row) => sum + Number(row.lead_time_days || 0), 0) / count;
+      const matchingConfig =
+        groupConfigById.get(String(sortedItems[0]?.planning_item_group_id || "")) ||
+        groupConfigByName.get(groupName) ||
+        null;
+      const totalRequirement = matchingConfig
+        ? Number(matchingConfig.monthly_requirement_qty || 0)
+        : sortedItems.reduce((sum, row) => sum + Number(row.monthly_requirement_qty || 0), 0);
+      const avgSafetyDays = matchingConfig
+        ? Number(matchingConfig.safety_days || 0)
+        : sortedItems.reduce((sum, row) => sum + Number(row.safety_days || 0), 0) / count;
+      const avgProcessingDays = matchingConfig
+        ? Number(matchingConfig.processing_time_days || 0)
+        : sortedItems.reduce((sum, row) => sum + Number(row.processing_time_days || 0), 0) / count;
+      const avgLeadDays = matchingConfig
+        ? Number(matchingConfig.lead_time_days || 0)
+        : sortedItems.reduce((sum, row) => sum + Number(row.lead_time_days || 0), 0) / count;
       const avgReplenishmentDays = avgProcessingDays + avgLeadDays;
       const daysInMonth = getDaysInMonth(monthValue);
       const dailyRequirement = daysInMonth > 0 ? totalRequirement / daysInMonth : 0;
       const derivedSafety = dailyRequirement * avgSafetyDays;
       const derivedReplenishment = derivedSafety + dailyRequirement * avgReplenishmentDays;
+      const fixedSafetyTotal =
+        matchingConfig?.fixed_safety_stock_qty == null
+          ? null
+          : Number(matchingConfig.fixed_safety_stock_qty || 0);
+      const fixedReplenishmentTotal =
+        matchingConfig?.fixed_replenishment_stock_qty == null
+          ? null
+          : Number(matchingConfig.fixed_replenishment_stock_qty || 0);
+      const effectiveSafety = fixedSafetyTotal == null ? derivedSafety : fixedSafetyTotal;
+      const effectiveReplenishment =
+        fixedReplenishmentTotal == null ? derivedReplenishment : fixedReplenishmentTotal;
       const totalAvailable = sortedItems.reduce(
         (sum, row) => sum + Number(row.available_stock_qty || 0),
         0
@@ -128,9 +216,9 @@ function computeDashboardBlocks(rows, monthValue) {
       const totalQa = sortedItems.reduce((sum, row) => sum + Number(row.qa_stock_qty || 0), 0);
       const totalStock = totalAvailable + totalTrn + totalGe + totalQa;
       let tone = "NORMAL";
-      if (totalStock <= derivedSafety) {
+      if (totalStock <= effectiveSafety) {
         tone = "CRITICAL";
-      } else if (totalStock <= derivedReplenishment) {
+      } else if (totalStock <= effectiveReplenishment) {
         tone = "WARNING";
       }
       blocks.push({
@@ -142,10 +230,13 @@ function computeDashboardBlocks(rows, monthValue) {
           processing_time_days: avgProcessingDays,
           lead_time_days: avgLeadDays,
           replenishment_days: avgReplenishmentDays,
+          planning_item_group_id: sortedItems[0]?.planning_item_group_id || null,
+          fixed_safety_stock_qty: fixedSafetyTotal,
+          fixed_replenishment_stock_qty: fixedReplenishmentTotal,
           derived_safety_stock_qty: derivedSafety,
           derived_replenishment_stock_qty: derivedReplenishment,
-          effective_safety_stock_qty: derivedSafety,
-          effective_replenishment_stock_qty: derivedReplenishment,
+          effective_safety_stock_qty: effectiveSafety,
+          effective_replenishment_stock_qty: effectiveReplenishment,
           available_stock_qty: totalAvailable,
           trn_stock_qty: totalTrn,
           ge_stock_qty: totalGe,
@@ -170,6 +261,62 @@ function computeDashboardBlocks(rows, monthValue) {
   return blocks;
 }
 
+function normalizeHistoryRows(rows) {
+  return rows.map((row) => ({
+    material_id: row.material_id,
+    material_code: row.material_code_snapshot,
+    material_name: row.material_name_snapshot,
+    base_uom_code: row.base_uom_code_snapshot,
+    source_sloc_group_name: row.source_sloc_group_name_snapshot,
+    planning_item_group_name: row.planning_item_group_name_snapshot,
+    excluded_from_dashboard: Boolean(row.excluded_from_dashboard),
+    monthly_requirement_qty: Number(row.monthly_requirement_qty || 0),
+    safety_days: Number(row.safety_days || 0),
+    processing_time_days: Number(row.processing_time_days || 0),
+    lead_time_days: Number(row.lead_time_days || 0),
+    replenishment_days:
+      Number(row.processing_time_days || 0) + Number(row.lead_time_days || 0),
+    fixed_safety_stock_qty:
+      row.fixed_safety_stock_qty == null ? null : Number(row.fixed_safety_stock_qty || 0),
+    fixed_replenishment_stock_qty:
+      row.fixed_replenishment_stock_qty == null
+        ? null
+        : Number(row.fixed_replenishment_stock_qty || 0),
+    available_stock_qty: Number(row.available_stock_qty || 0),
+    trn_stock_qty: Number(row.trn_stock_qty || 0),
+    ge_stock_qty: Number(row.ge_stock_qty || 0),
+    qa_stock_qty: Number(row.qa_stock_qty || 0),
+    total_stock_qty: Number(row.total_stock_qty || 0),
+    derived_safety_stock_qty: Number(row.derived_safety_stock_qty || 0),
+    derived_replenishment_stock_qty: Number(row.derived_replenishment_stock_qty || 0),
+    effective_safety_stock_qty: Number(row.effective_safety_stock_qty || 0),
+    effective_replenishment_stock_qty: Number(row.effective_replenishment_stock_qty || 0),
+    status_tone:
+      Number(row.total_stock_qty || 0) <= Number(row.effective_safety_stock_qty || 0)
+        ? "CRITICAL"
+        : Number(row.total_stock_qty || 0) <= Number(row.effective_replenishment_stock_qty || 0)
+          ? "WARNING"
+          : "NORMAL",
+  }));
+}
+
+function normalizeHistoryGroupConfigs(groupConfigs) {
+  return groupConfigs.map((config) => ({
+    planning_item_group_id: config.planning_item_group_id || null,
+    planning_item_group_name: config.planning_item_group_name_snapshot,
+    monthly_requirement_qty: Number(config.monthly_requirement_qty || 0),
+    safety_days: Number(config.safety_days || 0),
+    processing_time_days: Number(config.processing_time_days || 0),
+    lead_time_days: Number(config.lead_time_days || 0),
+    fixed_safety_stock_qty:
+      config.fixed_safety_stock_qty == null ? null : Number(config.fixed_safety_stock_qty || 0),
+    fixed_replenishment_stock_qty:
+      config.fixed_replenishment_stock_qty == null
+        ? null
+        : Number(config.fixed_replenishment_stock_qty || 0),
+  }));
+}
+
 function SummaryChips({ items }) {
   return (
     <div className="flex flex-wrap gap-2 text-xs">
@@ -180,6 +327,33 @@ function SummaryChips({ items }) {
         >
           {item.label}: {item.value}
         </span>
+      ))}
+    </div>
+  );
+}
+
+function GuidancePanel({ title, columns = 3, items }) {
+  const gridClass =
+    columns === 4
+      ? "lg:grid-cols-4"
+      : columns === 2
+        ? "lg:grid-cols-2"
+        : "lg:grid-cols-3";
+  const spanClass =
+    columns === 4 ? "lg:col-span-4" : columns === 2 ? "lg:col-span-2" : "lg:col-span-3";
+  return (
+    <div
+      className={`grid gap-2 rounded border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 ${gridClass}`}
+    >
+      {title ? (
+        <div className={spanClass}>
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-800">
+            {title}
+          </span>
+        </div>
+      ) : null}
+      {items.map((item) => (
+        <p key={item}>{item}</p>
       ))}
     </div>
   );
@@ -218,28 +392,59 @@ function WorkflowGuide({ activeTab }) {
   );
 }
 
-function DashboardTable({ rows, monthValue }) {
-  const blocks = useMemo(() => computeDashboardBlocks(rows, monthValue), [rows, monthValue]);
-  const summary = useMemo(() => {
-    return rows
-      .filter((row) => !row.excluded_from_dashboard)
-      .reduce(
-        (acc, row) => {
-          acc.total += 1;
-          if (row.status_tone === "CRITICAL") acc.critical += 1;
-          else if (row.status_tone === "WARNING") acc.warning += 1;
-          else acc.normal += 1;
-          return acc;
-        },
-        { total: 0, critical: 0, warning: 0, normal: 0 }
-      );
-  }, [rows]);
+function DashboardTable({ rows, monthValue, filters, onFilterChange, groupConfigs }) {
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      if (filters.slocGroupId && row.source_sloc_group_id !== filters.slocGroupId) return false;
+      if (filters.materialType !== "ALL" && row.material_type !== filters.materialType) return false;
+      return true;
+    });
+  }, [filters.materialType, filters.slocGroupId, rows]);
+  const blocks = useMemo(
+    () => computeDashboardBlocks(filteredRows, monthValue, groupConfigs),
+    [filteredRows, monthValue, groupConfigs]
+  );
+  const summary = useMemo(() => summarizeDecisionBlocks(blocks), [blocks]);
 
   return (
     <div className="grid gap-3">
+      <div className="grid gap-3 rounded border border-slate-200 bg-white p-4 lg:grid-cols-[220px_220px_minmax(0,1fr)]">
+        <label className="grid gap-1 text-sm text-slate-700">
+          <span className="font-medium text-slate-800">SLOC Group</span>
+          <select
+            value={filters.slocGroupId}
+            onChange={(event) => onFilterChange("slocGroupId", event.target.value)}
+            className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+          >
+            <option value="">All SLOC groups</option>
+            {filters.slocGroups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.group_name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-1 text-sm text-slate-700">
+          <span className="font-medium text-slate-800">Material Type</span>
+          <select
+            value={filters.materialType}
+            onChange={(event) => onFilterChange("materialType", event.target.value)}
+            className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+          >
+            <option value="ALL">All</option>
+            <option value="RM">RM</option>
+            <option value="PM">PM</option>
+          </select>
+        </label>
+        <div className="flex items-end text-sm text-slate-600">
+          Report rows change immediately by selected company + SLOC group + RM/PM filter.
+        </div>
+      </div>
       <SummaryChips
         items={[
-          { label: "Visible Items", value: summary.total },
+          { label: "Visible Decisions", value: summary.total },
+          { label: "Grouped Pools", value: summary.grouped },
+          { label: "Standalone", value: summary.standalone },
           {
             label: "Critical",
             value: summary.critical,
@@ -251,6 +456,14 @@ function DashboardTable({ rows, monthValue }) {
             className: "border-amber-200 bg-amber-50 text-amber-800",
           },
           { label: "Normal", value: summary.normal },
+        ]}
+      />
+      <GuidancePanel
+        title="Dashboard Reading Guide"
+        items={[
+          "Group member rows show live stock visibility item-wise. Final warning / critical decision is taken from the group total row.",
+          "Standalone rows carry their own requirement and threshold calculation. Group total rows carry pooled planning values.",
+          "To change requirement, safety days, processing time, lead time, or fixed overrides, use the Monthly Plan Input tab.",
         ]}
       />
       <div className="overflow-x-auto border border-slate-200 bg-white">
@@ -266,6 +479,8 @@ function DashboardTable({ rows, monthValue }) {
               <th className="border px-2 py-2 text-right">Lead Days</th>
               <th className="border px-2 py-2 text-right">Safety Stock</th>
               <th className="border px-2 py-2 text-right">Replenishment</th>
+              <th className="border px-2 py-2 text-right">Fixed Safety</th>
+              <th className="border px-2 py-2 text-right">Fixed Replenishment</th>
               <th className="border px-2 py-2 text-right">Available</th>
               <th className="border px-2 py-2 text-right">TRN</th>
               <th className="border px-2 py-2 text-right">GE</th>
@@ -301,12 +516,30 @@ function DashboardTable({ rows, monthValue }) {
                   <td className="border px-2 py-2">
                     {row.source_sloc_group_name || (isGroupTotal ? "Mixed scope" : "Not assigned")}
                   </td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.monthly_requirement_qty)}</td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.safety_days)}</td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.processing_time_days)}</td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.lead_time_days)}</td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.effective_safety_stock_qty)}</td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.effective_replenishment_stock_qty)}</td>
+                  <td className="border px-2 py-2 text-right">
+                    {renderPlanningCell(entry, row.monthly_requirement_qty)}
+                  </td>
+                  <td className="border px-2 py-2 text-right">
+                    {renderPlanningCell(entry, row.safety_days)}
+                  </td>
+                  <td className="border px-2 py-2 text-right">
+                    {renderPlanningCell(entry, row.processing_time_days)}
+                  </td>
+                  <td className="border px-2 py-2 text-right">
+                    {renderPlanningCell(entry, row.lead_time_days)}
+                  </td>
+                  <td className="border px-2 py-2 text-right">
+                    {renderPlanningCell(entry, row.effective_safety_stock_qty)}
+                  </td>
+                  <td className="border px-2 py-2 text-right">
+                    {renderPlanningCell(entry, row.effective_replenishment_stock_qty)}
+                  </td>
+                  <td className="border px-2 py-2 text-right">
+                    {renderOptionalPlanningCell(entry, row.fixed_safety_stock_qty)}
+                  </td>
+                  <td className="border px-2 py-2 text-right">
+                    {renderOptionalPlanningCell(entry, row.fixed_replenishment_stock_qty)}
+                  </td>
                   <td className="border px-2 py-2 text-right">{formatQty(row.available_stock_qty)}</td>
                   <td className="border px-2 py-2 text-right">{formatQty(row.trn_stock_qty)}</td>
                   <td className="border px-2 py-2 text-right">{formatQty(row.ge_stock_qty)}</td>
@@ -318,7 +551,7 @@ function DashboardTable({ rows, monthValue }) {
             })}
             {blocks.length === 0 ? (
               <tr>
-                <td className="border px-2 py-6 text-center text-slate-500" colSpan={15}>
+                <td className="border px-2 py-6 text-center text-slate-500" colSpan={17}>
                   No planning rows available for this company/month yet.
                 </td>
               </tr>
@@ -335,8 +568,10 @@ function MonthlyInputTable({
   itemGroups,
   slocGroups,
   drafts,
+  groupConfigDrafts,
   filters,
   onChange,
+  onGroupConfigChange,
   onFilterChange,
   onClearFilters,
 }) {
@@ -345,15 +580,43 @@ function MonthlyInputTable({
       if (!matchesSearch(row, filters.query)) return false;
       if (filters.slocGroupId && row.source_sloc_group_id !== filters.slocGroupId) return false;
       if (filters.itemGroupId && row.planning_item_group_id !== filters.itemGroupId) return false;
+      if (filters.materialType !== "ALL" && row.material_type !== filters.materialType) return false;
       if (filters.showUngroupedOnly && row.planning_item_group_id) return false;
       if (filters.showExcludedOnly && !row.excluded_from_dashboard) return false;
       return true;
     });
   }, [filters, rows]);
+  const groupConfigs = useMemo(() => Object.values(groupConfigDrafts || {}), [groupConfigDrafts]);
+  const blocks = useMemo(
+    () => computeDashboardBlocks(filteredRows, filters.monthValue, groupConfigs),
+    [filteredRows, filters.monthValue, groupConfigs]
+  );
+  const itemGroupsBySloc = useMemo(() => {
+    const map = new Map();
+    itemGroups.forEach((group) => {
+      const key = group.sloc_group_id || "__UNSCOPED__";
+      const bucket = map.get(key) || [];
+      bucket.push(group);
+      map.set(key, bucket);
+    });
+    return map;
+  }, [itemGroups]);
+  const decisionBlocks = useMemo(
+    () => blocks.filter((entry) => !isGroupedMemberEntry(entry)),
+    [blocks]
+  );
+  const groupedDecisionCount = useMemo(
+    () => decisionBlocks.filter((entry) => entry.type === "group-total").length,
+    [decisionBlocks]
+  );
+  const standaloneDecisionCount = useMemo(
+    () => decisionBlocks.filter((entry) => entry.type === "item").length,
+    [decisionBlocks]
+  );
 
   return (
     <div className="grid gap-3">
-      <div className="grid gap-3 rounded border border-slate-200 bg-white p-4 lg:grid-cols-[minmax(0,1.4fr)_220px_220px_auto_auto_auto]">
+      <div className="grid gap-3 rounded border border-slate-200 bg-white p-4 lg:grid-cols-[minmax(0,1.4fr)_220px_220px_160px_auto_auto_auto]">
         <label className="grid gap-1 text-sm text-slate-700">
           <span className="font-medium text-slate-800">Search Material / Group</span>
           <input
@@ -393,6 +656,18 @@ function MonthlyInputTable({
             ))}
           </select>
         </label>
+        <label className="grid gap-1 text-sm text-slate-700">
+          <span className="font-medium text-slate-800">Material Type</span>
+          <select
+            value={filters.materialType}
+            onChange={(event) => onFilterChange("materialType", event.target.value)}
+            className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+          >
+            <option value="ALL">All</option>
+            <option value="RM">RM</option>
+            <option value="PM">PM</option>
+          </select>
+        </label>
         <label className="flex items-center gap-2 text-sm text-slate-700">
           <input
             type="checkbox"
@@ -424,10 +699,22 @@ function MonthlyInputTable({
 
       <SummaryChips
         items={[
-          { label: "Visible Rows", value: filteredRows.length },
+          { label: "Visible Decisions", value: decisionBlocks.length },
+          { label: "Grouped Pools", value: groupedDecisionCount },
+          { label: "Standalone", value: standaloneDecisionCount },
+          { label: "Member Rows", value: filteredRows.filter((row) => row.planning_item_group_id).length },
           { label: "Total Rows", value: rows.length },
-          { label: "Standalone", value: rows.filter((row) => !row.planning_item_group_id).length },
           { label: "Excluded", value: rows.filter((row) => row.excluded_from_dashboard).length },
+        ]}
+      />
+      <GuidancePanel
+        title="Monthly Input Rules"
+        columns={4}
+        items={[
+          "Edit grouped planning only on the Group Total row.",
+          "Group member rows inherit requirement / safety / replenishment logic from their group total and stay visible for traceability.",
+          "Standalone rows remain independently editable. Moving an item into a group immediately changes how it is planned for the open month.",
+          "`0` is a valid value. Save the month after any change to refresh the final dashboard decision state.",
         ]}
       />
 
@@ -435,7 +722,10 @@ function MonthlyInputTable({
         <table className="min-w-full text-xs">
           <thead className="bg-slate-100 text-slate-700">
             <tr>
+              <th className="border px-2 py-2 text-left">Group</th>
+              <th className="border px-2 py-2 text-left">Row</th>
               <th className="border px-2 py-2 text-left">Material</th>
+              <th className="border px-2 py-2 text-left">Type</th>
               <th className="border px-2 py-2 text-left">Source SLOC Group</th>
               <th className="border px-2 py-2 text-right">Live Total Stock</th>
               <th className="border px-2 py-2 text-right">Requirement</th>
@@ -449,29 +739,57 @@ function MonthlyInputTable({
             </tr>
           </thead>
           <tbody>
-            {filteredRows.map((row) => {
-              const draft = drafts[row.material_id] || getInitialDraft(row);
+            {blocks.map((entry, index) => {
+              const row = entry.row;
+              const isGroupTotal = entry.type === "group-total";
+              const isGroupedMember = !isGroupTotal && Boolean(row.planning_item_group_id);
+              const draft = !isGroupTotal ? drafts[row.material_id] || getInitialDraft(row) : null;
+              const groupConfigDraft = isGroupTotal
+                ? groupConfigDrafts[row.planning_item_group_id] || null
+                : null;
+              const scopedItemGroups =
+                itemGroupsBySloc.get(row.source_sloc_group_id || "__UNSCOPED__") || [];
               return (
-                <tr key={row.material_id}>
+                <tr
+                  key={`${entry.type}-${entry.groupName || row.material_id || index}`}
+                  className={`${isGroupTotal ? `font-semibold ${getStatusToneClass(row.status_tone)}` : ""}`}
+                >
                   <td className="border px-2 py-2">
-                    <div className="grid gap-[2px]">
-                      <span className="font-semibold text-slate-900">{row.material_code}</span>
-                      <span className="text-[11px] text-slate-600">
-                        {row.material_name} {row.base_uom_code ? `(${row.base_uom_code})` : ""}
-                      </span>
-                      <span className="text-[11px] text-slate-500">
-                        Current status: {getStatusLabel(row.status_tone)}
-                      </span>
-                    </div>
+                    {entry.groupName || row.planning_item_group_name || "Standalone"}
                   </td>
+                  <td className="border px-2 py-2">
+                    {isGroupTotal
+                      ? "Group Total"
+                      : row.planning_item_group_name
+                        ? "Member"
+                        : "Standalone"}
+                  </td>
+                  <td className="border px-2 py-2">
+                    {isGroupTotal ? (
+                      <span>Summary</span>
+                    ) : (
+                      <div className="grid gap-[2px]">
+                        <span className="font-semibold text-slate-900">{row.material_code}</span>
+                        <span className="text-[11px] text-slate-600">
+                          {row.material_name} {row.base_uom_code ? `(${row.base_uom_code})` : ""}
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          Current status: {getStatusLabel(row.status_tone)}
+                        </span>
+                      </div>
+                    )}
+                  </td>
+                  <td className="border px-2 py-2">{isGroupTotal ? "-" : row.material_type}</td>
                   <td className="border px-2 py-2">
                     <div className="grid gap-[2px]">
                       <span className="font-medium text-slate-800">
                         {row.source_sloc_group_name || "No SLOC group"}
                       </span>
-                      <span className="text-[11px] text-slate-500">
-                        {row.planning_item_group_name || "Standalone"}
-                      </span>
+                      {!isGroupTotal ? (
+                        <span className="text-[11px] text-slate-500">
+                          {row.planning_item_group_name || "Standalone"}
+                        </span>
+                      ) : null}
                     </div>
                   </td>
                   <td className="border px-2 py-2 text-right">{formatQty(row.total_stock_qty)}</td>
@@ -484,48 +802,71 @@ function MonthlyInputTable({
                     "fixed_replenishment_stock_qty",
                   ].map((field) => (
                     <td className="border px-2 py-2" key={field}>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.001"
-                        value={draft[field]}
-                        onChange={(event) => onChange(row.material_id, field, event.target.value)}
-                        className="w-full border border-slate-300 px-2 py-1 text-right outline-none focus:border-sky-500"
-                      />
+                      {isGroupTotal ? (
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.001"
+                          value={groupConfigDraft?.[field] ?? ""}
+                          onChange={(event) =>
+                            onGroupConfigChange(row.planning_item_group_id, field, event.target.value)
+                          }
+                          className="w-full border border-slate-300 px-2 py-1 text-right outline-none focus:border-sky-500"
+                        />
+                      ) : isGroupedMember ? (
+                        <span className="block text-right text-slate-500">Via group total</span>
+                      ) : (
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.001"
+                          value={draft[field]}
+                          onChange={(event) => onChange(row.material_id, field, event.target.value)}
+                          className="w-full border border-slate-300 px-2 py-1 text-right outline-none focus:border-sky-500"
+                        />
+                      )}
                     </td>
                   ))}
                   <td className="border px-2 py-2">
-                    <select
-                      value={draft.planning_item_group_id}
-                      onChange={(event) =>
-                        onChange(row.material_id, "planning_item_group_id", event.target.value)
-                      }
-                      className="w-full border border-slate-300 px-2 py-1 outline-none focus:border-sky-500"
-                    >
-                      <option value="">Standalone</option>
-                      {itemGroups.map((group) => (
-                        <option key={group.id} value={group.id}>
-                          {group.group_name}
-                        </option>
-                      ))}
-                    </select>
+                    {isGroupTotal ? (
+                      <span>{entry.groupName || "-"}</span>
+                    ) : (
+                      <select
+                        value={draft.planning_item_group_id}
+                        onChange={(event) =>
+                          onChange(row.material_id, "planning_item_group_id", event.target.value)
+                        }
+                        className="w-full border border-slate-300 px-2 py-1 outline-none focus:border-sky-500"
+                      >
+                        <option value="">Standalone</option>
+                        {scopedItemGroups.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.group_name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </td>
                   <td className="border px-2 py-2 text-center">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(draft.excluded_from_dashboard)}
-                      onChange={(event) =>
-                        onChange(row.material_id, "excluded_from_dashboard", event.target.checked)
-                      }
-                      className="h-4 w-4"
-                    />
+                    {isGroupTotal ? (
+                      <span>-</span>
+                    ) : (
+                      <input
+                        type="checkbox"
+                        checked={Boolean(draft.excluded_from_dashboard)}
+                        onChange={(event) =>
+                          onChange(row.material_id, "excluded_from_dashboard", event.target.checked)
+                        }
+                        className="h-4 w-4"
+                      />
+                    )}
                   </td>
                 </tr>
               );
             })}
-            {filteredRows.length === 0 ? (
+            {blocks.length === 0 ? (
               <tr>
-                <td className="border px-2 py-6 text-center text-slate-500" colSpan={11}>
+                <td className="border px-2 py-6 text-center text-slate-500" colSpan={14}>
                   No monthly plan rows match the current filter.
                 </td>
               </tr>
@@ -624,21 +965,32 @@ export default function ProcurementPlanningPage() {
     rows: [],
     sloc_groups: [],
     item_groups: [],
+    group_configs: [],
   });
   const [historyRows, setHistoryRows] = useState([]);
+  const [historyGroupConfigs, setHistoryGroupConfigs] = useState([]);
   const [historyMeta, setHistoryMeta] = useState(null);
   const [storageLocations, setStorageLocations] = useState([]);
   const [lineDrafts, setLineDrafts] = useState({});
+  const [groupConfigDrafts, setGroupConfigDrafts] = useState({});
   const [slocGroupForm, setSlocGroupForm] = useState({
     id: "",
     group_name: "",
     storage_location_ids: [],
   });
-  const [itemGroupForm, setItemGroupForm] = useState({ id: "", group_name: "" });
+  const [itemGroupForm, setItemGroupForm] = useState({ id: "", group_name: "", sloc_group_id: "" });
+  const [selectedItemGroupId, setSelectedItemGroupId] = useState("");
+  const [itemManagerSlocGroupId, setItemManagerSlocGroupId] = useState("");
+  const [dashboardFilters, setDashboardFilters] = useState({
+    slocGroupId: "",
+    materialType: "ALL",
+    slocGroups: [],
+  });
   const [inputFilters, setInputFilters] = useState({
     query: "",
     slocGroupId: "",
     itemGroupId: "",
+    materialType: "ALL",
     showUngroupedOnly: false,
     showExcludedOnly: false,
   });
@@ -652,7 +1004,7 @@ export default function ProcurementPlanningPage() {
 
   async function loadWorkspace() {
     if (!effectiveCompanyId) {
-      setWorkspace({ plan: null, rows: [], sloc_groups: [], item_groups: [] });
+      setWorkspace({ plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [] });
       setStorageLocations([]);
       setLoading(false);
       return;
@@ -684,6 +1036,9 @@ export default function ProcurementPlanningPage() {
         item_groups: Array.isArray(workspaceData?.item_groups)
           ? workspaceData.item_groups
           : [],
+        group_configs: Array.isArray(workspaceData?.group_configs)
+          ? workspaceData.group_configs
+          : [],
       });
 
       if (locationsResult.status === "fulfilled") {
@@ -694,7 +1049,7 @@ export default function ProcurementPlanningPage() {
       }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Unable to load PO11 workspace.");
-      setWorkspace({ plan: null, rows: [], sloc_groups: [], item_groups: [] });
+      setWorkspace({ plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [] });
       setStorageLocations([]);
     } finally {
       setLoading(false);
@@ -713,6 +1068,49 @@ export default function ProcurementPlanningPage() {
     setLineDrafts(nextDrafts);
   }, [workspace.rows]);
 
+  useEffect(() => {
+    const nextGroupConfigDrafts = {};
+    (workspace.item_groups || []).forEach((group) => {
+      const existing = (workspace.group_configs || []).find(
+        (config) => config.planning_item_group_id === group.id
+      );
+      nextGroupConfigDrafts[group.id] = {
+        planning_item_group_id: group.id,
+        planning_item_group_name: group.group_name,
+        sloc_group_id: group.sloc_group_id || "",
+        monthly_requirement_qty: String(existing?.monthly_requirement_qty ?? 0),
+        safety_days: String(existing?.safety_days ?? 0),
+        processing_time_days: String(existing?.processing_time_days ?? 0),
+        lead_time_days: String(existing?.lead_time_days ?? 0),
+        fixed_safety_stock_qty:
+          existing?.fixed_safety_stock_qty == null ? "" : String(existing.fixed_safety_stock_qty),
+        fixed_replenishment_stock_qty:
+          existing?.fixed_replenishment_stock_qty == null
+            ? ""
+            : String(existing.fixed_replenishment_stock_qty),
+      };
+    });
+    setGroupConfigDrafts(nextGroupConfigDrafts);
+  }, [workspace.group_configs, workspace.item_groups]);
+
+  useEffect(() => {
+    setDashboardFilters((current) => ({
+      ...current,
+      slocGroups: workspace.sloc_groups || [],
+    }));
+  }, [workspace.sloc_groups]);
+
+  useEffect(() => {
+    if (!workspace.sloc_groups.length) {
+      setItemManagerSlocGroupId("");
+      return;
+    }
+    setItemManagerSlocGroupId((current) => {
+      if (current && workspace.sloc_groups.some((group) => group.id === current)) return current;
+      return workspace.sloc_groups[0]?.id || "";
+    });
+  }, [workspace.sloc_groups]);
+
   async function loadHistory() {
     if (!effectiveCompanyId) return;
     setLoading(true);
@@ -723,10 +1121,12 @@ export default function ProcurementPlanningPage() {
         plan_month: `${planMonthValue}-01`,
       });
       setHistoryRows(Array.isArray(history?.rows) ? history.rows : []);
+      setHistoryGroupConfigs(Array.isArray(history?.group_configs) ? history.group_configs : []);
       setHistoryMeta(history?.archive ?? null);
     } catch (historyError) {
       setError(historyError instanceof Error ? historyError.message : "Unable to load PO11 history.");
       setHistoryRows([]);
+      setHistoryGroupConfigs([]);
       setHistoryMeta(null);
     } finally {
       setLoading(false);
@@ -749,6 +1149,16 @@ export default function ProcurementPlanningPage() {
     }));
   }
 
+  function handleGroupConfigChange(groupId, field, value) {
+    setGroupConfigDrafts((current) => ({
+      ...current,
+      [groupId]: {
+        ...(current[groupId] || {}),
+        [field]: value,
+      },
+    }));
+  }
+
   function handleInputFilterChange(field, value) {
     setInputFilters((current) => ({
       ...current,
@@ -761,6 +1171,7 @@ export default function ProcurementPlanningPage() {
       query: "",
       slocGroupId: "",
       itemGroupId: "",
+      materialType: "ALL",
       showUngroupedOnly: false,
       showExcludedOnly: false,
     });
@@ -776,11 +1187,15 @@ export default function ProcurementPlanningPage() {
         company_id: effectiveCompanyId,
         plan_month: `${planMonthValue}-01`,
         lines: Object.values(lineDrafts),
+        group_configs: Object.values(groupConfigDrafts),
       };
       const result = await saveProcurementPlanningLines(payload);
       setWorkspace((current) => ({
         ...current,
         rows: Array.isArray(result?.rows) ? result.rows : current.rows,
+        group_configs: Array.isArray(result?.group_configs)
+          ? result.group_configs
+          : current.group_configs,
       }));
       setMessage("Monthly plan saved.");
     } catch (saveError) {
@@ -859,8 +1274,8 @@ export default function ProcurementPlanningPage() {
   }
 
   async function handleSaveItemGroup() {
-    if (!effectiveCompanyId || !itemGroupForm.group_name) {
-      setError("Select company and group name.");
+    if (!effectiveCompanyId || !itemGroupForm.group_name || !itemGroupForm.sloc_group_id) {
+      setError("Select company, SLOC group, and group name.");
       return;
     }
     setSaving(true);
@@ -869,15 +1284,17 @@ export default function ProcurementPlanningPage() {
     try {
       if (itemGroupForm.id) {
         await updateProcurementPlanningItemGroup(itemGroupForm.id, {
+          sloc_group_id: itemGroupForm.sloc_group_id,
           group_name: itemGroupForm.group_name,
         });
       } else {
         await createProcurementPlanningItemGroup({
           company_id: effectiveCompanyId,
+          sloc_group_id: itemGroupForm.sloc_group_id,
           group_name: itemGroupForm.group_name,
         });
       }
-      setItemGroupForm({ id: "", group_name: "" });
+      setItemGroupForm({ id: "", group_name: "", sloc_group_id: "" });
       setMessage("Planning item group saved.");
       await loadWorkspace();
     } catch (saveError) {
@@ -893,7 +1310,8 @@ export default function ProcurementPlanningPage() {
     setMessage("");
     try {
       await deleteProcurementPlanningItemGroup(id);
-      setItemGroupForm({ id: "", group_name: "" });
+      setItemGroupForm({ id: "", group_name: "", sloc_group_id: "" });
+      if (selectedItemGroupId === id) setSelectedItemGroupId("");
       setMessage("Planning item group deleted.");
       await loadWorkspace();
     } catch (deleteError) {
@@ -908,10 +1326,26 @@ export default function ProcurementPlanningPage() {
       query: "",
       slocGroupId: filters.slocGroupId || "",
       itemGroupId: filters.itemGroupId || "",
+      materialType: filters.materialType || "ALL",
       showUngroupedOnly: Boolean(filters.showUngroupedOnly),
       showExcludedOnly: Boolean(filters.showExcludedOnly),
     });
     setActiveTab("input");
+  }
+
+  function handleDashboardFilterChange(field, value) {
+    setDashboardFilters((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  function assignItemGroup(materialId, groupId) {
+    handleDraftChange(materialId, "planning_item_group_id", groupId);
+  }
+
+  function unassignItemGroup(materialId) {
+    handleDraftChange(materialId, "planning_item_group_id", "");
   }
 
   const tabs = [
@@ -922,8 +1356,18 @@ export default function ProcurementPlanningPage() {
     { id: "history", label: "History / Archive" },
   ];
 
+  const itemGroupsById = useMemo(() => {
+    return new Map((workspace.item_groups || []).map((group) => [group.id, group]));
+  }, [workspace.item_groups]);
+
+  const effectiveRows = useMemo(() => {
+    return (workspace.rows || []).map((row) =>
+      applyDraftToRow(row, lineDrafts[row.material_id], itemGroupsById)
+    );
+  }, [itemGroupsById, lineDrafts, workspace.rows]);
+
   const planningSummary = useMemo(() => {
-    const rows = workspace.rows || [];
+    const rows = effectiveRows || [];
     return {
       totalRows: rows.length,
       slocGroups: workspace.sloc_groups.length,
@@ -934,11 +1378,19 @@ export default function ProcurementPlanningPage() {
       criticalRows: rows.filter((row) => row.status_tone === "CRITICAL").length,
       warningRows: rows.filter((row) => row.status_tone === "WARNING").length,
     };
-  }, [workspace]);
+  }, [effectiveRows, workspace.item_groups.length, workspace.sloc_groups.length]);
+  const workspaceDecisionBlocks = useMemo(
+    () => computeDashboardBlocks(effectiveRows, planMonthValue, Object.values(groupConfigDrafts)),
+    [effectiveRows, groupConfigDrafts, planMonthValue]
+  );
+  const workspaceDecisionSummary = useMemo(
+    () => summarizeDecisionBlocks(workspaceDecisionBlocks),
+    [workspaceDecisionBlocks]
+  );
 
   const slocGroupInsights = useMemo(() => {
     return workspace.sloc_groups.map((group) => {
-      const linkedRows = workspace.rows.filter((row) => row.source_sloc_group_id === group.id);
+      const linkedRows = effectiveRows.filter((row) => row.source_sloc_group_id === group.id);
       return {
         ...group,
         linkedMaterialCount: linkedRows.length,
@@ -951,11 +1403,11 @@ export default function ProcurementPlanningPage() {
           .slice(0, 10),
       };
     });
-  }, [workspace.rows, workspace.sloc_groups]);
+  }, [effectiveRows, workspace.sloc_groups]);
 
   const itemGroupInsights = useMemo(() => {
     return workspace.item_groups.map((group) => {
-      const memberRows = workspace.rows.filter((row) => row.planning_item_group_id === group.id);
+      const memberRows = effectiveRows.filter((row) => row.planning_item_group_id === group.id);
       return {
         ...group,
         memberCount: memberRows.length,
@@ -969,13 +1421,52 @@ export default function ProcurementPlanningPage() {
           .slice(0, 10),
       };
     });
-  }, [workspace.item_groups, workspace.rows]);
+  }, [effectiveRows, workspace.item_groups]);
 
   const standaloneRows = useMemo(() => {
-    return workspace.rows
+    return effectiveRows
       .filter((row) => !row.planning_item_group_id)
       .sort((left, right) => String(left.material_code).localeCompare(String(right.material_code)));
-  }, [workspace.rows]);
+  }, [effectiveRows]);
+
+  const selectedItemGroup = useMemo(() => {
+    return workspace.item_groups.find((group) => group.id === selectedItemGroupId) || null;
+  }, [selectedItemGroupId, workspace.item_groups]);
+
+  useEffect(() => {
+    if (selectedItemGroup?.sloc_group_id) {
+      setItemManagerSlocGroupId(selectedItemGroup.sloc_group_id);
+    }
+  }, [selectedItemGroup]);
+
+  const selectedSlocGroupIdForItems = itemManagerSlocGroupId || workspace.sloc_groups[0]?.id || "";
+
+  const itemTabRows = useMemo(() => {
+    return effectiveRows
+      .filter((row) => !selectedSlocGroupIdForItems || row.source_sloc_group_id === selectedSlocGroupIdForItems)
+      .sort((left, right) => String(left.material_code).localeCompare(String(right.material_code)));
+  }, [effectiveRows, selectedSlocGroupIdForItems]);
+
+  const selectedItemGroupMembers = useMemo(() => {
+    if (!selectedItemGroupId) return [];
+    return itemTabRows.filter((row) => row.planning_item_group_id === selectedItemGroupId);
+  }, [itemTabRows, selectedItemGroupId]);
+
+  const availableItemPool = useMemo(() => {
+    return itemTabRows.filter((row) => !row.planning_item_group_id);
+  }, [itemTabRows]);
+  const scopedItemGroups = useMemo(() => {
+    return workspace.item_groups.filter((group) => group.sloc_group_id === selectedSlocGroupIdForItems);
+  }, [selectedSlocGroupIdForItems, workspace.item_groups]);
+
+  const historyBlocks = useMemo(() => {
+    return computeDashboardBlocks(
+      normalizeHistoryRows(historyRows),
+      planMonthValue,
+      normalizeHistoryGroupConfigs(historyGroupConfigs)
+    );
+  }, [historyGroupConfigs, historyRows, planMonthValue]);
+  const historySummary = useMemo(() => summarizeDecisionBlocks(historyBlocks), [historyBlocks]);
 
   return (
     <ErpMasterListTemplate
@@ -993,6 +1484,16 @@ export default function ProcurementPlanningPage() {
               {
                 key: "save-lines",
                 label: saving ? "Saving..." : "Save Monthly Plan",
+                tone: "primary",
+                onClick: () => void handleSaveLines(),
+              },
+            ]
+          : []),
+        ...(activeTab === "item"
+          ? [
+              {
+                key: "save-item-membership",
+                label: saving ? "Saving..." : "Save Item Group Mapping",
                 tone: "primary",
                 onClick: () => void handleSaveLines(),
               },
@@ -1059,6 +1560,8 @@ export default function ProcurementPlanningPage() {
                 { label: "Plan Month", value: planMonthValue },
                 { label: "Status", value: workspace.plan?.status || "OPEN" },
                 { label: "Rows", value: planningSummary.totalRows },
+                { label: "Decision Rows", value: workspaceDecisionSummary.total },
+                { label: "Grouped Pools", value: workspaceDecisionSummary.grouped },
                 { label: "SLOC Groups", value: planningSummary.slocGroups },
                 { label: "Item Groups", value: planningSummary.itemGroups },
                 { label: "Standalone", value: planningSummary.standaloneRows },
@@ -1075,6 +1578,14 @@ export default function ProcurementPlanningPage() {
                 },
               ]}
             />
+            <GuidancePanel
+              title="Workspace Health"
+              items={[
+                "First define company-scoped SLOC groups. Those groups decide which RM / PM materials automatically enter PO11 planning scope.",
+                "Then create item groups under one selected SLOC group and manage pooled / alternate materials there. One item can stay standalone or belong to only one item group in the open month.",
+                "Monthly Plan Input controls requirement and threshold values. Planning Dashboard is the live decision screen. History shows the frozen month-end snapshot after Close Month.",
+              ]}
+            />
           </div>
         ),
       }}
@@ -1084,17 +1595,25 @@ export default function ProcurementPlanningPage() {
         children: (
           <div className="grid gap-4">
             {activeTab === "dashboard" ? (
-              <DashboardTable rows={workspace.rows} monthValue={planMonthValue} />
+              <DashboardTable
+                rows={effectiveRows}
+                monthValue={planMonthValue}
+                filters={dashboardFilters}
+                onFilterChange={handleDashboardFilterChange}
+                groupConfigs={Object.values(groupConfigDrafts)}
+              />
             ) : null}
 
             {activeTab === "input" ? (
               <MonthlyInputTable
-                rows={workspace.rows}
+                rows={effectiveRows}
                 itemGroups={workspace.item_groups}
                 slocGroups={workspace.sloc_groups}
                 drafts={lineDrafts}
-                filters={inputFilters}
+                groupConfigDrafts={groupConfigDrafts}
+                filters={{ ...inputFilters, monthValue: planMonthValue }}
                 onChange={handleDraftChange}
+                onGroupConfigChange={handleGroupConfigChange}
                 onFilterChange={handleInputFilterChange}
                 onClearFilters={clearInputFilters}
               />
@@ -1162,8 +1681,35 @@ export default function ProcurementPlanningPage() {
                       Clear
                     </button>
                   </div>
+                  <SummaryChips
+                    items={[
+                      { label: "Selected SLOCs", value: slocGroupForm.storage_location_ids.length },
+                      { label: "Open Month", value: planMonthValue },
+                    ]}
+                  />
                 </div>
                 <div className="grid gap-3">
+                  <SummaryChips
+                    items={[
+                      { label: "Configured Groups", value: slocGroupInsights.length },
+                      {
+                        label: "Eligible Materials",
+                        value: slocGroupInsights.reduce((sum, group) => sum + group.linkedMaterialCount, 0),
+                      },
+                      {
+                        label: "Grouped Materials",
+                        value: slocGroupInsights.reduce((sum, group) => sum + group.groupedMaterialCount, 0),
+                      },
+                    ]}
+                  />
+                  <GuidancePanel
+                    title="SLOC Group Purpose"
+                    items={[
+                      "Only materials flowing from the selected planning SLOC groups are visible in PO11 for the company.",
+                      "New RM / PM materials mapped into these storage locations should auto-appear in the open month without manual line creation.",
+                      "Edit a SLOC group whenever planning scope changes. After save, review Monthly Plan Input for newly included or reassigned materials.",
+                    ]}
+                  />
                   {slocGroupInsights.map((group) => (
                     <GroupCard
                       key={group.id}
@@ -1207,7 +1753,7 @@ export default function ProcurementPlanningPage() {
                     {itemGroupForm.id ? "Edit Item Group" : "New Item Group"}
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Item groups define pooled / alternate materials. Membership is assigned from Monthly Plan Input.
+                    Item groups define pooled / alternate materials inside one selected SLOC group scope.
                   </p>
                   <label className="grid gap-1 text-sm text-slate-700">
                     <span className="font-medium text-slate-800">Group Name</span>
@@ -1222,6 +1768,26 @@ export default function ProcurementPlanningPage() {
                       className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
                     />
                   </label>
+                  <label className="grid gap-1 text-sm text-slate-700">
+                    <span className="font-medium text-slate-800">Parent SLOC Group</span>
+                    <select
+                      value={itemGroupForm.sloc_group_id}
+                      onChange={(event) =>
+                        setItemGroupForm((current) => ({
+                          ...current,
+                          sloc_group_id: event.target.value,
+                        }))
+                      }
+                      className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+                    >
+                      <option value="">Select SLOC group</option>
+                      {workspace.sloc_groups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.group_name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <div className="flex gap-2">
                     <button
                       type="button"
@@ -1232,35 +1798,172 @@ export default function ProcurementPlanningPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setItemGroupForm({ id: "", group_name: "" })}
+                      onClick={() => setItemGroupForm({ id: "", group_name: "", sloc_group_id: "" })}
                       className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
                     >
                       Clear
                     </button>
                   </div>
+                  <SummaryChips
+                    items={[
+                      { label: "Scoped Groups", value: workspace.item_groups.length },
+                      { label: "Selected Parent", value: itemGroupForm.sloc_group_id ? "Yes" : "No" },
+                    ]}
+                  />
                 </div>
                 <div className="grid gap-3">
+                  <SummaryChips
+                    items={[
+                      { label: "Item Groups", value: itemGroupInsights.length },
+                      { label: "Standalone Materials", value: standaloneRows.length },
+                      { label: "Scope Groups", value: scopedItemGroups.length },
+                      { label: "Available Pool", value: availableItemPool.length },
+                    ]}
+                  />
+                  <GuidancePanel
+                    title="Item Group Rules"
+                    items={[
+                      "Each item group must belong to one parent SLOC group. Item selection always happens inside that SLOC scope.",
+                      "Adding an item to a group makes it part of pooled planning for the open month. Removing it returns it to standalone planning.",
+                      "The same item cannot sit in two item groups at once. Save Item Group Mapping after any member change to refresh report behavior.",
+                    ]}
+                  />
                   {itemGroupInsights.map((group) => (
                     <GroupCard
                       key={group.id}
                       title={group.group_name}
-                      subtitle="Members are maintained from Monthly Plan Input."
+                      subtitle="Members are managed from this Item Group Setup screen."
                       badges={[
                         { label: "Members", value: group.memberCount },
                         { label: "Source SLOC Groups", value: group.sourceSlocCount },
                       ]}
                       previewItems={group.previewMaterials}
                       emptyMessage="No material has been assigned to this item group yet."
-                      onPrimary={() => jumpToMonthlyInput({ itemGroupId: group.id })}
-                      primaryLabel="Assign / Review Members"
+                      onPrimary={() => {
+                        setSelectedItemGroupId(group.id);
+                        setItemManagerSlocGroupId(group.sloc_group_id || "");
+                      }}
+                      primaryLabel="Manage Members"
                       onEdit={() =>
-                        setItemGroupForm({ id: group.id, group_name: group.group_name })
+                        setItemGroupForm({
+                          id: group.id,
+                          group_name: group.group_name,
+                          sloc_group_id: group.sloc_group_id || "",
+                        })
                       }
                       onDelete={() => void handleDeleteItemGroup(group.id)}
                     />
                   ))}
 
                   <div className="grid gap-3 border border-slate-200 bg-white p-4">
+                    <div className="grid gap-3 lg:grid-cols-[220px_220px_minmax(0,1fr)]">
+                      <label className="grid gap-1 text-sm text-slate-700">
+                        <span className="font-medium text-slate-800">SLOC Group Scope</span>
+                        <select
+                          value={selectedSlocGroupIdForItems}
+                          onChange={(event) => {
+                            setItemManagerSlocGroupId(event.target.value);
+                            setSelectedItemGroupId("");
+                          }}
+                          className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+                        >
+                          <option value="">Select SLOC group</option>
+                          {workspace.sloc_groups.map((group) => (
+                            <option key={group.id} value={group.id}>
+                              {group.group_name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="grid gap-1 text-sm text-slate-700">
+                        <span className="font-medium text-slate-800">Item Group To Manage</span>
+                        <select
+                          value={selectedItemGroupId}
+                          onChange={(event) => setSelectedItemGroupId(event.target.value)}
+                          className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+                        >
+                          <option value="">Select item group</option>
+                          {workspace.item_groups
+                            .filter((group) => group.sloc_group_id === selectedSlocGroupIdForItems)
+                            .map((group) => (
+                              <option key={group.id} value={group.id}>
+                                {group.group_name}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <div className="flex items-end text-sm text-slate-600">
+                        Ekhane member add/remove kore save korle current month-er report update hobe, ar next month carry-forward eo ei assignment jabe.
+                      </div>
+                    </div>
+                    <SummaryChips
+                      items={[
+                        { label: "Scope Items", value: itemTabRows.length },
+                        { label: "Scope Groups", value: scopedItemGroups.length },
+                        { label: "Current Members", value: selectedItemGroupMembers.length },
+                        { label: "Available Standalone", value: availableItemPool.length },
+                      ]}
+                    />
+                    {selectedItemGroupId ? (
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <h3 className="text-sm font-semibold text-slate-900">Available Item Pool</h3>
+                            <span className="text-xs text-slate-500">{availableItemPool.length} item(s)</span>
+                          </div>
+                          <div className="grid gap-2">
+                            {availableItemPool.map((row) => (
+                              <div key={row.material_id} className="flex items-center justify-between gap-3 rounded border border-slate-200 bg-white px-3 py-2">
+                                <div className="grid gap-[2px]">
+                                  <span className="text-sm font-semibold text-slate-900">{row.material_code}</span>
+                                  <span className="text-xs text-slate-600">
+                                    {row.material_name} | {row.material_type} | Standalone
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => assignItemGroup(row.material_id, selectedItemGroupId)}
+                                  className="border border-sky-300 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800"
+                                >
+                                  Add
+                                </button>
+                              </div>
+                            ))}
+                            {availableItemPool.length === 0 ? (
+                              <span className="text-xs text-slate-500">No standalone item is available in this SLOC group scope.</span>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <h3 className="text-sm font-semibold text-slate-900">Current Members</h3>
+                            <span className="text-xs text-slate-500">{selectedItemGroupMembers.length} item(s)</span>
+                          </div>
+                          <div className="grid gap-2">
+                            {selectedItemGroupMembers.map((row) => (
+                              <div key={row.material_id} className="flex items-center justify-between gap-3 rounded border border-slate-200 bg-white px-3 py-2">
+                                <div className="grid gap-[2px]">
+                                  <span className="text-sm font-semibold text-slate-900">{row.material_code}</span>
+                                  <span className="text-xs text-slate-600">
+                                    {row.material_name} | {row.material_type}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => unassignItemGroup(row.material_id)}
+                                  className="border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ))}
+                            {selectedItemGroupMembers.length === 0 ? (
+                              <span className="text-xs text-slate-500">No member is mapped to this item group yet.</span>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="grid gap-1">
                         <h3 className="text-sm font-semibold text-slate-900">Standalone Materials</h3>
@@ -1309,67 +2012,121 @@ export default function ProcurementPlanningPage() {
                     <span>No archive exists yet for {planMonthValue}.</span>
                   )}
                 </div>
+                <SummaryChips
+                  items={[
+                    { label: "Archived Decisions", value: historySummary.total },
+                    { label: "Grouped Pools", value: historySummary.grouped },
+                    { label: "Standalone", value: historySummary.standalone },
+                    {
+                      label: "Critical",
+                      value: historySummary.critical,
+                      className: "border-rose-200 bg-rose-50 text-rose-800",
+                    },
+                    {
+                      label: "Replenish",
+                      value: historySummary.warning,
+                      className: "border-amber-200 bg-amber-50 text-amber-800",
+                    },
+                  ]}
+                />
+                <GuidancePanel
+                  title="History Rules"
+                  items={[
+                    "History never recalculates against today's live stock. It shows the exact month-end snapshot that was frozen during Close Month.",
+                    "Use this tab to compare prior-month requirement, thresholds, and stock position with the current open month workspace.",
+                    "If no archive exists for the month, keep working in Monthly Plan Input and close the month only after review is complete.",
+                  ]}
+                />
                 <div className="overflow-x-auto border border-slate-200 bg-white">
                   <table className="min-w-full text-xs">
                     <thead className="bg-slate-100 text-slate-700">
                       <tr>
                         <th className="border px-2 py-2 text-left">Group</th>
-                        <th className="border px-2 py-2 text-left">Material</th>
+                        <th className="border px-2 py-2 text-left">Item</th>
+                        <th className="border px-2 py-2 text-left">Source SLOC Group</th>
                         <th className="border px-2 py-2 text-right">Requirement</th>
-                        <th className="border px-2 py-2 text-right">Safety</th>
+                        <th className="border px-2 py-2 text-right">Safety Days</th>
+                        <th className="border px-2 py-2 text-right">Proc Days</th>
+                        <th className="border px-2 py-2 text-right">Lead Days</th>
+                        <th className="border px-2 py-2 text-right">Safety Stock</th>
                         <th className="border px-2 py-2 text-right">Replenishment</th>
+                        <th className="border px-2 py-2 text-right">Fixed Safety</th>
+                        <th className="border px-2 py-2 text-right">Fixed Replenishment</th>
                         <th className="border px-2 py-2 text-right">Available</th>
                         <th className="border px-2 py-2 text-right">TRN</th>
                         <th className="border px-2 py-2 text-right">GE</th>
-                        <th className="border px-2 py-2 text-right">QA</th>
+                        <th className="border px-2 py-2 text-right">In QA</th>
                         <th className="border px-2 py-2 text-right">Total</th>
+                        <th className="border px-2 py-2 text-left">Status</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {historyRows.map((row) => (
-                        <tr key={`${row.id}-${row.material_id}`}>
-                          <td className="border px-2 py-2">
-                            {row.planning_item_group_name_snapshot || "Standalone"}
-                          </td>
-                          <td className="border px-2 py-2">
-                            <div className="grid gap-[2px]">
-                              <span className="font-semibold text-slate-900">
-                                {row.material_code_snapshot}
-                              </span>
-                              <span className="text-[11px] text-slate-600">
-                                {row.material_name_snapshot}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="border px-2 py-2 text-right">
-                            {formatQty(row.monthly_requirement_qty)}
-                          </td>
-                          <td className="border px-2 py-2 text-right">
-                            {formatQty(row.effective_safety_stock_qty)}
-                          </td>
-                          <td className="border px-2 py-2 text-right">
-                            {formatQty(row.effective_replenishment_stock_qty)}
-                          </td>
-                          <td className="border px-2 py-2 text-right">
-                            {formatQty(row.available_stock_qty)}
-                          </td>
-                          <td className="border px-2 py-2 text-right">
-                            {formatQty(row.trn_stock_qty)}
-                          </td>
-                          <td className="border px-2 py-2 text-right">
-                            {formatQty(row.ge_stock_qty)}
-                          </td>
-                          <td className="border px-2 py-2 text-right">
-                            {formatQty(row.qa_stock_qty)}
-                          </td>
-                          <td className="border px-2 py-2 text-right">
-                            {formatQty(row.total_stock_qty)}
-                          </td>
-                        </tr>
-                      ))}
-                      {historyRows.length === 0 ? (
+                      {historyBlocks.map((entry, index) => {
+                        const isGroupTotal = entry.type === "group-total";
+                        const row = entry.row;
+                        return (
+                          <tr
+                            key={`${entry.type}-${entry.groupName || row.material_id || index}`}
+                            className={`${getStatusToneClass(row.status_tone)} ${isGroupTotal ? "font-semibold" : ""}`}
+                          >
+                            <td className="border px-2 py-2">
+                              {entry.groupName || row.planning_item_group_name || "Standalone"}
+                            </td>
+                            <td className="border px-2 py-2">
+                              {isGroupTotal ? (
+                                <span>Group Total</span>
+                              ) : (
+                                <div className="grid gap-[2px]">
+                                  <span className="font-semibold text-slate-900">
+                                    {row.material_code}
+                                  </span>
+                                  <span className="text-[11px] text-slate-600">
+                                    {row.material_name}
+                                  </span>
+                                </div>
+                              )}
+                            </td>
+                            <td className="border px-2 py-2">
+                              {row.source_sloc_group_name || (isGroupTotal ? "Mixed scope" : "Not assigned")}
+                            </td>
+                            <td className="border px-2 py-2 text-right">
+                              {renderPlanningCell(entry, row.monthly_requirement_qty)}
+                            </td>
+                            <td className="border px-2 py-2 text-right">
+                              {renderPlanningCell(entry, row.safety_days)}
+                            </td>
+                            <td className="border px-2 py-2 text-right">
+                              {renderPlanningCell(entry, row.processing_time_days)}
+                            </td>
+                            <td className="border px-2 py-2 text-right">
+                              {renderPlanningCell(entry, row.lead_time_days)}
+                            </td>
+                            <td className="border px-2 py-2 text-right">
+                              {renderPlanningCell(entry, row.effective_safety_stock_qty)}
+                            </td>
+                            <td className="border px-2 py-2 text-right">
+                              {renderPlanningCell(entry, row.effective_replenishment_stock_qty)}
+                            </td>
+                            <td className="border px-2 py-2 text-right">
+                              {renderOptionalPlanningCell(entry, row.fixed_safety_stock_qty)}
+                            </td>
+                            <td className="border px-2 py-2 text-right">
+                              {renderOptionalPlanningCell(entry, row.fixed_replenishment_stock_qty)}
+                            </td>
+                            <td className="border px-2 py-2 text-right">
+                              {formatQty(row.available_stock_qty)}
+                            </td>
+                            <td className="border px-2 py-2 text-right">{formatQty(row.trn_stock_qty)}</td>
+                            <td className="border px-2 py-2 text-right">{formatQty(row.ge_stock_qty)}</td>
+                            <td className="border px-2 py-2 text-right">{formatQty(row.qa_stock_qty)}</td>
+                            <td className="border px-2 py-2 text-right">{formatQty(row.total_stock_qty)}</td>
+                            <td className="border px-2 py-2">{getStatusLabel(row.status_tone)}</td>
+                          </tr>
+                        );
+                      })}
+                      {historyBlocks.length === 0 ? (
                         <tr>
-                          <td className="border px-2 py-6 text-center text-slate-500" colSpan={10}>
+                          <td className="border px-2 py-6 text-center text-slate-500" colSpan={17}>
                             No archived rows found.
                           </td>
                         </tr>
