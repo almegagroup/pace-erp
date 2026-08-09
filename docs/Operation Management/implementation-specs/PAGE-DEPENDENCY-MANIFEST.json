@@ -4085,12 +4085,68 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/planning/ProcurementPlanningPage.jsx",
-    "dependencyCount": 1,
+    "dependencyCount": 8,
     "deps": [
       {
         "fn": "getProcurementPlanning",
         "method": "GET",
         "path": "/api/procurement/planning",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "saveProcurementPlanningLines",
+        "method": "POST",
+        "path": "/api/procurement/planning/lines/bulk-upsert",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "closeProcurementPlanningMonth",
+        "method": "POST",
+        "path": "/api/procurement/planning/close",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "getProcurementPlanningHistory",
+        "method": "GET",
+        "path": "/api/procurement/planning/history",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createProcurementPlanningSlocGroup / updateProcurementPlanningSlocGroup / deleteProcurementPlanningSlocGroup",
+        "method": "POST / PUT / DELETE",
+        "path": "/api/procurement/planning/sloc-groups",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "createProcurementPlanningItemGroup / updateProcurementPlanningItemGroup / deleteProcurementPlanningItemGroup",
+        "method": "POST / PUT / DELETE",
+        "path": "/api/procurement/planning/item-groups",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "listStorageLocations",
+        "method": "GET",
+        "path": "/api/om/storage-locations?${query.toString()}",
+        "resourceCode": "UNRESOLVED",
+        "action": "?",
+        "skipAcl": true
+      },
+      {
+        "fn": "list planning setup collections",
+        "method": "GET",
+        "path": "/api/procurement/planning/sloc-groups + /api/procurement/planning/item-groups",
         "resourceCode": "PROC_PLANNING_VIEW",
         "action": "VIEW",
         "skipAcl": false

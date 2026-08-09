@@ -723,6 +723,50 @@ export function getProcurementPlanning(params) {
   return fetchProcurement("GET", "/api/procurement/planning", undefined, params);
 }
 
+export function saveProcurementPlanningLines(data) {
+  return fetchProcurement("POST", "/api/procurement/planning/lines/bulk-upsert", data);
+}
+
+export function listProcurementPlanningSlocGroups(params) {
+  return fetchProcurement("GET", "/api/procurement/planning/sloc-groups", undefined, params);
+}
+
+export function createProcurementPlanningSlocGroup(data) {
+  return fetchProcurement("POST", "/api/procurement/planning/sloc-groups", data);
+}
+
+export function updateProcurementPlanningSlocGroup(id, data) {
+  return fetchProcurement("PUT", `/api/procurement/planning/sloc-groups/${encodeURIComponent(id)}`, data);
+}
+
+export function deleteProcurementPlanningSlocGroup(id) {
+  return fetchProcurement("DELETE", `/api/procurement/planning/sloc-groups/${encodeURIComponent(id)}`);
+}
+
+export function listProcurementPlanningItemGroups(params) {
+  return fetchProcurement("GET", "/api/procurement/planning/item-groups", undefined, params);
+}
+
+export function createProcurementPlanningItemGroup(data) {
+  return fetchProcurement("POST", "/api/procurement/planning/item-groups", data);
+}
+
+export function updateProcurementPlanningItemGroup(id, data) {
+  return fetchProcurement("PUT", `/api/procurement/planning/item-groups/${encodeURIComponent(id)}`, data);
+}
+
+export function deleteProcurementPlanningItemGroup(id) {
+  return fetchProcurement("DELETE", `/api/procurement/planning/item-groups/${encodeURIComponent(id)}`);
+}
+
+export function closeProcurementPlanningMonth(data) {
+  return fetchProcurement("POST", "/api/procurement/planning/close", data);
+}
+
+export function getProcurementPlanningHistory(params) {
+  return fetchProcurement("GET", "/api/procurement/planning/history", undefined, params);
+}
+
 export function listPTOs(params) {
   return fetchProcurement("GET", "/api/procurement/ptos", undefined, params);
 }

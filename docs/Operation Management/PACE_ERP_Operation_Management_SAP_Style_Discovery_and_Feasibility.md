@@ -3049,6 +3049,179 @@ If I > 0 → Surplus or sufficient
 | View consignment status | Procurement user |
 | Close completed POs | Procurement manager |
 
+### 35.6 PO11 Procurement Planning Workspace (LOCKED - 2026-08-08)
+
+The original Gate-22 interpretation of PO11 as a read-only shortage grid is superseded for RM / PM monthly planning.
+
+For ADMIX and HPS procurement planning, PO11 is a monthly planning workspace that combines:
+- monthly plan input
+- live stock position
+- GE / QA / TRN pipeline visibility
+- item grouping
+- planning storage-location grouping
+- month-end archival snapshot
+
+This workspace is company-scoped by the selected company and month-scoped by the selected planning month.
+
+The month remains editable during that month. When the month closes, the system must preserve a frozen archive snapshot using the final day-end position for that month.
+
+### 35.7 PO11 High-Level Structure
+
+PO11 is not a single flat table. It is a workspace with the following parts:
+
+1. Planning Dashboard
+2. Monthly Plan Input
+3. Planning SLOC Group Setup
+4. Planning Item Group Setup
+5. History / Archive
+6. Detail drawers / modals
+
+The main operational page must behave similarly to a Plan Feed style workspace: users can review live planning status in one tab and maintain month-specific planning data in another tab.
+
+### 35.8 Planning Dashboard
+
+The dashboard tab is the live decision table for the selected company and month.
+
+For each visible item, the table must show:
+- planning group name
+- item row within the group
+- monthly requirement
+- safety days
+- processing time
+- lead time
+- derived safety stock
+- derived replenishment stock
+- fixed safety stock override
+- fixed replenishment stock override
+- current available stock
+- CSN in-transit stock (`TRN`)
+- gate-entry stock (`GE`)
+- in-QA stock
+- total stock
+- warning / critical state
+
+Display rules:
+- Group rows must display the group name first, with the member items shown beside / beneath as part of the same visible planning block.
+- Group members must still appear individually.
+- Items that do not belong to any active planning item group remain visible as stand-alone rows.
+- New eligible items must appear immediately in the live month if they belong to the selected planning storage-location scope, even if the user has not yet entered manual planning values.
+- User-entered numeric planning fields may validly remain `0`.
+
+Stock rules:
+- `GE` stock is visible only until GRN is completed. Once GRN is done, that quantity must no longer remain in `GE`.
+- `Total Stock = Available Stock + TRN + GE + In QA`
+- The dashboard is dynamic. It always reflects the current operational position for the selected month, except inside History / Archive where the saved snapshot is shown.
+
+Highlighting rules:
+- If `Total Stock <= Effective Replenishment Stock`, the row is highlighted as replenishment attention.
+- If `Total Stock <= Effective Safety Stock`, the row is highlighted as critical.
+
+Where:
+- `Effective Safety Stock = Fixed Safety Stock` when a fixed value is present, otherwise `Derived Safety Stock`
+- `Effective Replenishment Stock = Fixed Replenishment Stock` when a fixed value is present, otherwise `Derived Replenishment Stock`
+
+### 35.9 Monthly Plan Input
+
+The Monthly Plan Input tab is where users maintain month-specific planning data.
+
+Behavior:
+- On creating / opening a month, the system must prefill from the previous month's saved input for the same company.
+- Users may then change any editable planning values for the current month.
+- Users may include or exclude items from planning item groups during the month.
+- Users may change safety days, processing time, lead time, fixed safety stock, fixed replenishment stock, and monthly requirement during the month.
+- Changes apply only to that selected company and month.
+
+Editable data is monthly, not permanent master data.
+
+### 35.10 Planning Formula (PO11 - Monthly RM / PM Workspace)
+
+For the selected month:
+
+1. `Daily Requirement (Prorata) = Monthly Requirement / Total Days In Month`
+2. `Derived Safety Stock = Daily Requirement x Safety Days`
+3. `Replenishment Days = Processing Time + Lead Time`
+4. `Derived Replenishment Stock = Derived Safety Stock + (Daily Requirement x Replenishment Days)`
+
+Override rules:
+- If `Fixed Safety Stock` is populated, it overrides derived safety stock for decisioning.
+- If `Fixed Replenishment Stock` is populated, it overrides derived replenishment stock for decisioning.
+
+### 35.11 Grouping Model
+
+PO11 uses two different grouping layers:
+
+#### 35.11.1 Planning SLOC Group
+
+This decides which storage locations contribute items into a planning scope.
+
+Rules:
+- Users define which storage locations belong to a planning storage-location group.
+- Items eligible for PO11 come from the storage locations assigned to that planning SLOC group.
+- If a new RM / PM item starts appearing in an included storage location, it must automatically become available in PO11 immediately for the active month.
+
+#### 35.11.2 Planning Item Group
+
+This decides which materials should be evaluated together as alternate / pooled materials.
+
+Rules:
+- Each group is monthly-decision driven from the PO11 workspace.
+- A material may be included, excluded, or moved between item groups in a given month.
+- Excluded items remain visible as stand-alone rows.
+- Group logic is for planning visibility and aggregate replenishment judgment; member-level data remains individually visible and editable.
+
+### 35.12 Group Display Rules
+
+For grouped materials:
+- Members must appear in ascending order.
+- The group total row must appear immediately after the last member.
+- Group total stock is the summed stock position of all active members in that month.
+- Group total requirement is the summed monthly requirement of all active members in that month.
+- Group total safety days and replenishment days use the average of active member values for display / derived calculation at group level.
+
+### 35.13 History / Archive
+
+At month close, PO11 must create a frozen archived snapshot for each company and month.
+
+Archive rules:
+- The archive snapshot must store the final month-end input state.
+- The archive snapshot must store the final day-end stock state of the last date of that month.
+- This includes the month-end EOD values for available stock, TRN, GE, in-QA, and total stock as they stood at close.
+- History views must show the saved snapshot, not recalculate against current live stock.
+
+The live dashboard remains dynamic for the active month. The history screen remains frozen.
+
+### 35.14 Planning Mode Clarification For PO11
+
+This PO11 workspace is specifically for ADMIX and HPS RM / PM monthly procurement planning.
+
+It is not the same thing as full MRP automation. Full MRP remains a later-phase concept. PO11 in this design is a controlled monthly planning cockpit with live operational overlays.
+
+### 35.15 PO11 Authority (Corrected)
+
+For this redesigned PO11 workspace:
+
+| Action | Who Can Do |
+|---|---|
+| View Planning Dashboard | SCM / Director / ACL-authorized equivalent |
+| Maintain Monthly Plan Input | SCM / Director / ACL-authorized equivalent |
+| Maintain Planning SLOC Group | SCM / Director / ACL-authorized equivalent |
+| Maintain Planning Item Group | SCM / Director / ACL-authorized equivalent |
+| View History / Archive | SCM / Director / ACL-authorized equivalent |
+
+For the current approved business scope, full PO11 access is intended only for SCM and Director.
+
+### 35.16 UX Rule
+
+PO11 must use a workspace-style UI with tabs, drawers, and modals where appropriate.
+
+The design should optimize:
+- fast monthly data entry
+- quick shortage judgment
+- clear grouped-material visibility
+- quick access to item / group detail without leaving the page
+
+This page must not behave like a minimal legacy table if that reduces planning usability.
+
 ---
 
 ## Section 36 — Purchase Requirement (PR) Design
