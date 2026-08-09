@@ -1140,7 +1140,7 @@ export async function getProcurementPlanningHandler(
       logPlanningDebug(ctx, "WORKSPACE_EMPTY_COMPANY_SCOPE", {
         requested_company_id: url.searchParams.get("company_id") ?? "",
       });
-      return okResponse(req, { plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [] }, ctx.request_id);
+      return okResponse({ plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [] }, ctx.request_id, req);
     }
     const planMonth = normalizePlanMonth(url.searchParams.get("plan_month")) ?? getCurrentPlanMonth();
     logPlanningDebug(ctx, "WORKSPACE_REQUEST", {
@@ -1166,14 +1166,18 @@ export async function getProcurementPlanningHandler(
       item_group_count: workspace.itemGroups.length,
       group_config_count: workspace.groupConfigs.length,
     });
-    return okResponse(req, {
-      plan,
-      plan_month: planMonth,
-      rows: workspace.rows,
-      sloc_groups: workspace.slocGroups,
-      item_groups: workspace.itemGroups,
-      group_configs: workspace.groupConfigs,
-    }, ctx.request_id);
+    return okResponse(
+      {
+        plan,
+        plan_month: planMonth,
+        rows: workspace.rows,
+        sloc_groups: workspace.slocGroups,
+        item_groups: workspace.itemGroups,
+        group_configs: workspace.groupConfigs,
+      },
+      ctx.request_id,
+      req,
+    );
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_WORKSPACE_FAILED";
     console.error("PO11_WORKSPACE_HANDLER_FAILED", {
@@ -1338,7 +1342,6 @@ export async function upsertProcurementPlanningLinesHandler(
     }
     const workspace = await loadWorkspaceRows(ctx, companyId, planMonth, plan.id);
     return okResponse(
-      req,
       {
         plan,
         plan_month: planMonth,
@@ -1346,6 +1349,7 @@ export async function upsertProcurementPlanningLinesHandler(
         group_configs: workspace.groupConfigs,
       },
       ctx.request_id,
+      req,
     );
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_LINES_SAVE_FAILED";
@@ -1356,13 +1360,13 @@ export async function upsertProcurementPlanningLinesHandler(
 export async function listPlanningSlocGroupsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const companyId = await getCompanyScope(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
-    if (!companyId) return okResponse(req, { items: [] }, ctx.request_id);
+    if (!companyId) return okResponse({ items: [] }, ctx.request_id, req);
     const [groupRows, memberRows] = await Promise.all([
       loadSlocGroups(companyId),
       loadSlocGroupMembers(companyId),
     ]);
     const groups = buildSlocGroupSummaries(groupRows, memberRows);
-    return okResponse(req, { items: groups }, ctx.request_id);
+    return okResponse({ items: groups }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_SLOC_GROUP_LIST_FAILED";
     return planningError(req, ctx, code, 500, "Unable to load planning storage-location groups.");
@@ -1550,8 +1554,8 @@ export async function deletePlanningSlocGroupHandler(req: Request, ctx: Procurem
 export async function listPlanningItemGroupsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const companyId = await getCompanyScope(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
-    if (!companyId) return okResponse(req, { items: [] }, ctx.request_id);
-    return okResponse(req, { items: await loadItemGroups(companyId) }, ctx.request_id);
+    if (!companyId) return okResponse({ items: [] }, ctx.request_id, req);
+    return okResponse({ items: await loadItemGroups(companyId) }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_ITEM_GROUP_LIST_FAILED";
     return planningError(req, ctx, code, 500, "Unable to load planning item groups.");
@@ -1595,7 +1599,7 @@ export async function createPlanningItemGroupHandler(req: Request, ctx: Procurem
       }
       throw new Error("PROCUREMENT_PLANNING_ITEM_GROUP_CREATE_FAILED");
     }
-    return okResponse(req, { items: await loadItemGroups(companyId) }, ctx.request_id);
+    return okResponse({ items: await loadItemGroups(companyId) }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_ITEM_GROUP_CREATE_FAILED";
     return planningError(req, ctx, code, 500, "Unable to create planning item group.");
@@ -1641,7 +1645,7 @@ export async function updatePlanningItemGroupHandler(req: Request, ctx: Procurem
       })
       .eq("id", groupId);
     if (error) throw new Error("PROCUREMENT_PLANNING_ITEM_GROUP_UPDATE_FAILED");
-    return okResponse(req, { items: await loadItemGroups(companyId) }, ctx.request_id);
+    return okResponse({ items: await loadItemGroups(companyId) }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_ITEM_GROUP_UPDATE_FAILED";
     return planningError(req, ctx, code, 500, "Unable to update planning item group.");
@@ -1674,7 +1678,7 @@ export async function deletePlanningItemGroupHandler(req: Request, ctx: Procurem
       .delete()
       .eq("id", groupId);
     if (error) throw new Error("PROCUREMENT_PLANNING_ITEM_GROUP_DELETE_FAILED");
-    return okResponse(req, { items: await loadItemGroups(companyId) }, ctx.request_id);
+    return okResponse({ items: await loadItemGroups(companyId) }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_ITEM_GROUP_DELETE_FAILED";
     return planningError(req, ctx, code, 500, "Unable to delete planning item group.");
@@ -1774,7 +1778,7 @@ export async function closeProcurementPlanningMonthHandler(req: Request, ctx: Pr
       })
       .eq("id", plan.id);
     if (closeError) throw new Error("PROCUREMENT_PLANNING_CLOSE_FAILED");
-    return okResponse(req, { archive_id: archiveId, plan_month: planMonth, status: "CLOSED" }, ctx.request_id);
+    return okResponse({ archive_id: archiveId, plan_month: planMonth, status: "CLOSED" }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_CLOSE_FAILED";
     return planningError(req, ctx, code, 500, "Unable to close procurement planning month.");
@@ -1786,7 +1790,7 @@ export async function getProcurementPlanningHistoryHandler(req: Request, ctx: Pr
     const url = new URL(req.url);
     const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
     const planMonth = normalizePlanMonth(url.searchParams.get("plan_month")) ?? getCurrentPlanMonth();
-    if (!companyId) return okResponse(req, { archive: null, rows: [], group_configs: [] }, ctx.request_id);
+    if (!companyId) return okResponse({ archive: null, rows: [], group_configs: [] }, ctx.request_id, req);
     const { data: archive, error: archiveError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("procurement_monthly_plan_archive")
@@ -1796,7 +1800,7 @@ export async function getProcurementPlanningHistoryHandler(req: Request, ctx: Pr
       .maybeSingle();
     if (archiveError) throw new Error("PROCUREMENT_PLANNING_HISTORY_LOOKUP_FAILED");
     const archiveId = toTrimmedString((archive as JsonRecord | null)?.id);
-    if (!archiveId) return okResponse(req, { archive: null, rows: [], group_configs: [] }, ctx.request_id);
+    if (!archiveId) return okResponse({ archive: null, rows: [], group_configs: [] }, ctx.request_id, req);
     const { data: rows, error: rowsError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("procurement_monthly_plan_archive_line")
@@ -1812,9 +1816,9 @@ export async function getProcurementPlanningHistoryHandler(req: Request, ctx: Pr
       .order("planning_item_group_name_snapshot", { ascending: true });
     if (groupConfigsError) throw new Error("PROCUREMENT_PLANNING_HISTORY_GROUP_CONFIG_FAILED");
     return okResponse(
-      req,
       { archive, rows: (rows ?? []) as JsonRecord[], group_configs: (groupConfigs ?? []) as JsonRecord[] },
       ctx.request_id,
+      req,
     );
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_HISTORY_FAILED";
