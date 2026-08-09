@@ -340,66 +340,6 @@ function SummaryChips({ items }) {
   );
 }
 
-function GuidancePanel({ title, columns = 3, items }) {
-  const gridClass =
-    columns === 4
-      ? "lg:grid-cols-4"
-      : columns === 2
-        ? "lg:grid-cols-2"
-        : "lg:grid-cols-3";
-  const spanClass =
-    columns === 4 ? "lg:col-span-4" : columns === 2 ? "lg:col-span-2" : "lg:col-span-3";
-  return (
-    <div
-      className={`grid gap-2 rounded border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 ${gridClass}`}
-    >
-      {title ? (
-        <div className={spanClass}>
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-800">
-            {title}
-          </span>
-        </div>
-      ) : null}
-      {items.map((item) => (
-        <p key={item}>{item}</p>
-      ))}
-    </div>
-  );
-}
-
-function WorkflowGuide({ activeTab }) {
-  const stepNotes = {
-    dashboard:
-      "Review live shortage position after monthly values and group assignments are saved.",
-    input:
-      "Maintain this month's requirement, safety, lead times, overrides, and item-group assignment here.",
-    sloc:
-      "Define which storage locations contribute RM/PM materials into this month's planning scope.",
-    item:
-      "Create alternate-material groups here, then assign materials into those groups from Monthly Plan Input.",
-    history:
-      "Review the frozen month-end snapshot after Close Month is completed.",
-  };
-
-  return (
-    <div className="grid gap-3 rounded border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-slate-700">
-      <div className="grid gap-1">
-        <span className="text-xs font-semibold uppercase tracking-wide text-sky-900">
-          Recommended PO11 Flow
-        </span>
-        <p>
-          1. Create planning SLOC groups. 2. Create planning item groups. 3. Open Monthly Plan
-          Input and fill month-specific values. 4. Assign grouped / stand-alone materials. 5.
-          Review Planning Dashboard. 6. Close Month to freeze archive.
-        </p>
-      </div>
-      <p className="rounded border border-sky-200 bg-white px-3 py-2 text-sm text-slate-700">
-        Current tab purpose: {stepNotes[activeTab]}
-      </p>
-    </div>
-  );
-}
-
 function DashboardTable({ rows, monthValue, filters, onFilterChange, groupConfigs }) {
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
@@ -444,9 +384,6 @@ function DashboardTable({ rows, monthValue, filters, onFilterChange, groupConfig
             <option value="PM">PM</option>
           </select>
         </label>
-        <div className="flex items-end text-sm text-slate-600">
-          Report rows change immediately by selected company + SLOC group + RM/PM filter.
-        </div>
       </div>
       <SummaryChips
         items={[
@@ -1594,19 +1531,14 @@ export default function ProcurementPlanningPage() {
               </div>
             </div>
 
-            <WorkflowGuide activeTab={activeTab} />
-
             <SummaryChips
               items={[
                 { label: "Plan Month", value: planMonthValue },
                 { label: "Status", value: workspace.plan?.status || "OPEN" },
                 { label: "Rows", value: planningSummary.totalRows },
-                { label: "Decision Rows", value: workspaceDecisionSummary.total },
-                { label: "Grouped Pools", value: workspaceDecisionSummary.grouped },
                 { label: "SLOC Groups", value: planningSummary.slocGroups },
                 { label: "Item Groups", value: planningSummary.itemGroups },
                 { label: "Standalone", value: planningSummary.standaloneRows },
-                { label: "Excluded", value: planningSummary.excludedRows },
                 {
                   label: "Critical",
                   value: planningSummary.criticalRows,
@@ -1617,14 +1549,6 @@ export default function ProcurementPlanningPage() {
                   value: planningSummary.warningRows,
                   className: "border-amber-200 bg-amber-50 text-amber-800",
                 },
-              ]}
-            />
-            <GuidancePanel
-              title="Workspace Health"
-              items={[
-                "First define company-scoped SLOC groups. Those groups decide which RM / PM materials automatically enter PO11 planning scope.",
-                "Then create item groups under one selected SLOC group and manage pooled / alternate materials there. One item can stay standalone or belong to only one item group in the open month.",
-                "Monthly Plan Input controls requirement and threshold values. Planning Dashboard is the live decision screen. History shows the frozen month-end snapshot after Close Month.",
               ]}
             />
           </div>
@@ -1722,35 +1646,8 @@ export default function ProcurementPlanningPage() {
                       Clear
                     </button>
                   </div>
-                  <SummaryChips
-                    items={[
-                      { label: "Selected SLOCs", value: slocGroupForm.storage_location_ids.length },
-                      { label: "Open Month", value: planMonthValue },
-                    ]}
-                  />
                 </div>
                 <div className="grid gap-3">
-                  <SummaryChips
-                    items={[
-                      { label: "Configured Groups", value: slocGroupInsights.length },
-                      {
-                        label: "Eligible Materials",
-                        value: slocGroupInsights.reduce((sum, group) => sum + group.linkedMaterialCount, 0),
-                      },
-                      {
-                        label: "Grouped Materials",
-                        value: slocGroupInsights.reduce((sum, group) => sum + group.groupedMaterialCount, 0),
-                      },
-                    ]}
-                  />
-                  <GuidancePanel
-                    title="SLOC Group Purpose"
-                    items={[
-                      "Only materials flowing from the selected planning SLOC groups are visible in PO11 for the company.",
-                      "New RM / PM materials mapped into these storage locations should auto-appear in the open month without manual line creation.",
-                      "Edit a SLOC group whenever planning scope changes. After save, review Monthly Plan Input for newly included or reassigned materials.",
-                    ]}
-                  />
                   {slocGroupInsights.map((group) => (
                     <GroupCard
                       key={group.id}
@@ -1845,30 +1742,8 @@ export default function ProcurementPlanningPage() {
                       Clear
                     </button>
                   </div>
-                  <SummaryChips
-                    items={[
-                      { label: "Scoped Groups", value: workspace.item_groups.length },
-                      { label: "Selected Parent", value: itemGroupForm.sloc_group_id ? "Yes" : "No" },
-                    ]}
-                  />
                 </div>
                 <div className="grid gap-3">
-                  <SummaryChips
-                    items={[
-                      { label: "Item Groups", value: itemGroupInsights.length },
-                      { label: "Standalone Materials", value: standaloneRows.length },
-                      { label: "Scope Groups", value: scopedItemGroups.length },
-                      { label: "Available Pool", value: availableItemPool.length },
-                    ]}
-                  />
-                  <GuidancePanel
-                    title="Item Group Rules"
-                    items={[
-                      "Each item group must belong to one parent SLOC group. Item selection always happens inside that SLOC scope.",
-                      "Adding an item to a group makes it part of pooled planning for the open month. Removing it returns it to standalone planning.",
-                      "The same item cannot sit in two item groups at once. Save Item Group Mapping after any member change to refresh report behavior.",
-                    ]}
-                  />
                   {itemGroupInsights.map((group) => (
                     <GroupCard
                       key={group.id}
@@ -1933,9 +1808,6 @@ export default function ProcurementPlanningPage() {
                             ))}
                         </select>
                       </label>
-                      <div className="flex items-end text-sm text-slate-600">
-                        Ekhane member add/remove kore save korle current month-er report update hobe, ar next month carry-forward eo ei assignment jabe.
-                      </div>
                     </div>
                     <SummaryChips
                       items={[
@@ -2020,7 +1892,6 @@ export default function ProcurementPlanningPage() {
                         Review Standalone
                       </button>
                     </div>
-                    <SummaryChips items={[{ label: "Standalone Count", value: standaloneRows.length }]} />
                     <div className="flex flex-wrap gap-2">
                       {standaloneRows.length > 0 ? (
                         standaloneRows.slice(0, 16).map((row) => (
@@ -2068,14 +1939,6 @@ export default function ProcurementPlanningPage() {
                       value: historySummary.warning,
                       className: "border-amber-200 bg-amber-50 text-amber-800",
                     },
-                  ]}
-                />
-                <GuidancePanel
-                  title="History Rules"
-                  items={[
-                    "History never recalculates against today's live stock. It shows the exact month-end snapshot that was frozen during Close Month.",
-                    "Use this tab to compare prior-month requirement, thresholds, and stock position with the current open month workspace.",
-                    "If no archive exists for the month, keep working in Monthly Plan Input and close the month only after review is complete.",
                   ]}
                 />
                 <div className="overflow-x-auto border border-slate-200 bg-white">
