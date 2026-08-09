@@ -35,20 +35,24 @@ PO11 must now become a monthly RM / PM planning workspace for ADMIX and HPS with
 The final intended business model is:
 
 1. User creates one or more company-scoped `SLOC Group`.
-2. Each `Item Group` is always dependent on exactly one `SLOC Group`.
-3. User manages item membership from the chosen `SLOC Group` scope:
+2. As soon as a `SLOC Group` is created, the system must show that group's eligible RM / PM item pool from the selected storage locations.
+3. Each `Item Group` is always dependent on exactly one `SLOC Group`.
+4. One `SLOC Group` may contain multiple `Item Group`.
+5. User manages item membership from the chosen `SLOC Group` scope:
    - add item into an item group
    - remove item from an item group
    - move item from one item group to another
    - leave item as stand-alone
-4. The same item cannot belong to more than one item group in the same month.
-5. Membership is month-scoped, editable throughout the open month, and carried forward into the next month.
-6. When a month is closed, the exact group structure, input values, and month-end EOD stock snapshot become frozen history.
+6. The same item cannot belong to more than one item group in the same month.
+7. Membership is month-scoped, editable throughout the open month, and carried forward into the next month.
+8. The final planning slice for a SLOC group is: stand-alone items + item-group members under that same SLOC group.
+9. When a month is closed, the exact group structure, input values, and month-end EOD stock snapshot become frozen history.
 
 Important correction:
 - `Item Group` is not a free-floating company master by itself.
 - `Item Group` must be created under a selected `SLOC Group`.
 - The item-management UI must show the relevant item pool for that `SLOC Group`.
+- One storage location cannot belong to more than one active planning SLOC group in the same company.
 
 ## Clarified UX Requirements (Locked From User Review)
 
@@ -138,6 +142,7 @@ PO11 report visibility:
   - toggle SLOC group
   - review grouped / standalone planning rows
   - use the standard company selector exactly like other company-scoped report pages
+- view Monthly Plan Input in read-only form for the selected company/month scope
 
 Company-scope rule:
 - single-company users can only view their own company's data
@@ -272,6 +277,7 @@ Purpose:
 Rules:
 - items visible in PO11 come from selected planning storage-location groups
 - new RM / PM item appearing in an included SLOC must automatically appear in the active month
+- same SLOC group's eligible item list must be visible immediately after group save in the same session
 
 ### 4. Planning Item Group Setup
 
@@ -282,6 +288,8 @@ Rules:
 - monthly include / exclude / move decisions allowed
 - group members still show individually
 - stand-alone items remain visible
+- removing one item from an item group returns it to stand-alone immediately
+- one SLOC group may contain multiple item groups
 
 ### 5. History / Archive
 
@@ -289,6 +297,7 @@ At month close:
 - store frozen monthly input state
 - store month-end last-date EOD stock state
 - history must read snapshot data, not recompute from current live stock
+- close may be manual, and a later automatic month-end close is acceptable only if it creates the same frozen snapshot result
 
 ## Required Schema Layer
 
@@ -409,6 +418,17 @@ Before closing the work:
 11. Re-check carry-forward correctness
 12. Re-check history snapshot correctness
 13. Re-check SCM / Director-only authority in prod-style ACL logic
+14. Re-check report-view access for non-maintenance PO11 users in company-scoped mode
+
+## Current Known Unresolved Issue
+
+As of the latest user review, one blocker is still not considered solved:
+
+- Newly created or recently updated company-scoped planning SLOC groups are not consistently becoming visible immediately in:
+  - the same tab's existing-group view, and
+  - the Item Group Setup parent-SLOC dropdown
+
+Expected behavior is immediate same-session visibility after save. Treat this as an implementation bug, not a requirement ambiguity.
 
 ## Sequence-Wise Task Breakdown
 

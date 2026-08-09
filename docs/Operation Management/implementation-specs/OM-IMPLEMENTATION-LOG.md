@@ -3888,3 +3888,37 @@ it provides no enforcement value as a CI step in its current form.
 - Verification:
   - `frontend` production build re-run after the hardening pass also passed on Sunday, August 9, 2026.
   - The same unrelated pre-existing `GRNListPage.jsx` duplicate `emptyMessage` build warning remains unchanged and unrelated to PO11.
+
+### 2026-08-09 23:20 IST - PO11 clarified design wording + live-scope eligibility correction
+- Trigger: after the business owner restated the exact PO11 sequence in plain language, the live prod investigation showed a deeper mismatch than the earlier same-session UI bug. Prod project `bsjpvkigpllichlknmah` had company `CMP003` with active planning SLOC groups and item groups, and the selected SLOC locations (`P003`, `R003`, `T003`) clearly contained RM/PM stock rows, but the active August 2026 PO11 plan still had zero member rows under the visible item group.
+- Docs corrected first, per rule:
+  - Updated feasibility section `35.11` / `35.13` to state the exact operational sequence explicitly: create company-scoped SLOC group -> system shows that SLOC group's eligible RM/PM pool -> create one or more item groups under that same SLOC group -> assign some items into item groups -> remaining items stay stand-alone inside that same SLOC group -> save month-specific planning values -> close/freeze month. Also added the explicit invariant that one storage location cannot belong to more than one active planning SLOC group in the same company, and noted that any future automatic month-end close must produce the same frozen snapshot result as the manual close path.
+  - Updated `CODEX-PO11-PROCUREMENT-PLANNING-WORKSPACE-TASK-BRIEF.md` with the same clarified sequence, immediate same-session eligible-item visibility expectation after SLOC-group save, explicit "multiple item groups under one SLOC group" rule, explicit "remove from item group -> return to stand-alone" rule, and the same month-close clarification.
+- Root cause found from the live prod data check:
+  - The current PO11 backend was still deriving "eligible items for a SLOC group" from `erp_master.material_plant_ext.default_storage_location_id`, which is a plant-extension defaulting structure, not the live chosen-SLOC item pool described by the PO11 design.
+  - In prod `CMP003`, `material_company_ext` procurement-allowed rows existed, and the chosen planning SLOC locations had real RM/PM stock rows, but `material_plant_ext` rows for that company were `0`. That made the backend auto-include logic conclude there were no eligible PO11 materials, so no monthly plan rows were created even though the business-visible storage locations clearly had item data.
+  - In other words: data was present in the chosen storage locations, but it did not pass through the implementation's over-restricted eligibility gate, so the report had nothing to render for that planning scope.
+- Backend correction delivered in `supabase/functions/api/_core/procurement/planning.handlers.ts`:
+  - Rewrote `getEligibleMaterialRows(companyId)` so PO11 eligibility now comes from live `erp_inventory.stock_snapshot` rows inside the active storage locations that belong to the configured planning SLOC groups, constrained to RM/PM materials plus active `material_company_ext.procurement_allowed = true`.
+  - The resolved parent `source_sloc_group_id` still comes from the configured SLOC-group membership map, so the monthly plan rows continue to carry the correct planning scope identity for downstream filters and item-group management.
+  - This keeps the earlier same-session React Query fix intact but removes the deeper backend condition that had been filtering out real prod data.
+- Live prod check also exposed a separate dependency-data violation that is now documented honestly, not hidden: the same three active storage locations in `CMP003` were assigned to three active planning SLOC groups simultaneously (`ADM_HPS`, `ADM_HPS PLANNING`, `ASCL_ADMIX`). The backend validator added earlier already blocks creating or updating that invalid shape going forward, but existing prod data still needs one explicit cleanup decision outside this code change because PO11 design allows only one active parent SLOC group per storage location per company.
+- Verification:
+  - `frontend` production build passed on Sunday, August 9, 2026 after the PO11 wording/backend correction pass. The same unrelated pre-existing `GRNListPage.jsx` duplicate `emptyMessage` warning remains unchanged.
+  - A local backend import smoke was attempted, but this terminal context still has the known host-level Node `EPERM` realpath/lstat issue before script code begins, so no truthful "backend import smoke passed" claim is made for this pass. No touched-file-local syntax issue was surfaced before that host-level launcher failure.
+
+### 2026-08-09 23:35 IST - PO11 viewer-mode lock + report-route authority follow-up
+- Follow-up audit after the broader redesign pass found two remaining frontend alignment gaps against the locked PO11 authority/UX model:
+  - **Viewer-mode leakage:** `ProcurementPlanningPage.jsx` still rendered save / close actions and setup tabs even for page viewers, which contradicted the locked rule that viewers may only switch company/month/SLOC scope and review Monthly Plan Input in read-only form.
+  - **Full-page report route companion gap:** the new `/dashboard/procurement/planning/report` route existed in `AppRouter.jsx`, but `frontend/src/router/routeIndex.js` had not yet registered it as a companion route of the base PO11 page. That meant direct open / refresh / new-window flows could still be brittle because the shell's allowed-route index is built from the base menu snapshot, not from every local router variant automatically.
+- Fixes delivered:
+  - `frontend/src/pages/dashboard/procurement/planning/ProcurementPlanningPage.jsx`
+    - Reintroduced an explicit PO11 maintenance-mode gate for the current shell context: admin, `DIRECTOR`, `ACL-MASTER`, or SCM work context.
+    - View-only users now keep `Dashboard`, `Monthly Plan Input`, and `History`, but no longer see setup tabs or save / close actions.
+    - Monthly Plan Input now stays visible but read-only for viewers, matching the locked PO11 design.
+    - Added a small `Access` summary chip so the current mode is obvious inside the workspace.
+  - `frontend/src/router/routeIndex.js`
+    - Added `/dashboard/procurement/planning/report` as the PO11 companion route of `/dashboard/procurement/planning`, so the full-page report survives shell authorization checks during direct navigation and Shift+F8-style new-window usage.
+- Verification:
+  - `frontend` production build passed on Sunday, August 9, 2026 after this follow-up patch as well.
+  - The same unrelated pre-existing `GRNListPage.jsx` duplicate `emptyMessage` warning remains unchanged.

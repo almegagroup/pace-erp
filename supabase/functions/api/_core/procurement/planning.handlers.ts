@@ -18,6 +18,7 @@ type ProcurementHandlerContext = {
 };
 
 type PlanningWorkspaceRow = {
+  id: string;
   material_id: string;
   material_code: string;
   material_name: string;
@@ -110,6 +111,10 @@ function parseNullableNumber(value: unknown): number | null {
 function normalizeQty(value: unknown): number {
   const parsed = Number(value ?? 0);
   return Number((Number.isFinite(parsed) ? parsed : 0).toFixed(6));
+}
+
+function buildMaterialScopeKey(materialId: string, sourceSlocGroupId?: string | null): string {
+  return `${toTrimmedString(materialId)}::${toTrimmedString(sourceSlocGroupId)}`;
 }
 
 function parseBody(req: Request): Promise<JsonRecord> {
@@ -234,6 +239,37 @@ async function getMaterialDefaultLeadTimes(companyId: string, materialIds: strin
   return map;
 }
 
+function sanitizeCarryForwardLine(
+  row: JsonRecord,
+  itemGroupScopeById: Map<string, string | null>,
+): JsonRecord | null {
+  const materialId = toTrimmedString(row.material_id);
+  if (!materialId) return null;
+  const priorPlanningItemGroupId = toTrimmedString(row.planning_item_group_id) || null;
+  const sourceSlocGroupId =
+    toTrimmedString(row.source_sloc_group_id) ||
+    (priorPlanningItemGroupId ? itemGroupScopeById.get(priorPlanningItemGroupId) || null : null) ||
+    null;
+  const effectivePlanningItemGroupId =
+    priorPlanningItemGroupId && itemGroupScopeById.get(priorPlanningItemGroupId) === sourceSlocGroupId
+      ? priorPlanningItemGroupId
+      : null;
+  return {
+    material_id: materialId,
+    source_sloc_group_id: sourceSlocGroupId,
+    planning_item_group_id: effectivePlanningItemGroupId,
+    excluded_from_dashboard: Boolean(row.excluded_from_dashboard),
+    monthly_requirement_qty: normalizeQty(row.monthly_requirement_qty),
+    safety_days: normalizeQty(row.safety_days),
+    processing_time_days: normalizeQty(row.processing_time_days),
+    lead_time_days: normalizeQty(row.lead_time_days),
+    fixed_safety_stock_qty: parseNullableNumber(row.fixed_safety_stock_qty),
+    fixed_replenishment_stock_qty: parseNullableNumber(row.fixed_replenishment_stock_qty),
+    display_order: Number(row.display_order ?? 0) || 0,
+    auto_included: Boolean(row.auto_included),
+  };
+}
+
 async function ensurePlanExists(
   ctx: ProcurementHandlerContext,
   companyId: string,
@@ -260,12 +296,26 @@ async function ensurePlanExists(
   const created = inserted as PlanHeader;
 
   if (previousPlan?.id) {
-    const [previousLines, previousGroupConfigs] = await Promise.all([
+    const [previousLines, previousGroupConfigs, currentItemGroups] = await Promise.all([
       loadPlanLines(previousPlan.id),
       loadPlanGroupConfigRows(previousPlan.id),
+      loadItemGroups(companyId),
     ]);
+    const itemGroupScopeById = new Map(currentItemGroups.map((group) => [group.id, group.sloc_group_id || null]));
     if (previousLines.length > 0) {
-      const clonedLines = previousLines.map((row) => ({
+      const dedupedLines = new Map<string, JsonRecord>();
+      for (const row of previousLines) {
+        const sanitized = sanitizeCarryForwardLine(row, itemGroupScopeById);
+        if (!sanitized) continue;
+        const scopeKey = buildMaterialScopeKey(
+          toTrimmedString(sanitized.material_id),
+          toTrimmedString(sanitized.source_sloc_group_id) || null,
+        );
+        if (!dedupedLines.has(scopeKey)) {
+          dedupedLines.set(scopeKey, sanitized);
+        }
+      }
+      const clonedLines = [...dedupedLines.values()].map((row) => ({
         plan_id: created.id,
         company_id: companyId,
         material_id: row.material_id,
@@ -291,7 +341,9 @@ async function ensurePlanExists(
       if (cloneError) throw new Error("PROCUREMENT_PLANNING_CARRY_FORWARD_FAILED");
     }
     if (previousGroupConfigs.length > 0) {
-      const clonedGroupConfigs = previousGroupConfigs.map((row) => ({
+      const clonedGroupConfigs = previousGroupConfigs
+        .filter((row) => itemGroupScopeById.has(toTrimmedString(row.planning_item_group_id)))
+        .map((row) => ({
         plan_id: created.id,
         company_id: companyId,
         planning_item_group_id: row.planning_item_group_id,
@@ -305,11 +357,13 @@ async function ensurePlanExists(
         last_updated_by: ctx.auth_user_id,
         last_updated_at: new Date().toISOString(),
       }));
-      const { error: configCloneError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("procurement_monthly_plan_group_config")
-        .insert(clonedGroupConfigs);
-      if (configCloneError) throw new Error("PROCUREMENT_PLANNING_GROUP_CONFIG_CARRY_FORWARD_FAILED");
+      if (clonedGroupConfigs.length > 0) {
+        const { error: configCloneError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("procurement_monthly_plan_group_config")
+          .insert(clonedGroupConfigs);
+        if (configCloneError) throw new Error("PROCUREMENT_PLANNING_GROUP_CONFIG_CARRY_FORWARD_FAILED");
+      }
     }
   }
 
@@ -581,17 +635,23 @@ async function getEligibleMaterialRows(companyId: string): Promise<Array<{ mater
     }
   }
 
-  const { data: plantExtRows, error: plantExtError } = await serviceRoleClient
-    .schema("erp_master")
-    .from("material_plant_ext")
-    .select("material_id, default_storage_location_id, status")
+  const { data: stockScopeRows, error: stockScopeError } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_snapshot")
+    .select("material_id, storage_location_id, quantity")
     .eq("company_id", companyId)
-    .eq("status", "ACTIVE")
-    .in("default_storage_location_id", activeSlocIds);
-  if (plantExtError) throw new Error("PROCUREMENT_PLANNING_ELIGIBLE_PLANT_EXT_FAILED");
+    .in("storage_location_id", activeSlocIds);
+  if (stockScopeError) throw new Error("PROCUREMENT_PLANNING_ELIGIBLE_STOCK_SCOPE_FAILED");
 
-  const eligiblePlantRows = (plantExtRows ?? []) as JsonRecord[];
-  const materialIds = [...new Set(eligiblePlantRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+  const eligibleStockRows = ((stockScopeRows ?? []) as JsonRecord[])
+    .filter((row) => normalizeQty(row.quantity) > 0)
+    .map((row) => ({
+      material_id: toTrimmedString(row.material_id),
+      storage_location_id: toTrimmedString(row.storage_location_id),
+    }))
+    .filter((row) => row.material_id && row.storage_location_id);
+
+  const materialIds = [...new Set(eligibleStockRows.map((row) => row.material_id))];
   if (materialIds.length === 0) return [];
 
   const { data: materialRows, error: materialError } = await serviceRoleClient
@@ -616,13 +676,15 @@ async function getEligibleMaterialRows(companyId: string): Promise<Array<{ mater
 
   const companyAllowed = new Set(((companyExtRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean));
   const resultMap = new Map<string, { material_id: string; source_sloc_group_id: string | null }>();
-  for (const row of eligiblePlantRows) {
-    const materialId = toTrimmedString(row.material_id);
-    const locationId = toTrimmedString(row.default_storage_location_id);
-    if (!companyAllowed.has(materialId) || resultMap.has(materialId)) continue;
-    resultMap.set(materialId, {
+  for (const row of eligibleStockRows) {
+    const materialId = row.material_id;
+    const locationId = row.storage_location_id;
+    const sourceSlocGroupId = slocGroupByLocationId.get(locationId) ?? null;
+    const scopeKey = buildMaterialScopeKey(materialId, sourceSlocGroupId);
+    if (!companyAllowed.has(materialId) || resultMap.has(scopeKey)) continue;
+    resultMap.set(scopeKey, {
       material_id: materialId,
-      source_sloc_group_id: slocGroupByLocationId.get(locationId) ?? null,
+      source_sloc_group_id: sourceSlocGroupId,
     });
   }
   return [...resultMap.values()];
@@ -639,17 +701,23 @@ async function ensureAutoIncludedPlanLines(
     getEligibleMaterialRows(companyId),
     loadItemGroups(companyId),
   ]);
-  const existingMaterialIds = new Set(existingLines.map((row) => toTrimmedString(row.material_id)).filter(Boolean));
-  const eligibleByMaterialId = new Map(eligibleRows.map((row) => [row.material_id, row]));
+  const existingScopeKeys = new Set(
+    existingLines
+      .map((row) => buildMaterialScopeKey(toTrimmedString(row.material_id), toTrimmedString(row.source_sloc_group_id) || null))
+      .filter((key) => key !== "::"),
+  );
+  const eligibleByScopeKey = new Map(
+    eligibleRows.map((row) => [buildMaterialScopeKey(row.material_id, row.source_sloc_group_id), row]),
+  );
   const itemGroupScopeById = new Map(
     itemGroups.map((group) => [group.id, group.sloc_group_id || null]),
   );
 
   for (const row of existingLines) {
     const materialId = toTrimmedString(row.material_id);
-    const eligible = eligibleByMaterialId.get(materialId);
-    if (!eligible) continue;
     const currentSourceSlocGroupId = toTrimmedString(row.source_sloc_group_id) || null;
+    const eligible = eligibleByScopeKey.get(buildMaterialScopeKey(materialId, currentSourceSlocGroupId));
+    if (!eligible) continue;
     const nextSourceSlocGroupId = eligible.source_sloc_group_id || null;
     const currentItemGroupId = toTrimmedString(row.planning_item_group_id) || null;
     const currentItemGroupScopeId = currentItemGroupId
@@ -677,16 +745,21 @@ async function ensureAutoIncludedPlanLines(
     if (syncError) throw new Error("PROCUREMENT_PLANNING_SCOPE_SYNC_FAILED");
   }
 
-  const missingRows = eligibleRows.filter((row) => !existingMaterialIds.has(row.material_id));
+  const missingRows = eligibleRows.filter((row) => !existingScopeKeys.has(buildMaterialScopeKey(row.material_id, row.source_sloc_group_id)));
   if (missingRows.length === 0) return;
 
   const leadTimeMap = await getMaterialDefaultLeadTimes(companyId, missingRows.map((row) => row.material_id));
   const priorPlan = await getPreviousPlan(companyId, planMonth);
   const priorLines = priorPlan?.id ? await loadPlanLines(priorPlan.id) : [];
-  const priorByMaterialId = new Map(priorLines.map((row) => [toTrimmedString(row.material_id), row]));
+  const priorByScopeKey = new Map(
+    priorLines.map((row) => [
+      buildMaterialScopeKey(toTrimmedString(row.material_id), toTrimmedString(row.source_sloc_group_id) || null),
+      row,
+    ]),
+  );
 
   const inserts = missingRows.map((row, index) => {
-    const prior = priorByMaterialId.get(row.material_id);
+    const prior = priorByScopeKey.get(buildMaterialScopeKey(row.material_id, row.source_sloc_group_id));
     const priorPlanningItemGroupId = toTrimmedString(prior?.planning_item_group_id) || null;
     const priorPlanningItemGroupScopeId = priorPlanningItemGroupId
       ? itemGroupScopeById.get(priorPlanningItemGroupId) || null
@@ -752,18 +825,34 @@ async function loadWorkspaceRows(
 }> {
   await ensureAutoIncludedPlanLines(ctx, companyId, planMonth, planId);
 
-  const [planLines, slocGroupsRaw, slocRows, itemGroups, groupConfigRows] = await Promise.all([
+  const [planLines, slocGroupsRaw, slocRows, itemGroups, groupConfigRows, eligibleRows] = await Promise.all([
     loadPlanLines(planId),
     loadSlocGroups(companyId),
     loadSlocGroupMembers(companyId),
     loadItemGroups(companyId),
     loadPlanGroupConfigRows(planId),
+    getEligibleMaterialRows(companyId),
   ]);
 
   const slocGroups = buildSlocGroupSummaries(slocGroupsRaw, slocRows);
   const groupConfigs = buildPlanningGroupConfigs(groupConfigRows, itemGroups);
   const slocGroupNameById = new Map(slocGroups.map((group) => [group.id, group.group_name]));
   const itemGroupNameById = new Map(itemGroups.map((group) => [group.id, group.group_name]));
+  const itemGroupScopeById = new Map(
+    itemGroups.map((group) => [group.id, group.sloc_group_id || null]),
+  );
+  const slocGroupByLocationId = new Map<string, string>();
+  for (const row of slocRows) {
+    const locationId = toTrimmedString(row.storage_location_id);
+    const group = (row.planning_sloc_group as JsonRecord | null) ?? null;
+    const groupId = toTrimmedString(group?.id);
+    if (locationId && groupId && !slocGroupByLocationId.has(locationId)) {
+      slocGroupByLocationId.set(locationId, groupId);
+    }
+  }
+  const eligibleByScopeKey = new Map(
+    eligibleRows.map((row) => [buildMaterialScopeKey(row.material_id, row.source_sloc_group_id), row.source_sloc_group_id || null]),
+  );
   const activeSlocIds = [...new Set(slocRows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
   const materialIds = [...new Set(planLines.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
 
@@ -815,12 +904,14 @@ async function loadWorkspaceRows(
   const qaMap = new Map<string, number>();
   for (const row of snapshotRows) {
     const materialId = toTrimmedString(row.material_id);
+    const sourceSlocGroupId = slocGroupByLocationId.get(toTrimmedString(row.storage_location_id)) || null;
+    const scopeKey = buildMaterialScopeKey(materialId, sourceSlocGroupId);
     const stockType = toUpperTrimmedString(row.stock_type_code);
     const quantity = normalizeQty(row.quantity);
     if (stockType === "UNRESTRICTED") {
-      availableMap.set(materialId, normalizeQty((availableMap.get(materialId) ?? 0) + quantity));
+      availableMap.set(scopeKey, normalizeQty((availableMap.get(scopeKey) ?? 0) + quantity));
     } else if (stockType === "QUALITY_INSPECTION") {
-      qaMap.set(materialId, normalizeQty((qaMap.get(materialId) ?? 0) + quantity));
+      qaMap.set(scopeKey, normalizeQty((qaMap.get(scopeKey) ?? 0) + quantity));
     }
   }
 
@@ -838,8 +929,15 @@ async function loadWorkspaceRows(
 
   const daysInMonth = getDaysInMonth(planMonth);
   const rows: PlanningWorkspaceRow[] = planLines.map((row) => {
+    const rowId = toTrimmedString(row.id);
     const materialId = toTrimmedString(row.material_id);
     const material = materialMap.get(materialId) ?? {};
+    const planningItemGroupId = toTrimmedString(row.planning_item_group_id) || null;
+    const resolvedSourceSlocGroupId = toTrimmedString(row.source_sloc_group_id) ||
+      itemGroupScopeById.get(planningItemGroupId || "") ||
+      eligibleByScopeKey.get(buildMaterialScopeKey(materialId, toTrimmedString(row.source_sloc_group_id) || null)) ||
+      null;
+    const scopeKey = buildMaterialScopeKey(materialId, resolvedSourceSlocGroupId);
     const monthlyRequirementQty = normalizeQty(row.monthly_requirement_qty);
     const safetyDays = normalizeQty(row.safety_days);
     const processingTimeDays = normalizeQty(row.processing_time_days);
@@ -854,10 +952,10 @@ async function loadWorkspaceRows(
     const fixedReplenishment = parseNullableNumber(row.fixed_replenishment_stock_qty);
     const effectiveSafetyStockQty = normalizeQty(fixedSafety ?? derivedSafetyStockQty);
     const effectiveReplenishmentStockQty = normalizeQty(fixedReplenishment ?? derivedReplenishmentStockQty);
-    const availableStockQty = normalizeQty(availableMap.get(materialId) ?? 0);
+    const availableStockQty = normalizeQty(availableMap.get(scopeKey) ?? 0);
     const trnStockQty = normalizeQty(trnMap.get(materialId) ?? 0);
     const geStockQty = normalizeQty(geMap.get(materialId) ?? 0);
-    const qaStockQty = normalizeQty(qaMap.get(materialId) ?? 0);
+    const qaStockQty = normalizeQty(qaMap.get(scopeKey) ?? 0);
     const totalStockQty = normalizeQty(availableStockQty + trnStockQty + geStockQty + qaStockQty);
     let statusTone: "NORMAL" | "WARNING" | "CRITICAL" = "NORMAL";
     if (totalStockQty <= effectiveSafetyStockQty) {
@@ -866,15 +964,16 @@ async function loadWorkspaceRows(
       statusTone = "WARNING";
     }
     return {
+      id: rowId,
       material_id: materialId,
       material_code: toTrimmedString(material.pace_code),
       material_name: toTrimmedString(material.material_name),
       material_type: toTrimmedString(material.material_type),
       base_uom_code: toTrimmedString(material.base_uom_code),
-      source_sloc_group_id: toTrimmedString(row.source_sloc_group_id) || null,
-      source_sloc_group_name: slocGroupNameById.get(toTrimmedString(row.source_sloc_group_id)) ?? null,
-      planning_item_group_id: toTrimmedString(row.planning_item_group_id) || null,
-      planning_item_group_name: itemGroupNameById.get(toTrimmedString(row.planning_item_group_id)) ?? null,
+      source_sloc_group_id: resolvedSourceSlocGroupId,
+      source_sloc_group_name: slocGroupNameById.get(resolvedSourceSlocGroupId || "") ?? null,
+      planning_item_group_id: planningItemGroupId,
+      planning_item_group_name: itemGroupNameById.get(planningItemGroupId || "") ?? null,
       excluded_from_dashboard: Boolean(row.excluded_from_dashboard),
       monthly_requirement_qty: monthlyRequirementQty,
       safety_days: safetyDays,
@@ -898,6 +997,10 @@ async function loadWorkspaceRows(
   });
 
   rows.sort((left, right) => {
+    const leftSloc = left.source_sloc_group_name ?? "~";
+    const rightSloc = right.source_sloc_group_name ?? "~";
+    const slocCmp = leftSloc.localeCompare(rightSloc);
+    if (slocCmp !== 0) return slocCmp;
     const leftGroup = left.planning_item_group_name ?? "~";
     const rightGroup = right.planning_item_group_name ?? "~";
     const groupCmp = leftGroup.localeCompare(rightGroup);
@@ -958,7 +1061,13 @@ export async function upsertProcurementPlanningLinesHandler(
     }
     await ensureAutoIncludedPlanLines(ctx, companyId, planMonth, plan.id);
     const existingLines = await loadPlanLines(plan.id);
-    const existingByMaterialId = new Map(existingLines.map((row) => [toTrimmedString(row.material_id), row]));
+    const existingById = new Map(existingLines.map((row) => [toTrimmedString(row.id), row]));
+    const existingByScopeKey = new Map(
+      existingLines.map((row) => [
+        buildMaterialScopeKey(toTrimmedString(row.material_id), toTrimmedString(row.source_sloc_group_id) || null),
+        row,
+      ]),
+    );
     const itemGroups = await loadItemGroups(companyId);
     const allowedItemGroupIds = new Set(itemGroups.map((group) => group.id));
     const itemGroupScopeById = new Map(itemGroups.map((group) => [group.id, group.sloc_group_id || null]));
@@ -971,15 +1080,17 @@ export async function upsertProcurementPlanningLinesHandler(
     const leadTimeMap = await getMaterialDefaultLeadTimes(companyId, materialIds);
     const inserts: JsonRecord[] = [];
     for (const line of lines) {
+      const lineId = toTrimmedString(line.id);
       const materialId = toTrimmedString(line.material_id);
       if (!materialId) continue;
+      const requestedSourceSlocGroupId = toTrimmedString(line.source_sloc_group_id) || null;
       const planningItemGroupId = toTrimmedString(line.planning_item_group_id) || null;
       if (planningItemGroupId && !allowedItemGroupIds.has(planningItemGroupId)) {
         return planningError(req, ctx, "PROCUREMENT_PLANNING_ITEM_GROUP_INVALID", 422, "Selected item group does not belong to the company.");
       }
       const sourceSlocGroupId =
-        toTrimmedString(line.source_sloc_group_id) ||
-        toTrimmedString(existingByMaterialId.get(materialId)?.source_sloc_group_id) ||
+        requestedSourceSlocGroupId ||
+        toTrimmedString(existingById.get(lineId)?.source_sloc_group_id) ||
         null;
       if (
         planningItemGroupId &&
@@ -994,7 +1105,11 @@ export async function upsertProcurementPlanningLinesHandler(
           "Selected item group does not belong to the material's SLOC group scope.",
         );
       }
+      const existingLine =
+        existingById.get(lineId) ||
+        existingByScopeKey.get(buildMaterialScopeKey(materialId, sourceSlocGroupId));
       const payload = {
+        source_sloc_group_id: sourceSlocGroupId,
         planning_item_group_id: planningItemGroupId,
         excluded_from_dashboard: Boolean(line.excluded_from_dashboard),
         monthly_requirement_qty: normalizeQty(line.monthly_requirement_qty),
@@ -1003,23 +1118,23 @@ export async function upsertProcurementPlanningLinesHandler(
         lead_time_days: normalizeQty(line.lead_time_days ?? leadTimeMap.get(materialId) ?? 0),
         fixed_safety_stock_qty: parseNullableNumber(line.fixed_safety_stock_qty),
         fixed_replenishment_stock_qty: parseNullableNumber(line.fixed_replenishment_stock_qty),
-        display_order: Number(line.display_order ?? existingByMaterialId.get(materialId)?.display_order ?? 0) || 0,
+        display_order: Number(line.display_order ?? existingLine?.display_order ?? 0) || 0,
         last_updated_by: ctx.auth_user_id,
         last_updated_at: new Date().toISOString(),
       };
-      if (existingByMaterialId.has(materialId)) {
+      if (existingLine) {
         const { error } = await serviceRoleClient
           .schema("erp_procurement")
           .from("procurement_monthly_plan_line")
           .update(payload)
-          .eq("id", toTrimmedString(existingByMaterialId.get(materialId)?.id));
+          .eq("id", toTrimmedString(existingLine.id));
         if (error) throw new Error("PROCUREMENT_PLANNING_LINE_UPDATE_FAILED");
       } else {
         inserts.push({
           plan_id: plan.id,
           company_id: companyId,
           material_id: materialId,
-          source_sloc_group_id: null,
+          source_sloc_group_id: sourceSlocGroupId,
           auto_included: false,
           created_by: ctx.auth_user_id,
           ...payload,
@@ -1451,6 +1566,8 @@ export async function closeProcurementPlanningMonthHandler(req: Request, ctx: Pr
     const archiveLines = workspace.rows.map((row) => ({
       archive_id: archiveId,
       material_id: row.material_id,
+      source_sloc_group_id_snapshot: row.source_sloc_group_id,
+      planning_item_group_id_snapshot: row.planning_item_group_id,
       material_code_snapshot: row.material_code,
       material_name_snapshot: row.material_name,
       base_uom_code_snapshot: row.base_uom_code,
