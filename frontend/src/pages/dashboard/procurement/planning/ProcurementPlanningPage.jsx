@@ -955,19 +955,14 @@ export default function ProcurementPlanningPage() {
           company_id: effectiveCompanyId,
         }),
       ]);
-      if (workspaceResult.status !== "fulfilled") {
-        throw workspaceResult.reason;
-      }
+      if (workspaceResult.status !== "fulfilled") throw workspaceResult.reason;
+      if (locationsResult.status !== "fulfilled") throw locationsResult.reason;
+      if (slocGroupsResult.status !== "fulfilled") throw slocGroupsResult.reason;
+      if (itemGroupsResult.status !== "fulfilled") throw itemGroupsResult.reason;
 
       const workspaceData = workspaceResult.value;
-      const fallbackSlocGroups =
-        slocGroupsResult.status === "fulfilled"
-          ? extractCollectionItems(slocGroupsResult.value)
-          : [];
-      const fallbackItemGroups =
-        itemGroupsResult.status === "fulfilled"
-          ? extractCollectionItems(itemGroupsResult.value)
-          : [];
+      const fallbackSlocGroups = extractCollectionItems(slocGroupsResult.value);
+      const fallbackItemGroups = extractCollectionItems(itemGroupsResult.value);
       setWorkspace({
         plan: workspaceData?.plan ?? null,
         rows: Array.isArray(workspaceData?.rows) ? workspaceData.rows : [],
@@ -1144,6 +1139,7 @@ export default function ProcurementPlanningPage() {
           ? result.group_configs
           : current.group_configs,
       }));
+      await loadWorkspace();
       setMessage("Monthly plan saved.");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Unable to save monthly plan.");

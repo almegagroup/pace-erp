@@ -316,7 +316,7 @@ async function ensurePlanExists(
   return created;
 }
 
-async function loadSlocGroupMembers(companyId: string): Promise<JsonRecord[]> {
+async function loadSlocGroups(companyId: string): Promise<JsonRecord[]> {
   const { data: groups, error: groupError } = await serviceRoleClient
     .schema("erp_procurement")
     .from("planning_sloc_group")
@@ -325,11 +325,11 @@ async function loadSlocGroupMembers(companyId: string): Promise<JsonRecord[]> {
     .eq("active", true)
     .order("group_name", { ascending: true });
   if (groupError) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUPS_FAILED");
+  return (groups ?? []) as JsonRecord[];
+}
 
-  const groupRows = (groups ?? []) as JsonRecord[];
-  const groupIds = groupRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
+async function loadSlocGroupMembersByIds(groupIds: string[]): Promise<JsonRecord[]> {
   if (groupIds.length === 0) return [];
-
   const { data: members, error: memberError } = await serviceRoleClient
     .schema("erp_procurement")
     .from("planning_sloc_group_member")
@@ -338,23 +338,37 @@ async function loadSlocGroupMembers(companyId: string): Promise<JsonRecord[]> {
     .eq("active", true)
     .order("added_at", { ascending: true });
   if (memberError) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUPS_FAILED");
+  return (members ?? []) as JsonRecord[];
+}
 
-  const memberRows = (members ?? []) as JsonRecord[];
-  const locationIds = [...new Set(memberRows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
-  if (locationIds.length === 0) return [];
-
-  const { data: locations, error: locationError } = await serviceRoleClient
+async function loadStorageLocationLookup(
+  locationIds: string[],
+  options?: { activeOnly?: boolean },
+): Promise<Map<string, JsonRecord>> {
+  const ids = [...new Set(locationIds.filter(Boolean))];
+  if (ids.length === 0) return new Map();
+  let query = serviceRoleClient
     .schema("erp_inventory")
     .from("storage_location_master")
     .select("id, code, name, active")
-    .in("id", locationIds)
-    .eq("active", true);
+    .in("id", ids);
+  if (options?.activeOnly) {
+    query = query.eq("active", true);
+  }
+  const { data: locations, error: locationError } = await query;
   if (locationError) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUPS_FAILED");
+  return new Map(((locations ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+}
 
+async function loadSlocGroupMembers(companyId: string): Promise<JsonRecord[]> {
+  const groupRows = await loadSlocGroups(companyId);
+  const groupIds = groupRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
+  if (groupIds.length === 0) return [];
+
+  const memberRows = await loadSlocGroupMembersByIds(groupIds);
+  const locationIds = [...new Set(memberRows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
   const groupById = new Map(groupRows.map((row) => [toTrimmedString(row.id), row]));
-  const locationById = new Map(
-    ((locations ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]),
-  );
+  const locationById = await loadStorageLocationLookup(locationIds);
 
   return memberRows
     .map((row) => {
@@ -368,7 +382,7 @@ async function loadSlocGroupMembers(companyId: string): Promise<JsonRecord[]> {
         storage_location_master: location,
       } as JsonRecord;
     })
-    .filter((row) => row.planning_sloc_group && row.storage_location_master);
+    .filter((row) => row.planning_sloc_group);
 }
 
 async function loadItemGroups(companyId: string): Promise<ItemGroupSummary[]> {
@@ -418,35 +432,44 @@ function buildPlanningGroupConfigs(
     .sort((left, right) => left.planning_item_group_name.localeCompare(right.planning_item_group_name));
 }
 
-function buildSlocGroupSummaries(rows: JsonRecord[]): SlocGroupSummary[] {
-  const map = new Map<string, SlocGroupSummary>();
+function buildSlocGroupSummaries(groups: JsonRecord[], rows: JsonRecord[]): SlocGroupSummary[] {
+  const map = new Map<string, SlocGroupSummary>(
+    groups.map((group) => [
+      toTrimmedString(group.id),
+      {
+        id: toTrimmedString(group.id),
+        group_name: toTrimmedString(group.group_name),
+        member_count: 0,
+        storage_locations: [],
+      },
+    ]),
+  );
   for (const row of rows) {
     const group = (row.planning_sloc_group as JsonRecord | null) ?? null;
     const location = (row.storage_location_master as JsonRecord | null) ?? null;
     const groupId = toTrimmedString(group?.id);
-    if (!groupId || !location) continue;
-    if (!map.has(groupId)) {
-      map.set(groupId, {
-        id: groupId,
-        group_name: toTrimmedString(group?.group_name),
-        member_count: 0,
-        storage_locations: [],
+    if (!groupId || !map.has(groupId)) continue;
+    const current = map.get(groupId)!;
+    current.member_count += 1;
+    if (location) {
+      current.storage_locations.push({
+        id: toTrimmedString(location.id),
+        code: toTrimmedString(location.code),
+        name: toTrimmedString(location.name),
       });
     }
-    const current = map.get(groupId)!;
-    current.storage_locations.push({
-      id: toTrimmedString(location.id),
-      code: toTrimmedString(location.code),
-      name: toTrimmedString(location.name),
-    });
-    current.member_count = current.storage_locations.length;
   }
   return [...map.values()].sort((left, right) => left.group_name.localeCompare(right.group_name));
 }
 
 async function getEligibleMaterialRows(companyId: string): Promise<Array<{ material_id: string; source_sloc_group_id: string | null }>> {
   const slocRows = await loadSlocGroupMembers(companyId);
-  const activeSlocIds = [...new Set(slocRows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
+  const activeSlocIds = [...new Set(
+    slocRows
+      .filter((row) => ((row.storage_location_master as JsonRecord | null)?.active ?? false) === true)
+      .map((row) => toTrimmedString(row.storage_location_id))
+      .filter(Boolean),
+  )];
   if (activeSlocIds.length === 0) return [];
 
   const slocGroupByLocationId = new Map<string, string>();
@@ -630,14 +653,15 @@ async function loadWorkspaceRows(
 }> {
   await ensureAutoIncludedPlanLines(ctx, companyId, planMonth, planId);
 
-  const [planLines, slocRows, itemGroups, groupConfigRows] = await Promise.all([
+  const [planLines, slocGroupsRaw, slocRows, itemGroups, groupConfigRows] = await Promise.all([
     loadPlanLines(planId),
+    loadSlocGroups(companyId),
     loadSlocGroupMembers(companyId),
     loadItemGroups(companyId),
     loadPlanGroupConfigRows(planId),
   ]);
 
-  const slocGroups = buildSlocGroupSummaries(slocRows);
+  const slocGroups = buildSlocGroupSummaries(slocGroupsRaw, slocRows);
   const groupConfigs = buildPlanningGroupConfigs(groupConfigRows, itemGroups);
   const slocGroupNameById = new Map(slocGroups.map((group) => [group.id, group.group_name]));
   const itemGroupNameById = new Map(itemGroups.map((group) => [group.id, group.group_name]));
@@ -975,7 +999,11 @@ export async function listPlanningSlocGroupsHandler(req: Request, ctx: Procureme
   try {
     const companyId = await getCompanyScope(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
     if (!companyId) return okResponse(req, { items: [] }, ctx.request_id);
-    const groups = buildSlocGroupSummaries(await loadSlocGroupMembers(companyId));
+    const [groupRows, memberRows] = await Promise.all([
+      loadSlocGroups(companyId),
+      loadSlocGroupMembers(companyId),
+    ]);
+    const groups = buildSlocGroupSummaries(groupRows, memberRows);
     return okResponse(req, { items: groups }, ctx.request_id);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_SLOC_GROUP_LIST_FAILED";
