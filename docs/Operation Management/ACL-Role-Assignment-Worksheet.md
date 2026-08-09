@@ -261,7 +261,7 @@ final implementation pass, once every group is decided.
 | PO02 | CSN Tracker | Consignment Note tracker | SCM + DIRECTOR |
 | PO03 | CSN Alerts | CSN alert/exception view | SCM + DIRECTOR |
 | PO07 | Stock Transfer Orders | STO list/create/view | SCM + DIRECTOR |
-| PO11 | Procurement Planning | Planning view | SCM + DIRECTOR |
+| PO11 | Procurement Planning | Report view for everyone in own company scope; maintenance only for SCM + DIRECTOR + ACL MASTER | Everyone (view, company-scoped) / SCM + DIRECTOR + ACL MASTER (edit/setup/close) |
 | PO12 | Plant Transfers | Plant-to-plant transfer | **SCM + DIRECTOR + Stores** |
 | PO13 | Pending Order Approvals (PO/STO) | Approval queue | SCM + DIRECTOR |
 | PO14 | Old Purchase Order | Opening-genealogy legacy PO entry | SCM + DIRECTOR |

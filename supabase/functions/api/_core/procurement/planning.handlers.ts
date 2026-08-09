@@ -1021,7 +1021,12 @@ export async function createPlanningSlocGroupHandler(req: Request, ctx: Procurem
         added_by: ctx.auth_user_id,
       })));
     if (memberError) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUP_MEMBER_CREATE_FAILED");
-    return await listPlanningSlocGroupsHandler(req, ctx);
+    return await listPlanningSlocGroupsHandler(
+      new Request(
+        `${new URL(req.url).origin}/api/procurement/planning/sloc-groups?company_id=${encodeURIComponent(companyId)}`,
+      ),
+      ctx,
+    );
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_SLOC_GROUP_CREATE_FAILED";
     return planningError(req, ctx, code, 500, "Unable to create planning storage-location group.");
@@ -1075,7 +1080,12 @@ export async function updatePlanningSlocGroupHandler(req: Request, ctx: Procurem
         added_by: ctx.auth_user_id,
       })));
     if (memberError) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUP_MEMBER_CREATE_FAILED");
-    return await listPlanningSlocGroupsHandler(req, ctx);
+    return await listPlanningSlocGroupsHandler(
+      new Request(
+        `${new URL(req.url).origin}/api/procurement/planning/sloc-groups?company_id=${encodeURIComponent(companyId)}`,
+      ),
+      ctx,
+    );
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_SLOC_GROUP_UPDATE_FAILED";
     return planningError(req, ctx, code, 500, "Unable to update planning storage-location group.");

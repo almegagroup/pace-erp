@@ -12,6 +12,8 @@ import {
   deleteProcurementPlanningSlocGroup,
   getProcurementPlanning,
   getProcurementPlanningHistory,
+  listProcurementPlanningItemGroups,
+  listProcurementPlanningSlocGroups,
   saveProcurementPlanningLines,
   updateProcurementPlanningItemGroup,
   updateProcurementPlanningSlocGroup,
@@ -38,6 +40,12 @@ function getStatusToneClass(tone) {
   if (tone === "CRITICAL") return "bg-rose-50 text-rose-800";
   if (tone === "WARNING") return "bg-amber-50 text-amber-800";
   return "";
+}
+
+function extractCollectionItems(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.items)) return payload.items;
+  return [];
 }
 
 function getStatusLabel(tone) {
@@ -1012,7 +1020,7 @@ export default function ProcurementPlanningPage() {
     setLoading(true);
     setError("");
     try {
-      const [workspaceResult, locationsResult] = await Promise.allSettled([
+      const [workspaceResult, locationsResult, slocGroupsResult, itemGroupsResult] = await Promise.allSettled([
         getProcurementPlanning({
           company_id: effectiveCompanyId,
           plan_month: `${planMonthValue}-01`,
@@ -1021,21 +1029,41 @@ export default function ProcurementPlanningPage() {
           company_id: effectiveCompanyId,
           is_active: true,
         }),
+        listProcurementPlanningSlocGroups({
+          company_id: effectiveCompanyId,
+        }),
+        listProcurementPlanningItemGroups({
+          company_id: effectiveCompanyId,
+        }),
       ]);
       if (workspaceResult.status !== "fulfilled") {
         throw workspaceResult.reason;
       }
 
       const workspaceData = workspaceResult.value;
+      const fallbackSlocGroups =
+        slocGroupsResult.status === "fulfilled"
+          ? extractCollectionItems(slocGroupsResult.value)
+          : [];
+      const fallbackItemGroups =
+        itemGroupsResult.status === "fulfilled"
+          ? extractCollectionItems(itemGroupsResult.value)
+          : [];
       setWorkspace({
         plan: workspaceData?.plan ?? null,
         rows: Array.isArray(workspaceData?.rows) ? workspaceData.rows : [],
-        sloc_groups: Array.isArray(workspaceData?.sloc_groups)
-          ? workspaceData.sloc_groups
-          : [],
-        item_groups: Array.isArray(workspaceData?.item_groups)
-          ? workspaceData.item_groups
-          : [],
+        sloc_groups:
+          fallbackSlocGroups.length > 0
+            ? fallbackSlocGroups
+            : Array.isArray(workspaceData?.sloc_groups)
+              ? workspaceData.sloc_groups
+              : [],
+        item_groups:
+          fallbackItemGroups.length > 0
+            ? fallbackItemGroups
+            : Array.isArray(workspaceData?.item_groups)
+              ? workspaceData.item_groups
+              : [],
         group_configs: Array.isArray(workspaceData?.group_configs)
           ? workspaceData.group_configs
           : [],
@@ -1235,17 +1263,24 @@ export default function ProcurementPlanningPage() {
     setError("");
     setMessage("");
     try {
+      let savedGroups = [];
       if (slocGroupForm.id) {
-        await updateProcurementPlanningSlocGroup(slocGroupForm.id, {
+        savedGroups = extractCollectionItems(await updateProcurementPlanningSlocGroup(slocGroupForm.id, {
           group_name: slocGroupForm.group_name,
           storage_location_ids: slocGroupForm.storage_location_ids,
-        });
+        }));
       } else {
-        await createProcurementPlanningSlocGroup({
+        savedGroups = extractCollectionItems(await createProcurementPlanningSlocGroup({
           company_id: effectiveCompanyId,
           group_name: slocGroupForm.group_name,
           storage_location_ids: slocGroupForm.storage_location_ids,
-        });
+        }));
+      }
+      if (savedGroups.length > 0) {
+        setWorkspace((current) => ({
+          ...current,
+          sloc_groups: savedGroups,
+        }));
       }
       setSlocGroupForm({ id: "", group_name: "", storage_location_ids: [] });
       setMessage("Planning SLOC group saved.");
@@ -1262,7 +1297,13 @@ export default function ProcurementPlanningPage() {
     setError("");
     setMessage("");
     try {
-      await deleteProcurementPlanningSlocGroup(id);
+      const savedGroups = extractCollectionItems(await deleteProcurementPlanningSlocGroup(id));
+      if (savedGroups.length > 0 || workspace.sloc_groups.length > 0) {
+        setWorkspace((current) => ({
+          ...current,
+          sloc_groups: savedGroups,
+        }));
+      }
       setSlocGroupForm({ id: "", group_name: "", storage_location_ids: [] });
       setMessage("Planning SLOC group deleted.");
       await loadWorkspace();
