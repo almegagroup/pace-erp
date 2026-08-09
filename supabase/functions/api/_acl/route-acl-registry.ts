@@ -545,6 +545,20 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     },
   },
   {
+    pattern: /^\/api\/procurement\/planning\/sloc-groups\/[^/]+$/,
+    methods: {
+      PUT: { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW", action: "EDIT" },
+      DELETE: { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/procurement\/planning\/item-groups\/[^/]+$/,
+    methods: {
+      PUT: { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW", action: "EDIT" },
+      DELETE: { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW", action: "EDIT" },
+    },
+  },
+  {
     pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/approve$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "APPROVE" } },
   },
