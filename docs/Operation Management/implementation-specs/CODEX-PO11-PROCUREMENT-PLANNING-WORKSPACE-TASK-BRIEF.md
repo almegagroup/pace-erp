@@ -30,6 +30,84 @@ PO11 must now become a monthly RM / PM planning workspace for ADMIX and HPS with
 - month-end frozen archive snapshots
 - SCM / Director full-access workflow
 
+## Clarified Grouping Model (Locked From User Review)
+
+The final intended business model is:
+
+1. User creates one or more company-scoped `SLOC Group`.
+2. Each `Item Group` is always dependent on exactly one `SLOC Group`.
+3. User manages item membership from the chosen `SLOC Group` scope:
+   - add item into an item group
+   - remove item from an item group
+   - move item from one item group to another
+   - leave item as stand-alone
+4. The same item cannot belong to more than one item group in the same month.
+5. Membership is month-scoped, editable throughout the open month, and carried forward into the next month.
+6. When a month is closed, the exact group structure, input values, and month-end EOD stock snapshot become frozen history.
+
+Important correction:
+- `Item Group` is not a free-floating company master by itself.
+- `Item Group` must be created under a selected `SLOC Group`.
+- The item-management UI must show the relevant item pool for that `SLOC Group`.
+
+## Clarified UX Requirements (Locked From User Review)
+
+### Monthly Plan Table
+
+The monthly input table must itself be shown in grouped planning format, not as an unstructured flat maintenance list.
+
+Expected behavior:
+- columns include `Group Name`, `Row Type` / stand-alone vs member vs group total, and item details
+- `RM / PM / All` selector must exist
+- `SLOC Group` toggle/filter must exist at company scope
+- user must be able to work on one SLOC group's planning slice or on all items together
+
+### Group Calculation Rules
+
+For a grouped block:
+- member rows remain individually visible
+- a `Group Total` row appears after the last member
+- fields that must total:
+  - monthly requirement
+  - available stock
+  - TRN
+  - GE
+  - In QA
+  - total stock
+- fields that must average:
+  - safety days
+  - processing time
+  - lead time
+  - replenishment days
+- derived safety / replenishment calculations at group total level use:
+  - total requirement
+  - averaged day-based fields
+
+### Month Carry-Forward Rules
+
+When opening a new month:
+- monthly planning input data carries forward from the previous month
+- current stock-side columns do not carry forward; they must always show live current data
+- user can edit the new month freely until that month is closed
+
+### Edit / Freeze Rules
+
+- open month: editable unlimited times
+- closed past month: no further edits allowed
+- history must show the frozen month-end snapshot
+
+## Current Gap Summary (Locked From User Review)
+
+The current implementation is still incomplete because:
+
+1. `planning_item_group` is not tied to a `planning_sloc_group`.
+2. There is no dedicated item-membership management model for the active month beyond direct line assignment.
+3. Item-group management is not presented as `SLOC Group -> item pool -> member map/unmap`.
+4. Monthly input is not yet rendered primarily in the intended grouped planning shape.
+5. Report/dashboard does not yet behave as a company + SLOC-group toggleable planning slice.
+6. The current implementation partially supports carry-forward and archive, but not the full corrected grouping workflow.
+7. Grouped monthly requirement / fixed override semantics are still line-oriented in the current code path; exact-match implementation needs a dedicated month-scoped group-config layer so grouped totals are first-class planning inputs, not only derived sums.
+
 ## In Scope
 
 ### Business Scope
@@ -58,6 +136,10 @@ Full PO11 workspace authority for:
 - Director
 
 Do not accidentally widen operational write access beyond the approved ACL scope.
+
+Audit note:
+- Local route ACL wiring now maps PO11 setup/save/close writes under `PROC_PLANNING_VIEW` with `EDIT`.
+- Production ACL snapshot / role-data must still be reconciled during publish if prod currently shows PO11 as read-only for some roles.
 
 ## Out Of Scope
 
@@ -240,14 +322,17 @@ Minimum endpoint families likely needed:
 
 Potential route design:
 
-- `GET /api/procurement/planning/workspace`
-- `POST /api/procurement/planning/months/bootstrap`
-- `PATCH /api/procurement/planning/months/:id/lines`
+- `GET /api/procurement/planning`
+- `POST /api/procurement/planning/lines/bulk-upsert`
+- `GET /api/procurement/planning/sloc-groups`
 - `POST /api/procurement/planning/sloc-groups`
-- `PATCH /api/procurement/planning/sloc-groups/:id`
+- `PUT /api/procurement/planning/sloc-groups/:id`
+- `DELETE /api/procurement/planning/sloc-groups/:id`
+- `GET /api/procurement/planning/item-groups`
 - `POST /api/procurement/planning/item-groups`
-- `PATCH /api/procurement/planning/item-groups/:id`
-- `POST /api/procurement/planning/months/:id/close`
+- `PUT /api/procurement/planning/item-groups/:id`
+- `DELETE /api/procurement/planning/item-groups/:id`
+- `POST /api/procurement/planning/close`
 - `GET /api/procurement/planning/history`
 
 Exact paths can change, but the ACL/resource mapping must stay explicit.

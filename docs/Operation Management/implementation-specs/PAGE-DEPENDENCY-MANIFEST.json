@@ -4085,7 +4085,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/planning/ProcurementPlanningPage.jsx",
-    "dependencyCount": 8,
+    "dependencyCount": 13,
     "deps": [
       {
         "fn": "getProcurementPlanning",
@@ -4120,17 +4120,65 @@
         "skipAcl": false
       },
       {
-        "fn": "createProcurementPlanningSlocGroup / updateProcurementPlanningSlocGroup / deleteProcurementPlanningSlocGroup",
-        "method": "POST / PUT / DELETE",
+        "fn": "listPlanningSlocGroups",
+        "method": "GET",
+        "path": "/api/procurement/planning/sloc-groups",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createProcurementPlanningSlocGroup",
+        "method": "POST",
         "path": "/api/procurement/planning/sloc-groups",
         "resourceCode": "PROC_PLANNING_VIEW",
         "action": "EDIT",
         "skipAcl": false
       },
       {
-        "fn": "createProcurementPlanningItemGroup / updateProcurementPlanningItemGroup / deleteProcurementPlanningItemGroup",
-        "method": "POST / PUT / DELETE",
+        "fn": "updateProcurementPlanningSlocGroup",
+        "method": "PUT",
+        "path": "/api/procurement/planning/sloc-groups/:id",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "deleteProcurementPlanningSlocGroup",
+        "method": "DELETE",
+        "path": "/api/procurement/planning/sloc-groups/:id",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "listPlanningItemGroups",
+        "method": "GET",
         "path": "/api/procurement/planning/item-groups",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createProcurementPlanningItemGroup",
+        "method": "POST",
+        "path": "/api/procurement/planning/item-groups",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "updateProcurementPlanningItemGroup",
+        "method": "PUT",
+        "path": "/api/procurement/planning/item-groups/:id",
+        "resourceCode": "PROC_PLANNING_VIEW",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "deleteProcurementPlanningItemGroup",
+        "method": "DELETE",
+        "path": "/api/procurement/planning/item-groups/:id",
         "resourceCode": "PROC_PLANNING_VIEW",
         "action": "EDIT",
         "skipAcl": false

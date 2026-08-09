@@ -21,6 +21,7 @@ type PlanningWorkspaceRow = {
   material_id: string;
   material_code: string;
   material_name: string;
+  material_type: string;
   base_uom_code: string;
   source_sloc_group_id: string | null;
   source_sloc_group_name: string | null;
@@ -57,6 +58,32 @@ type SlocGroupSummary = {
 type ItemGroupSummary = {
   id: string;
   group_name: string;
+  sloc_group_id: string | null;
+  sloc_group_name: string | null;
+};
+
+type PlanningGroupConfig = {
+  planning_item_group_id: string;
+  planning_item_group_name: string;
+  sloc_group_id: string | null;
+  sloc_group_name: string | null;
+  monthly_requirement_qty: number;
+  safety_days: number;
+  processing_time_days: number;
+  lead_time_days: number;
+  fixed_safety_stock_qty: number | null;
+  fixed_replenishment_stock_qty: number | null;
+};
+
+type ArchiveGroupConfig = {
+  planning_item_group_id: string | null;
+  planning_item_group_name_snapshot: string;
+  monthly_requirement_qty: number;
+  safety_days: number;
+  processing_time_days: number;
+  lead_time_days: number;
+  fixed_safety_stock_qty: number | null;
+  fixed_replenishment_stock_qty: number | null;
 };
 
 type PlanHeader = {
@@ -177,6 +204,16 @@ async function loadPlanLines(planId: string): Promise<JsonRecord[]> {
   return (data ?? []) as JsonRecord[];
 }
 
+async function loadPlanGroupConfigRows(planId: string): Promise<JsonRecord[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("procurement_monthly_plan_group_config")
+    .select("*")
+    .eq("plan_id", planId);
+  if (error) throw new Error("PROCUREMENT_PLANNING_GROUP_CONFIG_FAILED");
+  return (data ?? []) as JsonRecord[];
+}
+
 async function getMaterialDefaultLeadTimes(companyId: string, materialIds: string[]): Promise<Map<string, number>> {
   const ids = [...new Set(materialIds.filter(Boolean))];
   const map = new Map<string, number>();
@@ -223,7 +260,10 @@ async function ensurePlanExists(
   const created = inserted as PlanHeader;
 
   if (previousPlan?.id) {
-    const previousLines = await loadPlanLines(previousPlan.id);
+    const [previousLines, previousGroupConfigs] = await Promise.all([
+      loadPlanLines(previousPlan.id),
+      loadPlanGroupConfigRows(previousPlan.id),
+    ]);
     if (previousLines.length > 0) {
       const clonedLines = previousLines.map((row) => ({
         plan_id: created.id,
@@ -249,6 +289,27 @@ async function ensurePlanExists(
         .from("procurement_monthly_plan_line")
         .insert(clonedLines);
       if (cloneError) throw new Error("PROCUREMENT_PLANNING_CARRY_FORWARD_FAILED");
+    }
+    if (previousGroupConfigs.length > 0) {
+      const clonedGroupConfigs = previousGroupConfigs.map((row) => ({
+        plan_id: created.id,
+        company_id: companyId,
+        planning_item_group_id: row.planning_item_group_id,
+        monthly_requirement_qty: normalizeQty(row.monthly_requirement_qty),
+        safety_days: normalizeQty(row.safety_days),
+        processing_time_days: normalizeQty(row.processing_time_days),
+        lead_time_days: normalizeQty(row.lead_time_days),
+        fixed_safety_stock_qty: parseNullableNumber(row.fixed_safety_stock_qty),
+        fixed_replenishment_stock_qty: parseNullableNumber(row.fixed_replenishment_stock_qty),
+        created_by: ctx.auth_user_id,
+        last_updated_by: ctx.auth_user_id,
+        last_updated_at: new Date().toISOString(),
+      }));
+      const { error: configCloneError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("procurement_monthly_plan_group_config")
+        .insert(clonedGroupConfigs);
+      if (configCloneError) throw new Error("PROCUREMENT_PLANNING_GROUP_CONFIG_CARRY_FORWARD_FAILED");
     }
   }
 
@@ -314,15 +375,47 @@ async function loadItemGroups(companyId: string): Promise<ItemGroupSummary[]> {
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
     .from("planning_item_group")
-    .select("id, group_name")
+    .select("id, group_name, sloc_group_id, planning_sloc_group:sloc_group_id(group_name)")
     .eq("company_id", companyId)
     .eq("active", true)
     .order("group_name", { ascending: true });
   if (error) throw new Error("PROCUREMENT_PLANNING_ITEM_GROUPS_FAILED");
-  return ((data ?? []) as JsonRecord[]).map((row) => ({
-    id: toTrimmedString(row.id),
-    group_name: toTrimmedString(row.group_name),
-  }));
+  return ((data ?? []) as JsonRecord[]).map((row) => {
+    const slocGroup = (row.planning_sloc_group as JsonRecord | null) ?? null;
+    return {
+      id: toTrimmedString(row.id),
+      group_name: toTrimmedString(row.group_name),
+      sloc_group_id: toTrimmedString(row.sloc_group_id) || null,
+      sloc_group_name: toTrimmedString(slocGroup?.group_name) || null,
+    };
+  });
+}
+
+function buildPlanningGroupConfigs(
+  configRows: JsonRecord[],
+  itemGroups: ItemGroupSummary[],
+): PlanningGroupConfig[] {
+  const itemGroupById = new Map(itemGroups.map((group) => [group.id, group]));
+  return configRows
+    .map((row) => {
+      const planningItemGroupId = toTrimmedString(row.planning_item_group_id);
+      const itemGroup = itemGroupById.get(planningItemGroupId);
+      if (!planningItemGroupId || !itemGroup) return null;
+      return {
+        planning_item_group_id: planningItemGroupId,
+        planning_item_group_name: itemGroup.group_name,
+        sloc_group_id: itemGroup.sloc_group_id,
+        sloc_group_name: itemGroup.sloc_group_name,
+        monthly_requirement_qty: normalizeQty(row.monthly_requirement_qty),
+        safety_days: normalizeQty(row.safety_days),
+        processing_time_days: normalizeQty(row.processing_time_days),
+        lead_time_days: normalizeQty(row.lead_time_days),
+        fixed_safety_stock_qty: parseNullableNumber(row.fixed_safety_stock_qty),
+        fixed_replenishment_stock_qty: parseNullableNumber(row.fixed_replenishment_stock_qty),
+      } satisfies PlanningGroupConfig;
+    })
+    .filter((row): row is PlanningGroupConfig => Boolean(row))
+    .sort((left, right) => left.planning_item_group_name.localeCompare(right.planning_item_group_name));
 }
 
 function buildSlocGroupSummaries(rows: JsonRecord[]): SlocGroupSummary[] {
@@ -419,11 +512,49 @@ async function ensureAutoIncludedPlanLines(
   planMonth: string,
   planId: string,
 ): Promise<void> {
-  const [existingLines, eligibleRows] = await Promise.all([
+  const [existingLines, eligibleRows, itemGroups] = await Promise.all([
     loadPlanLines(planId),
     getEligibleMaterialRows(companyId),
+    loadItemGroups(companyId),
   ]);
   const existingMaterialIds = new Set(existingLines.map((row) => toTrimmedString(row.material_id)).filter(Boolean));
+  const eligibleByMaterialId = new Map(eligibleRows.map((row) => [row.material_id, row]));
+  const itemGroupScopeById = new Map(
+    itemGroups.map((group) => [group.id, group.sloc_group_id || null]),
+  );
+
+  for (const row of existingLines) {
+    const materialId = toTrimmedString(row.material_id);
+    const eligible = eligibleByMaterialId.get(materialId);
+    if (!eligible) continue;
+    const currentSourceSlocGroupId = toTrimmedString(row.source_sloc_group_id) || null;
+    const nextSourceSlocGroupId = eligible.source_sloc_group_id || null;
+    const currentItemGroupId = toTrimmedString(row.planning_item_group_id) || null;
+    const currentItemGroupScopeId = currentItemGroupId
+      ? itemGroupScopeById.get(currentItemGroupId) || null
+      : null;
+    if (
+      currentSourceSlocGroupId === nextSourceSlocGroupId &&
+      (!currentItemGroupId || currentItemGroupScopeId === nextSourceSlocGroupId)
+    ) {
+      continue;
+    }
+    const updatePayload: JsonRecord = {
+      source_sloc_group_id: nextSourceSlocGroupId,
+      last_updated_by: ctx.auth_user_id,
+      last_updated_at: new Date().toISOString(),
+    };
+    if (currentItemGroupId && currentItemGroupScopeId !== nextSourceSlocGroupId) {
+      updatePayload.planning_item_group_id = null;
+    }
+    const { error: syncError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("procurement_monthly_plan_line")
+      .update(updatePayload)
+      .eq("id", toTrimmedString(row.id));
+    if (syncError) throw new Error("PROCUREMENT_PLANNING_SCOPE_SYNC_FAILED");
+  }
+
   const missingRows = eligibleRows.filter((row) => !existingMaterialIds.has(row.material_id));
   if (missingRows.length === 0) return;
 
@@ -434,12 +565,20 @@ async function ensureAutoIncludedPlanLines(
 
   const inserts = missingRows.map((row, index) => {
     const prior = priorByMaterialId.get(row.material_id);
+    const priorPlanningItemGroupId = toTrimmedString(prior?.planning_item_group_id) || null;
+    const priorPlanningItemGroupScopeId = priorPlanningItemGroupId
+      ? itemGroupScopeById.get(priorPlanningItemGroupId) || null
+      : null;
+    const carriedPlanningItemGroupId =
+      priorPlanningItemGroupId && priorPlanningItemGroupScopeId === (row.source_sloc_group_id || null)
+        ? priorPlanningItemGroupId
+        : null;
     return {
       plan_id: planId,
       company_id: companyId,
       material_id: row.material_id,
       source_sloc_group_id: row.source_sloc_group_id,
-      planning_item_group_id: toTrimmedString(prior?.planning_item_group_id) || null,
+      planning_item_group_id: carriedPlanningItemGroupId,
       excluded_from_dashboard: Boolean(prior?.excluded_from_dashboard),
       monthly_requirement_qty: normalizeQty(prior?.monthly_requirement_qty),
       safety_days: normalizeQty(prior?.safety_days),
@@ -469,7 +608,7 @@ async function loadMaterialMap(materialIds: string[]): Promise<Map<string, JsonR
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, pace_code, material_name, base_uom_code")
+    .select("id, pace_code, material_name, base_uom_code, material_type")
     .in("id", ids);
   if (error) throw new Error("PROCUREMENT_PLANNING_MATERIAL_MAP_FAILED");
   for (const row of ((data ?? []) as JsonRecord[])) {
@@ -487,16 +626,19 @@ async function loadWorkspaceRows(
   rows: PlanningWorkspaceRow[];
   slocGroups: SlocGroupSummary[];
   itemGroups: ItemGroupSummary[];
+  groupConfigs: PlanningGroupConfig[];
 }> {
   await ensureAutoIncludedPlanLines(ctx, companyId, planMonth, planId);
 
-  const [planLines, slocRows, itemGroups] = await Promise.all([
+  const [planLines, slocRows, itemGroups, groupConfigRows] = await Promise.all([
     loadPlanLines(planId),
     loadSlocGroupMembers(companyId),
     loadItemGroups(companyId),
+    loadPlanGroupConfigRows(planId),
   ]);
 
   const slocGroups = buildSlocGroupSummaries(slocRows);
+  const groupConfigs = buildPlanningGroupConfigs(groupConfigRows, itemGroups);
   const slocGroupNameById = new Map(slocGroups.map((group) => [group.id, group.group_name]));
   const itemGroupNameById = new Map(itemGroups.map((group) => [group.id, group.group_name]));
   const activeSlocIds = [...new Set(slocRows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
@@ -604,6 +746,7 @@ async function loadWorkspaceRows(
       material_id: materialId,
       material_code: toTrimmedString(material.pace_code),
       material_name: toTrimmedString(material.material_name),
+      material_type: toTrimmedString(material.material_type),
       base_uom_code: toTrimmedString(material.base_uom_code),
       source_sloc_group_id: toTrimmedString(row.source_sloc_group_id) || null,
       source_sloc_group_name: slocGroupNameById.get(toTrimmedString(row.source_sloc_group_id)) ?? null,
@@ -643,7 +786,7 @@ async function loadWorkspaceRows(
     return left.material_name.localeCompare(right.material_name);
   });
 
-  return { rows, slocGroups, itemGroups };
+  return { rows, slocGroups, itemGroups, groupConfigs };
 }
 
 export async function getProcurementPlanningHandler(
@@ -654,7 +797,7 @@ export async function getProcurementPlanningHandler(
     const url = new URL(req.url);
     const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
     if (!companyId) {
-      return okResponse(req, { plan: null, rows: [], sloc_groups: [], item_groups: [] }, ctx.request_id);
+      return okResponse(req, { plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [] }, ctx.request_id);
     }
     const planMonth = normalizePlanMonth(url.searchParams.get("plan_month")) ?? getCurrentPlanMonth();
     const plan = await ensurePlanExists(ctx, companyId, planMonth);
@@ -665,6 +808,7 @@ export async function getProcurementPlanningHandler(
       rows: workspace.rows,
       sloc_groups: workspace.slocGroups,
       item_groups: workspace.itemGroups,
+      group_configs: workspace.groupConfigs,
     }, ctx.request_id);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_WORKSPACE_FAILED";
@@ -681,6 +825,7 @@ export async function upsertProcurementPlanningLinesHandler(
     const companyId = await getCompanyScope(ctx, body.company_id);
     const planMonth = normalizePlanMonth(body.plan_month) ?? getCurrentPlanMonth();
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    const groupConfigs = Array.isArray(body.group_configs) ? (body.group_configs as JsonRecord[]) : [];
     if (!companyId || lines.length === 0) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_LINES_INVALID", 400, "company_id and lines are required.");
     }
@@ -693,6 +838,11 @@ export async function upsertProcurementPlanningLinesHandler(
     const existingByMaterialId = new Map(existingLines.map((row) => [toTrimmedString(row.material_id), row]));
     const itemGroups = await loadItemGroups(companyId);
     const allowedItemGroupIds = new Set(itemGroups.map((group) => group.id));
+    const itemGroupScopeById = new Map(itemGroups.map((group) => [group.id, group.sloc_group_id || null]));
+    const existingGroupConfigRows = await loadPlanGroupConfigRows(plan.id);
+    const existingGroupConfigByGroupId = new Map(
+      existingGroupConfigRows.map((row) => [toTrimmedString(row.planning_item_group_id), row]),
+    );
 
     const materialIds = [...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
     const leadTimeMap = await getMaterialDefaultLeadTimes(companyId, materialIds);
@@ -703,6 +853,23 @@ export async function upsertProcurementPlanningLinesHandler(
       const planningItemGroupId = toTrimmedString(line.planning_item_group_id) || null;
       if (planningItemGroupId && !allowedItemGroupIds.has(planningItemGroupId)) {
         return planningError(req, ctx, "PROCUREMENT_PLANNING_ITEM_GROUP_INVALID", 422, "Selected item group does not belong to the company.");
+      }
+      const sourceSlocGroupId =
+        toTrimmedString(line.source_sloc_group_id) ||
+        toTrimmedString(existingByMaterialId.get(materialId)?.source_sloc_group_id) ||
+        null;
+      if (
+        planningItemGroupId &&
+        sourceSlocGroupId &&
+        itemGroupScopeById.get(planningItemGroupId) !== sourceSlocGroupId
+      ) {
+        return planningError(
+          req,
+          ctx,
+          "PROCUREMENT_PLANNING_ITEM_GROUP_SCOPE_MISMATCH",
+          422,
+          "Selected item group does not belong to the material's SLOC group scope.",
+        );
       }
       const payload = {
         planning_item_group_id: planningItemGroupId,
@@ -743,8 +910,61 @@ export async function upsertProcurementPlanningLinesHandler(
         .insert(inserts);
       if (error) throw new Error("PROCUREMENT_PLANNING_LINE_INSERT_FAILED");
     }
+    for (const config of groupConfigs) {
+      const planningItemGroupId = toTrimmedString(config.planning_item_group_id);
+      if (!planningItemGroupId) continue;
+      if (!allowedItemGroupIds.has(planningItemGroupId)) {
+        return planningError(
+          req,
+          ctx,
+          "PROCUREMENT_PLANNING_ITEM_GROUP_INVALID",
+          422,
+          "Selected item group does not belong to the company.",
+        );
+      }
+      const payload = {
+        monthly_requirement_qty: normalizeQty(config.monthly_requirement_qty),
+        safety_days: normalizeQty(config.safety_days),
+        processing_time_days: normalizeQty(config.processing_time_days),
+        lead_time_days: normalizeQty(config.lead_time_days),
+        fixed_safety_stock_qty: parseNullableNumber(config.fixed_safety_stock_qty),
+        fixed_replenishment_stock_qty: parseNullableNumber(config.fixed_replenishment_stock_qty),
+        last_updated_by: ctx.auth_user_id,
+        last_updated_at: new Date().toISOString(),
+      };
+      const existingConfig = existingGroupConfigByGroupId.get(planningItemGroupId);
+      if (existingConfig) {
+        const { error } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("procurement_monthly_plan_group_config")
+          .update(payload)
+          .eq("id", toTrimmedString(existingConfig.id));
+        if (error) throw new Error("PROCUREMENT_PLANNING_GROUP_CONFIG_UPDATE_FAILED");
+      } else {
+        const { error } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("procurement_monthly_plan_group_config")
+          .insert({
+            plan_id: plan.id,
+            company_id: companyId,
+            planning_item_group_id: planningItemGroupId,
+            created_by: ctx.auth_user_id,
+            ...payload,
+          });
+        if (error) throw new Error("PROCUREMENT_PLANNING_GROUP_CONFIG_INSERT_FAILED");
+      }
+    }
     const workspace = await loadWorkspaceRows(ctx, companyId, planMonth, plan.id);
-    return okResponse(req, { plan, plan_month: planMonth, rows: workspace.rows }, ctx.request_id);
+    return okResponse(
+      req,
+      {
+        plan,
+        plan_month: planMonth,
+        rows: workspace.rows,
+        group_configs: workspace.groupConfigs,
+      },
+      ctx.request_id,
+    );
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_LINES_SAVE_FAILED";
     return planningError(req, ctx, code, 500, "Unable to save procurement planning lines.");
@@ -876,6 +1096,24 @@ export async function deletePlanningSlocGroupHandler(req: Request, ctx: Procurem
     if (!groupId || !companyId) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_SLOC_GROUP_NOT_FOUND", 404, "Planning storage-location group not found.");
     }
+    const { data: linkedItemGroups, error: linkedItemGroupsError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("planning_item_group")
+      .select("id, group_name")
+      .eq("company_id", companyId)
+      .eq("sloc_group_id", groupId)
+      .eq("active", true);
+    if (linkedItemGroupsError) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUP_LINKED_ITEM_GROUPS_FAILED");
+    const activeLinkedGroups = (linkedItemGroups ?? []) as JsonRecord[];
+    if (activeLinkedGroups.length > 0) {
+      return planningError(
+        req,
+        ctx,
+        "PROCUREMENT_PLANNING_SLOC_GROUP_IN_USE",
+        409,
+        "Delete or move the dependent item groups before deleting this SLOC group.",
+      );
+    }
     const { error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("planning_sloc_group")
@@ -905,14 +1143,27 @@ export async function createPlanningItemGroupHandler(req: Request, ctx: Procurem
     const body = await parseBody(req);
     const companyId = await getCompanyScope(ctx, body.company_id);
     const groupName = toTrimmedString(body.group_name);
-    if (!companyId || !groupName) {
-      return planningError(req, ctx, "PROCUREMENT_PLANNING_ITEM_GROUP_INVALID", 400, "company_id and group_name are required.");
+    const slocGroupId = toTrimmedString(body.sloc_group_id);
+    if (!companyId || !groupName || !slocGroupId) {
+      return planningError(req, ctx, "PROCUREMENT_PLANNING_ITEM_GROUP_INVALID", 400, "company_id, sloc_group_id, and group_name are required.");
+    }
+    const { data: slocGroup, error: slocGroupError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("planning_sloc_group")
+      .select("id, company_id")
+      .eq("id", slocGroupId)
+      .eq("active", true)
+      .maybeSingle();
+    if (slocGroupError) throw new Error("PROCUREMENT_PLANNING_ITEM_GROUP_SLOC_LOOKUP_FAILED");
+    if (toTrimmedString((slocGroup as JsonRecord | null)?.company_id) !== companyId) {
+      return planningError(req, ctx, "PROCUREMENT_PLANNING_ITEM_GROUP_SLOC_INVALID", 422, "Selected planning SLOC group does not belong to the company.");
     }
     const { error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("planning_item_group")
       .insert({
         company_id: companyId,
+        sloc_group_id: slocGroupId,
         group_name: groupName,
         created_by: ctx.auth_user_id,
         last_updated_by: ctx.auth_user_id,
@@ -944,13 +1195,26 @@ export async function updatePlanningItemGroupHandler(req: Request, ctx: Procurem
     if (groupError) throw new Error("PROCUREMENT_PLANNING_ITEM_GROUP_LOOKUP_FAILED");
     const companyId = await getCompanyScope(ctx, (group as JsonRecord | null)?.company_id);
     const groupName = toTrimmedString(body.group_name);
-    if (!groupId || !companyId || !groupName) {
-      return planningError(req, ctx, "PROCUREMENT_PLANNING_ITEM_GROUP_INVALID", 400, "Valid group_name is required.");
+    const slocGroupId = toTrimmedString(body.sloc_group_id);
+    if (!groupId || !companyId || !groupName || !slocGroupId) {
+      return planningError(req, ctx, "PROCUREMENT_PLANNING_ITEM_GROUP_INVALID", 400, "Valid group_name and sloc_group_id are required.");
+    }
+    const { data: slocGroup, error: slocGroupError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("planning_sloc_group")
+      .select("id, company_id")
+      .eq("id", slocGroupId)
+      .eq("active", true)
+      .maybeSingle();
+    if (slocGroupError) throw new Error("PROCUREMENT_PLANNING_ITEM_GROUP_SLOC_LOOKUP_FAILED");
+    if (toTrimmedString((slocGroup as JsonRecord | null)?.company_id) !== companyId) {
+      return planningError(req, ctx, "PROCUREMENT_PLANNING_ITEM_GROUP_SLOC_INVALID", 422, "Selected planning SLOC group does not belong to the company.");
     }
     const { error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("planning_item_group")
       .update({
+        sloc_group_id: slocGroupId,
         group_name: groupName,
         last_updated_by: ctx.auth_user_id,
         last_updated_at: new Date().toISOString(),
@@ -1049,12 +1313,32 @@ export async function closeProcurementPlanningMonthHandler(req: Request, ctx: Pr
       effective_replenishment_stock_qty: row.effective_replenishment_stock_qty,
       display_order: row.display_order,
     }));
+    const archiveGroupConfigs = workspace.groupConfigs.map((config) => ({
+      archive_id: archiveId,
+      planning_item_group_id: config.planning_item_group_id,
+      planning_item_group_name_snapshot: config.planning_item_group_name,
+      monthly_requirement_qty: config.monthly_requirement_qty,
+      safety_days: config.safety_days,
+      processing_time_days: config.processing_time_days,
+      lead_time_days: config.lead_time_days,
+      fixed_safety_stock_qty: config.fixed_safety_stock_qty,
+      fixed_replenishment_stock_qty: config.fixed_replenishment_stock_qty,
+    }));
     if (archiveLines.length > 0) {
       const { error: lineError } = await serviceRoleClient
         .schema("erp_procurement")
         .from("procurement_monthly_plan_archive_line")
         .insert(archiveLines);
       if (lineError) throw new Error("PROCUREMENT_PLANNING_ARCHIVE_LINE_CREATE_FAILED");
+    }
+    if (archiveGroupConfigs.length > 0) {
+      const { error: groupConfigArchiveError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("procurement_monthly_plan_archive_group_config")
+        .insert(archiveGroupConfigs);
+      if (groupConfigArchiveError) {
+        throw new Error("PROCUREMENT_PLANNING_ARCHIVE_GROUP_CONFIG_CREATE_FAILED");
+      }
     }
     const { error: closeError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -1080,7 +1364,7 @@ export async function getProcurementPlanningHistoryHandler(req: Request, ctx: Pr
     const url = new URL(req.url);
     const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
     const planMonth = normalizePlanMonth(url.searchParams.get("plan_month")) ?? getCurrentPlanMonth();
-    if (!companyId) return okResponse(req, { archive: null, rows: [] }, ctx.request_id);
+    if (!companyId) return okResponse(req, { archive: null, rows: [], group_configs: [] }, ctx.request_id);
     const { data: archive, error: archiveError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("procurement_monthly_plan_archive")
@@ -1090,7 +1374,7 @@ export async function getProcurementPlanningHistoryHandler(req: Request, ctx: Pr
       .maybeSingle();
     if (archiveError) throw new Error("PROCUREMENT_PLANNING_HISTORY_LOOKUP_FAILED");
     const archiveId = toTrimmedString((archive as JsonRecord | null)?.id);
-    if (!archiveId) return okResponse(req, { archive: null, rows: [] }, ctx.request_id);
+    if (!archiveId) return okResponse(req, { archive: null, rows: [], group_configs: [] }, ctx.request_id);
     const { data: rows, error: rowsError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("procurement_monthly_plan_archive_line")
@@ -1098,7 +1382,18 @@ export async function getProcurementPlanningHistoryHandler(req: Request, ctx: Pr
       .eq("archive_id", archiveId)
       .order("display_order", { ascending: true });
     if (rowsError) throw new Error("PROCUREMENT_PLANNING_HISTORY_ROWS_FAILED");
-    return okResponse(req, { archive, rows: (rows ?? []) as JsonRecord[] }, ctx.request_id);
+    const { data: groupConfigs, error: groupConfigsError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("procurement_monthly_plan_archive_group_config")
+      .select("*")
+      .eq("archive_id", archiveId)
+      .order("planning_item_group_name_snapshot", { ascending: true });
+    if (groupConfigsError) throw new Error("PROCUREMENT_PLANNING_HISTORY_GROUP_CONFIG_FAILED");
+    return okResponse(
+      req,
+      { archive, rows: (rows ?? []) as JsonRecord[], group_configs: (groupConfigs ?? []) as JsonRecord[] },
+      ctx.request_id,
+    );
   } catch (error) {
     const code = error instanceof Error ? error.message : "PROCUREMENT_PLANNING_HISTORY_FAILED";
     return planningError(req, ctx, code, 500, "Unable to load procurement planning history.");
