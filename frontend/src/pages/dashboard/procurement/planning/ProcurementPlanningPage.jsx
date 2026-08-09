@@ -361,13 +361,14 @@ export default function ProcurementPlanningPage() {
   async function loadWorkspace() {
     if (!effectiveCompanyId) {
       setWorkspace({ plan: null, rows: [], sloc_groups: [], item_groups: [] });
+      setStorageLocations([]);
       setLoading(false);
       return;
     }
     setLoading(true);
     setError("");
     try {
-      const [workspaceData, locations] = await Promise.all([
+      const [workspaceResult, locationsResult] = await Promise.allSettled([
         getProcurementPlanning({
           company_id: effectiveCompanyId,
           plan_month: `${planMonthValue}-01`,
@@ -377,6 +378,11 @@ export default function ProcurementPlanningPage() {
           is_active: true,
         }),
       ]);
+      if (workspaceResult.status !== "fulfilled") {
+        throw workspaceResult.reason;
+      }
+
+      const workspaceData = workspaceResult.value;
       setWorkspace({
         plan: workspaceData?.plan ?? null,
         rows: Array.isArray(workspaceData?.rows) ? workspaceData.rows : [],
@@ -387,7 +393,13 @@ export default function ProcurementPlanningPage() {
           ? workspaceData.item_groups
           : [],
       });
-      setStorageLocations(Array.isArray(locations) ? locations : locations?.data ?? []);
+
+      if (locationsResult.status === "fulfilled") {
+        const locations = locationsResult.value;
+        setStorageLocations(Array.isArray(locations) ? locations : locations?.data ?? []);
+      } else {
+        setStorageLocations([]);
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Unable to load PO11 workspace.");
       setWorkspace({ plan: null, rows: [], sloc_groups: [], item_groups: [] });

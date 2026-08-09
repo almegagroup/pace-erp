@@ -256,16 +256,58 @@ async function ensurePlanExists(
 }
 
 async function loadSlocGroupMembers(companyId: string): Promise<JsonRecord[]> {
-  const { data, error } = await serviceRoleClient
+  const { data: groups, error: groupError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("planning_sloc_group")
+    .select("id, company_id, group_name, active")
+    .eq("company_id", companyId)
+    .eq("active", true)
+    .order("group_name", { ascending: true });
+  if (groupError) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUPS_FAILED");
+
+  const groupRows = (groups ?? []) as JsonRecord[];
+  const groupIds = groupRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
+  if (groupIds.length === 0) return [];
+
+  const { data: members, error: memberError } = await serviceRoleClient
     .schema("erp_procurement")
     .from("planning_sloc_group_member")
-    .select("id, sloc_group_id, storage_location_id, active, planning_sloc_group!inner(id, company_id, group_name, active), storage_location_master!inner(id, code, name, active)")
-    .eq("planning_sloc_group.company_id", companyId)
-    .eq("planning_sloc_group.active", true)
+    .select("id, sloc_group_id, storage_location_id, active")
+    .in("sloc_group_id", groupIds)
     .eq("active", true)
-    .eq("storage_location_master.active", true);
-  if (error) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUPS_FAILED");
-  return (data ?? []) as JsonRecord[];
+    .order("added_at", { ascending: true });
+  if (memberError) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUPS_FAILED");
+
+  const memberRows = (members ?? []) as JsonRecord[];
+  const locationIds = [...new Set(memberRows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
+  if (locationIds.length === 0) return [];
+
+  const { data: locations, error: locationError } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_master")
+    .select("id, code, name, active")
+    .in("id", locationIds)
+    .eq("active", true);
+  if (locationError) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUPS_FAILED");
+
+  const groupById = new Map(groupRows.map((row) => [toTrimmedString(row.id), row]));
+  const locationById = new Map(
+    ((locations ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]),
+  );
+
+  return memberRows
+    .map((row) => {
+      const slocGroupId = toTrimmedString(row.sloc_group_id);
+      const storageLocationId = toTrimmedString(row.storage_location_id);
+      const group = groupById.get(slocGroupId) ?? null;
+      const location = locationById.get(storageLocationId) ?? null;
+      return {
+        ...row,
+        planning_sloc_group: group,
+        storage_location_master: location,
+      } as JsonRecord;
+    })
+    .filter((row) => row.planning_sloc_group && row.storage_location_master);
 }
 
 async function loadItemGroups(companyId: string): Promise<ItemGroupSummary[]> {
@@ -324,15 +366,17 @@ async function getEligibleMaterialRows(companyId: string): Promise<Array<{ mater
     }
   }
 
-  const { data: stockRows, error: stockError } = await serviceRoleClient
-    .schema("erp_inventory")
-    .from("stock_snapshot")
-    .select("material_id, storage_location_id, quantity")
+  const { data: plantExtRows, error: plantExtError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_plant_ext")
+    .select("material_id, default_storage_location_id, status")
     .eq("company_id", companyId)
-    .in("storage_location_id", activeSlocIds);
-  if (stockError) throw new Error("PROCUREMENT_PLANNING_ELIGIBLE_STOCK_FAILED");
+    .eq("status", "ACTIVE")
+    .in("default_storage_location_id", activeSlocIds);
+  if (plantExtError) throw new Error("PROCUREMENT_PLANNING_ELIGIBLE_PLANT_EXT_FAILED");
 
-  const materialIds = [...new Set(((stockRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+  const eligiblePlantRows = (plantExtRows ?? []) as JsonRecord[];
+  const materialIds = [...new Set(eligiblePlantRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   if (materialIds.length === 0) return [];
 
   const { data: materialRows, error: materialError } = await serviceRoleClient
@@ -357,9 +401,9 @@ async function getEligibleMaterialRows(companyId: string): Promise<Array<{ mater
 
   const companyAllowed = new Set(((companyExtRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean));
   const resultMap = new Map<string, { material_id: string; source_sloc_group_id: string | null }>();
-  for (const row of ((stockRows ?? []) as JsonRecord[])) {
+  for (const row of eligiblePlantRows) {
     const materialId = toTrimmedString(row.material_id);
-    const locationId = toTrimmedString(row.storage_location_id);
+    const locationId = toTrimmedString(row.default_storage_location_id);
     if (!companyAllowed.has(materialId) || resultMap.has(materialId)) continue;
     resultMap.set(materialId, {
       material_id: materialId,
