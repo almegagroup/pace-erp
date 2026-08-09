@@ -929,6 +929,39 @@ export default function ProcurementPlanningPage() {
   const effectiveCompanyId = companyId || defaultCompanyId;
   const planMonthValue = getMonthValue(planMonth);
 
+  useEffect(() => {
+    if (!companyId) {
+      const selectedCompany = String(runtimeContext?.selectedCompanyId ?? "").trim();
+      if (selectedCompany) {
+        setCompanyId(selectedCompany);
+        return;
+      }
+      if (defaultCompanyId) {
+        setCompanyId(defaultCompanyId);
+      }
+    }
+  }, [companyId, defaultCompanyId, runtimeContext]);
+
+  useEffect(() => {
+    setSlocGroupForm({ id: "", group_name: "", storage_location_ids: [] });
+    setItemGroupForm({ id: "", group_name: "", sloc_group_id: "" });
+    setSelectedItemGroupId("");
+    setItemManagerSlocGroupId("");
+    setDashboardFilters((current) => ({
+      ...current,
+      slocGroupId: "",
+      slocGroups: [],
+    }));
+    setInputFilters({
+      query: "",
+      slocGroupId: "",
+      itemGroupId: "",
+      materialType: "ALL",
+      showUngroupedOnly: false,
+      showExcludedOnly: false,
+    });
+  }, [companyId]);
+
   async function loadWorkspace() {
     if (!effectiveCompanyId) {
       setWorkspace({ plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [] });
