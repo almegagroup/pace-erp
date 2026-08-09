@@ -3839,3 +3839,52 @@ it provides no enforcement value as a CI step in its current form.
 - Frontend changes: `PlanFeedPage.jsx` now shows a `Mapped Batch No(s)` column in the Total tab, keeps the cancelled FO loaded after cancel, and switches action state from `Cancel FO` to `Reactivate FO` with user-safe confirmation messaging. `prodApi.js` now exposes `reactivatePlanFeed`.
 - Verification performed: `frontend` production build passed on Saturday, August 8, 2026. Pre-existing unrelated warning remains in `frontend/src/pages/dashboard/procurement/grn/GRNListPage.jsx` for duplicate `emptyMessage`. Manual ACL/rule audit against the post-implementation checklist found and fixed two omissions from the first pass: (1) `PAGE-DEPENDENCY-MANIFEST.json` was updated to include the new `reactivatePlanFeed` dependency, and (2) a dormant future-facing SO write-path (`plan_feed_id` accepted in `sales_order.handlers.ts` create/update payloads) was removed so the new FO linkage remains schema-only until the formal SO↔FO design session lands.
 - Limit noted honestly: local static guard scripts (`route-acl-registry-guard.mjs`, `company-scope-guard.mjs`, `wrong-company-source-guard.mjs`, `frontend-payload-guard.mjs`) could not be executed in this terminal context because Node launch hit a host-level `EPERM` path-resolution issue before script code began running; the audit for this task was therefore completed manually with direct code/document cross-checking instead of claiming those guards passed.
+
+### 2026-08-09 19:35 IST - PO11 same-session SLOC-group visibility fix
+- Task: audited and fixed the PO11 Procurement Planning Workspace after the business-owner update to the final design docs and the explicit report that newly created / just-updated Planning SLOC Groups were not consistently appearing in the same session's existing-group list or in the Item Group Setup parent-SLOC dropdown.
+- Docs/rules re-read before changing code: `CLAUDE.md` (especially the 13 recurring bug patterns), feasibility Sections `35.6`-`35.16`, `CODEX-PO11-PROCUREMENT-PLANNING-WORKSPACE-TASK-BRIEF.md`, the ACL post-implementation checklist in `PROD-ACL-Access-Decisions.md`, and the PO11 page entry in `PAGE-DEPENDENCY-MANIFEST.json`.
+- Root cause summary (full audit, not just task-brief assumption):
+  - **R-02 violation / structural bug:** `ProcurementPlanningPage.jsx` was still using `useEffect` + local state for API loading instead of React Query, despite the implementation-log rule that fetch pages must use `useQuery`. This made the page inherently race-prone on remount, company change, month change, and manual refresh.
+  - **Duplicate source-of-truth bug:** the page fetched `getProcurementPlanning()` and separate `listProcurementPlanningSlocGroups()` / `listProcurementPlanningItemGroups()` calls for the same setup collections, then preferred the fallback list responses over the workspace payload. Any slower/stale list response could overwrite a fresher save result.
+  - **Same-session overwrite bug:** save handlers first patched local state, then immediately called the non-guarded full reload path, so the just-saved in-memory state was not authoritative for even one render.
+  - **Mount / refresh concurrency bug:** the page's company bootstrap path plus manual reload path allowed overlapping workspace fetches with no latest-only protection and no cache dedupe at the page layer.
+  - **Partial-failure blast radius:** one failed request in the old multi-request loader cleared the full PO11 workspace state, making a transient fetch problem look like "saved group disappeared."
+- Bug-pattern checklist result:
+  - **Bug #2 / #11 (company-scope / wrong company source):** checked, not triggered by this fix path. PO11 still uses the shared transaction-company selector pattern and passes `company_id` through the existing scoped handlers.
+  - **Bug #8 (route / ACL registry mismatch):** checked against the dependency manifest and current PO11 routes, not triggered.
+  - **Bug #13 (frontend payload missing backend-required field):** checked across SLOC-group and item-group save calls, not triggered in the current payloads.
+  - **Primary triggered class was the structural R-02 fetch-pattern violation**, which was the actual parent cause behind the disappearing same-session setup state.
+- Frontend fix delivered in `frontend/src/pages/dashboard/procurement/planning/ProcurementPlanningPage.jsx`:
+  - Replaced the page-local `loadWorkspace()` / `loadHistory()` `useEffect` fetch flow with React Query (`useQuery`, `useQueryClient`) for PO11 workspace, history, and storage locations.
+  - Removed the duplicate standalone setup-collection fetches from the page; PO11 now treats `getProcurementPlanning()` as the authoritative source of `sloc_groups` and `item_groups`.
+  - Save/delete handlers now update the React Query cache immediately (`queryClient.setQueryData`) so the same-screen existing-group list and Item Group parent-SLOC dropdown reflect the save without waiting for a second render cycle.
+  - Those handlers then invalidate the authoritative workspace query so dependent monthly rows / auto-included scope can resync safely without stale overwrite races.
+  - Manual refresh now refetches the active React Query sources instead of calling a bespoke page-local reload routine.
+  - Query errors are surfaced without clearing good cached data first, reducing the old "temporary failure looks like vanished setup" behavior.
+- Verification:
+  - `frontend` production build passed on Sunday, August 9, 2026. The build still reports the pre-existing unrelated `GRNListPage.jsx` duplicate `emptyMessage` warning, unchanged by this task.
+  - Repo-wide `frontend` lint still fails on many unrelated pre-existing baseline files (HR/admin/other procurement/production pages); after the PO11 cleanup pass, `ProcurementPlanningPage.jsx` itself no longer appeared in that lint failure list.
+  - The local static guard scripts could not be executed here for the same host-level Node `EPERM` path-resolution issue already seen in other recent sessions, so the 13-bug-pattern review for this task was completed manually against the touched PO11 files and the relevant docs instead of claiming guard-script success.
+
+### 2026-08-09 21:05 IST - PO11 broader design-alignment hardening pass
+- Follow-up after the same-session sync fix: re-audited PO11 against the four broader design-gap categories the business owner called out (`already matched`, `partially matched`, `missing`, `risky`) instead of stopping at the task-brief's immediate bug.
+- Additional concrete implementation gaps found and fixed:
+  - **Authority / UX mismatch:** the page let every PO11 viewer see live write controls (`Save Monthly Plan`, `Save Item Group Mapping`, `Close Month`, setup tabs/forms) even though the locked design says maintenance/setup/close are only for `SCM + Director + ACL Master`, while view-only users must still be able to switch company/month and read the Monthly Plan Input.
+  - **Item-group scope presentation mismatch:** the Item Group Setup tab's bottom "Standalone Materials" area and its "Review Standalone" jump were using all ungrouped PO11 rows across the workspace, not only the currently selected parent SLOC-group scope, which contradicted the locked rule that the item-management UI must first choose a parent SLOC group and then operate strictly inside that scope.
+  - **SLOC-group write-path scope hole / ambiguity risk:** backend create/update of `planning_sloc_group` accepted arbitrary `storage_location_ids` without re-validating that those locations were active in the requested company, and it also allowed the same active storage location to be assigned to multiple planning SLOC groups in one company. That made `source_sloc_group_id` ambiguous because PO11 line rows only support one parent SLOC-group id.
+- Fixes delivered:
+  - `frontend/src/pages/dashboard/procurement/planning/ProcurementPlanningPage.jsx`
+    - Added PO11 maintenance gating based on the live shell/runtime context (`DIRECTOR`, `SUPPLY CHAIN`, `ACL-MASTER`, plus admin bypass).
+    - View-only users now keep `Dashboard`, `Monthly Plan Input`, and `History`, but setup tabs and write actions are hidden.
+    - Monthly Plan Input now renders read-only for viewers instead of showing editable controls they are not allowed to save.
+    - The Item Group Setup standalone preview and "Review Standalone" jump now stay inside the selected parent SLOC-group scope, matching the locked design.
+  - `supabase/functions/api/_core/procurement/planning.handlers.ts`
+    - Added `validatePlanningStorageLocationSelection()` to re-check that every selected storage location is active in the chosen company.
+    - The same validator now rejects duplicate active storage-location membership across multiple planning SLOC groups in the same company, preventing arbitrary source-group resolution for PO11 auto-included materials.
+- Result of the broader audit:
+  - The originally reported same-session visibility bug remains fixed by the earlier React Query refactor.
+  - The PO11 page now better matches the locked authority model and parent-SLOC-scoped item-management UX, not just the refresh behavior.
+  - The backend now blocks one real configuration class that would have made PO11 grouping behavior inherently ambiguous even if the frontend rendered correctly.
+- Verification:
+  - `frontend` production build re-run after the hardening pass also passed on Sunday, August 9, 2026.
+  - The same unrelated pre-existing `GRNListPage.jsx` duplicate `emptyMessage` build warning remains unchanged and unrelated to PO11.

@@ -360,6 +360,105 @@ async function loadStorageLocationLookup(
   return new Map(((locations ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
 }
 
+async function validatePlanningStorageLocationSelection(
+  companyId: string,
+  storageLocationIds: string[],
+  currentGroupId?: string | null,
+): Promise<{ status: "OK" } | { status: "ERROR"; code: string; httpStatus: number; message: string }> {
+  const normalizedIds = [...new Set(storageLocationIds.map((value) => toTrimmedString(value)).filter(Boolean))];
+  if (normalizedIds.length === 0) {
+    return {
+      status: "ERROR",
+      code: "PROCUREMENT_PLANNING_SLOC_GROUP_INVALID",
+      httpStatus: 400,
+      message: "At least one active storage location is required.",
+    };
+  }
+
+  const [locationMap, locationScopeRows, existingAssignments] = await Promise.all([
+    loadStorageLocationLookup(normalizedIds, { activeOnly: true }),
+    serviceRoleClient
+      .schema("erp_inventory")
+      .from("storage_location_plant_map")
+      .select("storage_location_id, company_id")
+      .in("storage_location_id", normalizedIds)
+      .eq("active", true)
+      .then(({ data, error }) => {
+        if (error) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUP_SCOPE_LOOKUP_FAILED");
+        return (data ?? []) as JsonRecord[];
+      }),
+    serviceRoleClient
+      .schema("erp_procurement")
+      .from("planning_sloc_group_member")
+      .select("storage_location_id, sloc_group_id, planning_sloc_group:sloc_group_id(id, company_id, group_name, active)")
+      .in("storage_location_id", normalizedIds)
+      .eq("active", true)
+      .then(({ data, error }) => {
+        if (error) throw new Error("PROCUREMENT_PLANNING_SLOC_GROUP_CONFLICT_LOOKUP_FAILED");
+        return (data ?? []) as JsonRecord[];
+      }),
+  ]);
+
+  const scopeByLocationId = new Map<string, string>();
+  for (const row of locationScopeRows) {
+    const locationId = toTrimmedString(row.storage_location_id);
+    const scopedCompanyId = toTrimmedString(row.company_id);
+    if (locationId && scopedCompanyId && !scopeByLocationId.has(locationId)) {
+      scopeByLocationId.set(locationId, scopedCompanyId);
+    }
+  }
+
+  const invalidLocationLabels = normalizedIds
+    .filter((locationId) => {
+      return !locationMap.has(locationId) || scopeByLocationId.get(locationId) !== companyId;
+    })
+    .map((locationId) => {
+      const location = locationMap.get(locationId) ?? null;
+      const code = toTrimmedString(location?.code) || locationId;
+      const name = toTrimmedString(location?.name);
+      return name ? `${code} - ${name}` : code;
+    });
+
+  if (invalidLocationLabels.length > 0) {
+    return {
+      status: "ERROR",
+      code: "PROCUREMENT_PLANNING_SLOC_GROUP_LOCATION_INVALID",
+      httpStatus: 422,
+      message: `Selected storage locations are not active in the chosen company: ${invalidLocationLabels.join(", ")}`,
+    };
+  }
+
+  const conflictingGroupNames = [
+    ...new Set(
+      existingAssignments
+        .map((row) => {
+          const locationId = toTrimmedString(row.storage_location_id);
+          const slocGroupId = toTrimmedString(row.sloc_group_id);
+          const slocGroup = (row.planning_sloc_group as JsonRecord | null) ?? null;
+          const groupCompanyId = toTrimmedString(slocGroup?.company_id);
+          const groupName = toTrimmedString(slocGroup?.group_name);
+          const isActive = slocGroup?.active === true;
+          if (!locationId || !slocGroupId || !groupName || !isActive) return "";
+          if (groupCompanyId !== companyId) return "";
+          if (currentGroupId && slocGroupId === currentGroupId) return "";
+          return groupName;
+        })
+        .filter(Boolean),
+    ),
+  ];
+
+  if (conflictingGroupNames.length > 0) {
+    return {
+      status: "ERROR",
+      code: "PROCUREMENT_PLANNING_SLOC_GROUP_LOCATION_CONFLICT",
+      httpStatus: 409,
+      message: `A storage location can belong to only one active planning SLOC group per company. Conflict with: ${conflictingGroupNames.join(", ")}`,
+    };
+  }
+
+  return { status: "OK" };
+}
+
 async function loadSlocGroupMembers(companyId: string): Promise<JsonRecord[]> {
   const groupRows = await loadSlocGroups(companyId);
   const groupIds = groupRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
@@ -1022,6 +1121,16 @@ export async function createPlanningSlocGroupHandler(req: Request, ctx: Procurem
     if (!companyId || !groupName || storageLocationIds.length === 0) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_SLOC_GROUP_INVALID", 400, "company_id, group_name, and storage_location_ids are required.");
     }
+    const storageLocationValidation = await validatePlanningStorageLocationSelection(companyId, storageLocationIds);
+    if (storageLocationValidation.status === "ERROR") {
+      return planningError(
+        req,
+        ctx,
+        storageLocationValidation.code,
+        storageLocationValidation.httpStatus,
+        storageLocationValidation.message,
+      );
+    }
     const { data: group, error: groupError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("planning_sloc_group")
@@ -1082,6 +1191,20 @@ export async function updatePlanningSlocGroupHandler(req: Request, ctx: Procurem
       : [];
     if (!groupName || storageLocationIds.length === 0) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_SLOC_GROUP_INVALID", 400, "group_name and storage_location_ids are required.");
+    }
+    const storageLocationValidation = await validatePlanningStorageLocationSelection(
+      companyId,
+      storageLocationIds,
+      groupId,
+    );
+    if (storageLocationValidation.status === "ERROR") {
+      return planningError(
+        req,
+        ctx,
+        storageLocationValidation.code,
+        storageLocationValidation.httpStatus,
+        storageLocationValidation.message,
+      );
     }
     const { error: updateError } = await serviceRoleClient
       .schema("erp_procurement")
