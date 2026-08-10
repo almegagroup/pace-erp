@@ -227,6 +227,75 @@ explicitly in the script's own `--help`/header comment, matching
 
 ---
 
+## Step 4A — Safe Automation Strategy (future-safe, but still cautious)
+
+This script is allowed to become **automation-ready**, but **not**
+"auto-apply to prod" and **not** "blindly create every missing grant."
+The safe shape is a staged pipeline:
+
+1. **Detect** — compute `owning_resource -> dependency_resource:action`
+   from real code (`*Screens.js` + `AppRouter.jsx` + dependency manifest),
+   not from a hardcoded hand-maintained list.
+2. **Compare** — check only active-version `acl.precomputed_acl_view`
+   rows, same as Step 2 above.
+3. **Classify** — every gap must be tagged with a risk bucket:
+   `LOW`, `MEDIUM`, or `HIGH`.
+4. **Propose** — generate helper SQL / draft capability SQL only.
+5. **Verify** — always produce post-change verification SQL / guidance.
+6. **Apply** — remains a separate explicit human-reviewed step; the
+   script itself never executes DB writes.
+
+### Locked risk rules
+
+- **LOW**
+  `dependency_action = VIEW` only. Usually Type খ (reference lookup).
+  Safe to suggest a narrow `menu_visible=false` hidden companion grant.
+- **MEDIUM**
+  `dependency_action IN ('WRITE', 'EDIT')` **and** the dependency resource
+  is **not** itself a full page. Usually Type ক (inline quick-create /
+  quick-update companion). Suggest only, do not assume without review.
+- **HIGH**
+  `dependency_action IN ('DELETE', 'APPROVE')`, **or** the dependency
+  resource is itself a routed page / likely full ownership surface.
+  These are possible Type গ cases. **Never auto-suggest a business fix
+  beyond flagging and stopping.**
+
+### Locked automation rules
+
+- The script may support **multiple output modes** (human report, machine
+  JSON, gap SQL only, suggestion SQL only), but every mode must remain
+  read-only.
+- The script may become **config-driven** (companies, exclusions,
+  thresholds, strictness flags), but safe defaults must remain the same
+  as this brief.
+- Manifest freshness and manifest-coverage warnings are **first-class
+  output**, never silently swallowed.
+- Ambiguous source capability detection is a **hard stop** for SQL
+  generation on that owning resource — print a manual-review note instead
+  of guessing.
+- Missing manifest coverage is **not** a silent skip. It must be exposed
+  in output so a human knows the report is partial there.
+- Any future "draft apply" automation must still stop before activation;
+  activating an ACL version stays human-controlled.
+
+### Recommended staged modes
+
+1. `report`
+   Full human-readable output: warnings + triples + gap SQL + suggestion SQL.
+2. `summary`
+   Short operational overview for a human reviewer.
+3. `triples-json`
+   Machine-readable dependency map / warnings / stats only.
+4. `gap-sql`
+   Only the gap-detection SQL.
+5. `suggest-sql`
+   Only the helper SQL that proposes hidden dependency capabilities.
+
+These modes are allowed because they improve repeatability and future
+automation-readiness without granting the script any write authority.
+
+---
+
 ## Step 5 — Commit
 
 `scripts/dependency-provisioning-check.mjs` only. No application code
