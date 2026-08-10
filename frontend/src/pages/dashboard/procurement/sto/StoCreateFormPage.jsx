@@ -7,7 +7,7 @@ import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx"
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { useCostCentersQuery, useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useCostCentersQuery, useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
@@ -227,7 +227,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
   const materialQuery = useMaterialOptionsQuery(
     {
       material_type: materialType || undefined,
-      limit: 200,
+      limit: MASTER_PICKER_FETCH_LIMIT,
       offset: 0,
     },
     // material_type changing the queryKey shouldn't blank the whole page —

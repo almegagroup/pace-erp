@@ -25,6 +25,7 @@ import { openScreenWithContext, popScreen } from "../../../../navigation/screenS
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import CustomerCreateForm from "../../om/customer/CustomerCreateForm.jsx";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useCustomerOptionsQuery,
   useMaterialOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -276,10 +277,10 @@ export default function SOCreatePage() {
   // §113.6 — Customer dropdown is scoped to the selected company via
   // customer_company_map (listCustomersHandler now honors company_id).
   const customerQuery = useCustomerOptionsQuery(
-    { company_id: form.company_id, limit: 200, offset: 0, status: "ACTIVE" },
+    { company_id: form.company_id, limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" },
     { enabled: Boolean(form.company_id) }
   );
-  const materialQuery = useMaterialOptionsQuery({ limit: 300, offset: 0, status: "ACTIVE" });
+  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" });
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const customers = customerQuery.customers;
   const materials = materialQuery.materials;

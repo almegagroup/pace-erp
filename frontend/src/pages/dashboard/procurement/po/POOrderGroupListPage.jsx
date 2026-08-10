@@ -5,7 +5,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
@@ -32,7 +32,7 @@ export default function POOrderGroupListPage() {
   const [status, setStatus] = useState("PENDING_APPROVAL");
   const [companyId, setCompanyId] = useState("");
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
-  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const groupParams = useMemo(
     () => ({ company_id: effectiveCompanyId || undefined, status: status || undefined, limit: 100, offset: 0 }),
     [effectiveCompanyId, status]

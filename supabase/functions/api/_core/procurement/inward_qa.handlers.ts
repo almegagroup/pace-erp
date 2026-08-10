@@ -164,11 +164,33 @@ function sumDecidedQty(decisionLines: JsonRecord[]): number {
   return roundQty(decisionLines.reduce((sum, line) => sum + (Number(line.decision_qty) || 0), 0));
 }
 
+// R-01/R-03: mirrors listQADocumentsHandler's bulk-resolve, one-row lookup here
+// since this endpoint returns a single document rather than a list.
+async function fetchQaMaterialFields(materialId: string): Promise<{ pace_code: string | null; material_name: string | null; material_category: string | null }> {
+  if (!materialId) return { pace_code: null, material_name: null, material_category: null };
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("pace_code, material_name, material_category")
+    .eq("id", materialId)
+    .single();
+
+  if (error || !data) {
+    if (error) logDbError("fetchQaMaterialFields", error);
+    return { pace_code: null, material_name: null, material_category: null };
+  }
+  return {
+    pace_code: (data.pace_code as string) ?? null,
+    material_name: (data.material_name as string) ?? null,
+    material_category: (data.material_category as string) ?? null,
+  };
+}
+
 async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContext): Promise<JsonRecord> {
   const qaDocument = await fetchQaDocument(qaDocumentId);
   assertQaCompanyScope(ctx, qaDocument);
 
-  const [testLinesResp, decisionLines] = await Promise.all([
+  const [testLinesResp, decisionLines, materialFields] = await Promise.all([
     serviceRoleClient
       .schema("erp_procurement")
       .from("inward_qa_test_line")
@@ -176,6 +198,7 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
       .eq("qa_document_id", qaDocumentId)
       .order("line_number", { ascending: true }),
     fetchDecisionLines(qaDocumentId),
+    fetchQaMaterialFields(String(qaDocument.material_id ?? "")),
   ]);
 
   if (testLinesResp.error) {
@@ -196,6 +219,9 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
     public_status: mapQaStatusForResponse(qaDocument.status),
     test_lines: testLinesResp.data ?? [],
     decision_lines: decisionLines,
+    pace_code: materialFields.pace_code,
+    material_name: materialFields.material_name,
+    material_category: materialFields.material_category,
   };
 }
 
@@ -402,9 +428,36 @@ export async function listQADocumentsHandler(
       }, new Map<string, number>());
     }
 
+    // R-01/R-03 (OM-IMPLEMENTATION-LOG.md): the list endpoint must return its own
+    // accurate display data -- never make the frontend fetch a separate picker list
+    // and join client-side. Bulk-resolve material_name/pace_code/material_category
+    // in one .in() query, same pattern as the decidedByDoc lookup above.
+    const materialIds = [...new Set(rows.map((row: JsonRecord) => String(row.material_id)).filter(Boolean))];
+    let materialById = new Map<string, { pace_code: string | null; material_name: string | null; material_category: string | null }>();
+    if (materialIds.length > 0) {
+      const { data: materialRows, error: materialError } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id, pace_code, material_name, material_category")
+        .in("id", materialIds);
+
+      if (materialError) {
+        logDbError("listQADocumentsHandler material resolve", materialError);
+        throw new ApiError(500, materialError.message || "Unable to resolve materials");
+      }
+
+      materialById = new Map(
+        (materialRows ?? []).map((row: JsonRecord) => [
+          String(row.id),
+          { pace_code: row.pace_code ?? null, material_name: row.material_name ?? null, material_category: row.material_category ?? null },
+        ]),
+      );
+    }
+
     const items = rows.map((row) => {
       const totalQty = roundQty(Number(row.qa_stock_qty) || 0);
       const decidedQty = decidedByDoc.get(String(row.id)) ?? 0;
+      const material = materialById.get(String(row.material_id));
       return {
         ...row,
         qa_doc_number: row.qa_number,
@@ -413,6 +466,9 @@ export async function listQADocumentsHandler(
         decided_qty: decidedQty,
         remaining_qty: roundQty(totalQty - decidedQty),
         public_status: mapQaStatusForResponse(row.status),
+        pace_code: material?.pace_code ?? null,
+        material_name: material?.material_name ?? null,
+        material_category: material?.material_category ?? null,
       };
     });
 

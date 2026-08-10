@@ -18,6 +18,7 @@ import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { INDIAN_STATES } from "../../../../data/indianStates.js";
 import { createCustomer, createParentCustomer, getVendor, lookupCustomerGstProfile } from "../omApi.js";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useParentCustomersQuery,
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -88,7 +89,7 @@ export default function CustomerCreateForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const vendorQuery = useVendorOptionsQuery({ status: "ACTIVE", limit: 500, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const parentCustomerQuery = useParentCustomersQuery();
   const vendors = vendorQuery.vendors;
   const parentCustomers = Array.isArray(parentCustomerQuery.data?.data)

@@ -27,6 +27,7 @@ import {
   updateMaterial,
 } from "../omApi.js";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useUomsQuery,
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -95,7 +96,7 @@ export default function MaterialDetailPage() {
     enabled: Boolean(id && showApprovedVendors),
   });
   const vendorOptionsQuery = useVendorOptionsQuery(
-    { limit: 200, offset: 0 },
+    { limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 },
     { enabled: Boolean(showApprovedVendors) }
   );
   const material = detailQuery.data?.material ?? null;

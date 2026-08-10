@@ -32,6 +32,7 @@ import {
 } from "../procurementApi.js";
 import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useMaterialOptionsQuery,
   useStorageLocationsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -282,7 +283,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
   const isSfgGenealogy = isSfgGenealogyDocument(isOpeningGenealogyDocument, documentMaterialType);
   const isFgGenealogy = isFgGenealogyDocument(isOpeningGenealogyDocument, documentMaterialType);
 
-  const materialQuery = useMaterialOptionsQuery({ limit: 500, status: "ACTIVE" });
+  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, status: "ACTIVE" });
   const locationQuery = useStorageLocationsQuery(
     { company_id: companyId || undefined },
     { enabled: Boolean(companyId) },

@@ -7,7 +7,7 @@ import { resolveDefaultTransactionCompanyId } from "../../../../components/input
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
-import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
@@ -52,7 +52,7 @@ export default function POListPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
-  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const purchaseOrderParams = useMemo(
     () => ({
       company_id: effectiveCompanyId || undefined,

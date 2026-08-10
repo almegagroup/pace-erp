@@ -23,7 +23,7 @@ import {
   removeMaterialCategoryMember,
   updateMaterialCategoryGroup,
 } from "../../om/omApi.js";
-import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const ERROR_LABELS = {
   OM_MCG_LIST_FAILED:        "Failed to load category groups.",
@@ -54,7 +54,7 @@ export default function MaterialCategoryMasterPage() {
     if (defaultId) setCompanyId(defaultId);
   }, [companyId, runtimeContext]);
 
-  const materialQuery = useMaterialOptionsQuery({ limit: 500, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const groupQuery = useQuery({
     queryKey: ["procurement", "material-category-groups", companyId],
     queryFn: async () => {

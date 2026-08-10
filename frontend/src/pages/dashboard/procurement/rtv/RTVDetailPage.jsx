@@ -8,6 +8,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useMaterialOptionsQuery,
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -75,8 +76,8 @@ export default function RTVDetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
-  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const detailQuery = useQuery({
     queryKey: ["procurement", "rtv-detail", id],
     enabled: Boolean(id),

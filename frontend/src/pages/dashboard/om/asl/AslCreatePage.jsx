@@ -20,6 +20,7 @@ import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { createVendorMaterialInfo, listMappedMaterialIdsForVendor } from "../omApi.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useMaterialOptionsQuery,
   useUomsQuery,
   useVendorOptionsQuery,
@@ -53,8 +54,8 @@ export default function AslCreatePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const vendorQuery = useVendorOptionsQuery({ status: "ACTIVE", limit: 500, offset: 0 });
-  const materialQuery = useMaterialOptionsQuery({ status: "ACTIVE", limit: 500, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const uomQuery = useUomsQuery({ is_active: true });
   const paymentTermQuery = usePaymentTermOptionsQuery();
   const vendors = vendorQuery.vendors;

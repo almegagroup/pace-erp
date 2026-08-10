@@ -20,7 +20,7 @@ import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx"
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -114,7 +114,7 @@ export default function PlantTransferListPage() {
     () => (runtimeContext?.availableCompanies ?? []).map((entry) => ({ value: entry.id, label: entry.company_name || entry.company_code || entry.id })),
     [runtimeContext?.availableCompanies]
   );
-  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const materialOptions = useMemo(
     () => materialQuery.materials.map((entry) => ({ value: entry.id, label: `${entry.pace_code || ""} - ${entry.material_name || ""}`.trim() })),
     [materialQuery.materials]

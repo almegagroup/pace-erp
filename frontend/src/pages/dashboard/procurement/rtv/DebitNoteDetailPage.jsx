@@ -26,7 +26,7 @@ import {
   settleDebitNote,
 } from "../procurementApi.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
-import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -67,7 +67,7 @@ export default function DebitNoteDetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const detailQuery = useQuery({
     queryKey: ["procurement", "debit-note-detail", id],
     queryFn: () => getDebitNote(id),

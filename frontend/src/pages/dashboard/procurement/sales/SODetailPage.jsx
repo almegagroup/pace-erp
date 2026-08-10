@@ -19,6 +19,7 @@ import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useCustomerOptionsQuery,
   useMaterialOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -69,8 +70,8 @@ export default function SODetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const customerQuery = useCustomerOptionsQuery({ limit: 200, offset: 0 });
-  const materialQuery = useMaterialOptionsQuery({ limit: 300, offset: 0 });
+  const customerQuery = useCustomerOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const detailQuery = useQuery({
     queryKey: ["procurement", "so-detail", id],
     queryFn: async () => {

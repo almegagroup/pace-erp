@@ -7,7 +7,7 @@ import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
-import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
@@ -57,7 +57,7 @@ export default function RTVListPage() {
   const [companyId, setCompanyId] = useState("");
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
-  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const rtvParams = useMemo(
     () => ({
       company_id: effectiveCompanyId || undefined,

@@ -12,6 +12,7 @@ import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/opera
 import { addRTVLine, createRTV, getGRN, listGRNs } from "../procurementApi.js";
 import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useMaterialOptionsQuery,
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -46,8 +47,8 @@ export default function RTVCreatePage() {
   const [lineItems, setLineItems] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
-  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const grnQuery = useQuery({
     queryKey: ["procurement", "rtv-create-grns", effectiveCompanyId || null],
     queryFn: () =>

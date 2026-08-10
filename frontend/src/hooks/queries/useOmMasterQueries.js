@@ -14,6 +14,25 @@ import {
 import { queryKeys } from "./queryKeys.js";
 import { cleanQueryParams, maybeArray } from "./queryUtils.js";
 
+// Client-side picker/lookup queries (useMaterialOptionsQuery, useVendorOptionsQuery,
+// useCustomerOptionsQuery) fetch a master table ONCE and build an in-memory id -> row
+// Map on the client, for both display-name resolution and dropdown option lists. A
+// too-small `limit` silently truncates whatever rows sort past it as the table grows --
+// no error, just blank names / raw UUIDs shown instead of names, or missing dropdown
+// options for anything outside the window.
+//
+// Real incident (2026-08-10): Inward QA Queue (PO06) started showing a raw material
+// UUID and "no category" for a real, valid RM material once erp_master.material_master
+// crossed ~200 rows (FG alone is 201 rows and sorts first by material_type -- so any
+// limit:200 fetch on this table returns ZERO non-FG materials). Over a dozen pages
+// across procurement/production shared this exact hardcoded limit:200/300/500 pattern.
+//
+// Use this constant instead of a magic number for any "load the full picker list"
+// query on material/vendor/customer -- one place to raise if a master table ever
+// outgrows it. (413 materials / 78 vendors / 15 customers as of 2026-08-10 -- this
+// gives generous headroom for all three.)
+export const MASTER_PICKER_FETCH_LIMIT = 5000;
+
 export function useVendorsQuery(params = {}, options = {}) {
   const normalizedParams = useMemo(() => cleanQueryParams(params), [params]);
   return useQuery({

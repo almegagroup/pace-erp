@@ -19,6 +19,7 @@ import ErpScreenScaffold, {
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useMaterialOptionsQuery,
   useStorageLocationOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -92,7 +93,7 @@ export default function CurrentStockPage() {
   // the picker leaked every company's materials into every other company's
   // dropdown even though report execution itself was already scoped.
   const materialsQuery = useMaterialOptionsQuery(
-    { status: "ACTIVE", limit: 1000, company_id: companyId },
+    { status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, company_id: companyId },
     { enabled: Boolean(companyId) },
   );
   const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
