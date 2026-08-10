@@ -1074,8 +1074,17 @@ export default function ProcurementPlanningPage() {
 
   const workspace = workspaceQuery.data ?? EMPTY_WORKSPACE;
   const storageLocations = storageLocationsQuery.data ?? [];
-  const slocGroups = slocGroupsQuery.data ?? workspace.sloc_groups ?? [];
-  const itemGroups = itemGroupsQuery.data ?? workspace.item_groups ?? [];
+  // workspace.sloc_groups/item_groups (embedded in the same getProcurementPlanning()
+  // response used for everything else on this page) is the authoritative source -- the
+  // standalone slocGroupsQuery/itemGroupsQuery below exist only to prime the parent-SLOC
+  // picker before the workspace call resolves. Both selects always return an array
+  // (never undefined, see normalizeCollectionPayload), so workspace was previously dead
+  // once the standalone query settled -- if that separate fetch ever returned stale/empty
+  // data for any reason (timing, a transient error swallowed into []), it silently
+  // overrode a workspace response that had the real groups. Precedence flipped so a
+  // populated workspace always wins.
+  const slocGroups = workspace.sloc_groups?.length ? workspace.sloc_groups : slocGroupsQuery.data ?? [];
+  const itemGroups = workspace.item_groups?.length ? workspace.item_groups : itemGroupsQuery.data ?? [];
   const historyData = historyQuery.data ?? EMPTY_HISTORY;
   const historyRows = historyData.rows;
   const historyGroupConfigs = historyData.group_configs;
