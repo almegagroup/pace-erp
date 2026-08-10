@@ -622,6 +622,49 @@ async function getMaterialGroupOptionsByMaterialIds(materialIds: string[]): Prom
   return grouped;
 }
 
+// Fields safe to carry over to a balance-split CSN: static PO/vendor/company
+// reference data that describes the *order line*, not any specific shipment
+// event. Deliberately an ALLOWLIST, not a spread-then-blocklist -- a blocklist
+// silently leaks any field nobody remembered to null out (see bug below), an
+// allowlist fails safe (a new column added later defaults to NOT copying).
+const CSN_BALANCE_CLONE_REFERENCE_FIELDS = [
+  "csn_type",
+  "company_id",
+  "vendor_id",
+  "material_id",
+  "material_category_id",
+  "po_id",
+  "po_line_id",
+  "po_qty",
+  "po_uom_code",
+  "sto_id",
+  "payment_term_id",
+  "lc_required",
+  "has_rebate",
+  "rebate_remarks",
+  "rebate_rate",
+  "indent_required",
+  "port_of_discharge_id",
+  "port_of_loading_id",
+  "cha_id",
+  "cha_name_freetext",
+  "consignee_company_id",
+  "delivery_type",
+  "transit_days_snapshot",
+] as const;
+
+/*
+ * Bug (found live 2026-08-10, CSN-3000000029): this used to be
+ * `{ ...sourceCsn, id: undefined, ...a handful of overrides }`. That spread
+ * copies EVERY column from the source CSN, so any shipment-event field the
+ * override list forgot to null out leaks straight into the new "balance"
+ * CSN -- most importantly `status`, which was never in the override list.
+ * A balance split created off an already-GRN-posted CSN (status GRD) came
+ * out ALSO status GRD, with no real gate entry or GRN ever done against it
+ * -- and since GRD is a READONLY_CSN_STATUSES value, the new CSN's own real
+ * balance quantity became permanently un-actionable. invoice_number,
+ * lr_number, lr_date, and domestic_transporter_id leaked the same way.
+ */
 async function cloneBalanceCsnFromSource(
   sourceCsn: CsnRow,
   quantity: number,
@@ -630,26 +673,75 @@ async function cloneBalanceCsnFromSource(
   const csnNumber = await generateProcurementDocNumber("CSN");
   const nowIso = new Date().toISOString();
   const payload: JsonRecord = {
-    ...sourceCsn,
     id: undefined,
     csn_number: csnNumber,
-    po_qty: sourceCsn.po_qty ?? null,
     dispatch_qty: quantity,
     total_received_qty: 0,
+    total_dispatch_qty: 0,
+    is_mother_csn: false,
+    mother_csn_id: null,
+    // Fresh lifecycle state -- this CSN has had no gate entry or GRN yet,
+    // whatever the source CSN's current status was.
+    status: CSN_STATUS.ORDERED,
+    pre_ge_status: null,
     gate_entry_id: null,
     gate_entry_date: null,
     grn_id: null,
     grn_date: null,
     received_qty: null,
+    invoice_number: null,
+    invoice_date: null,
+    // Logistics/shipment-tracking fields -- describe a specific dispatch
+    // event on the source CSN, not yet applicable to an undispatched balance.
+    vessel_name: null,
+    voyage_number: null,
+    bl_number: null,
+    bl_date: null,
+    boe_number: null,
+    boe_date: null,
+    scheduled_eta_to_port: null,
+    etd: null,
+    etd_is_manual_override: false,
+    eta_at_port: null,
+    eta_at_port_is_manual_override: false,
+    ata_at_port: null,
+    post_clearance_lr_date: null,
+    eta_to_plant_calculated: null,
+    transporter_id: null,
+    transporter_name_freetext: null,
+    lr_number_port_to_plant: null,
+    vehicle_number_port_to_plant: null,
+    lc_due_date: null,
+    lc_opened_date: null,
+    lc_number: null,
+    vessel_booking_confirmed_date: null,
+    lr_date: null,
+    lr_number: null,
+    vehicle_number: null,
+    domestic_transporter_id: null,
+    domestic_transporter_freetext: null,
+    vendor_indent_number: null,
+    soft_copy_received: false,
+    hard_copy_received: false,
+    hard_copy_courier_number: null,
+    courier_dispatch_date: null,
+    courier_received_date: null,
+    courier_date_to_cha: null,
+    courier_cha_receive_date: null,
+    cha_docket_number: null,
+    remarks: null,
     inactive_reason_code: null,
     inactive_from_status: null,
     inactive_at: null,
     inactive_by: null,
-    created_at: undefined,
     created_by: createdBy,
     last_updated_at: nowIso,
     last_updated_by: createdBy,
   };
+
+  for (const field of CSN_BALANCE_CLONE_REFERENCE_FIELDS) {
+    payload[field] = sourceCsn[field] ?? null;
+  }
 
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
