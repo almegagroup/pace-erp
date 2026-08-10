@@ -3133,6 +3133,17 @@ Behavior:
 
 Editable data is monthly, not permanent master data.
 
+**Corrected 2026-08-11 (business owner) -- grouped-member editability.** The
+original build locked grouped members to a read-only "Via group total"
+placeholder and only let the user type into the Group Total row directly.
+This is wrong for Requirement, Safety Days, Processing Time, Lead Time, Fixed
+Safety Stock, and Fixed Replenishment Stock alike -- items in the same group
+routinely need different day-parameters and requirements from each other.
+Every member row must be independently editable for all six fields, exactly
+like a stand-alone row. See §35.12 (rewritten) for how the Group Total row
+now derives its own value from members instead of being a second,
+disconnected input.
+
 ### 35.10 Planning Formula (PO11 - Monthly RM / PM Workspace)
 
 For the selected month:
@@ -3170,6 +3181,24 @@ Rules:
   5. remaining items stay stand-alone under that same SLOC group
 - One storage location cannot belong to more than one active planning SLOC group in the same company.
 
+**Added 2026-08-11 (business owner) -- SLOC Group Include/Exclude.** New RM/PM
+items auto-include into a SLOC group's eligible pool the moment they appear
+in one of that group's mapped storage locations (unchanged) -- but not every
+auto-included item actually needs monthly planning. Users with maintenance
+authority must be able to manually **exclude** a specific material from a
+SLOC group's planning scope (it stops appearing in that month's Monthly Plan
+Input / Planning Dashboard rows) and **re-include** it later at any time, the
+same include/exclude posture already established for Planning Item Group
+membership (§35.11.2) -- same mechanism (`procurement_monthly_plan_line.
+excluded_from_dashboard`, already existed as a per-row checkbox in Monthly
+Plan Input), now additionally surfaced as a dedicated "Manage Materials"
+work area on the SLOC Group Setup screen itself (Included / Excluded split
+view, no need to hunt through the full monthly grid). This is independent of
+Planning Item Group membership -- excluding a material from its SLOC group
+hides it everywhere for that month regardless of whether it's grouped or
+stand-alone; excluding it from just one item group (§35.11.2) only drops it
+from that group's pooled total while it stays visible stand-alone.
+
 #### 35.11.2 Planning Item Group
 
 This decides which materials should be evaluated together as alternate / pooled materials.
@@ -3192,12 +3221,42 @@ Rules:
 
 ### 35.12 Group Display Rules
 
-For grouped materials:
+**Rewritten 2026-08-11 (business owner) -- supersedes the original
+group-aggregation rule below, which treated the Group Total row as an
+independently-entered value disconnected from members instead of a value
+derived from them.** For grouped materials:
 - Members must appear in ascending order.
 - The group total row must appear immediately after the last member.
-- Group total stock is the summed stock position of all active members in that month.
-- Group total requirement is the summed monthly requirement of all active members in that month.
-- Group total safety days and replenishment days use the average of active member values for display / derived calculation at group level.
+- Group total stock is the summed stock position of all active members in that month (unchanged).
+- **Monthly Requirement is the one dual-entry-mode field:**
+  - If any member in the group has its own requirement entered, the Group
+    Total's requirement is the **sum of those member values** -- this is the
+    real, authoritative figure once a group has been broken down item-wise.
+  - If no member has a requirement entered yet, the Group Total row accepts
+    **direct entry** at the group level (a single uniform number for the
+    whole group) -- a quick-entry mode for groups nobody has broken down by
+    item yet.
+  - Whichever mode is actually populated governs; per-item entries (once any
+    exist) always win over the group-level direct entry.
+- **Safety Days, Processing Time, and Lead Time are always item-wise** --
+  every member enters its own value, no group-level direct entry exists for
+  these at all. The Group Total row always shows the **average** of active
+  member values (display / derived calculation only, never a separate input).
+- **Fixed Safety Stock and Fixed Replenishment Stock overrides are always
+  item-wise** -- every member may set its own override, no group-level direct
+  entry exists for these either. The Group Total row always shows the **sum**
+  of whichever members carry an override (members without one contribute
+  nothing; if zero members have an override, the Group Total shows none and
+  falls back to the derived safety/replenishment stock like any ungrouped row).
+
+Superseded original text (kept for history, do not follow): "Group total
+requirement is the summed monthly requirement of all active members in that
+month" / "Group total safety days and replenishment days use the average of
+active member values" -- the sum-only and average-only framing didn't account
+for the dual-entry-mode Requirement needs, and never addressed Fixed
+Safety/Replenishment at group level at all (the original build silently
+sourced those two only from the group-level config, never summed from
+members).
 
 ### 35.13 History / Archive
 
@@ -3260,6 +3319,15 @@ This page must not behave like a minimal legacy table if that reduces planning u
 
 ### 35.17 Known Current Unresolved Implementation Issue (as of 2026-08-09)
 
+**✅ RESOLVED 2026-08-10.** Root cause: the frontend's SLOC/Item group lists
+preferred the standalone `slocGroupsQuery`/`itemGroupsQuery` fetch over the
+groups already embedded in the main workspace response
+(`workspace.sloc_groups`/`workspace.item_groups`), and the standalone
+queries' `select` always resolved to an array (never `undefined`), so the
+`??` fallback never actually fell through to the workspace data even when
+the standalone fetch was empty/stale. Fixed by flipping precedence: a
+populated `workspace.sloc_groups`/`workspace.item_groups` now always wins.
+
 The business design for PO11 is considered final, but one implementation issue remains unresolved:
 
 - Newly created or recently updated company-scoped `Planning SLOC Group` records are not yet consistently becoming visible immediately in the same PO11 session and in the `Planning Item Group` parent-SLOC dropdown for follow-up mapping.
@@ -3270,6 +3338,40 @@ Expected behavior:
 - The Item Group Setup tab immediately shows that SLOC group as a selectable parent scope for item-group creation and member management.
 
 This is an implementation gap, not a business-design ambiguity.
+
+### 35.18 Table Display Conventions (LOCKED 2026-08-11)
+
+Applies to every PO11 table (Monthly Plan Input, Planning Dashboard /
+Planning Dashboard Report, Item Group Setup's Available Item Pool / Current
+Members / Standalone Materials, SLOC Group Setup's Manage Materials work
+area, History / Archive):
+
+- **Pace Code is never shown anywhere on this page.** The material identity
+  cell shows the material **Name** as the primary/bold text, with **External
+  Code** as the secondary line beneath it (blank dash if the material has no
+  external code set). This matches the repo-wide rule that `external_code`/
+  `external_sku` is reporting-only (see the material-master note elsewhere in
+  this doc) -- display use is fine, business-logic dependence is not.
+- **Column order:** the Group badge column and the Source SLOC Group column
+  sit next to each other (Group, then Source SLOC Group), ahead of the
+  Material/Item column. A member row's Source SLOC Group cell shows only the
+  group name -- it must not also repeat the Group badge value underneath it,
+  since the adjacent Group column already shows that.
+- **Column width:** columns size to their actual content (material/item name
+  gets the flexible remaining width; short fields like Type, Safety Days,
+  Group, Status size to content and never stretch to fill unused space).
+- **Full-page report mode** (Planning Dashboard's "Execute Full Report"):
+  the report screen is a genuine dedicated report view, not the same
+  workspace page with a panel toggled visible inside it -- no repeated
+  workspace-editing chrome (tab row when there's only one tab to show, the
+  Status/Access/Rows/SLOC Groups/Item Groups chip row that only matters for
+  editing). Company and Month stay directly editable in the report's own
+  controls; SLOC Group/Material Type filters and the report's own summary
+  chips live with the report table itself. Close Month stays available in
+  this mode for users with maintenance authority.
+- **Search:** every material-listing table on this page needs a live
+  substring search (material code, name, external code) -- no table should
+  force the user to fall back to browser Ctrl+F.
 
 ---
 

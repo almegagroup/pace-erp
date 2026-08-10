@@ -23,6 +23,7 @@ type PlanningWorkspaceRow = {
   material_id: string;
   material_code: string;
   material_name: string;
+  material_external_code: string;
   material_type: string;
   base_uom_code: string;
   source_sloc_group_id: string | null;
@@ -947,7 +948,7 @@ async function loadMaterialMap(materialIds: string[]): Promise<Map<string, JsonR
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, pace_code, material_name, base_uom_code, material_type")
+    .select("id, pace_code, external_code, material_name, base_uom_code, material_type")
     .in("id", ids);
   if (error) throw new Error("PROCUREMENT_PLANNING_MATERIAL_MAP_FAILED");
   for (const row of ((data ?? []) as JsonRecord[])) {
@@ -1112,6 +1113,7 @@ async function loadWorkspaceRows(
       material_id: materialId,
       material_code: toTrimmedString(material.pace_code),
       material_name: toTrimmedString(material.material_name),
+      material_external_code: toTrimmedString(material.external_code),
       material_type: toTrimmedString(material.material_type),
       base_uom_code: toTrimmedString(material.base_uom_code),
       source_sloc_group_id: resolvedSourceSlocGroupId,
@@ -1772,6 +1774,7 @@ export async function closeProcurementPlanningMonthHandler(req: Request, ctx: Pr
       planning_item_group_id_snapshot: row.planning_item_group_id,
       material_code_snapshot: row.material_code,
       material_name_snapshot: row.material_name,
+      material_external_code_snapshot: row.material_external_code,
       base_uom_code_snapshot: row.base_uom_code,
       source_sloc_group_name_snapshot: row.source_sloc_group_name,
       planning_item_group_name_snapshot: row.planning_item_group_name,
