@@ -11,7 +11,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import { openRoute, getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { getPurchaseOrder, getSTO, createPrintLog, listPorts } from "../procurementApi.js";
-import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const SHIPMENT_MODE_LABELS = {
   FCL: "Sea — FCL (Full Container Load)",
@@ -364,7 +364,7 @@ export default function PrintPreviewPage() {
   const [error, setError] = useState("");
   const [logged, setLogged] = useState(false);
 
-  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 }, { enabled: kind === "STO" });
+  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 }, { enabled: kind === "STO" });
   const materialMap = useMemo(
     () => new Map((materialQuery.materials ?? []).map((entry) => [String(entry.id), entry])),
     [materialQuery.materials],

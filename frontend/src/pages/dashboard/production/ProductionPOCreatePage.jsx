@@ -12,7 +12,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
@@ -173,7 +173,7 @@ export default function ProductionPOCreatePage() {
     }
   }, [defaultCompanyId, processForm.company_id]);
 
-  const materialsQ = useMaterialOptionsQuery({ status: "ACTIVE", limit: 500 });
+  const materialsQ = useMaterialOptionsQuery({ status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT });
   const materialRows = materialsQ.materials ?? [];
   const materialById = useMemo(
     () => new Map(materialRows.map((material) => [material.id, material])),

@@ -6,6 +6,7 @@ import { resolveDefaultTransactionCompanyId } from "../../../../components/input
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useMaterialOptionsQuery,
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -44,8 +45,8 @@ export default function IVCreatePage() {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
-  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
 
   useEffect(() => {
     setForm((current) => ({

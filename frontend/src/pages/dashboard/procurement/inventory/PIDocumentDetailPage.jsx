@@ -23,6 +23,7 @@ import {
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useMaterialOptionsQuery,
   useStorageLocationsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -91,7 +92,7 @@ export default function PIDocumentDetailPage() {
   });
   const detail = detailQuery.data ?? null;
   const materialQuery = useMaterialOptionsQuery({
-    limit: 500,
+    limit: MASTER_PICKER_FETCH_LIMIT,
     offset: 0,
     status: "ACTIVE",
   });

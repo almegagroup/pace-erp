@@ -18,7 +18,7 @@ import { resolveDefaultTransactionCompanyId } from "../../../../components/input
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { useStorageLocationOptionsQuery, useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useStorageLocationOptionsQuery, useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { useMenu } from "../../../../context/useMenu.js";
@@ -148,7 +148,7 @@ export default function StockLedgerReportPage() {
   // the picker leaked every company's materials into every other company's
   // dropdown even though report execution itself was already scoped.
   const materialsQuery = useMaterialOptionsQuery(
-    { status: "ACTIVE", limit: 1000, company_id: companyId },
+    { status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, company_id: companyId },
     { enabled: Boolean(companyId) },
   );
   const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });

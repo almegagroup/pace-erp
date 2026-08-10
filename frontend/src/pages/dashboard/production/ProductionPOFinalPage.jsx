@@ -14,7 +14,7 @@ import TransactionCompanySelector from "../../../components/inputs/TransactionCo
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { availabilityPreviewProcessOrder, finalizeProcessOrder, getProcessOrder, listProcessOrders } from "./prodApi.js";
@@ -197,7 +197,7 @@ function PackingPoFinalTab() {
   // is loaded and still STANDARD (an ad-hoc extra consumable can only be
   // added at Final, not at COR6 correction time).
   const pmMaterialQ = useMaterialOptionsQuery(
-    { status: "ACTIVE", material_type: "PM", limit: 500 },
+    { status: "ACTIVE", material_type: "PM", limit: MASTER_PICKER_FETCH_LIMIT },
     { enabled: Boolean(po?.status === "STANDARD") },
   );
   const pmMaterialOptions = useMemo(
@@ -925,7 +925,7 @@ function ProcessPoFinalTab() {
     queryFn: () => getProcessOrder(activeOrderId),
     enabled: Boolean(activeOrderId),
   });
-  const materialQ = useMaterialOptionsQuery({ status: "ACTIVE", limit: 500 });
+  const materialQ = useMaterialOptionsQuery({ status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT });
   const materialOptions = useMemo(
     () => (materialQ.materials ?? []).map((material) => ({ value: material.id, label: materialLabel(material) || "Material" })),
     [materialQ.materials],

@@ -17,6 +17,7 @@ import {
 } from "../procurementApi.js";
 import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useMaterialOptionsQuery,
   useStorageLocationsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -191,7 +192,7 @@ export default function OpeningStockApprovalPage() {
   const isFgGenealogy = isOpeningGenealogyDocument && documentMaterialType === "FG";
   const showRateUomSelector = RATE_UOM_PO_TYPES.has(documentPoType);
 
-  const materialQuery = useMaterialOptionsQuery({ limit: 500, status: "ACTIVE" });
+  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, status: "ACTIVE" });
   const locationQuery = useStorageLocationsQuery({ company_id: companyId || undefined }, { enabled: Boolean(companyId) });
   const companiesQuery = useCompaniesQuery();
 

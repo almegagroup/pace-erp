@@ -9,6 +9,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import {
+  MASTER_PICKER_FETCH_LIMIT,
   useCostCentersQuery,
   useMaterialOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
@@ -137,7 +138,7 @@ export default function STODetailPage() {
     queryFn: () => getSTO(id),
     enabled: Boolean(id),
   });
-  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const detail = detailQuery.data ?? null;
   // INTER_PLANT STOs get their own CSN(s) at create time (unlike PO, which

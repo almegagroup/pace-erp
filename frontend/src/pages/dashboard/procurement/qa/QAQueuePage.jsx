@@ -26,7 +26,6 @@ import {
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
-import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const LIMIT = 50;
 
@@ -103,27 +102,24 @@ export default function QAQueuePage() {
     queryFn: () => listGRNs({ company_id: effectiveCompanyId || undefined, limit: 200, offset: 0 }),
     enabled: Boolean(effectiveCompanyId),
   });
-  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
 
   const rows = useMemo(() => (Array.isArray(queueQuery.data) ? queueQuery.data : []), [queueQuery.data]);
   const grns = useMemo(
     () => (Array.isArray(grnsQuery.data?.items) ? grnsQuery.data.items : []),
     [grnsQuery.data],
   );
-  const materials = materialQuery.materials;
-  const loading = queueQuery.isLoading || grnsQuery.isLoading || materialQuery.isLoading;
+  const loading = queueQuery.isLoading || grnsQuery.isLoading;
 
   useErpScreenHotkeys({
     refresh: {
       disabled: loading,
-      perform: () => void Promise.all([queueQuery.refetch(), grnsQuery.refetch(), materialQuery.refetch()]),
+      perform: () => void Promise.all([queueQuery.refetch(), grnsQuery.refetch()]),
     },
   });
 
   const error =
     queueQuery.error?.message ||
     grnsQuery.error?.message ||
-    materialQuery.error?.message ||
     "";
 
   // Deep-link support: other detail pages' Document Flow chain link here with ?qa_id=
@@ -144,7 +140,6 @@ export default function QAQueuePage() {
   }, [deepLinkQaId, rows, setSearchParams]);
 
   const grnMap = useMemo(() => new Map(grns.map((row) => [row.id, row])), [grns]);
-  const materialMap = useMemo(() => new Map(materials.map((row) => [row.id, row])), [materials]);
 
   const filteredRows = useMemo(() => {
     const needle = normalizeSearch(search);
@@ -154,14 +149,13 @@ export default function QAQueuePage() {
 
     return rows.filter((row) => {
       const grn = grnMap.get(row.grn_id);
-      const material = materialMap.get(row.material_id);
-      const haystack = [row.qa_doc_number, grn?.grn_number, material?.material_name, material?.material_code]
+      const haystack = [row.qa_doc_number, grn?.grn_number, row.material_name, row.pace_code]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       return haystack.includes(needle);
     });
-  }, [grnMap, materialMap, rows, search]);
+  }, [grnMap, rows, search]);
 
   const total = filteredRows.length;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
@@ -195,7 +189,7 @@ export default function QAQueuePage() {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => void Promise.all([queueQuery.refetch(), grnsQuery.refetch(), materialQuery.refetch()]),
+          onClick: () => void Promise.all([queueQuery.refetch(), grnsQuery.refetch()]),
         },
       ]}
       notices={[
@@ -306,7 +300,6 @@ export default function QAQueuePage() {
                   ) : (
                     pageRows.map((row) => {
                       const grn = grnMap.get(row.grn_id);
-                      const material = materialMap.get(row.material_id);
                       const isExpanded = expandedRowId === row.id;
                       const remaining = Number(row.remaining_qty ?? row.total_qty ?? 0);
                       return (
@@ -319,9 +312,9 @@ export default function QAQueuePage() {
                               {grn?.grn_number || row.grn_id || "—"}
                             </td>
                             <td className="px-2 py-1.5">
-                              {material?.material_name || material?.material_code || row.material_id || "—"}
+                              {row.material_name || row.pace_code || "—"}
                             </td>
-                            <td className="px-2 py-1.5">{material?.material_category || "—"}</td>
+                            <td className="px-2 py-1.5">{row.material_category || "—"}</td>
                             <td className="px-2 py-1.5">
                               {Number(row.total_qty ?? 0).toLocaleString()} {row.uom_code || ""}
                               {remaining > 0 && remaining !== Number(row.total_qty ?? 0) ? (
@@ -344,7 +337,6 @@ export default function QAQueuePage() {
                               <td colSpan={columns.length} className="border-t border-slate-200 p-0">
                                 <QaExpandedPanel
                                   row={row}
-                                  material={material}
                                   companyId={effectiveCompanyId}
                                   onChanged={() => {
                                     void queueQuery.refetch();
@@ -368,7 +360,7 @@ export default function QAQueuePage() {
   );
 }
 
-function QaExpandedPanel({ row, material, companyId, onChanged, onCollapse }) {
+function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
   const queryClient = useQueryClient();
   // Pattern #12 fix (2026-08-06): the old QA_MANAGER_ROLE_CODES list gated on
   // "SA", "DIRECTOR", "PROCUREMENT_HEAD", "STORE_MANAGER" — the last two are
@@ -383,7 +375,6 @@ function QaExpandedPanel({ row, material, companyId, onChanged, onCollapse }) {
   // POST decision -> APPROVE, all on PROC_QA_QUEUE) with no local role check
   // in inward_qa.handlers.ts — trust that decision instead.
   const canManage = true;
-  const materialCategory = material?.material_category || "";
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -397,6 +388,10 @@ function QaExpandedPanel({ row, material, companyId, onChanged, onCollapse }) {
     queryKey: ["procurement", "qa-detail", row.id],
     queryFn: () => getQADocument(row.id),
   });
+  // Resolved server-side (R-01/R-03): prefer the detail endpoint's own value once
+  // loaded, fall back to the list row's value (already resolved, Step 3a) so the
+  // category-dependent queries below don't have to wait on the detail round-trip.
+  const materialCategory = detailQuery.data?.material_category || row.material_category || "";
   const grnQuery = useQuery({
     queryKey: ["procurement", "qa-grn-detail", row.grn_id],
     queryFn: () => getGRN(row.grn_id),
