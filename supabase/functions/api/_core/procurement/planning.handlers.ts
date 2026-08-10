@@ -7,6 +7,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -149,6 +150,50 @@ async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyI
   const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
   if (companyId) await assertCompanyScope(ctx, companyId);
   return companyId;
+}
+
+// Frontend has zero authority here (per _pipeline/acl.ts's own header:
+// "Database is enforcement layer, not decision maker") -- the write routes
+// (bulk-upsert, close, sloc-groups/item-groups CRUD) are already gated
+// PROC_PLANNING_VIEW:EDIT at the route-registry level, but this GET/VIEW
+// route has no reason to know that decision on its own. The workspace
+// response carries it explicitly as `can_maintain` so the frontend can show/
+// hide Save/Close/Setup controls without re-deriving the answer itself from
+// role code or work-context name -- which is exactly the pattern-#12 shape
+// this repo sweeps for elsewhere (a local guess standing in for the real
+// ACL decision, liable to drift the moment a work-context gets renamed).
+async function canMaintainPlanning(ctx: ProcurementHandlerContext, companyId: string): Promise<boolean> {
+  if (ctx.context.isAdmin) return true;
+  if (!companyId) return false;
+
+  const workContextIds =
+    ctx.context.workContextIds && ctx.context.workContextIds.length > 0
+      ? ctx.context.workContextIds
+      : ctx.context.workContextId
+        ? [ctx.context.workContextId]
+        : [];
+  if (workContextIds.length === 0) return false;
+
+  const { data: versionRow, error: versionError } = await serviceRoleClient
+    .schema("acl")
+    .from("acl_versions")
+    .select("acl_version_id")
+    .eq("company_id", companyId)
+    .eq("is_active", true)
+    .single();
+  if (versionError || !versionRow?.acl_version_id) return false;
+
+  const { data, error } = await readAclSnapshotDecisionAny({
+    db: serviceRoleClient,
+    aclVersionId: versionRow.acl_version_id as string,
+    authUserId: ctx.auth_user_id,
+    companyId,
+    workContextIds,
+    resourceCode: "PROC_PLANNING_VIEW",
+    actionCode: "EDIT",
+  });
+  if (error || !data) return false;
+  return data.decision === "ALLOW";
 }
 
 function getPathId(req: Request, marker: string): string {
@@ -1140,7 +1185,11 @@ export async function getProcurementPlanningHandler(
       logPlanningDebug(ctx, "WORKSPACE_EMPTY_COMPANY_SCOPE", {
         requested_company_id: url.searchParams.get("company_id") ?? "",
       });
-      return okResponse({ plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [] }, ctx.request_id, req);
+      return okResponse(
+        { plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [], can_maintain: false },
+        ctx.request_id,
+        req,
+      );
     }
     const planMonth = normalizePlanMonth(url.searchParams.get("plan_month")) ?? getCurrentPlanMonth();
     logPlanningDebug(ctx, "WORKSPACE_REQUEST", {
@@ -1156,7 +1205,10 @@ export async function getProcurementPlanningHandler(
       plan_id: plan.id,
       plan_status: plan.status,
     });
-    const workspace = await loadWorkspaceRows(ctx, companyId, planMonth, plan.id);
+    const [workspace, canMaintain] = await Promise.all([
+      loadWorkspaceRows(ctx, companyId, planMonth, plan.id),
+      canMaintainPlanning(ctx, companyId),
+    ]);
     logPlanningDebug(ctx, "WORKSPACE_RESPONSE", {
       company_id: companyId,
       plan_month: planMonth,
@@ -1165,6 +1217,7 @@ export async function getProcurementPlanningHandler(
       sloc_group_count: workspace.slocGroups.length,
       item_group_count: workspace.itemGroups.length,
       group_config_count: workspace.groupConfigs.length,
+      can_maintain: canMaintain,
     });
     return okResponse(
       {
@@ -1174,6 +1227,7 @@ export async function getProcurementPlanningHandler(
         sloc_groups: workspace.slocGroups,
         item_groups: workspace.itemGroups,
         group_configs: workspace.groupConfigs,
+        can_maintain: canMaintain,
       },
       ctx.request_id,
       req,

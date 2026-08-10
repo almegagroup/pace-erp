@@ -73,8 +73,17 @@ function extractLabel(url, method = "GET") {
       return "Refreshing system health";
     }
 
-    const parts = parsed.pathname.split("/").filter(Boolean);
-    const leaf = parts.slice(-2).join(" / ") || parts.at(-1) || parsed.pathname;
+    // R-01: never surface a raw UUID (or other opaque id-shaped segment) in
+    // user-facing text -- a PUT/DELETE/GET-detail call like
+    // /api/.../sloc-groups/<uuid> would otherwise leak the id straight into
+    // this global sync-status label. Drop any path segment that looks like
+    // an id (UUID, or a long hex/digit token) before building the leaf.
+    const isIdLikeSegment = (segment) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment) ||
+      /^[0-9a-f]{16,}$/i.test(segment) ||
+      /^\d{6,}$/.test(segment);
+    const parts = parsed.pathname.split("/").filter((segment) => segment && !isIdLikeSegment(segment));
+    const leaf = parts.slice(-2).join(" / ") || parts.at(-1) || "record";
     const prefix =
       normalizedMethod === "POST"
         ? "Saving"
