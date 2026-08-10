@@ -50,7 +50,7 @@ async function getMaterialMapByIds(materialIds: string[]): Promise<Map<string, J
   const { data: mats, error: matErr } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, pace_code, material_name, shade_code, pack_code")
+    .select("id, pace_code, external_code, material_name, shade_code, pack_code")
     .in("id", matIds);
   if (matErr) {
     console.error("[plan_feed.getMaterialMapByIds] material query failed:", JSON.stringify(matErr));
@@ -60,6 +60,14 @@ async function getMaterialMapByIds(materialIds: string[]): Promise<Map<string, J
     matMap.set(String(mat.id), mat);
   }
   return matMap;
+}
+
+function resolveEffectiveSkuCode(material: JsonRecord | null | undefined, fallbackSku?: string | null): string {
+  return toUpperTrimmedString(
+    toTrimmedString(fallbackSku)
+      || toTrimmedString(material?.external_code)
+      || toTrimmedString(material?.pace_code),
+  );
 }
 
 async function getCustomerMapByIds(customerIds: string[]): Promise<Map<string, JsonRecord>> {
@@ -680,6 +688,21 @@ export async function upsertFoAllocationHandler(req: Request, ctx: ProdHandlerCo
         .delete().eq("plan_feed_id", planFeedId).eq("packing_order_id", packingOrderId);
       if (delError) throw new Error("PROD_PLAN_FEED_ALLOCATION_UPDATE_FAILED");
       return okResponse({ plan_feed_id: planFeedId, packing_order_id: packingOrderId, allocated_qty_kg: 0 }, ctx.request_id, req);
+    }
+
+    const foMaterialIdForSkuCheck = toTrimmedString((fo as JsonRecord).material_id);
+    const poMaterialIdForSkuCheck = toTrimmedString((po as JsonRecord).material_id);
+    const [foMaterialMapForSkuCheck, poMaterialMapForSkuCheck] = await Promise.all([
+      getMaterialMapByIds([foMaterialIdForSkuCheck]),
+      getMaterialMapByIds([poMaterialIdForSkuCheck]),
+    ]);
+    const foMaterialForSkuCheck = foMaterialMapForSkuCheck.get(foMaterialIdForSkuCheck) ?? null;
+    const poMaterialForSkuCheck = poMaterialMapForSkuCheck.get(poMaterialIdForSkuCheck) ?? null;
+    const sameVisibleSkuForAllocation =
+      resolveEffectiveSkuCode(foMaterialForSkuCheck, toTrimmedString((fo as JsonRecord).sku))
+      === resolveEffectiveSkuCode(poMaterialForSkuCheck);
+    if (sameVisibleSkuForAllocation && poMaterialIdForSkuCheck) {
+      (fo as JsonRecord).material_id = poMaterialIdForSkuCheck;
     }
 
     const materialMismatch = toTrimmedString((po as JsonRecord).material_id) !== toTrimmedString((fo as JsonRecord).material_id);
