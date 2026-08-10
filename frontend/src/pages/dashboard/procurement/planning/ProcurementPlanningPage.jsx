@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
@@ -121,21 +122,6 @@ function summarizeDecisionBlocks(blocks) {
 
 function isGroupedMemberEntry(entry) {
   return entry?.type === "item" && Boolean(entry?.groupName);
-}
-
-// Members carry their own real Requirement/Days/Fixed values now (feasibility
-// §35.12 rewrite, 2026-08-11) -- a grouped member is no longer a "via group
-// total" placeholder, it displays its own entered figure exactly like a
-// standalone row. Group Total rows are the derived ones (see
-// computeDashboardBlocks): Requirement=SUM (or the direct group-level value
-// when no member has one yet), Days=AVERAGE, Fixed Safety/Replenishment=SUM.
-function renderPlanningCell(_entry, value, emptyLabel = "-") {
-  if (value == null) return emptyLabel;
-  return formatQty(value);
-}
-
-function renderOptionalPlanningCell(_entry, value) {
-  return value == null ? "-" : formatQty(value);
 }
 
 function getInitialDraft(row) {
@@ -443,7 +429,145 @@ function SummaryChips({ items }) {
   );
 }
 
-function DashboardTable({ rows, monthValue, filters, onFilterChange, groupConfigs }) {
+// computeDashboardBlocks() returns {type, groupName, row, requirementIsDerivedFromMembers?}
+// entries -- ErpDenseGrid needs one flat row object per entry (its rowKey/render
+// functions read straight off the row, no nesting). Group-total/member-vs-standalone
+// state moves onto the row itself as __-prefixed props so column render() functions
+// (and getRowProps, for the group-total background highlight) can read it directly.
+function flattenBlocksForGrid(blocks) {
+  return blocks.map((entry, index) => ({
+    ...entry.row,
+    __gridKey: `${entry.type}-${entry.groupName || entry.row.id || entry.row.material_id || index}`,
+    __isGroupTotal: entry.type === "group-total",
+    __groupName: entry.groupName || entry.row.planning_item_group_name || "Standalone",
+    __requirementIsDerivedFromMembers: Boolean(entry.requirementIsDerivedFromMembers),
+  }));
+}
+
+// Shared by DashboardTable (live view + full report) and the History tab --
+// same read-only report shape in both places, one definition so a fix here
+// can't land in one and be missed in the other (§35.18).
+function buildReportGridColumns() {
+  const numericColumn = (key, label, width, formatter = formatQty) => ({
+    key,
+    label,
+    width,
+    align: "right",
+    render: (row) => formatter(row[key]),
+  });
+  const optionalNumericColumn = (key, label, width) =>
+    numericColumn(key, label, width, (value) => (value == null ? "-" : formatQty(value)));
+
+  return [
+    {
+      key: "group",
+      label: "Group",
+      width: "90px",
+      render: (row) => row.__groupName,
+    },
+    {
+      key: "source_sloc_group_name",
+      label: "Source SLOC Group",
+      width: "140px",
+      render: (row) => row.source_sloc_group_name || (row.__isGroupTotal ? "Mixed scope" : "Not assigned"),
+    },
+    {
+      key: "material_name",
+      label: "Material Name",
+      width: "260px",
+      render: (row) => (row.__isGroupTotal ? "Group Total" : row.material_name),
+    },
+    {
+      key: "material_external_code",
+      label: "External Code",
+      width: "130px",
+      render: (row) => (row.__isGroupTotal ? "-" : row.material_external_code || "-"),
+    },
+    numericColumn("monthly_requirement_qty", "Requirement", "110px"),
+    numericColumn("safety_days", "Safety Days", "100px"),
+    numericColumn("processing_time_days", "Proc Days", "90px"),
+    numericColumn("lead_time_days", "Lead Days", "90px"),
+    numericColumn("effective_safety_stock_qty", "Safety Stock", "110px"),
+    numericColumn("effective_replenishment_stock_qty", "Replenishment", "120px"),
+    optionalNumericColumn("fixed_safety_stock_qty", "Fixed Safety", "110px"),
+    optionalNumericColumn("fixed_replenishment_stock_qty", "Fixed Replenishment", "130px"),
+    numericColumn("available_stock_qty", "Available", "110px"),
+    numericColumn("trn_stock_qty", "TRN", "90px"),
+    numericColumn("ge_stock_qty", "GE", "90px"),
+    numericColumn("qa_stock_qty", "In QA", "90px"),
+    numericColumn("total_stock_qty", "Total", "110px"),
+    {
+      key: "status_tone",
+      label: "Status",
+      width: "100px",
+      render: (row) => getStatusLabel(row.status_tone),
+    },
+  ];
+}
+
+// Group Total rows get a visibly distinct background -- previously only
+// font-weight differed, easy to miss at a glance in a long table.
+function reportRowProps(row) {
+  return {
+    className: `${row.__isGroupTotal ? "bg-slate-100 font-semibold" : ""} ${getStatusToneClass(row.status_tone)}`.trim(),
+  };
+}
+
+// Shared by Item Group Setup's Available Item Pool / Current Members /
+// Standalone Materials and SLOC Group Setup's Included / Excluded lists --
+// same four/five-column material-listing shape everywhere, one definition so
+// the Name/External Code split and column widths can't drift between them.
+function buildMaterialListColumns({ statusLabel, actionLabel, actionClassName, onAction } = {}) {
+  const columns = [
+    {
+      key: "material_name",
+      label: "Material Name",
+      width: "220px",
+      render: (row) => row.material_name,
+    },
+    {
+      key: "material_external_code",
+      label: "External Code",
+      width: "130px",
+      render: (row) => row.material_external_code || "-",
+    },
+    {
+      key: "material_type",
+      label: "Type",
+      width: "70px",
+      render: (row) => row.material_type,
+    },
+    {
+      key: "status",
+      label: "Status",
+      width: "110px",
+      render: () => statusLabel,
+    },
+  ];
+  if (onAction) {
+    columns.push({
+      key: "action",
+      label: "",
+      width: "90px",
+      render: (row) => (
+        <button type="button" onClick={() => onAction(row)} className={actionClassName}>
+          {actionLabel}
+        </button>
+      ),
+    });
+  }
+  return columns;
+}
+
+function DashboardTable({
+  rows,
+  monthValue,
+  filters,
+  onFilterChange,
+  groupConfigs,
+  companyControls,
+  gridMaxHeight,
+}) {
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
       if (filters.slocGroupId && row.source_sloc_group_id !== filters.slocGroupId) return false;
@@ -456,10 +580,17 @@ function DashboardTable({ rows, monthValue, filters, onFilterChange, groupConfig
     [filteredRows, monthValue, groupConfigs]
   );
   const summary = useMemo(() => summarizeDecisionBlocks(blocks), [blocks]);
+  const gridRows = useMemo(() => flattenBlocksForGrid(blocks), [blocks]);
+  const columns = useMemo(() => buildReportGridColumns(), []);
 
   return (
     <div className="grid gap-3">
-      <div className="grid gap-3 rounded border border-slate-200 bg-white p-4 lg:grid-cols-[220px_220px_minmax(0,1fr)]">
+      <div
+        className={`grid gap-3 rounded border border-slate-200 bg-white p-3 ${
+          companyControls ? "lg:grid-cols-[220px_200px_220px_180px]" : "lg:grid-cols-[220px_220px]"
+        }`}
+      >
+        {companyControls}
         <label className="grid gap-1 text-sm text-slate-700">
           <span className="font-medium text-slate-800">SLOC Group</span>
           <select
@@ -506,99 +637,15 @@ function DashboardTable({ rows, monthValue, filters, onFilterChange, groupConfig
           { label: "Normal", value: summary.normal },
         ]}
       />
-      <div className="overflow-x-auto border border-slate-200 bg-white">
-        <table className="min-w-full text-xs">
-          <thead className="bg-slate-100 text-slate-700">
-            <tr>
-              <th className="border px-2 py-2 text-left w-px whitespace-nowrap">Group</th>
-              <th className="border px-2 py-2 text-left w-px whitespace-nowrap">Source SLOC Group</th>
-              <th className="border px-2 py-2 text-left">Item</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Requirement</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Safety Days</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Proc Days</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Lead Days</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Safety Stock</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Replenishment</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Fixed Safety</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Fixed Replenishment</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Available</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">TRN</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">GE</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">In QA</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Total</th>
-              <th className="border px-2 py-2 text-left w-px whitespace-nowrap">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {blocks.map((entry, index) => {
-              const isGroupTotal = entry.type === "group-total";
-              const row = entry.row;
-              return (
-                <tr
-                  key={`${entry.type}-${entry.groupName || row.id || index}`}
-                  className={`${getStatusToneClass(row.status_tone)} ${isGroupTotal ? "font-semibold" : ""}`}
-                >
-                  <td className="border px-2 py-2 whitespace-nowrap">
-                    {entry.groupName || row.planning_item_group_name || "Standalone"}
-                  </td>
-                  <td className="border px-2 py-2 whitespace-nowrap">
-                    {row.source_sloc_group_name || (isGroupTotal ? "Mixed scope" : "Not assigned")}
-                  </td>
-                  <td className="border px-2 py-2">
-                    {isGroupTotal ? (
-                      <span>Group Total</span>
-                    ) : (
-                      <div className="grid gap-[2px]">
-                        <span className="font-semibold text-slate-900">
-                          {row.material_name} {row.base_uom_code ? `(${row.base_uom_code})` : ""}
-                        </span>
-                        <span className="text-[11px] text-slate-600">{row.material_external_code || "-"}</span>
-                      </div>
-                    )}
-                  </td>
-                  <td className="border px-2 py-2 text-right">
-                    {renderPlanningCell(entry, row.monthly_requirement_qty)}
-                  </td>
-                  <td className="border px-2 py-2 text-right">
-                    {renderPlanningCell(entry, row.safety_days)}
-                  </td>
-                  <td className="border px-2 py-2 text-right">
-                    {renderPlanningCell(entry, row.processing_time_days)}
-                  </td>
-                  <td className="border px-2 py-2 text-right">
-                    {renderPlanningCell(entry, row.lead_time_days)}
-                  </td>
-                  <td className="border px-2 py-2 text-right">
-                    {renderPlanningCell(entry, row.effective_safety_stock_qty)}
-                  </td>
-                  <td className="border px-2 py-2 text-right">
-                    {renderPlanningCell(entry, row.effective_replenishment_stock_qty)}
-                  </td>
-                  <td className="border px-2 py-2 text-right">
-                    {renderOptionalPlanningCell(entry, row.fixed_safety_stock_qty)}
-                  </td>
-                  <td className="border px-2 py-2 text-right">
-                    {renderOptionalPlanningCell(entry, row.fixed_replenishment_stock_qty)}
-                  </td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.available_stock_qty)}</td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.trn_stock_qty)}</td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.ge_stock_qty)}</td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.qa_stock_qty)}</td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.total_stock_qty)}</td>
-                  <td className="border px-2 py-2">{getStatusLabel(row.status_tone)}</td>
-                </tr>
-              );
-            })}
-            {blocks.length === 0 ? (
-              <tr>
-                <td className="border px-2 py-6 text-center text-slate-500" colSpan={17}>
-                  No planning rows available for this company/month yet.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+      <ErpDenseGrid
+        columns={columns}
+        rows={gridRows}
+        rowKey={(row) => row.__gridKey}
+        getRowProps={reportRowProps}
+        emptyMessage="No planning rows available for this company/month yet."
+        maxHeight={gridMaxHeight || "480px"}
+        virtualize
+      />
     </div>
   );
 }
@@ -749,167 +796,214 @@ function MonthlyInputTable({
         ]}
       />
 
-      <div className="overflow-x-auto border border-slate-200 bg-white">
-        <table className="min-w-full text-xs">
-          <thead className="bg-slate-100 text-slate-700">
-            <tr>
-              <th className="border px-2 py-2 text-left w-px whitespace-nowrap">Group</th>
-              <th className="border px-2 py-2 text-left w-px whitespace-nowrap">Source SLOC Group</th>
-              <th className="border px-2 py-2 text-left w-px whitespace-nowrap">Row</th>
-              <th className="border px-2 py-2 text-left">Material</th>
-              <th className="border px-2 py-2 text-left w-px whitespace-nowrap">Type</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Live Total Stock</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Requirement</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Safety Days</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Proc Days</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Lead Days</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Fixed Safety</th>
-              <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Fixed Replenishment</th>
-              <th className="border px-2 py-2 text-left w-px whitespace-nowrap">Item Group</th>
-              <th className="border px-2 py-2 text-center w-px whitespace-nowrap">Exclude</th>
-            </tr>
-          </thead>
-          <tbody>
-            {blocks.map((entry, index) => {
-              const row = entry.row;
-              const isGroupTotal = entry.type === "group-total";
-              const draft = !isGroupTotal ? drafts[row.id] || getInitialDraft(row) : null;
-              const groupConfigDraft = isGroupTotal
-                ? groupConfigDrafts[row.planning_item_group_id] || null
-                : null;
-              const scopedItemGroups =
-                itemGroupsBySloc.get(row.source_sloc_group_id || "__UNSCOPED__") || [];
-              return (
-                <tr
-                  key={`${entry.type}-${entry.groupName || row.id || index}`}
-                  className={`${isGroupTotal ? `font-semibold ${getStatusToneClass(row.status_tone)}` : ""}`}
-                >
-                  <td className="border px-2 py-2 whitespace-nowrap">
-                    {entry.groupName || row.planning_item_group_name || "Standalone"}
-                  </td>
-                  <td className="border px-2 py-2 whitespace-nowrap">
-                    {row.source_sloc_group_name || "No SLOC group"}
-                  </td>
-                  <td className="border px-2 py-2 whitespace-nowrap">
-                    {isGroupTotal
-                      ? "Group Total"
-                      : row.planning_item_group_name
-                        ? "Member"
-                        : "Standalone"}
-                  </td>
-                  <td className="border px-2 py-2">
-                    {isGroupTotal ? (
-                      <span>Summary</span>
-                    ) : (
-                      <div className="grid gap-[2px]">
-                        <span className="font-semibold text-slate-900">
-                          {row.material_name} {row.base_uom_code ? `(${row.base_uom_code})` : ""}
-                        </span>
-                        <span className="text-[11px] text-slate-600">{row.material_external_code || "-"}</span>
-                        <span className="text-[11px] text-slate-500">
-                          Current status: {getStatusLabel(row.status_tone)}
-                        </span>
-                      </div>
-                    )}
-                  </td>
-                  <td className="border px-2 py-2 whitespace-nowrap">{isGroupTotal ? "-" : row.material_type}</td>
-                  <td className="border px-2 py-2 text-right">{formatQty(row.total_stock_qty)}</td>
-                  {[
-                    // Requirement is the one dual-mode field: direct group entry
-                    // stays available only while no member has its own value yet
-                    // (aggregate: "sum"); the other five are always item-wise,
-                    // Group Total is always a derived read-only figure
-                    // (aggregate: "avg" for the day fields, "sum" for Fixed).
-                    { field: "monthly_requirement_qty", aggregate: "sum", groupDirectEntryAllowed: true },
-                    { field: "safety_days", aggregate: "avg", groupDirectEntryAllowed: false },
-                    { field: "processing_time_days", aggregate: "avg", groupDirectEntryAllowed: false },
-                    { field: "lead_time_days", aggregate: "avg", groupDirectEntryAllowed: false },
-                    { field: "fixed_safety_stock_qty", aggregate: "sum", groupDirectEntryAllowed: false },
-                    { field: "fixed_replenishment_stock_qty", aggregate: "sum", groupDirectEntryAllowed: false },
-                  ].map(({ field, groupDirectEntryAllowed }) => (
-                    <td className="border px-2 py-2" key={field}>
-                      {isGroupTotal && groupDirectEntryAllowed && !entry.requirementIsDerivedFromMembers ? (
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.001"
-                          value={groupConfigDraft?.[field] ?? ""}
-                          onChange={(event) =>
-                            onGroupConfigChange(row.planning_item_group_id, field, event.target.value)
-                          }
-                          disabled={readOnly}
-                          className="w-full border border-slate-300 px-2 py-1 text-right outline-none focus:border-sky-500"
-                        />
-                      ) : isGroupTotal ? (
-                        <div className="grid gap-[1px] text-right">
-                          <span className="font-semibold text-slate-900">{formatQty(row[field])}</span>
-                          <span className="text-[10px] text-slate-500">
-                            {field === "monthly_requirement_qty" ? "sum of items" : "avg/sum of items"}
-                          </span>
-                        </div>
-                      ) : (
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.001"
-                          value={draft[field]}
-                          onChange={(event) => onChange(row.id, field, event.target.value)}
-                          disabled={readOnly}
-                          className="w-full border border-slate-300 px-2 py-1 text-right outline-none focus:border-sky-500"
-                        />
-                      )}
-                    </td>
-                  ))}
-                  <td className="border px-2 py-2">
-                    {isGroupTotal ? (
-                      <span>{entry.groupName || "-"}</span>
-                    ) : (
-                      <select
-                        value={draft.planning_item_group_id}
-                        onChange={(event) =>
-                          onChange(row.id, "planning_item_group_id", event.target.value)
-                        }
-                        disabled={readOnly}
-                        className="w-full border border-slate-300 px-2 py-1 outline-none focus:border-sky-500"
-                      >
-                        <option value="">Standalone</option>
-                        {scopedItemGroups.map((group) => (
-                          <option key={group.id} value={group.id}>
-                            {group.group_name}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </td>
-                  <td className="border px-2 py-2 text-center">
-                    {isGroupTotal ? (
-                      <span>-</span>
-                    ) : (
-                      <input
-                        type="checkbox"
-                        checked={Boolean(draft.excluded_from_dashboard)}
-                        onChange={(event) =>
-                          onChange(row.id, "excluded_from_dashboard", event.target.checked)
-                        }
-                        disabled={readOnly}
-                        className="h-4 w-4"
-                      />
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-            {blocks.length === 0 ? (
-              <tr>
-                <td className="border px-2 py-6 text-center text-slate-500" colSpan={14}>
-                  No monthly plan rows match the current filter.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+      <MonthlyInputGrid
+        blocks={blocks}
+        drafts={drafts}
+        groupConfigDrafts={groupConfigDrafts}
+        onChange={onChange}
+        onGroupConfigChange={onGroupConfigChange}
+        itemGroupsBySloc={itemGroupsBySloc}
+        readOnly={readOnly}
+      />
     </div>
+  );
+}
+
+// Editable numeric field. Group Total's Requirement cell is the one field
+// that's sometimes still a direct-entry input (bound to groupConfigDrafts,
+// only while no member has its own value yet); every other Group Total cell
+// is a plain derived read-only figure -- see the `direct-entry` label under
+// each so the effective aggregation mode is visible at a glance.
+function PlanningNumberCell({
+  row,
+  field,
+  groupDirectEntryAllowed,
+  drafts,
+  groupConfigDrafts,
+  onChange,
+  onGroupConfigChange,
+  readOnly,
+}) {
+  const isGroupTotal = row.__isGroupTotal;
+  if (isGroupTotal && groupDirectEntryAllowed && !row.__requirementIsDerivedFromMembers) {
+    const groupConfigDraft = groupConfigDrafts[row.planning_item_group_id] || null;
+    return (
+      <input
+        type="number"
+        min="0"
+        step="0.001"
+        value={groupConfigDraft?.[field] ?? ""}
+        onChange={(event) => onGroupConfigChange(row.planning_item_group_id, field, event.target.value)}
+        disabled={readOnly}
+        className="w-full border border-slate-300 px-2 py-1 text-right outline-none focus:border-sky-500"
+      />
+    );
+  }
+  if (isGroupTotal) {
+    return (
+      <div className="grid gap-[1px] text-right">
+        <span className="font-semibold text-slate-900">{formatQty(row[field])}</span>
+        <span className="text-[10px] text-slate-500">
+          {field === "monthly_requirement_qty" ? "sum of items" : "avg/sum of items"}
+        </span>
+      </div>
+    );
+  }
+  const draft = drafts[row.id] || getInitialDraft(row);
+  return (
+    <input
+      type="number"
+      min="0"
+      step="0.001"
+      value={draft[field]}
+      onChange={(event) => onChange(row.id, field, event.target.value)}
+      disabled={readOnly}
+      className="w-full border border-slate-300 px-2 py-1 text-right outline-none focus:border-sky-500"
+    />
+  );
+}
+
+function MonthlyInputGrid({
+  blocks,
+  drafts,
+  groupConfigDrafts,
+  onChange,
+  onGroupConfigChange,
+  itemGroupsBySloc,
+  readOnly,
+}) {
+  const gridRows = useMemo(() => flattenBlocksForGrid(blocks), [blocks]);
+
+  const numberFieldColumn = (field, label, width, groupDirectEntryAllowed) => ({
+    key: field,
+    label,
+    width,
+    align: "right",
+    render: (row) => (
+      <PlanningNumberCell
+        row={row}
+        field={field}
+        groupDirectEntryAllowed={groupDirectEntryAllowed}
+        drafts={drafts}
+        groupConfigDrafts={groupConfigDrafts}
+        onChange={onChange}
+        onGroupConfigChange={onGroupConfigChange}
+        readOnly={readOnly}
+      />
+    ),
+  });
+
+  const columns = useMemo(
+    () => [
+      {
+        key: "group",
+        label: "Group",
+        width: "80px",
+        render: (row) => row.__groupName,
+      },
+      {
+        key: "source_sloc_group_name",
+        label: "Source SLOC Group",
+        width: "140px",
+        render: (row) => row.source_sloc_group_name || "No SLOC group",
+      },
+      {
+        key: "row_kind",
+        label: "Row",
+        width: "90px",
+        render: (row) =>
+          row.__isGroupTotal ? "Group Total" : row.planning_item_group_name ? "Member" : "Standalone",
+      },
+      {
+        key: "material_name",
+        label: "Material Name",
+        width: "260px",
+        render: (row) => (row.__isGroupTotal ? "Summary" : row.material_name),
+      },
+      {
+        key: "material_external_code",
+        label: "External Code",
+        width: "130px",
+        render: (row) => (row.__isGroupTotal ? "-" : row.material_external_code || "-"),
+      },
+      {
+        key: "material_type",
+        label: "Type",
+        width: "70px",
+        render: (row) => (row.__isGroupTotal ? "-" : row.material_type),
+      },
+      {
+        key: "total_stock_qty",
+        label: "Live Total Stock",
+        width: "120px",
+        align: "right",
+        render: (row) => formatQty(row.total_stock_qty),
+      },
+      numberFieldColumn("monthly_requirement_qty", "Requirement", "130px", true),
+      numberFieldColumn("safety_days", "Safety Days", "110px", false),
+      numberFieldColumn("processing_time_days", "Proc Days", "100px", false),
+      numberFieldColumn("lead_time_days", "Lead Days", "100px", false),
+      numberFieldColumn("fixed_safety_stock_qty", "Fixed Safety", "120px", false),
+      numberFieldColumn("fixed_replenishment_stock_qty", "Fixed Replenishment", "140px", false),
+      {
+        key: "planning_item_group_id",
+        label: "Item Group",
+        width: "150px",
+        render: (row) => {
+          if (row.__isGroupTotal) return row.__groupName || "-";
+          const draft = drafts[row.id] || getInitialDraft(row);
+          const scopedItemGroups = itemGroupsBySloc.get(row.source_sloc_group_id || "__UNSCOPED__") || [];
+          return (
+            <select
+              value={draft.planning_item_group_id}
+              onChange={(event) => onChange(row.id, "planning_item_group_id", event.target.value)}
+              disabled={readOnly}
+              className="w-full border border-slate-300 px-2 py-1 outline-none focus:border-sky-500"
+            >
+              <option value="">Standalone</option>
+              {scopedItemGroups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.group_name}
+                </option>
+              ))}
+            </select>
+          );
+        },
+      },
+      {
+        key: "excluded_from_dashboard",
+        label: "Exclude",
+        width: "80px",
+        align: "center",
+        render: (row) => {
+          if (row.__isGroupTotal) return "-";
+          const draft = drafts[row.id] || getInitialDraft(row);
+          return (
+            <input
+              type="checkbox"
+              checked={Boolean(draft.excluded_from_dashboard)}
+              onChange={(event) => onChange(row.id, "excluded_from_dashboard", event.target.checked)}
+              disabled={readOnly}
+              className="h-4 w-4"
+            />
+          );
+        },
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [drafts, groupConfigDrafts, itemGroupsBySloc, onChange, onGroupConfigChange, readOnly]
+  );
+
+  return (
+    <ErpDenseGrid
+      columns={columns}
+      rows={gridRows}
+      rowKey={(row) => row.__gridKey}
+      getRowProps={reportRowProps}
+      emptyMessage="No monthly plan rows match the current filter."
+      maxHeight="560px"
+      virtualize
+    />
   );
 }
 
@@ -1590,9 +1684,14 @@ export default function ProcurementPlanningPage() {
 
   const selectedSlocGroupIdForItems = itemManagerSlocGroupId || slocGroups[0]?.id || "";
 
+  // A material excluded via SLOC Group Setup's Manage Materials (§35.11.1
+  // addendum) is out of planning scope entirely for the month -- it must not
+  // show up here either, in the pool or as a member, or the two screens would
+  // visibly disagree about what's actually in play.
   const itemTabRows = useMemo(() => {
     return effectiveRows
       .filter((row) => !selectedSlocGroupIdForItems || row.source_sloc_group_id === selectedSlocGroupIdForItems)
+      .filter((row) => !row.excluded_from_dashboard)
       .sort((left, right) => String(left.material_code).localeCompare(String(right.material_code)));
   }, [effectiveRows, selectedSlocGroupIdForItems]);
 
@@ -1655,6 +1754,8 @@ export default function ProcurementPlanningPage() {
     );
   }, [historyGroupConfigs, historyRows, planMonthValue]);
   const historySummary = useMemo(() => summarizeDecisionBlocks(historyBlocks), [historyBlocks]);
+  const historyGridRows = useMemo(() => flattenBlocksForGrid(historyBlocks), [historyBlocks]);
+  const historyGridColumns = useMemo(() => buildReportGridColumns(), []);
 
   useEffect(() => {
     if (!tabs.some((tab) => tab.id === activeTab)) {
@@ -1738,101 +1839,88 @@ export default function ProcurementPlanningPage() {
         ...(activeError ? [{ key: "planning-error", tone: "error", message: activeError }] : []),
         ...(message ? [{ key: "planning-message", tone: "success", message }] : []),
       ]}
-      filterSection={{
-        eyebrow: showFullReport ? "Report Controls" : "Controls",
-        title: showFullReport ? "Company / Month" : "Company / Month / Workspace",
-        children: showFullReport ? (
-          // Genuine report chrome (matches the IN02/IN03 RESULTS-state pattern) --
-          // no workspace tab row (there's only one tab here, "Planning Dashboard
-          // Report", so a button for it is pointless), no editing-workspace chip
-          // row (Status/Access/Rows/SLOC Groups/Item Groups -- none of that is
-          // report-relevant). Company and Month stay directly editable right here,
-          // and DashboardTable's own SLOC Group/Material Type filters plus its own
-          // summary chips (Visible Decisions/Grouped Pools/Critical/Replenish) live
-          // in listSection below -- nothing duplicated.
-          <div className="grid gap-3 lg:grid-cols-[220px_200px]">
-            <TransactionCompanySelector
-              runtimeContext={runtimeContext}
-              value={companyId}
-              onChange={setCompanyId}
-              label="Company"
-            />
-            <label className="grid gap-1 text-sm text-slate-700">
-              <span className="font-medium text-slate-800">Month</span>
-              <input
-                type="month"
-                value={planMonthValue}
-                onChange={(event) => setPlanMonth(event.target.value)}
-                className="h-10 border border-slate-300 bg-white px-3 outline-none focus:border-sky-500"
-              />
-            </label>
-          </div>
-        ) : (
-          <div className="grid gap-4">
-            <div className="grid gap-3 lg:grid-cols-[220px_200px_minmax(0,1fr)]">
-              <TransactionCompanySelector
-                runtimeContext={runtimeContext}
-                value={companyId}
-                onChange={setCompanyId}
-                label="Company"
-              />
-              <label className="grid gap-1 text-sm text-slate-700">
-                <span className="font-medium text-slate-800">Month</span>
-                <input
-                  type="month"
-                  value={planMonthValue}
-                  onChange={(event) => setPlanMonth(event.target.value)}
-                  className="h-10 border border-slate-300 bg-white px-3 outline-none focus:border-sky-500"
-                />
-              </label>
-              <div className="flex flex-wrap items-end gap-2">
-                {tabs.map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`border px-3 py-2 text-sm font-semibold ${
-                      activeTab === tab.id
-                        ? "border-sky-700 bg-sky-100 text-sky-950"
-                        : "border-slate-300 bg-white text-slate-700"
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+      filterSection={
+        // Full report mode: Company/Month/SLOC Group/Material Type all live in
+        // ONE row inside DashboardTable itself (via its companyControls prop)
+        // below, so this section renders nothing at all here -- no separate
+        // "Controls" card duplicating half of that row (§35.18: single-line
+        // report controls, report grid gets the rest of the page).
+        showFullReport
+          ? null
+          : {
+              eyebrow: "Controls",
+              title: "Company / Month / Workspace",
+              children: (
+                <div className="grid gap-4">
+                  <div className="grid gap-3 lg:grid-cols-[220px_200px_minmax(0,1fr)]">
+                    <TransactionCompanySelector
+                      runtimeContext={runtimeContext}
+                      value={companyId}
+                      onChange={setCompanyId}
+                      label="Company"
+                    />
+                    <label className="grid gap-1 text-sm text-slate-700">
+                      <span className="font-medium text-slate-800">Month</span>
+                      <input
+                        type="month"
+                        value={planMonthValue}
+                        onChange={(event) => setPlanMonth(event.target.value)}
+                        className="h-10 border border-slate-300 bg-white px-3 outline-none focus:border-sky-500"
+                      />
+                    </label>
+                    <div className="flex flex-wrap items-end gap-2">
+                      {tabs.map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setActiveTab(tab.id)}
+                          className={`border px-3 py-2 text-sm font-semibold ${
+                            activeTab === tab.id
+                              ? "border-sky-700 bg-sky-100 text-sky-950"
+                              : "border-slate-300 bg-white text-slate-700"
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
-            <SummaryChips
-              items={[
-                { label: "Plan Month", value: planMonthValue },
-                { label: "Status", value: workspace.plan?.status || "OPEN" },
-                {
-                  label: "Access",
-                  value: canMaintainWorkspace ? "Maintenance" : "View Only",
-                },
-                { label: "Rows", value: planningSummary.totalRows },
-                { label: "SLOC Groups", value: planningSummary.slocGroups },
-                { label: "Item Groups", value: planningSummary.itemGroups },
-                { label: "Standalone", value: planningSummary.standaloneRows },
-                {
-                  label: "Critical",
-                  value: planningSummary.criticalRows,
-                  className: "border-rose-200 bg-rose-50 text-rose-800",
-                },
-                {
-                  label: "Replenish",
-                  value: planningSummary.warningRows,
-                  className: "border-amber-200 bg-amber-50 text-amber-800",
-                },
-              ]}
-            />
-          </div>
-        ),
-      }}
+                  <SummaryChips
+                    items={[
+                      { label: "Plan Month", value: planMonthValue },
+                      { label: "Status", value: workspace.plan?.status || "OPEN" },
+                      {
+                        label: "Access",
+                        value: canMaintainWorkspace ? "Maintenance" : "View Only",
+                      },
+                      { label: "Rows", value: planningSummary.totalRows },
+                      { label: "SLOC Groups", value: planningSummary.slocGroups },
+                      { label: "Item Groups", value: planningSummary.itemGroups },
+                      { label: "Standalone", value: planningSummary.standaloneRows },
+                      {
+                        label: "Critical",
+                        value: planningSummary.criticalRows,
+                        className: "border-rose-200 bg-rose-50 text-rose-800",
+                      },
+                      {
+                        label: "Replenish",
+                        value: planningSummary.warningRows,
+                        className: "border-amber-200 bg-amber-50 text-amber-800",
+                      },
+                    ]}
+                  />
+                </div>
+              ),
+            }
+      }
       listSection={{
-        eyebrow: "PO11",
-        title: tabs.find((tab) => tab.id === activeTab)?.label || "Workspace",
+        // Full report mode drops the redundant "Planning Dashboard Report"
+        // eyebrow/title -- filterSection's own heading already says that,
+        // repeating it here is exactly the kind of leftover chrome that made
+        // this not feel like a genuine full-page report (§35.18).
+        eyebrow: showFullReport ? "" : "PO11",
+        title: showFullReport ? "" : tabs.find((tab) => tab.id === activeTab)?.label || "Workspace",
         children: (
           <div className="grid gap-4">
             {activeTab === "dashboard" && showFullReport ? (
@@ -1842,6 +1930,26 @@ export default function ProcurementPlanningPage() {
                 filters={dashboardFilters}
                 onFilterChange={handleDashboardFilterChange}
                 groupConfigs={Object.values(groupConfigDrafts)}
+                gridMaxHeight="calc(100vh - 260px)"
+                companyControls={
+                  <>
+                    <TransactionCompanySelector
+                      runtimeContext={runtimeContext}
+                      value={companyId}
+                      onChange={setCompanyId}
+                      label="Company"
+                    />
+                    <label className="grid gap-1 text-sm text-slate-700">
+                      <span className="font-medium text-slate-800">Month</span>
+                      <input
+                        type="month"
+                        value={planMonthValue}
+                        onChange={(event) => setPlanMonth(event.target.value)}
+                        className="h-10 border border-slate-300 bg-white px-3 outline-none focus:border-sky-500"
+                      />
+                    </label>
+                  </>
+                }
               />
             ) : null}
 
@@ -2080,98 +2188,42 @@ export default function ProcurementPlanningPage() {
                             <h4 className="text-sm font-semibold text-slate-900">Included</h4>
                             <span className="text-xs text-slate-500">{includedSlocMaterialRows.length} item(s)</span>
                           </div>
-                          <div className="overflow-auto border border-slate-200 bg-white">
-                            <table className="min-w-full text-xs">
-                              <thead className="bg-slate-100 text-slate-700">
-                                <tr>
-                                  <th className="border px-2 py-1.5 text-left">Material</th>
-                                  <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap">Type</th>
-                                  <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap"></th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {includedSlocMaterialRows.map((row) => (
-                                  <tr key={row.id}>
-                                    <td className="border px-2 py-1.5">
-                                      <div className="grid gap-[1px]">
-                                        <span className="font-semibold text-slate-900">{row.material_name}</span>
-                                        <span className="text-[10px] text-slate-500">
-                                          {row.material_external_code || "-"}
-                                        </span>
-                                      </div>
-                                    </td>
-                                    <td className="border px-2 py-1.5 whitespace-nowrap">{row.material_type}</td>
-                                    <td className="border px-2 py-1.5 whitespace-nowrap">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDraftChange(row.id, "excluded_from_dashboard", true)}
-                                        disabled={!canMaintainWorkspace}
-                                        className="border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
-                                      >
-                                        Exclude
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))}
-                                {includedSlocMaterialRows.length === 0 ? (
-                                  <tr>
-                                    <td className="border px-2 py-3 text-slate-500" colSpan={3}>
-                                      No included material matches the current search.
-                                    </td>
-                                  </tr>
-                                ) : null}
-                              </tbody>
-                            </table>
-                          </div>
+                          <ErpDenseGrid
+                            columns={buildMaterialListColumns({
+                              actionLabel: "Exclude",
+                              actionClassName: canMaintainWorkspace
+                                ? "border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
+                                : "border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-400 cursor-not-allowed",
+                              onAction: canMaintainWorkspace
+                                ? (row) => handleDraftChange(row.id, "excluded_from_dashboard", true)
+                                : () => {},
+                            }).filter((column) => column.key !== "status")}
+                            rows={includedSlocMaterialRows}
+                            rowKey={(row) => row.id}
+                            maxHeight="320px"
+                            emptyMessage="No included material matches the current search."
+                          />
                         </div>
                         <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
                           <div className="flex items-center justify-between gap-3">
                             <h4 className="text-sm font-semibold text-slate-900">Excluded</h4>
                             <span className="text-xs text-slate-500">{excludedSlocMaterialRows.length} item(s)</span>
                           </div>
-                          <div className="overflow-auto border border-slate-200 bg-white">
-                            <table className="min-w-full text-xs">
-                              <thead className="bg-slate-100 text-slate-700">
-                                <tr>
-                                  <th className="border px-2 py-1.5 text-left">Material</th>
-                                  <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap">Type</th>
-                                  <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap"></th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {excludedSlocMaterialRows.map((row) => (
-                                  <tr key={row.id}>
-                                    <td className="border px-2 py-1.5">
-                                      <div className="grid gap-[1px]">
-                                        <span className="font-semibold text-slate-900">{row.material_name}</span>
-                                        <span className="text-[10px] text-slate-500">
-                                          {row.material_external_code || "-"}
-                                        </span>
-                                      </div>
-                                    </td>
-                                    <td className="border px-2 py-1.5 whitespace-nowrap">{row.material_type}</td>
-                                    <td className="border px-2 py-1.5 whitespace-nowrap">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDraftChange(row.id, "excluded_from_dashboard", false)}
-                                        disabled={!canMaintainWorkspace}
-                                        className="border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800"
-                                      >
-                                        Include
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))}
-                                {excludedSlocMaterialRows.length === 0 ? (
-                                  <tr>
-                                    <td className="border px-2 py-3 text-slate-500" colSpan={3}>
-                                      No material is excluded from this SLOC group yet.
-                                    </td>
-                                  </tr>
-                                ) : null}
-                              </tbody>
-                            </table>
-                          </div>
+                          <ErpDenseGrid
+                            columns={buildMaterialListColumns({
+                              actionLabel: "Include",
+                              actionClassName: canMaintainWorkspace
+                                ? "border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800"
+                                : "border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-400 cursor-not-allowed",
+                              onAction: canMaintainWorkspace
+                                ? (row) => handleDraftChange(row.id, "excluded_from_dashboard", false)
+                                : () => {},
+                            }).filter((column) => column.key !== "status")}
+                            rows={excludedSlocMaterialRows}
+                            rowKey={(row) => row.id}
+                            maxHeight="320px"
+                            emptyMessage="No material is excluded from this SLOC group yet."
+                          />
                         </div>
                       </div>
                       <p className="text-[11px] text-slate-500">
@@ -2321,104 +2373,44 @@ export default function ProcurementPlanningPage() {
                             <span className="text-xs text-slate-500">{filteredAvailableItemPool.length} item(s)</span>
                           </div>
                         </div>
-                        <div className="overflow-auto border border-slate-200 bg-white">
-                          <table className="min-w-full text-xs">
-                            <thead className="bg-slate-100 text-slate-700">
-                              <tr>
-                                <th className="border px-2 py-1.5 text-left">Material</th>
-                                <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap">Type</th>
-                                <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap">Status</th>
-                                <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap"></th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {filteredAvailableItemPool.map((row) => (
-                                <tr key={row.id}>
-                                  <td className="border px-2 py-1.5">
-                                    <div className="grid gap-[1px]">
-                                      <span className="font-semibold text-slate-900">{row.material_name}</span>
-                                      <span className="text-[10px] text-slate-500">
-                                        {row.material_external_code || "-"}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className="border px-2 py-1.5 whitespace-nowrap">{row.material_type}</td>
-                                  <td className="border px-2 py-1.5 whitespace-nowrap">Standalone</td>
-                                  <td className="border px-2 py-1.5 whitespace-nowrap">
-                                    <button
-                                      type="button"
-                                      onClick={() => assignItemGroup(row.id, selectedItemGroupId)}
-                                      className="border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800"
-                                    >
-                                      Add
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))}
-                              {filteredAvailableItemPool.length === 0 ? (
-                                <tr>
-                                  <td className="border px-2 py-3 text-slate-500" colSpan={4}>
-                                    {availableItemPool.length === 0
-                                      ? "No standalone item is available in this SLOC group scope."
-                                      : "No item matches the current filter."}
-                                  </td>
-                                </tr>
-                              ) : null}
-                            </tbody>
-                          </table>
-                        </div>
+                        <ErpDenseGrid
+                          columns={buildMaterialListColumns({
+                            statusLabel: "Standalone",
+                            actionLabel: "Add",
+                            actionClassName: "border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800",
+                            onAction: (row) => assignItemGroup(row.id, selectedItemGroupId),
+                          })}
+                          rows={filteredAvailableItemPool}
+                          rowKey={(row) => row.id}
+                          maxHeight="320px"
+                          emptyMessage={
+                            availableItemPool.length === 0
+                              ? "No standalone item is available in this SLOC group scope."
+                              : "No item matches the current filter."
+                          }
+                        />
                       </div>
                       <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
                         <div className="flex items-center justify-between gap-3">
                           <h3 className="text-sm font-semibold text-slate-900">Current Members</h3>
                           <span className="text-xs text-slate-500">{selectedItemGroupMembers.length} item(s)</span>
                         </div>
-                        <div className="overflow-auto border border-slate-200 bg-white">
-                          <table className="min-w-full text-xs">
-                            <thead className="bg-slate-100 text-slate-700">
-                              <tr>
-                                <th className="border px-2 py-1.5 text-left">Material</th>
-                                <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap">Type</th>
-                                <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap">Status</th>
-                                <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap"></th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {filteredSelectedItemGroupMembers.map((row) => (
-                                <tr key={row.id}>
-                                  <td className="border px-2 py-1.5">
-                                    <div className="grid gap-[1px]">
-                                      <span className="font-semibold text-slate-900">{row.material_name}</span>
-                                      <span className="text-[10px] text-slate-500">
-                                        {row.material_external_code || "-"}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className="border px-2 py-1.5 whitespace-nowrap">{row.material_type}</td>
-                                  <td className="border px-2 py-1.5 whitespace-nowrap">Group Member</td>
-                                  <td className="border px-2 py-1.5 whitespace-nowrap">
-                                    <button
-                                      type="button"
-                                      onClick={() => unassignItemGroup(row.id)}
-                                      className="border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
-                                    >
-                                      Remove
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))}
-                              {filteredSelectedItemGroupMembers.length === 0 ? (
-                                <tr>
-                                  <td className="border px-2 py-3 text-slate-500" colSpan={4}>
-                                    {selectedItemGroupMembers.length === 0
-                                      ? "No member is mapped to this item group yet."
-                                      : "No member matches the current search."}
-                                  </td>
-                                </tr>
-                              ) : null}
-                            </tbody>
-                          </table>
-                        </div>
+                        <ErpDenseGrid
+                          columns={buildMaterialListColumns({
+                            statusLabel: "Group Member",
+                            actionLabel: "Remove",
+                            actionClassName: "border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700",
+                            onAction: (row) => unassignItemGroup(row.id),
+                          })}
+                          rows={filteredSelectedItemGroupMembers}
+                          rowKey={(row) => row.id}
+                          maxHeight="320px"
+                          emptyMessage={
+                            selectedItemGroupMembers.length === 0
+                              ? "No member is mapped to this item group yet."
+                              : "No member matches the current search."
+                          }
+                        />
                       </div>
                     </div>
                   ) : null}
@@ -2442,110 +2434,75 @@ export default function ProcurementPlanningPage() {
                       Review Standalone
                     </button>
                   </div>
-                  <div className="overflow-auto border border-slate-200 bg-white">
-                    <table className="min-w-full text-xs">
-                      <thead className="bg-slate-100 text-slate-700">
-                        <tr>
-                          <th className="border px-2 py-1.5 text-left">Material</th>
-                          <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap">Type</th>
-                          <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredScopedStandaloneRows.slice(0, 16).map((row) => (
-                          <tr key={row.id}>
-                            <td className="border px-2 py-1.5">
-                              <div className="grid gap-[1px]">
-                                <span className="font-semibold text-slate-900">{row.material_name}</span>
-                                <span className="text-[10px] text-slate-500">{row.material_external_code || "-"}</span>
-                              </div>
-                            </td>
-                            <td className="border px-2 py-1.5 whitespace-nowrap">{row.material_type}</td>
-                            <td className="border px-2 py-1.5 whitespace-nowrap">Standalone</td>
-                          </tr>
-                        ))}
-                        {filteredScopedStandaloneRows.length === 0 ? (
-                          <tr>
-                            <td className="border px-2 py-3 text-slate-500" colSpan={3}>
-                              {scopedStandaloneRows.length === 0
-                                ? "Every visible material in this SLOC scope is already assigned to a planning item group."
-                                : "No standalone material matches the current search."}
-                            </td>
-                          </tr>
-                        ) : null}
-                      </tbody>
-                    </table>
-                    {filteredScopedStandaloneRows.length > 16 ? (
-                      <p className="border-t border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-500">
-                        Showing 16 of {filteredScopedStandaloneRows.length}. Use "Review Standalone" to see the full list in Monthly Plan Input.
-                      </p>
-                    ) : null}
-                  </div>
+                  <ErpDenseGrid
+                    columns={buildMaterialListColumns({ statusLabel: "Standalone" })}
+                    rows={filteredScopedStandaloneRows}
+                    rowKey={(row) => row.id}
+                    maxHeight="360px"
+                    emptyMessage={
+                      scopedStandaloneRows.length === 0
+                        ? "Every visible material in this SLOC scope is already assigned to a planning item group."
+                        : "No standalone material matches the current search."
+                    }
+                  />
                 </div>
 
                 {/* Existing item groups -- compact list, secondary to the work area above. */}
-                <div className="overflow-auto border border-slate-200 bg-white">
-                  <table className="min-w-full text-xs">
-                    <thead className="bg-slate-100 text-slate-700">
-                      <tr>
-                        <th className="border px-2 py-1.5 text-left">Item Group</th>
-                        <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap">Source SLOC Group</th>
-                        <th className="border px-2 py-1.5 text-right w-px whitespace-nowrap">Members</th>
-                        <th className="border px-2 py-1.5 text-left w-px whitespace-nowrap"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {itemGroupInsights.map((group) => (
-                        <tr key={group.id}>
-                          <td className="border px-2 py-1.5 font-semibold text-slate-900">{group.group_name}</td>
-                          <td className="border px-2 py-1.5 whitespace-nowrap">{group.sloc_group_name || "-"}</td>
-                          <td className="border px-2 py-1.5 text-right">{group.memberCount}</td>
-                          <td className="border px-2 py-1.5 whitespace-nowrap">
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedItemGroupId(group.id);
-                                  setItemManagerSlocGroupId(group.sloc_group_id || "");
-                                }}
-                                className="border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800"
-                              >
-                                Manage
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setItemGroupForm({
-                                    id: group.id,
-                                    group_name: group.group_name,
-                                    sloc_group_id: group.sloc_group_id || "",
-                                  })
-                                }
-                                className="border border-slate-300 bg-white px-2 py-0.5 text-xs font-semibold text-slate-700"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void handleDeleteItemGroup(group.id)}
-                                className="border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                      {itemGroupInsights.length === 0 ? (
-                        <tr>
-                          <td className="border px-2 py-3 text-slate-500" colSpan={4}>
-                            No item group exists yet for this company.
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
+                <ErpDenseGrid
+                  columns={[
+                    { key: "group_name", label: "Item Group", width: "220px", render: (group) => group.group_name },
+                    {
+                      key: "sloc_group_name",
+                      label: "Source SLOC Group",
+                      width: "160px",
+                      render: (group) => group.sloc_group_name || "-",
+                    },
+                    { key: "memberCount", label: "Members", width: "90px", align: "right" },
+                    {
+                      key: "actions",
+                      label: "",
+                      width: "220px",
+                      render: (group) => (
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedItemGroupId(group.id);
+                              setItemManagerSlocGroupId(group.sloc_group_id || "");
+                            }}
+                            className="border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800"
+                          >
+                            Manage
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setItemGroupForm({
+                                id: group.id,
+                                group_name: group.group_name,
+                                sloc_group_id: group.sloc_group_id || "",
+                              })
+                            }
+                            className="border border-slate-300 bg-white px-2 py-0.5 text-xs font-semibold text-slate-700"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteItemGroup(group.id)}
+                            className="border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      ),
+                    },
+                  ]}
+                  rows={itemGroupInsights}
+                  rowKey={(group) => group.id}
+                  maxHeight="none"
+                  emptyMessage="No item group exists yet for this company."
+                />
               </div>
             ) : null}
 
@@ -2577,103 +2534,15 @@ export default function ProcurementPlanningPage() {
                     },
                   ]}
                 />
-                <div className="overflow-x-auto border border-slate-200 bg-white">
-                  <table className="min-w-full text-xs">
-                    <thead className="bg-slate-100 text-slate-700">
-                      <tr>
-                        <th className="border px-2 py-2 text-left w-px whitespace-nowrap">Group</th>
-                        <th className="border px-2 py-2 text-left w-px whitespace-nowrap">Source SLOC Group</th>
-                        <th className="border px-2 py-2 text-left">Item</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Requirement</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Safety Days</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Proc Days</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Lead Days</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Safety Stock</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Replenishment</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Fixed Safety</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Fixed Replenishment</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Available</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">TRN</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">GE</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">In QA</th>
-                        <th className="border px-2 py-2 text-right w-px whitespace-nowrap">Total</th>
-                        <th className="border px-2 py-2 text-left w-px whitespace-nowrap">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {historyBlocks.map((entry, index) => {
-                        const isGroupTotal = entry.type === "group-total";
-                        const row = entry.row;
-                        return (
-                          <tr
-                            key={`${entry.type}-${entry.groupName || row.material_id || row.source_sloc_group_name || index}`}
-                            className={`${getStatusToneClass(row.status_tone)} ${isGroupTotal ? "font-semibold" : ""}`}
-                          >
-                            <td className="border px-2 py-2 whitespace-nowrap">
-                              {entry.groupName || row.planning_item_group_name || "Standalone"}
-                            </td>
-                            <td className="border px-2 py-2 whitespace-nowrap">
-                              {row.source_sloc_group_name || (isGroupTotal ? "Mixed scope" : "Not assigned")}
-                            </td>
-                            <td className="border px-2 py-2">
-                              {isGroupTotal ? (
-                                <span>Group Total</span>
-                              ) : (
-                                <div className="grid gap-[2px]">
-                                  <span className="font-semibold text-slate-900">
-                                    {row.material_name}
-                                  </span>
-                                  <span className="text-[11px] text-slate-600">
-                                    {row.material_external_code || "-"}
-                                  </span>
-                                </div>
-                              )}
-                            </td>
-                            <td className="border px-2 py-2 text-right">
-                              {renderPlanningCell(entry, row.monthly_requirement_qty)}
-                            </td>
-                            <td className="border px-2 py-2 text-right">
-                              {renderPlanningCell(entry, row.safety_days)}
-                            </td>
-                            <td className="border px-2 py-2 text-right">
-                              {renderPlanningCell(entry, row.processing_time_days)}
-                            </td>
-                            <td className="border px-2 py-2 text-right">
-                              {renderPlanningCell(entry, row.lead_time_days)}
-                            </td>
-                            <td className="border px-2 py-2 text-right">
-                              {renderPlanningCell(entry, row.effective_safety_stock_qty)}
-                            </td>
-                            <td className="border px-2 py-2 text-right">
-                              {renderPlanningCell(entry, row.effective_replenishment_stock_qty)}
-                            </td>
-                            <td className="border px-2 py-2 text-right">
-                              {renderOptionalPlanningCell(entry, row.fixed_safety_stock_qty)}
-                            </td>
-                            <td className="border px-2 py-2 text-right">
-                              {renderOptionalPlanningCell(entry, row.fixed_replenishment_stock_qty)}
-                            </td>
-                            <td className="border px-2 py-2 text-right">
-                              {formatQty(row.available_stock_qty)}
-                            </td>
-                            <td className="border px-2 py-2 text-right">{formatQty(row.trn_stock_qty)}</td>
-                            <td className="border px-2 py-2 text-right">{formatQty(row.ge_stock_qty)}</td>
-                            <td className="border px-2 py-2 text-right">{formatQty(row.qa_stock_qty)}</td>
-                            <td className="border px-2 py-2 text-right">{formatQty(row.total_stock_qty)}</td>
-                            <td className="border px-2 py-2">{getStatusLabel(row.status_tone)}</td>
-                          </tr>
-                        );
-                      })}
-                      {historyBlocks.length === 0 ? (
-                        <tr>
-                          <td className="border px-2 py-6 text-center text-slate-500" colSpan={17}>
-                            No archived rows found.
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
+                <ErpDenseGrid
+                  columns={historyGridColumns}
+                  rows={historyGridRows}
+                  rowKey={(row) => row.__gridKey}
+                  getRowProps={reportRowProps}
+                  emptyMessage="No archived rows found."
+                  maxHeight="560px"
+                  virtualize
+                />
               </div>
             ) : null}
           </div>
