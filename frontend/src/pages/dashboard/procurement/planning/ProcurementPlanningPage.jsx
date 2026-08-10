@@ -56,6 +56,7 @@ const EMPTY_WORKSPACE = {
   sloc_groups: [],
   item_groups: [],
   group_configs: [],
+  can_maintain: false,
 };
 
 const EMPTY_HISTORY = {
@@ -71,6 +72,10 @@ function normalizeWorkspaceData(payload) {
     sloc_groups: Array.isArray(payload?.sloc_groups) ? payload.sloc_groups : [],
     item_groups: Array.isArray(payload?.item_groups) ? payload.item_groups : [],
     group_configs: Array.isArray(payload?.group_configs) ? payload.group_configs : [],
+    // Backend-decided (PROC_PLANNING_VIEW:EDIT via the real ACL snapshot, see
+    // canMaintainPlanning() in planning.handlers.ts) -- never re-derived here
+    // from role code or work-context name.
+    can_maintain: Boolean(payload?.can_maintain),
   };
 }
 
@@ -941,24 +946,8 @@ function GroupCard({
   );
 }
 
-function canMaintainPo11Workspace(runtimeContext, shellProfile) {
-  if (runtimeContext?.isAdmin) return true;
-  const roleCode = String(shellProfile?.roleCode || "").trim().toUpperCase();
-  const workContextCode = String(runtimeContext?.selectedWorkContext?.work_context_code || "")
-    .trim()
-    .toUpperCase();
-  const workContextName = String(runtimeContext?.selectedWorkContext?.work_context_name || "")
-    .trim()
-    .toUpperCase();
-  if (roleCode === "DIRECTOR") return true;
-  if (workContextName === "ACL-MASTER") return true;
-  if (workContextCode.includes("SCM")) return true;
-  if (workContextName.includes("SUPPLY CHAIN")) return true;
-  return false;
-}
-
 export default function ProcurementPlanningPage() {
-  const { runtimeContext, shellProfile } = useMenu();
+  const { runtimeContext } = useMenu();
   const queryClient = useQueryClient();
   const location = useLocation();
   const navigate = useNavigate();
@@ -1012,7 +1001,6 @@ export default function ProcurementPlanningPage() {
 
   const effectiveCompanyId = companyId || defaultCompanyId;
   const planMonthValue = getMonthValue(planMonth);
-  const canMaintainWorkspace = canMaintainPo11Workspace(runtimeContext, shellProfile);
   const workspaceQueryKey = ["po11", "workspace", effectiveCompanyId || "", planMonthValue];
   const historyQueryKey = ["po11", "history", effectiveCompanyId || "", planMonthValue];
   const storageLocationsQueryKey = ["po11", "storage-locations", effectiveCompanyId || ""];
@@ -1100,6 +1088,12 @@ export default function ProcurementPlanningPage() {
   // populated workspace always wins.
   const slocGroups = workspace.sloc_groups?.length ? workspace.sloc_groups : slocGroupsQuery.data ?? [];
   const itemGroups = workspace.item_groups?.length ? workspace.item_groups : itemGroupsQuery.data ?? [];
+  // Backend-decided (PROC_PLANNING_VIEW:EDIT via the real ACL snapshot) --
+  // never guessed here from role code or work-context name. Defaults to
+  // false until the workspace call resolves, which is the safe direction:
+  // maintenance controls stay hidden rather than flashing on for a user who
+  // turns out not to have EDIT.
+  const canMaintainWorkspace = Boolean(workspace.can_maintain);
   const historyData = historyQuery.data ?? EMPTY_HISTORY;
   const historyRows = historyData.rows;
   const historyGroupConfigs = historyData.group_configs;
