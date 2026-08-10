@@ -964,7 +964,16 @@ export default function ProcurementPlanningPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+  // Report display is driven by local state, not location.pathname. It used to be
+  // `navigate()`-driven to a separate /report route, but that fought this app's
+  // screen-stack sync (NavigationStackBridge.jsx) -- the report would render for one
+  // frame then get torn down as the stack corrected the URL back to the base screen's
+  // registered route, showing as a flicker. Seed from the URL once (so a direct deep
+  // link to /report, e.g. via Shift+F8 in a new window, still opens straight into the
+  // report), then let the Execute/Back actions flip this in-place -- no navigation
+  // involved, so nothing can fight it.
   const isReportRoute = location.pathname.endsWith("/report");
+  const [showFullReport, setShowFullReport] = useState(isReportRoute);
   const [companyId, setCompanyId] = useState("");
   const [planMonth, setPlanMonth] = useState(getMonthValue(""));
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -978,6 +987,12 @@ export default function ProcurementPlanningPage() {
   const [itemGroupForm, setItemGroupForm] = useState({ id: "", group_name: "", sloc_group_id: "" });
   const [selectedItemGroupId, setSelectedItemGroupId] = useState("");
   const [itemManagerSlocGroupId, setItemManagerSlocGroupId] = useState("");
+  // Only filters which rows are VISIBLE in the Available Item Pool below --
+  // staged Add/Remove decisions live in lineDrafts (see assignItemGroup/
+  // unassignItemGroup), which this filter never touches, so switching between
+  // RM and PM here never loses anything already staged for the other type.
+  // One "Save Item Group Mapping" click still commits all of it together.
+  const [itemPoolMaterialTypeFilter, setItemPoolMaterialTypeFilter] = useState("ALL");
   const [dashboardFilters, setDashboardFilters] = useState({
     slocGroupId: "",
     materialType: "ALL",
@@ -1128,14 +1143,14 @@ export default function ProcurementPlanningPage() {
   }, [planMonth, searchParams]);
 
   useEffect(() => {
-    if (!isReportRoute) return;
+    if (!showFullReport) return;
     setActiveTab("dashboard");
     setDashboardFilters((current) => ({
       ...current,
       slocGroupId: String(searchParams.get("sloc_group_id") || ""),
       materialType: String(searchParams.get("material_type") || "ALL"),
     }));
-  }, [isReportRoute, searchParams]);
+  }, [showFullReport, searchParams]);
 
   useEffect(() => {
     setSlocGroupForm({ id: "", group_name: "", storage_location_ids: [] });
@@ -1462,6 +1477,12 @@ export default function ProcurementPlanningPage() {
     setActiveTab("input");
   }
 
+  function jumpToItemGroupManage(slocGroupId) {
+    setItemManagerSlocGroupId(slocGroupId || "");
+    setSelectedItemGroupId("");
+    setActiveTab("item");
+  }
+
   function handleDashboardFilterChange(field, value) {
     setDashboardFilters((current) => ({
       ...current,
@@ -1474,6 +1495,11 @@ export default function ProcurementPlanningPage() {
       setError("Select company first.");
       return;
     }
+    // Flip local state first -- this is what actually drives the render. The
+    // navigate() call below only updates the address bar (for bookmarking /
+    // Shift+F8-into-a-new-window) and runs with replace so it never becomes a
+    // back-button trap; it does not gate anything here.
+    setShowFullReport(true);
     const params = new URLSearchParams();
     params.set("company_id", effectiveCompanyId);
     params.set("plan_month", planMonthValue);
@@ -1481,10 +1507,11 @@ export default function ProcurementPlanningPage() {
     if (dashboardFilters.materialType && dashboardFilters.materialType !== "ALL") {
       params.set("material_type", dashboardFilters.materialType);
     }
-    navigate(`/dashboard/procurement/planning/report?${params.toString()}`);
+    navigate(`/dashboard/procurement/planning/report?${params.toString()}`, { replace: true });
   }
 
   function handleBackToPlanningFilters() {
+    setShowFullReport(false);
     const params = new URLSearchParams();
     if (effectiveCompanyId) params.set("company_id", effectiveCompanyId);
     params.set("plan_month", planMonthValue);
@@ -1492,7 +1519,7 @@ export default function ProcurementPlanningPage() {
     if (dashboardFilters.materialType && dashboardFilters.materialType !== "ALL") {
       params.set("material_type", dashboardFilters.materialType);
     }
-    navigate(`/dashboard/procurement/planning?${params.toString()}`);
+    navigate(`/dashboard/procurement/planning?${params.toString()}`, { replace: true });
   }
 
   function assignItemGroup(lineId, groupId) {
@@ -1504,7 +1531,7 @@ export default function ProcurementPlanningPage() {
   }
 
   const tabs = useMemo(
-    () => (isReportRoute
+    () => (showFullReport
       ? [{ id: "dashboard", label: "Planning Dashboard Report" }]
       : [
       { id: "dashboard", label: "Planning Dashboard" },
@@ -1513,7 +1540,7 @@ export default function ProcurementPlanningPage() {
       ...(canMaintainWorkspace ? [{ id: "item", label: "Item Group Setup" }] : []),
       { id: "history", label: "History / Archive" },
     ]),
-    [canMaintainWorkspace, isReportRoute]
+    [canMaintainWorkspace, showFullReport]
   );
 
   const itemGroupsById = useMemo(() => {
@@ -1600,6 +1627,10 @@ export default function ProcurementPlanningPage() {
   const availableItemPool = useMemo(() => {
     return itemTabRows.filter((row) => !row.planning_item_group_id);
   }, [itemTabRows]);
+  const filteredAvailableItemPool = useMemo(() => {
+    if (itemPoolMaterialTypeFilter === "ALL") return availableItemPool;
+    return availableItemPool.filter((row) => row.material_type === itemPoolMaterialTypeFilter);
+  }, [availableItemPool, itemPoolMaterialTypeFilter]);
   const scopedStandaloneRows = useMemo(() => {
     return [...availableItemPool].sort((left, right) =>
       String(left.material_code).localeCompare(String(right.material_code))
@@ -1629,7 +1660,7 @@ export default function ProcurementPlanningPage() {
       eyebrow="Procurement"
       title="Procurement Planning Workspace"
       actions={[
-        ...(isReportRoute
+        ...(showFullReport
           ? [
               {
                 key: "back-to-filters",
@@ -1645,7 +1676,7 @@ export default function ProcurementPlanningPage() {
           tone: "neutral",
           onClick: () => void refreshWorkspaceView(),
         },
-        ...(activeTab === "dashboard" && !isReportRoute
+        ...(activeTab === "dashboard" && !showFullReport
           ? [
               {
                 key: "execute-report",
@@ -1761,7 +1792,7 @@ export default function ProcurementPlanningPage() {
         title: tabs.find((tab) => tab.id === activeTab)?.label || "Workspace",
         children: (
           <div className="grid gap-4">
-            {activeTab === "dashboard" && isReportRoute ? (
+            {activeTab === "dashboard" && showFullReport ? (
               <DashboardTable
                 rows={effectiveRows}
                 monthValue={planMonthValue}
@@ -1771,7 +1802,7 @@ export default function ProcurementPlanningPage() {
               />
             ) : null}
 
-            {activeTab === "dashboard" && !isReportRoute ? (
+            {activeTab === "dashboard" && !showFullReport ? (
               <div className="grid gap-4">
                 <div className="rounded border border-slate-200 bg-white p-4">
                   <div className="grid gap-3 lg:grid-cols-[220px_220px_auto]">
@@ -1900,31 +1931,57 @@ export default function ProcurementPlanningPage() {
                 </div>
                 <div className="grid gap-3">
                   {slocGroupInsights.map((group) => (
-                    <GroupCard
-                      key={group.id}
-                      title={group.group_name}
-                      subtitle={`${group.member_count} storage location${group.member_count === 1 ? "" : "s"} selected`}
-                      badges={[
-                        { label: "Eligible Materials", value: group.linkedMaterialCount },
-                        { label: "Grouped", value: group.groupedMaterialCount },
-                        { label: "Excluded", value: group.excludedMaterialCount },
-                      ]}
-                      previewItems={[
-                        ...group.storage_locations.map((location) => `${location.code} - ${location.name}`),
-                        ...group.previewMaterials,
-                      ].slice(0, 10)}
-                      emptyMessage="No RM/PM materials are currently flowing from this SLOC group into PO11."
-                      onPrimary={() => jumpToMonthlyInput({ slocGroupId: group.id })}
-                      primaryLabel="Open in Monthly Plan"
-                      onEdit={() =>
-                        setSlocGroupForm({
-                          id: group.id,
-                          group_name: group.group_name,
-                          storage_location_ids: group.storage_locations.map((location) => location.id),
-                        })
-                      }
-                      onDelete={() => void handleDeleteSlocGroup(group.id)}
-                    />
+                    <div key={group.id} className="grid gap-1 border border-slate-200 bg-white p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="grid gap-1">
+                          <h3 className="text-sm font-semibold text-slate-900">{group.group_name}</h3>
+                          <p className="text-xs text-slate-500">
+                            {group.member_count} storage location{group.member_count === 1 ? "" : "s"} selected
+                            {" | "}
+                            {group.linkedMaterialCount} eligible material{group.linkedMaterialCount === 1 ? "" : "s"}
+                            {" ("}
+                            {group.groupedMaterialCount} grouped, {group.excludedMaterialCount} excluded
+                            {")"}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => jumpToItemGroupManage(group.id)}
+                            className="border border-sky-700 bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-950"
+                          >
+                            Manage
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => jumpToMonthlyInput({ slocGroupId: group.id })}
+                            className="border border-sky-300 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800"
+                          >
+                            Open in Monthly Plan
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSlocGroupForm({
+                                id: group.id,
+                                group_name: group.group_name,
+                                storage_location_ids: group.storage_locations.map((location) => location.id),
+                              })
+                            }
+                            className="border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteSlocGroup(group.id)}
+                            className="border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   ))}
                   {slocGroupInsights.length === 0 ? (
                     <div className="rounded border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
@@ -2070,31 +2127,64 @@ export default function ProcurementPlanningPage() {
                     {selectedItemGroupId ? (
                       <div className="grid gap-4 lg:grid-cols-2">
                         <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
-                          <div className="flex items-center justify-between gap-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
                             <h3 className="text-sm font-semibold text-slate-900">Available Item Pool</h3>
-                            <span className="text-xs text-slate-500">{availableItemPool.length} item(s)</span>
-                          </div>
-                          <div className="grid gap-2">
-                            {availableItemPool.map((row) => (
-                              <div key={row.id} className="flex items-center justify-between gap-3 rounded border border-slate-200 bg-white px-3 py-2">
-                                <div className="grid gap-[2px]">
-                                  <span className="text-sm font-semibold text-slate-900">{row.material_code}</span>
-                                  <span className="text-xs text-slate-600">
-                                    {row.material_name} | {row.material_type} | Standalone
-                                  </span>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => assignItemGroup(row.id, selectedItemGroupId)}
-                                  className="border border-sky-300 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800"
+                            <div className="flex items-center gap-2">
+                              <label className="flex items-center gap-1 text-xs text-slate-600">
+                                Material Type
+                                <select
+                                  value={itemPoolMaterialTypeFilter}
+                                  onChange={(event) => setItemPoolMaterialTypeFilter(event.target.value)}
+                                  className="h-7 border border-slate-300 bg-white px-1.5 text-xs outline-none focus:border-sky-500"
                                 >
-                                  Add
-                                </button>
-                              </div>
-                            ))}
-                            {availableItemPool.length === 0 ? (
-                              <span className="text-xs text-slate-500">No standalone item is available in this SLOC group scope.</span>
-                            ) : null}
+                                  <option value="ALL">All</option>
+                                  <option value="RM">RM</option>
+                                  <option value="PM">PM</option>
+                                </select>
+                              </label>
+                              <span className="text-xs text-slate-500">{filteredAvailableItemPool.length} item(s)</span>
+                            </div>
+                          </div>
+                          <div className="overflow-auto border border-slate-200 bg-white">
+                            <table className="min-w-full text-xs">
+                              <thead className="bg-slate-100 text-slate-700">
+                                <tr>
+                                  <th className="border px-2 py-1.5 text-left">Code</th>
+                                  <th className="border px-2 py-1.5 text-left">Name</th>
+                                  <th className="border px-2 py-1.5 text-left">Type</th>
+                                  <th className="border px-2 py-1.5 text-left">Status</th>
+                                  <th className="border px-2 py-1.5 text-left"></th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {filteredAvailableItemPool.map((row) => (
+                                  <tr key={row.id}>
+                                    <td className="border px-2 py-1.5 font-semibold text-slate-900">{row.material_code}</td>
+                                    <td className="border px-2 py-1.5">{row.material_name}</td>
+                                    <td className="border px-2 py-1.5">{row.material_type}</td>
+                                    <td className="border px-2 py-1.5">Standalone</td>
+                                    <td className="border px-2 py-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => assignItemGroup(row.id, selectedItemGroupId)}
+                                        className="border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800"
+                                      >
+                                        Add
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                                {filteredAvailableItemPool.length === 0 ? (
+                                  <tr>
+                                    <td className="border px-2 py-3 text-slate-500" colSpan={5}>
+                                      {availableItemPool.length === 0
+                                        ? "No standalone item is available in this SLOC group scope."
+                                        : "No item matches the selected material type."}
+                                    </td>
+                                  </tr>
+                                ) : null}
+                              </tbody>
+                            </table>
                           </div>
                         </div>
                         <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
@@ -2102,27 +2192,44 @@ export default function ProcurementPlanningPage() {
                             <h3 className="text-sm font-semibold text-slate-900">Current Members</h3>
                             <span className="text-xs text-slate-500">{selectedItemGroupMembers.length} item(s)</span>
                           </div>
-                          <div className="grid gap-2">
-                            {selectedItemGroupMembers.map((row) => (
-                              <div key={row.id} className="flex items-center justify-between gap-3 rounded border border-slate-200 bg-white px-3 py-2">
-                                <div className="grid gap-[2px]">
-                                  <span className="text-sm font-semibold text-slate-900">{row.material_code}</span>
-                                  <span className="text-xs text-slate-600">
-                                    {row.material_name} | {row.material_type}
-                                  </span>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => unassignItemGroup(row.id)}
-                                  className="border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
-                                >
-                                  Remove
-                                </button>
-                              </div>
-                            ))}
-                            {selectedItemGroupMembers.length === 0 ? (
-                              <span className="text-xs text-slate-500">No member is mapped to this item group yet.</span>
-                            ) : null}
+                          <div className="overflow-auto border border-slate-200 bg-white">
+                            <table className="min-w-full text-xs">
+                              <thead className="bg-slate-100 text-slate-700">
+                                <tr>
+                                  <th className="border px-2 py-1.5 text-left">Code</th>
+                                  <th className="border px-2 py-1.5 text-left">Name</th>
+                                  <th className="border px-2 py-1.5 text-left">Type</th>
+                                  <th className="border px-2 py-1.5 text-left">Status</th>
+                                  <th className="border px-2 py-1.5 text-left"></th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {selectedItemGroupMembers.map((row) => (
+                                  <tr key={row.id}>
+                                    <td className="border px-2 py-1.5 font-semibold text-slate-900">{row.material_code}</td>
+                                    <td className="border px-2 py-1.5">{row.material_name}</td>
+                                    <td className="border px-2 py-1.5">{row.material_type}</td>
+                                    <td className="border px-2 py-1.5">Group Member</td>
+                                    <td className="border px-2 py-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => unassignItemGroup(row.id)}
+                                        className="border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
+                                      >
+                                        Remove
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                                {selectedItemGroupMembers.length === 0 ? (
+                                  <tr>
+                                    <td className="border px-2 py-3 text-slate-500" colSpan={5}>
+                                      No member is mapped to this item group yet.
+                                    </td>
+                                  </tr>
+                                ) : null}
+                              </tbody>
+                            </table>
                           </div>
                         </div>
                       </div>
@@ -2147,21 +2254,39 @@ export default function ProcurementPlanningPage() {
                         Review Standalone
                       </button>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {scopedStandaloneRows.length > 0 ? (
-                        scopedStandaloneRows.slice(0, 16).map((row) => (
-                          <span
-                            key={row.id}
-                            className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700"
-                          >
-                            {row.material_code}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="text-xs text-slate-500">
-                          Every visible material in this SLOC scope is already assigned to a planning item group.
-                        </span>
-                      )}
+                    <div className="overflow-auto border border-slate-200 bg-white">
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-slate-100 text-slate-700">
+                          <tr>
+                            <th className="border px-2 py-1.5 text-left">Code</th>
+                            <th className="border px-2 py-1.5 text-left">Name</th>
+                            <th className="border px-2 py-1.5 text-left">Type</th>
+                            <th className="border px-2 py-1.5 text-left">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {scopedStandaloneRows.slice(0, 16).map((row) => (
+                            <tr key={row.id}>
+                              <td className="border px-2 py-1.5 font-semibold text-slate-900">{row.material_code}</td>
+                              <td className="border px-2 py-1.5">{row.material_name}</td>
+                              <td className="border px-2 py-1.5">{row.material_type}</td>
+                              <td className="border px-2 py-1.5">Standalone</td>
+                            </tr>
+                          ))}
+                          {scopedStandaloneRows.length === 0 ? (
+                            <tr>
+                              <td className="border px-2 py-3 text-slate-500" colSpan={4}>
+                                Every visible material in this SLOC scope is already assigned to a planning item group.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                      {scopedStandaloneRows.length > 16 ? (
+                        <p className="border-t border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-500">
+                          Showing 16 of {scopedStandaloneRows.length}. Use "Review Standalone" to see the full list in Monthly Plan Input.
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
