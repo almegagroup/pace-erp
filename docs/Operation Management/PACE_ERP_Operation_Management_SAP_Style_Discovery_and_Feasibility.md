@@ -3339,39 +3339,63 @@ Expected behavior:
 
 This is an implementation gap, not a business-design ambiguity.
 
-### 35.18 Table Display Conventions (LOCKED 2026-08-11)
+### 35.18 Table Display Conventions (LOCKED 2026-08-11, corrected same day)
 
 Applies to every PO11 table (Monthly Plan Input, Planning Dashboard /
 Planning Dashboard Report, Item Group Setup's Available Item Pool / Current
 Members / Standalone Materials, SLOC Group Setup's Manage Materials work
 area, History / Archive):
 
-- **Pace Code is never shown anywhere on this page.** The material identity
-  cell shows the material **Name** as the primary/bold text, with **External
-  Code** as the secondary line beneath it (blank dash if the material has no
-  external code set). This matches the repo-wide rule that `external_code`/
-  `external_sku` is reporting-only (see the material-master note elsewhere in
-  this doc) -- display use is fine, business-logic dependence is not.
+- **Pace Code is never shown anywhere on this page.** Material Name and
+  External Code are **two separate columns** (not one cell with Name bold
+  and External Code as a small subtitle underneath -- that was tried first
+  and corrected same day; the business requirement is a real second column,
+  every table). Blank dash if the material has no external code set. This
+  matches the repo-wide rule that `external_code`/`external_sku` is
+  reporting-only (see the material-master note elsewhere in this doc) --
+  display use is fine, business-logic dependence is not.
 - **Column order:** the Group badge column and the Source SLOC Group column
   sit next to each other (Group, then Source SLOC Group), ahead of the
-  Material/Item column. A member row's Source SLOC Group cell shows only the
-  group name -- it must not also repeat the Group badge value underneath it,
-  since the adjacent Group column already shows that.
-- **Column width:** columns size to their actual content (material/item name
-  gets the flexible remaining width; short fields like Type, Safety Days,
-  Group, Status size to content and never stretch to fill unused space).
+  Material Name/External Code columns. A member row's Source SLOC Group cell
+  shows only the group name -- it must not also repeat the Group badge value
+  underneath it, since the adjacent Group column already shows that.
+- **Monthly Plan Input's material identity cell shows Name only** -- no UOM
+  suffix, no "Current status: X" caption line (both were removed; UOM isn't
+  needed there and status is already visible via the row's own highlight/the
+  Status column elsewhere).
+- **Group Total rows get a visibly distinct background color** (not just
+  bold text) in every table that has them (Monthly Plan Input, Planning
+  Dashboard/Report, History).
+- **Implementation primitive:** every PO11 table uses `ErpDenseGrid`
+  (`frontend/src/components/data/ErpDenseGrid.jsx`) -- the same grid
+  component IN02/IN03 use -- not a hand-rolled `<table>`. This is what
+  actually delivers the rest of this section for free: sticky/frozen header
+  by default, explicit per-column pixel width (so a short field never
+  stretches to fill leftover space and a long field never gets squeezed),
+  and optional virtualization for larger row sets. A hand-rolled table with
+  CSS `w-px`/`whitespace-nowrap` guessing was tried first and produced
+  exactly the width and missing-sticky-header bugs this correction fixes --
+  do not go back to that approach for any future PO11 table.
 - **Full-page report mode** (Planning Dashboard's "Execute Full Report"):
   the report screen is a genuine dedicated report view, not the same
   workspace page with a panel toggled visible inside it -- no repeated
   workspace-editing chrome (tab row when there's only one tab to show, the
   Status/Access/Rows/SLOC Groups/Item Groups chip row that only matters for
-  editing). Company and Month stay directly editable in the report's own
-  controls; SLOC Group/Material Type filters and the report's own summary
-  chips live with the report table itself. Close Month stays available in
-  this mode for users with maintenance authority.
+  editing, and no separate "Controls" card at all). Company, Month, SLOC
+  Group, and Material Type filters all sit together in **one single row**
+  at the top of the report; the report grid itself fills essentially the
+  rest of the page height (`ErpDenseGrid` `maxHeight="calc(100vh - 260px)"`).
+  Close Month stays available in this mode for users with maintenance
+  authority.
 - **Search:** every material-listing table on this page needs a live
   substring search (material code, name, external code) -- no table should
   force the user to fall back to browser Ctrl+F.
+- **SLOC Group Include/Exclude scope leak (fixed same day):** a material
+  excluded via SLOC Group Setup's Manage Materials must also disappear from
+  Item Group Setup's Available Item Pool/Current Members/Standalone lists
+  for that SLOC group -- it is out of planning scope entirely for the month,
+  not just hidden from the dashboard. `itemTabRows` filters out
+  `excluded_from_dashboard` rows for this reason.
 
 ---
 
