@@ -596,18 +596,17 @@ export async function listMaterialsHandler(
     // company's pickers.
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
 
-    let query = serviceRoleClient
-      .schema("erp_master")
-      .from("material_master")
-      .select("id,pace_code,external_code,material_name,document_name,short_name,material_type,material_category,base_uom_code,purchase_uom_code,issue_uom_code,hsn_code,status,created_at", { count: "exact" })
-      .order("material_type", { ascending: true })
-      .order("material_name", { ascending: true })
-      .range(offset, offset + limit - 1);
-
-    if (materialType) query = query.eq("material_type", materialType);
-    if (statusFilter) query = query.eq("status", statusFilter);
-    if (search) query = query.or(`pace_code.ilike.%${search}%,material_name.ilike.%${search}%,external_code.ilike.%${search}%`);
-
+    // company_id present -> scope via material_company_ext. A company with a
+    // few hundred mapped materials (CMP003 = 405) turned `.in("id", mappedIds)`
+    // into a ~15,000-character query string (PostgREST/supabase-js encodes
+    // .in() filters as URL query params, not a request body) -- that blew
+    // past the deployed proxy's URL/header length limit and failed with an
+    // opaque 500 (OM_MATERIAL_LIST_FAILED, no further detail). Found live
+    // 2026-08-11 on IN02/IN03's Material picker. Fixed by filtering
+    // company-mapped rows in memory instead of pushing the id list into the
+    // query string -- material_master is a small table (low hundreds of
+    // rows today), safe to pull the type/status/search-matching page and
+    // then keep only the ones this company is mapped to.
     if (companyId) {
       try {
         await assertCompanyScope(ctx, companyId);
@@ -620,12 +619,39 @@ export async function listMaterialsHandler(
         .select("material_id")
         .eq("company_id", companyId);
       if (extError) throw new Error("OM_MATERIAL_LIST_FAILED");
-      const mappedIds = [...new Set(((extRows ?? []) as Array<Record<string, unknown>>).map((row) => String(row.material_id)))];
-      if (mappedIds.length === 0) {
+      const mappedIds = new Set(((extRows ?? []) as Array<Record<string, unknown>>).map((row) => String(row.material_id)));
+      if (mappedIds.size === 0) {
         return okResponse({ data: [], total: 0 }, ctx.request_id, req);
       }
-      query = query.in("id", mappedIds);
+
+      let scopedQuery = serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id,pace_code,external_code,material_name,document_name,short_name,material_type,material_category,base_uom_code,purchase_uom_code,issue_uom_code,hsn_code,status,created_at")
+        .order("material_type", { ascending: true })
+        .order("material_name", { ascending: true });
+      if (materialType) scopedQuery = scopedQuery.eq("material_type", materialType);
+      if (statusFilter) scopedQuery = scopedQuery.eq("status", statusFilter);
+      if (search) scopedQuery = scopedQuery.or(`pace_code.ilike.%${search}%,material_name.ilike.%${search}%,external_code.ilike.%${search}%`);
+
+      const { data: candidateRows, error: candidateError } = await scopedQuery;
+      if (candidateError) throw new Error("OM_MATERIAL_LIST_FAILED");
+      const matchedRows = ((candidateRows ?? []) as Array<Record<string, unknown>>).filter((row) => mappedIds.has(String(row.id)));
+      const pagedRows = matchedRows.slice(offset, offset + limit);
+      return okResponse({ data: pagedRows, total: matchedRows.length }, ctx.request_id, req);
     }
+
+    let query = serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .select("id,pace_code,external_code,material_name,document_name,short_name,material_type,material_category,base_uom_code,purchase_uom_code,issue_uom_code,hsn_code,status,created_at", { count: "exact" })
+      .order("material_type", { ascending: true })
+      .order("material_name", { ascending: true })
+      .range(offset, offset + limit - 1);
+
+    if (materialType) query = query.eq("material_type", materialType);
+    if (statusFilter) query = query.eq("status", statusFilter);
+    if (search) query = query.or(`pace_code.ilike.%${search}%,material_name.ilike.%${search}%,external_code.ilike.%${search}%`);
 
     const { data, error, count } = await query;
     if (error) throw new Error("OM_MATERIAL_LIST_FAILED");
