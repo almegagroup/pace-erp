@@ -145,16 +145,80 @@ function resolveMaterialLabel(material: JsonRecord | undefined): string {
   return toTrimmedString(material?.document_name) || toTrimmedString(material?.material_name);
 }
 
+// Opening Stock (IN05) FG lines carry a real packing_order_id (the PR23
+// genealogy record this opening balance represents), but the posting they
+// produce is tagged reference_document_type='OS' (not 'PACK_PO'), and
+// derive_source_lot_ref() (migration 20260719210000) only derives
+// source_lot_ref for reference_document_type='PACK_PO' + P101 + IN --
+// Opening Stock's P561/P565 postings never match that, so source_lot_ref
+// stays NULL for them. Without this map, resolveLotRef() below falls all
+// the way through to doc.document_number -- the MATERIAL document's own
+// short year-scoped number (e.g. "00000019") -- which is what IN02/IN03
+// were wrongly showing as "Packing PO Number" (found live 2026-08-11).
+// Built once per report request from the already-fetched stock_document
+// rows; keyed by (opening_stock_document_id, material_id, batch_number)
+// since one Opening Stock document has many lines.
+async function buildOpeningStockLotMap(docs: JsonRecord[]): Promise<Map<string, string>> {
+  const openingDocIds = [...new Set(
+    docs
+      .filter((doc) => toTrimmedString(doc.reference_document_type) === "OS")
+      .map((doc) => toTrimmedString(doc.reference_document_id))
+      .filter(Boolean),
+  )];
+  if (openingDocIds.length === 0) return new Map();
+
+  const { data: lines, error: linesError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("opening_stock_line")
+    .select("document_id, material_id, batch_number, packing_order_id")
+    .in("document_id", openingDocIds)
+    .not("packing_order_id", "is", null);
+  if (linesError || !lines) return new Map();
+
+  const packingOrderIds = [...new Set(
+    (lines as JsonRecord[]).map((line) => toTrimmedString(line.packing_order_id)).filter(Boolean),
+  )];
+  if (packingOrderIds.length === 0) return new Map();
+
+  const { data: packingOrders } = await serviceRoleClient
+    .schema("erp_production")
+    .from("packing_order")
+    .select("id, po_number")
+    .in("id", packingOrderIds);
+  const poNumberById = new Map(
+    ((packingOrders ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.po_number)]),
+  );
+
+  const lotMap = new Map<string, string>();
+  for (const line of lines as JsonRecord[]) {
+    const poNumber = poNumberById.get(toTrimmedString(line.packing_order_id));
+    if (!poNumber) continue;
+    const key = `${toTrimmedString(line.document_id)}::${toTrimmedString(line.material_id)}::${toTrimmedString(line.batch_number)}`;
+    lotMap.set(key, poNumber);
+  }
+  return lotMap;
+}
+
 // Shared by both IN02 (stock ledger) and IN03 (current stock) — same
 // fallback chain as fgStockBreakdownHandler's resolveLotRef(). Kept as one
 // function per the task brief's explicit "don't duplicate" instruction.
-function resolveLotRef(doc: JsonRecord | undefined): string {
+function resolveLotRef(
+  doc: JsonRecord | undefined,
+  materialId: string,
+  batchNumber: string | null,
+  openingLotMap: Map<string, string>,
+): string {
   if (!doc) return "";
   const lot = toTrimmedString(doc.source_lot_ref);
   if (lot) return lot;
   if (toTrimmedString(doc.reference_document_type) === "PACK_PO") {
     const ref = toTrimmedString(doc.reference_document_number);
     if (ref) return ref;
+  }
+  if (toTrimmedString(doc.reference_document_type) === "OS") {
+    const key = `${toTrimmedString(doc.reference_document_id)}::${materialId}::${toTrimmedString(batchNumber)}`;
+    const openingPoNumber = openingLotMap.get(key);
+    if (openingPoNumber) return openingPoNumber;
   }
   return toTrimmedString(doc.document_number);
 }
@@ -524,6 +588,7 @@ export async function getStockLedgerReportHandler(
       }
       conversionsByMaterialId.get(materialId)?.push(row);
     }
+    const openingLotMap = await buildOpeningStockLotMap((stockDocResp.data ?? []) as JsonRecord[]);
 
     const userIds = new Set<string>();
     const fgPoNumbers = new Set<string>();
@@ -539,7 +604,7 @@ export async function getStockLedgerReportHandler(
       }
       const material = materialMap.get(row.material_id);
       if (toTrimmedString(material?.material_type) === "FG") {
-        const poNumber = resolveLotRef(doc);
+        const poNumber = resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap);
         if (poNumber) fgPoNumbers.add(poNumber);
       }
       const packCode = toTrimmedString(material?.pack_code);
@@ -658,7 +723,7 @@ export async function getStockLedgerReportHandler(
       const baseQuantity = normalizeNumber(row.quantity);
       const conversion = resolveAltUomConversion(material, conversionsByMaterialId.get(row.material_id) ?? []);
       const altFactor = Number(conversion?.conversion_factor ?? 0);
-      const fgPoNumber = materialType === "FG" ? resolveLotRef(doc) : "";
+      const fgPoNumber = materialType === "FG" ? resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap) : "";
       const fgPo = fgPoNumber ? packingOrderMap.get(fgPoNumber) : null;
       const packUomCode = packCodeMap.get(toTrimmedString(material?.pack_code)) || null;
       let packQuantity: number | null = null;
@@ -865,16 +930,22 @@ export async function getCurrentStockHandler(
         ? await serviceRoleClient
             .schema("erp_inventory")
             .from("stock_document")
-            .select("id, document_number, source_lot_ref, reference_document_type, reference_document_number")
+            .select("id, document_number, source_lot_ref, reference_document_type, reference_document_number, reference_document_id")
             .in("id", docIds)
         : { data: [], error: null };
       if (docError) {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
       const docMap = new Map(((docRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+      const openingLotMap = await buildOpeningStockLotMap((docRows ?? []) as JsonRecord[]);
       const poNumbers = [...new Set(
         typedLedgerRows
-          .map((row) => resolveLotRef(docMap.get(toTrimmedString(row.stock_document_id))))
+          .map((row) => resolveLotRef(
+            docMap.get(toTrimmedString(row.stock_document_id)),
+            toTrimmedString(row.material_id),
+            toTrimmedString(row.batch_number) || null,
+            openingLotMap,
+          ))
           .filter(Boolean),
       )];
       const { data: poRows, error: poError } = poNumbers.length
@@ -897,7 +968,12 @@ export async function getCurrentStockHandler(
           ? Number(ledger.quantity ?? 0)
           : -Number(ledger.quantity ?? 0);
         const batchNumber = toTrimmedString(ledger.batch_number) || null;
-        const resolvedPoNumber = resolveLotRef(docMap.get(toTrimmedString(ledger.stock_document_id))) || null;
+        const resolvedPoNumber = resolveLotRef(
+          docMap.get(toTrimmedString(ledger.stock_document_id)),
+          materialId,
+          batchNumber,
+          openingLotMap,
+        ) || null;
         const packingOrder = resolvedPoNumber ? poMap.get(resolvedPoNumber) : undefined;
         const sourcePoType = toTrimmedString(packingOrder?.source_po_type).toUpperCase();
 

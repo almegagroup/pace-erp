@@ -25,6 +25,11 @@ import { generateGlobalDocNumber } from "./production.utils.ts";
 type JsonRecord = Record<string, unknown>;
 
 const SEGMENT_BY_PO_TYPE: Record<string, string> = { MTO: "ADMIX", HPS: "HPS" };
+// Mirrors opening_stock.handlers.ts's PACKING_PO_TYPE_BY_SOURCE -- kept in sync
+// intentionally (that file's resolveFgOpeningPackingOrder is the save-time
+// authority; this list must match it exactly or a packing order can appear
+// selectable here yet fail OPENING_STOCK_FG_PACKING_PO_NOT_FOUND at save).
+const PACKING_PO_TYPE_BY_SOURCE: Record<string, string> = { MTO: "PMTO", HPS: "PHPS" };
 
 function genErr(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
@@ -401,6 +406,7 @@ export async function listOldProcessPoBatchesHandler(req: Request, ctx: ProdHand
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
     const materialId = toTrimmedString(url.searchParams.get("material_id") ?? "");
+    const poType = toUpperTrimmedString(url.searchParams.get("po_type") ?? "");
     if (!companyId) return okResponse({ data: [] }, ctx.request_id, req);
     try {
       await assertCompanyScope(ctx, companyId);
@@ -427,7 +433,13 @@ export async function listOldProcessPoBatchesHandler(req: Request, ctx: ProdHand
       .order("created_at", { ascending: false });
     if (poErr) throw new Error("PROD_OLD_PROCESS_PO_LIST_FAILED");
 
-    const rows = ((pos ?? []) as JsonRecord[]).filter((row) => !materialId || toTrimmedString(row.material_id) === materialId);
+    // Must match opening_stock.handlers.ts's resolveSfgOpeningProcessOrder
+    // exactly -- same reasoning as the packing-order filter above.
+    const rows = ((pos ?? []) as JsonRecord[]).filter((row) => {
+      if (materialId && toTrimmedString(row.material_id) !== materialId) return false;
+      if (poType && toUpperTrimmedString(row.po_type) !== poType) return false;
+      return true;
+    });
     const matMap = await fetchMaterialLabels(rows.map((row) => String(row.material_id)));
     const strokeMap = await fetchStrokeNumbers(rows.map((row) => toTrimmedString(row.stroke_master_id)));
 
@@ -670,6 +682,7 @@ export async function listOldPackingPoBatchesHandler(req: Request, ctx: ProdHand
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
     const materialId = toTrimmedString(url.searchParams.get("material_id") ?? "");
+    const poType = toUpperTrimmedString(url.searchParams.get("po_type") ?? "");
     if (!companyId) return okResponse({ data: [] }, ctx.request_id, req);
     try {
       await assertCompanyScope(ctx, companyId);
@@ -701,7 +714,20 @@ export async function listOldPackingPoBatchesHandler(req: Request, ctx: ProdHand
 
     const { data: pos, error: poErr } = await query;
     if (poErr) throw new Error("PROD_OLD_PACKING_PO_LIST_FAILED");
-    const rows = (pos ?? []) as JsonRecord[];
+    // Must match opening_stock.handlers.ts's resolveFgOpeningPackingOrder
+    // exactly -- that is the save-time authority, and this list only exists
+    // to drive the picker that feeds it. Without this filter a material
+    // whose only genealogy packing order was created under a different
+    // po_type (e.g. HPS) than the Opening Stock document (e.g. MTO) shows up
+    // here as selectable but always 422s as OPENING_STOCK_FG_PACKING_PO_NOT_FOUND
+    // at save (found live 2026-08-11).
+    const rows = ((pos ?? []) as JsonRecord[]).filter((row) => {
+      if (!poType) return true;
+      return (
+        toUpperTrimmedString(row.source_po_type) === poType ||
+        toUpperTrimmedString(row.po_type) === (PACKING_PO_TYPE_BY_SOURCE[poType] ?? "")
+      );
+    });
     const matMap = await fetchMaterialLabels(rows.map((row) => toTrimmedString(row.material_id)));
     const enrichedRows = await enrichOldPackingRows(companyId, rows);
 
