@@ -163,16 +163,48 @@ async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyI
 // role code or work-context name -- which is exactly the pattern-#12 shape
 // this repo sweeps for elsewhere (a local guess standing in for the real
 // ACL decision, liable to drift the moment a work-context gets renamed).
+//
+// companyId here is this page's OWN selector value (this.GET /planning?company_id=...),
+// which for a MULTI-company user is frequently NOT the same company as
+// ctx.context.companyId -- that field reflects the session's active company
+// (or the x-company-id header, which today's procurement API client never
+// sends), not this page's local dropdown. Found live 2026-08-11: a MULTI
+// user whose session is still pinned to Company A, viewing Company B's
+// planning workspace via the page-local selector, was shown Viewer-only for
+// B even though their B-scoped ACL grant is EDIT -- because this function
+// used to check ctx.context.workContextIds (Company A's work contexts)
+// against companyId=B, a company/work-context pair that can never match in
+// precomputed_acl_view. Resolve this company's own work contexts directly
+// instead of trusting ctx.context, so the answer is correct regardless of
+// which company the session happens to be pinned to.
 async function canMaintainPlanning(ctx: ProcurementHandlerContext, companyId: string): Promise<boolean> {
   if (ctx.context.isAdmin) return true;
   if (!companyId) return false;
 
-  const workContextIds =
-    ctx.context.workContextIds && ctx.context.workContextIds.length > 0
-      ? ctx.context.workContextIds
-      : ctx.context.workContextId
-        ? [ctx.context.workContextId]
-        : [];
+  let workContextIds: string[];
+  if (companyId === ctx.context.companyId) {
+    workContextIds =
+      ctx.context.workContextIds && ctx.context.workContextIds.length > 0
+        ? ctx.context.workContextIds
+        : ctx.context.workContextId
+          ? [ctx.context.workContextId]
+          : [];
+  } else {
+    const { data: workContextRows, error: workContextError } = await serviceRoleClient
+      .schema("erp_acl")
+      .from("user_work_contexts")
+      .select("work_context:work_context_id!inner(work_context_id, is_active)")
+      .eq("auth_user_id", ctx.auth_user_id)
+      .eq("company_id", companyId);
+    if (workContextError) return false;
+    workContextIds = ((workContextRows ?? []) as Array<{ work_context: unknown }>)
+      .map((row) => {
+        const wc = Array.isArray(row.work_context) ? row.work_context[0] : row.work_context;
+        return wc && typeof wc === "object" ? (wc as { work_context_id: string; is_active: boolean }) : null;
+      })
+      .filter((wc): wc is { work_context_id: string; is_active: boolean } => Boolean(wc && wc.is_active === true))
+      .map((wc) => wc.work_context_id);
+  }
   if (workContextIds.length === 0) return false;
 
   const { data: versionRow, error: versionError } = await serviceRoleClient
@@ -195,6 +227,38 @@ async function canMaintainPlanning(ctx: ProcurementHandlerContext, companyId: st
   });
   if (error || !data) return false;
   return data.decision === "ALLOW";
+}
+
+// Every write handler below resolves its own companyId from the request body
+// (via getCompanyScope), independently of ctx.context.companyId -- that lets
+// a MULTI-company user's page-local company selector target a company other
+// than whichever one the session/route-registry ACL gate (stepAcl) happens to
+// be pinned to (today: always the session's company, since no procurement API
+// call sends x-company-id). getCompanyScope's own assertCompanyScope only
+// proves company MEMBERSHIP (erp_map.user_companies), not that the caller's
+// ACL grant at THAT company is actually EDIT -- so without an explicit check
+// here, a user with EDIT at their session's active company but only VIEW (or
+// no work context at all) at the body's target company could still write
+// there, purely because stepAcl evaluated a different company than the one
+// actually written to. Found live 2026-08-11 alongside the canMaintainPlanning
+// read-side bug above -- same root cause, write side. Every handler that
+// calls getCompanyScope for a write must check this immediately after
+// resolving companyId and return 403 (not fall through to a generic catch,
+// whose status code varies by handler and isn't guaranteed to be 403).
+async function requirePlanningEditAccess(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+  companyId: string,
+): Promise<Response | null> {
+  const allowed = await canMaintainPlanning(ctx, companyId);
+  if (allowed) return null;
+  return planningError(
+    req,
+    ctx,
+    "PROCUREMENT_PLANNING_FORBIDDEN",
+    403,
+    "You do not have edit access to procurement planning for this company.",
+  );
 }
 
 function getPathId(req: Request, marker: string): string {
@@ -1259,6 +1323,8 @@ export async function upsertProcurementPlanningLinesHandler(
     if (!companyId || lines.length === 0) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_LINES_INVALID", 400, "company_id and lines are required.");
     }
+    const forbidden = await requirePlanningEditAccess(req, ctx, companyId);
+    if (forbidden) return forbidden;
     const plan = await ensurePlanExists(ctx, companyId, planMonth);
     if (plan.status === "CLOSED") {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_PLAN_CLOSED", 409, "Closed month cannot be edited.");
@@ -1440,6 +1506,8 @@ export async function createPlanningSlocGroupHandler(req: Request, ctx: Procurem
     if (!companyId || !groupName || storageLocationIds.length === 0) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_SLOC_GROUP_INVALID", 400, "company_id, group_name, and storage_location_ids are required.");
     }
+    const forbidden = await requirePlanningEditAccess(req, ctx, companyId);
+    if (forbidden) return forbidden;
     const storageLocationValidation = await validatePlanningStorageLocationSelection(companyId, storageLocationIds);
     if (storageLocationValidation.status === "ERROR") {
       return planningError(
@@ -1504,6 +1572,8 @@ export async function updatePlanningSlocGroupHandler(req: Request, ctx: Procurem
     if (!groupId || !companyId) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_SLOC_GROUP_NOT_FOUND", 404, "Planning storage-location group not found.");
     }
+    const forbidden = await requirePlanningEditAccess(req, ctx, companyId);
+    if (forbidden) return forbidden;
     const groupName = toTrimmedString(body.group_name);
     const storageLocationIds = Array.isArray(body.storage_location_ids)
       ? [...new Set((body.storage_location_ids as unknown[]).map((value) => toTrimmedString(value)).filter(Boolean))]
@@ -1576,6 +1646,8 @@ export async function deletePlanningSlocGroupHandler(req: Request, ctx: Procurem
     if (!groupId || !companyId) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_SLOC_GROUP_NOT_FOUND", 404, "Planning storage-location group not found.");
     }
+    const forbidden = await requirePlanningEditAccess(req, ctx, companyId);
+    if (forbidden) return forbidden;
     const { data: linkedItemGroups, error: linkedItemGroupsError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("planning_item_group")
@@ -1627,6 +1699,8 @@ export async function createPlanningItemGroupHandler(req: Request, ctx: Procurem
     if (!companyId || !groupName || !slocGroupId) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_ITEM_GROUP_INVALID", 400, "company_id, sloc_group_id, and group_name are required.");
     }
+    const forbidden = await requirePlanningEditAccess(req, ctx, companyId);
+    if (forbidden) return forbidden;
     const { data: slocGroup, error: slocGroupError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("planning_sloc_group")
@@ -1679,6 +1753,8 @@ export async function updatePlanningItemGroupHandler(req: Request, ctx: Procurem
     if (!groupId || !companyId || !groupName || !slocGroupId) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_ITEM_GROUP_INVALID", 400, "Valid group_name and sloc_group_id are required.");
     }
+    const forbidden = await requirePlanningEditAccess(req, ctx, companyId);
+    if (forbidden) return forbidden;
     const { data: slocGroup, error: slocGroupError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("planning_sloc_group")
@@ -1722,6 +1798,8 @@ export async function deletePlanningItemGroupHandler(req: Request, ctx: Procurem
     if (!groupId || !companyId) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_ITEM_GROUP_NOT_FOUND", 404, "Planning item group not found.");
     }
+    const forbidden = await requirePlanningEditAccess(req, ctx, companyId);
+    if (forbidden) return forbidden;
     const { error: clearError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("procurement_monthly_plan_line")
@@ -1749,6 +1827,8 @@ export async function closeProcurementPlanningMonthHandler(req: Request, ctx: Pr
     if (!companyId) {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_CLOSE_INVALID", 400, "company_id is required.");
     }
+    const forbidden = await requirePlanningEditAccess(req, ctx, companyId);
+    if (forbidden) return forbidden;
     const plan = await ensurePlanExists(ctx, companyId, planMonth);
     if (plan.status === "CLOSED") {
       return planningError(req, ctx, "PROCUREMENT_PLANNING_PLAN_ALREADY_CLOSED", 409, "Month is already closed.");
