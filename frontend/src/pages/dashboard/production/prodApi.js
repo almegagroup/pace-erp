@@ -138,7 +138,6 @@ export const editProcessOrder = (id, body) => fetchProd("PATCH", `/api/productio
 export const qaApproveProcessOrder = (id) => fetchProd("POST", `/api/production/process-orders/${id}/qa-approve`);
 export const qaRejectProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/qa-reject`, body);
 export const startBatch = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/start-batch`, body ?? {});
-export const completeIntProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/complete-int`, body);
 export const finalizeProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/finalize`, body);
 export const verifyProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/verify`, body);
 export const reverseProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/reverse`, body);

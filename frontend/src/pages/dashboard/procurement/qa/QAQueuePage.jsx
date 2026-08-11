@@ -9,6 +9,7 @@ import ErpMasterListTemplate from "../../../../components/templates/ErpMasterLis
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import {
   addQATestLine,
   createQaCategoryTestConfig,
@@ -377,8 +378,6 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
   const canManage = true;
 
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [resultDrafts, setResultDrafts] = useState({});
   const [limitDrafts, setLimitDrafts] = useState({});
   const [decisionRows, setDecisionRows] = useState([]);
@@ -472,12 +471,7 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
   }, [isMutable, mctConfigs.length]);
 
   function toast(msg, tone = "success") {
-    if (tone === "error") setError(msg);
-    else setNotice(msg);
-    setTimeout(() => {
-      setError("");
-      setNotice("");
-    }, 3500);
+    pushToast({ message: msg, tone });
   }
 
   async function refreshDetail() {
@@ -495,7 +489,6 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
     const existingLine = testLineForMethod(config.test_method_id);
     const testType = config.qa_test_method?.test_group === "OTHR" ? "OTHER" : "MCT";
     setSaving(true);
-    setError("");
     try {
       if (existingLine) {
         await updateQATestLine(row.id, existingLine.id, { result_value: value });
@@ -521,7 +514,6 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
     const form = addMethodForm;
     if (form.group !== group) return;
     setSaving(true);
-    setError("");
     try {
       let testMethodId = form.methodId;
       if (form.mode === "new") {
@@ -558,7 +550,6 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
     const draft = limitDrafts[config.id];
     if (!draft || draft[field] === undefined) return;
     setSaving(true);
-    setError("");
     try {
       await updateQaCategoryTestConfig(config.id, { [field]: draft[field] === "" ? null : Number(draft[field]) });
       setLimitDrafts((current) => {
@@ -582,7 +573,6 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
     });
     if (!confirmed) return;
     setSaving(true);
-    setError("");
     try {
       await deleteQaCategoryTestConfig(config.id);
       await queryClient.invalidateQueries({ queryKey: ["procurement", "qa-category-config", companyId, materialCategory] });
@@ -640,7 +630,6 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
     if (!confirmed) return;
 
     setSaving(true);
-    setError("");
     try {
       await submitUsageDecision(row.id, {
         decision_lines: decisionRows.map((r) => ({
@@ -860,8 +849,6 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
       ) : (
         <>
           <div className="text-[10px] uppercase tracking-[0.08em] text-slate-400">Ctrl+S Save | Esc Collapse</div>
-          {error ? <div className="border border-rose-300 bg-rose-50 px-3 py-1.5 text-[12px] text-rose-800">{error}</div> : null}
-          {notice ? <div className="border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-[12px] text-emerald-800">{notice}</div> : null}
 
           <div className="grid gap-2 lg:grid-cols-4">
             <ErpDenseFormRow label="Storage Location (auto, read-only)">

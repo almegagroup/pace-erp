@@ -9,6 +9,7 @@
 import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
@@ -38,14 +39,12 @@ export default function PackConfigPage() {
   const [companyId, setCompanyId] = useState("");
   const [materialId, setMaterialId] = useState("");
   const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [form, setForm] = useState({ company_id: "", material_id: "", pack_code_id: "", fill_qty: "" });
   const [fillQtyLiter, setFillQtyLiter] = useState("");
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3000);
+    pushToast({ message: msg, tone });
   }
 
   const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
@@ -165,7 +164,6 @@ export default function PackConfigPage() {
       title="Pack Configuration"
       subtitle="Manage pack codes and prodshade-level pack configs"
       actions={tab === 1 ? [{ label: "New Config", tone: "primary", mnemonic: "N", onClick: () => { setForm({ company_id: effectiveCompanyId, material_id: "", pack_code_id: "", fill_qty: "" }); setFillQtyLiter(""); setDrawerOpen(true); } }] : []}
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       {/* Tabs */}
       <ErpSectionCard>

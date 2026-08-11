@@ -14,6 +14,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { getPackingOrder, getProcessOrder, listPackingOrders, listProcessOrders, reversePackingOrder, reverseProcessOrder } from "./prodApi.js";
@@ -182,7 +183,6 @@ export default function ReversalPage() {
   const [poNumberInput, setPoNumberInput] = useState("");
   const [submittedPoNumber, setSubmittedPoNumber] = useState("");
   const [reason, setReason] = useState("");
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
 
@@ -234,8 +234,7 @@ export default function ReversalPage() {
   }, [po?.id]);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   function handleSearchSubmit(event) {
@@ -306,7 +305,6 @@ export default function ReversalPage() {
     <ErpScreenScaffold
       title="Reversal - PR15"
       subtitle="CORS full reversal for Process PO and Packing PO"
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Find PO to Reverse">
         <form onSubmit={handleSearchSubmit} className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto_auto]">

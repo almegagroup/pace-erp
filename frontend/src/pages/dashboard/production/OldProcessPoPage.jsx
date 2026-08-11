@@ -15,6 +15,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
@@ -57,12 +58,10 @@ export default function OldProcessPoPage() {
   const [lineEdits, setLineEdits] = useState({});
   const [manualLines, setManualLines] = useState([]);
   const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const nextManualId = useRef(1);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 5000);
+    pushToast({ message: msg, tone });
   }
 
   const { runtimeContext } = useMenu();
@@ -282,7 +281,6 @@ export default function OldProcessPoPage() {
       title="Old Process PO"
       subtitle="PR22 — genealogy for a pre-go-live MTO/HPS batch (§104.9). RM/INT auto-derived from the Stroke, editable, and expandable with manual extra lines. Saves a VERIFIED paper order; posts NO stock movement. Create this record before loading the related Opening Stock (IN05)."
       actions={[{ label: "Save", tone: "primary", mnemonic: "S", disabled: !canSave || saving, onClick: handleSave }]}
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Header">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

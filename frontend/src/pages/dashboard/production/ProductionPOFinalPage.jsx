@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../context/useMenu.js";
@@ -97,7 +98,6 @@ function PackingPoFinalTab() {
   const [activeOrderId, setActiveOrderId] = useState("");
   const [poNumberInput, setPoNumberInput] = useState("");
   const [submittedPoNumber, setSubmittedPoNumber] = useState("");
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [sfgBatchNumber, setSfgBatchNumber] = useState("");
   const [correctionQty, setCorrectionQty] = useState({});
@@ -217,8 +217,7 @@ function PackingPoFinalTab() {
   );
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   function resetSelection(nextCompanyId = "") {
@@ -374,11 +373,6 @@ function PackingPoFinalTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      {notice.msg ? (
-        <div className={`rounded px-3 py-2 text-sm ${notice.tone === "error" ? "border border-rose-200 bg-rose-50 text-rose-700" : "border border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
-          {notice.msg}
-        </div>
-      ) : null}
 
       <ErpSectionCard title="Select Packing PO">
         <div className="flex flex-col gap-4">
@@ -833,10 +827,18 @@ function storageLocationLabel(location) {
   return [location?.code || location?.location_code, location?.name || location?.location_name].filter(Boolean).join(" - ");
 }
 
-function validateFinalPoStatus(status) {
-  return String(status || "").toUpperCase() === "BATCH_STARTED"
+// Locked 2026-08-12: INT skips QA and Start Batch entirely (no batch number, per
+// §83.5) so it finalizes directly from STANDARD — every other po_type (MTEST included,
+// now running the exact same lifecycle as MTO/HPS) still needs BATCH_STARTED.
+function requiredFinalStatus(poType) {
+  return String(poType || "").toUpperCase() === "INT" ? "STANDARD" : "BATCH_STARTED";
+}
+
+function validateFinalPoStatus(status, poType) {
+  const required = requiredFinalStatus(poType);
+  return String(status || "").toUpperCase() === required
     ? ""
-    : "This Process PO is not applicable for Final. Only `BATCH_STARTED` is allowed.";
+    : `This Process PO is not applicable for Final. Only \`${required}\` is allowed for this type.`;
 }
 
 function computeRowValues(row) {
@@ -888,10 +890,12 @@ function ProcessPoFinalTab() {
   const [activeOrderId, setActiveOrderId] = useState("");
   const [poNumberInput, setPoNumberInput] = useState("");
   const [submittedPoNumber, setSubmittedPoNumber] = useState("");
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [rows, setRows] = useState([]);
   const [debouncedPreviewRows, setDebouncedPreviewRows] = useState([]);
+  // INT/MTEST's real output qty is an independently-measured number, not a sum of the
+  // RM input lines (unlike MTO/HPS/MTS where output = Σ RM approved qty).
+  const [manualOutputQty, setManualOutputQty] = useState("");
 
   const { runtimeContext } = useMenu();
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
@@ -902,9 +906,17 @@ function ProcessPoFinalTab() {
     enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
+  // INT never reaches BATCH_STARTED (no Start Batch stage) — it finalizes straight from
+  // STANDARD, so it needs its own query merged into the picker list.
+  const intOrdersQ = useQuery({
+    queryKey: ["production-final-int-orders", effectiveCompanyId],
+    queryFn: () => listProcessOrders({ company_id: effectiveCompanyId || undefined, status: "STANDARD", po_type: "INT", per_page: 100 }),
+    enabled: Boolean(effectiveCompanyId),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
   const orderOptions = useMemo(
-    () => (ordersQ.data ?? []).map((order) => ({ value: order.id, label: orderLabel(order) || order.po_number || "Process PO" })),
-    [ordersQ.data],
+    () => [...(ordersQ.data ?? []), ...(intOrdersQ.data ?? [])].map((order) => ({ value: order.id, label: orderLabel(order) || order.po_number || "Process PO" })),
+    [ordersQ.data, intOrdersQ.data],
   );
 
   const lookupQ = useQuery({
@@ -915,7 +927,7 @@ function ProcessPoFinalTab() {
       const options = Array.isArray(result) ? result : result?.data ?? [];
       const match = options.find((order) => String(order.po_number || "").toUpperCase() === submittedPoNumber.toUpperCase()) ?? null;
       if (!match?.id) return { match: null, blockedMessage: "Process PO not found." };
-      const blockedMessage = validateFinalPoStatus(match.status);
+      const blockedMessage = validateFinalPoStatus(match.status, match.po_type);
       return { match, blockedMessage };
     },
   });
@@ -946,7 +958,10 @@ function ProcessPoFinalTab() {
   // §108.2 item 7 — MTS has no Approved/AP-Approved reco workflow (§108.4); showing
   // these fields would suggest a concept that doesn't apply and is never written
   // (process_order.handlers.ts skips the reco insert entirely for MTS at Verify).
-  const hideRmApproval = po?.po_type === "MTS";
+  // INT/MTEST join the same exemption (locked 2026-08-12) — neither has an AP-Reco/
+  // billing relationship, and both now post stock at Final instead of Verify.
+  const hideRmApproval = po?.po_type === "MTS" || po?.po_type === "INT" || po?.po_type === "MTEST";
+  const isDirectPostType = po?.po_type === "INT" || po?.po_type === "MTEST";
   const lookupMessage = useMemo(() => {
     if (lookupQ.error) return lookupQ.error.message || "Process PO lookup failed.";
     if (!submittedPoNumber || lookupQ.isFetching) return "";
@@ -963,6 +978,7 @@ function ProcessPoFinalTab() {
 
   useEffect(() => {
     setRows((po?.lines ?? []).map(makeDraftRow));
+    setManualOutputQty(String(po?.planned_qty ?? 0));
   }, [po]);
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -991,8 +1007,7 @@ function ProcessPoFinalTab() {
   );
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   function resetSelection(nextCompanyId = "") {
@@ -1057,7 +1072,7 @@ function ProcessPoFinalTab() {
   }
 
   async function handleSave() {
-    if (!po || po.status !== "BATCH_STARTED") return;
+    if (!po || po.status !== requiredFinalStatus(po.po_type)) return;
     setSaving(true);
     try {
       const inputRows = rows.map((row) => {
@@ -1074,12 +1089,16 @@ function ProcessPoFinalTab() {
           is_rm: true,
         };
       });
-      const outputActualQty = rows.reduce((sum, row) => sum + computeRowValues(row).apApproved, 0);
+      // INT/MTEST: output qty is the independently-entered manual field (posts
+      // immediately, no Verify). MTO/HPS/MTS: unchanged, derived from RM approved qty.
+      const outputActualQty = isDirectPostType
+        ? Number(manualOutputQty || 0)
+        : rows.reduce((sum, row) => sum + computeRowValues(row).apApproved, 0);
       await finalizeProcessOrder(po.id, {
         actual_qty: outputActualQty,
         lines: inputRows,
       });
-      toast("Process PO saved as FINAL.");
+      toast(isDirectPostType ? "Process PO completed and stock posted." : "Process PO saved as FINAL.");
       qc.invalidateQueries({ queryKey: ["process-orders"] });
       qc.invalidateQueries({ queryKey: ["production-final-detail", po.id] });
     } catch (error) {
@@ -1095,11 +1114,6 @@ function ProcessPoFinalTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      {notice.msg ? (
-        <div className={`rounded px-3 py-2 text-sm ${notice.tone === "error" ? "border border-rose-200 bg-rose-50 text-rose-700" : "border border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
-          {notice.msg}
-        </div>
-      ) : null}
       <ErpSectionCard title="Select Process PO">
         <div className="flex flex-col gap-4">
           <form onSubmit={handleLookupSubmit} className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
@@ -1150,7 +1164,7 @@ function ProcessPoFinalTab() {
                 onChange={setSelectedOrderId}
                 options={orderOptions}
                 placeholder="-- Select process PO --"
-                emptyStateLabel={ordersQ.isLoading ? "Loading process orders..." : "No BATCH_STARTED process POs"}
+                emptyStateLabel={ordersQ.isLoading || intOrdersQ.isLoading ? "Loading process orders..." : "No process POs ready for Final"}
                 disabled={!effectiveCompanyId}
               />
             </div>
@@ -1170,9 +1184,9 @@ function ProcessPoFinalTab() {
 
       {po && (
         <ErpSectionCard title="PR11 Final">
-          {po.status !== "BATCH_STARTED" ? (
+          {po.status !== requiredFinalStatus(po.po_type) ? (
             <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              This Process PO is blocked for Final. Only `BATCH_STARTED` is allowed.
+              This Process PO is blocked for Final. Only `{requiredFinalStatus(po.po_type)}` is allowed for this type.
             </div>
           ) : (
             <div className="flex flex-col gap-4">
@@ -1193,7 +1207,7 @@ function ProcessPoFinalTab() {
                   disabled={saving}
                   className="rounded bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
                 >
-                  {saving ? "Saving..." : "Save as Final"}
+                  {saving ? "Saving..." : isDirectPostType ? "Complete & Post Stock" : "Save as Final"}
                 </button>
               </div>
 
@@ -1340,7 +1354,7 @@ function ProcessPoFinalTab() {
                         <th className="border-b px-3 py-2 text-right">Std</th>
                         <th className="border-b px-3 py-2 text-right">Actual</th>
                         {!hideRmApproval && <th className="border-b px-3 py-2 text-right">AP Appr</th>}
-                        <th className="border-b px-3 py-2 text-right">Var</th>
+                        {!isDirectPostType && <th className="border-b px-3 py-2 text-right">Var</th>}
                         <th className="border-b px-3 py-2 text-left">Mvt</th>
                       </tr>
                     </thead>
@@ -1348,9 +1362,22 @@ function ProcessPoFinalTab() {
                       <tr>
                         <td className="border-b border-slate-100 px-3 py-2">{materialLabel(po.material) || "--"}</td>
                         <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{Number(po.planned_qty || 0).toFixed(3)}</td>
-                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputActualQty.toFixed(3)}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right">
+                          {isDirectPostType ? (
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.001"
+                              className="w-28 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                              value={manualOutputQty}
+                              onChange={(event) => setManualOutputQty(event.target.value)}
+                            />
+                          ) : (
+                            <span className="font-mono">{outputActualQty.toFixed(3)}</span>
+                          )}
+                        </td>
                         {!hideRmApproval && <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputApprovedQty.toFixed(3)}</td>}
-                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputVariance.toFixed(3)}</td>
+                        {!isDirectPostType && <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputVariance.toFixed(3)}</td>}
                         <td className="border-b border-slate-100 px-3 py-2">P101</td>
                       </tr>
                     </tbody>

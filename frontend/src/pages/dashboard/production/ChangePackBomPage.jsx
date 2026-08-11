@@ -12,6 +12,7 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { getPackBom, listPackBoms, createPackBomChangeRequest } from "./prodApi.js";
 import { listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember } from "../om/omApi.js";
@@ -31,7 +32,6 @@ export default function ChangePackBomPage() {
   const [bom, setBom] = useState(null);
   const [loading, setLoading] = useState(false);
   const [changes, setChanges] = useState([]);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
 
   const [groupModal, setGroupModal] = useState(null);
   const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
@@ -39,8 +39,7 @@ export default function ChangePackBomPage() {
   const [memberMaterialId, setMemberMaterialId] = useState("");
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   const activeBomsQ = useQuery({
@@ -195,7 +194,6 @@ export default function ChangePackBomPage() {
     <ErpScreenScaffold
       title="Change Pack BOM — PR07"
       subtitle="Propose PM line changes to an ACTIVE Pack BOM — creates a change request for L1 Manager approval"
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Select Active Pack BOM">
         <div className="max-w-md">

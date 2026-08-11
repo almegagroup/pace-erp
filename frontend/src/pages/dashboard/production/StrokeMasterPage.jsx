@@ -18,6 +18,7 @@
 import React, { useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import {
@@ -48,7 +49,6 @@ export default function StrokeMasterPage() {
   const [companyFilter, setCompanyFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState("create"); // create | detail
   const [detail, setDetail] = useState(null);
@@ -137,8 +137,7 @@ export default function StrokeMasterPage() {
   const isDuplicateBlocked = Boolean(duplicateStroke);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   function openCreate() {
@@ -364,7 +363,6 @@ export default function StrokeMasterPage() {
       title="Stroke Master"
       subtitle="Define RM/INT dosage formulas per Prodshade (SFG/INT, PO Type-scoped)"
       actions={actions}
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
         <div className="flex gap-3 flex-wrap">

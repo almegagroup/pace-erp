@@ -8,6 +8,7 @@
 import React, { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import {
@@ -84,7 +85,6 @@ const EMPTY_PACK_CODE_FORM = {
 export default function SAPackCodeMasterPage() {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState(0);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
 
   const [filterMaterialId, setFilterMaterialId] = useState("");
@@ -100,8 +100,7 @@ export default function SAPackCodeMasterPage() {
   const prodshadeInputRef = useRef(null);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   const codesQ = useQuery({
@@ -290,7 +289,6 @@ export default function SAPackCodeMasterPage() {
   return (
     <ErpScreenScaffold
       title="Pack Code Master — OM08"
-      notices={notice.msg ? [{ key: "pack-code-master-notice", tone: notice.tone, message: notice.msg }] : []}
     >
       <ErpSectionCard>
         <div className="mb-6 flex gap-0 border-b border-slate-200">

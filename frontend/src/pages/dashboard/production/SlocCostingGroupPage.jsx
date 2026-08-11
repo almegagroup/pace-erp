@@ -4,6 +4,7 @@ import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { listStorageLocations } from "../om/omApi.js";
@@ -88,7 +89,6 @@ export default function SlocCostingGroupPage() {
   const [selectedMonth, setSelectedMonth] = useState(currentMonth());
   const [slocGroupId, setSlocGroupId] = useState("");
   const [tab, setTab] = useState("entry");
-  const [notice, setNotice] = useState({ message: "", tone: "success" });
   const [submitting, setSubmitting] = useState(false);
 
   const [costingDrawerOpen, setCostingDrawerOpen] = useState(false);
@@ -129,8 +129,7 @@ export default function SlocCostingGroupPage() {
   }, [companyId]);
 
   function pushNotice(message, tone = "success") {
-    setNotice({ message, tone });
-    window.setTimeout(() => setNotice({ message: "", tone: "success" }), 4500);
+    pushToast({ message, tone });
   }
 
   const storageLocationsQuery = useQuery({
@@ -396,7 +395,6 @@ export default function SlocCostingGroupPage() {
     <ErpScreenScaffold
       title="SLoc Costing Group"
       subtitle="AC06 v2 - material-level costing groups and month-wise rate drafting, browsed by SLoc Group."
-      notice={notice.message ? notice : null}
       actions={[
         {
           label: "Manage SLoc Groups",

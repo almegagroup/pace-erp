@@ -11,6 +11,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import {
@@ -133,7 +134,6 @@ function PackingPoEditTab() {
   const qc = useQueryClient();
   const [poNumberInput, setPoNumberInput] = useState("");
   const [submittedPoNumber, setSubmittedPoNumber] = useState("");
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [pmOverrides, setPmOverrides] = useState({});
   const [pmMatOverrides, setPmMatOverrides] = useState({});
@@ -198,8 +198,7 @@ function PackingPoEditTab() {
   const fillEditable = po?.pack_code?.bom_required === false;
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   function resetLookup() {
@@ -301,11 +300,6 @@ function PackingPoEditTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      {notice.msg ? (
-        <div className={`rounded px-3 py-2 text-sm ${notice.tone === "error" ? "border border-rose-200 bg-rose-50 text-rose-700" : "border border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
-          {notice.msg}
-        </div>
-      ) : null}
 
       {!showEditPage ? (
         <ErpSectionCard title="Page 1 - Identify Packing PO">
@@ -523,7 +517,6 @@ function ProcessPoEditTab() {
   const qc = useQueryClient();
   const [poNumberInput, setPoNumberInput] = useState("");
   const [submittedPoNumber, setSubmittedPoNumber] = useState("");
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [machineId, setMachineId] = useState("");
   const [batchQty, setBatchQty] = useState("");
@@ -650,8 +643,7 @@ function ProcessPoEditTab() {
   }, [blockMessage, detailQ.error, detailQ.isFetching, po, submittedPoNumber]);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   function resetLookup() {
@@ -716,11 +708,6 @@ function ProcessPoEditTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      {notice.msg ? (
-        <div className={`rounded px-3 py-2 text-sm ${notice.tone === "error" ? "border border-rose-200 bg-rose-50 text-rose-700" : "border border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
-          {notice.msg}
-        </div>
-      ) : null}
       {!showEditPage ? (
         <ErpSectionCard title="Page 1 - Identify Process PO">
           <form onSubmit={handleLookupSubmit} className="flex max-w-xl flex-col gap-4">

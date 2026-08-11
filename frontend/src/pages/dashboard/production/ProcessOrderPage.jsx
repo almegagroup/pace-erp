@@ -11,6 +11,7 @@
 import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
@@ -61,7 +62,6 @@ export default function ProcessOrderPage() {
   const [companyId, setCompanyId]   = useState("");
   const [statusFilter, setStatus]   = useState("");
   const [saving, setSaving]         = useState(false);
-  const [notice, setNotice]         = useState({ msg: "", tone: "success" });
 
   // Drawers/modals
   const [createOpen, setCreateOpen]         = useState(false);
@@ -82,8 +82,7 @@ export default function ProcessOrderPage() {
   const [actualDraft, setActualDraft] = useState([]);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
@@ -278,7 +277,6 @@ export default function ProcessOrderPage() {
         mnemonic: "N",
         onClick: () => { setForm({ ...EMPTY_FORM, company_id: defaultCompanyId }); setCreateOpen(true); },
       }]}
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       {/* Filters */}
       <ErpSectionCard>

@@ -9,6 +9,7 @@
 import React, { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
@@ -173,13 +174,11 @@ export default function PlanFeedPage() {
   const [tab, setTab] = useState("create");
   const [companyId, setCompanyId] = useState("");
   const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
 
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 4000);
+    pushToast({ message: msg, tone });
   }
 
   // ── Shared master lookups ─────────────────────────────────────────────────
@@ -555,7 +554,6 @@ export default function PlanFeedPage() {
     <ErpScreenScaffold
       title="Plan Feed"
       subtitle="Firm Order visibility — what customers ordered, and its current production/dispatch state"
-      notices={notice.msg ? [{ key: "plan-feed-notice", message: notice.msg, tone: notice.tone }] : []}
     >
       <ErpSectionCard>
         <div className="flex gap-3 items-end flex-wrap">

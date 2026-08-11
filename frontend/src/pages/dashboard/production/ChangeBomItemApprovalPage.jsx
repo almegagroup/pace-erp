@@ -13,6 +13,7 @@
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
@@ -46,7 +47,6 @@ export default function ChangeBomItemApprovalPage() {
   const [companyId, setCompanyId] = useState("");
   const [companyInitialized, setCompanyInitialized] = useState(false);
   const [statusFilter, setStatusFilter] = useState("");
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState("");
   const [detail, setDetail] = useState(null);
@@ -69,8 +69,7 @@ export default function ChangeBomItemApprovalPage() {
   }, [companyInitialized, runtimeContext]);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   const crQ = useQuery({
@@ -208,7 +207,6 @@ export default function ChangeBomItemApprovalPage() {
     <ErpScreenScaffold
       title="Change BOM Item Approval — PR04"
       subtitle="L3 Manager reviews DRAFT change requests, may edit the Proposed column, then approves or rejects."
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
         <div className="flex gap-3 flex-wrap items-end">

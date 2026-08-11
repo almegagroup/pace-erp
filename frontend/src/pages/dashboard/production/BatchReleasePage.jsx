@@ -10,6 +10,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { listProcessOrders, startBatch } from "./prodApi.js";
 
@@ -25,14 +26,12 @@ export default function BatchReleasePage() {
   const qc = useQueryClient();
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [releasingId, setReleasingId] = useState(null);
   const [releasedBatches, setReleasedBatches] = useState({});
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 4000);
+    pushToast({ message: msg, tone });
   }
 
   const ordersQ = useQuery({
@@ -68,7 +67,6 @@ export default function BatchReleasePage() {
     <ErpScreenScaffold
       title="Batch Release — PR17"
       subtitle="Manager releases batch numbers for QA_APPROVED Process Orders"
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
         <div className="flex gap-3 flex-wrap items-end">

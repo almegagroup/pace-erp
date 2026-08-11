@@ -11,6 +11,7 @@
 import React, { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
@@ -59,7 +60,6 @@ export default function QAQueuePage() {
   const qc = useQueryClient();
   const [companyId, setCompanyId] = useState("");
   const [expandedOrderId, setExpandedOrderId] = useState("");
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [rejectOrderId, setRejectOrderId] = useState("");
   const [rejectReason, setRejectReason] = useState("");
@@ -97,8 +97,7 @@ export default function QAQueuePage() {
   });
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   async function handleApprove(orderId) {
@@ -174,7 +173,6 @@ export default function QAQueuePage() {
     <ErpScreenScaffold
       title="QA Queue - PR16"
       subtitle="Inline expandable Process PO queue for QA approval and batch start"
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
         <div className="flex flex-wrap items-end gap-3">

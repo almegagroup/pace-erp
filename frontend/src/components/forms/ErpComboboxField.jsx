@@ -141,6 +141,16 @@ export default function ErpComboboxField({
   // Track the input's viewport position while open so the portaled panel
   // can follow it — recompute on open, and on scroll/resize anywhere
   // (capture phase catches scrolling inside any ancestor container too).
+  //
+  // Found live 2026-08-12: the panel used to be forced to exactly the
+  // trigger input's own width. In a dense grid (Stroke Master, Process/
+  // Packing PO create — anywhere the field lives in a narrow table cell)
+  // that made both the field AND its option list too narrow to read a full
+  // material name, so users clicked the wrong material by mistake — a real
+  // data-integrity risk, not just cosmetic. The panel now floors at
+  // MIN_PANEL_WIDTH (grows to fit long labels) and, since growing rightward
+  // could run off-screen for a field near the right edge, clamps its left
+  // edge back onto the viewport instead of overflowing.
   useLayoutEffect(() => {
     if (!open) {
       setPanelRect(null);
@@ -150,7 +160,12 @@ export default function ErpComboboxField({
       const el = wrapperRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
-      setPanelRect({ top: rect.bottom, left: rect.left, width: rect.width });
+      const MIN_PANEL_WIDTH = 320;
+      const VIEWPORT_MARGIN = 8;
+      const width = Math.max(rect.width, MIN_PANEL_WIDTH);
+      const maxLeft = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN);
+      const left = Math.min(rect.left, maxLeft);
+      setPanelRect({ top: rect.bottom, left, width });
     }
     updateRect();
     window.addEventListener("scroll", updateRect, true);
@@ -265,6 +280,7 @@ export default function ErpComboboxField({
         disabled={disabled}
         value={open ? query : selectedLabel}
         placeholder={open ? "Type to search…" : placeholder}
+        title={open ? undefined : selectedLabel}
         onClick={handleInputClick}
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
@@ -293,7 +309,7 @@ export default function ErpComboboxField({
                 className={`px-2 py-1 text-sm ${optionToneClass(opt, idx === highlightIndex, opt.value === value)}`}
               >
                 <div className="flex items-center justify-between gap-3">
-                  <span className="min-w-0 truncate">{opt.label}</span>
+                  <span className="min-w-0 truncate" title={opt.label}>{opt.label}</span>
                   {opt.badge ? (
                     <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${optionBadgeClass(opt, idx === highlightIndex)}`}>
                       {opt.badge}

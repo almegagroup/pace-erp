@@ -11,6 +11,7 @@
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
@@ -32,7 +33,6 @@ export default function BatchNumberReleasePage() {
   const [releaseModalOpen, setReleaseModalOpen] = useState(false);
   const [releaseReason, setReleaseReason] = useState("");
   const [releasing, setReleasing] = useState(false);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
 
   const { runtimeContext } = useMenu();
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
@@ -46,8 +46,7 @@ export default function BatchNumberReleasePage() {
   });
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   async function handleRelease() {
@@ -73,7 +72,6 @@ export default function BatchNumberReleasePage() {
     <ErpScreenScaffold
       title="Batch Number Release - PR17"
       subtitle="Release VOIDED batch numbers so they can be reused at Start Batch"
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
         <div className="flex flex-wrap items-end gap-3">

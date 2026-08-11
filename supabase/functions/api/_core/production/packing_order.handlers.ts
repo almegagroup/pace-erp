@@ -2090,6 +2090,15 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       }
       sfgLine.batch_number = effectiveSfgBatchNumber;
       if (fgLine) fgLine.batch_number = effectiveSfgBatchNumber;
+      // PM lines have no batch identity of their own, but they were consumed FOR this
+      // specific SFG batch — without this, PM issue rows in the Stock Ledger show no
+      // Batch Number at all (same bug class as Process PO's RM issue, found live
+      // 2026-08-11). Stamp it here so the posting loop below picks it up uniformly.
+      for (const line of lineRows) {
+        if (String(line.line_type ?? "") === "PM") {
+          line.batch_number = effectiveSfgBatchNumber;
+        }
+      }
       poData.batch_number = effectiveSfgBatchNumber;
       poData.process_order_id = selectedSfgBatch.process_order_id;
       poData.machine_id = toTrimmedString(selectedSfgBatch.machine?.id) || null;
