@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -111,6 +111,33 @@ export default function CurrentStockPage() {
       label: sloc.code ? `${sloc.code}${sloc.name ? ` — ${sloc.name}` : ""}` : sloc.name || sloc.id,
     })),
     [slocQuery.storageLocations],
+  );
+  // MultiValueFilterField's internal debounce effect depends on `searchFn` by
+  // reference -- an inline arrow function here would be a NEW reference every
+  // render, re-triggering that effect (and its "Searching…" loading flip) on
+  // every parent re-render, not just when the user actually types. That's the
+  // picker-drawer flicker/never-stabilizes bug reported live 2026-08-11.
+  // useCallback keeps the reference stable across renders that don't change
+  // companyId.
+  const searchBatchNumbers = useCallback(
+    async (queryText) => {
+      const response = await searchCurrentStockBatchNumbers({
+        q: queryText || undefined,
+        company_ids: companyId || undefined,
+      });
+      return Array.isArray(response?.data) ? response.data : [];
+    },
+    [companyId],
+  );
+  const searchPackingPoNumbers = useCallback(
+    async (queryText) => {
+      const response = await searchCurrentStockPackingPoNumbers({
+        q: queryText || undefined,
+        company_ids: companyId || undefined,
+      });
+      return Array.isArray(response?.data) ? response.data : [];
+    },
+    [companyId],
   );
   const [materialValues, setMaterialValues] = useState([]);
   const [slocValues, setSlocValues] = useState([]);
@@ -278,26 +305,14 @@ export default function CurrentStockPage() {
               placeholder="All batch numbers"
               value={batchValues}
               onChange={setBatchValues}
-              searchFn={async (queryText) => {
-                const response = await searchCurrentStockBatchNumbers({
-                  q: queryText || undefined,
-                  company_ids: companyId || undefined,
-                });
-                return Array.isArray(response?.data) ? response.data : [];
-              }}
+              searchFn={searchBatchNumbers}
             />
             <MultiValueFilterField
               label="Packing PO Number"
               placeholder="All packing POs"
               value={packingPoValues}
               onChange={setPackingPoValues}
-              searchFn={async (queryText) => {
-                const response = await searchCurrentStockPackingPoNumbers({
-                  q: queryText || undefined,
-                  company_ids: companyId || undefined,
-                });
-                return Array.isArray(response?.data) ? response.data : [];
-              }}
+              searchFn={searchPackingPoNumbers}
             />
           </div>
 

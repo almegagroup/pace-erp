@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -178,6 +178,33 @@ export default function StockLedgerReportPage() {
       label: entry.label,
     })),
     [movementTypesQuery.data],
+  );
+  // MultiValueFilterField's internal debounce effect depends on `searchFn` by
+  // reference -- an inline arrow function here would be a NEW reference every
+  // render, re-triggering that effect (and its "Searching…" loading flip) on
+  // every parent re-render, not just when the user actually types. That's the
+  // picker-drawer flicker/never-stabilizes bug reported live 2026-08-11.
+  // useCallback keeps the reference stable across renders that don't change
+  // companyId.
+  const searchBatchNumbers = useCallback(
+    async (queryText) => {
+      const result = await searchStockLedgerBatchNumbers({
+        q: queryText || undefined,
+        company_ids: companyId || undefined,
+      });
+      return Array.isArray(result?.data) ? result.data : [];
+    },
+    [companyId],
+  );
+  const searchPackingPoNumbers = useCallback(
+    async (queryText) => {
+      const result = await searchStockLedgerPackingPoNumbers({
+        q: queryText || undefined,
+        company_ids: companyId || undefined,
+      });
+      return Array.isArray(result?.data) ? result.data : [];
+    },
+    [companyId],
   );
   const [materialValues, setMaterialValues] = useState([]);
   const [slocValues, setSlocValues] = useState([]);
@@ -483,13 +510,7 @@ export default function StockLedgerReportPage() {
               placeholder="All batch numbers"
               value={batchValues}
               onChange={setBatchValues}
-              searchFn={async (queryText) => {
-                const result = await searchStockLedgerBatchNumbers({
-                  q: queryText || undefined,
-                  company_ids: companyId || undefined,
-                });
-                return Array.isArray(result?.data) ? result.data : [];
-              }}
+              searchFn={searchBatchNumbers}
             />
 
             <MultiValueFilterField
@@ -497,13 +518,7 @@ export default function StockLedgerReportPage() {
               placeholder="All packing PO numbers"
               value={packingPoValues}
               onChange={setPackingPoValues}
-              searchFn={async (queryText) => {
-                const result = await searchStockLedgerPackingPoNumbers({
-                  q: queryText || undefined,
-                  company_ids: companyId || undefined,
-                });
-                return Array.isArray(result?.data) ? result.data : [];
-              }}
+              searchFn={searchPackingPoNumbers}
             />
 
             <MultiValueFilterField
