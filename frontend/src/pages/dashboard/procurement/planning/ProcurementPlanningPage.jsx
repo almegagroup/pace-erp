@@ -39,12 +39,6 @@ function getMonthValue(raw) {
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-function getStatusToneClass(tone) {
-  if (tone === "CRITICAL") return "bg-rose-50 text-rose-800";
-  if (tone === "WARNING") return "bg-amber-50 text-amber-800";
-  return "";
-}
-
 function extractCollectionItems(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.items)) return payload.items;
@@ -227,21 +221,22 @@ function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
     }
   }
 
-  const blocks = [];
-  [...grouped.values()]
-    .sort((left, right) =>
-      String(left[0]?.planning_item_group_name || "").localeCompare(
-        String(right[0]?.planning_item_group_name || "")
-      )
-    )
-    .forEach((items) => {
-      const sortedItems = [...items].sort((left, right) => {
-        const leftCode = String(left.material_code || "");
-        const rightCode = String(right.material_code || "");
-        return leftCode.localeCompare(rightCode);
-      });
+  // Groups and standalone materials render as ONE merged alphabetical list
+  // (by Material Name -- name is the primary display field everywhere now,
+  // §35.18), not two separate stacks (all groups, then all standalone).
+  // A group's position in that merged order is decided by its alphabetically
+  // -first member's name -- e.g. a group containing DEG/LFG/MFG sorts as
+  // if it were a single entry named "DEG", so it lands between whichever
+  // standalone materials come before and after "DEG" alphabetically, not
+  // clustered separately from them. Locked 2026-08-11 (business owner).
+  const units = [];
+  [...grouped.values()].forEach((items) => {
+      const sortedItems = [...items].sort((left, right) =>
+        String(left.material_name || "").localeCompare(String(right.material_name || ""))
+      );
       const groupName = sortedItems[0]?.planning_item_group_name || "";
-      sortedItems.forEach((row) => blocks.push({ type: "item", row, groupName }));
+      const groupBlocks = [];
+      sortedItems.forEach((row) => groupBlocks.push({ type: "item", row, groupName }));
       const count = sortedItems.length || 1;
       const matchingConfig =
         groupConfigById.get(String(sortedItems[0]?.planning_item_group_id || "")) ||
@@ -308,7 +303,7 @@ function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
       } else if (totalStock <= effectiveReplenishment) {
         tone = "WARNING";
       }
-      blocks.push({
+      groupBlocks.push({
         type: "group-total",
         groupName,
         // True once any member has its own requirement entered -- the Group
@@ -341,15 +336,18 @@ function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
               .join(", ") || "Mixed scope",
         },
       });
+      // Group's position in the merged list = its alphabetically-first
+      // member's name (sortedItems is already name-sorted, so [0] is it).
+      units.push({ sortKey: sortedItems[0]?.material_name || "", blocks: groupBlocks });
     });
 
-  standalone
-    .sort((left, right) =>
-      String(left.row.material_code || "").localeCompare(String(right.row.material_code || ""))
-    )
-    .forEach((entry) => blocks.push(entry));
+  standalone.forEach((entry) => {
+    units.push({ sortKey: entry.row.material_name || "", blocks: [entry] });
+  });
 
-  return blocks;
+  return units
+    .sort((left, right) => String(left.sortKey).localeCompare(String(right.sortKey)))
+    .flatMap((unit) => unit.blocks);
 }
 
 function normalizeHistoryRows(rows) {
@@ -507,9 +505,31 @@ function buildReportGridColumns() {
 
 // Group Total rows get a visibly distinct background -- previously only
 // font-weight differed, easy to miss at a glance in a long table.
+//
+// Two real bugs fixed here (2026-08-11, found live after the ErpDenseGrid
+// rewrite): (1) ErpDenseGrid's own <tr> already hardcodes `bg-white` in its
+// base className, applied via the SAME className string as whatever
+// getRowProps returns here -- two non-!important Tailwind bg-* utilities in
+// one class list have no guaranteed winner (browser/Tailwind stylesheet
+// order decides, not string order), so the row color was silently losing to
+// bg-white. Fixed with the `!` important prefix so ours always wins.
+// (2) the old version concatenated a status-tone bg-amber-50/bg-rose-50
+// class together with this function's own bg-slate-100 for a
+// WARNING/CRITICAL group-total row -- two bg-* utilities fighting each
+// other again. Status severity is the more urgent signal, so it now takes
+// priority over the plain "this is a group total" highlight (below), rather
+// than being combined with it -- exactly one background class per row.
 function reportRowProps(row) {
+  let backgroundClass = "";
+  if (row.status_tone === "CRITICAL") backgroundClass = "!bg-rose-50";
+  else if (row.status_tone === "WARNING") backgroundClass = "!bg-amber-50";
+  else if (row.__isGroupTotal) backgroundClass = "!bg-slate-100";
+
+  const textClass =
+    row.status_tone === "CRITICAL" ? "text-rose-800" : row.status_tone === "WARNING" ? "text-amber-800" : "";
+
   return {
-    className: `${row.__isGroupTotal ? "bg-slate-100 font-semibold" : ""} ${getStatusToneClass(row.status_tone)}`.trim(),
+    className: `${backgroundClass} ${textClass} ${row.__isGroupTotal ? "font-semibold" : ""}`.trim(),
   };
 }
 

@@ -1028,6 +1028,14 @@ function ProcessPoFinalTab() {
     setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
   }
 
+  // Only manually-added lines can be removed -- auto-derived formulation
+  // lines (is_formulation_line: true, loaded from the Process PO's BOM) stay
+  // fixed here, same guard PR12 Verify already uses. This page previously had
+  // no remove path at all: addRow existed, nothing did the opposite.
+  function removeRow(key) {
+    setRows((current) => current.filter((row) => row.key !== key));
+  }
+
   function addRow() {
     setRows((current) => [...current, {
       key: `new-${Date.now()}`,
@@ -1205,6 +1213,7 @@ function ProcessPoFinalTab() {
                         {!hideRmApproval && <th className="border-b px-3 py-2 text-right">AP Appr</th>}
                         <th className="border-b px-3 py-2 text-right">Var</th>
                         <th className="border-b px-3 py-2 text-left">Mvt</th>
+                        <th className="border-b px-3 py-2 text-center">Delete</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1301,6 +1310,17 @@ function ProcessPoFinalTab() {
                             )}
                             <td className="px-3 py-2 text-right font-mono">{values.variance.toFixed(3)}</td>
                             <td className="px-3 py-2">P261</td>
+                            <td className="px-3 py-2 text-center">
+                              {!row.is_formulation_line && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeRow(row.key)}
+                                  className="text-sm font-medium text-rose-600 hover:underline"
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}

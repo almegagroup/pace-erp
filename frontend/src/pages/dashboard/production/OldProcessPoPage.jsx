@@ -32,6 +32,7 @@ const ERRORS = {
   PROD_OLD_PROCESS_PO_BATCH_EXISTS: "A Process PO already exists for this batch.",
   PROD_OLD_OPENING_BATCH_NOT_FOUND: "This batch has no posted Opening Stock (IN05). Load opening stock first.",
   PROD_OLD_OPENING_QTY_MISMATCH: "Actual Output does not match the opening stock quantity for this batch.",
+  PROD_OLD_PROCESS_PO_LINE_INVALID: "Every line needs a material, storage location, and actual qty (0 or more).",
 };
 function friendly(code, fallback) { return ERRORS[code] ?? fallback ?? code; }
 
@@ -226,11 +227,23 @@ export default function OldProcessPoPage() {
 
   const allLines = useMemo(() => [...derivedLines, ...normalizedManualLines], [derivedLines, normalizedManualLines]);
   const totalRm = allLines.reduce((s, l) => s + l.actual_qty, 0);
-  const hasInvalidLine = allLines.some((line) => !line.material_id || num(line.actual_qty) <= 0 || !line.issue_sloc_id);
+  // actual_qty === 0 is a valid, explicit line value (e.g. this RM/INT was
+  // part of the formulation but zero actually used in this old batch) --
+  // only material and storage location are truly required per line. This
+  // previously rejected 0 the same as "not entered" (num("") is also 0 in
+  // JS, so a genuine 0 and a blank field were indistinguishable here
+  // anyway -- the fix is simply to stop treating either as an error).
+  const hasInvalidLine = allLines.some((line) => !line.material_id || !line.issue_sloc_id);
   const canSave = !!effectiveCompanyId && !!strokeId && !!batchNumber.trim() && num(outputQty) > 0 && allLines.length > 0 && !hasInvalidLine;
 
   async function handleSave() {
-    if (!canSave) { toast("Fill Company, Stroke, Batch Number, Actual Output, and every line's storage location.", "error"); return; }
+    if (!canSave) {
+      toast(
+        "Fill Company, Stroke, Batch Number, and Actual Output -- and make sure every line (including any you just added) has a Material and a Storage Location.",
+        "error"
+      );
+      return;
+    }
     setSaving(true);
     try {
       const res = await createOldProcessPo({

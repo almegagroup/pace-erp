@@ -15,6 +15,7 @@ import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
   parseBody,
+  parseNonNegativeNumber,
   parsePositiveNumber,
   toTrimmedString,
   toUpperTrimmedString,
@@ -231,14 +232,22 @@ export async function createOldProcessPoHandler(req: Request, ctx: ProdHandlerCo
     if (lines.length === 0) {
       return genErr(req, ctx, "PROD_OLD_PROCESS_PO_NO_LINES", 400, "At least one RM/INT line is required");
     }
+    // A line's actual_qty being exactly 0 is a valid, meaningful genealogy
+    // entry (e.g. this RM/INT was part of the formulation but zero actually
+    // used in this old batch) -- it must not be rejected the same way a
+    // truly missing value would be. parsePositiveNumber rejects 0 (returns
+    // null), so used with `!actualQty` it made 0 indistinguishable from
+    // "not provided". Switched to parseNonNegativeNumber (0 allowed) and an
+    // explicit `=== null` check (0 is falsy in JS, so `!actualQty` alone
+    // would still have rejected a real 0 even with the non-negative parser).
     const hasInvalidLine = lines.some((line) => {
       const materialId = toTrimmedString(line.material_id);
-      const actualQty = parsePositiveNumber(line.actual_qty);
+      const actualQty = parseNonNegativeNumber(line.actual_qty);
       const issueSlocId = toTrimmedString(line.issue_sloc_id);
-      return !materialId || !actualQty || !issueSlocId;
+      return !materialId || actualQty === null || !issueSlocId;
     });
     if (hasInvalidLine) {
-      return genErr(req, ctx, "PROD_OLD_PROCESS_PO_LINE_INVALID", 400, "Every PR22 line needs material, actual qty, and storage location");
+      return genErr(req, ctx, "PROD_OLD_PROCESS_PO_LINE_INVALID", 400, "Every PR22 line needs material, actual qty (0 or more), and storage location");
     }
 
     const { data: dup } = await serviceRoleClient
