@@ -33,6 +33,16 @@ jobs:
       - name: Company scope guard
         run: node scripts/company-scope-guard.mjs
 
+      # Fails if a NEW write handler resolves a caller-supplied company_id
+      # (body/query, not ctx.context.companyId) and mutates without its own
+      # EDIT-level ACL check for that specific company -- route-level stepAcl
+      # only checks ctx.context.companyId (session-pinned), so this is a
+      # distinct gap from the plain membership check above (found live
+      # 2026-08-11, PO11 Planning; 126 pre-existing handlers baselined, see
+      # the script header for the remediation-sweep plan).
+      - name: Company scope write ACL guard
+        run: node scripts/company-scope-write-acl-guard.mjs
+
       # Fails if any handler introduces a new hardcoded MANAGER_OR_SA_ROLES-style
       # role list/function instead of relying on the ACL layer (11-bug #1).
       - name: Hardcoded role-check guard
