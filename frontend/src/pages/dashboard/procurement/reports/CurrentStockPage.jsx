@@ -87,14 +87,24 @@ export default function CurrentStockPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runtimeContext]);
+  // Defensive fallback, not just a stopgap for the effect above: TransactionCompanySelector
+  // itself already falls back to this same resolver for its own DISPLAY value
+  // (see transactionCompanyRuntime.js) whenever the `companyId` state prop is
+  // still empty -- so the Company field can visibly show the right company
+  // while `companyId` state is still "" for a render or two. Anything reading
+  // `companyId` directly (this query, the picker searchFns) must fall back to
+  // the same resolver, or it can silently stay scoped to nothing while the
+  // field looks populated. Investigated live 2026-08-11 (IN02/IN03 Material
+  // picker reported empty) -- this closes the gap regardless of why state lags.
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   // Materials filter dropdown is scoped to the selected company (§8A gap
   // fix, 2026-08-05) -- material_master itself is global, so without this
   // the picker leaked every company's materials into every other company's
   // dropdown even though report execution itself was already scoped.
   const materialsQuery = useMaterialOptionsQuery(
-    { status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, company_id: companyId },
-    { enabled: Boolean(companyId) },
+    { status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, company_id: effectiveCompanyId },
+    { enabled: Boolean(effectiveCompanyId) },
   );
   const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
 
@@ -123,21 +133,21 @@ export default function CurrentStockPage() {
     async (queryText) => {
       const response = await searchCurrentStockBatchNumbers({
         q: queryText || undefined,
-        company_ids: companyId || undefined,
+        company_ids: effectiveCompanyId || undefined,
       });
       return Array.isArray(response?.data) ? response.data : [];
     },
-    [companyId],
+    [effectiveCompanyId],
   );
   const searchPackingPoNumbers = useCallback(
     async (queryText) => {
       const response = await searchCurrentStockPackingPoNumbers({
         q: queryText || undefined,
-        company_ids: companyId || undefined,
+        company_ids: effectiveCompanyId || undefined,
       });
       return Array.isArray(response?.data) ? response.data : [];
     },
-    [companyId],
+    [effectiveCompanyId],
   );
   const [materialValues, setMaterialValues] = useState([]);
   const [slocValues, setSlocValues] = useState([]);
@@ -292,6 +302,13 @@ export default function CurrentStockPage() {
               value={materialValues}
               onChange={setMaterialValues}
               options={materialOptions}
+              loadError={
+                !effectiveCompanyId
+                  ? "Company not resolved yet — select Company above."
+                  : materialsQuery.isError
+                    ? `${materialsQuery.error?.code ?? ""} ${materialsQuery.error?.message ?? "Unknown error"}`.trim()
+                    : ""
+              }
             />
             <MultiValueFilterField
               label="Storage Location"
@@ -299,6 +316,7 @@ export default function CurrentStockPage() {
               value={slocValues}
               onChange={setSlocValues}
               options={slocOptions}
+              loadError={slocQuery.isError ? `${slocQuery.error?.code ?? ""} ${slocQuery.error?.message ?? "Unknown error"}`.trim() : ""}
             />
             <MultiValueFilterField
               label="Batch Number"
