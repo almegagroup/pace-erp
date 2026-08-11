@@ -43,6 +43,7 @@ const FREIGHT_TERM_OPTIONS = [
   { value: "FOR", label: "FOR" },
   { value: "FREIGHT_SEPARATE", label: "Freight Separate" },
   { value: "FREIGHT_AT_ACTUALS", label: "Freight at Actuals" },
+  { value: "EX_TRANSPORTER_GODOWN", label: "Ex Transporter Godown" },
 ];
 const REBATE_BASIS_OPTIONS = [
   { value: "BASE_UOM", label: "Base UOM" },

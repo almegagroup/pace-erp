@@ -1032,7 +1032,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
   }
 }
 
-const EXCLUSIVE_FREIGHT_TERMS = new Set(["FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS"]);
+const EXCLUSIVE_FREIGHT_TERMS = new Set(["FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS", "EX_TRANSPORTER_GODOWN"]);
 
 // post_document/complete_pgi_invoice_action wrote the invoice+lines inside
 // the transaction, so this is a plain read-back for the response -- not
