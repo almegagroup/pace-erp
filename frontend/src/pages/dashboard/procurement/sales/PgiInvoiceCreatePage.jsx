@@ -22,7 +22,7 @@ import { getActiveScreenContext, openScreenWithContext, popScreen } from "../../
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { createPgiInvoice, getDeliveryOrder } from "../procurementApi.js";
 
-const EXCLUSIVE_FREIGHT_TERMS = new Set(["FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS"]);
+const EXCLUSIVE_FREIGHT_TERMS = new Set(["FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS", "EX_TRANSPORTER_GODOWN"]);
 
 function formatFixed(value, digits = 2) {
   const numeric = Number(value);

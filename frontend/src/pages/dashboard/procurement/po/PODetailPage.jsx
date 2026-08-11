@@ -812,6 +812,7 @@ export default function PODetailPage() {
                     <option value="FOR">FOR</option>
                     <option value="FREIGHT_SEPARATE">Freight Separate</option>
                     <option value="FREIGHT_AT_ACTUALS">Freight at Actuals</option>
+                    <option value="EX_TRANSPORTER_GODOWN">Ex Transporter Godown</option>
                   </select>
                 </label>
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
