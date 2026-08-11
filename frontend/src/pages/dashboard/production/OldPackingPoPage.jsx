@@ -211,10 +211,14 @@ export default function OldPackingPoPage() {
 
   const poType = parent?.po_type ? packingPoTypeForProcessType(parent.po_type) : "";
   const allPmLines = useMemo(() => [...derivedPmLines, ...normalizedManualPmLines], [derivedPmLines, normalizedManualPmLines]);
-  const pmLinesToSave = useMemo(
-    () => allPmLines.filter((line) => num(line.actual_qty) > 0),
-    [allPmLines],
-  );
+  // A line's Actual Qty being exactly 0 is a valid, meaningful data point for
+  // opening genealogy (e.g. "this PM was part of the formulation but zero
+  // actually used in this old batch") -- it must be saved as 0, not silently
+  // dropped. This previously filtered on `> 0`, which treated a real 0 the
+  // same as "not entered" and excluded the line from the save payload before
+  // the request was even built. Backend (createOldPackingPoHandler) already
+  // happily inserts a 0-qty PM line, so this was purely a frontend drop.
+  const pmLinesToSave = allPmLines;
   const hasInvalidPmLine = pmLinesToSave.some((line) => !line.material_id || !line.issue_sloc_id);
   const needsSfgLine = !!parent?.material_id;
   const canSave = !!effectiveCompanyId && !!processOrderId && !!skuMaterialId && num(actualQtyKg) > 0 && !!fgSlocId && (!needsSfgLine || !!sfgSlocId) && !hasInvalidPmLine;
