@@ -3225,8 +3225,20 @@ Rules:
 group-aggregation rule below, which treated the Group Total row as an
 independently-entered value disconnected from members instead of a value
 derived from them.** For grouped materials:
-- Members must appear in ascending order.
+- Members must appear in ascending order, by Material Name (name is the
+  primary display field everywhere, §35.18 -- not material code).
 - The group total row must appear immediately after the last member.
+- **Overall row order is one merged alphabetical list, not two stacked
+  blocks** (added 2026-08-11, business owner): standalone materials and
+  groups sort together by Material Name, not "all groups first, then all
+  standalone" or vice versa. A group's position in that merged order is
+  decided by its alphabetically-first member's name -- e.g. a group whose
+  members are DEG/LFG/MFG sorts as if it were a single entry named "DEG",
+  landing between whichever standalone materials come immediately before
+  and after "DEG" alphabetically (example locked: Biocide, Caramel Colour,
+  DEG, LFG, MFG, Group Total, Econex -- not Biocide, Caramel Colour, Econex,
+  DEG-group). Applies everywhere this ordering renders: Planning Dashboard
+  (live + full report), Monthly Plan Input, History/Archive.
 - Group total stock is the summed stock position of all active members in that month (unchanged).
 - **Monthly Requirement is the one dual-entry-mode field:**
   - If any member in the group has its own requirement entered, the Group

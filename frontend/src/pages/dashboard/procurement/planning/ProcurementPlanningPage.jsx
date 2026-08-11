@@ -221,21 +221,22 @@ function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
     }
   }
 
-  const blocks = [];
-  [...grouped.values()]
-    .sort((left, right) =>
-      String(left[0]?.planning_item_group_name || "").localeCompare(
-        String(right[0]?.planning_item_group_name || "")
-      )
-    )
-    .forEach((items) => {
-      const sortedItems = [...items].sort((left, right) => {
-        const leftCode = String(left.material_code || "");
-        const rightCode = String(right.material_code || "");
-        return leftCode.localeCompare(rightCode);
-      });
+  // Groups and standalone materials render as ONE merged alphabetical list
+  // (by Material Name -- name is the primary display field everywhere now,
+  // §35.18), not two separate stacks (all groups, then all standalone).
+  // A group's position in that merged order is decided by its alphabetically
+  // -first member's name -- e.g. a group containing DEG/LFG/MFG sorts as
+  // if it were a single entry named "DEG", so it lands between whichever
+  // standalone materials come before and after "DEG" alphabetically, not
+  // clustered separately from them. Locked 2026-08-11 (business owner).
+  const units = [];
+  [...grouped.values()].forEach((items) => {
+      const sortedItems = [...items].sort((left, right) =>
+        String(left.material_name || "").localeCompare(String(right.material_name || ""))
+      );
       const groupName = sortedItems[0]?.planning_item_group_name || "";
-      sortedItems.forEach((row) => blocks.push({ type: "item", row, groupName }));
+      const groupBlocks = [];
+      sortedItems.forEach((row) => groupBlocks.push({ type: "item", row, groupName }));
       const count = sortedItems.length || 1;
       const matchingConfig =
         groupConfigById.get(String(sortedItems[0]?.planning_item_group_id || "")) ||
@@ -302,7 +303,7 @@ function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
       } else if (totalStock <= effectiveReplenishment) {
         tone = "WARNING";
       }
-      blocks.push({
+      groupBlocks.push({
         type: "group-total",
         groupName,
         // True once any member has its own requirement entered -- the Group
@@ -335,15 +336,18 @@ function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
               .join(", ") || "Mixed scope",
         },
       });
+      // Group's position in the merged list = its alphabetically-first
+      // member's name (sortedItems is already name-sorted, so [0] is it).
+      units.push({ sortKey: sortedItems[0]?.material_name || "", blocks: groupBlocks });
     });
 
-  standalone
-    .sort((left, right) =>
-      String(left.row.material_code || "").localeCompare(String(right.row.material_code || ""))
-    )
-    .forEach((entry) => blocks.push(entry));
+  standalone.forEach((entry) => {
+    units.push({ sortKey: entry.row.material_name || "", blocks: [entry] });
+  });
 
-  return blocks;
+  return units
+    .sort((left, right) => String(left.sortKey).localeCompare(String(right.sortKey)))
+    .flatMap((unit) => unit.blocks);
 }
 
 function normalizeHistoryRows(rows) {
