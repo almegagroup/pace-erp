@@ -224,10 +224,10 @@ export default function OpeningStockApprovalPage() {
   });
   const openingQueries = useQueries({
     queries: editableLines.map((line) => ({
-      queryKey: [documentMaterialType === "FG" ? "old-packing-po-batches" : "old-process-po-batches", companyId, line.material_id, line.row_key, "approval"],
+      queryKey: [documentMaterialType === "FG" ? "old-packing-po-batches" : "old-process-po-batches", companyId, line.material_id, documentPoType, line.row_key, "approval"],
       queryFn: () => documentMaterialType === "FG"
-        ? listOldPackingPoBatches({ company_id: companyId, material_id: line.material_id })
-        : listOldProcessPoBatches({ company_id: companyId, material_id: line.material_id }),
+        ? listOldPackingPoBatches({ company_id: companyId, material_id: line.material_id, po_type: documentPoType })
+        : listOldProcessPoBatches({ company_id: companyId, material_id: line.material_id, po_type: documentPoType }),
       enabled: Boolean(isOpeningGenealogyDocument && companyId && line.material_id),
       select: (response) => response?.data ?? response ?? [],
     })),

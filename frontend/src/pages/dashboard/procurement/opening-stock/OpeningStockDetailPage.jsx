@@ -408,26 +408,26 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     })),
   });
   const singleOpeningSfgQuery = useQuery({
-    queryKey: ["old-process-po-batches", companyId, singleForm.material_id],
-    queryFn: () => listOldProcessPoBatches({ company_id: companyId, material_id: singleForm.material_id }),
+    queryKey: ["old-process-po-batches", companyId, singleForm.material_id, documentPoType],
+    queryFn: () => listOldProcessPoBatches({ company_id: companyId, material_id: singleForm.material_id, po_type: documentPoType }),
     enabled: Boolean(isOpeningGenealogyDocument && documentMaterialType === "SFG" && companyId && singleForm.material_id),
     select: (response) => response?.data ?? response ?? [],
   });
   const singleOpeningFgQuery = useQuery({
-    queryKey: ["old-packing-po-batches", companyId, singleForm.material_id],
-    queryFn: () => listOldPackingPoBatches({ company_id: companyId, material_id: singleForm.material_id }),
+    queryKey: ["old-packing-po-batches", companyId, singleForm.material_id, documentPoType],
+    queryFn: () => listOldPackingPoBatches({ company_id: companyId, material_id: singleForm.material_id, po_type: documentPoType }),
     enabled: Boolean(isOpeningGenealogyDocument && documentMaterialType === "FG" && companyId && singleForm.material_id),
     select: (response) => response?.data ?? response ?? [],
   });
   const editOpeningSfgQuery = useQuery({
-    queryKey: ["old-process-po-batches", companyId, editForm.material_id, "edit"],
-    queryFn: () => listOldProcessPoBatches({ company_id: companyId, material_id: editForm.material_id }),
+    queryKey: ["old-process-po-batches", companyId, editForm.material_id, documentPoType, "edit"],
+    queryFn: () => listOldProcessPoBatches({ company_id: companyId, material_id: editForm.material_id, po_type: documentPoType }),
     enabled: Boolean(isOpeningGenealogyDocument && documentMaterialType === "SFG" && companyId && editForm.material_id),
     select: (response) => response?.data ?? response ?? [],
   });
   const editOpeningFgQuery = useQuery({
-    queryKey: ["old-packing-po-batches", companyId, editForm.material_id, "edit"],
-    queryFn: () => listOldPackingPoBatches({ company_id: companyId, material_id: editForm.material_id }),
+    queryKey: ["old-packing-po-batches", companyId, editForm.material_id, documentPoType, "edit"],
+    queryFn: () => listOldPackingPoBatches({ company_id: companyId, material_id: editForm.material_id, po_type: documentPoType }),
     enabled: Boolean(isOpeningGenealogyDocument && documentMaterialType === "FG" && companyId && editForm.material_id),
     select: (response) => response?.data ?? response ?? [],
   });
@@ -437,12 +437,13 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
         documentMaterialType === "FG" ? "old-packing-po-batches" : "old-process-po-batches",
         companyId,
         row.material_id,
+        documentPoType,
         row.key,
       ],
       queryFn: () => (
         documentMaterialType === "FG"
-          ? listOldPackingPoBatches({ company_id: companyId, material_id: row.material_id })
-          : listOldProcessPoBatches({ company_id: companyId, material_id: row.material_id })
+          ? listOldPackingPoBatches({ company_id: companyId, material_id: row.material_id, po_type: documentPoType })
+          : listOldProcessPoBatches({ company_id: companyId, material_id: row.material_id, po_type: documentPoType })
       ),
       enabled: Boolean(isOpeningGenealogyDocument && companyId && row.material_id),
       select: (response) => response?.data ?? response ?? [],
