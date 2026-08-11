@@ -433,13 +433,28 @@ function SummaryChips({ items }) {
 // state moves onto the row itself as __-prefixed props so column render() functions
 // (and getRowProps, for the group-total background highlight) can read it directly.
 function flattenBlocksForGrid(blocks) {
-  return blocks.map((entry, index) => ({
-    ...entry.row,
-    __gridKey: `${entry.type}-${entry.groupName || entry.row.id || entry.row.material_id || index}`,
-    __isGroupTotal: entry.type === "group-total",
-    __groupName: entry.groupName || entry.row.planning_item_group_name || "Standalone",
-    __requirementIsDerivedFromMembers: Boolean(entry.requirementIsDerivedFromMembers),
-  }));
+  return blocks.map((entry, index) => {
+    // Real bug fixed here (2026-08-11, found live): every member of the same
+    // group was getting the SAME __gridKey (it fell back to entry.groupName
+    // first, which is identical for every row in that group -- entry.row.id
+    // never got reached). ErpDenseGrid's virtualized rows are keyed by this
+    // value; duplicate keys made React reuse/misapply one row's rendered
+    // content for a different row's data, showing the group's first member
+    // twice and dropping another member entirely. Item rows must key off
+    // their own unique row id (or material_id) first -- group name is only
+    // safe as a key for the single group-total row per group.
+    const gridKey =
+      entry.type === "group-total"
+        ? `group-total-${entry.row.planning_item_group_id || entry.groupName || index}`
+        : `item-${entry.row.id || entry.row.material_id || index}`;
+    return {
+      ...entry.row,
+      __gridKey: gridKey,
+      __isGroupTotal: entry.type === "group-total",
+      __groupName: entry.groupName || entry.row.planning_item_group_name || "Standalone",
+      __requirementIsDerivedFromMembers: Boolean(entry.requirementIsDerivedFromMembers),
+    };
+  });
 }
 
 // Shared by DashboardTable (live view + full report) and the History tab --
@@ -590,11 +605,12 @@ function DashboardTable({
 }) {
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
+      if (!matchesSearch(row, filters.query)) return false;
       if (filters.slocGroupId && row.source_sloc_group_id !== filters.slocGroupId) return false;
       if (filters.materialType !== "ALL" && row.material_type !== filters.materialType) return false;
       return true;
     });
-  }, [filters.materialType, filters.slocGroupId, rows]);
+  }, [filters.materialType, filters.query, filters.slocGroupId, rows]);
   const blocks = useMemo(
     () => computeDashboardBlocks(filteredRows, monthValue, groupConfigs),
     [filteredRows, monthValue, groupConfigs]
@@ -607,7 +623,9 @@ function DashboardTable({
     <div className="grid gap-3">
       <div
         className={`grid gap-3 rounded border border-slate-200 bg-white p-3 ${
-          companyControls ? "lg:grid-cols-[220px_200px_220px_180px]" : "lg:grid-cols-[220px_220px]"
+          companyControls
+            ? "lg:grid-cols-[220px_200px_200px_160px_minmax(0,1fr)]"
+            : "lg:grid-cols-[200px_160px_minmax(0,1fr)]"
         }`}
       >
         {companyControls}
@@ -637,6 +655,15 @@ function DashboardTable({
             <option value="RM">RM</option>
             <option value="PM">PM</option>
           </select>
+        </label>
+        <label className="grid gap-1 text-sm text-slate-700">
+          <span className="font-medium text-slate-800">Search Material</span>
+          <input
+            value={filters.query || ""}
+            onChange={(event) => onFilterChange("query", event.target.value)}
+            placeholder="Type material code, name, or external code..."
+            className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+          />
         </label>
       </div>
       <SummaryChips
@@ -1077,6 +1104,7 @@ export default function ProcurementPlanningPage() {
   const [materialManagerSlocGroupId, setMaterialManagerSlocGroupId] = useState("");
   const [slocMaterialSearch, setSlocMaterialSearch] = useState("");
   const [dashboardFilters, setDashboardFilters] = useState({
+    query: "",
     slocGroupId: "",
     materialType: "ALL",
     slocGroups: [],
@@ -1250,6 +1278,7 @@ export default function ProcurementPlanningPage() {
     setSlocMaterialSearch("");
     setDashboardFilters((current) => ({
       ...current,
+      query: "",
       slocGroupId: "",
       slocGroups: [],
     }));
