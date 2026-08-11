@@ -4,6 +4,7 @@ import TransactionCompanySelector from "../../../components/inputs/TransactionCo
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import {
@@ -112,7 +113,6 @@ export default function MtsSkuMonthlyRatePage() {
   const [page, setPage] = useState(1);
   const [draftPage, setDraftPage] = useState(1);
   const [submitting, setSubmitting] = useState(false);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
 
   useEffect(() => {
     if (!companyId) {
@@ -126,8 +126,7 @@ export default function MtsSkuMonthlyRatePage() {
   }, [companyId, selectedMonth, tab]);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    window.setTimeout(() => setNotice({ msg: "", tone: "success" }), 4500);
+    pushToast({ message: msg, tone });
   }
 
   const activeMonth = tab === "approve" && approvalMonth ? approvalMonth : selectedMonth;
@@ -367,7 +366,6 @@ export default function MtsSkuMonthlyRatePage() {
     <ErpScreenScaffold
       title="MTS SKU Monthly Rate Master"
       subtitle="AC05 - company-wise monthly rate chart with April-start fiscal month selection, dispatch UOM, and per-KG resolution."
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
       actions={[
         {
           label: submitting ? "Working..." : tab === "entry" ? "Save" : "Approve Month",

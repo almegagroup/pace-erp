@@ -10,6 +10,7 @@
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import { listSegmentLocations, upsertSegmentLocation } from "../../../pages/dashboard/production/prodApi.js";
 
@@ -27,14 +28,12 @@ export default function SAProductionSegmentLocationPage() {
   const qc = useQueryClient();
   const [companyId, setCompanyId] = useState("");
   const [saving, setSaving]       = useState(false);
-  const [notice, setNotice]       = useState({ msg: "", tone: "success" });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editEntry, setEditEntry]  = useState(null);
   const [form, setForm]            = useState({ ...EMPTY_FORM });
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   const listQ = useQuery({
@@ -93,7 +92,6 @@ export default function SAProductionSegmentLocationPage() {
         mnemonic: "N",
         onClick: openCreate,
       }]}
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard>
         <div className="flex gap-3 mb-4">

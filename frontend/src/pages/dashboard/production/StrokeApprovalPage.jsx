@@ -16,6 +16,7 @@
 import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
@@ -58,7 +59,6 @@ export default function StrokeApprovalPage() {
     setCompanyId(defaultId);
     setCompanyInitialized(true);
   }, [companyInitialized, runtimeContext]);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState("");
   const [editForm, setEditForm] = useState(null);
@@ -72,8 +72,7 @@ export default function StrokeApprovalPage() {
   const [memberMaterialId, setMemberMaterialId] = useState("");
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   const strokesQ = useQuery({
@@ -275,7 +274,6 @@ export default function StrokeApprovalPage() {
     <ErpScreenScaffold
       title="Stroke Approval — PR02"
       subtitle="L3 Manager reviews DRAFT strokes; Save = Approve. Material Type / Prodshade / Stroke Number are locked."
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
         <div className="flex gap-3 flex-wrap items-end">

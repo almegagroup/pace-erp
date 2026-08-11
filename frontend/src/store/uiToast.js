@@ -9,11 +9,15 @@
  */
 
 const DEFAULT_DURATION_MS = 5000;
+// error: 0 = never auto-dismiss. Found live 2026-08-12 investigating "error only visible
+// in DevTools console" reports — long structured messages (e.g. multi-material stock
+// shortage detail) need more than a few seconds to read, and ToastOverlay already has a
+// manual Close button, so there's no reason to race the user against a timer for errors.
 const TONE_DURATION_MS = Object.freeze({
   success: 4200,
   info: 5000,
   neutral: 5000,
-  error: 7000,
+  error: 0,
 });
 
 let toasts = [];

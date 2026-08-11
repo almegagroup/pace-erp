@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { INDIAN_STATES, matchIndianStateName } from "../../../data/indianStates.js";
@@ -76,7 +77,6 @@ export default function FgDispatchCustomerPage() {
   const [selectedDepotId, setSelectedDepotId] = useState("");
   const [currentCustomer, setCurrentCustomer] = useState(null);
   const [loadedAddressId, setLoadedAddressId] = useState("");
-  const [notice, setNotice] = useState({ message: "", tone: "neutral" });
   const [savingParent, setSavingParent] = useState(false);
   const [savingDepot, setSavingDepot] = useState(false);
   const [savingCustomer, setSavingCustomer] = useState(false);
@@ -137,8 +137,7 @@ export default function FgDispatchCustomerPage() {
   }, [dispatchType, selectedDirectDepotId]);
 
   function pushNotice(message, tone = "success") {
-    setNotice({ message, tone });
-    window.setTimeout(() => setNotice({ message: "", tone: "neutral" }), 4500);
+    pushToast({ message, tone });
   }
 
   const parentCompaniesQuery = useQuery({
@@ -428,7 +427,6 @@ export default function FgDispatchCustomerPage() {
     <ErpScreenScaffold
       title="FG Dispatch Customer Master"
       subtitle="MM05 - Parent company, depot or virtual depot, then customer with GST/unregistered address flow."
-      notice={notice.message ? { message: notice.message, tone: notice.tone } : null}
     >
       <ErpSectionCard>
         <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(0,320px)_220px_220px]">

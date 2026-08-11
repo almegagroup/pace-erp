@@ -4,19 +4,17 @@
  * Gate: 27
  * Phase: 27
  * Domain: PRODUCTION
- * Purpose: Combined production order list plus minimal INT completion action.
+ * Purpose: Combined production order list.
  * Authority: Frontend
  */
 
-import React, { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import React, { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import ModalBase from "../../../components/layer/ModalBase.jsx";
-import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useMenu } from "../../../context/useMenu.js";
-import { completeIntProcessOrder, getProcessOrder, listPackingOrders, listProcessOrders } from "./prodApi.js";
+import { listPackingOrders, listProcessOrders } from "./prodApi.js";
 
 const PROCESS_STATUS_COLORS = {
   STANDARD: "bg-slate-100 text-slate-700",
@@ -53,17 +51,11 @@ function StatusChips({ selected, onToggle, statuses, colors }) {
 }
 
 export default function OrderListPage() {
-  const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState(0);
   const [companyId, setCompanyId] = useState("");
   const [search, setSearch] = useState("");
   const [processStatus, setProcessStatus] = useState("");
   const [packingStatus, setPackingStatus] = useState("");
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
-  const [intModalOrderId, setIntModalOrderId] = useState("");
-  const [intLineDrafts, setIntLineDrafts] = useState([]);
-  const [actualOutputQty, setActualOutputQty] = useState("");
-  const [savingInt, setSavingInt] = useState(false);
 
   const { runtimeContext } = useMenu();
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
@@ -90,60 +82,16 @@ export default function OrderListPage() {
     enabled: activeTab === 1 && Boolean(effectiveCompanyId),
   });
 
-  const intDetailQ = useQuery({
-    queryKey: ["int-complete-detail", intModalOrderId],
-    queryFn: () => getProcessOrder(intModalOrderId),
-    enabled: Boolean(intModalOrderId),
-  });
-
-  useEffect(() => {
-    if (!intDetailQ.data) {
-      setIntLineDrafts([]);
-      setActualOutputQty("");
-      return;
-    }
-    setIntLineDrafts((intDetailQ.data.lines ?? []).map((line) => ({
-      id: line.id,
-      materialLabel: [line.material?.pace_code, line.material?.material_name].filter(Boolean).join(" - ") || "Material",
-      actual_qty: String(line.planned_qty ?? 0),
-    })));
-    setActualOutputQty(String(intDetailQ.data.planned_qty ?? 0));
-  }, [intDetailQ.data]);
-
-  function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
-  }
-
   const processOrders = (processQ.data ?? []).filter((order) => {
     const haystack = [order.po_number, order.material?.material_name, order.material?.pace_code, order.batch_number].filter(Boolean).join(" ").toLowerCase();
     return haystack.includes(search.trim().toLowerCase());
   });
   const packingOrders = packingQ.data ?? [];
 
-  async function handleCompleteInt() {
-    if (!intDetailQ.data) return;
-    setSavingInt(true);
-    try {
-      await completeIntProcessOrder(intDetailQ.data.id, {
-        lines: intLineDrafts.map((line) => ({ id: line.id, actual_qty: Number(line.actual_qty || 0) })),
-        actual_output_qty: Number(actualOutputQty || 0),
-      });
-      toast("INT Process PO completed.");
-      setIntModalOrderId("");
-      qc.invalidateQueries({ queryKey: ["process-orders"] });
-    } catch (error) {
-      toast(error.message || "INT completion failed.", "error");
-    } finally {
-      setSavingInt(false);
-    }
-  }
-
   return (
     <ErpScreenScaffold
       title="Order List - PR13"
       subtitle="Combined production order list"
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
         <div className="flex flex-wrap gap-3">
@@ -208,7 +156,6 @@ export default function OrderListPage() {
                     <th className="border-b px-3 py-2 text-left">Batch #</th>
                     <th className="border-b px-3 py-2 text-left">Status</th>
                     <th className="border-b px-3 py-2 text-left">Created</th>
-                    <th className="border-b px-3 py-2 text-left">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -225,18 +172,6 @@ export default function OrderListPage() {
                         </span>
                       </td>
                       <td className="px-3 py-2 text-xs text-slate-400">{order.created_at?.slice(0, 10) || "--"}</td>
-                      <td className="px-3 py-2">
-                        {order.po_type === "INT" && order.status === "STANDARD" ? (
-                          <button
-                            onClick={() => setIntModalOrderId(order.id)}
-                            className="text-sm font-medium text-emerald-700 hover:underline"
-                          >
-                            Complete
-                          </button>
-                        ) : (
-                          <span className="text-slate-300">--</span>
-                        )}
-                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -285,76 +220,6 @@ export default function OrderListPage() {
           </>
         )}
       </ErpSectionCard>
-
-      <ModalBase
-        visible={Boolean(intModalOrderId)}
-        title={intDetailQ.data ? `Complete INT - ${intDetailQ.data.po_number}` : "Complete INT"}
-        onClose={() => setIntModalOrderId("")}
-      >
-        <div className="flex flex-col gap-4 p-4">
-          {intDetailQ.isLoading ? (
-            <p className="text-sm text-slate-400">Loading...</p>
-          ) : intDetailQ.data ? (
-            <>
-              <div className="grid gap-3 md:grid-cols-2 text-sm">
-                <div><span className="block text-xs text-slate-400">PO #</span><p className="font-mono font-semibold text-sky-700">{intDetailQ.data.po_number || "--"}</p></div>
-                <div><span className="block text-xs text-slate-400">Prodshade</span><p>{[intDetailQ.data.material?.pace_code, intDetailQ.data.material?.material_name].filter(Boolean).join(" - ") || "--"}</p></div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                      <th className="border-b px-3 py-2 text-left">Material</th>
-                      <th className="border-b px-3 py-2 text-right">Actual Qty</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {intLineDrafts.map((line) => (
-                      <tr key={line.id} className="border-b border-slate-100">
-                        <td className="px-3 py-2">{line.materialLabel}</td>
-                        <td className="px-3 py-2 text-right">
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.001"
-                            className="w-28 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
-                            value={line.actual_qty}
-                            onChange={(event) => setIntLineDrafts((current) => current.map((entry) => (
-                              entry.id === line.id ? { ...entry, actual_qty: event.target.value } : entry
-                            )))}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-600">Actual Output Qty</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.001"
-                  className="max-w-[180px] rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
-                  value={actualOutputQty}
-                  onChange={(event) => setActualOutputQty(event.target.value)}
-                />
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleCompleteInt}
-                  disabled={savingInt}
-                  className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
-                >
-                  {savingInt ? "Completing..." : "Complete INT"}
-                </button>
-              </div>
-            </>
-          ) : (
-            <p className="text-sm text-slate-400">No INT detail loaded.</p>
-          )}
-        </div>
-      </ModalBase>
     </ErpScreenScaffold>
   );
 }

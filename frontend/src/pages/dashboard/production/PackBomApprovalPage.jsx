@@ -10,6 +10,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { approvePackBom, getPackBom, listPackBoms, rejectPackBom } from "./prodApi.js";
 import { addMaterialCategoryMember, createMaterialCategoryGroup, listMaterialCategoryGroups, listMaterials } from "../om/omApi.js";
@@ -41,7 +42,6 @@ export default function PackBomApprovalPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [companyFilter, setCompanyFilter] = useState(readStoredCompanyFilter);
   const effectiveCompanyFilter = companyFilter || resolveDefaultTransactionCompanyId(runtimeContext);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState("");
   const [detail, setDetail] = useState(null);
@@ -55,8 +55,7 @@ export default function PackBomApprovalPage() {
   const [memberMaterialId, setMemberMaterialId] = useState("");
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   useEffect(() => {
@@ -215,7 +214,6 @@ export default function PackBomApprovalPage() {
     <ErpScreenScaffold
       title="Pack BOM Approval - PR06"
       subtitle="Review company-scoped Pack BOM submissions"
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
         <div className="flex flex-wrap gap-3">

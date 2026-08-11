@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../context/useMenu.js";
@@ -112,7 +113,6 @@ export default function ProductionPOVerifyPage() {
   const [activeOrderId, setActiveOrderId] = useState("");
   const [poNumberInput, setPoNumberInput] = useState("");
   const [submittedPoNumber, setSubmittedPoNumber] = useState("");
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [rows, setRows] = useState([]);
   const [debouncedPreviewRows, setDebouncedPreviewRows] = useState([]);
@@ -212,8 +212,7 @@ export default function ProductionPOVerifyPage() {
   );
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   function resetSelection(nextCompanyId = "") {
@@ -310,7 +309,6 @@ export default function ProductionPOVerifyPage() {
     <ErpScreenScaffold
       title="Production PO Verify - PR12"
       subtitle="QA verification and stock posting"
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Select Process PO">
         <div className="flex flex-col gap-4">

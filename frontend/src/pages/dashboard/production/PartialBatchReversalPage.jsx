@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
@@ -44,7 +45,6 @@ function rowKey(row) {
 export default function PartialBatchReversalPage() {
   const qc = useQueryClient();
   const [step, setStep] = useState(1);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
 
   // Page 1
   const [companyId, setCompanyId] = useState("");
@@ -64,8 +64,7 @@ export default function PartialBatchReversalPage() {
   const [submitting, setSubmitting] = useState(false);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 4000);
+    pushToast({ message: msg, tone });
   }
 
   const { runtimeContext } = useMenu();
@@ -199,11 +198,6 @@ export default function PartialBatchReversalPage() {
 
   return (
     <ErpScreenScaffold title="Partial Batch Reversal - PR19" subtitle="Reverse a partial qty of a VERIFIED batch (SFG or SKU row)">
-      {notice.msg ? (
-        <div className={`mb-4 rounded px-3 py-2 text-sm ${notice.tone === "error" ? "border border-rose-200 bg-rose-50 text-rose-700" : "border border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
-          {notice.msg}
-        </div>
-      ) : null}
 
       <div className="mb-4 flex gap-2 text-xs font-medium text-slate-500">
         {["1. Identify Batch", "2. Select Stock Line", "3. Reverse Qty + Post"].map((label, idx) => (

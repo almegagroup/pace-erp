@@ -15,6 +15,7 @@
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import {
   listPackBomChangeRequests,
   getPackBomChangeRequest,
@@ -40,7 +41,6 @@ function friendly(code) { return ERRORS[code] ?? code; }
 export default function ChangePackBomApprovalPage() {
   const qc = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("");
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState("");
   const [detail, setDetail] = useState(null);
@@ -55,8 +55,7 @@ export default function ChangePackBomApprovalPage() {
   const [memberMaterialId, setMemberMaterialId] = useState("");
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
+    pushToast({ message: msg, tone });
   }
 
   const crQ = useQuery({
@@ -192,7 +191,6 @@ export default function ChangePackBomApprovalPage() {
     <ErpScreenScaffold
       title="Change Pack BOM Approval — PR08"
       subtitle="L1 Manager reviews DRAFT change requests, may edit the proposed lines, then approves or rejects."
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
         <div className="flex flex-col gap-1 w-40">

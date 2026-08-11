@@ -14,6 +14,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
@@ -56,12 +57,10 @@ export default function OldPackingPoPage() {
   const [pmEdits, setPmEdits] = useState({});
   const [manualPmLines, setManualPmLines] = useState([]);
   const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const nextManualPmId = useRef(1);
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 5000);
+    pushToast({ message: msg, tone });
   }
 
   const { runtimeContext } = useMenu();
@@ -261,7 +260,6 @@ export default function OldPackingPoPage() {
       title="Old Packing PO"
       subtitle="PR23 — genealogy for a pre-go-live FG batch (§104.9). Links to its parent Old Process PO; FG, SFG, and PM lines all carry explicit storage locations for later reversal-safe traceability. Saves a FINAL paper order; posts NO stock movement."
       actions={[{ label: "Save", tone: "primary", mnemonic: "S", disabled: !canSave || saving, onClick: handleSave }]}
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Header">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

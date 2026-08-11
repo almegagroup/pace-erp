@@ -17,6 +17,7 @@
 import React, { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { pushToast } from "../../../store/uiToast.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
@@ -52,13 +53,11 @@ export default function ConversionCostPage() {
   const [companyId, setCompanyId] = useState("");
   const [segmentFilter, setSegmentFilter] = useState("");
   const [saving, setSaving]     = useState(false);
-  const [notice, setNotice]     = useState({ msg: "", tone: "success" });
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm]         = useState(emptyForm());
 
   function toast(msg, tone = "success") {
-    setNotice({ msg, tone });
-    setTimeout(() => setNotice({ msg: "", tone: "success" }), 4000);
+    pushToast({ message: msg, tone });
   }
 
   const { runtimeContext } = useMenu();
@@ -136,7 +135,6 @@ export default function ConversionCostPage() {
         disabled: !companyId,
         onClick: () => { setForm(emptyForm()); setCreateOpen(true); },
       }]}
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard>
         <div className="flex gap-3 mb-4">

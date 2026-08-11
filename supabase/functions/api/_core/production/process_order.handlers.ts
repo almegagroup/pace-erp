@@ -374,13 +374,24 @@ async function cancelOpenReservationsForProcessOrder(id: string, userId: string,
   }
 }
 
-async function resetReservationsForProcessOrder(id: string, userId: string, now: string): Promise<void> {
+// Found live 2026-08-11/12: this was named "reset" and set status back to "OPEN" —
+// but its only two callers are both inside reverseProcessOrderHandler, where the PO
+// is being permanently killed (REVERSED can never return to STANDARD, per §83.4 lock).
+// Resetting to "OPEN" left the reservation counted forever in
+// RESERVATION_OPEN_STATUSES-based availability checks (computePhysicalAvailabilityRows,
+// checkStockAvailability) even though the PO that made it will never draw the material —
+// permanently locking real stock away from every other order. "CANCELLED" already exists
+// in the reservation_document status CHECK constraint and is exactly what
+// reversePackingOrderHandler's own sibling cancellation already uses — this now matches
+// that pattern instead of silently reopening a dead hold. issued_qty is left as-is
+// (not zeroed) so a fully-issued reservation's history stays visible after cancel, same
+// as the Packing PO side.
+async function cancelReservationsForProcessOrder(id: string, userId: string, now: string): Promise<void> {
   const { error } = await serviceRoleClient
     .schema("erp_production")
     .from("reservation_document")
     .update({
-      issued_qty: 0,
-      status: "OPEN",
+      status: "CANCELLED",
       last_updated_by: userId,
       last_updated_at: now,
     })
@@ -388,7 +399,7 @@ async function resetReservationsForProcessOrder(id: string, userId: string, now:
     .eq("source_id", id)
     .in("status", RESERVATION_ACTIVE_STATUSES);
   if (error) {
-    console.error("[process_order.resetReservationsForProcessOrder] update failed:", JSON.stringify(error));
+    console.error("[process_order.cancelReservationsForProcessOrder] update failed:", JSON.stringify(error));
     throw new Error("PROD_PO_RESERVATION_UPDATE_FAILED");
   }
 }
@@ -1212,10 +1223,48 @@ function buildLineAvailabilityNeeds(lines: JsonRecord[]): Map<string, Availabili
   return needed;
 }
 
-function formatShortageDetail(shortages: AvailabilityRow[]): string {
+// Found live 2026-08-12: every shortage/short-material error message in this file (4
+// separate call shapes — this shared helper plus two inline copies plus the INT unmet
+// list) rendered raw UUID prefixes (`material_id.slice(0,8)`) instead of a resolved
+// name — a direct violation of CLAUDE.md §8A ("কোনো Business Data UUID হিসেবে দেখাবে না")
+// that nobody caught because the frontend just toasts `error.message` as-is. A user
+// hitting PROD_PO_INSUFFICIENT_STOCK saw "0b3360af @ 637eb0ee" with no way to know that
+// meant Caustic Soda Lye at S003 — had to be decoded via DevTools/DB query. This is the
+// ONE shared resolver now used everywhere a shortage list needs to become readable text;
+// reuses the same getMaterialMapByIds/getStorageLocationMapByIds helpers already used
+// throughout this file for every other UUID→name resolution, instead of inventing a
+// separate path just for error messages.
+async function formatShortageDetail(shortages: AvailabilityRow[]): Promise<string> {
+  if (shortages.length === 0) return "";
+  const materialIds = [...new Set(shortages.map((row) => row.material_id))];
+  const storageLocationIds = [...new Set(shortages.map((row) => row.storage_location_id))];
+  const [materialMap, slocMap] = await Promise.all([
+    getMaterialMapByIds(materialIds, "[process_order.formatShortageDetail]", "PROD_PO_STOCK_CHECK_FAILED", "id, pace_code, material_name"),
+    getStorageLocationMapByIds(storageLocationIds, "[process_order.formatShortageDetail]", "PROD_PO_STOCK_CHECK_FAILED"),
+  ]);
   return shortages
-    .map((row) => `${row.material_id.slice(0, 8)} @ ${row.storage_location_id.slice(0, 8)} (need ${row.needed_qty.toFixed(3)}, have ${row.available_qty.toFixed(3)})`)
+    .map((row) => {
+      const mat = materialMap.get(row.material_id);
+      const matLabel = mat ? `${toTrimmedString(mat.pace_code) || "—"} — ${toTrimmedString(mat.material_name) || "—"}` : row.material_id;
+      const sloc = slocMap.get(row.storage_location_id);
+      const slocLabel = sloc ? (toTrimmedString(sloc.code) || toTrimmedString(sloc.name) || row.storage_location_id) : row.storage_location_id;
+      return `${matLabel} @ ${slocLabel} (need ${row.needed_qty.toFixed(3)}, have ${row.available_qty.toFixed(3)})`;
+    })
     .join("; ");
+}
+
+// Same resolver as formatShortageDetail, for the INT-specific "output not yet declared"
+// list — was rendering raw UUID prefixes too (unmet.push(materialId.slice(0,8))).
+async function formatMaterialLabels(materialIds: string[]): Promise<string> {
+  if (materialIds.length === 0) return "";
+  const ids = [...new Set(materialIds)];
+  const materialMap = await getMaterialMapByIds(ids, "[process_order.formatMaterialLabels]", "PROD_PO_STOCK_CHECK_FAILED", "id, pace_code, material_name");
+  return ids
+    .map((id) => {
+      const mat = materialMap.get(id);
+      return mat ? `${toTrimmedString(mat.pace_code) || "—"} — ${toTrimmedString(mat.material_name) || "—"}` : id;
+    })
+    .join(", ");
 }
 
 export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -1691,9 +1740,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
 
         const short = await checkStockAvailability(companyId, needed);
         if (short.length > 0) {
-          const detail = short
-            .map((row) => `${row.material_id.slice(0, 8)} @ ${row.storage_location_id.slice(0, 8)} (need ${row.needed_qty.toFixed(3)}, have ${row.available_qty.toFixed(3)})`)
-            .join("; ");
+          const detail = await formatShortageDetail(short);
           return poErr(req, ctx, "PROD_PO_INSUFFICIENT_STOCK", 422, `Insufficient UNRESTRICTED stock for ${short.length} material(s): ${detail}`);
         }
       }
@@ -1817,107 +1864,6 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         throw new Error("PROD_PO_LINE_PREPOPULATE_FAILED");
       }
       insertedLines.push(...((createdManualLines ?? []) as JsonRecord[]));
-    }
-
-    if (poType === "MTEST") {
-      // MTEST is not batch-managed (locked 2026-07-14) — no batch series entry,
-      // no batch_number_instance row; its Packing PO (PTEST) draws SFG
-      // generically, so nothing downstream ever needs this batch identity.
-      const lines = await fetchOrderLines(poId, null);
-      const postedBy = ctx.auth_user_id;
-      const today = todayIso();
-      const ledgerEntries: JsonRecord[] = [];
-
-      // §106: MTEST is a single-action event — one Material Document covers its RM issues
-      // and its FG receipt; the Process PO number is the reference.
-      const mtestMatDoc = await generateMaterialDocNumber(companyId);
-
-      for (const line of lines) {
-        const issueQty = Number(line.planned_qty ?? 0);
-        if (issueQty <= 0) continue;
-        const slocId = getIssueStorageLocationId(line);
-        if (!slocId) {
-          return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 400, "Storage location required for MTEST - segment config is not used for this type");
-        }
-        const baseUom = String((line.material as JsonRecord | null)?.base_uom_code ?? line.uom_code ?? "KG");
-        const posting = await postStockMovement({
-          documentNumber: poNumber,
-          documentDate: today,
-          postingDate: today,
-          movementTypeCode: "P261",
-          companyId,
-          storageLocationId: slocId,
-          materialId: line.material_id,
-          quantity: issueQty,
-          baseUomCode: baseUom,
-          unitValue: 0,
-          stockTypeCode: "UNRESTRICTED",
-          direction: "OUT",
-          postedBy,
-          matDoc: mtestMatDoc,
-          referenceDocumentId: poId,
-        });
-
-        const { error: lineUpdateErr } = await serviceRoleClient
-          .schema("erp_production")
-          .from("process_order_line")
-          .update({
-            actual_qty: issueQty,
-            stock_ledger_id: posting.stock_ledger_id,
-          })
-          .eq("id", line.id as string);
-        if (lineUpdateErr) {
-          console.error("[process_order.createProcessOrder] mtest line update failed:", JSON.stringify(lineUpdateErr));
-          throw new Error("PROD_PO_CREATE_FAILED");
-        }
-        ledgerEntries.push({ line_id: line.id, movement: "P261", direction: "OUT", ...posting });
-      }
-
-      const fgUom = await fetchProductionMaterialBaseUom(materialId);
-      const fgPosting = await postStockMovement({
-        documentNumber: poNumber,
-        documentDate: today,
-        postingDate: today,
-        movementTypeCode: "P101",
-        companyId,
-        storageLocationId: outputStorageLocationId,
-        materialId,
-        quantity: plannedQty,
-        baseUomCode: fgUom,
-        unitValue: 0,
-        stockTypeCode: "UNRESTRICTED",
-        direction: "IN",
-        postedBy,
-        matDoc: mtestMatDoc,
-        referenceDocumentId: poId,
-      });
-
-      const verifiedAt = new Date().toISOString();
-      const { error: poUpdateErr } = await serviceRoleClient
-        .schema("erp_production")
-        .from("process_order")
-        .update({
-          status: "VERIFIED",
-          actual_qty: plannedQty,
-          fg_stock_ledger_id: fgPosting.stock_ledger_id,
-          verified_at: verifiedAt,
-          verified_by: ctx.auth_user_id,
-          last_updated_at: verifiedAt,
-          last_updated_by: ctx.auth_user_id,
-        })
-        .eq("id", poId);
-      if (poUpdateErr) {
-        console.error("[process_order.createProcessOrder] mtest po update failed:", JSON.stringify(poUpdateErr));
-        throw new Error("PROD_PO_CREATE_FAILED");
-      }
-
-      return createdOkResponse({
-        id: poId,
-        po_number: poNumber,
-        status: "VERIFIED",
-        batch_number: null,
-        ledger_entries: [...ledgerEntries, { movement: "P101", direction: "IN", ...fgPosting }],
-      }, ctx.request_id, req);
     }
 
     if (insertedLines.length > 0) {
@@ -2114,6 +2060,12 @@ export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandle
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected STANDARD, got ${po.status}`);
     }
+    // Locked 2026-08-12: INT skips QA entirely (Standard -> Final directly, no batch
+    // number, no Start Batch) — it never had a QA step to approve/reject in the first
+    // place, so surface a clear error instead of silently accepting a no-op transition.
+    if (po.po_type === "INT") {
+      return poErr(req, ctx, "PROD_PO_QA_NOT_APPLICABLE", 422, "INT Process Orders skip QA approval — finalize directly from STANDARD");
+    }
 
     const lines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
     if (lines.length === 0 && po.po_type !== "MTEST") {
@@ -2160,6 +2112,9 @@ export async function qaRejectProcessOrderHandler(req: Request, ctx: ProdHandler
     }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected STANDARD, got ${po.status}`);
+    }
+    if (po.po_type === "INT") {
+      return poErr(req, ctx, "PROD_PO_QA_NOT_APPLICABLE", 422, "INT Process Orders skip QA approval — use Reverse instead of QA Reject");
     }
 
     const body = await parseBody(req);
@@ -2400,9 +2355,7 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
       buildReservationCreditMap(existingReservationMap.values()),
     ).filter((row) => row.short);
     if (short.length > 0) {
-      const detail = short
-        .map((row) => `${row.material_id.slice(0, 8)} @ ${row.storage_location_id.slice(0, 8)} (need ${row.needed_qty.toFixed(3)}, have ${row.available_qty.toFixed(3)})`)
-        .join("; ");
+      const detail = await formatShortageDetail(short);
       return poErr(req, ctx, "PROD_PO_INSUFFICIENT_STOCK", 422, `Insufficient UNRESTRICTED stock for ${short.length} material(s): ${detail}`);
     }
 
@@ -2553,213 +2506,6 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
   }
 }
 
-export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
-  try {
-    assertProdReadRole(ctx);
-    const id = getIdFromPath(req);
-    if (!id) return poErr(req, ctx, "PROD_PO_ID_MISSING", 400, "ID required");
-
-    const po = await fetchProcessOrder(id);
-    if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
-    try {
-      await assertCompanyScope(ctx, String(po.company_id ?? ""));
-    } catch {
-      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
-    }
-    if (po.po_type !== "INT") {
-      return poErr(req, ctx, "PROD_PO_NOT_INT", 422, "Only INT orders can use complete-int");
-    }
-    if (po.status !== "STANDARD") {
-      return poErr(req, ctx, "PROD_PO_INT_COMPLETE_STATUS_INVALID", 422, "INT complete allowed only at STANDARD");
-    }
-
-    const body = await parseBody(req);
-    const actualOutputQty = parsePositiveNumber(body.actual_output_qty);
-    if (!actualOutputQty) {
-      return poErr(req, ctx, "PROD_PO_ACTUAL_QTY_REQUIRED", 400, "actual_output_qty required");
-    }
-
-    const lines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
-    const lineOverrideMap = new Map(
-      (Array.isArray(body.lines) ? body.lines : [])
-        .map((line) => line as JsonRecord)
-        .filter((line) => toTrimmedString(line.id))
-        .map((line) => [toTrimmedString(line.id), parseNonNegativeNumber(line.actual_qty)]),
-    );
-
-    const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
-    if (!shopfloorSlocId) {
-      return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
-    }
-
-    const today = todayIso();
-    const docNumber = String(po.po_number);
-    const postedBy = ctx.auth_user_id;
-    const reservationMap = await fetchReservationRowsBySourceLineIds(lines.map((line) => String(line.id)));
-    const ledgerEntries: JsonRecord[] = [];
-
-    // §106: one Material Document for this INT completion event (RM issues + output receipt);
-    // the Process PO number is the reference.
-    const intMatDoc = await generateMaterialDocNumber(String(po.company_id));
-
-    // §104.8 (INT valuation, LOCKED 2026-07-18): in-house INT costs what its RM cost —
-    // Σ(RM issue qty × that RM's rate) ÷ output qty. Pre-fetch every RM line's current
-    // UNRESTRICTED rate so the P261 issues post at real value and roll up into the INT output.
-    // Purchased INT keeps its own GRN rate; the two sources blend in stock_snapshot's weighted
-    // average, which is the correct combined cost an MTO batch should consume at.
-    const intRateMap = await fetchUnrestrictedRates(
-      String(po.company_id),
-      lines.map((line) => ({
-        materialId: toTrimmedString(line.actual_material_id) || String(line.material_id),
-        slocId: String(getIssueStorageLocationId(line) ?? ""),
-      })),
-    );
-    let totalIntRmValue = 0;
-
-    for (const line of lines) {
-      const actualQty = lineOverrideMap.has(String(line.id))
-        ? Number(lineOverrideMap.get(String(line.id)) ?? 0)
-        : Number(line.planned_qty ?? 0);
-      const slocId = getIssueStorageLocationId(line);
-      if (!slocId) {
-        return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 422, `Storage location missing for ${line.material_id}`);
-      }
-      const movementMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
-      const baseUom = String(
-        ((toTrimmedString(line.actual_material_id)
-          ? line.actual_material
-          : line.material) as JsonRecord | null)?.base_uom_code ?? line.uom_code ?? "KG",
-      );
-
-      const { error: lineActualErr } = await serviceRoleClient
-        .schema("erp_production")
-        .from("process_order_line")
-        .update({ actual_qty: actualQty })
-        .eq("id", line.id as string)
-        .eq("process_order_id", id);
-      if (lineActualErr) {
-        console.error("[process_order.completeInt] line actual update failed:", JSON.stringify(lineActualErr));
-        throw new Error("PROD_PO_VERIFY_FAILED");
-      }
-
-      // §104.8: issue at the RM's real cost and accumulate it — this sum IS the INT's value.
-      const intRmRate = intRateMap.get(`${movementMaterialId}|${slocId}`) ?? 0;
-      totalIntRmValue += actualQty * intRmRate;
-
-      const posting = await postStockMovement({
-        documentNumber: docNumber,
-        documentDate: today,
-        postingDate: today,
-        movementTypeCode: "P261",
-        companyId: po.company_id,
-        storageLocationId: slocId,
-        materialId: movementMaterialId,
-        quantity: actualQty,
-        baseUomCode: baseUom,
-        unitValue: intRmRate,
-        stockTypeCode: "UNRESTRICTED",
-        direction: "OUT",
-        postedBy,
-        matDoc: intMatDoc,
-        referenceDocumentId: String(po.id),
-      });
-
-      const { error: lineLedgerErr } = await serviceRoleClient
-        .schema("erp_production")
-        .from("process_order_line")
-        .update({ stock_ledger_id: posting.stock_ledger_id })
-        .eq("id", line.id as string);
-      if (lineLedgerErr) {
-        console.error("[process_order.completeInt] line ledger update failed:", JSON.stringify(lineLedgerErr));
-        throw new Error("PROD_PO_VERIFY_FAILED");
-      }
-
-      const reservation = reservationMap.get(String(line.id));
-      if (reservation) {
-        const { error: reservationErr } = await serviceRoleClient
-          .schema("erp_production")
-          .from("reservation_document")
-          .update({
-            issued_qty: Number(reservation.required_qty ?? 0),
-            status: "FULLY_ISSUED",
-            last_updated_at: new Date().toISOString(),
-            last_updated_by: ctx.auth_user_id,
-          })
-          .eq("id", reservation.id as string);
-        if (reservationErr) {
-          console.error("[process_order.completeInt] reservation update failed:", JSON.stringify(reservationErr));
-          throw new Error("PROD_PO_VERIFY_FAILED");
-        }
-      }
-
-      ledgerEntries.push({ line_id: line.id, movement: "P261", direction: "OUT", ...posting });
-    }
-
-    const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
-
-    // §104.8 (LOCKED 2026-07-18): INT conversion cost is OPTIONAL and data-driven — INT resolves the
-    // SAME conversion_cost_config as SFG, but a missing rate means 0-and-proceed, NOT a hard block
-    // (contrast verifyProcessOrderHandler's PROD_PO_CONVERSION_RATE_MISSING). Rationale: SFG
-    // conversion is known to exist so a missing rate is a config error; INT conversion does not
-    // exist today, so absent legitimately means zero. If a future INT ever needs one, the business
-    // adds a dated row on the AC04 page (segment INT, optional per-material override) — no code
-    // change, no migration, no deploy.
-    const intConversionRate = (await resolveConversionRate(
-      String(po.company_id), String(po.segment_code ?? ""), String(po.material_id), today,
-    )) ?? 0;
-    const intCostPerKg = actualOutputQty > 0
-      ? (totalIntRmValue / actualOutputQty) + intConversionRate
-      : intConversionRate;
-
-    const fgPosting = await postStockMovement({
-      documentNumber: docNumber,
-      documentDate: today,
-      postingDate: today,
-      movementTypeCode: "P101",
-      companyId: po.company_id,
-      storageLocationId: shopfloorSlocId,
-      materialId: po.material_id,
-      quantity: actualOutputQty,
-      baseUomCode: fgUom,
-      unitValue: intCostPerKg,
-      stockTypeCode: "UNRESTRICTED",
-      direction: "IN",
-      postedBy,
-      matDoc: intMatDoc,
-      referenceDocumentId: String(po.id),
-    });
-
-    const now = new Date().toISOString();
-    const { error: poUpdateErr } = await serviceRoleClient
-      .schema("erp_production")
-      .from("process_order")
-      .update({
-        status: "VERIFIED",
-        actual_qty: actualOutputQty,
-        fg_stock_ledger_id: fgPosting.stock_ledger_id,
-        verified_at: now,
-        verified_by: ctx.auth_user_id,
-        last_updated_at: now,
-        last_updated_by: ctx.auth_user_id,
-      })
-      .eq("id", id);
-    if (poUpdateErr) {
-      console.error("[process_order.completeInt] process-order update failed:", JSON.stringify(poUpdateErr));
-      throw new Error("PROD_PO_VERIFY_FAILED");
-    }
-
-    return okResponse({
-      id,
-      status: "VERIFIED",
-      verified_qty: actualOutputQty,
-      ledger_entries: [...ledgerEntries, { movement: "P101", direction: "IN", ...fgPosting }],
-    }, ctx.request_id, req);
-  } catch (err) {
-    const code = err instanceof Error ? err.message : "PROD_PO_VERIFY_FAILED";
-    return poErr(req, ctx, code, 500, "INT completion failed");
-  }
-}
-
 export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
@@ -2773,8 +2519,14 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    if (po.status !== "BATCH_STARTED") {
-      return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, "Must be BATCH_STARTED to finalize");
+    // Locked 2026-08-12: INT skips QA and Start Batch entirely (no batch number, per
+    // §83.5) so it finalizes directly from STANDARD. Every other po_type still needs
+    // BATCH_STARTED (reached via QA approval + Start Batch), MTEST included — MTEST now
+    // runs the exact same Standard->QA->Start Batch->Final lifecycle as MTO/HPS, it just
+    // posts stock at Final instead of Verify (see the postsAtFinal branch below).
+    const requiredStatus = po.po_type === "INT" ? "STANDARD" : "BATCH_STARTED";
+    if (po.status !== requiredStatus) {
+      return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Must be ${requiredStatus} to finalize`);
     }
 
     const body = await parseBody(req);
@@ -2816,7 +2568,7 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
           ctx,
           "PROD_PO_INSUFFICIENT_STOCK",
           422,
-          `Insufficient UNRESTRICTED stock for ${nonIntShortages.length} material(s): ${formatShortageDetail(nonIntShortages)}`,
+          `Insufficient UNRESTRICTED stock for ${nonIntShortages.length} material(s): ${await formatShortageDetail(nonIntShortages)}`,
         );
       }
 
@@ -2847,13 +2599,174 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
       const unmet: string[] = [];
       for (const [materialId, neededQty] of intNeeded.entries()) {
         if ((declaredQty.get(materialId) ?? 0) < neededQty - EPSILON) {
-          unmet.push(materialId.slice(0, 8));
+          unmet.push(materialId);
         }
       }
 
       if (unmet.length > 0) {
-        return poErr(req, ctx, "PROD_PO_INT_NOT_VERIFIED", 422, `INT material(s) short in stock and output not yet declared: ${unmet.join(", ")}. Finalize or verify the INT Process Orders first.`);
+        return poErr(req, ctx, "PROD_PO_INT_NOT_VERIFIED", 422, `INT material(s) short in stock and output not yet declared: ${await formatMaterialLabels(unmet)}. Finalize or verify the INT Process Orders first.`);
       }
+    }
+
+    // Locked 2026-08-12: INT and MTEST have no Verify stage — everything posts here at
+    // Final instead (RM issue + output receipt, straight to UNRESTRICTED, no QI hold —
+    // matches the pre-existing rule that INT/MTEST P101 receipts skip QI per §83.5).
+    // MTO/HPS/MTS keep the original two-step Final(record)->Verify(post) split untouched.
+    const postsAtFinal = po.po_type === "INT" || po.po_type === "MTEST";
+    if (postsAtFinal) {
+      const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
+      if (!shopfloorSlocId) {
+        return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
+      }
+
+      const today = todayIso();
+      const docNumber = String(po.po_number);
+      const postedBy = ctx.auth_user_id;
+      const reservationMap = await fetchReservationRowsBySourceLineIds(allLines.map((line) => String(line.id)));
+      const ledgerEntries: JsonRecord[] = [];
+
+      // §106: one Material Document for this Final-posting event (RM issues + output
+      // receipt); the Process PO number is the reference.
+      const matDoc = await generateMaterialDocNumber(String(po.company_id));
+
+      // §104.8: INT costs what its RM cost (real weighted-average issue rate, rolled up
+      // into the output). MTEST valuation stays the pre-existing simplified unit_value: 0
+      // (test batches, doesn't feed MTO cost) — only INT gets real rate resolution.
+      const isInt = po.po_type === "INT";
+      const rateMap = isInt
+        ? await fetchUnrestrictedRates(
+            String(po.company_id),
+            allLines.map((line) => ({
+              materialId: toTrimmedString(line.actual_material_id) || String(line.material_id),
+              slocId: String(getIssueStorageLocationId(line) ?? ""),
+            })),
+          )
+        : new Map<string, number>();
+      let totalRmValue = 0;
+
+      // DEPENDENT: all lines share the same brand-new Material Document number — the
+      // FOR UPDATE item_number lock has nothing to serialize against on the first
+      // insert, so concurrent posts would race on the same item_number. Post sequentially.
+      for (const line of allLines) {
+        const lineActualQty = Number(line.actual_qty ?? 0);
+        if (lineActualQty <= 0) continue;
+        const slocId = getIssueStorageLocationId(line);
+        if (!slocId) {
+          return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 422, `Storage location missing for ${line.material_id}`);
+        }
+        const movementMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
+        const baseUom = String(
+          ((toTrimmedString(line.actual_material_id) ? line.actual_material : line.material) as JsonRecord | null)?.base_uom_code ?? line.uom_code ?? "KG",
+        );
+        const rmRate = isInt ? (rateMap.get(`${movementMaterialId}|${slocId}`) ?? 0) : 0;
+        totalRmValue += lineActualQty * rmRate;
+
+        const posting = await postStockMovement({
+          documentNumber: docNumber,
+          documentDate: today,
+          postingDate: today,
+          movementTypeCode: "P261",
+          companyId: po.company_id,
+          storageLocationId: slocId,
+          materialId: movementMaterialId,
+          quantity: lineActualQty,
+          baseUomCode: baseUom,
+          unitValue: rmRate,
+          stockTypeCode: "UNRESTRICTED",
+          direction: "OUT",
+          postedBy,
+          matDoc,
+          referenceDocumentId: String(po.id),
+        });
+
+        const { error: lineLedgerErr } = await serviceRoleClient
+          .schema("erp_production")
+          .from("process_order_line")
+          .update({ stock_ledger_id: posting.stock_ledger_id })
+          .eq("id", line.id as string);
+        if (lineLedgerErr) {
+          console.error("[process_order.finalize] line ledger update failed:", JSON.stringify(lineLedgerErr));
+          throw new Error("PROD_PO_FINALIZE_FAILED");
+        }
+
+        const reservation = reservationMap.get(String(line.id));
+        if (reservation) {
+          const { error: reservationErr } = await serviceRoleClient
+            .schema("erp_production")
+            .from("reservation_document")
+            .update({
+              issued_qty: Number(reservation.required_qty ?? 0),
+              status: "FULLY_ISSUED",
+              last_updated_at: new Date().toISOString(),
+              last_updated_by: ctx.auth_user_id,
+            })
+            .eq("id", reservation.id as string);
+          if (reservationErr) {
+            console.error("[process_order.finalize] reservation update failed:", JSON.stringify(reservationErr));
+            throw new Error("PROD_PO_FINALIZE_FAILED");
+          }
+        }
+
+        ledgerEntries.push({ line_id: line.id, movement: "P261", direction: "OUT", ...posting });
+      }
+
+      const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
+      let outputUnitValue = 0;
+      if (isInt) {
+        // §104.8 (LOCKED 2026-07-18): INT conversion cost is optional/data-driven — a
+        // missing rate means 0-and-proceed (contrast Verify's hard block for SFG).
+        const conversionRate = (await resolveConversionRate(
+          String(po.company_id), String(po.segment_code ?? ""), String(po.material_id), today,
+        )) ?? 0;
+        outputUnitValue = actualQty > 0 ? (totalRmValue / actualQty) + conversionRate : conversionRate;
+      }
+
+      const fgPosting = await postStockMovement({
+        documentNumber: docNumber,
+        documentDate: today,
+        postingDate: today,
+        movementTypeCode: "P101",
+        companyId: po.company_id,
+        storageLocationId: shopfloorSlocId,
+        materialId: po.material_id,
+        quantity: actualQty,
+        baseUomCode: fgUom,
+        unitValue: outputUnitValue,
+        stockTypeCode: "UNRESTRICTED",
+        direction: "IN",
+        postedBy,
+        matDoc,
+        referenceDocumentId: String(po.id),
+      });
+
+      const now = new Date().toISOString();
+      const { error: poUpdateErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("process_order")
+        .update({
+          status: "VERIFIED",
+          actual_qty: actualQty,
+          fg_stock_ledger_id: fgPosting.stock_ledger_id,
+          finalized_at: now,
+          finalized_by: ctx.auth_user_id,
+          verified_at: now,
+          verified_by: ctx.auth_user_id,
+          has_unapproved_deviation: applyResult.hasUnapprovedDeviation ?? false,
+          last_updated_at: now,
+          last_updated_by: ctx.auth_user_id,
+        })
+        .eq("id", id);
+      if (poUpdateErr) {
+        console.error("[process_order.finalize] process-order update failed:", JSON.stringify(poUpdateErr));
+        throw new Error("PROD_PO_FINALIZE_FAILED");
+      }
+
+      return okResponse({
+        id,
+        status: "VERIFIED",
+        verified_qty: actualQty,
+        ledger_entries: [...ledgerEntries, { movement: "P101", direction: "IN", ...fgPosting }],
+      }, ctx.request_id, req);
     }
 
     const now = new Date().toISOString();
@@ -2920,7 +2833,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         ctx,
         "PROD_PO_INSUFFICIENT_STOCK",
         422,
-        `Insufficient UNRESTRICTED stock for ${shortRows.length} material(s): ${formatShortageDetail(shortRows)}`,
+        `Insufficient UNRESTRICTED stock for ${shortRows.length} material(s): ${await formatShortageDetail(shortRows)}`,
       );
     }
 
@@ -3020,6 +2933,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         stockTypeCode: "UNRESTRICTED",
         direction: "OUT",
         postedBy,
+        batchNumber,
         matDoc: verifyMatDoc,
         referenceDocumentId: String(po.id),
       }, String(line.id)));
@@ -3410,7 +3324,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
         ledgerEntries.push({ movement: "P102", direction: "OUT", ...p102Posting });
       }
 
-      await resetReservationsForProcessOrder(id, ctx.auth_user_id, now);
+      await cancelReservationsForProcessOrder(id, ctx.auth_user_id, now);
 
       const { error: recoErr } = await serviceRoleClient
         .schema("erp_production")
@@ -3428,7 +3342,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
         throw new Error("PROD_PO_REVERSE_FAILED");
       }
     } else if (["FINAL", "BATCH_STARTED", "QA_APPROVED", "STANDARD"].includes(String(po.status))) {
-      await resetReservationsForProcessOrder(id, ctx.auth_user_id, now);
+      await cancelReservationsForProcessOrder(id, ctx.auth_user_id, now);
     }
 
     const { error: poUpdateErr } = await serviceRoleClient
