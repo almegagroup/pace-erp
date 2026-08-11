@@ -30,6 +30,14 @@ export default function MultiValueFilterField({
   options = [],
   searchFn,
   disabled = false,
+  // Options-branch (no searchFn) callers back this field with a react-query
+  // result the caller owns (e.g. useMaterialOptionsQuery) -- if THAT query
+  // failed, this component previously had no way to know and just rendered
+  // "No matching values.", identical to a genuinely-empty result. Pass the
+  // query's error message here so a real fetch failure is distinguishable
+  // from an empty list (found live 2026-08-11 while investigating IN02/IN03's
+  // Material picker showing empty with no diagnosable signal).
+  loadError = "",
 }) {
   const [open, setOpen] = useState(false);
   const [draftValues, setDraftValues] = useState(value);
@@ -162,6 +170,8 @@ export default function MultiValueFilterField({
             />
             {searchError ? (
               <div className="text-xs text-rose-700">{searchError}</div>
+            ) : loadError ? (
+              <div className="text-xs text-rose-700">Failed to load options: {loadError}</div>
             ) : null}
           </div>
 
@@ -202,7 +212,9 @@ export default function MultiValueFilterField({
               {loading ? (
                 <div className="px-3 py-4 text-sm text-slate-500">Searching…</div>
               ) : searchResults.length === 0 ? (
-                <div className="px-3 py-4 text-sm text-slate-500">No matching values.</div>
+                <div className="px-3 py-4 text-sm text-slate-500">
+                  {loadError ? "Unable to load options — see error above." : "No matching values."}
+                </div>
               ) : (
                 searchResults.map((entry) => {
                   const selected = selectedMap.has(entry.value);
