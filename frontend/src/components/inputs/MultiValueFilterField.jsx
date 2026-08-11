@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import DrawerBase from "../layer/DrawerBase.jsx";
 
+// searchFn-based callers (Batch Number, Packing PO Number) never pass
+// `options` at all -- without a stable default, the `options = []`
+// destructuring default below would create a BRAND NEW empty array on every
+// render, and `options` is one of the debounced search effect's own
+// dependencies. A fresh array reference every render re-triggers that
+// effect (and fires a new search request) on every unrelated parent
+// re-render, not just when the user types -- this was the picker-drawer
+// flicker reported live 2026-08-11, still happening after stabilizing
+// searchFn alone. Confirmed via a Network-tab capture showing 20+ repeated
+// fetches to the same search endpoint with no typing in between.
+const EMPTY_OPTIONS = [];
+
 function splitPastedValues(rawValue) {
   return String(rawValue || "")
     .split(/[\n,\t]+/)
@@ -25,9 +37,9 @@ function normalizeOption(option) {
 export default function MultiValueFilterField({
   label,
   placeholder = "Select values",
-  value = [],
+  value = EMPTY_OPTIONS,
   onChange,
-  options = [],
+  options = EMPTY_OPTIONS,
   searchFn,
   disabled = false,
   // Options-branch (no searchFn) callers back this field with a react-query
