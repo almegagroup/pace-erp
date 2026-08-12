@@ -194,6 +194,15 @@ const BASELINE = new Set([
   "supabase/functions/api/_core/production/process_order.handlers.ts::completeIntProcessOrderHandler",
   "supabase/functions/api/_core/production/process_order.handlers.ts::finalizeProcessOrderHandler",
   "supabase/functions/api/_core/production/process_order.handlers.ts::reverseProcessOrderHandler",
+  // Added 2026-08-12 — new COR6 correction handler, same shape as its sibling
+  // packing_order.handlers.ts::correctPackingOrderHandler above (already
+  // baselined 2026-08-11): resolves po.company_id from the fetched process_order
+  // row and only membership-checks it via assertCompanyScope(), same as every
+  // other *ProcessOrderHandler in this file. Not a new/distinct risk — part of
+  // the same tracked Phase 2 remediation sweep (see memory:
+  // project_company_scope_write_acl_gap.md, task #90), fix module-by-module
+  // together with the rest of process_order.handlers.ts, not one-off here.
+  "supabase/functions/api/_core/production/process_order.handlers.ts::correctProcessOrderHandler",
   "supabase/functions/api/_core/production/segment_location.handlers.ts::upsertSegmentLocationHandler",
   "supabase/functions/api/_core/production/sfg_qa.handlers.ts::addSfgQaTestLineHandler",
   "supabase/functions/api/_core/production/sfg_qa.handlers.ts::updateSfgQaTestLineHandler",
