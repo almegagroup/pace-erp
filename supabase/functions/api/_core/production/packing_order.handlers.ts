@@ -671,7 +671,20 @@ async function postStockMovement(params: {
     p_reference_document_id: params.referenceDocumentId ?? null,
   });
   if (error || !Array.isArray(data) || data.length === 0) {
-    throw new Error(`PROD_PACK_STOCK_POST_FAILED: ${params.movementTypeCode}`);
+    // Found live 2026-08-12: this used to discard the real reason entirely — a
+    // material with genuinely zero stock for this company (e.g. never GRN'd,
+    // even though a sister company holds stock at the same shared storage
+    // location) surfaced only as an opaque "PROD_PACK_STOCK_POST_FAILED: P261"
+    // with nothing in the response the user could act on. post_stock_movement()
+    // raises a plain message (e.g. "INSUFFICIENT_STOCK") on failure — surface it.
+    const dbReason = toTrimmedString((error as { message?: string } | null)?.message);
+    console.error("[packing_order.postStockMovement] post_stock_movement RPC failed:", JSON.stringify({
+      error, movementTypeCode: params.movementTypeCode, materialId: params.materialId, storageLocationId: params.storageLocationId,
+    }));
+    const reason = dbReason === "INSUFFICIENT_STOCK"
+      ? `insufficient UNRESTRICTED stock for this material/location/company`
+      : dbReason || "unknown error";
+    throw new Error(`PROD_PACK_STOCK_POST_FAILED: ${params.movementTypeCode} (${reason})`);
   }
   return data[0] as { stock_document_id: string; stock_ledger_id: string };
 }
@@ -2484,10 +2497,9 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     for (const correction of corrections) {
       const line = lineMap.get(toTrimmedString(correction.id));
       if (!line || String(line.line_type ?? "") !== "SFG" || batchBlind) continue;
-      const newActual = parsePositiveNumber(correction.actual_qty);
-      if (!newActual) continue;
-      const oldActual = Number(line.actual_qty ?? line.total_qty ?? 0);
-      const delta = newActual - oldActual;
+      // Locked 2026-08-12: caller now sends the DELTA directly (not a new absolute qty)
+      // — the sign decides the movement type, matching correctProcessOrderHandler.
+      const delta = Number(correction.delta_qty ?? 0);
       if (delta <= 0) continue;
       const slocId = toTrimmedString(line.issue_sloc_id);
       if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
@@ -2526,36 +2538,46 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     // row from Final). A correction delta has no Std of its own (it IS the deviation),
     // so approval is always mandatory here, never auto-YES.
     const pmRecoRows: JsonRecord[] = [];
+    let newPmLineOffset = 0;
     for (const correction of corrections) {
-      const line = lineMap.get(toTrimmedString(correction.id));
-      if (!line) throw new Error("PROD_PACK_LINE_NOT_FOUND");
-      const newActual = parsePositiveNumber(correction.actual_qty);
-      if (!newActual) throw new Error("PROD_PACK_CORRECTION_INVALID");
-      const oldActual = Number(line.actual_qty ?? line.total_qty ?? 0);
-      const delta = newActual - oldActual;
-      const lineType = String(line.line_type ?? "");
+      const isNewLine = !toTrimmedString(correction.id);
+      let line = isNewLine ? null : (lineMap.get(toTrimmedString(correction.id)) ?? null);
+      if (!isNewLine && !line) throw new Error("PROD_PACK_LINE_NOT_FOUND");
 
-      let effectiveMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
-      const linePatch: JsonRecord = { actual_qty: newActual };
-      if (lineType === "PM" && Object.prototype.hasOwnProperty.call(correction, "actual_material_id")) {
+      // Locked 2026-08-12: caller sends the DELTA directly (not a new absolute qty) —
+      // the sign decides the movement type, matching correctProcessOrderHandler. A
+      // brand-new line (missed item, never on the PO before) is always PM and always
+      // a positive addition — there is nothing to decrease.
+      const delta = Number(correction.delta_qty ?? 0);
+      const lineType = isNewLine ? "PM" : String(line?.line_type ?? "");
+
+      let effectiveMaterialId = isNewLine
+        ? toTrimmedString(correction.material_id)
+        : toTrimmedString(line?.actual_material_id) || String(line?.material_id ?? "");
+      const linePatch: JsonRecord = {};
+      if (!isNewLine && lineType === "PM" && Object.prototype.hasOwnProperty.call(correction, "actual_material_id")) {
         const alt = toTrimmedString(correction.actual_material_id) || null;
-        if (alt && line.has_alternate !== true) {
+        if (alt && line?.has_alternate !== true) {
           return packErr(req, ctx, "PROD_PACK_SUBSTITUTE_NOT_REGISTERED", 422, "actual_material_id requires a registered alternate on this line");
         }
         linePatch.actual_material_id = alt;
-        effectiveMaterialId = alt || String(line.material_id ?? "");
+        effectiveMaterialId = alt || String(line?.material_id ?? "");
       }
 
       if (delta === 0) {
-        if (linePatch.actual_material_id !== undefined) {
+        if (!isNewLine && linePatch.actual_material_id !== undefined && line) {
           await serviceRoleClient.schema("erp_production").from("packing_order_line")
             .update(linePatch).eq("id", line.id as string);
         }
         postings.push(null);
         continue;
       }
+      if (isNewLine && delta < 0) throw new Error("PROD_PACK_CORRECTION_INVALID");
+      if (isNewLine && !effectiveMaterialId) throw new Error("PROD_PACK_CORRECTION_MATERIAL_REQUIRED");
 
-      const slocId = (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string | null;
+      const slocId = isNewLine
+        ? (toTrimmedString(correction.storage_location_id) || defaultPmSlocId)
+        : ((line?.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string | null);
       if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
       const material = materialMap.get(effectiveMaterialId) ?? {};
       const baseUom = (material.base_uom_code ?? "KG") as string;
@@ -2570,12 +2592,18 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       // reverses the exact value it removed (an IN reversal at 0 would dilute the material's
       // weighted average), and an increase adds/issues at the same per-KG cost the batch was
       // booked at (FG increase = same batch cost; SFG/PM increase records the original issue
-      // rate, harmless to the snapshot which consumes OUT at the current rate regardless).
-      const ledgerRef = ledgerRefByLedgerId.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+      // rate, harmless to the snapshot which consumes OUT at the current rate regardless). A
+      // brand-new line has no original posting, so it rates at the CURRENT UNRESTRICTED rate.
+      const ledgerRef = isNewLine ? null : (ledgerRefByLedgerId.get(toTrimmedString(line?.stock_ledger_id)) ?? null);
       let reversalOfId: string | null = null;
       if (!isIncrease) {
         reversalOfId = ledgerRef?.docId ?? null;
         if (!reversalOfId) throw new Error("PROD_PACK_REVERSAL_SOURCE_NOT_FOUND");
+      }
+      let newLineRate = 0;
+      if (isNewLine) {
+        const rateRows = await fetchUnrestrictedRates(String(poData.company_id), [{ materialId: effectiveMaterialId, slocId }]);
+        newLineRate = rateRows.get(`${effectiveMaterialId}|${slocId}`) ?? 0;
       }
       const posting = await postStockMovement({
         documentNumber: poData.po_number as string,
@@ -2587,18 +2615,51 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
         materialId: effectiveMaterialId,
         quantity: Math.abs(delta),
         baseUomCode: baseUom,
-        unitValue: ledgerRef?.rate ?? 0,
+        unitValue: isNewLine ? newLineRate : (ledgerRef?.rate ?? 0),
         stockTypeCode: "UNRESTRICTED",
         direction: direction as "IN" | "OUT",
         postedBy: ctx.auth_user_id,
         reversalOfId,
-        batchNumber: (line.batch_number as string | null) ?? null,
+        batchNumber: isNewLine ? null : ((line?.batch_number as string | null) ?? null),
         matDoc: correctionMatDoc,
         referenceDocumentId: String(poData.id),
       });
-      await serviceRoleClient.schema("erp_production").from("packing_order_line")
-        .update(linePatch).eq("id", line.id as string);
-      postings.push({ line_id: line.id, movement_type_code: movementTypeCode, stock_ledger_id: posting.stock_ledger_id });
+
+      if (isNewLine) {
+        const { data: insertedLine, error: insertErr } = await serviceRoleClient
+          .schema("erp_production").from("packing_order_line")
+          .insert({
+            packing_order_id: id,
+            line_type: "PM",
+            material_id: effectiveMaterialId,
+            actual_material_id: null,
+            batch_number: null,
+            qty_per_pack: Number(poData.num_packs) > 0 ? delta / Number(poData.num_packs) : delta,
+            total_qty: delta,
+            actual_qty: delta,
+            issue_sloc_id: slocId,
+            uom_code: baseUom,
+            movement_type_code: "P261",
+            has_alternate: false,
+            material_group_id: null,
+            display_order: 1000 + lineMap.size + newPmLineOffset++,
+            stock_ledger_id: posting.stock_ledger_id,
+          })
+          .select("id").single();
+        if (insertErr) {
+          console.error("[packing_order.correctPackingOrder] new line insert failed:", JSON.stringify(insertErr));
+          throw new Error("PROD_PACK_CORRECTION_FAILED");
+        }
+        line = { id: (insertedLine as JsonRecord).id, line_type: "PM", material_id: effectiveMaterialId };
+      } else if (line) {
+        // Deliberately does NOT touch stock_ledger_id here (it identifies the line's
+        // ORIGINAL Final-time posting, which any future correction's rate/reversal
+        // lookup still needs) — only actual_qty (+ any material swap) advances.
+        linePatch.actual_qty = Number(line.actual_qty ?? line.total_qty ?? 0) + delta;
+        await serviceRoleClient.schema("erp_production").from("packing_order_line")
+          .update(linePatch).eq("id", line.id as string);
+      }
+      postings.push({ line_id: line?.id, movement_type_code: movementTypeCode, stock_ledger_id: posting.stock_ledger_id });
 
       // §108.2 item 6 — same PMTS reco skip as Final, applied to COR6 correction rows too.
       if (lineType === "PM" && String(poData.po_type ?? "") !== "PMTS") {
@@ -2613,9 +2674,9 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
           po_type: poData.po_type,
           finalized_at: null,
           packing_order_id: id,
-          packing_order_line_id: line.id,
+          packing_order_line_id: line?.id,
           material_id: effectiveMaterialId,
-          formulation_material_id: line.material_id ?? null,
+          formulation_material_id: isNewLine ? effectiveMaterialId : (line?.material_id ?? null),
           standard_qty: 0,
           actual_qty: delta,
           approved_status: fields.approved,

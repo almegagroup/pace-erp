@@ -1265,6 +1265,13 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_VERIFY", action: "APPROVE" } },
   },
   {
+    // COR6-style post-Verify correction — gated on the same resource that got the PO to
+    // VERIFIED in the first place, matching how correctPackingOrderHandler reuses
+    // PROD_PACKING_PO_FINAL rather than minting a new resource for one action.
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/correct$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_VERIFY", action: "APPROVE" } },
+  },
+  {
     pattern: /^\/api\/production\/process-orders\/[^/]+\/reverse$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_REVERSAL", action: "APPROVE" } },
   },
