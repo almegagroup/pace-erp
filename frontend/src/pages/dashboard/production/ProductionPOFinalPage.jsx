@@ -209,12 +209,14 @@ function PackingPoFinalTab() {
   const sfgRequiredQty = Number(sfgLine?.total_qty ?? 0);
   const sfgShortage = selectedSfgBatch ? Math.max(0, sfgRequiredQty - Number(selectedSfgBatch.available_qty ?? 0)) : 0;
 
-  // "+ Add PM Row" material/storage-location pickers — only queried once a PO
-  // is loaded and still STANDARD (an ad-hoc extra consumable can only be
-  // added at Final, not at COR6 correction time).
+  // PM material picker, shared by two different "add a line" features:
+  // "+ Add PM Row" at STANDARD (Final) and "+ Add Missing Item" at FINAL
+  // (COR6 correction). Real bug found live 2026-08-13 (business owner) — this
+  // was gated to STANDARD only, so the correction-mode dropdown always came
+  // up empty (storage location worked fine since that query has no such gate).
   const pmMaterialQ = useMaterialOptionsQuery(
     { status: "ACTIVE", material_type: "PM", limit: MASTER_PICKER_FETCH_LIMIT },
-    { enabled: Boolean(po?.status === "STANDARD") },
+    { enabled: Boolean(po?.status === "STANDARD" || po?.status === "FINAL") },
   );
   const pmMaterialOptions = useMemo(
     () => (pmMaterialQ.materials ?? []).map((material) => ({ value: material.id, label: materialLabelSimple(material) || "Material" })),
