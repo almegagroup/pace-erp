@@ -21,6 +21,14 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { availabilityPreviewProcessOrder, correctProcessOrder, getProcessOrder, listProcessOrders, verifyProcessOrder } from "./prodApi.js";
 
 const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }));
+const RM_CORRECTION_MOVEMENT_OPTIONS = [
+  { value: "P261", label: "P261 (increase)" },
+  { value: "P262", label: "P262 (decrease)" },
+];
+const OUTPUT_CORRECTION_MOVEMENT_OPTIONS = [
+  { value: "P101", label: "P101 (increase)" },
+  { value: "P102", label: "P102 (decrease)" },
+];
 
 function orderLabel(order) {
   return [order.po_number, order.material?.material_name, order.po_type].filter(Boolean).join(" - ");
@@ -121,15 +129,19 @@ export default function ProductionPOVerifyPage() {
   const [rows, setRows] = useState([]);
   const [debouncedPreviewRows, setDebouncedPreviewRows] = useState([]);
 
-  // COR6-style post-Verify correction (Locked 2026-08-12) — triggered when the loaded
-  // Process PO is already VERIFIED. Separate from `rows`/makeDraftRow (which drive the
-  // one-time Verify posting itself): the caller sends a DELTA per line (e.g. +10/-10),
-  // the backend decides P261 vs P262 (or P101/P102 for the output) from its sign.
+  // COR6-style post-Verify correction (Locked 2026-08-12, corrected same day — business
+  // owner overrode the original sign-decides-direction design) — triggered when the
+  // loaded Process PO is already VERIFIED. Separate from `rows`/makeDraftRow (which
+  // drive the one-time Verify posting itself): the caller enters a positive QUANTITY
+  // per line plus picks the movement type (P261/P262, or P101/P102 for the output)
+  // from a dropdown themselves — the backend never infers direction from a sign.
   const [correctionQty, setCorrectionQty] = useState({});
+  const [correctionMovementType, setCorrectionMovementType] = useState({});
   const [correctionApproved, setCorrectionApproved] = useState({});
   const [correctionApApproved, setCorrectionApApproved] = useState({});
   const [correctionNewRows, setCorrectionNewRows] = useState([]);
   const [outputDeltaQty, setOutputDeltaQty] = useState("");
+  const [outputMovementType, setOutputMovementType] = useState("P101");
 
   const { runtimeContext } = useMenu();
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
@@ -201,10 +213,12 @@ export default function ProductionPOVerifyPage() {
   }, [po]);
   useEffect(() => {
     setCorrectionQty({});
+    setCorrectionMovementType({});
     setCorrectionApproved({});
     setCorrectionApApproved({});
     setCorrectionNewRows([]);
     setOutputDeltaQty("");
+    setOutputMovementType("P101");
   }, [po?.id, po?.status]);
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -339,51 +353,60 @@ export default function ProductionPOVerifyPage() {
 
   async function handleCorrect() {
     if (!po || po.status !== "VERIFIED") return;
-    // Locked 2026-08-12: caller sends the DELTA directly (e.g. +10 or -10) — the
-    // backend decides P261/P262 (or P101/P102 for the output) from the sign, never
-    // the user. Mirrors correctPackingOrderHandler's PR11 UI, same rules for both.
+    // Locked 2026-08-12, corrected same day (business owner override): caller enters a
+    // positive QUANTITY and picks the movement type themselves — the backend never
+    // infers direction from a sign. Mirrors correctPackingOrderHandler's PR11 UI.
     const existingLines = (po.lines ?? [])
-      .filter((line) => correctionQty[line.id] !== undefined && correctionQty[line.id] !== "")
+      .filter((line) => correctionQty[line.id] !== undefined && correctionQty[line.id] !== "" && Number(correctionQty[line.id]) > 0)
       .map((line) => {
-        const delta = Number(correctionQty[line.id]);
         const approvedStatus = correctionApproved[line.id] || "YES";
-        const payload = { id: line.id, delta_qty: delta, approved_status: approvedStatus };
+        const payload = {
+          id: line.id,
+          delta_qty: Number(correctionQty[line.id]),
+          movement_type: correctionMovementType[line.id] || "P261",
+          approved_status: approvedStatus,
+        };
         if (approvedStatus === "PARTIAL") payload.ap_approved_qty = Number(correctionApApproved[line.id] || 0);
         return payload;
-      })
-      .filter((line) => Number.isFinite(line.delta_qty) && line.delta_qty !== 0);
+      });
     const newLines = correctionNewRows
       .filter((row) => row.material_id && row.issue_sloc_id && Number(row.delta_qty) > 0)
       .map((row) => ({
         material_id: row.material_id,
         storage_location_id: row.issue_sloc_id,
         delta_qty: Number(row.delta_qty),
+        movement_type: "P261",
       }));
     const lines = [...existingLines, ...newLines];
-    const outputDelta = outputDeltaQty === "" ? 0 : Number(outputDeltaQty);
-    const hasOutputDelta = Number.isFinite(outputDelta) && outputDelta !== 0;
+    const outputQty = outputDeltaQty === "" ? 0 : Number(outputDeltaQty);
+    const hasOutputDelta = Number.isFinite(outputQty) && outputQty > 0;
     if (lines.length === 0 && !hasOutputDelta) {
-      toast("Enter a delta qty for at least one line, add a missed item, or enter an output delta.", "error");
+      toast("Enter a qty + movement type for at least one line, add a missed item, or enter an output correction.", "error");
       return;
     }
     const confirmed = await openActionConfirm({
       eyebrow: "Process PO",
       title: "Post correction?",
-      message: "This will post a delta stock movement for each changed/added line and/or the output.",
+      message: "This will post a stock movement for each changed/added line and/or the output, using the movement type you selected.",
       confirmLabel: "Post Correction",
     });
     if (!confirmed) return;
     setSaving(true);
     try {
       const body = { lines };
-      if (hasOutputDelta) body.output_delta_qty = outputDelta;
+      if (hasOutputDelta) {
+        body.output_delta_qty = outputQty;
+        body.output_movement_type = outputMovementType;
+      }
       await correctProcessOrder(po.id, body);
       toast("Correction posted.");
       setCorrectionQty({});
+      setCorrectionMovementType({});
       setCorrectionApproved({});
       setCorrectionApApproved({});
       setCorrectionNewRows([]);
       setOutputDeltaQty("");
+      setOutputMovementType("P101");
       qc.invalidateQueries({ queryKey: ["production-verify-orders"] });
       qc.invalidateQueries({ queryKey: ["production-verify-detail", po.id] });
       detailQ.refetch();
@@ -518,7 +541,7 @@ export default function ProductionPOVerifyPage() {
                         <th className="border-b px-3 py-2 text-left">Approved</th>
                         <th className="border-b px-3 py-2 text-right">AP Appr</th>
                         <th className="border-b px-3 py-2 text-right">Var</th>
-                        {isCorrectionMode ? <th className="border-b px-3 py-2 text-right">Delta Qty (+/-)</th> : null}
+                        {isCorrectionMode ? <th className="border-b px-3 py-2 text-right">Qty</th> : null}
                         <th className="border-b px-3 py-2 text-left">Mvt</th>
                         <th className="border-b px-3 py-2 text-center">Delete</th>
                       </tr>
@@ -537,14 +560,17 @@ export default function ProductionPOVerifyPage() {
 
                         // COR6 correction preview — backend re-reads material/SLoc from
                         // the existing DB line itself (ignores any override sent here), so
-                        // those two fields render read-only in correction mode below.
+                        // those two fields render read-only in correction mode below. Qty is
+                        // always a positive magnitude; the user picks the movement type
+                        // (P261/P262) from a dropdown themselves — never inferred from sign.
                         const correctionInput = correctionQty[row.id];
-                        const hasCorrectionDelta = isCorrectionMode && correctionInput !== undefined && correctionInput !== "" && Number(correctionInput) !== 0;
-                        const correctionDeltaNum = hasCorrectionDelta ? Number(correctionInput) : 0;
-                        const correctionValues = hasCorrectionDelta
-                          ? computeRowValues({ planned_qty: 0, actual_qty: correctionDeltaNum, approved_status: correctionApproved[row.id], ap_approved_qty: correctionApApproved[row.id] })
+                        const hasCorrectionQty = isCorrectionMode && correctionInput !== undefined && correctionInput !== "" && Number(correctionInput) > 0;
+                        const selectedMovementType = correctionMovementType[row.id] || "P261";
+                        const correctionMagnitude = hasCorrectionQty ? Number(correctionInput) : 0;
+                        const correctionSignedDelta = selectedMovementType === "P261" ? correctionMagnitude : -correctionMagnitude;
+                        const correctionValues = hasCorrectionQty
+                          ? computeRowValues({ planned_qty: 0, actual_qty: correctionSignedDelta, approved_status: correctionApproved[row.id], ap_approved_qty: correctionApApproved[row.id] })
                           : null;
-                        const correctionMovementType = hasCorrectionDelta ? (correctionDeltaNum > 0 ? "P261" : "P262") : null;
                         const actualMaterialLabel = actualMaterialOptions.find((option) => option.value === row.actual_material_id)?.label || "(same)";
                         const slocLabelValue = storageLocationOptions.find((option) => option.value === row.issue_sloc_id)?.label || "--";
 
@@ -613,7 +639,7 @@ export default function ProductionPOVerifyPage() {
                             </td>
                             <td className="px-3 py-2">
                               {isCorrectionMode ? (
-                                hasCorrectionDelta && !correctionValues.autoYes ? (
+                                hasCorrectionQty && !correctionValues.autoYes ? (
                                   <ErpComboboxField
                                     value={correctionApproved[row.id] || "YES"}
                                     onChange={(value) => setCorrectionApproved((current) => ({ ...current, [row.id]: value }))}
@@ -636,7 +662,7 @@ export default function ProductionPOVerifyPage() {
                             </td>
                             <td className="px-3 py-2 text-right">
                               {isCorrectionMode ? (
-                                hasCorrectionDelta && correctionValues.approved === "PARTIAL" ? (
+                                hasCorrectionQty && correctionValues.approved === "PARTIAL" ? (
                                   <input
                                     type="number"
                                     step="0.001"
@@ -644,7 +670,7 @@ export default function ProductionPOVerifyPage() {
                                     value={correctionApApproved[row.id] ?? ""}
                                     onChange={(event) => setCorrectionApApproved((current) => ({ ...current, [row.id]: event.target.value }))}
                                   />
-                                ) : hasCorrectionDelta ? (
+                                ) : hasCorrectionQty ? (
                                   <span className="font-mono">{correctionValues.apApproved.toFixed(3)}</span>
                                 ) : (
                                   <span className="text-slate-400">—</span>
@@ -663,24 +689,30 @@ export default function ProductionPOVerifyPage() {
                               )}
                             </td>
                             <td className="px-3 py-2 text-right font-mono">
-                              {isCorrectionMode ? (hasCorrectionDelta ? correctionValues.variance.toFixed(3) : "—") : values.variance.toFixed(3)}
+                              {isCorrectionMode ? (hasCorrectionQty ? correctionValues.variance.toFixed(3) : "—") : values.variance.toFixed(3)}
                             </td>
                             {isCorrectionMode ? (
                               <td className="px-3 py-2 text-right">
                                 <input
                                   type="number"
+                                  min="0"
                                   step="0.001"
-                                  className="w-28 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                  className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                   value={correctionQty[row.id] ?? ""}
-                                  placeholder="e.g. 10 or -10"
+                                  placeholder="qty"
                                   onChange={(event) => setCorrectionQty((current) => ({ ...current, [row.id]: event.target.value }))}
                                 />
                               </td>
                             ) : null}
                             <td className="px-3 py-2 font-mono">
-                              {isCorrectionMode
-                                ? (hasCorrectionDelta ? <span className="text-purple-700">{correctionMovementType}</span> : "—")
-                                : "P261"}
+                              {isCorrectionMode ? (
+                                <ErpComboboxField
+                                  value={selectedMovementType}
+                                  onChange={(value) => setCorrectionMovementType((current) => ({ ...current, [row.id]: value }))}
+                                  options={RM_CORRECTION_MOVEMENT_OPTIONS}
+                                  hideBlank
+                                />
+                              ) : "P261"}
                             </td>
                             <td className="px-3 py-2 text-center">
                               {!isCorrectionMode && !row.is_formulation_line && (
@@ -787,20 +819,25 @@ export default function ProductionPOVerifyPage() {
                 {isCorrectionMode ? (
                   <div className="mt-3 flex flex-wrap items-end gap-3 text-sm">
                     <div className="flex flex-col gap-1">
-                      <label className="text-xs font-medium text-slate-600">Output Delta Qty (+/-)</label>
+                      <label className="text-xs font-medium text-slate-600">Output Qty</label>
                       <input
                         type="number"
+                        min="0"
                         step="0.001"
-                        className="w-36 rounded border border-slate-300 px-2 py-1.5 text-right font-mono text-sm"
+                        className="w-32 rounded border border-slate-300 px-2 py-1.5 text-right font-mono text-sm"
                         value={outputDeltaQty}
-                        placeholder="e.g. 10 or -10"
+                        placeholder="qty"
                         onChange={(event) => setOutputDeltaQty(event.target.value)}
                       />
                     </div>
-                    <div className="text-xs text-slate-500">
-                      Movement: {outputDeltaQty !== "" && Number(outputDeltaQty) !== 0
-                        ? <span className="font-mono text-purple-700">{Number(outputDeltaQty) > 0 ? "P101" : "P102"}</span>
-                        : "—"}
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-slate-600">Movement</label>
+                      <ErpComboboxField
+                        value={outputMovementType}
+                        onChange={setOutputMovementType}
+                        options={OUTPUT_CORRECTION_MOVEMENT_OPTIONS}
+                        hideBlank
+                      />
                     </div>
                   </div>
                 ) : null}

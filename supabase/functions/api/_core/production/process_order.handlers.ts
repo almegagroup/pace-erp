@@ -3130,19 +3130,22 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
   }
 }
 
+const RM_CORRECTION_MOVEMENT_TYPES = new Set(["P261", "P262"]);
+const OUTPUT_CORRECTION_MOVEMENT_TYPES = new Set(["P101", "P102"]);
+
 // POST /api/production/process-orders/:id/correct
-// COR6-style post-Verify correction (locked 2026-08-12): unlike Final/Verify, the
-// caller sends a DELTA directly (not a new absolute qty) — the sign decides the
-// movement type (+delta = P261/P101 additional issue/receipt, -delta = P262/P102
-// reversal of what was already posted), so the handler never has to be told which
-// movement code to use. Mirrors correctPackingOrderHandler's shape (same delta ->
-// movement-type-by-sign rule, same "original leg's own rate" costing rule, same
-// append-only posting, no reservation involvement since Verify already closed those)
-// adapted for Process PO's own line shape: `lines` corrects existing/new RM+INT
-// input lines, `output_delta_qty` (optional) corrects the SFG/INT output itself,
-// which — unlike Packing PO's FG — is a header field on process_order, not its own
-// line row. A brand-new line (no `id`) has no prior posting to reverse, so it always
-// posts as a straight increase (P261 OUT) at the current UNRESTRICTED rate.
+// COR6-style post-Verify correction (locked 2026-08-12, corrected same day —
+// business owner overrode the original sign-decides-direction design): the caller
+// sends a positive QUANTITY plus an explicit `movement_type` the user picked from a
+// dropdown (P261/P262 for RM+INT lines, P101/P102 for the output) — the handler
+// never infers direction from a number's sign. Mirrors correctPackingOrderHandler's
+// shape (same explicit-movement-type rule, same "original leg's own rate" costing
+// rule, same append-only posting, no reservation involvement since Verify already
+// closed those) adapted for Process PO's own line shape: `lines` corrects
+// existing/new RM+INT input lines, `output_delta_qty`+`output_movement_type`
+// (optional) corrects the SFG/INT output itself, which — unlike Packing PO's FG —
+// is a header field on process_order, not its own line row. A brand-new line (no
+// `id`) has no prior posting to reverse, so it must use P261 (increase).
 export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
@@ -3162,9 +3165,17 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
 
     const body = await parseBody(req);
     const corrections = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
-    const outputDelta = parseNonNegativeNumber(body.output_delta_qty) ?? (Number(body.output_delta_qty) || 0);
-    if (corrections.length === 0 && !outputDelta) {
-      return poErr(req, ctx, "PROD_PO_CORRECTION_INVALID", 400, "At least one line correction or an output_delta_qty is required");
+    // Locked 2026-08-12 (corrected same day, business owner override): the user picks the
+    // movement type themselves from a dropdown — the qty field is always a positive
+    // magnitude, never a signed delta. "10 + P261" = issue 10 more; "10 + P262" = reverse
+    // 10 back. Same rule for the output correction below (P101/P102).
+    const outputMagnitude = Math.abs(Number(body.output_delta_qty ?? 0));
+    const outputMovementType = toTrimmedString(body.output_movement_type);
+    if (outputMagnitude > 0 && !OUTPUT_CORRECTION_MOVEMENT_TYPES.has(outputMovementType)) {
+      return poErr(req, ctx, "PROD_PO_CORRECTION_MOVEMENT_TYPE_INVALID", 400, "output_movement_type must be P101 or P102");
+    }
+    if (corrections.length === 0 && outputMagnitude === 0) {
+      return poErr(req, ctx, "PROD_PO_CORRECTION_INVALID", 400, "At least one line correction or an output correction is required");
     }
 
     const existingLines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
@@ -3185,11 +3196,13 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
       if (toTrimmedString(correction.id)) continue;
       const materialId = toTrimmedString(correction.material_id);
       const slocId = toTrimmedString(correction.storage_location_id);
-      const delta = Number(correction.delta_qty ?? 0);
+      const magnitude = Math.abs(Number(correction.delta_qty ?? 0));
+      const movementType = toTrimmedString(correction.movement_type);
       if (!materialId) return poErr(req, ctx, "PROD_PO_CORRECTION_MATERIAL_REQUIRED", 400, "material_id required for a new correction line");
       if (!slocId) return poErr(req, ctx, "PROD_PO_CORRECTION_SLOC_REQUIRED", 400, "storage_location_id required for a new correction line");
-      if (delta <= 0) return poErr(req, ctx, "PROD_PO_CORRECTION_INVALID", 400, "A new line must be added with a positive quantity");
-      newLineNeeds.push({ materialId, storageLocationId: slocId, qty: delta });
+      if (magnitude <= 0) return poErr(req, ctx, "PROD_PO_CORRECTION_INVALID", 400, "A new line must be added with a positive quantity");
+      if (movementType !== "P261") return poErr(req, ctx, "PROD_PO_CORRECTION_INVALID", 400, "A new line has no prior posting to reverse — movement_type must be P261");
+      newLineNeeds.push({ materialId, storageLocationId: slocId, qty: magnitude });
     }
     const rateMap = newLineNeeds.length > 0
       ? await fetchUnrestrictedRates(String(po.company_id), newLineNeeds.map((n) => ({ materialId: n.materialId, slocId: n.storageLocationId })))
@@ -3225,9 +3238,16 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
     // item_number. Post sequentially (same reasoning as correctPackingOrderHandler).
     for (const correction of corrections) {
       const lineId = toTrimmedString(correction.id);
-      const delta = Number(correction.delta_qty ?? 0);
-      if (delta === 0) continue;
-      const isIncrease = delta > 0;
+      const magnitude = Math.abs(Number(correction.delta_qty ?? 0));
+      if (magnitude === 0) continue;
+      const movementType = toTrimmedString(correction.movement_type);
+      if (!RM_CORRECTION_MOVEMENT_TYPES.has(movementType)) {
+        return poErr(req, ctx, "PROD_PO_CORRECTION_MOVEMENT_TYPE_INVALID", 400, `movement_type must be P261 or P262 for line ${lineId || "new"}`);
+      }
+      const isIncrease = movementType === "P261";
+      // Signed only for bookkeeping (actual_qty delta, reco variance) — the RPC always
+      // gets a positive quantity; direction comes from the user's own movement_type pick.
+      const delta = isIncrease ? magnitude : -magnitude;
 
       let materialId: string;
       let slocId: string | null;
@@ -3262,11 +3282,11 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
         documentNumber: docNumber,
         documentDate: today,
         postingDate: today,
-        movementTypeCode: "P261",
+        movementTypeCode: movementType,
         companyId: po.company_id,
         storageLocationId: slocId,
         materialId,
-        quantity: Math.abs(delta),
+        quantity: magnitude,
         baseUomCode: baseUom,
         unitValue: rate,
         stockTypeCode: "UNRESTRICTED",
@@ -3312,7 +3332,7 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
         existingLine = { id: (insertedLine as JsonRecord).id, material_id: materialId };
       }
 
-      postings.push({ line_id: existingLine.id, movement: "P261", direction: isIncrease ? "OUT" : "IN", ...posting });
+      postings.push({ line_id: existingLine.id, movement: movementType, direction: isIncrease ? "OUT" : "IN", ...posting });
 
       if (!skipReco) {
         const approvedInput = toTrimmedString(correction.approved_status) || null;
@@ -3356,8 +3376,9 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
     // row (unlike Packing PO's FG, which IS a packing_order_line). Posts straight to
     // UNRESTRICTED, mirroring where Verify's own P321 QI-release already lands it —
     // no QI leg here, the batch is long past that gate.
-    if (outputDelta) {
-      const isIncrease = outputDelta > 0;
+    if (outputMagnitude > 0) {
+      const isIncrease = outputMovementType === "P101";
+      const outputDelta = isIncrease ? outputMagnitude : -outputMagnitude;
       const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
       if (!shopfloorSlocId) return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
@@ -3371,11 +3392,11 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
         documentNumber: docNumber,
         documentDate: today,
         postingDate: today,
-        movementTypeCode: "P101",
+        movementTypeCode: outputMovementType,
         companyId: po.company_id,
         storageLocationId: shopfloorSlocId,
         materialId: po.material_id,
-        quantity: Math.abs(outputDelta),
+        quantity: outputMagnitude,
         baseUomCode: fgUom,
         unitValue: fgLedgerRef?.rate ?? 0,
         stockTypeCode: "UNRESTRICTED",
@@ -3386,7 +3407,7 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
         matDoc: correctionMatDoc,
         referenceDocumentId: String(po.id),
       });
-      postings.push({ line_id: "OUTPUT", movement: "P101", direction: isIncrease ? "IN" : "OUT", ...posting });
+      postings.push({ line_id: "OUTPUT", movement: outputMovementType, direction: isIncrease ? "IN" : "OUT", ...posting });
 
       const newOutputQty = Number(po.actual_qty ?? 0) + outputDelta;
       await serviceRoleClient.schema("erp_production").from("process_order")

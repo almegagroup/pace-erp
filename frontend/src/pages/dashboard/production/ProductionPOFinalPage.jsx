@@ -29,6 +29,14 @@ import {
 
 const FINAL_TABS = ["Process PO", "Packing PO"];
 const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }));
+const ISSUE_CORRECTION_MOVEMENT_OPTIONS = [
+  { value: "P261", label: "P261 (increase)" },
+  { value: "P262", label: "P262 (decrease)" },
+];
+const FG_CORRECTION_MOVEMENT_OPTIONS = [
+  { value: "P101", label: "P101 (increase)" },
+  { value: "P102", label: "P102 (decrease)" },
+];
 
 function materialLabelSimple(material) {
   return [material?.pace_code || material?.external_code, material?.material_name].filter(Boolean).join(" - ");
@@ -101,6 +109,10 @@ function PackingPoFinalTab() {
   const [saving, setSaving] = useState(false);
   const [sfgBatchNumber, setSfgBatchNumber] = useState("");
   const [correctionQty, setCorrectionQty] = useState({});
+  // Locked 2026-08-12, corrected same day (business owner override): the user picks
+  // the movement type from a dropdown themselves — the qty field is always a positive
+  // magnitude, never a signed delta.
+  const [correctionMovementType, setCorrectionMovementType] = useState({});
   // §83.4.1 addendum: PM-line Actual Qty / Actual Material / Approved / AP
   // Approved overrides, keyed by line id — used both at STANDARD (Final) and
   // at FINAL (COR6 correction); the correction delta reuses the same maps.
@@ -164,6 +176,7 @@ function PackingPoFinalTab() {
   useEffect(() => {
     setSfgBatchNumber("");
     setCorrectionQty({});
+    setCorrectionMovementType({});
     setPmActualQty({});
     setPmMatOverrides({});
     setPmApproved({});
@@ -345,13 +358,18 @@ function PackingPoFinalTab() {
   }
 
   async function handleCorrect() {
-    // Locked 2026-08-12: caller sends the DELTA directly (e.g. +10 or -10) — the
-    // backend decides P261/P262 (or P101/P102 for FG) from the sign, never the user.
+    // Locked 2026-08-12, corrected same day (business owner override): caller enters a
+    // positive QUANTITY and picks the movement type themselves (P101/P102 for FG,
+    // P261/P262 for SFG/PM) — the backend never infers direction from a sign.
     const existingLines = (po.lines ?? [])
-      .filter((line) => correctionQty[line.id] !== undefined && correctionQty[line.id] !== "")
+      .filter((line) => correctionQty[line.id] !== undefined && correctionQty[line.id] !== "" && Number(correctionQty[line.id]) > 0)
       .map((line) => {
-        const delta = Number(correctionQty[line.id]);
-        const payload = { id: line.id, delta_qty: delta };
+        const defaultMovement = line.line_type === "FG" ? "P101" : "P261";
+        const payload = {
+          id: line.id,
+          delta_qty: Number(correctionQty[line.id]),
+          movement_type: correctionMovementType[line.id] || defaultMovement,
+        };
         if (line.line_type === "PM") {
           if (Object.prototype.hasOwnProperty.call(pmMatOverrides, line.id)) {
             payload.actual_material_id = pmMatOverrides[line.id] || null;
@@ -361,24 +379,24 @@ function PackingPoFinalTab() {
           if (approvedStatus === "PARTIAL") payload.ap_approved_qty = Number(pmApApproved[line.id] || 0);
         }
         return payload;
-      })
-      .filter((line) => Number.isFinite(line.delta_qty) && line.delta_qty !== 0);
+      });
     const newLines = correctionNewRows
       .filter((row) => row.material_id && row.issue_sloc_id && Number(row.delta_qty) > 0)
       .map((row) => ({
         material_id: row.material_id,
         storage_location_id: row.issue_sloc_id,
         delta_qty: Number(row.delta_qty),
+        movement_type: "P261",
       }));
     const lines = [...existingLines, ...newLines];
     if (lines.length === 0) {
-      toast("Enter a delta qty for at least one line, or add a missed item.", "error");
+      toast("Enter a qty + movement type for at least one line, or add a missed item.", "error");
       return;
     }
     const confirmed = await openActionConfirm({
       eyebrow: "Packing PO",
       title: "Post correction?",
-      message: "This will post a delta stock movement for each changed/added line.",
+      message: "This will post a stock movement for each changed/added line, using the movement type you selected.",
       confirmLabel: "Post Correction",
     });
     if (!confirmed) return;
@@ -387,6 +405,7 @@ function PackingPoFinalTab() {
       await correctPackingOrder(po.id, { lines });
       toast("Correction posted.");
       setCorrectionQty({});
+      setCorrectionMovementType({});
       setPmMatOverrides({});
       setPmApproved({});
       setPmApApproved({});
@@ -558,7 +577,7 @@ function PackingPoFinalTab() {
                       {!hidePmApproval && <th className="border-b px-3 py-2 text-left">Approved</th>}
                       {!hidePmApproval && <th className="border-b px-3 py-2 text-right">AP Appr</th>}
                       <th className="border-b px-3 py-2 text-right">Var</th>
-                      {po.status === "FINAL" ? <th className="border-b px-3 py-2 text-right">Delta Qty (+/-)</th> : null}
+                      {po.status === "FINAL" ? <th className="border-b px-3 py-2 text-right">Qty</th> : null}
                       <th className="border-b px-3 py-2 text-left">Movement</th>
                     </tr>
                   </thead>
@@ -574,17 +593,21 @@ function PackingPoFinalTab() {
                         ? computePmValues(standardQty, actualQtyForFinal, pmApproved[line.id], pmApApproved[line.id])
                         : null;
 
-                      // FINAL (COR6) view, locked 2026-08-12 — the correction input
-                      // IS the delta directly (e.g. +10 or -10); the backend decides
-                      // the movement type from its sign, never the user.
+                      // FINAL (COR6) view, locked 2026-08-12, corrected same day (business
+                      // owner override): the qty field is always a positive magnitude — the
+                      // user picks the movement type themselves from a dropdown, never
+                      // inferred from a sign.
                       const correctionInput = correctionQty[line.id];
-                      const hasCorrectionDelta = isPm && correctionInput !== undefined && correctionInput !== "" && Number(correctionInput) !== 0;
-                      const correctionDelta = hasCorrectionDelta ? Number(correctionInput) : 0;
-                      const correctionValues = hasCorrectionDelta
-                        ? computePmValues(0, correctionDelta, pmApproved[line.id], pmApApproved[line.id])
-                        : null;
-                      const correctionMovementType = hasCorrectionDelta
-                        ? (line.line_type === "FG" ? (correctionDelta > 0 ? "P101" : "P102") : (correctionDelta > 0 ? "P261" : "P262"))
+                      const hasCorrectionQty = correctionInput !== undefined && correctionInput !== "" && Number(correctionInput) > 0;
+                      const defaultMovementType = line.line_type === "FG" ? "P101" : "P261";
+                      const selectedMovementType = correctionMovementType[line.id] || defaultMovementType;
+                      const movementOptions = line.line_type === "FG" ? FG_CORRECTION_MOVEMENT_OPTIONS : ISSUE_CORRECTION_MOVEMENT_OPTIONS;
+                      const correctionMagnitude = hasCorrectionQty ? Number(correctionInput) : 0;
+                      const correctionSignedDelta = (selectedMovementType === "P261" || selectedMovementType === "P101")
+                        ? correctionMagnitude
+                        : -correctionMagnitude;
+                      const correctionValues = (isPm && hasCorrectionQty)
+                        ? computePmValues(0, correctionSignedDelta, pmApproved[line.id], pmApApproved[line.id])
                         : null;
 
                       const altOptions = isPm ? buildPmAlternateOptions(line) : [];
@@ -664,7 +687,7 @@ function PackingPoFinalTab() {
                               <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.actual_qty ?? line.total_qty)}</td>
                               {!hidePmApproval && (
                                 <td className="px-3 py-2">
-                                  {hasCorrectionDelta && !correctionValues.autoYes ? (
+                                  {correctionValues && !correctionValues.autoYes ? (
                                     <ErpComboboxField
                                       value={pmApproved[line.id] || "YES"}
                                       onChange={(value) => setPmApproved((current) => ({ ...current, [line.id]: value }))}
@@ -678,21 +701,21 @@ function PackingPoFinalTab() {
                               )}
                               {!hidePmApproval && (
                                 <td className="px-3 py-2 text-right">
-                                  {hasCorrectionDelta && correctionValues.approved === "PARTIAL" ? (
+                                  {correctionValues && correctionValues.approved === "PARTIAL" ? (
                                     <input
                                       type="number" min="0" step="0.001"
                                       className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                       value={pmApApproved[line.id] ?? ""}
                                       onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
                                     />
-                                  ) : hasCorrectionDelta ? (
+                                  ) : correctionValues ? (
                                     <span className="font-mono">{correctionValues.apApproved.toFixed(3)}</span>
                                   ) : (
                                     <span className="text-slate-400">—</span>
                                   )}
                                 </td>
                               )}
-                              <td className="px-3 py-2 text-right font-mono">{hasCorrectionDelta ? correctionValues.variance.toFixed(3) : "—"}</td>
+                              <td className="px-3 py-2 text-right font-mono">{correctionValues ? correctionValues.variance.toFixed(3) : "—"}</td>
                             </>
                           )}
 
@@ -700,18 +723,24 @@ function PackingPoFinalTab() {
                             <td className="px-3 py-2 text-right">
                               <input
                                 type="number"
+                                min="0"
                                 step="0.001"
-                                className="w-28 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                 value={correctionQty[line.id] ?? ""}
-                                placeholder="e.g. 10 or -10"
+                                placeholder="qty"
                                 onChange={(event) => setCorrectionQty((current) => ({ ...current, [line.id]: event.target.value }))}
                               />
                             </td>
                           ) : null}
                           <td className="px-3 py-2 font-mono">
-                            {po.status === "FINAL" && hasCorrectionDelta
-                              ? <span className="text-purple-700">{correctionMovementType}</span>
-                              : (line.movement_type_code || (line.line_type === "FG" ? "P101" : "P261"))}
+                            {po.status === "FINAL" ? (
+                              <ErpComboboxField
+                                value={selectedMovementType}
+                                onChange={(value) => setCorrectionMovementType((current) => ({ ...current, [line.id]: value }))}
+                                options={movementOptions}
+                                hideBlank
+                              />
+                            ) : (line.movement_type_code || (line.line_type === "FG" ? "P101" : "P261"))}
                           </td>
                         </tr>
                       );

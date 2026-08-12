@@ -2445,8 +2445,16 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
   }
 }
 
+const PACK_FG_CORRECTION_MOVEMENT_TYPES = new Set(["P101", "P102"]);
+const PACK_ISSUE_CORRECTION_MOVEMENT_TYPES = new Set(["P261", "P262"]);
+
 // POST /api/production/packing-orders/:id/correct
-// Minimal COR6-style append-only correction shape because no Process PO COR6 handler exists to mirror.
+// COR6-style append-only correction (locked 2026-08-12, corrected same day — business
+// owner overrode the original sign-decides-direction design): the caller sends a
+// positive QUANTITY plus an explicit `movement_type` the user picked from a dropdown
+// (P101/P102 for the FG line, P261/P262 for SFG/PM lines) — never inferred from a
+// number's sign. A brand-new line (missed item) is always PM and must use P261 — there
+// is nothing to reverse for a line that didn't exist before.
 export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
@@ -2497,9 +2505,11 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     for (const correction of corrections) {
       const line = lineMap.get(toTrimmedString(correction.id));
       if (!line || String(line.line_type ?? "") !== "SFG" || batchBlind) continue;
-      // Locked 2026-08-12: caller now sends the DELTA directly (not a new absolute qty)
-      // — the sign decides the movement type, matching correctProcessOrderHandler.
-      const delta = Number(correction.delta_qty ?? 0);
+      // Locked 2026-08-12, corrected same day (business owner override): caller sends a
+      // positive quantity + an explicit movement_type the user picked — P261 = draw more
+      // SFG from the batch (needs an availability check), P262 = return SFG (doesn't).
+      if (toTrimmedString(correction.movement_type) !== "P261") continue;
+      const delta = Math.abs(Number(correction.delta_qty ?? 0));
       if (delta <= 0) continue;
       const slocId = toTrimmedString(line.issue_sloc_id);
       if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
@@ -2544,12 +2554,15 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       let line = isNewLine ? null : (lineMap.get(toTrimmedString(correction.id)) ?? null);
       if (!isNewLine && !line) throw new Error("PROD_PACK_LINE_NOT_FOUND");
 
-      // Locked 2026-08-12: caller sends the DELTA directly (not a new absolute qty) —
-      // the sign decides the movement type, matching correctProcessOrderHandler. A
-      // brand-new line (missed item, never on the PO before) is always PM and always
-      // a positive addition — there is nothing to decrease.
-      const delta = Number(correction.delta_qty ?? 0);
+      // Locked 2026-08-12, corrected same day (business owner override): caller sends a
+      // positive quantity + an explicit movement_type the user picked from a dropdown —
+      // P101/P102 for FG lines, P261/P262 for SFG/PM lines — never inferred from a sign.
+      // A brand-new line (missed item, never on the PO before) is always PM and always a
+      // positive addition (movement_type P261) — there is nothing to decrease.
       const lineType = isNewLine ? "PM" : String(line?.line_type ?? "");
+      const magnitude = Math.abs(Number(correction.delta_qty ?? 0));
+      const movementType = toTrimmedString(correction.movement_type);
+      const allowedMovementTypes = lineType === "FG" ? PACK_FG_CORRECTION_MOVEMENT_TYPES : PACK_ISSUE_CORRECTION_MOVEMENT_TYPES;
 
       let effectiveMaterialId = isNewLine
         ? toTrimmedString(correction.material_id)
@@ -2564,7 +2577,7 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
         effectiveMaterialId = alt || String(line?.material_id ?? "");
       }
 
-      if (delta === 0) {
+      if (magnitude === 0) {
         if (!isNewLine && linePatch.actual_material_id !== undefined && line) {
           await serviceRoleClient.schema("erp_production").from("packing_order_line")
             .update(linePatch).eq("id", line.id as string);
@@ -2572,7 +2585,13 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
         postings.push(null);
         continue;
       }
-      if (isNewLine && delta < 0) throw new Error("PROD_PACK_CORRECTION_INVALID");
+      if (!allowedMovementTypes.has(movementType)) {
+        return packErr(req, ctx, "PROD_PACK_CORRECTION_MOVEMENT_TYPE_INVALID", 400,
+          `movement_type must be ${lineType === "FG" ? "P101 or P102" : "P261 or P262"} for line ${toTrimmedString(correction.id) || "new"}`);
+      }
+      const isIncrease = lineType === "FG" ? movementType === "P101" : movementType === "P261";
+      const delta = isIncrease ? magnitude : -magnitude;
+      if (isNewLine && !isIncrease) throw new Error("PROD_PACK_CORRECTION_INVALID");
       if (isNewLine && !effectiveMaterialId) throw new Error("PROD_PACK_CORRECTION_MATERIAL_REQUIRED");
 
       const slocId = isNewLine
@@ -2581,10 +2600,7 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       if (!slocId) throw new Error("PROD_PACK_LINE_SLOC_REQUIRED");
       const material = materialMap.get(effectiveMaterialId) ?? {};
       const baseUom = (material.base_uom_code ?? "KG") as string;
-      const isIncrease = delta > 0;
-      const movementTypeCode = lineType === "FG"
-        ? (isIncrease ? "P101" : "P102")
-        : (isIncrease ? "P261" : "P262");
+      const movementTypeCode = movementType;
       const direction = lineType === "FG"
         ? (isIncrease ? "IN" : "OUT")
         : (isIncrease ? "OUT" : "IN");
