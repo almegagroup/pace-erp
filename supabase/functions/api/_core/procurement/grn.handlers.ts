@@ -944,6 +944,7 @@ export async function createAndPostGRNFromLineHandler(
         received_qty: receivedQty,
         total_received_qty: receivedQty,
         invoice_number: grn.invoice_number ?? null,
+        invoice_date: grn.invoice_date ?? null,
         last_updated_at: new Date().toISOString(),
       };
       if (vendorType === "DOMESTIC") {
