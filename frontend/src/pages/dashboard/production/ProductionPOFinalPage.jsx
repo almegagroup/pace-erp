@@ -29,6 +29,14 @@ import {
 
 const FINAL_TABS = ["Process PO", "Packing PO"];
 const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }));
+const ISSUE_CORRECTION_MOVEMENT_OPTIONS = [
+  { value: "P261", label: "P261 (increase)" },
+  { value: "P262", label: "P262 (decrease)" },
+];
+const FG_CORRECTION_MOVEMENT_OPTIONS = [
+  { value: "P101", label: "P101 (increase)" },
+  { value: "P102", label: "P102 (decrease)" },
+];
 
 function materialLabelSimple(material) {
   return [material?.pace_code || material?.external_code, material?.material_name].filter(Boolean).join(" - ");
@@ -101,6 +109,10 @@ function PackingPoFinalTab() {
   const [saving, setSaving] = useState(false);
   const [sfgBatchNumber, setSfgBatchNumber] = useState("");
   const [correctionQty, setCorrectionQty] = useState({});
+  // Locked 2026-08-12, corrected same day (business owner override): the user picks
+  // the movement type from a dropdown themselves — the qty field is always a positive
+  // magnitude, never a signed delta.
+  const [correctionMovementType, setCorrectionMovementType] = useState({});
   // §83.4.1 addendum: PM-line Actual Qty / Actual Material / Approved / AP
   // Approved overrides, keyed by line id — used both at STANDARD (Final) and
   // at FINAL (COR6 correction); the correction delta reuses the same maps.
@@ -109,6 +121,9 @@ function PackingPoFinalTab() {
   const [pmApproved, setPmApproved] = useState({});
   const [pmApApproved, setPmApApproved] = useState({});
   const [newPmRows, setNewPmRows] = useState([]);
+  // Locked 2026-08-12: COR6 correction-time "add a missed item" rows — kept separate
+  // from newPmRows (that's the STANDARD-time add-row, a different endpoint/payload).
+  const [correctionNewRows, setCorrectionNewRows] = useState([]);
 
   const { runtimeContext } = useMenu();
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
@@ -161,6 +176,7 @@ function PackingPoFinalTab() {
   useEffect(() => {
     setSfgBatchNumber("");
     setCorrectionQty({});
+    setCorrectionMovementType({});
     setPmActualQty({});
     setPmMatOverrides({});
     setPmApproved({});
@@ -258,6 +274,21 @@ function PackingPoFinalTab() {
     setNewPmRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
   }
 
+  function addCorrectionRow() {
+    setCorrectionNewRows((current) => [...current, {
+      key: `cor-new-${Date.now()}-${current.length}`,
+      material_id: "", issue_sloc_id: "", delta_qty: "",
+    }]);
+  }
+
+  function updateCorrectionRow(key, patch) {
+    setCorrectionNewRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  }
+
+  function removeCorrectionRow(key) {
+    setCorrectionNewRows((current) => current.filter((row) => row.key !== key));
+  }
+
   async function handleFinalize() {
     if (!isBatchBlind) {
       if (!effectiveSfgBatchNumber) {
@@ -327,10 +358,18 @@ function PackingPoFinalTab() {
   }
 
   async function handleCorrect() {
-    const lines = (po.lines ?? [])
-      .filter((line) => correctionQty[line.id] !== undefined && correctionQty[line.id] !== "")
+    // Locked 2026-08-12, corrected same day (business owner override): caller enters a
+    // positive QUANTITY and picks the movement type themselves (P101/P102 for FG,
+    // P261/P262 for SFG/PM) — the backend never infers direction from a sign.
+    const existingLines = (po.lines ?? [])
+      .filter((line) => correctionQty[line.id] !== undefined && correctionQty[line.id] !== "" && Number(correctionQty[line.id]) > 0)
       .map((line) => {
-        const payload = { id: line.id, actual_qty: Number(correctionQty[line.id]) };
+        const defaultMovement = line.line_type === "FG" ? "P101" : "P261";
+        const payload = {
+          id: line.id,
+          delta_qty: Number(correctionQty[line.id]),
+          movement_type: correctionMovementType[line.id] || defaultMovement,
+        };
         if (line.line_type === "PM") {
           if (Object.prototype.hasOwnProperty.call(pmMatOverrides, line.id)) {
             payload.actual_material_id = pmMatOverrides[line.id] || null;
@@ -340,16 +379,24 @@ function PackingPoFinalTab() {
           if (approvedStatus === "PARTIAL") payload.ap_approved_qty = Number(pmApApproved[line.id] || 0);
         }
         return payload;
-      })
-      .filter((line) => Number.isFinite(line.actual_qty) && line.actual_qty > 0);
+      });
+    const newLines = correctionNewRows
+      .filter((row) => row.material_id && row.issue_sloc_id && Number(row.delta_qty) > 0)
+      .map((row) => ({
+        material_id: row.material_id,
+        storage_location_id: row.issue_sloc_id,
+        delta_qty: Number(row.delta_qty),
+        movement_type: "P261",
+      }));
+    const lines = [...existingLines, ...newLines];
     if (lines.length === 0) {
-      toast("Enter a new actual qty for at least one line.", "error");
+      toast("Enter a qty + movement type for at least one line, or add a missed item.", "error");
       return;
     }
     const confirmed = await openActionConfirm({
       eyebrow: "Packing PO",
       title: "Post correction?",
-      message: "This will post a delta stock movement for each changed line.",
+      message: "This will post a stock movement for each changed/added line, using the movement type you selected.",
       confirmLabel: "Post Correction",
     });
     if (!confirmed) return;
@@ -358,9 +405,11 @@ function PackingPoFinalTab() {
       await correctPackingOrder(po.id, { lines });
       toast("Correction posted.");
       setCorrectionQty({});
+      setCorrectionMovementType({});
       setPmMatOverrides({});
       setPmApproved({});
       setPmApApproved({});
+      setCorrectionNewRows([]);
       qc.invalidateQueries({ queryKey: ["pack-orders"] });
       qc.invalidateQueries({ queryKey: ["packing-final-detail", po.id] });
       detailQ.refetch();
@@ -528,7 +577,7 @@ function PackingPoFinalTab() {
                       {!hidePmApproval && <th className="border-b px-3 py-2 text-left">Approved</th>}
                       {!hidePmApproval && <th className="border-b px-3 py-2 text-right">AP Appr</th>}
                       <th className="border-b px-3 py-2 text-right">Var</th>
-                      {po.status === "FINAL" ? <th className="border-b px-3 py-2 text-right">New Actual Qty (correction)</th> : null}
+                      {po.status === "FINAL" ? <th className="border-b px-3 py-2 text-right">Qty</th> : null}
                       <th className="border-b px-3 py-2 text-left">Movement</th>
                     </tr>
                   </thead>
@@ -544,13 +593,21 @@ function PackingPoFinalTab() {
                         ? computePmValues(standardQty, actualQtyForFinal, pmApproved[line.id], pmApApproved[line.id])
                         : null;
 
-                      // FINAL (COR6) view — the correction input holds the NEW absolute
-                      // actual; approval applies to the delta it implies.
+                      // FINAL (COR6) view, locked 2026-08-12, corrected same day (business
+                      // owner override): the qty field is always a positive magnitude — the
+                      // user picks the movement type themselves from a dropdown, never
+                      // inferred from a sign.
                       const correctionInput = correctionQty[line.id];
-                      const hasCorrectionDelta = isPm && correctionInput !== undefined && correctionInput !== "";
-                      const correctionDelta = hasCorrectionDelta ? Number(correctionInput) - Number(line.actual_qty ?? line.total_qty ?? 0) : 0;
-                      const correctionValues = hasCorrectionDelta
-                        ? computePmValues(0, correctionDelta, pmApproved[line.id], pmApApproved[line.id])
+                      const hasCorrectionQty = correctionInput !== undefined && correctionInput !== "" && Number(correctionInput) > 0;
+                      const defaultMovementType = line.line_type === "FG" ? "P101" : "P261";
+                      const selectedMovementType = correctionMovementType[line.id] || defaultMovementType;
+                      const movementOptions = line.line_type === "FG" ? FG_CORRECTION_MOVEMENT_OPTIONS : ISSUE_CORRECTION_MOVEMENT_OPTIONS;
+                      const correctionMagnitude = hasCorrectionQty ? Number(correctionInput) : 0;
+                      const correctionSignedDelta = (selectedMovementType === "P261" || selectedMovementType === "P101")
+                        ? correctionMagnitude
+                        : -correctionMagnitude;
+                      const correctionValues = (isPm && hasCorrectionQty)
+                        ? computePmValues(0, correctionSignedDelta, pmApproved[line.id], pmApApproved[line.id])
                         : null;
 
                       const altOptions = isPm ? buildPmAlternateOptions(line) : [];
@@ -630,7 +687,7 @@ function PackingPoFinalTab() {
                               <td className="px-3 py-2 text-right font-mono">{qtyFmt(line.actual_qty ?? line.total_qty)}</td>
                               {!hidePmApproval && (
                                 <td className="px-3 py-2">
-                                  {hasCorrectionDelta && !correctionValues.autoYes ? (
+                                  {correctionValues && !correctionValues.autoYes ? (
                                     <ErpComboboxField
                                       value={pmApproved[line.id] || "YES"}
                                       onChange={(value) => setPmApproved((current) => ({ ...current, [line.id]: value }))}
@@ -644,21 +701,21 @@ function PackingPoFinalTab() {
                               )}
                               {!hidePmApproval && (
                                 <td className="px-3 py-2 text-right">
-                                  {hasCorrectionDelta && correctionValues.approved === "PARTIAL" ? (
+                                  {correctionValues && correctionValues.approved === "PARTIAL" ? (
                                     <input
                                       type="number" min="0" step="0.001"
                                       className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                       value={pmApApproved[line.id] ?? ""}
                                       onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
                                     />
-                                  ) : hasCorrectionDelta ? (
+                                  ) : correctionValues ? (
                                     <span className="font-mono">{correctionValues.apApproved.toFixed(3)}</span>
                                   ) : (
                                     <span className="text-slate-400">—</span>
                                   )}
                                 </td>
                               )}
-                              <td className="px-3 py-2 text-right font-mono">{hasCorrectionDelta ? correctionValues.variance.toFixed(3) : "—"}</td>
+                              <td className="px-3 py-2 text-right font-mono">{correctionValues ? correctionValues.variance.toFixed(3) : "—"}</td>
                             </>
                           )}
 
@@ -668,14 +725,23 @@ function PackingPoFinalTab() {
                                 type="number"
                                 min="0"
                                 step="0.001"
-                                className="w-28 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                 value={correctionQty[line.id] ?? ""}
-                                placeholder={qtyFmt(line.actual_qty ?? line.total_qty)}
+                                placeholder="qty"
                                 onChange={(event) => setCorrectionQty((current) => ({ ...current, [line.id]: event.target.value }))}
                               />
                             </td>
                           ) : null}
-                          <td className="px-3 py-2 font-mono">{line.movement_type_code || (line.line_type === "FG" ? "P101" : "P261")}</td>
+                          <td className="px-3 py-2 font-mono">
+                            {po.status === "FINAL" ? (
+                              <ErpComboboxField
+                                value={selectedMovementType}
+                                onChange={(value) => setCorrectionMovementType((current) => ({ ...current, [line.id]: value }))}
+                                options={movementOptions}
+                                hideBlank
+                              />
+                            ) : (line.movement_type_code || (line.line_type === "FG" ? "P101" : "P261"))}
+                          </td>
                         </tr>
                       );
                     })}
@@ -745,6 +811,54 @@ function PackingPoFinalTab() {
                         </td>
                       </tr>
                     )) : null}
+
+                    {po.status === "FINAL" ? correctionNewRows.map((row) => (
+                      <tr key={row.key} className="border-b border-slate-100 bg-amber-50/40">
+                        <td className="px-3 py-2 font-semibold">PM<span className="ml-1 text-xs font-normal text-amber-600">(missed item)</span></td>
+                        <td className="px-3 py-2 min-w-[220px]" colSpan={2}>
+                          <ErpComboboxField
+                            value={row.material_id}
+                            onChange={(value) => updateCorrectionRow(row.key, { material_id: value })}
+                            options={pmMaterialOptions}
+                            placeholder="-- Select PM material --"
+                            emptyStateLabel={pmMaterialQ.isLoading ? "Loading PM materials..." : "No PM materials"}
+                          />
+                        </td>
+                        <td className="px-3 py-2 min-w-[200px]">
+                          <ErpComboboxField
+                            value={row.issue_sloc_id}
+                            onChange={(value) => updateCorrectionRow(row.key, { issue_sloc_id: value })}
+                            options={storageLocationOptions}
+                            placeholder="-- Select storage location --"
+                            emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                          />
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">—</td>
+                        <td className="px-3 py-2 text-right font-mono">—</td>
+                        {!hidePmApproval && <td className="px-3 py-2 text-slate-400">—</td>}
+                        {!hidePmApproval && <td className="px-3 py-2 text-right text-slate-400">—</td>}
+                        <td className="px-3 py-2 text-right text-slate-400">—</td>
+                        <td className="px-3 py-2 text-right">
+                          <input
+                            type="number" min="0" step="0.001"
+                            className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                            value={row.delta_qty}
+                            placeholder="qty"
+                            onChange={(event) => updateCorrectionRow(row.key, { delta_qty: event.target.value })}
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className="text-purple-700">P261</span>
+                          <button
+                            type="button"
+                            onClick={() => removeCorrectionRow(row.key)}
+                            className="ml-3 text-sm font-medium text-rose-600 hover:underline"
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    )) : null}
                   </tbody>
                 </table>
               </div>
@@ -752,6 +866,11 @@ function PackingPoFinalTab() {
               {po.status === "STANDARD" ? (
                 <button type="button" onClick={addPmRow} className="self-start text-sm font-medium text-sky-700 hover:underline">
                   + Add PM Row (extra consumable)
+                </button>
+              ) : null}
+              {po.status === "FINAL" ? (
+                <button type="button" onClick={addCorrectionRow} className="self-start text-sm font-medium text-sky-700 hover:underline">
+                  + Add Missing Item
                 </button>
               ) : null}
 

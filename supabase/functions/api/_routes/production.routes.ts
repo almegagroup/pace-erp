@@ -102,6 +102,7 @@ import {
   startBatchHandler,
   finalizeProcessOrderHandler,
   verifyProcessOrderHandler,
+  correctProcessOrderHandler,
   reverseProcessOrderHandler,
   pruneProcessOrderHandler,
 } from "../_core/production/process_order.handlers.ts";
@@ -415,6 +416,9 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/process-orders\/[^/]+\/verify$/.test(pathname) && req.method === "POST") {
     return await verifyProcessOrderHandler(req, ctx);
+  }
+  if (/^\/api\/production\/process-orders\/[^/]+\/correct$/.test(pathname) && req.method === "POST") {
+    return await correctProcessOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/process-orders\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
     return await reverseProcessOrderHandler(req, ctx);

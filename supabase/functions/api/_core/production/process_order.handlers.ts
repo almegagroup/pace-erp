@@ -15,6 +15,7 @@ import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -466,7 +467,13 @@ async function postStockMovement(params: {
     });
   if (error || !Array.isArray(data) || data.length === 0) {
     console.error("[process_order.postStockMovement] rpc failed:", JSON.stringify(error));
-    throw new Error(`PROD_STOCK_POST_FAILED: ${params.movementTypeCode} ${params.direction}`);
+    // Found live 2026-08-12 (same gap fixed in packing_order.handlers.ts): surface the
+    // real DB-raised reason (e.g. "INSUFFICIENT_STOCK") instead of a bare, opaque code.
+    const dbReason = toTrimmedString((error as { message?: string } | null)?.message);
+    const reason = dbReason === "INSUFFICIENT_STOCK"
+      ? "insufficient UNRESTRICTED stock for this material/location/company"
+      : dbReason || "unknown error";
+    throw new Error(`PROD_STOCK_POST_FAILED: ${params.movementTypeCode} ${params.direction} (${reason})`);
   }
   return data[0] as StockPostingResult;
 }
@@ -1666,6 +1673,9 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (!(await canMaintainCompanyResource(ctx, companyId, "PROD_PO_CREATE", "WRITE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Process PO for this company.");
+    }
 
     const machineValidation = await validateRequiredMachine(req, ctx, companyId, poType, machineId);
     if (machineValidation) return machineValidation;
@@ -1913,6 +1923,9 @@ export async function pruneProcessOrderHandler(req: Request, ctx: ProdHandlerCon
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Process PO for this company.");
+    }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_PRUNE_STATUS_INVALID", 422, "Prune allowed only at STANDARD");
     }
@@ -1976,6 +1989,9 @@ export async function updateProcessOrderLinesHandler(req: Request, ctx: ProdHand
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Process PO for this company.");
     }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_LOCKED", 422, "Lines editable only at STANDARD status");
@@ -2057,6 +2073,9 @@ export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandle
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_QA_QUEUE", "APPROVE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have QA approval access for this company.");
+    }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected STANDARD, got ${po.status}`);
     }
@@ -2109,6 +2128,9 @@ export async function qaRejectProcessOrderHandler(req: Request, ctx: ProdHandler
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_QA_QUEUE", "APPROVE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have QA approval access for this company.");
     }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected STANDARD, got ${po.status}`);
@@ -2165,6 +2187,9 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_START_BATCH", "WRITE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Start Batch access for this company.");
     }
 
     const requiredStatus = po.po_type === "MTS" ? "STANDARD" : "QA_APPROVED";
@@ -2258,6 +2283,9 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Process PO for this company.");
     }
     if (!["MTO", "HPS"].includes(String(po.po_type ?? "").toUpperCase())) {
       return poErr(req, ctx, "PROD_PO_EDIT_TYPE_INVALID", 422, "PR10 edit is available only for MTO or HPS Process POs");
@@ -2518,6 +2546,9 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_FINAL", "WRITE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Final posting access for this company.");
     }
     // Locked 2026-08-12: INT skips QA and Start Batch entirely (no batch number, per
     // §83.5) so it finalizes directly from STANDARD. Every other po_type still needs
@@ -3124,6 +3155,315 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
   }
 }
 
+const RM_CORRECTION_MOVEMENT_TYPES = new Set(["P261", "P262"]);
+const OUTPUT_CORRECTION_MOVEMENT_TYPES = new Set(["P101", "P102"]);
+
+// POST /api/production/process-orders/:id/correct
+// COR6-style post-Verify correction (locked 2026-08-12, corrected same day —
+// business owner overrode the original sign-decides-direction design): the caller
+// sends a positive QUANTITY plus an explicit `movement_type` the user picked from a
+// dropdown (P261/P262 for RM+INT lines, P101/P102 for the output) — the handler
+// never infers direction from a number's sign. Mirrors correctPackingOrderHandler's
+// shape (same explicit-movement-type rule, same "original leg's own rate" costing
+// rule, same append-only posting, no reservation involvement since Verify already
+// closed those) adapted for Process PO's own line shape: `lines` corrects
+// existing/new RM+INT input lines, `output_delta_qty`+`output_movement_type`
+// (optional) corrects the SFG/INT output itself, which — unlike Packing PO's FG —
+// is a header field on process_order, not its own line row. A brand-new line (no
+// `id`) has no prior posting to reverse, so it must use P261 (increase).
+export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const id = getIdFromPath(req);
+    if (!id) return poErr(req, ctx, "PROD_PO_ID_MISSING", 400, "ID required");
+
+    const po = await fetchProcessOrder(id);
+    if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_VERIFY", "APPROVE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Verify/correction access for this company.");
+    }
+    if (po.status !== "VERIFIED") {
+      return poErr(req, ctx, "PROD_PO_CORRECTION_STATUS_INVALID", 422, "Process PO must be VERIFIED to correct");
+    }
+
+    const body = await parseBody(req);
+    const corrections = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    // Locked 2026-08-12 (corrected same day, business owner override): the user picks the
+    // movement type themselves from a dropdown — the qty field is always a positive
+    // magnitude, never a signed delta. "10 + P261" = issue 10 more; "10 + P262" = reverse
+    // 10 back. Same rule for the output correction below (P101/P102).
+    const outputMagnitude = Math.abs(Number(body.output_delta_qty ?? 0));
+    const outputMovementType = toTrimmedString(body.output_movement_type);
+    if (outputMagnitude > 0 && !OUTPUT_CORRECTION_MOVEMENT_TYPES.has(outputMovementType)) {
+      return poErr(req, ctx, "PROD_PO_CORRECTION_MOVEMENT_TYPE_INVALID", 400, "output_movement_type must be P101 or P102");
+    }
+    if (corrections.length === 0 && outputMagnitude === 0) {
+      return poErr(req, ctx, "PROD_PO_CORRECTION_INVALID", 400, "At least one line correction or an output correction is required");
+    }
+
+    const existingLines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
+    const lineMap = new Map(existingLines.map((line) => [String(line.id), line]));
+
+    // Rates: existing lines/output reuse the ORIGINAL posting's own rate (§104.8 — a
+    // decrease must reverse the exact value it removed; an increase adds at the same
+    // per-KG cost the batch was already booked at). New lines have no prior posting to
+    // reuse, so they rate at the CURRENT UNRESTRICTED rate, same as a fresh Verify line.
+    const existingLedgerIds = [
+      ...existingLines.map((line) => toTrimmedString(line.stock_ledger_id)),
+      toTrimmedString(po.fg_stock_ledger_id),
+    ];
+    const ledgerRefByLedgerId = await resolveStockLedgerRefsByLedgerIds(existingLedgerIds);
+
+    const newLineNeeds: Array<{ materialId: string; storageLocationId: string; qty: number }> = [];
+    for (const correction of corrections) {
+      if (toTrimmedString(correction.id)) continue;
+      const materialId = toTrimmedString(correction.material_id);
+      const slocId = toTrimmedString(correction.storage_location_id);
+      const magnitude = Math.abs(Number(correction.delta_qty ?? 0));
+      const movementType = toTrimmedString(correction.movement_type);
+      if (!materialId) return poErr(req, ctx, "PROD_PO_CORRECTION_MATERIAL_REQUIRED", 400, "material_id required for a new correction line");
+      if (!slocId) return poErr(req, ctx, "PROD_PO_CORRECTION_SLOC_REQUIRED", 400, "storage_location_id required for a new correction line");
+      if (magnitude <= 0) return poErr(req, ctx, "PROD_PO_CORRECTION_INVALID", 400, "A new line must be added with a positive quantity");
+      if (movementType !== "P261") return poErr(req, ctx, "PROD_PO_CORRECTION_INVALID", 400, "A new line has no prior posting to reverse — movement_type must be P261");
+      newLineNeeds.push({ materialId, storageLocationId: slocId, qty: magnitude });
+    }
+    const rateMap = newLineNeeds.length > 0
+      ? await fetchUnrestrictedRates(String(po.company_id), newLineNeeds.map((n) => ({ materialId: n.materialId, slocId: n.storageLocationId })))
+      : new Map<string, number>();
+
+    const materialMap = await getMaterialMapByIds(
+      [
+        ...existingLines.map((line) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "")),
+        ...newLineNeeds.map((n) => n.materialId),
+        String(po.material_id ?? ""),
+      ],
+      "[process_order.correctProcessOrder]",
+      "PROD_PO_CORRECTION_FAILED",
+      "id, base_uom_code, material_type",
+    );
+
+    const today = todayIso();
+    const docNumber = String(po.po_number);
+    const postedBy = ctx.auth_user_id;
+    // §106: this COR6 correction is its own Material Document event; the Process PO
+    // number is the reference — same pattern as Verify's own matDoc.
+    const correctionMatDoc = await generateMaterialDocNumber(String(po.company_id));
+    // §108.2 — MTS/INT/MTEST have no Approved/AP-Approved reco workflow at all (same
+    // exemption PR11 Final already applies for these three po_types): a correction-time
+    // reco row would just be dead, unused data for them.
+    const skipReco = ["MTS", "INT", "MTEST"].includes(String(po.po_type ?? ""));
+    const recoRows: JsonRecord[] = [];
+    const postings: JsonRecord[] = [];
+    let newLineDisplayOffset = 0;
+
+    // DEPENDENT: every leg shares one brand-new Material Document number — the first
+    // insert for it has nothing to lock yet, so parallel posts would race on the same
+    // item_number. Post sequentially (same reasoning as correctPackingOrderHandler).
+    for (const correction of corrections) {
+      const lineId = toTrimmedString(correction.id);
+      const magnitude = Math.abs(Number(correction.delta_qty ?? 0));
+      if (magnitude === 0) continue;
+      const movementType = toTrimmedString(correction.movement_type);
+      if (!RM_CORRECTION_MOVEMENT_TYPES.has(movementType)) {
+        return poErr(req, ctx, "PROD_PO_CORRECTION_MOVEMENT_TYPE_INVALID", 400, `movement_type must be P261 or P262 for line ${lineId || "new"}`);
+      }
+      const isIncrease = movementType === "P261";
+      // Signed only for bookkeeping (actual_qty delta, reco variance) — the RPC always
+      // gets a positive quantity; direction comes from the user's own movement_type pick.
+      const delta = isIncrease ? magnitude : -magnitude;
+
+      let materialId: string;
+      let slocId: string | null;
+      let baseUom: string;
+      let rate: number;
+      let reversalOfId: string | null = null;
+      let existingLine: JsonRecord | null = null;
+
+      if (lineId) {
+        existingLine = lineMap.get(lineId) ?? null;
+        if (!existingLine) return poErr(req, ctx, "PROD_PO_LINE_NOT_FOUND", 404, `Line ${lineId} not found on this Process PO`);
+        materialId = toTrimmedString(existingLine.actual_material_id) || String(existingLine.material_id ?? "");
+        slocId = getIssueStorageLocationId(existingLine);
+        const mat = materialMap.get(materialId) ?? {};
+        baseUom = (mat.base_uom_code ?? "KG") as string;
+        const ledgerRef = ledgerRefByLedgerId.get(toTrimmedString(existingLine.stock_ledger_id)) ?? null;
+        rate = ledgerRef?.rate ?? 0;
+        if (!isIncrease) {
+          reversalOfId = ledgerRef?.docId ?? null;
+          if (!reversalOfId) return poErr(req, ctx, "PROD_PO_REVERSAL_SOURCE_NOT_FOUND", 422, `No original posting found for line ${lineId} to reverse`);
+        }
+      } else {
+        materialId = toTrimmedString(correction.material_id);
+        slocId = toTrimmedString(correction.storage_location_id);
+        const mat = materialMap.get(materialId) ?? {};
+        baseUom = (mat.base_uom_code ?? "KG") as string;
+        rate = rateMap.get(`${materialId}|${slocId}`) ?? 0;
+      }
+      if (!slocId) return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 422, `Storage location missing for correction line ${lineId || materialId}`);
+
+      const posting = await postStockMovement({
+        documentNumber: docNumber,
+        documentDate: today,
+        postingDate: today,
+        movementTypeCode: movementType,
+        companyId: po.company_id,
+        storageLocationId: slocId,
+        materialId,
+        quantity: magnitude,
+        baseUomCode: baseUom,
+        unitValue: rate,
+        stockTypeCode: "UNRESTRICTED",
+        direction: isIncrease ? "OUT" : "IN",
+        postedBy,
+        reversalOfId,
+        batchNumber: toTrimmedString(po.batch_number) || null,
+        matDoc: correctionMatDoc,
+        referenceDocumentId: String(po.id),
+      });
+
+      if (existingLine) {
+        // Deliberately does NOT touch stock_ledger_id here (matches
+        // correctPackingOrderHandler) — that column identifies the line's ORIGINAL
+        // Verify-time posting, which every future correction's rate/reversal lookup
+        // (ledgerRefByLedgerId, built above) still needs to resolve back to. This
+        // correction's own posting is tracked only via the `postings` response array.
+        const newActual = Number(existingLine.actual_qty ?? existingLine.planned_qty ?? 0) + delta;
+        await serviceRoleClient.schema("erp_production").from("process_order_line")
+          .update({ actual_qty: newActual }).eq("id", lineId as string);
+      } else {
+        // A brand-new line has no prior posting, so its own first correction posting
+        // IS its "original" — store it, exactly like a normal Verify-created line would.
+        const { data: insertedLine, error: insertErr } = await serviceRoleClient
+          .schema("erp_production").from("process_order_line")
+          .insert({
+            process_order_id: id,
+            material_id: materialId,
+            planned_qty: 0,
+            actual_qty: delta,
+            uom_code: baseUom,
+            issue_sloc_id: slocId,
+            is_rm: true,
+            display_order: 1000 + existingLines.length + newLineDisplayOffset++,
+            is_formulation_line: false,
+            stock_ledger_id: posting.stock_ledger_id,
+          })
+          .select("id").single();
+        if (insertErr) {
+          console.error("[process_order.correctProcessOrder] new line insert failed:", JSON.stringify(insertErr));
+          throw new Error("PROD_PO_CORRECTION_FAILED");
+        }
+        existingLine = { id: (insertedLine as JsonRecord).id, material_id: materialId };
+      }
+
+      postings.push({ line_id: existingLine.id, movement: movementType, direction: isIncrease ? "OUT" : "IN", ...posting });
+
+      if (!skipReco) {
+        const approvedInput = toTrimmedString(correction.approved_status) || null;
+        const apApprovedInput = parsePositiveNumber(correction.ap_approved_qty);
+        // A correction delta has no Std of its own (it IS the deviation) — approval is
+        // always mandatory here, never auto-YES (same rule correctPackingOrderHandler
+        // already uses for its PM correction deltas).
+        const approved = (approvedInput === "NO" || approvedInput === "PARTIAL") ? approvedInput : "YES";
+        const apApproved = approved === "NO" ? 0 : approved === "PARTIAL" ? (apApprovedInput ?? 0) : delta;
+        const variance = delta - apApproved;
+        const mat = materialMap.get(materialId) ?? {};
+        recoRows.push({
+          company_id: po.company_id,
+          po_number: po.po_number,
+          batch_number: po.batch_number,
+          po_type: po.po_type,
+          prodshade_material_id: po.material_id,
+          machine_id: po.machine_id ?? null,
+          segment_code: po.segment_code ?? null,
+          process_order_id: po.id,
+          process_order_line_id: existingLine.id,
+          material_id: materialId,
+          line_material_type: mat.material_type === "INT" ? "INT" : "RM",
+          standard_qty: 0,
+          actual_qty: delta,
+          approved_status: approved,
+          ap_approved_qty: apApproved,
+          variance_qty: variance,
+          is_formulation_line: false,
+          is_voided: false,
+          source_txn_type: "COR6_CORRECTION",
+          reference_document_number: String(po.po_number),
+          reference_document_type: "PROC_PO",
+          last_updated_at: new Date().toISOString(),
+          last_updated_by: ctx.auth_user_id,
+        });
+      }
+    }
+
+    // Output (SFG/INT) correction — a header field on process_order, not its own line
+    // row (unlike Packing PO's FG, which IS a packing_order_line). Posts straight to
+    // UNRESTRICTED, mirroring where Verify's own P321 QI-release already lands it —
+    // no QI leg here, the batch is long past that gate.
+    if (outputMagnitude > 0) {
+      const isIncrease = outputMovementType === "P101";
+      const outputDelta = isIncrease ? outputMagnitude : -outputMagnitude;
+      const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
+      if (!shopfloorSlocId) return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
+      const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
+      const fgLedgerRef = ledgerRefByLedgerId.get(toTrimmedString(po.fg_stock_ledger_id)) ?? null;
+      let reversalOfId: string | null = null;
+      if (!isIncrease) {
+        reversalOfId = fgLedgerRef?.docId ?? null;
+        if (!reversalOfId) return poErr(req, ctx, "PROD_PO_REVERSAL_SOURCE_NOT_FOUND", 422, "No original SFG/output posting found to reverse");
+      }
+      const posting = await postStockMovement({
+        documentNumber: docNumber,
+        documentDate: today,
+        postingDate: today,
+        movementTypeCode: outputMovementType,
+        companyId: po.company_id,
+        storageLocationId: shopfloorSlocId,
+        materialId: po.material_id,
+        quantity: outputMagnitude,
+        baseUomCode: fgUom,
+        unitValue: fgLedgerRef?.rate ?? 0,
+        stockTypeCode: "UNRESTRICTED",
+        direction: isIncrease ? "IN" : "OUT",
+        postedBy,
+        reversalOfId,
+        batchNumber: toTrimmedString(po.batch_number) || null,
+        matDoc: correctionMatDoc,
+        referenceDocumentId: String(po.id),
+      });
+      postings.push({ line_id: "OUTPUT", movement: outputMovementType, direction: isIncrease ? "IN" : "OUT", ...posting });
+
+      const newOutputQty = Number(po.actual_qty ?? 0) + outputDelta;
+      await serviceRoleClient.schema("erp_production").from("process_order")
+        .update({ actual_qty: newOutputQty, fg_stock_ledger_id: posting.stock_ledger_id, last_updated_at: new Date().toISOString(), last_updated_by: ctx.auth_user_id })
+        .eq("id", id);
+    }
+
+    if (recoRows.length > 0) {
+      const recoDoc = await generateRecoDocNumber(String(po.company_id));
+      for (const row of recoRows) {
+        row.reco_document_number = recoDoc.docNumber;
+        row.reco_document_year = recoDoc.docYear;
+      }
+      const { error: recoErr } = await serviceRoleClient.schema("erp_production").from("process_order_line_reco").insert(recoRows);
+      if (recoErr) {
+        console.error("[process_order.correctProcessOrder] reco insert failed:", JSON.stringify(recoErr));
+        throw new Error("PROD_PO_RECO_WRITE_FAILED");
+      }
+    }
+
+    return okResponse({ id, corrections: postings }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PO_CORRECTION_FAILED";
+    const status = ["PROD_PO_LINE_NOT_FOUND"].includes(code) ? 404 : code.includes("REQUIRED") || code.includes("INVALID") || code.includes("MISSING") || code.includes("NOT_FOUND") ? 422 : 500;
+    return poErr(req, ctx, code, status, `Process PO correction failed: ${err instanceof Error ? err.message : ""}`);
+  }
+}
+
 export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     // ACL-gated via route-acl-registry (PROD_REVERSAL:APPROVE) — no longer a
@@ -3137,6 +3477,9 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_REVERSAL", "APPROVE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have reversal access for this company.");
     }
     if (po.status === "REVERSED") return poErr(req, ctx, "PROD_PO_ALREADY_REVERSED", 409, "Already reversed");
 

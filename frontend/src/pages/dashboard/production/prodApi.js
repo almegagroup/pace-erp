@@ -140,6 +140,7 @@ export const qaRejectProcessOrder = (id, body) => fetchProd("POST", `/api/produc
 export const startBatch = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/start-batch`, body ?? {});
 export const finalizeProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/finalize`, body);
 export const verifyProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/verify`, body);
+export const correctProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/correct`, body);
 export const reverseProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/reverse`, body);
 
 // —— SFG QA Result Recording ————————————————————————————————————————————————————————

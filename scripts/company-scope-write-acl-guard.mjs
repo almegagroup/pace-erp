@@ -165,13 +165,8 @@ const BASELINE = new Set([
   "supabase/functions/api/_core/production/mts_sku_rate.handlers.ts::approveMtsSkuRateHandler",
   "supabase/functions/api/_core/production/opening_genealogy.handlers.ts::createOldProcessPoHandler",
   "supabase/functions/api/_core/production/opening_genealogy.handlers.ts::createOldPackingPoHandler",
-  "supabase/functions/api/_core/production/packing_order.handlers.ts::createPackingOrderHandler",
-  "supabase/functions/api/_core/production/packing_order.handlers.ts::editPackingOrderHandler",
-  "supabase/functions/api/_core/production/packing_order.handlers.ts::cancelPackingOrderHandler",
-  "supabase/functions/api/_core/production/packing_order.handlers.ts::updatePackingOrderLinesHandler",
-  "supabase/functions/api/_core/production/packing_order.handlers.ts::finalizePackingOrderHandler",
-  "supabase/functions/api/_core/production/packing_order.handlers.ts::reversePackingOrderHandler",
-  "supabase/functions/api/_core/production/packing_order.handlers.ts::correctPackingOrderHandler",
+  // packing_order.handlers.ts's 7 write handlers fixed 2026-08-12 (canMaintainCompanyResource
+  // added after assertPackingCompanyScope in each) -- removed from baseline.
   "supabase/functions/api/_core/production/pack_bom.handlers.ts::createPackBomHandler",
   "supabase/functions/api/_core/production/pack_bom.handlers.ts::approvePackBomHandler",
   "supabase/functions/api/_core/production/pack_bom.handlers.ts::rejectPackBomHandler",
@@ -184,16 +179,11 @@ const BASELINE = new Set([
   "supabase/functions/api/_core/production/plan_feed.handlers.ts::cancelPlanFeedHandler",
   "supabase/functions/api/_core/production/plan_feed.handlers.ts::reactivatePlanFeedHandler",
   "supabase/functions/api/_core/production/plan_feed.handlers.ts::upsertFoAllocationHandler",
-  "supabase/functions/api/_core/production/process_order.handlers.ts::createProcessOrderHandler",
-  "supabase/functions/api/_core/production/process_order.handlers.ts::pruneProcessOrderHandler",
-  "supabase/functions/api/_core/production/process_order.handlers.ts::updateProcessOrderLinesHandler",
-  "supabase/functions/api/_core/production/process_order.handlers.ts::qaApproveProcessOrderHandler",
-  "supabase/functions/api/_core/production/process_order.handlers.ts::qaRejectProcessOrderHandler",
-  "supabase/functions/api/_core/production/process_order.handlers.ts::startBatchHandler",
-  "supabase/functions/api/_core/production/process_order.handlers.ts::editProcessOrderHandler",
-  "supabase/functions/api/_core/production/process_order.handlers.ts::completeIntProcessOrderHandler",
-  "supabase/functions/api/_core/production/process_order.handlers.ts::finalizeProcessOrderHandler",
-  "supabase/functions/api/_core/production/process_order.handlers.ts::reverseProcessOrderHandler",
+  // process_order.handlers.ts's 10 write handlers + correctProcessOrderHandler fixed
+  // 2026-08-12 (canMaintainCompanyResource added after assertCompanyScope in each) --
+  // removed from baseline. completeIntProcessOrderHandler was already dead (merged
+  // into finalizeProcessOrderHandler by the earlier INT/MTEST lifecycle redesign),
+  // removed as stale rather than "fixed".
   "supabase/functions/api/_core/production/segment_location.handlers.ts::upsertSegmentLocationHandler",
   "supabase/functions/api/_core/production/sfg_qa.handlers.ts::addSfgQaTestLineHandler",
   "supabase/functions/api/_core/production/sfg_qa.handlers.ts::updateSfgQaTestLineHandler",

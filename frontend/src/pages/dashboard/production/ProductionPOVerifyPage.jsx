@@ -17,7 +17,18 @@ import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../context/useMenu.js";
-import { availabilityPreviewProcessOrder, getProcessOrder, listProcessOrders, verifyProcessOrder } from "./prodApi.js";
+import { openActionConfirm } from "../../../store/actionConfirm.js";
+import { availabilityPreviewProcessOrder, correctProcessOrder, getProcessOrder, listProcessOrders, verifyProcessOrder } from "./prodApi.js";
+
+const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }));
+const RM_CORRECTION_MOVEMENT_OPTIONS = [
+  { value: "P261", label: "P261 (increase)" },
+  { value: "P262", label: "P262 (decrease)" },
+];
+const OUTPUT_CORRECTION_MOVEMENT_OPTIONS = [
+  { value: "P101", label: "P101 (increase)" },
+  { value: "P102", label: "P102 (decrease)" },
+];
 
 function orderLabel(order) {
   return [order.po_number, order.material?.material_name, order.po_type].filter(Boolean).join(" - ");
@@ -59,9 +70,10 @@ function storageLocationLabel(location) {
 }
 
 function validateVerifyPoStatus(status) {
-  return String(status || "").toUpperCase() === "FINAL"
+  const upper = String(status || "").toUpperCase();
+  return upper === "FINAL" || upper === "VERIFIED"
     ? ""
-    : "This Process PO is not applicable for Verify. Only `FINAL` is allowed.";
+    : "This Process PO is not applicable here. Only `FINAL` (to verify) or `VERIFIED` (to correct) is allowed.";
 }
 
 function computeRowValues(row) {
@@ -116,6 +128,20 @@ export default function ProductionPOVerifyPage() {
   const [saving, setSaving] = useState(false);
   const [rows, setRows] = useState([]);
   const [debouncedPreviewRows, setDebouncedPreviewRows] = useState([]);
+
+  // COR6-style post-Verify correction (Locked 2026-08-12, corrected same day — business
+  // owner overrode the original sign-decides-direction design) — triggered when the
+  // loaded Process PO is already VERIFIED. Separate from `rows`/makeDraftRow (which
+  // drive the one-time Verify posting itself): the caller enters a positive QUANTITY
+  // per line plus picks the movement type (P261/P262, or P101/P102 for the output)
+  // from a dropdown themselves — the backend never infers direction from a sign.
+  const [correctionQty, setCorrectionQty] = useState({});
+  const [correctionMovementType, setCorrectionMovementType] = useState({});
+  const [correctionApproved, setCorrectionApproved] = useState({});
+  const [correctionApApproved, setCorrectionApApproved] = useState({});
+  const [correctionNewRows, setCorrectionNewRows] = useState([]);
+  const [outputDeltaQty, setOutputDeltaQty] = useState("");
+  const [outputMovementType, setOutputMovementType] = useState("P101");
 
   const { runtimeContext } = useMenu();
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
@@ -185,6 +211,15 @@ export default function ProductionPOVerifyPage() {
   useEffect(() => {
     setRows((po?.lines ?? []).map(makeDraftRow));
   }, [po]);
+  useEffect(() => {
+    setCorrectionQty({});
+    setCorrectionMovementType({});
+    setCorrectionApproved({});
+    setCorrectionApApproved({});
+    setCorrectionNewRows([]);
+    setOutputDeltaQty("");
+    setOutputMovementType("P101");
+  }, [po?.id, po?.status]);
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setDebouncedPreviewRows(rows.map((row) => ({
@@ -301,6 +336,88 @@ export default function ProductionPOVerifyPage() {
     }
   }
 
+  function addCorrectionRow() {
+    setCorrectionNewRows((current) => [...current, {
+      key: `cor-new-${Date.now()}-${current.length}`,
+      material_id: "", issue_sloc_id: "", delta_qty: "",
+    }]);
+  }
+
+  function updateCorrectionRow(key, patch) {
+    setCorrectionNewRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  }
+
+  function removeCorrectionRow(key) {
+    setCorrectionNewRows((current) => current.filter((row) => row.key !== key));
+  }
+
+  async function handleCorrect() {
+    if (!po || po.status !== "VERIFIED") return;
+    // Locked 2026-08-12, corrected same day (business owner override): caller enters a
+    // positive QUANTITY and picks the movement type themselves — the backend never
+    // infers direction from a sign. Mirrors correctPackingOrderHandler's PR11 UI.
+    const existingLines = (po.lines ?? [])
+      .filter((line) => correctionQty[line.id] !== undefined && correctionQty[line.id] !== "" && Number(correctionQty[line.id]) > 0)
+      .map((line) => {
+        const approvedStatus = correctionApproved[line.id] || "YES";
+        const payload = {
+          id: line.id,
+          delta_qty: Number(correctionQty[line.id]),
+          movement_type: correctionMovementType[line.id] || "P261",
+          approved_status: approvedStatus,
+        };
+        if (approvedStatus === "PARTIAL") payload.ap_approved_qty = Number(correctionApApproved[line.id] || 0);
+        return payload;
+      });
+    const newLines = correctionNewRows
+      .filter((row) => row.material_id && row.issue_sloc_id && Number(row.delta_qty) > 0)
+      .map((row) => ({
+        material_id: row.material_id,
+        storage_location_id: row.issue_sloc_id,
+        delta_qty: Number(row.delta_qty),
+        movement_type: "P261",
+      }));
+    const lines = [...existingLines, ...newLines];
+    const outputQty = outputDeltaQty === "" ? 0 : Number(outputDeltaQty);
+    const hasOutputDelta = Number.isFinite(outputQty) && outputQty > 0;
+    if (lines.length === 0 && !hasOutputDelta) {
+      toast("Enter a qty + movement type for at least one line, add a missed item, or enter an output correction.", "error");
+      return;
+    }
+    const confirmed = await openActionConfirm({
+      eyebrow: "Process PO",
+      title: "Post correction?",
+      message: "This will post a stock movement for each changed/added line and/or the output, using the movement type you selected.",
+      confirmLabel: "Post Correction",
+    });
+    if (!confirmed) return;
+    setSaving(true);
+    try {
+      const body = { lines };
+      if (hasOutputDelta) {
+        body.output_delta_qty = outputQty;
+        body.output_movement_type = outputMovementType;
+      }
+      await correctProcessOrder(po.id, body);
+      toast("Correction posted.");
+      setCorrectionQty({});
+      setCorrectionMovementType({});
+      setCorrectionApproved({});
+      setCorrectionApApproved({});
+      setCorrectionNewRows([]);
+      setOutputDeltaQty("");
+      setOutputMovementType("P101");
+      qc.invalidateQueries({ queryKey: ["production-verify-orders"] });
+      qc.invalidateQueries({ queryKey: ["production-verify-detail", po.id] });
+      detailQ.refetch();
+    } catch (error) {
+      toast(error.message || "Correction failed.", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const isCorrectionMode = po?.status === "VERIFIED";
   const outputApprovedQty = rows.reduce((sum, row) => sum + computeRowValues(row).apApproved, 0);
   const outputActualQty = rows.reduce((sum, row) => sum + computeRowValues(row).actual, 0);
   const outputVariance = outputActualQty - outputApprovedQty;
@@ -379,10 +496,10 @@ export default function ProductionPOVerifyPage() {
       </ErpSectionCard>
 
       {po && (
-        <ErpSectionCard title="PR12 Verify">
-          {po.status !== "FINAL" ? (
+        <ErpSectionCard title={isCorrectionMode ? "PR12 Correction Mode" : "PR12 Verify"}>
+          {po.status !== "FINAL" && po.status !== "VERIFIED" ? (
             <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              This Process PO is blocked for Verify. Only `FINAL` is allowed.
+              This Process PO is blocked here. Only `FINAL` (to verify) or `VERIFIED` (to correct) is allowed.
             </div>
           ) : (
             <div className="flex flex-col gap-4">
@@ -399,11 +516,13 @@ export default function ProductionPOVerifyPage() {
                   <div><span className="block text-xs text-slate-400">Std Size</span><p className="font-mono">{Number(po.planned_qty || 0).toLocaleString()}</p></div>
                 </div>
                 <button
-                  onClick={handleSave}
+                  onClick={isCorrectionMode ? handleCorrect : handleSave}
                   disabled={saving}
-                  className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
+                  className={isCorrectionMode
+                    ? "rounded bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
+                    : "rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"}
                 >
-                  {saving ? "Posting..." : "Save & Post Stock"}
+                  {saving ? "Posting..." : (isCorrectionMode ? "Post Correction" : "Save & Post Stock")}
                 </button>
               </div>
 
@@ -422,6 +541,7 @@ export default function ProductionPOVerifyPage() {
                         <th className="border-b px-3 py-2 text-left">Approved</th>
                         <th className="border-b px-3 py-2 text-right">AP Appr</th>
                         <th className="border-b px-3 py-2 text-right">Var</th>
+                        {isCorrectionMode ? <th className="border-b px-3 py-2 text-right">Qty</th> : null}
                         <th className="border-b px-3 py-2 text-left">Mvt</th>
                         <th className="border-b px-3 py-2 text-center">Delete</th>
                       </tr>
@@ -437,6 +557,23 @@ export default function ProductionPOVerifyPage() {
                         const actualMaterialOptions = row.allowed_alternate_material_options?.length
                           ? row.allowed_alternate_material_options
                           : [{ value: "", label: "(same)" }];
+
+                        // COR6 correction preview — backend re-reads material/SLoc from
+                        // the existing DB line itself (ignores any override sent here), so
+                        // those two fields render read-only in correction mode below. Qty is
+                        // always a positive magnitude; the user picks the movement type
+                        // (P261/P262) from a dropdown themselves — never inferred from sign.
+                        const correctionInput = correctionQty[row.id];
+                        const hasCorrectionQty = isCorrectionMode && correctionInput !== undefined && correctionInput !== "" && Number(correctionInput) > 0;
+                        const selectedMovementType = correctionMovementType[row.id] || "P261";
+                        const correctionMagnitude = hasCorrectionQty ? Number(correctionInput) : 0;
+                        const correctionSignedDelta = selectedMovementType === "P261" ? correctionMagnitude : -correctionMagnitude;
+                        const correctionValues = hasCorrectionQty
+                          ? computeRowValues({ planned_qty: 0, actual_qty: correctionSignedDelta, approved_status: correctionApproved[row.id], ap_approved_qty: correctionApApproved[row.id] })
+                          : null;
+                        const actualMaterialLabel = actualMaterialOptions.find((option) => option.value === row.actual_material_id)?.label || "(same)";
+                        const slocLabelValue = storageLocationOptions.find((option) => option.value === row.issue_sloc_id)?.label || "--";
+
                         return (
                           <tr key={row.key} className={isShort ? "bg-rose-50" : "border-b border-slate-100"}>
                             <td className="px-3 py-2">
@@ -460,48 +597,85 @@ export default function ProductionPOVerifyPage() {
                             </td>
                             <td className="px-3 py-2 text-right font-mono">{row.dosage_pct === "" ? "--" : Number(row.dosage_pct).toFixed(3)}</td>
                             <td className="px-3 py-2">
-                              <ErpComboboxField
-                                value={row.actual_material_id}
-                                onChange={(value) => updateRow(row.key, { actual_material_id: value })}
-                                options={actualMaterialOptions}
-                                placeholder="(same)"
-                                disabled={actualMaterialOptions.length <= 1}
-                              />
+                              {isCorrectionMode ? (
+                                <span className="text-slate-500">{actualMaterialLabel}</span>
+                              ) : (
+                                <ErpComboboxField
+                                  value={row.actual_material_id}
+                                  onChange={(value) => updateRow(row.key, { actual_material_id: value })}
+                                  options={actualMaterialOptions}
+                                  placeholder="(same)"
+                                  disabled={actualMaterialOptions.length <= 1}
+                                />
+                              )}
                             </td>
                             <td className="px-3 py-2">
-                              <ErpComboboxField
-                                value={row.issue_sloc_id}
-                                onChange={(value) => updateRow(row.key, { issue_sloc_id: value })}
-                                options={storageLocationOptions}
-                                placeholder="-- Select storage location --"
-                                emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
-                              />
+                              {isCorrectionMode ? (
+                                <span className="text-slate-500">{slocLabelValue}</span>
+                              ) : (
+                                <ErpComboboxField
+                                  value={row.issue_sloc_id}
+                                  onChange={(value) => updateRow(row.key, { issue_sloc_id: value })}
+                                  options={storageLocationOptions}
+                                  placeholder="-- Select storage location --"
+                                  emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                                />
+                              )}
                             </td>
                             <td className="px-3 py-2 text-right font-mono">{values.planned.toFixed(3)}</td>
                             <td className="px-3 py-2 text-right">
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.001"
-                                className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
-                                value={row.actual_qty}
-                                onChange={(event) => updateRow(row.key, { actual_qty: event.target.value })}
-                              />
+                              {isCorrectionMode ? (
+                                <span className="font-mono">{values.actual.toFixed(3)}</span>
+                              ) : (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.001"
+                                  className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                  value={row.actual_qty}
+                                  onChange={(event) => updateRow(row.key, { actual_qty: event.target.value })}
+                                />
+                              )}
                             </td>
                             <td className="px-3 py-2">
-                              {values.autoYes && row.id && row.is_formulation_line ? (
+                              {isCorrectionMode ? (
+                                hasCorrectionQty && !correctionValues.autoYes ? (
+                                  <ErpComboboxField
+                                    value={correctionApproved[row.id] || "YES"}
+                                    onChange={(value) => setCorrectionApproved((current) => ({ ...current, [row.id]: value }))}
+                                    options={APPROVED_OPTIONS}
+                                    hideBlank
+                                  />
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )
+                              ) : values.autoYes && row.id && row.is_formulation_line ? (
                                 <span className="inline-flex rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">* YES</span>
                               ) : (
                                 <ErpComboboxField
                                   value={row.approved_status}
                                   onChange={(value) => updateRow(row.key, { approved_status: value })}
-                                  options={["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }))}
+                                  options={APPROVED_OPTIONS}
                                   hideBlank
                                 />
                               )}
                             </td>
                             <td className="px-3 py-2 text-right">
-                              {row.approved_status === "PARTIAL" && !values.autoYes ? (
+                              {isCorrectionMode ? (
+                                hasCorrectionQty && correctionValues.approved === "PARTIAL" ? (
+                                  <input
+                                    type="number"
+                                    step="0.001"
+                                    className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                    value={correctionApApproved[row.id] ?? ""}
+                                    onChange={(event) => setCorrectionApApproved((current) => ({ ...current, [row.id]: event.target.value }))}
+                                  />
+                                ) : hasCorrectionQty ? (
+                                  <span className="font-mono">{correctionValues.apApproved.toFixed(3)}</span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )
+                              ) : row.approved_status === "PARTIAL" && !values.autoYes ? (
                                 <input
                                   type="number"
                                   min="0"
@@ -514,10 +688,34 @@ export default function ProductionPOVerifyPage() {
                                 <span className="font-mono">{values.apApproved.toFixed(3)}</span>
                               )}
                             </td>
-                            <td className="px-3 py-2 text-right font-mono">{values.variance.toFixed(3)}</td>
-                            <td className="px-3 py-2">P261</td>
+                            <td className="px-3 py-2 text-right font-mono">
+                              {isCorrectionMode ? (hasCorrectionQty ? correctionValues.variance.toFixed(3) : "—") : values.variance.toFixed(3)}
+                            </td>
+                            {isCorrectionMode ? (
+                              <td className="px-3 py-2 text-right">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.001"
+                                  className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                  value={correctionQty[row.id] ?? ""}
+                                  placeholder="qty"
+                                  onChange={(event) => setCorrectionQty((current) => ({ ...current, [row.id]: event.target.value }))}
+                                />
+                              </td>
+                            ) : null}
+                            <td className="px-3 py-2 font-mono">
+                              {isCorrectionMode ? (
+                                <ErpComboboxField
+                                  value={selectedMovementType}
+                                  onChange={(value) => setCorrectionMovementType((current) => ({ ...current, [row.id]: value }))}
+                                  options={RM_CORRECTION_MOVEMENT_OPTIONS}
+                                  hideBlank
+                                />
+                              ) : "P261"}
+                            </td>
                             <td className="px-3 py-2 text-center">
-                              {!row.is_formulation_line && (
+                              {!isCorrectionMode && !row.is_formulation_line && (
                                 <button
                                   onClick={() => setRows((current) => current.filter((entry) => entry.key !== row.key))}
                                   className="text-sm font-medium text-rose-600 hover:underline"
@@ -529,10 +727,67 @@ export default function ProductionPOVerifyPage() {
                           </tr>
                         );
                       })}
+
+                      {isCorrectionMode ? correctionNewRows.map((row) => (
+                        <tr key={row.key} className="border-b border-slate-100 bg-amber-50/40">
+                          <td className="px-3 py-2 min-w-[220px]">
+                            <ErpComboboxField
+                              value={row.material_id}
+                              onChange={(value) => updateCorrectionRow(row.key, { material_id: value })}
+                              options={materialOptions}
+                              placeholder="-- Select material (missed item) --"
+                              emptyStateLabel={materialQ.isLoading ? "Loading materials..." : "No materials"}
+                            />
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-400">—</td>
+                          <td className="px-3 py-2 text-slate-400">—</td>
+                          <td className="px-3 py-2 min-w-[200px]">
+                            <ErpComboboxField
+                              value={row.issue_sloc_id}
+                              onChange={(value) => updateCorrectionRow(row.key, { issue_sloc_id: value })}
+                              options={storageLocationOptions}
+                              placeholder="-- Select storage location --"
+                              emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                            />
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-400">—</td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-400">—</td>
+                          <td className="px-3 py-2 text-slate-400">—</td>
+                          <td className="px-3 py-2 text-right text-slate-400">—</td>
+                          <td className="px-3 py-2 text-right text-slate-400">—</td>
+                          <td className="px-3 py-2 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.001"
+                              className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                              value={row.delta_qty}
+                              placeholder="qty"
+                              onChange={(event) => updateCorrectionRow(row.key, { delta_qty: event.target.value })}
+                            />
+                          </td>
+                          <td className="px-3 py-2 font-mono text-purple-700">P261</td>
+                          <td className="px-3 py-2 text-center">
+                            <button
+                              type="button"
+                              onClick={() => removeCorrectionRow(row.key)}
+                              className="text-sm font-medium text-rose-600 hover:underline"
+                            >
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      )) : null}
                     </tbody>
                   </table>
                 </div>
-                <button onClick={addRow} className="mt-2 text-sm font-medium text-sky-700 hover:underline">+ Add Row</button>
+                {isCorrectionMode ? (
+                  <button type="button" onClick={addCorrectionRow} className="mt-2 text-sm font-medium text-sky-700 hover:underline">
+                    + Add Missing Item
+                  </button>
+                ) : (
+                  <button onClick={addRow} className="mt-2 text-sm font-medium text-sky-700 hover:underline">+ Add Row</button>
+                )}
               </div>
 
               <div>
@@ -561,6 +816,31 @@ export default function ProductionPOVerifyPage() {
                     </tbody>
                   </table>
                 </div>
+                {isCorrectionMode ? (
+                  <div className="mt-3 flex flex-wrap items-end gap-3 text-sm">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-slate-600">Output Qty</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.001"
+                        className="w-32 rounded border border-slate-300 px-2 py-1.5 text-right font-mono text-sm"
+                        value={outputDeltaQty}
+                        placeholder="qty"
+                        onChange={(event) => setOutputDeltaQty(event.target.value)}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-slate-600">Movement</label>
+                      <ErpComboboxField
+                        value={outputMovementType}
+                        onChange={setOutputMovementType}
+                        options={OUTPUT_CORRECTION_MOVEMENT_OPTIONS}
+                        hideBlank
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
           )}
