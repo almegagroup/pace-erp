@@ -31,8 +31,15 @@ const CSN_STATUS = {
   CANCELLED: "CAN",
   KNOCKED_OFF: "KOF",
 } as const;
-const EDITABLE_CSN_STATUSES = new Set<string>([CSN_STATUS.ORDERED, CSN_STATUS.IN_TRANSIT]);
-const READONLY_CSN_STATUSES = new Set<string>([CSN_STATUS.GATE_ENTRY_DONE, CSN_STATUS.GRN_DONE]);
+// Locked 2026-08-13 (business owner override): GATE_ENTRY_DONE/GRN_DONE used to hard-block
+// every edit here (400 PROCUREMENT_CSN_READ_ONLY) -- that was too strict. GE/Stores can make
+// a mistake just as easily as SCM, and whoever has CSN Tracker access should be able to
+// correct ANY field regardless of status; the safety net moves to the frontend instead, which
+// shows an English confirm ("GE/GRN already done for this CSN -- are you sure?") once per Save
+// action (not per field) when the CSN is past GED/GRD. Only CANCELLED/KNOCKED_OFF stay
+// genuinely blocked here -- those are terminal/void states, not "already processed but maybe
+// wrong" states, so there is nothing to correct.
+const EDIT_BLOCKED_CSN_STATUSES = new Set<string>([CSN_STATUS.CANCELLED, CSN_STATUS.KNOCKED_OFF]);
 const DATE_FIELDS = new Set([
   "scheduled_eta_to_port",
   "etd",
@@ -1396,11 +1403,8 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
     }
 
     const status = toUpperTrimmedString(csn.status);
-    if (!EDITABLE_CSN_STATUSES.has(status)) {
-      const code = READONLY_CSN_STATUSES.has(status)
-        ? "PROCUREMENT_CSN_READ_ONLY"
-        : "PROCUREMENT_CSN_EDIT_BLOCKED";
-      return procurementErrorResponse(req, ctx, code, 400, "CSN is not editable in current status");
+    if (EDIT_BLOCKED_CSN_STATUSES.has(status)) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_EDIT_BLOCKED", 400, "CSN is not editable in current status");
     }
 
     const updates: JsonRecord = {};
@@ -2273,8 +2277,8 @@ export async function inlineUpdateCSNHandler(req: Request, ctx: ProcurementHandl
     }
 
     const status = toUpperTrimmedString(csn.status);
-    if (!EDITABLE_CSN_STATUSES.has(status)) {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_READ_ONLY", 400, "CSN is not editable in current status");
+    if (EDIT_BLOCKED_CSN_STATUSES.has(status)) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_EDIT_BLOCKED", 400, "CSN is not editable in current status");
     }
 
     const rawValue = body.value === "" ? null : body.value;

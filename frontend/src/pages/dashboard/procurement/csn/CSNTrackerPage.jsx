@@ -14,6 +14,7 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen, openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import { requestWideWorkspace } from "../../../../store/wideWorkspace.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import {
@@ -47,6 +48,12 @@ const YES_NO_OPTIONS = [
   { value: true, label: "Yes" },
   { value: false, label: "No" },
 ];
+// Locked 2026-08-13 (business owner override): GED/GRD no longer hard-block editing on the
+// backend -- CSN Tracker access holders (SCM etc.) can correct any field regardless of status,
+// since GE/Stores can make a mistake just as easily as SCM can. The safety net is this
+// confirm, shown ONCE per Save click (not per field) when the CSN is already past Gate
+// Entry/GRN, so a genuine correction can't happen by accident.
+const POST_PROCESS_CSN_STATUSES = new Set(["GED", "GRD"]);
 const TRACKER_FIELDS = [
   "dispatch_qty",
   "has_rebate",
@@ -688,6 +695,18 @@ export default function CSNTrackerPage() {
     if (!scopedCompanyId) {
       setError("PROCUREMENT_CSN_COMPANY_REQUIRED");
       return;
+    }
+    // Only gate the FIRST entry into a save attempt -- dispatchAction is set when this function
+    // re-enters after the user already resolved the (separate) dispatch-qty conflict dialog, and
+    // by then they've already been through this confirm once for this same Save click.
+    if (!dispatchAction && POST_PROCESS_CSN_STATUSES.has(toText(row.status).toUpperCase())) {
+      const confirmed = await openActionConfirm({
+        eyebrow: "Consignment Tracker",
+        title: "Save changes to this CSN?",
+        message: "Gate Entry / GRN has already been posted for this consignment. Are you sure you want to change it now?",
+        confirmLabel: "Yes, save changes",
+      });
+      if (!confirmed) return;
     }
     setSavingRowId(row.id);
     setError("");
@@ -1371,16 +1390,35 @@ export default function CSNTrackerPage() {
 
                                 <TrackerSection eyebrow="Logistics" title="Transport, LR, and post-clearance handoff">
                                   <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
-                                    <EditField label="Transporter" rowId={row.id} fieldName="transporter_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <ErpComboboxField
-                                        value={draft.transporter_id ?? ""}
-                                        onChange={(value) => patchDraft("transporter_id", value)}
-                                        options={transporterOptions}
-                                        blankLabel="Select transporter"
-                                        placeholder="Select transporter"
-                                        inputClassName="h-[26px] px-2 py-0 text-[11px]"
-                                      />
-                                    </EditField>
+                                    {row.csn_type === "DOMESTIC" ? (
+                                      // Real bug found live 2026-08-13 (business owner) -- this field was
+                                      // hardcoded to transporter_id, but GRN sync (grn.handlers.ts's CSN
+                                      // sync-back) writes DOMESTIC transporters to domestic_transporter_id,
+                                      // a separate column. The combobox always came up blank for Domestic
+                                      // CSNs even with a real value sitting in the DB, because it was reading
+                                      // the wrong column.
+                                      <EditField label="Transporter" rowId={row.id} fieldName="domestic_transporter_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                        <ErpComboboxField
+                                          value={draft.domestic_transporter_id ?? ""}
+                                          onChange={(value) => patchDraft("domestic_transporter_id", value)}
+                                          options={transporterOptions}
+                                          blankLabel="Select transporter"
+                                          placeholder="Select transporter"
+                                          inputClassName="h-[26px] px-2 py-0 text-[11px]"
+                                        />
+                                      </EditField>
+                                    ) : (
+                                      <EditField label="Transporter" rowId={row.id} fieldName="transporter_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                        <ErpComboboxField
+                                          value={draft.transporter_id ?? ""}
+                                          onChange={(value) => patchDraft("transporter_id", value)}
+                                          options={transporterOptions}
+                                          blankLabel="Select transporter"
+                                          placeholder="Select transporter"
+                                          inputClassName="h-[26px] px-2 py-0 text-[11px]"
+                                        />
+                                      </EditField>
+                                    )}
                                     <EditField label="CHA" rowId={row.id} fieldName="cha_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <ErpComboboxField
                                         value={draft.cha_id ?? ""}
