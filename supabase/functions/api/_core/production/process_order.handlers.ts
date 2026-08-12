@@ -15,6 +15,7 @@ import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -1672,6 +1673,9 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (!(await canMaintainCompanyResource(ctx, companyId, "PROD_PO_CREATE", "WRITE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Process PO for this company.");
+    }
 
     const machineValidation = await validateRequiredMachine(req, ctx, companyId, poType, machineId);
     if (machineValidation) return machineValidation;
@@ -1919,6 +1923,9 @@ export async function pruneProcessOrderHandler(req: Request, ctx: ProdHandlerCon
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Process PO for this company.");
+    }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_PRUNE_STATUS_INVALID", 422, "Prune allowed only at STANDARD");
     }
@@ -1982,6 +1989,9 @@ export async function updateProcessOrderLinesHandler(req: Request, ctx: ProdHand
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Process PO for this company.");
     }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_LOCKED", 422, "Lines editable only at STANDARD status");
@@ -2063,6 +2073,9 @@ export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandle
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_QA_QUEUE", "APPROVE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have QA approval access for this company.");
+    }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected STANDARD, got ${po.status}`);
     }
@@ -2115,6 +2128,9 @@ export async function qaRejectProcessOrderHandler(req: Request, ctx: ProdHandler
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_QA_QUEUE", "APPROVE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have QA approval access for this company.");
     }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected STANDARD, got ${po.status}`);
@@ -2171,6 +2187,9 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_START_BATCH", "WRITE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Start Batch access for this company.");
     }
 
     const requiredStatus = po.po_type === "MTS" ? "STANDARD" : "QA_APPROVED";
@@ -2264,6 +2283,9 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Process PO for this company.");
     }
     if (!["MTO", "HPS"].includes(String(po.po_type ?? "").toUpperCase())) {
       return poErr(req, ctx, "PROD_PO_EDIT_TYPE_INVALID", 422, "PR10 edit is available only for MTO or HPS Process POs");
@@ -2524,6 +2546,9 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_FINAL", "WRITE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Final posting access for this company.");
     }
     // Locked 2026-08-12: INT skips QA and Start Batch entirely (no batch number, per
     // §83.5) so it finalizes directly from STANDARD. Every other po_type still needs
@@ -3159,6 +3184,9 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_VERIFY", "APPROVE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Verify/correction access for this company.");
+    }
     if (po.status !== "VERIFIED") {
       return poErr(req, ctx, "PROD_PO_CORRECTION_STATUS_INVALID", 422, "Process PO must be VERIFIED to correct");
     }
@@ -3449,6 +3477,9 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       await assertCompanyScope(ctx, String(po.company_id ?? ""));
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_REVERSAL", "APPROVE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have reversal access for this company.");
     }
     if (po.status === "REVERSED") return poErr(req, ctx, "PROD_PO_ALREADY_REVERSED", 409, "Already reversed");
 

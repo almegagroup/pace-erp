@@ -13,6 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
+import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -1219,6 +1220,9 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id, po_type, material_id and num_packs required");
     }
     await assertPackingCompanyScope(ctx, companyId);
+    if (!(await canMaintainCompanyResource(ctx, companyId, "PROD_PO_CREATE", "WRITE"))) {
+      return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Packing PO for this company.");
+    }
 
     const { data: sku, error: skuErr } = await serviceRoleClient
       .schema("erp_master")
@@ -1581,6 +1585,9 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
     } catch {
       return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
+      return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Packing PO for this company.");
+    }
     if (String(po.status) !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Packing PO is editable only at STANDARD status.");
     }
@@ -1784,6 +1791,9 @@ export async function cancelPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     } catch {
       return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (!(await canMaintainCompanyResource(ctx, String((poRow as JsonRecord).company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
+      return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Packing PO for this company.");
+    }
     if (String((poRow as JsonRecord).status) !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Only a STANDARD Packing PO can be cancelled here. A finalised PO must be reversed.");
     }
@@ -1825,6 +1835,9 @@ export async function updatePackingOrderLinesHandler(req: Request, ctx: ProdHand
       await assertPackingCompanyScope(ctx, String((po as JsonRecord).company_id ?? ""));
     } catch {
       return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String((po as JsonRecord).company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
+      return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Packing PO for this company.");
     }
     if ((po as JsonRecord).status !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Lines editable only at STANDARD status");
@@ -1914,6 +1927,9 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       await assertPackingCompanyScope(ctx, String((po as JsonRecord).company_id ?? ""));
     } catch {
       return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String((po as JsonRecord).company_id ?? ""), "PROD_PO_FINAL", "WRITE"))) {
+      return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have Final posting access for this company.");
     }
     if ((po as JsonRecord).status !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_INVALID", 422, "Must be STANDARD to finalize");
@@ -2302,6 +2318,9 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
     } catch {
       return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (!(await canMaintainCompanyResource(ctx, String(poData.company_id ?? ""), "PROD_REVERSAL", "APPROVE"))) {
+      return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have reversal access for this company.");
+    }
     if (poData.status === "REVERSED") {
       return packErr(req, ctx, "PROD_PACK_ALREADY_REVERSED", 409, "Already reversed");
     }
@@ -2473,6 +2492,9 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       await assertPackingCompanyScope(ctx, String(poData.company_id ?? ""));
     } catch {
       return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(poData.company_id ?? ""), "PROD_PO_FINAL", "WRITE"))) {
+      return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have correction access for this company.");
     }
     if (poData.status !== "FINAL") {
       return packErr(req, ctx, "PROD_PACK_CORRECTION_STATUS_INVALID", 422, "Packing PO must be FINAL to correct");

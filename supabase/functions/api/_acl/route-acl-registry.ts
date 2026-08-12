@@ -1266,8 +1266,8 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     // COR6-style post-Verify correction — gated on the same resource that got the PO to
-    // VERIFIED in the first place, matching how correctPackingOrderHandler reuses
-    // PROD_PACKING_PO_FINAL rather than minting a new resource for one action.
+    // VERIFIED in the first place, matching correctPackingOrderHandler's own /correct
+    // route below (which reuses PROD_PO_FINAL, the resource that got it to FINAL).
     pattern: /^\/api\/production\/process-orders\/[^/]+\/correct$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_VERIFY", action: "APPROVE" } },
   },
@@ -1322,8 +1322,16 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROD_REVERSAL", action: "APPROVE" } },
   },
   {
+    // Fixed 2026-08-12 — was "PROD_PACKING_PO_FINAL", a resource_code that has never
+    // existed in acl.menu_master (confirmed via live dev query: zero rows, zero
+    // capability_menu_actions grants). Live since 2026-07-13 (commit 003d48aed),
+    // invisible in dev because every test user is admin/full-access. Reuses
+    // PROD_PO_FINAL — the resource that already gates getting a Packing PO TO final in
+    // the first place (see the /finalize route below) — same "reuse, don't mint a new
+    // resource for one action" intent the original comment stated, just pointed at a
+    // resource that actually exists.
     pattern: /^\/api\/production\/packing-orders\/[^/]+\/correct$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROD_PACKING_PO_FINAL", action: "WRITE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_FINAL", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/production\/partial-reversals\/[^/]+$/,
