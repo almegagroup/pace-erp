@@ -18246,6 +18246,16 @@ rule-এর সাথে হুবহু মিলে যায় — কিন
    জন্য অপেক্ষা না করে) — `erp_menu.menu_snapshot`-এ IN07 এখন ৪৭ জন user-এর জন্য, PROC_PI_LIST
    ৭৩ row-এ visible
 
+**⚠️ সংশোধন, একই দিন — business owner-এর নিজের correction:** "Create/Edit = L1/L2_MANAGER"
+ভুল ছিল, আসল rule **L1/L2_AUDITOR** (Manager না)। যেহেতু `CAP_PI_AUDITOR` আগে থেকেই EDIT-এ
+Auditor+Director grant করছিল (prod-এর pre-existing state, এই session শুরুর আগে থেকেই), তাই
+নতুন যোগ করা `CAP_PI_MANAGER_EDIT` আসলে ভুল সংযোজন ছিল — **সম্পূর্ণ মুছে ফেলা হয়েছে** (capability,
+role_capabilities, work_context_capabilities, capability_menu_actions — live + সব ৪টা active
+version, তারপর snapshot+menu-snapshot আবার rebuild)। ফলাফল: EDIT এখন ঠিক session-শুরুর আগের
+অবস্থায় ফিরে গেছে (শুধু DIRECTOR+L1/L2_AUDITOR) — net change শূন্য এই action-এর জন্য। WRITE
+(count, up to L3_MANAGER+Auditor) ও APPROVE (Auditor/Director escalating) অপরিবর্তিত, সঠিক ছিল
+আগে থেকেই।
+
 **⚠️ পুরনো/অজানা gap (touched নয়, flagged):** CMP010-এ কোনো work_context-এই PID-সংক্রান্ত কোনো
 capability wired নেই (CAP_PI_AUDITOR/CAP_PI_COUNT_ENTRY/এখন CAP_PI_MANAGER_EDIT সবই ০ row) —
 মানে CMP010-এ আজ কোনো non-SA/GA user PID access-ই পায় না। এটা এই session-এর আগে থেকেই ছিল, এই
