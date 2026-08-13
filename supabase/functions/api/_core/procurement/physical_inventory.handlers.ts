@@ -834,17 +834,28 @@ export async function getPIDHandler(
       ...items.map((i) => toTrimmedString(i.storage_location_id)),
     ].filter(Boolean))];
 
-    const [materialRows, locationRows] = await Promise.all([
+    // FG Scenario 2 (variable-fill MTO/HPS/MTEST barrels/IBCs, §UoM-2026-08-14) — an item's
+    // packing_order carries the per-instance fill (fill_qty_per_pack), since there is no
+    // material-level fixed conversion for these pack codes (Bag/Barrel qty varies PO to PO,
+    // §83.14 balance-barrel). Frontend uses this as a "Per-Pack Qty" default and lets the
+    // counter type "Num Pack" blind — it does NOT expose num_packs from the PO record itself,
+    // that would just be the book count again.
+    const packingOrderIds = [...new Set(items.map((i) => toTrimmedString(i.packing_order_id)).filter(Boolean))];
+    const [materialRows, locationRows, packingOrderRows] = await Promise.all([
       materialIds.length
         ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type").in("id", materialIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       locationIds.length
         ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
+      packingOrderIds.length
+        ? serviceRoleClient.schema("erp_production").from("packing_order").select("id, po_number, fill_qty_per_pack").in("id", packingOrderIds)
+        : Promise.resolve({ data: [] as JsonRecord[] }),
     ]);
 
     const materialMap = new Map(((materialRows.data ?? []) as JsonRecord[]).map((m) => [String(m.id), m]));
     const locationMap = new Map(((locationRows.data ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
+    const packingOrderMap = new Map(((packingOrderRows.data ?? []) as JsonRecord[]).map((p) => [String(p.id), p]));
 
     return okResponse(
       {
@@ -854,6 +865,7 @@ export async function getPIDHandler(
         items: items.map((item) => {
           const material = materialMap.get(toTrimmedString(item.material_id));
           const location = locationMap.get(toTrimmedString(item.storage_location_id));
+          const packingOrder = packingOrderMap.get(toTrimmedString(item.packing_order_id));
           return {
             ...item,
             material_pace_code: material?.pace_code ?? null,
@@ -861,6 +873,8 @@ export async function getPIDHandler(
             material_type: material?.material_type ?? null,
             storage_location_code: location?.location_code ?? null,
             storage_location_name: location?.location_name ?? null,
+            packing_order_number: packingOrder?.po_number ?? null,
+            packing_order_fill_qty_per_pack: packingOrder?.fill_qty_per_pack ?? null,
           };
         }),
       },

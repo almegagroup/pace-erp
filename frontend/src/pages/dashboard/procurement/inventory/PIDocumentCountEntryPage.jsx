@@ -24,6 +24,83 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString("en-GB");
 }
 
+// FG Scenario 2 (variable-fill MTO/HPS/MTEST barrels/IBCs, §UoM-2026-08-14) — no material-level
+// fixed conversion exists for these (fill varies Packing PO to Packing PO, §83.14 balance-barrel),
+// so the counter enters Num Pack (blind — how many barrels/containers physically found) × a
+// Per-Pack Qty defaulted from that specific Packing PO's own recorded fill (that's a package
+// label attribute, not a book-stock total, so prefilling it is not the same bias risk as showing
+// book_qty — the counter is still blindly counting the actual number of packs).
+function PackCountCell({ row, canEdit, active, onActivate, onSave, saving }) {
+  const [numPacks, setNumPacks] = useState("");
+  const [perPackQty, setPerPackQty] = useState(row.packing_order_fill_qty_per_pack ?? "");
+  const [isZero, setIsZero] = useState(row.physical_qty === 0);
+
+  const isPosted = Boolean(row.posted_stock_document_id);
+  const hasCount = row.physical_qty !== null && row.physical_qty !== undefined;
+
+  if (!canEdit || isPosted) {
+    return <span className="text-sm text-slate-600">{hasCount ? `${row.physical_qty} ${row.base_uom_code ?? ""}` : "Not counted"}</span>;
+  }
+
+  if (!active && hasCount) {
+    return (
+      <button type="button" onClick={onActivate} className="rounded border border-slate-300 bg-white px-2 py-1 text-sm font-semibold text-slate-900">
+        {row.physical_qty} {row.base_uom_code ?? ""} — edit
+      </button>
+    );
+  }
+
+  const derivedQty = Number(numPacks) > 0 && Number(perPackQty) > 0 ? Number(numPacks) * Number(perPackQty) : null;
+
+  function commit() {
+    if (derivedQty === null) return;
+    onSave(derivedQty, false, { enteredQty: derivedQty, enteredUomCode: row.base_uom_code });
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2" onFocus={onActivate}>
+      <input
+        type="number"
+        min="0"
+        placeholder="Num Pack"
+        value={numPacks}
+        disabled={isZero || saving}
+        onChange={(event) => setNumPacks(event.target.value)}
+        onBlur={commit}
+        className="h-8 w-24 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+      />
+      <span className="text-xs text-slate-500">×</span>
+      <input
+        type="number"
+        min="0"
+        step="0.0001"
+        placeholder="Per-Pack Qty"
+        value={perPackQty}
+        disabled={isZero || saving}
+        onChange={(event) => setPerPackQty(event.target.value)}
+        onBlur={commit}
+        className="h-8 w-28 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+      />
+      <span className="text-xs text-slate-500">{row.base_uom_code}</span>
+      {derivedQty !== null ? <span className="text-xs font-semibold text-slate-700">= {derivedQty} {row.base_uom_code}</span> : null}
+      <label className="flex items-center gap-1 text-xs text-slate-600">
+        <input
+          type="checkbox"
+          checked={isZero}
+          disabled={saving}
+          onChange={(event) => {
+            const checked = event.target.checked;
+            setIsZero(checked);
+            if (checked) onSave(0, true);
+          }}
+          className="h-3.5 w-3.5"
+        />
+        Zero Stock
+      </label>
+    </div>
+  );
+}
+
 // Same blind-entry cell shape as the old inline one on the Detail page, minus any book-qty
 // awareness — this component never receives that field at all, so there is nothing to leak.
 function BlindCountCell({ row, canEdit, active, onActivate, onSave, saving }) {
@@ -195,17 +272,22 @@ export default function PIDocumentCountEntryPage() {
               {
                 key: "physical_qty",
                 label: "Physical Count",
-                width: "260px",
-                render: (row) => (
-                  <BlindCountCell
-                    row={row}
-                    canEdit={canEditCounts && !row.posted_stock_document_id}
-                    active={activeItemId === row.id}
-                    onActivate={() => setActiveItemId(row.id)}
-                    onSave={(qty, isZero, meta) => void saveCount(row.id, qty, isZero, meta)}
-                    saving={saving}
-                  />
-                ),
+                width: "300px",
+                render: (row) => {
+                  const cellProps = {
+                    row,
+                    canEdit: canEditCounts && !row.posted_stock_document_id,
+                    active: activeItemId === row.id,
+                    onActivate: () => setActiveItemId(row.id),
+                    onSave: (qty, isZero, meta) => void saveCount(row.id, qty, isZero, meta),
+                    saving,
+                  };
+                  // FG Scenario 2 — variable-fill packs (no material-level fixed conversion),
+                  // the packing order's own fill_qty_per_pack is the only signal for this.
+                  return row.packing_order_fill_qty_per_pack !== null && row.packing_order_fill_qty_per_pack !== undefined
+                    ? <PackCountCell {...cellProps} />
+                    : <BlindCountCell {...cellProps} />;
+                },
               },
             ]}
             rows={items}
