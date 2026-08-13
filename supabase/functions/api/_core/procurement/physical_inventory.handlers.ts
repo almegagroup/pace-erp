@@ -526,30 +526,44 @@ async function countNullPhysicalQty(documentId: string): Promise<number> {
 async function resolvePidActionAuthority(
   ctx: ProcurementHandlerContext,
   documentId: string,
-): Promise<{ allowed: boolean; requiredTier: "AUDITOR_OR_DIRECTOR" | "DIRECTOR_ONLY" }> {
+): Promise<{ allowed: boolean; requiredTier: "AUDITOR_OR_DIRECTOR" | "DIRECTOR_ONLY"; selfApproval?: boolean }> {
   if (isCompanyScopeAdminBypass(ctx)) {
     return { allowed: true, requiredTier: "AUDITOR_OR_DIRECTOR" };
   }
 
-  const { data: countedItem } = await serviceRoleClient
+  const { data: countedItems } = await serviceRoleClient
     .schema("erp_procurement")
     .from("physical_inventory_item")
     .select("counted_by")
     .eq("document_id", documentId)
-    .not("counted_by", "is", null)
-    .limit(1)
-    .maybeSingle();
+    .not("counted_by", "is", null);
 
+  const counterIds = [...new Set(
+    ((countedItems ?? []) as { counted_by: string | null }[])
+      .map((row) => toTrimmedString(row.counted_by))
+      .filter(Boolean),
+  )];
+
+  // Self-approval block — the maker-checker split is meaningless if whoever entered a count can
+  // also be the one who posts/reopens it, no matter what role they hold (including DIRECTOR,
+  // which inherits count-entry WRITE access via the role-rank hierarchy and would otherwise
+  // trivially satisfy both tiers below). Checked before the role-tier logic, not merged into it.
+  const callerId = toTrimmedString(ctx.auth_user_id);
+  if (callerId && counterIds.includes(callerId)) {
+    return { allowed: false, requiredTier: "AUDITOR_OR_DIRECTOR", selfApproval: true };
+  }
+
+  // Escalation must key off EVERY counter on the document, not just one arbitrary row — if any
+  // portion was counted by an Auditor, the whole document escalates to Director-only.
   let counterIsAuditor = false;
-  const counterId = toTrimmedString(countedItem?.counted_by);
-  if (counterId) {
-    const { data: counterRole } = await serviceRoleClient
+  if (counterIds.length > 0) {
+    const { data: counterRoles } = await serviceRoleClient
       .schema("erp_acl")
       .from("user_roles")
-      .select("role_code")
-      .eq("auth_user_id", counterId)
-      .maybeSingle();
-    counterIsAuditor = AUDITOR_ROLES.has(toUpperTrimmedString(counterRole?.role_code));
+      .select("auth_user_id, role_code")
+      .in("auth_user_id", counterIds);
+    counterIsAuditor = ((counterRoles ?? []) as { role_code: string | null }[])
+      .some((row) => AUDITOR_ROLES.has(toUpperTrimmedString(row.role_code)));
   }
 
   const callerRole = toUpperTrimmedString(ctx.roleCode);
@@ -1277,7 +1291,9 @@ export async function reopenPIDHandler(
         ctx,
         "PI_REOPEN_AUTHORITY_REQUIRED",
         403,
-        authority.requiredTier === "DIRECTOR_ONLY"
+        authority.selfApproval
+          ? "You entered a count on this document — someone else must reopen it."
+          : authority.requiredTier === "DIRECTOR_ONLY"
           ? "This document was counted by an Auditor — only Director can reopen it."
           : "Only an Auditor or Director can reopen this document.",
       );
@@ -1385,7 +1401,9 @@ export async function postDifferencesHandler(
         ctx,
         "PI_POST_AUTHORITY_REQUIRED",
         403,
-        authority.requiredTier === "DIRECTOR_ONLY"
+        authority.selfApproval
+          ? "You entered a count on this document — someone else must post it."
+          : authority.requiredTier === "DIRECTOR_ONLY"
           ? "This document was counted by an Auditor — only Director can post it."
           : "Only an Auditor or Director can post this document.",
       );

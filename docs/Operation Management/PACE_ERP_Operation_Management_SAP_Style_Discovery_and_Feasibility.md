@@ -18256,6 +18256,24 @@ version, তারপর snapshot+menu-snapshot আবার rebuild)। ফল�
 (count, up to L3_MANAGER+Auditor) ও APPROVE (Auditor/Director escalating) অপরিবর্তিত, সঠিক ছিল
 আগে থেকেই।
 
+**🔴 Real self-approval bug পাওয়া গেছে ও fix করা হয়েছে (2026-08-14, business owner-এর "ACL master
+self approve korte parbe?" প্রশ্নে ধরা পড়ে) — `physical_inventory.handlers.ts`-এর কোড-level fix,
+prod ACL data-র সমস্যা না:** `resolvePidActionAuthority()` শুধু counter-এর **role** আর caller-এর
+**role** তুলনা করত, কখনো দুজন একই **person** কিনা check করত না। যেহেতু DIRECTOR role-rank
+inheritance-এর মাধ্যমে count-entry WRITE access-ও পায় (L1-L3_MANAGER-এর capability inherit করে,
+`generate_acl_snapshot()`-এর role-family hierarchy অনুযায়ী — live prod data-তে verify করা: P0076
+role=DIRECTOR, আর DIRECTOR নিজেই `PROC_PI_LIST:WRITE` তালিকায় আছে), **যেকোনো DIRECTOR (P0076
+সহ) একটা PID-তে count entry করে তারপর নিজেই সেটা Post/Reopen করতে পারতো** — pure self-approval,
+maker-checker design-এর পুরো উদ্দেশ্যটাই ভেঙে দিতো। (Auditor counter এই বাগ থেকে আগে থেকেই সুরক্ষিত
+ছিল — তাদের জন্য escalation তো এমনিতেই DIRECTOR-ONLY-তে চলে যায়, তাই তারা কখনো নিজের কাউন্ট নিজে
+post করতে পারতো না।) **Fix:** caller-এর `auth_user_id` এখন document-এর সব counter-এর `counted_by`
+তালিকার সাথে মেলানো হয় (আগে শুধু ১টা arbitrary counted item দেখে escalation ঠিক করত — এটাও একসাথে
+ঠিক করা হয়েছে, এখন document-এর **সব** counter দেখে, যেকোনো একজন Auditor হলেই escalate করে) — match
+পেলে role নির্বিশেষে (ACL-MASTER/DIRECTOR সহ) `allowed=false`, আলাদা error message
+("You entered a count on this document — someone else must reopen/post it.")। `deno check` +
+সব ৯টা CI guard পুনরায় clean। **এখনো dev-এ কমিট করা, prod-এ পৌঁছাতে migration লাগে না (pure
+code fix) কিন্তু PR merge to main লাগবে** — material_uom_conversion fix-এর মতোই।
+
 **⚠️ পুরনো/অজানা gap (touched নয়, flagged):** CMP010-এ কোনো work_context-এই PID-সংক্রান্ত কোনো
 capability wired নেই (CAP_PI_AUDITOR/CAP_PI_COUNT_ENTRY/এখন CAP_PI_MANAGER_EDIT সবই ০ row) —
 মানে CMP010-এ আজ কোনো non-SA/GA user PID access-ই পায় না। এটা এই session-এর আগে থেকেই ছিল, এই
