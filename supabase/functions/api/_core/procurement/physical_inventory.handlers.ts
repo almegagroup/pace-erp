@@ -1819,6 +1819,14 @@ export async function listPIDifferencesHandler(
           ? derivePIMovementType(String(item.stock_type), differenceQty)
           : null,
         posted: Boolean(item.posted_stock_document_id),
+        // Found live 2026-08-14 — a CANCELLED document's items never posted (cancel is only
+        // allowed from OPEN, before posting), but `posted` alone reads as "Pending" forever,
+        // which misleadingly implies it will eventually post. Give the caller the real status.
+        status_label: item.posted_stock_document_id
+          ? "POSTED"
+          : toUpperTrimmedString(doc?.status) === "CANCELLED"
+          ? "CANCELLED"
+          : "PENDING",
       };
     });
 

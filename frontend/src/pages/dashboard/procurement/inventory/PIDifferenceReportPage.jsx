@@ -74,7 +74,9 @@ export default function PIDifferenceReportPage() {
 
   const gainCount = rows.filter((r) => Number(r.difference_qty) > 0).length;
   const lossCount = rows.filter((r) => Number(r.difference_qty) < 0).length;
-  const pendingCount = rows.filter((r) => !r.posted).length;
+  // §119.15 fix — a CANCELLED document's items never posted and never will; counting them as
+  // "pending" is misleading (implies still-actionable work).
+  const pendingCount = rows.filter((r) => r.status_label === "PENDING").length;
 
   return (
     <ErpMasterListTemplate
@@ -160,14 +162,21 @@ export default function PIDifferenceReportPage() {
               { key: "base_uom_code", label: "UoM", width: "70px" },
               { key: "movement_type", label: "Movement", width: "90px", render: (row) => row.movement_type ?? "—" },
               {
-                key: "posted",
-                label: "Posted",
-                width: "80px",
-                render: (row) => (
-                  <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${row.posted ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
-                    {row.posted ? "Posted" : "Pending"}
-                  </span>
-                ),
+                key: "status_label",
+                label: "Status",
+                width: "90px",
+                render: (row) => {
+                  const tone = row.status_label === "POSTED"
+                    ? "bg-emerald-100 text-emerald-800"
+                    : row.status_label === "CANCELLED"
+                    ? "bg-slate-200 text-slate-600"
+                    : "bg-amber-100 text-amber-800";
+                  return (
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${tone}`}>
+                      {row.status_label === "POSTED" ? "Posted" : row.status_label === "CANCELLED" ? "Cancelled" : "Pending"}
+                    </span>
+                  );
+                },
               },
             ]}
             rows={rows}
