@@ -547,6 +547,11 @@ type RmIntPreviewLine = {
 // §104.9: 'OPENING' rows (PR22 synthetic genealogy for a pre-go-live batch) are original
 // consumption too — they play exactly the same role as PRODUCTION here, so they must be included
 // or PR19 would find no RM/INT at all for an opening batch.
+// §119.14: 'PID_ADJUSTMENT' rows (PID gain/loss on batch-tracked SFG proportionally correcting
+// this batch's RM/INT reco) are the same class of "real correction since Opening" already
+// called out for PARTIAL_REVERSAL/COR6_CORRECTION elsewhere — a PID correction done BEFORE this
+// PR19 run must be part of the base this ratio is computed from, or PR19 would silently use a
+// stale (pre-PID) total.
 async function buildRmIntPreview(processOrderId: string, ratio: number): Promise<RmIntPreviewLine[]> {
   const { data: recoRows, error: recoErr } = await serviceRoleClient
     .schema("erp_production")
@@ -554,7 +559,7 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
     .select("process_order_line_id, material_id, line_material_type, actual_qty, ap_approved_qty, variance_qty")
     .eq("process_order_id", processOrderId)
     .eq("is_voided", false)
-    .in("source_txn_type", ["PRODUCTION", "OPENING"])
+    .in("source_txn_type", ["PRODUCTION", "OPENING", "PID_ADJUSTMENT"])
     .in("line_material_type", ["RM", "INT"]);
   if (recoErr) {
     console.error("[partial_reversal.buildRmIntPreview] query failed:", JSON.stringify(recoErr));

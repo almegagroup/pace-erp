@@ -555,6 +555,34 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // §119.4 — dedicated Create page (MI01), companion (no menu_master row, uses PROC_PI_LIST's
+  // own ACL resource — Auditor-only EDIT tier).
+  PROC_PI_CREATE: {
+    screen_code: "PROC_PI_CREATE",
+    route: "/dashboard/procurement/physical-inventory/create",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  // §119.4/§119.15 — MI21 print/count-sheet, companion.
+  PROC_PI_PRINT: {
+    screen_code: "PROC_PI_PRINT",
+    route: "/dashboard/procurement/physical-inventory/:id/print",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  // §119.15 — MI20 (IN07), standalone, own tx_code/ACL resource (PROC_PI_DIFFERENCES).
+  PROC_PI_DIFFERENCES: {
+    screen_code: "PROC_PI_DIFFERENCES",
+    route: "/dashboard/procurement/physical-inventory-differences",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_PAYMENT_TERMS_MASTER: {
     screen_code: "PROC_PAYMENT_TERMS_MASTER",
     route: "/dashboard/procurement/masters/payment-terms",

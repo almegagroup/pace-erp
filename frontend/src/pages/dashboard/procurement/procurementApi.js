@@ -1054,6 +1054,34 @@ export function postPIDifferences(id) {
   return fetchProcurement("POST", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/post`);
 }
 
+// §119.11 MI02 — item remove / document cancel.
+export function removePIItem(id, itemId) {
+  return fetchProcurement("DELETE", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}`);
+}
+
+export function cancelPIDocument(id, reason) {
+  return fetchProcurement("POST", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/cancel`, { reason });
+}
+
+// §119.6 — Submit for Approval / Reopen state-machine actions.
+export function submitPIDForApproval(id) {
+  return fetchProcurement("POST", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/submit`);
+}
+
+export function reopenPIDocument(id, reason) {
+  return fetchProcurement("POST", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/reopen`, { reason });
+}
+
+// §119.15 — MI20 difference report (IN07), standalone.
+export function listPIDifferences(params) {
+  return fetchProcurement("GET", "/api/procurement/physical-inventory-differences", undefined, params);
+}
+
+// §119.12 — Create page (ITEM_WISE) material-location breakdown preview.
+export function getPIMaterialLocationBreakdown(params) {
+  return fetchProcurement("GET", "/api/procurement/physical-inventory-material-locations", undefined, params);
+}
+
 export function getStockLedgerReport(params) {
   return fetchProcurement("GET", "/api/procurement/stock-ledger", undefined, params);
 }

@@ -44,7 +44,8 @@ const BASELINE = {
   "supabase/functions/api/_core/procurement/grn.handlers.ts": 3,
   "supabase/functions/api/_core/procurement/inward_qa.handlers.ts": 1,
   "supabase/functions/api/_core/procurement/opening_stock.handlers.ts": 1,
-  "supabase/functions/api/_core/procurement/physical_inventory.handlers.ts": 1,
+  // physical_inventory.handlers.ts migrated to post_document (§119.9, complete_pid_post) — no
+  // more raw post_stock_movement calls, so it drops out of this baseline entirely (2026-08-13).
   "supabase/functions/api/_core/procurement/pto.handlers.ts": 1,
   "supabase/functions/api/_core/procurement/rtv.handlers.ts": 3,
   "supabase/functions/api/_core/procurement/sales_order.handlers.ts": 1,

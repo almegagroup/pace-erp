@@ -172,7 +172,10 @@ import DODetailPage from "../pages/dashboard/procurement/sales/DODetailPage.jsx"
 import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvoiceListPage.jsx";
 import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
 import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocumentListPage.jsx";
+import PIDocumentCreatePage from "../pages/dashboard/procurement/inventory/PIDocumentCreatePage.jsx";
 import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
+import PIDocumentPrintPage from "../pages/dashboard/procurement/inventory/PIDocumentPrintPage.jsx";
+import PIDifferenceReportPage from "../pages/dashboard/procurement/inventory/PIDifferenceReportPage.jsx";
 import OpeningStockListPage from "../pages/dashboard/procurement/opening-stock/OpeningStockListPage.jsx";
 import OpeningStockDetailPage from "../pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx";
 import OpeningStockApprovalPage from "../pages/dashboard/procurement/opening-stock/OpeningStockApprovalPage.jsx";
@@ -784,6 +787,18 @@ export default function AppRouter() {
                   <Route
                     path="procurement/physical-inventory"
                     element={<PIDocumentListPage />}
+                  />
+                  <Route
+                    path="procurement/physical-inventory-differences"
+                    element={<PIDifferenceReportPage />}
+                  />
+                  <Route
+                    path="procurement/physical-inventory/create"
+                    element={<PIDocumentCreatePage />}
+                  />
+                  <Route
+                    path="procurement/physical-inventory/:id/print"
+                    element={<PIDocumentPrintPage />}
                   />
                   <Route
                     path="procurement/physical-inventory/:id"

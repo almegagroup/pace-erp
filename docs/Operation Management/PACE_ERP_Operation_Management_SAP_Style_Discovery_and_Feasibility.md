@@ -17717,3 +17717,498 @@ been written down yet — both are now captured in §118.6 above (Page 2 summary
 Draft/Pending-Approval exclusion) and §118.1/118.10 (item-cardinality rule, still-open body
 columns). No other gaps found — §118.1 through §118.11 together are the complete, current state of
 this design as of 2026-08-05.
+
+---
+
+## Section 119 — IN01/PID Full Redesign: RM→FG, Batch, Multi-UoM, Maker-Checker (✅ DESIGN LOCKED + IMPLEMENTATION COMPLETE — 2026-08-13, Claude direct-implemented, §119.17 তে বিস্তারিত)
+
+### 119.1 — প্রেক্ষাপট
+
+Business owner-এর locked module sequence (2026-08-13 — memory `project_locked_module_sequence.md`):
+**IN01(PID) → MTEST/ZTEST redesign → RM Sale Module revisit → Dispatch+Costing+Return**, একটা একটা
+করে শেষ করার সিদ্ধান্ত। IN01 প্রথম item। Scope: বর্তমান RM/PM/INT-only PID-কে সম্পূর্ণ **RM→FG**
+পর্যন্ত বিস্তৃত করা, SLoc-wise সব জায়গায় ব্যবহারযোগ্য করা — "একসাথে কিছু material দিয়ে বানানো"
+থেকে শুরু করে batch-level পর্যন্ত। SAP-এর MI01-MI21 cycle-কে reference model হিসেবে ব্যবহার করে
+আগে একটা সম্পূর্ণ full-stack (DB+BE+FE, dev+prod MCP) audit করে শুরু হয়েছে — নিচে ধাপে ধাপে।
+
+### 119.2 — Full-stack Audit Findings (2026-08-13, dev `ytapuwiqicmvpanmzelb` + prod
+`bsjpvkigpllichlknmah` MCP + code verify করা)
+
+**DB Layer:**
+
+| উপাদান | অবস্থা |
+|---|---|
+| `physical_inventory_document`/`item`/`block` (৩টা table, Gate-20 spec) | ✅ dev+prod-এ হুবহু এক, schema ২০২৬-০৫ থেকে অপরিবর্তিত — কোনো `batch_number`/`packing_order_id`/multi-UoM column নেই |
+| `document_number_series` (doc_type='PI') | ✅ ১০-digit global range-এ migrate হয়ে গেছে (`65xxxxxxxx`, §8) |
+| §106 Material Document integration | ✅ **ইতিমধ্যে wired** — `postDifferencesHandler` প্রতি posting-এ `generateMaterialDocNumber()` + `p_reference_document_type: "PI"` পাঠায়, original spec-এর চেয়েও advanced |
+| `erp_inventory.posting_source_registry` (§8D Tier 2) | ❌ **PI/PHYSICAL_INVENTORY কোথাও registered নেই** — code `reference_document_type: "PI"` ট্যাগ করে posting করে, কিন্তু registry-তে এই type নেই → real posting হলে `stock_health_check()` সাথে সাথে FAIL দেখাবে |
+| `movement_type_master` (P701-P716) | ✅ dev+prod দুটোতেই ১২টা row সঠিক |
+| Data | dev এবং prod দুটোতেই **০টা PID document কখনো তৈরি হয়নি** — feature বাস্তবে কখনো ব্যবহার হয়নি |
+
+**Backend Layer (`physical_inventory.handlers.ts`, ৭টা handler — create/list/get/addItem/count/recount/post):**
+
+| উপাদান | অবস্থা |
+|---|---|
+| Idempotency (§8D ধাপ ৩) | ✅ আছে — `posted_stock_document_id` check করে skip করে |
+| Atomicity (§8D ধাপ ৪খ, single plpgsql transaction) | ❌ নেই — `stock-posting-guard.mjs` baseline-এ আছে, raw `post_stock_movement` RPC loop-এ, `post_document()`-এ migrate হয়নি |
+| §8B DEPENDENT loop comment | ✅ ঠিকভাবে ট্যাগ করা |
+| Company-scope membership check | ✅ ঠিক আছে (fixed 2026-08-03, commit `65107269`) — PROD-ACL-Access-Decisions.md-এর 2026-08-06 "no company check" note **stale**, correction দরকার |
+| Company-scope Write-ACL (Phase 2 pattern, per-company EDIT grant) | ❌ নেই, **এবং `company-scope-write-acl-guard.mjs`-এর baseline-এও ধরা পড়েনি** — guard-এর regex সরাসরি handler-body-তে `*CompanyScope(ctx,` খোঁজে, কিন্তু PID-এর check local wrapper (`assertPIStorageLocationScope`)-এর ভিতরে লুকানো বলে miss হয়ে যায়। Phase 2-এর tracked ~১১০ সংখ্যাটা তাই real count-এর চেয়ে কম |
+| Gain/loss valuation | ❌ `p_unit_value: 0` — কোনো valuation নেই |
+| Approval/maker-checker | ❌ নেই |
+| Posting-block অন্য module-এ | ❌ শুধু GRN/STO/SO/RTV/DeliveryOrder চেক করে — Process PO, Packing PO, PR19, Opening Genealogy, Opening Stock **কেউ করে না** |
+| Item remove / document cancel (MI02) | ❌ নেই |
+| Bulk count entry | ❌ নেই |
+
+**Frontend Layer (`PIDocumentListPage.jsx`, `PIDocumentDetailPage.jsx`):**
+
+| উপাদান | অবস্থা |
+|---|---|
+| `useQuery` pattern (§8A) | ✅ ঠিক আছে, কোথাও `useEffect`+`setState` নেই |
+| §8A raw-UUID-fallback rule | ❌ **২টা real violation** — Material column (`materialMap.get()` miss করলে raw `row.material_id` দেখায়) এবং Storage Location field (`... ?? detail.storage_location_id ?? "—"` — মাঝের raw-ID fallback rule ভাঙছে) |
+| Print/count-sheet UI | ❌ নেই, কিন্তু reusable infra আছে (`PrintPreviewPage.jsx`/`PrintGroupPage.jsx` — PO print-এর জন্য বানানো, PID-এও reuse করা যাবে) |
+| Difference report UI | ❌ নেই |
+
+### 119.3 — SAP MI01-MI21 (MI06 বাদে) Mapping
+
+| tcode | কাজ | PACE status |
+|---|---|---|
+| MI01 | Create PID + posting block | ✅ আছে (gap: batch-split, FG/SFG — §119.6) |
+| MI02 | Change PID (item remove/cancel) | ❌ শুধু item **add** আছে, remove/cancel নেই |
+| MI03 | Display PID | ✅ আছে |
+| MI04 | Enter count | ✅ আছে (gap: multi-UoM) |
+| MI05 | Change count / recount | ✅ আছে |
+| MI07 | Post difference | ✅ আছে (gap: valuation, approval) |
+| MI20 | Difference report | ❌ নেই |
+| MI21 | Print count sheet | ❌ নেই (infra reuse করা যাবে) |
+
+MI08-MI19 রেঞ্জ SAP-এর legacy batch-input/mass-processing session tool (flat-file bulk upload) —
+modern web ERP-তে এর business-need সরাসরি bulk API/UI দিয়ে মেটে, আলাদা tcode-সমতুল্য লাগে না। এর
+মধ্যে "একসাথে কয়েকটা material দিয়ে PID বানানো" প্রয়োজনটা **ইতিমধ্যে satisfied** —
+`createPIDHandler`-এর ITEM_WISE mode একটা call-এই `items: [...]` array নেয়।
+
+### 119.4 — LOCKED: Page Structure (companion-page pattern)
+
+PACE-এর নিজস্ব established convention (§8-এর "Companion screens menu_master এ নেই — route-only"
+rule + Opening Stock/Inward QA/GRN-এর মতো status-driven single-detail-page pattern) অনুসরণ করে —
+SAP-এর প্রতিটা MI-tcode-এর জন্য আলাদা page **না বানিয়ে**:
+
+| Page | Type | কভার করে |
+|---|---|---|
+| **List** | Standalone (existing) | Entry point, filter — company-scoped, "New PID" বাটন শুধু Auditor দেখবে |
+| **Create** | Companion (নতুন, dedicated page — side-panel না, কারণ FG/SFG+batch selection জটিল হবে) | MI01 |
+| **Detail** | Companion (existing, enhanced) | MI02 + MI03 + MI04 + MI05 + MI07 — সব একই page-এ বাটন/inline action হিসেবে, status+role-driven visibility |
+| **Print** | Companion (নতুন) | MI21 — existing Print infra reuse |
+| **Difference Report** | **Standalone**, নিজের tx_code (IN02/IN03/PR21-এর মতো cross-document report) | MI20 |
+
+**কেন MI04+05+07 একই page-এ, আলাদা companion না:** এই তিনটা কাজেই একই item grid (book qty, আগের
+count, difference) সমসাময়িকভাবে দেখা লাগে — আলাদা page করলে বার বার navigate করে context হারাতে
+হবে, এমনকি SAP-এর নিজের UX-এর চেয়েও খারাপ হবে। MI02/MI03-ও SAP-এ কার্যত একই screen (Change =
+Display-এর edit-mode), তাই এরাও Detail page-এই।
+
+### 119.5 — LOCKED: Role/ACL Design — Escalating Maker-Checker
+
+| MI-tcode group | Full access কার |
+|---|---|
+| MI01/MI02/MI03 (Create/Change/Display) | শুধু **L1_Auditor + L2_Auditor** |
+| MI04/MI05 (Count/Recount) | **সব company-র সব regular user** (L3_Manager পর্যন্ত) + **L1/L2_Auditor** (same power) |
+| MI07 (Post) | **L1_Auditor + L2_Auditor + Director** |
+| MI20 (Difference report) | সবাই, company-scoped |
+
+**Escalating self-check-block rule (core catch):** Auditor role এখানে যেকোনো company-র L3_Manager-এর
+উপরে বসে, ফলে —
+- Regular company user (L3_Manager পর্যন্ত) count করলে → **L1/L2_Auditor** post করতে পারবে
+- **L1/L2_Auditor নিজে** count করলে → Auditor নিজের count নিজে post করতে পারবে না, শুধু **Director**
+  post করতে পারবে
+
+এটা static ACL role-grant দিয়ে express করা যায় না — `acl.approver_map`-স্টাইল dynamic
+maker-checker লাগবে, ঠিক যে pattern Opening Stock/AC05/AC06/Stroke Master-এ ইতিমধ্যে বানানো আছে
+(commit `65107269`, self-approval block) — **সেই mechanism-ই reuse হবে, নতুন করে design লাগবে না,
+শুধু PID-এর জন্য wire করতে হবে।**
+
+**Mixed-counter scenario ইচ্ছাকৃতভাবে handle করা হচ্ছে না (business owner confirm, 2026-08-13):**
+একটা document-এর কিছু item staff counted + কিছু item Auditor নিজে counted — এই মিশ্র অবস্থা বাস্তবে
+ঘটবে না ("L1/L2 Auditor role-এর কেউ half data বসাবে না")। তাই Post-বাটন logic শুধু **document-level**
+determination করবে (যেকোনো একটা counted item-এর counter role দেখলেই যথেষ্ট, item-by-item resolve
+করার দরকার নেই)। **সচেতন ঝুঁকি, guard বসানো হচ্ছে না:** MI05 Recount অন্য কেউ চালালে technically এই
+মিশ্র অবস্থা তৈরি হতে পারে (staff-counted item-এ Auditor recount, বা উল্টো) — কিন্তু এখন এর জন্য
+আলাদা validation বসানো হচ্ছে না, ভবিষ্যতে দরকার পড়লে যোগ করা যাবে।
+
+### 119.6 — LOCKED: MI04/MI05/MI07 UX + Workflow State Machine (2026-08-13)
+
+**Entry date vs Effective date (already satisfied, কোনো change লাগবে না):**
+- `physical_inventory_item.counted_at` = আসল entry timestamp (কে কখন সত্যিকারের count টাইপ করেছে)
+- `physical_inventory_document.count_date`/`posting_date` = effective/business date
+- এই দুটো আগে থেকেই schema-তে আলাদা — design-এ ধরাই ছিল।
+
+**Auto-save per item, draft-loss risk নেই:** প্রতিটা count entry Enter চাপলেই সাথে সাথে backend-এ
+save হয়ে যায় (আজকের `enterCountHandler` per-item pattern-ই বহাল থাকবে) — client-side draft হিসেবে
+কিছু থাকে না। তাই pagination/page-up-page-down করলেও value হারানোর ঝুঁকি নেই, কারণ হারানোর মতো কিছুই
+unsaved অবস্থায় থাকে না। আলাদা করে client-side draft-preserve-across-pages mechanism বানানো হচ্ছে না।
+
+**Zero Stock checkbox — pure frontend mutual-exclusion, কোনো নতুন DB column না:**
+- Count field-এ value থাকলে → checkbox disabled (tick করা যাবে না)
+- Checkbox tick করা থাকলে → count field disabled (value বসানো যাবে না)
+- Checkbox tick করলে backend-এ শুধু `physical_qty = 0` বসবে — আজকের schema (`NULL` = not counted,
+  non-NULL = counted, zero সহ) যথেষ্ট, নতুন `is_zero_confirmed`-জাতীয় column লাগবে না
+- MI04 "close" (সব item done → COUNTED status) condition অপরিবর্তিত থাকে: `physical_qty IS NOT NULL`
+  প্রতিটা item-এ — count আর zero-confirm দুটোই এই একই check-এ কভার হয়ে যায়
+
+**নতুন status — "Submit for Approval" ধাপ যোগ হচ্ছে:**
+
+আজকের status enum (`OPEN → COUNTED → POSTED`, ৩টা মাত্র) নতুন একটা status পাবে —
+`physical_inventory_document`-এর CHECK constraint widen করতে হবে, migration লাগবে:
+
+```
+OPEN → COUNTED (auto, সব item-এ physical_qty IS NOT NULL হলে — অপরিবর্তিত আজকের logic)
+     → [Submit for Approval বাটন, explicit click] → PENDING_APPROVAL (lock — এই অবস্থায় MI05 বন্ধ)
+     → [Reopen বাটন] → ফিরে OPEN/COUNTED (MI05 আবার চালু, যতবার ইচ্ছা)
+     → [Post বাটন, PENDING_APPROVAL থেকেই] → POSTED
+```
+
+**Reopen authority = ঠিক সেই authority যার Post (MI07) করার ক্ষমতা আছে সেই নির্দিষ্ট document-এর
+জন্য** — §119.5-এর dynamic escalation logic-ই reuse হবে (staff counted → Auditor reopen করতে পারবে;
+Auditor নিজে counted → Director reopen করতে পারবে)। আলাদা নতুন role-rule বানানো হচ্ছে না।
+
+**Reopen-এ mandatory reason লাগবে**, ছোট modal দিয়ে capture হবে (এই codebase-এর established
+pattern — Recalculate/COR6 correction-এর মতোই)।
+
+**MI04→MI07→MI20 live/auto-update:** standard `useQuery`+cache-invalidation convention দিয়েই হয়ে
+যাবে (এই codebase-এর সব জায়গায় এভাবেই কাজ করে) — আলাদা special design লাগছে না।
+
+### 119.7 — LOCKED: FG/SFG Item Grain — Batch/Packing-PO wise (2026-08-13, নতুন rule না — §108/§116-এর
+existing rule reuse করা হচ্ছে)
+
+Business owner confirm: MTO/HPS/MTEST বাদে SFG-এ batch_number maintain হয়ই না, একইভাবে ওই একই ৩টা
+po_type বাদে Packing-PO-wise stock-ও maintain হয় না (§108 MTS/IWC discovery + §116 IN03 grain rule-এর
+সাথে সঙ্গতিপূর্ণ, নতুন কিছু আবিষ্কার করা হচ্ছে না)। PID ঠিক এই existing rule-ই অনুসরণ করবে:
+
+| Material type | po_type | PID item grain |
+|---|---|---|
+| RM/PM/INT | — | material + stock_type (আজকের মতোই — batch/PO কখনো নেই) |
+| SFG | MTO/HPS/MTEST | material + stock_type + **batch_number** (প্রতিটা batch = আলাদা PID line, auto-split) |
+| SFG | MTS | material + stock_type (batch নেই — blended, আজকের মতোই) |
+| FG | MTO/HPS/MTEST | material + stock_type + **batch_number** + **packing_order_number** (auto-split) |
+| FG | MTS | material + stock_type (batch/PO নেই — blended, আজকের মতোই) |
+
+MI01 (Create)-এ batch/PO-managed material select করলে সিস্টেম নিজে থেকে existing stock থেকে প্রতিটা
+active batch/PO-কে আলাদা line-item বানাবে (SAP-এর batch-split pattern, §119.3-এ যা বলা হয়েছিল) —
+user-কে কোনো batch/PO number জানতে হবে না, সিস্টেম নিজে বের করবে।
+
+**Structural প্রয়োজন (design decision না, শুধু note):** Book qty query (`getBookSnapshots`) backend-এ
+batch_number/packing_order_number-aware করতে হবে যেসব material-এ applicable — আজকের query শুধু
+material+stock_type দিয়ে sum করে।
+
+### 119.8 — LOCKED: Multi-UoM Count Entry (2026-08-13, IN02/IN03-এর existing mechanism reuse করা হচ্ছে,
+নতুন কিছু design করা হয়নি)
+
+§116.5 (IN03)/§117.5 (IN02)-এ যা locked আছে, PID-এ হুবহু সেটাই reuse:
+
+| Material | po_type | Count entry mechanism |
+|---|---|---|
+| RM/PM/INT | — | Generic §110 mechanism — `material_uom_conversion` fixed factor থাকলে `UomQuantityInput.jsx` dropdown, না থাকলে শুধু base UoM (graceful fallback, §110.4 অপরিবর্তিত) |
+| SFG | যেকোনো | **সবসময় base UoM (KG) মাত্র, কোনো alt-unit dropdown নেই** — SFG কখনো pack হয় না (§117.5-এ explicit lock) |
+| FG | MTO/HPS/MTEST | Generic mechanism **না** — PID line ইতিমধ্যে একটা নির্দিষ্ট Packing PO-বাঁধা (§119.7), তাই user সরাসরি সেই PO-র নিজের UOM (`pack_code_master.outer_uom_code` — BBL/TANKER ইত্যাদি)-এ **pack-count** entry করবে; সিস্টেম `pack-count × packing_order.fill_qty_per_pack = KG` করে book qty-র সাথে মেলাবে (§116.5-এর Primary Quantity approach) |
+| FG | MTS | Blended (§119.7-এ batch/PO split নেই) — RM/PM/INT-এর মতোই generic §110 mechanism |
+
+### 119.9 — LOCKED: Posting-Block Extension — Atomic-First Sequencing + Modal UX (2026-08-13)
+
+**সিদ্ধান্ত ১ — atomic migration আগে, block-check পরে (dependency, business owner override):**
+Packing PO Final বা Process PO যদি atomic না থাকে, সেখানে block-check বসানোর **আগে** সেটাকে atomic
+করতে হবে — কারণ non-atomic handler-এ mid-loop block-collision নতুন এক ধরনের partial-posting তৈরি
+করতে পারে (§8D-এর সমস্যা, নতুন কারণে — example discuss করা হয়েছে এই session-এ)। Live-check করা
+(`stock-posting-guard.mjs` baseline, 2026-08-13):
+
+| File | Atomic? | কী করতে হবে |
+|---|---|---|
+| `process_order.handlers.ts` | ⚠️ আংশিক — Verify (MTO/HPS main path) `complete_process_po_verify()`-এ atomic, কিন্তু INT/MTEST/reverse path-এ এখনো ১টা raw call বাকি | INT/MTEST/reverse path migrate করার পর block-check |
+| `packing_order.handlers.ts` | ❌ না (raw call=1) | আগে atomic migration, তারপর block-check |
+| `partial_reversal.handlers.ts` (PR19) | ❌ না (raw call=1) | আগে atomic migration, তারপর block-check |
+| `opening_genealogy.handlers.ts` | N/A — কোনো `post_stock_movement` call-ই নেই (§104.9 অনুযায়ী ইচ্ছাকৃত, genealogy-only, stock move করে না) | Block-check এর প্রশ্নই আসে না এখানে |
+| `physical_inventory.handlers.ts` **(PID নিজেই — 2026-08-13 correction, দুইবার ভুল হয়েছিল, নিচে বিস্তারিত)** | ❌ না (raw call=1, §119.2-এ প্রথম audit-এই flagged ছিল) — প্রতি item-এ ৩টা আলাদা round-trip (post → item-এ `posted_stock_document_id` লেখা → block release), মাঝখানে crash হলে retry-তে **ডবল posting** হতে পারে | ✅ **document-wide এক transaction** — নিচে দেখো কেন |
+
+এর ফলে আগের §119.9-এর item #1 (posting-block extension) আর item #4 (atomic migration) এখন একটাই
+কাজ — আলাদা করে posting-block আগে বসিয়ে পরে atomic করলে হবে না। **PID নিজের handler-ও এই একই
+sequencing মানবে — নিজের atomicity আগে, block-check সংক্রান্ত বাকি কাজ তার সাথেই।**
+
+**⚠️ Correction (একই আলোচনায় দুইবার ভুল হয়েছিল, দুটোই লিখে রাখা হলো):** প্রথমে ধরে নেওয়া হয়েছিল
+per-item atomicity ঠিক হবে (পুরনো ২০২৬-০৫ Gate-20 spec-এর "partial posting allowed" ধরে — কিছু item
+এখনই post, বাকিটা পরে)। **কিন্তু business owner ধরিয়ে দেন:** §119.6-এ যে নতুন state machine lock করা
+হয়েছে (`COUNTED` status-ই আসে শুধু ১০০% item done হলে, তারপর Submit for Approval → PENDING_APPROVAL
+→ Post), তাতে MI07 (Post) fire হওয়ার precondition-ই হলো **পুরো document সম্পূর্ণ ready** — অর্থাৎ
+"কিছু item এখনই post, বাকিটা পরে" এই scenario নতুন workflow-এ আর সম্ভবই না (MI04/MI05-এ user বার বার
+আংশিক update করতে পারে, কিন্তু MI07-এ পৌঁছানো মানেই পুরো document একসাথে যাচ্ছে)। তাই **চূড়ান্ত
+সিদ্ধান্ত: MI07 (Post) document-wide এক transaction** — Process PO Verify-র মতোই, সব item একসাথে
+post হবে, কোনো একটা item সমস্যা করলে পুরো batch rollback হবে (এই পর্যায়ে item-level সমস্যা মানেই
+genuine data/system issue, "counting এখনো বাকি" না — তাই পুরো batch আটকে দেওয়াই safe)।
+
+**সিদ্ধান্ত ২ — Block হিট করলে শুধু generic 409 না, informative modal (নতুন requirement, আজকের ৫টা
+existing handler-ও এই standard মেটায় না, retrofit লাগবে):**
+
+আজকে `hasPhysicalInventoryBlock()`/`checkPostingBlock()` শুধু existence বুল (true/false) রিটার্ন করে
+— কোন PID document block করছে সেটা কোথাও জানানো হয় না, error message generic ("Material has an
+active physical inventory count in progress")। নতুন lock:
+
+- Block-check function **`pi_document_id` + `document_number`** সহ রিটার্ন করবে (শুধু boolean না)
+- Error response-এ এই reference থাকবে, frontend সেটা দিয়ে **একটা modal দেখাবে**: "এই item-টা PID
+  [document_number]-এর active count-এর কারণে block করা আছে" — user জানবে কোন document দায়ী
+- Block শুধু MI07 **আসল POST (POSTED status)** হলেই release হবে — §119.6-এর নতুন `PENDING_APPROVAL`
+  state-এও block চালু থাকবে, শুধু "submit for approval" করলেই release হবে না
+- **এটা শুধু নতুন Production handler-এই না — existing ৫টা handler-ও (GRN/STO/SO/RTV/DeliveryOrder)
+  retrofit করতে হবে**, কারণ আজকে ওরাও শুধু generic 409 দেয়, PID reference দেয় না
+
+### 119.10 — LOCKED: Gain/Loss Valuation — WAR Engine Link (2026-08-13, live-read, cache না)
+
+**সিদ্ধান্ত:** PID-এর 701/702 posting-এ `p_unit_value: 0`-এর বদলে posting-এর ঠিক মুহূর্তে সেই
+material+location-এর **live `stock_snapshot.valuation_rate`** query করে পাঠানো হবে — §104-4-এর
+reversal handler-গুলো যেভাবে "opening-origin leg হলে current rate" pattern করে, একই approach।
+§69.8-এর আগে থেকে-locked rule অপরিবর্তিত: gain/loss-এ qty বদলায়, WAR rate নিজে বদলায় না।
+
+**⚠️ Business owner-এর সতর্কতা, খুবই গুরুত্বপূর্ণ — future-proofing note:**
+1. **Rate সবসময় live query হবে, কখনো cache/freeze করা হবে না** — যাতে ভবিষ্যতে §111-এর WAR
+   mechanism বদলালে (Landed Cost integration, Accounts Module redesign — locked 4-step priority
+   order: Dispatch → Costing/AP-Reco → Accounts Module → WAR implementation) PID automatically সেই
+   নতুন rate-ই পাবে, আলাদা করে PID-র কোড ছুঁতে হবে না।
+2. **§109-এর "Recalculate" mechanism ভবিষ্যতে repeatable/additive হলে, PID (P701/P702)-এর নিজের
+   postings-ও সেই backfill cascade-এর scope-এ থাকতে হবে।** এটা ঠিক সেই একই class-এর সতর্কতা যা §109
+   PR19-এর জন্য আগে থেকে note করে রেখেছিল — "GRN+Verify+Final ধরে PR19/COR6/CORS postings বাদ পড়ে
+   যাবে না, কারণ Opening-এর পর হওয়া যেকোনো real posting-ই replay scope-এর অংশ"। PID-কেও এই একই
+   তালিকায় explicitly যোগ করে রাখা হলো, যাতে §109/§111-এর কাজ যখন শুরু হবে তখন `findDownstreamGroup()`
+   বা সমতুল্য cascade-logic PID-কে leaf/dead-end হিসেবে silently miss না করে।
+
+### 119.11 — LOCKED: Registry, Frontend Fix, MI02, Bulk-Entry Drop (2026-08-13)
+
+**১. `posting_source_registry`-তে PI register করা — LOCKED।** Atomic correction (§119.9)-এর পর
+suspect_statuses সহজ হয়ে গেছে: MI07 এখন document-wide atomic (পুরোটা হবে নাহলে কিছুই না), তাই
+`POSTED` ছাড়া অন্য যেকোনো status-এ PI-ট্যাগড posting পাওয়া মানেই সন্দেহজনক —
+`suspect_statuses = ['OPEN', 'COUNTED', 'PENDING_APPROVAL']`, `completion_function` = নতুন atomic
+function-এর নাম (§119.9 বানানো হলে বসবে)।
+
+**২. Frontend raw-UUID-fallback fix — LOCKED, নতুন design না, existing rule অনুসরণ।** CLAUDE.md §8A-তে
+এটা আগে থেকেই স্পষ্ট: "Name না এলে `"—"`, কখনো raw ID fallback নয়" — `PIDocumentDetailPage.jsx`-এর
+Material column আর Storage Location field-এর ২টা violation ঠিক এই existing rule মেনে fix হবে,
+নতুন কিছু ভাবার নেই।
+
+**৩. MI02 (item remove/document cancel) — LOCKED, SAP-এর মতোই:**
+- **Item remove:** যে item এখনো counted হয়নি (`physical_qty IS NULL`) সেটাই শুধু remove করা যাবে —
+  counted item remove করা যাবে না (SAP-ও casually counted item delete করতে দেয় না, audit-trail রক্ষা
+  করতে হয়) — remove করলে সেই item-এর posting block-ও release হয়ে যাবে
+- **Document cancel:** শুধু `OPEN` status-এ সম্ভব (কিছুই posted হয়নি) — cancel করলে সব item-এর
+  posting block release হয়ে যাবে, document status নতুন **`CANCELLED`** value-তে যাবে (retained, delete
+  হবে না — §71.4-এর existing cancellation discipline অনুযায়ী)
+- এই দুটোই Detail companion page-এই বাটন হিসেবে থাকবে (§119.4-এর pattern অনুযায়ী, আলাদা page না)
+
+**৪. Bulk count entry endpoint — DROPPED, লাগবে না।** এটা মূলত SAP-এর MI06/MI08/MI09 family-র (blind
+count/batch-input) business-need থেকে derive করা হয়েছিল, আর MI06 ইতিমধ্যেই scope থেকে বাদ (§119.3)।
+তাই এটাও বাদ — per-item Enter-to-save (MI04-এর মতোই) যথেষ্ট।
+
+### 119.12 — LOCKED + CORRECTION: Create — Multi-Location per PID Document (2026-08-13)
+
+**⚠️ Correction — §119-এর আগের একটা ধরে-নেওয়া ভুল ছিল, এই session-এই ধরা পড়ে ঠিক হলো:** আগে ধরে
+নেওয়া হয়েছিল "এক PID = এক storage location সবসময়, LOCATION_WISE বা ITEM_WISE যাই হোক না কেন" (SAP-এর
+plant+SLoc-bound MI01 convention অনুসরণ করে)। **এটা ভুল ছিল** — business owner ধরিয়ে দেন: PACE-এ
+storage location একটা **soft/logical identity** (§83.4-এর rm_sloc/pm_sloc/shopfloor_sloc আলাদা কোড
+হলেও অনেক ক্ষেত্রে physically একই জায়গা, শুধু business-process আলাদা করার জন্য কোড আলাদা) — তাই "এক
+রুমে একবারে একজন গুনতে পারে" যুক্তি সবসময় সত্যি না। একটা material একাধিক location-এ split থাকলে
+(উদাহরণ: Caustic Soda Lye — R003-এ 500 KG, S003-এ 300 KG), সেটা **একটাই PID document-এ** cover করা
+উচিত, আলাদা document বানিয়ে ভুলে-যাওয়ার ঝুঁকি রাখা উচিত না।
+
+**চূড়ান্ত সিদ্ধান্ত:**
+- **LOCATION_WISE mode** — অপরিবর্তিত, এক location-এ সব material auto-sweep (concept হিসেবে ঠিক আছে)
+- **ITEM_WISE mode** — এখন **company-scoped, single-location না**। একই material একাধিক location-এ
+  থাকলে, সবগুলো **একই PID document-এ আলাদা line হিসেবে** যোগ করা যাবে
+
+**Schema impact:**
+- `physical_inventory_item`-এ নতুন **`storage_location_id`** column (item-level) — আজকের schema-তে
+  এটা নেই, item document-header-এর একটাই location থেকে inherit করে ধরে নেওয়া হয়েছিল
+- Document header-এর `storage_location_id` শুধু LOCATION_WISE mode-এ ব্যবহার হবে (mandatory সেখানে);
+  ITEM_WISE mode-এ header-level location লাগবে না, শুধু `company_id`
+- Posting block creation প্রতিটা item-এর **নিজের** location অনুযায়ী হবে (আজকের code পুরো document-এর
+  একটাই location দিয়ে সব item-এর block বসায় — এটা বদলাতে হবে)
+- Book qty resolution (`getBookSnapshots`)-ও প্রতিটা item-এর নিজের location অনুযায়ী query করবে
+
+**ITEM_WISE Create — ধাপে ধাপে flow (LOCKED):**
+1. Material search (company-scoped combobox)
+2. Select করার সাথে সাথে সেই material-এর **সব location-wise current stock breakdown** দেখাবে
+   (Location | Stock Type | Book Qty — 0-qty location-ও দেখাবে, "found but not in system" case-এর জন্য)
+3. দরকারি row(গুলো) tick করে page-এর একটা **staged/running list**-এ যোগ (এখনো create হয়নি — PO/GRN
+   Create page-এর মতোই line-item জমা হওয়ার pattern)
+4. আরও material দরকার হলে ধাপ ১-৩ repeat
+5. Staged list review (বাদ দেওয়ার সুযোগসহ)
+6. **"Create PID" চাপলে** — existing pattern অনুযায়ী, **সব staged combo-র posting-block একসাথে
+   আগে check হবে** (create-এর আগে, কোনো insert শুরু হওয়ার আগেই) — কোনো একটা blocked থাকলে **পুরো
+   creation-ই fail** (409, কোনটা blocked দেখিয়ে), partial creation হবে না। সব ঠিক থাকলে document +
+   সব item (নিজ নিজ location-সহ) + সব posting block একসাথে তৈরি হবে।
+
+### 119.13 — LOCKED: PID → Opening Stock Reco Flag (2026-08-13, নতুন mechanism, recurring — শুধু go-live-এর জন্য না)
+
+**প্রেক্ষাপট:** আজকের Opening Stock (IN05) শুধু **এক-বারের go-live seeding mechanism** হিসেবে বানানো —
+কোনো material-এ আগে কোনো stock history না থাকলে প্রথম balance বসানোর জন্য (movement P561)। কিন্তু
+business owner-এর real practice হলো **নিয়মিত (quarter-end বা যেকোনো সময়) stock-taking**, আর সেই
+stock-taking-এর ফলাফলই পরের period-এর "official opening figure" হিসেবে গণ্য হওয়া উচিত — এটা এখনো
+কোথাও design করা হয়নি।
+
+**Locked design:**
+- PID create করার সময় একটা **flag** থাকবে (নাম প্রস্তাব: "Opening Stock Source") — user ইচ্ছামতো
+  যেকোনো PID-তে এটা tick করতে পারবে, hard-coded quarter-end-only না
+- Tick করা থাকলে: সেই PID-এর **Posting Date + 1 দিন** = পরের period-এর Opening Stock effective date
+- PID পুরোপুরি **POST (MI07)** হওয়ার পরেই (§119.9-এর নতুন document-wide atomic Post) — post-count
+  quantity (stock_snapshot-এর নতুন balance) সেই তারিখের Opening Stock reference হয়ে যায়
+- **কোনো নতুন IN05 (Opening Stock) entry/posting হবে না** — PID-এর নিজের 701/702 posting-ই
+  `stock_snapshot`-কে সঠিক balance-এ নিয়ে গেছে, IN05 আবার posting করলে **double-count/conflict**
+  হবে (IN05 ধরে নেয় আগে কোনো history নেই, কিন্তু এই material-এর তো ইতিমধ্যে ধারাবাহিক history আছে)
+- **নতুন "Reco" table/page (আলাদা session-এ implement হবে, এখানে শুধু design)** — শুধু একটা
+  **reference/reporting record**: "[date]-এর official Opening Stock (material+location) = X, derived
+  from PID [document_number]" — কোনো stock movement এখানে হবে না, শুধু lookup সুবিধার জন্য
+
+### 119.14 — LOCKED (চূড়ান্ত, বহুবার সংশোধিত): FG/SFG (MTO/HPS/MTEST) PID Loss/Gain — Reco-Only, Symmetric, No Flag (2026-08-13)
+
+**প্রেক্ষাপট ও সিদ্ধান্তের ইতিহাস (কেন এত ঘোরা হলো, ভবিষ্যতে যাতে আবার একই আলোচনা repeat না হয়):**
+
+প্রথম প্রস্তাব ছিল Loss হলে PR19 route (immediate RM/PM stock credit) আর Gain হলে শুধু reco bump —
+এটা **বাতিল হয়েছে** একটা real example দিয়ে (prod DB batch যাচাই করে): ৩০ barrel production হয়েছিল
+(RM/PM/INT সঠিক), কিন্তু dispatch-এ posting ভুল হয়েছিল (10 posted, বাস্তবে 8 গিয়েছিল বা 12 গিয়েছিল)
+— PID এই ভুল ধরবে (gain বা loss হিসেবে), কিন্তু **root cause production-এর না, dispatch-এর।**
+এই আবিষ্কার প্রমাণ করলো: **PID কখনোই জানে না discrepancy-র আসল কারণ কী** (production error, dispatch
+error, নাকি সত্যিকারের physical loss) — তাই root-cause-নির্ভর কোনো automatic branching (Loss→PR19,
+Gain→reco-only) ভুল সিদ্ধান্ত নিতে পারে।
+
+**চূড়ান্ত সিদ্ধান্ত (flag-ও বাদ দেওয়া হয়েছে — business owner-এর explicit সিদ্ধান্ত, root-cause
+investigation বাদ দিয়ে সবসময় mechanical/consistent রাখা হচ্ছে):**
+
+**Batch-tracked SFG/FG (MTO/HPS/MTEST)-এ PID হলেই — Loss বা Gain, দুটোতেই, সবসময়, automatically —
+reco table (`process_order_line_reco` + `packing_order_line_reco`)-এর RM/PM/INT/PM লাইনগুলো
+proportionately adjust হবে (dosage%-ভিত্তিক, PR19-এর existing calculation reuse করে)। Main stock
+(RM/PM/INT-এর real quantity) এখনই কোথাও touch হবে না, কোনো দিকেই না।**
+
+| | Loss | Gain |
+|---|---|---|
+| SFG/FG stock (main) | Plain 702 (normal PID posting) | Plain 701 (normal PID posting) |
+| **Batch reco (RM/PM/INT/PM lines)** | Proportionately **কমবে** | Proportionately **বাড়বে** |
+| RM/PM/INT main stock | **টাচ হয় না** | **টাচ হয় না** |
+
+**কেন main stock এখনই touch না করা নিরাপদ (উভয় দিকেই):** batch-এর "official" quantity (reco-তে
+যা লেখা আছে) শুধু bookkeeping-ভাবে বদলে যায় PID-এর সাথে সাথে। **যদি ভবিষ্যতে এই batch-এর উপর কখনো
+PR19 চালানো হয়**, সেই হিসাব automatically reco-র **এই মুহূর্তের (PID-corrected) quantity**-কেই ভিত্তি
+ধরবে — ফলে RM/PM-এর real stock-এ catch-up **lazily, automatically, সঠিক proportion-এই** ঘটে যায়,
+আলাদা কোনো immediate action লাগে না, আর negative-stock-এর ঝুঁকিও থাকে না (RM/PM-এ এখনই কোনো deduction
+হচ্ছে না বলে)।
+
+**RM/PM/INT আর MTS-typed SFG/FG** — কোনো genealogy chain নেই (batch-blind), তাই এদের PID loss/gain
+সবসময়ই plain 701/702-ই থাকে, অপরিবর্তিত।
+
+**✅ LOCKED:** batch reco-র **সবগুলো field-ই** proportionately adjust হবে — `actual_qty`,
+`ap_approved_qty`, **এবং `variance_qty`** — শুধু physical qty-তে না, পুরো batch-এর সব dimension-এই।
+
+### 119.15 — LOCKED: MI20 (Difference Report) + MI21 (Print) — TX Code, Mechanism (2026-08-13)
+
+**MI20 — Difference Report:**
+- **TX Code: IN07** (dev+prod দুটোতেই verify করা — IN01-IN06 আগেই taken, IN07 খালি)
+- **Standalone page**, নিজের `menu_code`/ACL resource — §8-এর 4-ধাপ MCP sequence-এ register করতে হবে
+- **DB:** নতুন কোনো table লাগবে না — pure read query, `physical_inventory_document` +
+  `physical_inventory_item` join, company-scoped (§116/117-এর "wrong company source" শিক্ষা মেনে —
+  admin-only company source না, `runtimeContext.availableCompanies` থেকে)
+- **BE:** নতুন handler (`listPIDifferencesHandler`-জাতীয়) — filters: Company (multi-select),
+  Storage Location, Material, PID Document Number, Count/Posting Date range, Status
+  (OPEN/COUNTED/PENDING_APPROVAL/POSTED), Difference Type (Gain/Loss/Zero) — SAP MI20-এর মতোই **posted
+  এবং pending দুটোই** দেখাবে (শুধু POSTED না, review-এর জন্য pending PID-ও দরকার)। §8A rule অনুযায়ী সব
+  FK bulk-resolve করে name/code পাঠাবে, raw UUID কখনো না
+- **FE:** নতুন standalone page, filter panel (IN02/IN03-এর existing pattern reuse), ফলাফল
+  **ErpDenseGrid**-এ — columns: PID Doc #, Company, Storage Location, Material, Batch (যদি থাকে),
+  Book Qty, Physical Qty, Difference Qty, Difference %, Stock Type, Status, Posting Date, Movement Type
+
+**MI21 — Print/Count Sheet:** §119.9-এ আগেই lock করা (companion, no TX code, PID number দিলে
+Material+SLoc+blank count field, Header Freeze) — অপরিবর্তিত।
+
+**✅ LOCKED (general rule, শুধু MI20-এর জন্য না — পুরো PID redesign-এর সব table-এই প্রযোজ্য):** List
+page, Create page-এর staged-item list, Detail page-এর item grid, MI20 — **সবগুলো ErpDenseGrid ব্যবহার
+করবে** (feedback memory "Use Existing Grid Components, Not Hand-Rolled Tables" — IN02/IN03-এর মতোই,
+raw `<table>`+CSS width guessing না)।
+
+### 119.16 — পরের session-এ আলোচনা হবে (এখনই না, deliberately deferred — business owner-এর নিজের
+সিদ্ধান্ত, implementation pass-এও touch করা হয়নি)
+
+1. `PROD-ACL-Access-Decisions.md`-এর stale company-scope note সংশোধন
+2. Dev-এ prod-এর matching fine-grained ACL capability (`CAP_PI_AUDITOR`/`CAP_PI_COUNT_ENTRY`)
+   push করা — dev/prod drift পাওয়া গেছে (§119.17-এ আরও একটা related drift পাওয়া গেছে, একসাথে
+   দেখা ভালো)
+
+### 119.17 — ✅ IMPLEMENTATION COMPLETE (2026-08-13, Claude direct-implemented, same session)
+
+পুরো §119.1-119.15-এর design (Phase 6 বাদে, নিচে দেখো) dev-এ (`ytapuwiqicmvpanmzelb`) সম্পূর্ণ
+implement + verify করা হয়েছে — DB migration, backend, frontend, ACL registration সবকিছু।
+
+**DB (৩টা migration, সবগুলো applied + migration-integrity-check.mjs দিয়ে verified `in_sync: true`):**
+- `20260813200000_pid_redesign_in01_schema.sql` — `physical_inventory_document`-এ `company_id`,
+  `is_opening_stock_source`, `submitted_by/at`, `cancelled_by/at`, `cancel_reason`; status CHECK
+  widen (`PENDING_APPROVAL`/`CANCELLED`); `physical_inventory_item`-এ item-level
+  `storage_location_id`, `batch_number`, `packing_order_id` + two-tier partial-unique-index
+  (blended vs batch-tracked, কারণ NULL≠NULL Postgres unique semantics-এ); `physical_inventory_block`-এ
+  `batch_number` (per-batch blocking, blanket material+location না); নতুন
+  `physical_inventory_reopen_log` টেবিল (append-only reason history)
+- `20260813210000_pid_reco_pid_adjustment_txn_type.sql` — `process_order_line_reco`/
+  `packing_order_line_reco`-র `source_txn_type` CHECK-এ `PID_ADJUSTMENT` যোগ + PR19-এর
+  `buildRmIntPreview()` filter আপডেট (নাহলে future PR19 একটা PID-corrected batch-এর নতুন
+  quantity মিস করত)
+- `20260813220000_complete_pid_post.sql` — `erp_procurement.complete_pid_post()` atomic plpgsql
+  function (§119.9-এর document-wide Post), `posting_source_registry`-তে PI register
+
+**Backend (`physical_inventory.handlers.ts`, সম্পূর্ণ rewrite, ~1750 লাইন):** সব ৭টা পুরনো handler
++ ৭টা নতুন (submit/reopen/cancel/remove-item/material-locations/differences-report) — multi-location
+ITEM_WISE grain (§119.12), batch/PO auto-split (§119.7), zero-stock mutual-exclusion (§119.6),
+multi-UoM entry fields (§119.8), live WAR valuation (§119.10), escalating maker-checker
+(`resolvePidActionAuthority`, §119.5), genealogy reco-adjustment (`buildGenealogyAdjustments`,
+§119.14), enhanced block-check-with-modal response (§119.9), company-scope write-ACL fix
+(`assertPIDCompanyActionAccess`)। `deno check` clean (শুধু pre-existing `.ilike`/`.gte`/`.lte`
+typing noise, বাকি সব codebase-এ already আছে)। Route wiring (`procurement.routes.ts`) +
+ACL registry (`route-acl-registry.ts`, নতুন routes + stale `/post-differences` duplicate entry
+পরিষ্কার) — সবগুলো ৯টা CI guard pass করছে (stock-posting, route-acl-registry, company-scope,
+company-scope-write-acl, hardcoded-role-check, wrong-company-source, resource-code-domain,
+frontend-payload, approver-chain)।
+
+**Frontend (৫টা page):** `PIDocumentListPage.jsx` (simplified, Create সরিয়ে নেওয়া হয়েছে),
+`PIDocumentCreatePage.jsx` (নতুন, LOCATION_WISE+ITEM_WISE staged flow), `PIDocumentDetailPage.jsx`
+(সম্পূর্ণ rewrite — MI02-07 সব একসাথে, zero-stock checkbox, multi-uom entry, submit/reopen/post
+বাটন, §8A raw-UUID-fallback fix করা হয়েছে), `PIDocumentPrintPage.jsx` (নতুন, MI21, header-freeze
+CSS), `PIDifferenceReportPage.jsx` (নতুন, MI20/IN07, ErpDenseGrid virtualized)। সব ৫টা `eslint`
+clean।
+
+**ACL/Menu (dev, MCP):** IN07 (`PROC_PI_DIFFERENCES`) `erp_menu.menu_master` +
+`erp_menu.menu_tree` (parent = Inventory group) + `acl.menu_master` + live
+`acl.capability_menu_actions` + সব ৪টা active company version-এর
+`acl.version_capability_menu_actions`-এ `CAP_PROC_INVENTORY:VIEW` (dev-এর সিবলিং resource-দের
+বর্তমান আসল pattern-ই মেলানো হয়েছে, prod-এর aspirational `CAP_EVERYONE_REPORTS` না — সেটা §119.16-এর
+deferred drift-fix-এর সাথে একসাথে করা হবে) + `generate_acl_snapshot()` প্রতিটা company-র জন্য
+চালানো হয়েছে।
+
+**✅ ACL breadth "discrepancy" — RESOLVED, ছিল false alarm (2026-08-13, একই session-এর পরের একটা
+recheck pass-এ ধরা পড়ে)।** আগে flag করা হয়েছিল যে IN07 (`PROC_PI_DIFFERENCES`) শুধু ১টা
+ALLOW row/company দেখাচ্ছে, অথচ sibling resource (`PROC_STOCK_LEDGER`) ৩০+ দেখায়। Root cause:
+সেই diagnostic query-তে `acl_version_id` filter ছিল না — তাই `PROC_STOCK_LEDGER`-এর জন্য
+**মাস ধরে জমে থাকা পুরনো, inactive acl_version-এর row** গুলোও (2026-05-28 থেকে, ৯ জন distinct
+user, বিভিন্ন historical version জুড়ে) গোনা হয়ে গিয়েছিল, নতুন `PROC_PI_DIFFERENCES`-এর সাথে
+তুলনা করার সময়, যেটা শুধু আজকের একটাই active version-এ আছে। বর্তমান **active** acl_version-এ
+scope করে (`acl_version_id IN (4টা active version)`) re-run করলে: `PROC_PI_DIFFERENCES`,
+`PROC_PI_LIST`, `PROC_STOCK_LEDGER` — তিনটেই VIEW action-এ ঠিক **৪ row / ১ distinct user**
+দেখায় (dev-এ বর্তমানে মাত্র ১ জন real non-SA/GA user-এর `CAP_PROC_INVENTORY` capability আছে,
+সব Inventory-tier resource জুড়ে identical)। কোনো real bug ছিল না — mechanism সঠিক, শুধু আগের
+verification query ভুলভাবে unscoped ছিল।
+
+**✅ real wiring gap পাওয়া গেছে + fix করা হয়েছে (একই recheck pass, 2026-08-13):**
+`getMaterialLocationBreakdownHandler` (`GET .../physical-inventory-material-locations`)
+route registry-তে `PROC_PI_LIST:EDIT` tier-এ gated, কিন্তু handler-এর ভিতরে শুধু plain
+membership-level `assertPIDocumentCompanyScope()` call করছিল — অন্য সব EDIT-tier PID handler-এর
+মতো action-tier-aware `assertPIDCompanyActionAccess(ctx, companyId, "EDIT")` না। এর মানে
+multi-company user যার active session company-তে EDIT আছে কিন্তু query param-এ পাঠানো ভিন্ন
+company-তে EDIT নেই (শুধু membership আছে), সে এই endpoint দিয়ে সেই company-র material/location
+stock breakdown দেখতে পারতো — company-scope-write-ACL gap pattern-এরই একটা ছোট shape (read-only
+endpoint বলে impact সীমিত, কিন্তু registry-declared tier-এর সাথে handler-এর নিজস্ব check মেলে না,
+inconsistent)। **Fix করা হয়েছে** — এখন `assertPIDCompanyActionAccess(ctx, companyId, "EDIT")`
+call করে, বাকি সব EDIT-tier PID handler-এর মতোই। `deno check` + সব ৯টা CI guard পুনরায় clean।
+
+**Phase 6 — ইচ্ছাকৃতভাবে এই pass-এ করা হয়নি (business owner confirm, আলাদা focused pass হিসেবে
+পরে হবে):** §119.9-এ lock করা posting-block extension + atomic migration Process PO
+(`process_order.handlers.ts`-এর INT/MTEST/reverse path), Packing PO Final, PR19 (
+`partial_reversal.handlers.ts`)-এ — এই তিনটা ফাইল এখনো PID-এর posting block respect করে না
+(আজকের অবস্থাই বহাল)। এছাড়া GRN/STO/SO/RTV/DeliveryOrder-এর existing block-check-ও এখনো informative
+modal response দেয় না (§119.9 সিদ্ধান্ত ২ — শুধু PID নিজের handler retrofit হয়েছে)।
