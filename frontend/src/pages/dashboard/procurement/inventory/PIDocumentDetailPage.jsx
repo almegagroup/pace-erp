@@ -1,7 +1,12 @@
 /*
- * PIDocumentDetailPage — MI02/MI03/MI04/MI05/MI07 all on one page (§119.4: these all need the
- * same item-grid context at once, splitting them into separate companion pages would force
- * constant re-navigation). Status + role-driven action visibility.
+ * PIDocumentDetailPage — MI02/MI03/MI07 review + oversight (§119.4). MI04 (blind count entry)
+ * moved out to its own page, PIDocumentCountEntryPage.jsx, 2026-08-14 — the whole point of a
+ * physical count is a blind comparison against the system's book quantity, so the screen where
+ * someone types in what they physically found must never show that book quantity. This page is
+ * the opposite: it's for reviewing what's already been counted (Book Qty/Difference are exactly
+ * what a supervisor/auditor needs here to decide whether to Recount, Submit, Reopen, or Post) —
+ * by the time an item has a physical_qty on this page, the blind-entry moment has already
+ * happened, so showing the variance here is not a bias risk, it's the actual job of this screen.
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -9,7 +14,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
-import UomQuantityInput from "../../../../components/forms/UomQuantityInput.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, {
   ErpFieldPreview,
@@ -22,9 +26,7 @@ import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/opera
 import {
   addPIItem,
   cancelPIDocument,
-  enterPICount,
   getPIDocument,
-  listMaterialUomConversionsForProcurement,
   postPIDifferences,
   removePIItem,
   reopenPIDocument,
@@ -120,7 +122,6 @@ export default function PIDocumentDetailPage() {
       : (screenContext.id || "");
   const { runtimeContext } = useMenu();
   const selectedCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
-  const [activeCountItemId, setActiveCountItemId] = useState("");
   const [itemForm, setItemForm] = useState({ material_id: "", stock_type: "UNRESTRICTED", storage_location_id: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -176,28 +177,6 @@ export default function PIDocumentDetailPage() {
   const canPost = status === "PENDING_APPROVAL";
 
   const queryError = detailQuery.error?.message || materialQuery.error?.message || locationQuery.error?.message || "";
-
-  async function saveCount(itemId, physicalQty, isZeroStock, enteredMeta) {
-    if (!detail?.id) return;
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      const payload = isZeroStock
-        ? { is_zero_stock: true }
-        : {
-            physical_qty: physicalQty,
-            ...(enteredMeta?.enteredUomCode ? { entered_uom_code: enteredMeta.enteredUomCode, entered_qty: enteredMeta.enteredQty } : {}),
-          };
-      await enterPICount(detail.id, itemId, payload);
-      setNotice("Physical count saved.");
-      await detailQuery.refetch();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PI_COUNT_SAVE_FAILED");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function handleRecount(itemId) {
     if (!detail?.id) return;
@@ -333,6 +312,11 @@ export default function PIDocumentDetailPage() {
     navigate(`/dashboard/procurement/physical-inventory/${encodeURIComponent(id)}/print`);
   }
 
+  function openCountEntry() {
+    openScreen(OPERATION_SCREENS.PROC_PI_COUNT_ENTRY.screen_code, { context: { id } });
+    navigate(`/dashboard/procurement/physical-inventory/${encodeURIComponent(id)}/count`);
+  }
+
   return (
     <ErpScreenScaffold
       eyebrow="Procurement Inventory"
@@ -352,6 +336,7 @@ export default function PIDocumentDetailPage() {
           },
         },
         { key: "print", label: "Print Count Sheet", tone: "neutral", onClick: openPrint },
+        ...(canEditCounts ? [{ key: "count-entry", label: "Enter Counts", tone: "primary", onClick: openCountEntry }] : []),
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
@@ -424,17 +409,11 @@ export default function PIDocumentDetailPage() {
                 { key: "book_qty", label: "Book Qty", width: "100px" },
                 {
                   key: "physical_qty",
-                  label: "Physical Qty / Zero Stock",
-                  width: "220px",
-                  render: (row) => (
-                    <PhysicalQtyCell
-                      row={row}
-                      canEdit={canEditCounts && !row.posted_stock_document_id}
-                      active={activeCountItemId === row.id}
-                      onActivate={() => setActiveCountItemId(row.id)}
-                      onSave={(qty, isZero, meta) => void saveCount(row.id, qty, isZero, meta)}
-                    />
-                  ),
+                  label: "Physical Qty",
+                  width: "140px",
+                  // Read-only here on purpose — entry happens only on the blind Count Entry
+                  // (MI04) page, never on this review screen (see file header comment).
+                  render: (row) => (row.physical_qty === null || row.physical_qty === undefined ? <span className="text-slate-400">Not counted</span> : <span>{row.physical_qty}</span>),
                 },
                 {
                   key: "difference_qty",
@@ -516,65 +495,3 @@ export default function PIDocumentDetailPage() {
   );
 }
 
-// §119.6/§119.8 — count entry cell: Zero-Stock checkbox (mutual exclusion with the qty field,
-// pure frontend, no new DB column) + multi-UoM (RM/PM/INT/MTS-FG generic; SFG always base UoM;
-// FG uses the pack UoM instead — this cell keeps it simple and always accepts base-UoM qty
-// directly for now, matching what the backend already accepts; a dedicated pack-count entry
-// path is a fast-follow once Pack-code-aware component wiring is prioritized).
-function PhysicalQtyCell({ row, canEdit, active, onActivate, onSave }) {
-  const [draftQty, setDraftQty] = useState(row.physical_qty ?? "");
-  const [isZero, setIsZero] = useState(row.physical_qty === 0);
-  const conversionsQuery = useQuery({
-    queryKey: ["procurement", "pi-material-uom-conversions", row.material_id],
-    queryFn: () => listMaterialUomConversionsForProcurement(row.material_id),
-    enabled: canEdit && active,
-  });
-
-  const isPosted = Boolean(row.posted_stock_document_id);
-  const hasCount = row.physical_qty !== null && row.physical_qty !== undefined;
-
-  if (!canEdit || isPosted) {
-    return <span>{hasCount ? row.physical_qty : "—"}</span>;
-  }
-
-  if (!active && hasCount) {
-    return (
-      <button type="button" onClick={onActivate} className="rounded border border-slate-300 bg-white px-2 py-1 text-sm font-semibold text-slate-900">
-        {row.physical_qty}
-      </button>
-    );
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-2" onFocus={onActivate}>
-      <UomQuantityInput
-        key={row.id}
-        baseUomCode={row.base_uom_code}
-        conversions={Array.isArray(conversionsQuery.data?.data) ? conversionsQuery.data.data : []}
-        value={hasCount ? row.physical_qty : undefined}
-        disabled={isZero}
-        onChange={(baseQty, { enteredQty, enteredUomCode }) => {
-          setDraftQty(baseQty ?? "");
-          if (baseQty !== null) onSave(baseQty, false, { enteredQty, enteredUomCode });
-        }}
-      />
-      <label className="flex items-center gap-1 text-xs text-slate-600">
-        <input
-          type="checkbox"
-          checked={isZero}
-          onChange={(event) => {
-            const checked = event.target.checked;
-            setIsZero(checked);
-            if (checked) {
-              setDraftQty(0);
-              onSave(0, true);
-            }
-          }}
-          disabled={Boolean(draftQty) && Number(draftQty) > 0}
-          className="h-3.5 w-3.5"
-        />
-        Zero Stock
-      </label>
-    </div>
-  );
-}

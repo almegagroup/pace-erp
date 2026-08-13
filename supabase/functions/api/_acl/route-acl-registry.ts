@@ -47,7 +47,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/print-groups":                { skipAcl: false, resourceCode: "PROC_PO_STO_PRINT", action: "VIEW" },
   "POST:/api/procurement/print-groups/log":           { skipAcl: false, resourceCode: "PROC_PO_STO_PRINT", action: "WRITE" },
   "GET:/api/procurement/po-filter-options":           { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"  },
-  "GET:/api/procurement/materials/uom-conversion":    { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"  },
+  // Generic material_uom_conversion lookup (no PO reference, no company scope in the handler) --
+  // was mis-gated under PROC_PO_LIST, which silently 403'd it for any non-PO page that also uses
+  // it (Opening Stock, PID) whenever that user lacked PO List access. Found live in prod 2026-08-14
+  // while verifying PID's companion-page dependencies -- OM_MATERIAL_LIST is what this data actually is.
+  "GET:/api/procurement/materials/uom-conversion":    { skipAcl: false, resourceCode: "OM_MATERIAL_LIST", action: "VIEW"  },
 
   // ── Procurement: Gate Entry ───────────────────────────────────────────────
   "GET:/api/procurement/gate-entries":                { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_LIST",   action: "VIEW"  },

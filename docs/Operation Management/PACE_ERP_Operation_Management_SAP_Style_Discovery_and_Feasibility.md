@@ -18206,6 +18206,132 @@ endpoint বলে impact সীমিত, কিন্তু registry-declared 
 inconsistent)। **Fix করা হয়েছে** — এখন `assertPIDCompanyActionAccess(ctx, companyId, "EDIT")`
 call করে, বাকি সব EDIT-tier PID handler-এর মতোই। `deno check` + সব ৯টা CI guard পুনরায় clean।
 
+### 119.18 — Prod ACL rollout (2026-08-14, PR #238 merged, business owner-directed role redesign)
+
+PR #238 merge হওয়ার সাথে সাথে `deploy-prod.yml` নিজে থেকে prod DB (`bsjpvkigpllichlknmah`)-তে সব
+৩টা migration apply করেছে (verified: `migration-integrity-check.mjs` → `in_sync: true`, সব নতুন
+schema object — `complete_pid_post()`, নতুন কলাম, `PID_ADJUSTMENT` txn type — live)।
+
+**Business owner-এর নতুন role rule (§119.5-এর escalating maker-checker-এর concrete role
+assignment, prod-এর জন্য explicit করে বলা হলো):**
+- Create/Edit (MI01/02) → **L1_MANAGER + L2_MANAGER**
+- Count/Recount (MI04/05) → **up to L3_MANAGER** (Plant Head) + L1/L2_AUDITOR, নিজের company scope-এ
+- Post (MI07) → escalating: normally Auditor-or-Director, counter নিজেই Auditor হলে **Director-only**
+  (কোড-লেভেলে `resolvePidActionAuthority()` আগে থেকেই সঠিক — যাচাই করা হয়েছে)
+- MI20/IN07 (Difference Report) → সবার জন্য open, IN02/IN03-এর মতো
+
+**Prod-এর discovery:** prod-এ আগে থেকেই একটা ভিন্ন, পুরনো ("Group 9 three-stage design",
+2026-08-06 — এই redesign-এর মাত্র এক সপ্তাহ আগে) capability structure ছিল — `CAP_PI_AUDITOR`
+(Auditor-only, create/edit **এবং** post দুটোই) + `CAP_PI_COUNT_ENTRY` (broad count-entry)। যাচাই
+করে দেখা গেল `CAP_PI_COUNT_ENTRY`-র membership (up to L3_MANAGER + L1/L2_AUDITOR) already নতুন
+rule-এর সাথে হুবহু মিলে যায় — কিন্তু EDIT (create/edit) prod-এ তখনো Auditor-only ছিল, নতুন rule-এর
+সাথে সরাসরি contradict করছিল, আর APPROVE-এ blanket `CAP_PROC_INVENTORY` (প্রায় সবাইকে) grant করা
+ছিল — bug-pattern #3 blanket-capability-leak।
+
+**যা করা হলো (MCP, prod, সব ৪টা active company: CMP003 v66/CMP006 v65/CMP010 v35/CMP014 v2):**
+1. নতুন capability `CAP_PI_MANAGER_EDIT` — শুধু L1_MANAGER+L2_MANAGER, `CAP_PI_COUNT_ENTRY`-র
+   একই work-context breadth mirror করে (company-wide, department-restricted না) — PROC_PI_LIST-এর
+   EDIT action-এ যোগ
+2. PROC_PI_LIST-এর APPROVE action থেকে blanket `CAP_PROC_INVENTORY` grant সরানো হলো — এখন শুধু
+   `CAP_PI_AUDITOR` (Auditor+Director)
+3. IN07 (`PROC_PI_DIFFERENCES`) নতুন registration — VIEW-এ `CAP_PROC_INVENTORY` +
+   `CAP_EVERYONE_REPORTS` (prod-এর নিজস্ব report-page pattern, dev-এর broad-only pattern না)
+4. সব পরিবর্তন version-scoped table-এও mirror করা হয়েছে (৪টা active version আগে থেকেই captured,
+   তাই `capture_acl_version_source()` no-op হতো — সরাসরি version table-এ insert)
+5. `generate_acl_snapshot()` চালানো হয়েছে ৪টা company-র জন্যই, `precomputed_acl_view` দিয়ে
+   role-level ফলাফল verify করা হয়েছে (APPROVE=শুধু DIRECTOR+L1_AUDITOR, EDIT=Manager tier +
+   inherited L3_MANAGER — role-rank inheritance-এর স্বাভাবিক ফলাফল, L3_MANAGER Plant Head হিসেবে
+   count-entry-ও করে তাই এটা expected)
+6. `rebuild_acl_menu_snapshot()` সব affected user-এর জন্য proactively চালানো হয়েছে (cache TTL-এর
+   জন্য অপেক্ষা না করে) — `erp_menu.menu_snapshot`-এ IN07 এখন ৪৭ জন user-এর জন্য, PROC_PI_LIST
+   ৭৩ row-এ visible
+
+**⚠️ সংশোধন, একই দিন — business owner-এর নিজের correction:** "Create/Edit = L1/L2_MANAGER"
+ভুল ছিল, আসল rule **L1/L2_AUDITOR** (Manager না)। যেহেতু `CAP_PI_AUDITOR` আগে থেকেই EDIT-এ
+Auditor+Director grant করছিল (prod-এর pre-existing state, এই session শুরুর আগে থেকেই), তাই
+নতুন যোগ করা `CAP_PI_MANAGER_EDIT` আসলে ভুল সংযোজন ছিল — **সম্পূর্ণ মুছে ফেলা হয়েছে** (capability,
+role_capabilities, work_context_capabilities, capability_menu_actions — live + সব ৪টা active
+version, তারপর snapshot+menu-snapshot আবার rebuild)। ফলাফল: EDIT এখন ঠিক session-শুরুর আগের
+অবস্থায় ফিরে গেছে (শুধু DIRECTOR+L1/L2_AUDITOR) — net change শূন্য এই action-এর জন্য। WRITE
+(count, up to L3_MANAGER+Auditor) ও APPROVE (Auditor/Director escalating) অপরিবর্তিত, সঠিক ছিল
+আগে থেকেই।
+
+**🔴 Real self-approval bug পাওয়া গেছে ও fix করা হয়েছে (2026-08-14, business owner-এর "ACL master
+self approve korte parbe?" প্রশ্নে ধরা পড়ে) — `physical_inventory.handlers.ts`-এর কোড-level fix,
+prod ACL data-র সমস্যা না:** `resolvePidActionAuthority()` শুধু counter-এর **role** আর caller-এর
+**role** তুলনা করত, কখনো দুজন একই **person** কিনা check করত না। যেহেতু DIRECTOR role-rank
+inheritance-এর মাধ্যমে count-entry WRITE access-ও পায় (L1-L3_MANAGER-এর capability inherit করে,
+`generate_acl_snapshot()`-এর role-family hierarchy অনুযায়ী — live prod data-তে verify করা: P0076
+role=DIRECTOR, আর DIRECTOR নিজেই `PROC_PI_LIST:WRITE` তালিকায় আছে), **যেকোনো DIRECTOR (P0076
+সহ) একটা PID-তে count entry করে তারপর নিজেই সেটা Post/Reopen করতে পারতো** — pure self-approval,
+maker-checker design-এর পুরো উদ্দেশ্যটাই ভেঙে দিতো। (Auditor counter এই বাগ থেকে আগে থেকেই সুরক্ষিত
+ছিল — তাদের জন্য escalation তো এমনিতেই DIRECTOR-ONLY-তে চলে যায়, তাই তারা কখনো নিজের কাউন্ট নিজে
+post করতে পারতো না।) **Fix:** caller-এর `auth_user_id` এখন document-এর সব counter-এর `counted_by`
+তালিকার সাথে মেলানো হয় (আগে শুধু ১টা arbitrary counted item দেখে escalation ঠিক করত — এটাও একসাথে
+ঠিক করা হয়েছে, এখন document-এর **সব** counter দেখে, যেকোনো একজন Auditor হলেই escalate করে) — match
+পেলে role নির্বিশেষে (ACL-MASTER/DIRECTOR সহ) `allowed=false`, আলাদা error message
+("You entered a count on this document — someone else must reopen/post it.")। `deno check` +
+সব ৯টা CI guard পুনরায় clean। **এখনো dev-এ কমিট করা, prod-এ পৌঁছাতে migration লাগে না (pure
+code fix) কিন্তু PR merge to main লাগবে** — material_uom_conversion fix-এর মতোই।
+
+**⚠️ সংশোধন, একই দিনের পরের turn-এ — business owner-এর প্রশ্ন ("ACL master baki der jonno fullest
+access with self approval ache") ধরিয়ে দিলো self-approval fix-টা বাকি system-এর established
+pattern-এর সাথে বিপরীত ছিল।** খুঁজে দেখা গেল `_shared/approval_override.ts`-এর
+`hasBlanketApprovalOverride()` (SA/GA/DIRECTOR/ACL-MASTER work-context) PO-তে **ইচ্ছাকৃতভাবে**
+self-approval bypass করে (`po.handlers.ts`-এর নিজের comment: "DIRECTOR may create and approve
+their own PO; everyone else needs a different approver") — এই একই pattern likely STO/PTO-তেও।
+Business owner-কে দুটো option দেওয়া হলো (PID strict রাখা বনাম বাকি system-এর সাথে মেলানো) —
+**"বাকি system-এর সাথে মেলাই" বেছে নেওয়া হয়েছে।** Fix: `resolvePidActionAuthority()`-এর top-level
+bypass condition-এ `isCompanyScopeAdminBypass()` (SA/GA)-এর পাশাপাশি এখন `hasBlanketApprovalOverride()`
+(SA/GA/DIRECTOR/ACL-MASTER)-ও যোগ করা হয়েছে — matching PO-র ঠিক একই semantics, self-approval-block
+সহ পুরোটাই bypass হয় এই role/work-context-দের জন্য। `deno check` + সব ৯টা CI guard পুনরায় clean।
+
+**🔴 বড় design correction, live click-through testing-এ ধরা পড়ে (2026-08-14):** business owner
+সরাসরি bug ধরিয়ে দিলেন — Detail page-এ MI04 (count entry) inline করা ছিল, আর ঠিক পাশেই **Book
+Qty column দেখাচ্ছিল** — এটা SAP-এর blind-count principle সরাসরি ভাঙে (physical count নেওয়ার
+পুরো উদ্দেশ্যই independent verification; system-এর expected value দেখিয়ে দিলে counter সেটাই
+copy করে বসিয়ে দিতে পারে, audit control-ই অকেজো হয়ে যায়)। PIDocumentPrintPage.jsx (MI21, paper
+count sheet)-এ এই principle-টা আমি ঠিকই লিখেছিলাম ("book quantity intentionally hidden") কিন্তু
+digital MI04 entry-তে apply করতে ভুলে গিয়েছিলাম — inconsistency।
+
+**Fix — MI04 আলাদা page-এ split করা হলো:**
+- নতুন `PIDocumentCountEntryPage.jsx` (route `.../physical-inventory/:id/count`, companion
+  screen `PROC_PI_COUNT_ENTRY`, একই `PROC_PI_LIST:WRITE` ACL resource — কোনো নতুন backend route/
+  ACL লাগেনি) — শুধু Material/Batch/Location/Stock Type + blind physical-qty entry (UOM +
+  Zero Stock সহ)। Book Qty/Difference **কোথাও নেই এই page-এ**।
+- `PIDocumentDetailPage.jsx` এখন শুধু review/oversight (MI02/MI03/MI07) — Book Qty + Difference
+  দেখায় (এখানে bias-এর ঝুঁকি নেই, কারণ item ইতিমধ্যে counted হয়ে গেছে), Physical Qty column
+  read-only, নতুন "Enter Counts" বাটন Count Entry page-এ পাঠায়। Recount (MI05) বাটন এখানেই থেকে
+  গেছে — এটা supervisor/auditor-এর decision (কোন item recount দরকার সেটা difference দেখেই
+  বোঝা যায়), তাই এখানে থাকাই সঠিক — recount trigger করলে item আবার "pending" হয়ে যায়, তারপর
+  আসল blind re-entry হয় Count Entry page দিয়েই।
+- Access/ACL অপরিবর্তিত (business owner-এর নির্দেশ অনুযায়ী) — WRITE tier যেভাবে আগে ছিল সেভাবেই।
+- `PAGE-DEPENDENCY-MANIFEST.json` আপডেট, SU24 রি-রান ক্লিন, সব ৯টা CI guard পুনরায় পাস।
+
+**⚠️ পুরনো/অজানা gap (touched নয়, flagged):** CMP010-এ কোনো work_context-এই PID-সংক্রান্ত কোনো
+capability wired নেই (CAP_PI_AUDITOR/CAP_PI_COUNT_ENTRY/এখন CAP_PI_MANAGER_EDIT সবই ০ row) —
+মানে CMP010-এ আজ কোনো non-SA/GA user PID access-ই পায় না। এটা এই session-এর আগে থেকেই ছিল, এই
+session-এ তৈরি করা হয়নি, আর কোন department-এ PID access দেওয়া উচিত সেটা অনুমান করে ঠিক করিনি —
+আলাদাভাবে decide করা দরকার।
+
+**✅ Companion/dependency permission gap পাওয়া গেছে ও fix করা হয়েছে (real bug, PID-এর বাইরেও
+প্রভাব ফেলছিল):** PID Detail page-এর UOM-conversion helper (`listMaterialUomConversionsForProcurement`,
+`GET /api/procurement/materials/uom-conversion`) route-acl-registry.ts-এ ভুলভাবে `PROC_PO_LIST`
+resource-এ gated ছিল — অথচ handler-টা pure `erp_master.material_uom_conversion` lookup, কোনো
+PO reference বা company scope নেই। প্রমাণ পাওয়া গেছে prod-এ সরাসরি: PROC_PI_LIST:VIEW আছে এমন
+কয়েকজন user-এর PROC_PO_LIST:VIEW নেই — একই bug Opening Stock page-এও (pre-existing, PID-এর
+কারণে তৈরি হয়নি) already silently affect করছিল একজন user-কে। Fix: resourceCode
+`OM_MATERIAL_LIST`-এ বদলানো হয়েছে (`route-acl-registry.ts`, একই commit-এ
+`resource-code-domain-guard.mjs`-এর BASELINE-এ intentional cross-domain-share হিসেবে note করা
+হয়েছে, আর `PAGE-DEPENDENCY-MANIFEST.json`-এর ৪টা matching entry আপডেট করা হয়েছে)। **এটা code
+change — dev-এ commit+push করা হয়েছে, কিন্তু prod-এ পৌঁছাতে আরেকটা PR merge to main লাগবে।**
+
+**✅ PAGE-DEPENDENCY-MANIFEST.json স্টেল entry ঠিক করা হয়েছে:** PID-এর ৩টা নতুন page
+(Create/Print/Difference-Report) manifest-এ ছিলই না (SU24 script নিজেই ধরেছিল
+`routed_page_without_manifest_entry`), আর PIDocumentDetailPage/ListPage-এর পুরনো entry redesign-
+এর আগের action-tier বহন করছিল (addPIItem-কে এখনো WRITE দেখাচ্ছিল, EDIT না)। সব ঠিক করা হয়েছে,
+re-run-এ `routed_page_without_manifest_entry: []`।
+
 **Phase 6 — ইচ্ছাকৃতভাবে এই pass-এ করা হয়নি (business owner confirm, আলাদা focused pass হিসেবে
 পরে হবে):** §119.9-এ lock করা posting-block extension + atomic migration Process PO
 (`process_order.handlers.ts`-এর INT/MTEST/reverse path), Packing PO Final, PR19 (

@@ -12,6 +12,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { ROLE } from "../../_shared/role_ladder.ts";
@@ -526,30 +527,49 @@ async function countNullPhysicalQty(documentId: string): Promise<number> {
 async function resolvePidActionAuthority(
   ctx: ProcurementHandlerContext,
   documentId: string,
-): Promise<{ allowed: boolean; requiredTier: "AUDITOR_OR_DIRECTOR" | "DIRECTOR_ONLY" }> {
-  if (isCompanyScopeAdminBypass(ctx)) {
+): Promise<{ allowed: boolean; requiredTier: "AUDITOR_OR_DIRECTOR" | "DIRECTOR_ONLY"; selfApproval?: boolean }> {
+  // SA/GA (isCompanyScopeAdminBypass) plus DIRECTOR/ACL-MASTER (hasBlanketApprovalOverride) all
+  // get the same full bypass here that PO/STO/PTO already grant them (§_shared/approval_override.ts)
+  // -- including self-approval -- per business-owner decision 2026-08-14: PID intentionally matches
+  // the rest of the system's "ultimate authority can self-approve, no top-of-chain deadlock" design
+  // rather than being a stricter one-off exception.
+  if (isCompanyScopeAdminBypass(ctx) || hasBlanketApprovalOverride(ctx)) {
     return { allowed: true, requiredTier: "AUDITOR_OR_DIRECTOR" };
   }
 
-  const { data: countedItem } = await serviceRoleClient
+  const { data: countedItems } = await serviceRoleClient
     .schema("erp_procurement")
     .from("physical_inventory_item")
     .select("counted_by")
     .eq("document_id", documentId)
-    .not("counted_by", "is", null)
-    .limit(1)
-    .maybeSingle();
+    .not("counted_by", "is", null);
 
+  const counterIds = [...new Set(
+    ((countedItems ?? []) as { counted_by: string | null }[])
+      .map((row) => toTrimmedString(row.counted_by))
+      .filter(Boolean),
+  )];
+
+  // Self-approval block — the maker-checker split is meaningless if whoever entered a count can
+  // also be the one who posts/reopens it, no matter what role they hold (including DIRECTOR,
+  // which inherits count-entry WRITE access via the role-rank hierarchy and would otherwise
+  // trivially satisfy both tiers below). Checked before the role-tier logic, not merged into it.
+  const callerId = toTrimmedString(ctx.auth_user_id);
+  if (callerId && counterIds.includes(callerId)) {
+    return { allowed: false, requiredTier: "AUDITOR_OR_DIRECTOR", selfApproval: true };
+  }
+
+  // Escalation must key off EVERY counter on the document, not just one arbitrary row — if any
+  // portion was counted by an Auditor, the whole document escalates to Director-only.
   let counterIsAuditor = false;
-  const counterId = toTrimmedString(countedItem?.counted_by);
-  if (counterId) {
-    const { data: counterRole } = await serviceRoleClient
+  if (counterIds.length > 0) {
+    const { data: counterRoles } = await serviceRoleClient
       .schema("erp_acl")
       .from("user_roles")
-      .select("role_code")
-      .eq("auth_user_id", counterId)
-      .maybeSingle();
-    counterIsAuditor = AUDITOR_ROLES.has(toUpperTrimmedString(counterRole?.role_code));
+      .select("auth_user_id, role_code")
+      .in("auth_user_id", counterIds);
+    counterIsAuditor = ((counterRoles ?? []) as { role_code: string | null }[])
+      .some((row) => AUDITOR_ROLES.has(toUpperTrimmedString(row.role_code)));
   }
 
   const callerRole = toUpperTrimmedString(ctx.roleCode);
@@ -814,17 +834,28 @@ export async function getPIDHandler(
       ...items.map((i) => toTrimmedString(i.storage_location_id)),
     ].filter(Boolean))];
 
-    const [materialRows, locationRows] = await Promise.all([
+    // FG Scenario 2 (variable-fill MTO/HPS/MTEST barrels/IBCs, §UoM-2026-08-14) — an item's
+    // packing_order carries the per-instance fill (fill_qty_per_pack), since there is no
+    // material-level fixed conversion for these pack codes (Bag/Barrel qty varies PO to PO,
+    // §83.14 balance-barrel). Frontend uses this as a "Per-Pack Qty" default and lets the
+    // counter type "Num Pack" blind — it does NOT expose num_packs from the PO record itself,
+    // that would just be the book count again.
+    const packingOrderIds = [...new Set(items.map((i) => toTrimmedString(i.packing_order_id)).filter(Boolean))];
+    const [materialRows, locationRows, packingOrderRows] = await Promise.all([
       materialIds.length
         ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type").in("id", materialIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       locationIds.length
-        ? serviceRoleClient.schema("erp_master").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
+        ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
+        : Promise.resolve({ data: [] as JsonRecord[] }),
+      packingOrderIds.length
+        ? serviceRoleClient.schema("erp_production").from("packing_order").select("id, po_number, fill_qty_per_pack").in("id", packingOrderIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
     ]);
 
     const materialMap = new Map(((materialRows.data ?? []) as JsonRecord[]).map((m) => [String(m.id), m]));
     const locationMap = new Map(((locationRows.data ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
+    const packingOrderMap = new Map(((packingOrderRows.data ?? []) as JsonRecord[]).map((p) => [String(p.id), p]));
 
     return okResponse(
       {
@@ -834,6 +865,7 @@ export async function getPIDHandler(
         items: items.map((item) => {
           const material = materialMap.get(toTrimmedString(item.material_id));
           const location = locationMap.get(toTrimmedString(item.storage_location_id));
+          const packingOrder = packingOrderMap.get(toTrimmedString(item.packing_order_id));
           return {
             ...item,
             material_pace_code: material?.pace_code ?? null,
@@ -841,6 +873,8 @@ export async function getPIDHandler(
             material_type: material?.material_type ?? null,
             storage_location_code: location?.location_code ?? null,
             storage_location_name: location?.location_name ?? null,
+            packing_order_number: packingOrder?.po_number ?? null,
+            packing_order_fill_qty_per_pack: packingOrder?.fill_qty_per_pack ?? null,
           };
         }),
       },
@@ -1277,7 +1311,9 @@ export async function reopenPIDHandler(
         ctx,
         "PI_REOPEN_AUTHORITY_REQUIRED",
         403,
-        authority.requiredTier === "DIRECTOR_ONLY"
+        authority.selfApproval
+          ? "You entered a count on this document — someone else must reopen it."
+          : authority.requiredTier === "DIRECTOR_ONLY"
           ? "This document was counted by an Auditor — only Director can reopen it."
           : "Only an Auditor or Director can reopen this document.",
       );
@@ -1385,7 +1421,9 @@ export async function postDifferencesHandler(
         ctx,
         "PI_POST_AUTHORITY_REQUIRED",
         403,
-        authority.requiredTier === "DIRECTOR_ONLY"
+        authority.selfApproval
+          ? "You entered a count on this document — someone else must post it."
+          : authority.requiredTier === "DIRECTOR_ONLY"
           ? "This document was counted by an Auditor — only Director can post it."
           : "Only an Auditor or Director can post this document.",
       );
@@ -1648,7 +1686,7 @@ export async function getMaterialLocationBreakdownHandler(
     }
 
     const { data: locationRows } = locationIds.length
-      ? await serviceRoleClient.schema("erp_master").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
+      ? await serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
       : { data: [] as JsonRecord[] };
     const locationMap = new Map(((locationRows ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
 
@@ -1760,7 +1798,7 @@ export async function listPIDifferencesHandler(
 
     const [companyRows, locationRows, materialRows] = await Promise.all([
       companyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds) : Promise.resolve({ data: [] as JsonRecord[] }),
-      locationIds.length ? serviceRoleClient.schema("erp_master").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[] }),
+      locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       matIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type").in("id", matIds) : Promise.resolve({ data: [] as JsonRecord[] }),
     ]);
     const companyMap = new Map(((companyRows.data ?? []) as JsonRecord[]).map((c) => [String(c.id), c]));
@@ -1795,6 +1833,14 @@ export async function listPIDifferencesHandler(
           ? derivePIMovementType(String(item.stock_type), differenceQty)
           : null,
         posted: Boolean(item.posted_stock_document_id),
+        // Found live 2026-08-14 — a CANCELLED document's items never posted (cancel is only
+        // allowed from OPEN, before posting), but `posted` alone reads as "Pending" forever,
+        // which misleadingly implies it will eventually post. Give the caller the real status.
+        status_label: item.posted_stock_document_id
+          ? "POSTED"
+          : toUpperTrimmedString(doc?.status) === "CANCELLED"
+          ? "CANCELLED"
+          : "PENDING",
       };
     });
 

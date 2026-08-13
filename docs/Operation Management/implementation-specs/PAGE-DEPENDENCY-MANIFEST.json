@@ -3167,7 +3167,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx",
-    "dependencyCount": 8,
+    "dependencyCount": 9,
     "deps": [
       {
         "fn": "getPIDocument",
@@ -3182,15 +3182,15 @@
         "method": "POST",
         "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/items",
         "resourceCode": "PROC_PI_LIST",
-        "action": "WRITE",
+        "action": "EDIT",
         "skipAcl": false
       },
       {
-        "fn": "enterPICount",
-        "method": "PUT",
-        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/count",
+        "fn": "removePIItem",
+        "method": "DELETE",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}",
         "resourceCode": "PROC_PI_LIST",
-        "action": "WRITE",
+        "action": "EDIT",
         "skipAcl": false
       },
       {
@@ -3202,33 +3202,63 @@
         "skipAcl": false
       },
       {
+        "fn": "submitPIDForApproval",
+        "method": "POST",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/submit",
+        "resourceCode": "PROC_PI_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "reopenPIDocument",
+        "method": "POST",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/reopen",
+        "resourceCode": "PROC_PI_LIST",
+        "action": "APPROVE",
+        "skipAcl": false
+      },
+      {
+        "fn": "cancelPIDocument",
+        "method": "POST",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/cancel",
+        "resourceCode": "PROC_PI_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
         "fn": "postPIDifferences",
         "method": "POST",
         "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/post",
-        "resourceCode": "UNRESOLVED",
-        "action": "?",
-        "skipAcl": null
-      },
+        "resourceCode": "PROC_PI_LIST",
+        "action": "APPROVE",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/inventory/PIDocumentCountEntryPage.jsx",
+    "dependencyCount": 3,
+    "deps": [
       {
-        "fn": "getDocumentFlow",
+        "fn": "getPIDocument",
         "method": "GET",
-        "path": "/api/procurement/document-flow",
-        "resourceCode": "PROC_PO_LIST",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}",
+        "resourceCode": "PROC_PI_LIST",
         "action": "VIEW",
         "skipAcl": false
       },
       {
-        "fn": "listStorageLocations",
-        "method": "GET",
-        "path": "/api/om/storage-locations?${query.toString()}",
-        "resourceCode": "UNRESOLVED",
-        "action": "?",
-        "skipAcl": true
+        "fn": "enterPICount",
+        "method": "PUT",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/count",
+        "resourceCode": "PROC_PI_LIST",
+        "action": "WRITE",
+        "skipAcl": false
       },
       {
-        "fn": "listMaterials",
+        "fn": "listMaterialUomConversionsForProcurement",
         "method": "GET",
-        "path": "/api/om/materials?${params.toString()}",
+        "path": "/api/procurement/materials/uom-conversion",
         "resourceCode": "OM_MATERIAL_LIST",
         "action": "VIEW",
         "skipAcl": false
@@ -3237,7 +3267,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/inventory/PIDocumentListPage.jsx",
-    "dependencyCount": 3,
+    "dependencyCount": 1,
     "deps": [
       {
         "fn": "listPIDocuments",
@@ -3246,13 +3276,27 @@
         "resourceCode": "PROC_PI_LIST",
         "action": "VIEW",
         "skipAcl": false
-      },
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/inventory/PIDocumentCreatePage.jsx",
+    "dependencyCount": 3,
+    "deps": [
       {
         "fn": "createPIDocument",
         "method": "POST",
         "path": "/api/procurement/physical-inventory",
         "resourceCode": "PROC_PI_LIST",
-        "action": "WRITE",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "getPIMaterialLocationBreakdown",
+        "method": "GET",
+        "path": "/api/procurement/physical-inventory-material-locations",
+        "resourceCode": "PROC_PI_LIST",
+        "action": "EDIT",
         "skipAcl": false
       },
       {
@@ -3262,6 +3306,34 @@
         "resourceCode": "UNRESOLVED",
         "action": "?",
         "skipAcl": true
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/inventory/PIDocumentPrintPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "getPIDocument",
+        "method": "GET",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}",
+        "resourceCode": "PROC_PI_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/inventory/PIDifferenceReportPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "listPIDifferences",
+        "method": "GET",
+        "path": "/api/procurement/physical-inventory-differences",
+        "resourceCode": "PROC_PI_DIFFERENCES",
+        "action": "VIEW",
+        "skipAcl": false
       }
     ]
   },
@@ -3865,7 +3937,7 @@
         "fn": "listMaterialUomConversionsForProcurement",
         "method": "GET",
         "path": "/api/procurement/materials/uom-conversion",
-        "resourceCode": "PROC_PO_LIST",
+        "resourceCode": "OM_MATERIAL_LIST",
         "action": "VIEW",
         "skipAcl": false
       },
@@ -3951,7 +4023,7 @@
         "fn": "listMaterialUomConversionsForProcurement",
         "method": "GET",
         "path": "/api/procurement/materials/uom-conversion",
-        "resourceCode": "PROC_PO_LIST",
+        "resourceCode": "OM_MATERIAL_LIST",
         "action": "VIEW",
         "skipAcl": false
       },
@@ -5311,7 +5383,7 @@
         "fn": "listMaterialUomConversionsForProcurement",
         "method": "GET",
         "path": "/api/procurement/materials/uom-conversion",
-        "resourceCode": "PROC_PO_LIST",
+        "resourceCode": "OM_MATERIAL_LIST",
         "action": "VIEW",
         "skipAcl": false
       },

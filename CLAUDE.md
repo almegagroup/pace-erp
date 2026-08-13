@@ -474,6 +474,27 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 >    false alarm প্রমাণিত হয়েছে (unscoped diagnostic query-র ভুল, mechanism ঠিকই ছিল)। একটা real
 >    gap পাওয়া গেছে ও fix করা হয়েছে — `getMaterialLocationBreakdownHandler` registry-তে EDIT-tier
 >    গেটেড থাকলেও ভিতরে শুধু membership-check করছিল, action-tier check না — এখন ঠিক করা।
+>    **Prod ACL rollout (2026-08-14, PR #238 merge-এর পরে, feasibility §119.18):** business owner
+>    concrete role rule দিলেন — **Create/Edit (MI01/02) = L1/L2_AUDITOR** (প্রথমে ভুল করে
+>    Manager বলা হয়েছিল, পরে business owner নিজেই সংশোধন করেন — prod-এর pre-existing
+>    `CAP_PI_AUDITOR` grant already এটাই করছিল, তাই net change শূন্য এই action-এ), Count
+>    (MI04/05) = up to L3_MANAGER + Auditor (already ঠিক ছিল, touch করা হয়নি), Post (MI07) =
+>    Auditor/Director escalating (APPROVE-এর blanket `CAP_PROC_INVENTORY` grant tighten করা
+>    হয়েছে, শুধু `CAP_PI_AUDITOR` থাকবে), Difference Report (IN07) = সবার জন্য open — সব ৪টা
+>    active company-তে (CMP003/006/010/014) verify করা হয়েছে।
+>    **দুটো real bug পাওয়া গেছে ও fix করা হয়েছে (কোড-লেভেল, dev-এ commit+push, prod-এ পৌঁছাতে
+>    PR merge to main বাকি):** (১) `material_uom_conversion` endpoint ভুল করে `PROC_PO_LIST`-এ
+>    gated ছিল (আসলে material-master data), PID+Opening Stock দুটোতেই silently 403 করছিল —
+>    `OM_MATERIAL_LIST`-এ ঠিক করা হয়েছে। (২) `resolvePidActionAuthority()`-এর escalating
+>    maker-checker শুধু **role** তুলনা করত, কখনো caller আর counter একই **person** কিনা চেক করত
+>    না — DIRECTOR role-inheritance দিয়ে count-entry-ও পায় বলে, যেকোনো Director (P0076/ACL-MASTER
+>    সহ) নিজে count করে নিজেই post করে ফেলতে পারতো (pure self-approval)। Fix করার পরে business
+>    owner-এর প্রশ্নে ধরা পড়ে এই fix বাকি system-এর established pattern
+>    (`_shared/approval_override.ts`-এর `hasBlanketApprovalOverride()` — PO-তে DIRECTOR/ACL-MASTER
+>    ইচ্ছাকৃতভাবে self-approve করতে পারে) থেকে বিপরীত ছিল — business owner-এর সিদ্ধান্তে PID-কেও
+>    সেই একই pattern-এ মেলানো হয়েছে (SA/GA/DIRECTOR/ACL-MASTER সবাই bypass পায়, বাকি সবার জন্য
+>    strict block বহাল)।
+>    CMP010-এ কোনো PID capability wired নেই (pre-existing gap, touch করা হয়নি) — flagged।
 > 2. **MTEST + ZTEST redesign** — অনেক change আছে (business owner এর ভাষায়), scope এখনো
 >    detail করা হয়নি — redesign session-এ locked হবে — **➡️ এখন এটাই পরের কাজ**
 > 3. **RM Sale Module Revisit** — test, fixes, finalize (§113-এর SO/STO/PGI/Invoice

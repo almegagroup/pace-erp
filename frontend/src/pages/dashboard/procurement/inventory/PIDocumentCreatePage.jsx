@@ -186,17 +186,19 @@ export default function PIDocumentCreatePage() {
             <div className="md:col-span-1 xl:col-span-2">
               <TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={setCompanyId} label="Company" />
             </div>
-            <ErpDenseFormRow label="Mode" required>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              Mode <span className="text-rose-500">*</span>
               <select
                 value={mode}
                 onChange={(event) => { setMode(event.target.value); setStagedItems([]); setBreakdown(null); }}
                 className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
-                <option value="LOCATION_WISE">LOCATION_WISE (sweep one location)</option>
-                <option value="ITEM_WISE">ITEM_WISE (pick materials, any location)</option>
+                <option value="LOCATION_WISE">Location-wise</option>
+                <option value="ITEM_WISE">Item-wise</option>
               </select>
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="Count Date" required>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              Count Date <span className="text-rose-500">*</span>
               <input
                 type="date"
                 value={countDate}
@@ -207,17 +209,19 @@ export default function PIDocumentCreatePage() {
                 }}
                 className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="Posting Date" required>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              Posting Date <span className="text-rose-500">*</span>
               <input
                 type="date"
                 value={postingDate}
                 onChange={(event) => setPostingDate(event.target.value)}
                 className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
-            </ErpDenseFormRow>
+            </label>
             {mode === "LOCATION_WISE" ? (
-              <ErpDenseFormRow label="Storage Location" required>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700 xl:col-span-2">
+                Storage Location <span className="text-rose-500">*</span>
                 <select
                   value={storageLocationId}
                   onChange={(event) => setStorageLocationId(event.target.value)}
@@ -228,28 +232,29 @@ export default function PIDocumentCreatePage() {
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
-              </ErpDenseFormRow>
+              </label>
             ) : null}
           </div>
           <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <ErpDenseFormRow label="Notes">
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              Notes
               <textarea
                 value={notes}
                 onChange={(event) => setNotes(event.target.value)}
-                className="min-h-[60px] w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                className="min-h-[60px] w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm font-normal text-slate-900 outline-none focus:border-sky-500"
               />
-            </ErpDenseFormRow>
+            </label>
             <div className="flex items-end">
-              <label className="flex items-center gap-2 text-sm text-slate-700">
+              <label className="flex items-start gap-2 text-sm text-slate-700">
                 <input
                   type="checkbox"
                   checked={isOpeningStockSource}
                   onChange={(event) => setIsOpeningStockSource(event.target.checked)}
-                  className="h-4 w-4"
+                  className="mt-0.5 h-4 w-4"
                 />
                 <span>
-                  <span className="font-semibold">Opening Stock Source</span> — §119.13: Posting Date+1 becomes
-                  the next period&apos;s official Opening Stock reference for every item here, once Posted.
+                  <span className="font-semibold">Opening Stock Source</span> — once posted, this document's
+                  count becomes the official Opening Stock reference for the next period.
                 </span>
               </label>
             </div>
@@ -287,7 +292,7 @@ export default function PIDocumentCreatePage() {
                           />
                         ),
                       },
-                      { key: "storage_location_name", label: "Location", width: "220px", render: (row) => `${row.storage_location_code ?? row.storage_location_id} — ${row.storage_location_name ?? ""}` },
+                      { key: "storage_location_name", label: "Location", width: "220px", render: (row) => (row.storage_location_code || row.storage_location_name ? `${row.storage_location_code ?? "—"} — ${row.storage_location_name ?? "—"}` : "—") },
                       { key: "stock_type", label: "Stock Type", width: "140px" },
                       { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
                       { key: "packing_order_id", label: "Packing PO", width: "110px", render: (row) => (row.packing_order_id ? "Linked" : "—") },

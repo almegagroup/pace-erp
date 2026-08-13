@@ -565,6 +565,18 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // §119.4 — MI04 dedicated blind count-entry page, companion (no menu_master row, uses
+  // PROC_PI_LIST's own WRITE-tier ACL resource — same as the count-entry endpoint itself).
+  // Split out 2026-08-14 from the Detail page so the review screen's Book Qty/Difference
+  // columns are never visible during actual blind count entry.
+  PROC_PI_COUNT_ENTRY: {
+    screen_code: "PROC_PI_COUNT_ENTRY",
+    route: "/dashboard/procurement/physical-inventory/:id/count",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   // §119.4/§119.15 — MI21 print/count-sheet, companion.
   PROC_PI_PRINT: {
     screen_code: "PROC_PI_PRINT",
