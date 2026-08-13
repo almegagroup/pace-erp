@@ -460,6 +460,21 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 
 ## 6. Next Actions
 
+> ### 📍 সবচেয়ে নতুন — 2026-08-13 session handoff, নতুন session এটা সবার আগে পড়ো
+>
+> পূর্ণ handoff brief: **`docs/SESSION-HANDOFF-BRIEF-2026-08-13.md`** — 13 bug pattern
+> status, company-scope write-ACL Phase 2 progress (17/127 handler done, 2টা real live
+> ACL bug পাওয়া+ঠিক করা হয়েছে — pattern: resourceCode route-registry-তে ঠিকই আছে কিন্তু
+> `acl.menu_master`-এ কখনো provision হয়নি, dev-এ admin-only user দিয়ে ধরা পড়ে না),
+> SU24-এর অবস্থা, OM Implementation Log pointer, ACL doc set, feasibility doc-এর locked
+> pending sequence (Dispatch/L5 → Costing/AP-Reco → Return → PR19 extension), আর পুরো
+> consolidated pending-task checklist। **এই session-এ (2026-08-12/13) যা শেষ হয়েছে, নতুন
+> করে re-design/re-verify কোরো না:** SAP-style COR6 correction mechanism (Process PO
+> Verify PR12 + Packing PO Final PR11 — magnitude qty + user-picked movement_type
+> dropdown, auto-sign-inference বাদ, real prod data দিয়ে verified), CSN Tracker-এর ৩টা bug
+> (GRN→CSN `invoice_date` sync, Domestic Transporter column mismatch, GED/GRD hard-lock
+> → one-time confirm-at-save-এ relax)।
+>
 > ### 📍 বর্তমান অবস্থা (2026-07-25 আপডেট) — নতুন session এটা আগে পড়ো
 >
 > **go-live: 1 July 2026 (Liquid — Admix/Hypershot/IWC)।**
