@@ -18286,6 +18286,28 @@ bypass condition-এ `isCompanyScopeAdminBypass()` (SA/GA)-এর পাশা�
 (SA/GA/DIRECTOR/ACL-MASTER)-ও যোগ করা হয়েছে — matching PO-র ঠিক একই semantics, self-approval-block
 সহ পুরোটাই bypass হয় এই role/work-context-দের জন্য। `deno check` + সব ৯টা CI guard পুনরায় clean।
 
+**🔴 বড় design correction, live click-through testing-এ ধরা পড়ে (2026-08-14):** business owner
+সরাসরি bug ধরিয়ে দিলেন — Detail page-এ MI04 (count entry) inline করা ছিল, আর ঠিক পাশেই **Book
+Qty column দেখাচ্ছিল** — এটা SAP-এর blind-count principle সরাসরি ভাঙে (physical count নেওয়ার
+পুরো উদ্দেশ্যই independent verification; system-এর expected value দেখিয়ে দিলে counter সেটাই
+copy করে বসিয়ে দিতে পারে, audit control-ই অকেজো হয়ে যায়)। PIDocumentPrintPage.jsx (MI21, paper
+count sheet)-এ এই principle-টা আমি ঠিকই লিখেছিলাম ("book quantity intentionally hidden") কিন্তু
+digital MI04 entry-তে apply করতে ভুলে গিয়েছিলাম — inconsistency।
+
+**Fix — MI04 আলাদা page-এ split করা হলো:**
+- নতুন `PIDocumentCountEntryPage.jsx` (route `.../physical-inventory/:id/count`, companion
+  screen `PROC_PI_COUNT_ENTRY`, একই `PROC_PI_LIST:WRITE` ACL resource — কোনো নতুন backend route/
+  ACL লাগেনি) — শুধু Material/Batch/Location/Stock Type + blind physical-qty entry (UOM +
+  Zero Stock সহ)। Book Qty/Difference **কোথাও নেই এই page-এ**।
+- `PIDocumentDetailPage.jsx` এখন শুধু review/oversight (MI02/MI03/MI07) — Book Qty + Difference
+  দেখায় (এখানে bias-এর ঝুঁকি নেই, কারণ item ইতিমধ্যে counted হয়ে গেছে), Physical Qty column
+  read-only, নতুন "Enter Counts" বাটন Count Entry page-এ পাঠায়। Recount (MI05) বাটন এখানেই থেকে
+  গেছে — এটা supervisor/auditor-এর decision (কোন item recount দরকার সেটা difference দেখেই
+  বোঝা যায়), তাই এখানে থাকাই সঠিক — recount trigger করলে item আবার "pending" হয়ে যায়, তারপর
+  আসল blind re-entry হয় Count Entry page দিয়েই।
+- Access/ACL অপরিবর্তিত (business owner-এর নির্দেশ অনুযায়ী) — WRITE tier যেভাবে আগে ছিল সেভাবেই।
+- `PAGE-DEPENDENCY-MANIFEST.json` আপডেট, SU24 রি-রান ক্লিন, সব ৯টা CI guard পুনরায় পাস।
+
 **⚠️ পুরনো/অজানা gap (touched নয়, flagged):** CMP010-এ কোনো work_context-এই PID-সংক্রান্ত কোনো
 capability wired নেই (CAP_PI_AUDITOR/CAP_PI_COUNT_ENTRY/এখন CAP_PI_MANAGER_EDIT সবই ০ row) —
 মানে CMP010-এ আজ কোনো non-SA/GA user PID access-ই পায় না। এটা এই session-এর আগে থেকেই ছিল, এই
