@@ -839,7 +839,7 @@ export async function getPIDHandler(
         ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type").in("id", materialIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       locationIds.length
-        ? serviceRoleClient.schema("erp_master").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
+        ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
     ]);
 
@@ -1672,7 +1672,7 @@ export async function getMaterialLocationBreakdownHandler(
     }
 
     const { data: locationRows } = locationIds.length
-      ? await serviceRoleClient.schema("erp_master").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
+      ? await serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
       : { data: [] as JsonRecord[] };
     const locationMap = new Map(((locationRows ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
 
@@ -1784,7 +1784,7 @@ export async function listPIDifferencesHandler(
 
     const [companyRows, locationRows, materialRows] = await Promise.all([
       companyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds) : Promise.resolve({ data: [] as JsonRecord[] }),
-      locationIds.length ? serviceRoleClient.schema("erp_master").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[] }),
+      locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       matIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type").in("id", matIds) : Promise.resolve({ data: [] as JsonRecord[] }),
     ]);
     const companyMap = new Map(((companyRows.data ?? []) as JsonRecord[]).map((c) => [String(c.id), c]));
