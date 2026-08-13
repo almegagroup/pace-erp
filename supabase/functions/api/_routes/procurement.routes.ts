@@ -162,12 +162,18 @@ import {
 } from "../_core/procurement/opening_stock.handlers.ts";
 import {
   addPIItemHandler,
+  cancelPIDHandler,
   createPIDHandler,
   enterCountHandler,
+  getMaterialLocationBreakdownHandler,
   getPIDHandler,
+  listPIDifferencesHandler,
   listPIDsHandler,
   postDifferencesHandler,
+  removePIItemHandler,
+  reopenPIDHandler,
   requestRecountHandler,
+  submitPIDForApprovalHandler,
 } from "../_core/procurement/physical_inventory.handlers.ts";
 import {
   createCHAHandler,
@@ -438,6 +444,12 @@ export async function dispatchProcurementRoutes(
       return await createPIDHandler(req, ctx);
     case "GET:/api/procurement/physical-inventory":
       return await listPIDsHandler(req, ctx);
+    // §119.15 — standalone, hyphenated path (not physical-inventory/:id) so it never
+    // collides with the :id pattern route below.
+    case "GET:/api/procurement/physical-inventory-differences":
+      return await listPIDifferencesHandler(req, ctx);
+    case "GET:/api/procurement/physical-inventory-material-locations":
+      return await getMaterialLocationBreakdownHandler(req, ctx);
     case "POST:/api/procurement/gate-entries":
       return await createGateEntryHandler(req, ctx);
     case "GET:/api/procurement/gate-entries":
@@ -775,12 +787,28 @@ export async function dispatchProcurementRoutes(
     return await addPIItemHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await removePIItemHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/count$/.test(pathname) && req.method === "PUT") {
     return await enterCountHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/recount$/.test(pathname) && req.method === "POST") {
     return await requestRecountHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/submit$/.test(pathname) && req.method === "POST") {
+    return await submitPIDForApprovalHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/reopen$/.test(pathname) && req.method === "POST") {
+    return await reopenPIDHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+    return await cancelPIDHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/physical-inventory\/[^/]+\/post$/.test(pathname) && req.method === "POST") {

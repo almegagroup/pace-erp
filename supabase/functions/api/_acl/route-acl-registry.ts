@@ -120,6 +120,13 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // WRITE action before this, which made the two-tier design unimplementable.
   "GET:/api/procurement/physical-inventory":          { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "VIEW"  },
   "POST:/api/procurement/physical-inventory":         { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT"  },
+  // §119.15 — MI20 IN07, own resourceCode (not PROC_PI_LIST) matching the IN02/IN03/PR21
+  // pattern: a separate cross-document report gets its own resource, "everyone" per §119.5,
+  // never shared with the document-lifecycle resource (bug pattern #6, §117.6's own note).
+  "GET:/api/procurement/physical-inventory-differences": { skipAcl: false, resourceCode: "PROC_PI_DIFFERENCES", action: "VIEW" },
+  // §119.12 — Create page (ITEM_WISE) material-location preview. Same EDIT tier as create
+  // itself (Auditor-only) since this is part of the Create flow, not a general report.
+  "GET:/api/procurement/physical-inventory-material-locations": { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT" },
 
   // ── Procurement: Opening Stock ────────────────────────────────────────────
   "GET:/api/procurement/opening-stock":               { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW"  },
@@ -1024,6 +1031,11 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT" } },
   },
   {
+    // §119.11 MI02 — item remove, same Auditor-only tier as item add.
+    pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+$/,
+    methods: { DELETE: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT" } },
+  },
+  {
     pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/count$/,
     methods: { PUT: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "WRITE" } },
   },
@@ -1032,16 +1044,25 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "WRITE" } },
   },
   {
-    // Route-registry guard (11-bug #8), verified 2026-08-06: the real
-    // dispatcher route is `/post` (see postDifferencesHandler in
-    // procurement.routes.ts) — `/post-differences` below has no matching
-    // dispatch at all (rename drift). Kept for now (guard's stale-entry
-    // report will flag it as unused); `/post` above is the real one.
-    pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/post$/,
+    // §119.6 — Submit for Approval is still the count-entry actor's own action; the
+    // Auditor/Director escalation only starts at Reopen/Post below.
+    pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/submit$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "WRITE" } },
+  },
+  {
+    // §119.5/§119.6 — base gate is APPROVE (Reopen authority = Post authority for that
+    // document); resolvePidActionAuthority() in the handler layers the escalating
+    // Auditor-vs-Director split on top of this.
+    pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/reopen$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "APPROVE" } },
   },
   {
-    pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/post-differences$/,
+    // §119.11 MI02 — document cancel, Auditor-only tier (same as create/item-add).
+    pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/cancel$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/post$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "APPROVE" } },
   },
 
