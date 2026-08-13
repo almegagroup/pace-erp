@@ -12,6 +12,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { ROLE } from "../../_shared/role_ladder.ts";
@@ -527,7 +528,12 @@ async function resolvePidActionAuthority(
   ctx: ProcurementHandlerContext,
   documentId: string,
 ): Promise<{ allowed: boolean; requiredTier: "AUDITOR_OR_DIRECTOR" | "DIRECTOR_ONLY"; selfApproval?: boolean }> {
-  if (isCompanyScopeAdminBypass(ctx)) {
+  // SA/GA (isCompanyScopeAdminBypass) plus DIRECTOR/ACL-MASTER (hasBlanketApprovalOverride) all
+  // get the same full bypass here that PO/STO/PTO already grant them (§_shared/approval_override.ts)
+  // -- including self-approval -- per business-owner decision 2026-08-14: PID intentionally matches
+  // the rest of the system's "ultimate authority can self-approve, no top-of-chain deadlock" design
+  // rather than being a stricter one-off exception.
+  if (isCompanyScopeAdminBypass(ctx) || hasBlanketApprovalOverride(ctx)) {
     return { allowed: true, requiredTier: "AUDITOR_OR_DIRECTOR" };
   }
 

@@ -18274,6 +18274,18 @@ post করতে পারতো না।) **Fix:** caller-এর `auth_user_i
 সব ৯টা CI guard পুনরায় clean। **এখনো dev-এ কমিট করা, prod-এ পৌঁছাতে migration লাগে না (pure
 code fix) কিন্তু PR merge to main লাগবে** — material_uom_conversion fix-এর মতোই।
 
+**⚠️ সংশোধন, একই দিনের পরের turn-এ — business owner-এর প্রশ্ন ("ACL master baki der jonno fullest
+access with self approval ache") ধরিয়ে দিলো self-approval fix-টা বাকি system-এর established
+pattern-এর সাথে বিপরীত ছিল।** খুঁজে দেখা গেল `_shared/approval_override.ts`-এর
+`hasBlanketApprovalOverride()` (SA/GA/DIRECTOR/ACL-MASTER work-context) PO-তে **ইচ্ছাকৃতভাবে**
+self-approval bypass করে (`po.handlers.ts`-এর নিজের comment: "DIRECTOR may create and approve
+their own PO; everyone else needs a different approver") — এই একই pattern likely STO/PTO-তেও।
+Business owner-কে দুটো option দেওয়া হলো (PID strict রাখা বনাম বাকি system-এর সাথে মেলানো) —
+**"বাকি system-এর সাথে মেলাই" বেছে নেওয়া হয়েছে।** Fix: `resolvePidActionAuthority()`-এর top-level
+bypass condition-এ `isCompanyScopeAdminBypass()` (SA/GA)-এর পাশাপাশি এখন `hasBlanketApprovalOverride()`
+(SA/GA/DIRECTOR/ACL-MASTER)-ও যোগ করা হয়েছে — matching PO-র ঠিক একই semantics, self-approval-block
+সহ পুরোটাই bypass হয় এই role/work-context-দের জন্য। `deno check` + সব ৯টা CI guard পুনরায় clean।
+
 **⚠️ পুরনো/অজানা gap (touched নয়, flagged):** CMP010-এ কোনো work_context-এই PID-সংক্রান্ত কোনো
 capability wired নেই (CAP_PI_AUDITOR/CAP_PI_COUNT_ENTRY/এখন CAP_PI_MANAGER_EDIT সবই ০ row) —
 মানে CMP010-এ আজ কোনো non-SA/GA user PID access-ই পায় না। এটা এই session-এর আগে থেকেই ছিল, এই
