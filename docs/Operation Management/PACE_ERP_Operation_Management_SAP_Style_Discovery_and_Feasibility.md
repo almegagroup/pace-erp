@@ -18206,6 +18206,70 @@ endpoint বলে impact সীমিত, কিন্তু registry-declared 
 inconsistent)। **Fix করা হয়েছে** — এখন `assertPIDCompanyActionAccess(ctx, companyId, "EDIT")`
 call করে, বাকি সব EDIT-tier PID handler-এর মতোই। `deno check` + সব ৯টা CI guard পুনরায় clean।
 
+### 119.18 — Prod ACL rollout (2026-08-14, PR #238 merged, business owner-directed role redesign)
+
+PR #238 merge হওয়ার সাথে সাথে `deploy-prod.yml` নিজে থেকে prod DB (`bsjpvkigpllichlknmah`)-তে সব
+৩টা migration apply করেছে (verified: `migration-integrity-check.mjs` → `in_sync: true`, সব নতুন
+schema object — `complete_pid_post()`, নতুন কলাম, `PID_ADJUSTMENT` txn type — live)।
+
+**Business owner-এর নতুন role rule (§119.5-এর escalating maker-checker-এর concrete role
+assignment, prod-এর জন্য explicit করে বলা হলো):**
+- Create/Edit (MI01/02) → **L1_MANAGER + L2_MANAGER**
+- Count/Recount (MI04/05) → **up to L3_MANAGER** (Plant Head) + L1/L2_AUDITOR, নিজের company scope-এ
+- Post (MI07) → escalating: normally Auditor-or-Director, counter নিজেই Auditor হলে **Director-only**
+  (কোড-লেভেলে `resolvePidActionAuthority()` আগে থেকেই সঠিক — যাচাই করা হয়েছে)
+- MI20/IN07 (Difference Report) → সবার জন্য open, IN02/IN03-এর মতো
+
+**Prod-এর discovery:** prod-এ আগে থেকেই একটা ভিন্ন, পুরনো ("Group 9 three-stage design",
+2026-08-06 — এই redesign-এর মাত্র এক সপ্তাহ আগে) capability structure ছিল — `CAP_PI_AUDITOR`
+(Auditor-only, create/edit **এবং** post দুটোই) + `CAP_PI_COUNT_ENTRY` (broad count-entry)। যাচাই
+করে দেখা গেল `CAP_PI_COUNT_ENTRY`-র membership (up to L3_MANAGER + L1/L2_AUDITOR) already নতুন
+rule-এর সাথে হুবহু মিলে যায় — কিন্তু EDIT (create/edit) prod-এ তখনো Auditor-only ছিল, নতুন rule-এর
+সাথে সরাসরি contradict করছিল, আর APPROVE-এ blanket `CAP_PROC_INVENTORY` (প্রায় সবাইকে) grant করা
+ছিল — bug-pattern #3 blanket-capability-leak।
+
+**যা করা হলো (MCP, prod, সব ৪টা active company: CMP003 v66/CMP006 v65/CMP010 v35/CMP014 v2):**
+1. নতুন capability `CAP_PI_MANAGER_EDIT` — শুধু L1_MANAGER+L2_MANAGER, `CAP_PI_COUNT_ENTRY`-র
+   একই work-context breadth mirror করে (company-wide, department-restricted না) — PROC_PI_LIST-এর
+   EDIT action-এ যোগ
+2. PROC_PI_LIST-এর APPROVE action থেকে blanket `CAP_PROC_INVENTORY` grant সরানো হলো — এখন শুধু
+   `CAP_PI_AUDITOR` (Auditor+Director)
+3. IN07 (`PROC_PI_DIFFERENCES`) নতুন registration — VIEW-এ `CAP_PROC_INVENTORY` +
+   `CAP_EVERYONE_REPORTS` (prod-এর নিজস্ব report-page pattern, dev-এর broad-only pattern না)
+4. সব পরিবর্তন version-scoped table-এও mirror করা হয়েছে (৪টা active version আগে থেকেই captured,
+   তাই `capture_acl_version_source()` no-op হতো — সরাসরি version table-এ insert)
+5. `generate_acl_snapshot()` চালানো হয়েছে ৪টা company-র জন্যই, `precomputed_acl_view` দিয়ে
+   role-level ফলাফল verify করা হয়েছে (APPROVE=শুধু DIRECTOR+L1_AUDITOR, EDIT=Manager tier +
+   inherited L3_MANAGER — role-rank inheritance-এর স্বাভাবিক ফলাফল, L3_MANAGER Plant Head হিসেবে
+   count-entry-ও করে তাই এটা expected)
+6. `rebuild_acl_menu_snapshot()` সব affected user-এর জন্য proactively চালানো হয়েছে (cache TTL-এর
+   জন্য অপেক্ষা না করে) — `erp_menu.menu_snapshot`-এ IN07 এখন ৪৭ জন user-এর জন্য, PROC_PI_LIST
+   ৭৩ row-এ visible
+
+**⚠️ পুরনো/অজানা gap (touched নয়, flagged):** CMP010-এ কোনো work_context-এই PID-সংক্রান্ত কোনো
+capability wired নেই (CAP_PI_AUDITOR/CAP_PI_COUNT_ENTRY/এখন CAP_PI_MANAGER_EDIT সবই ০ row) —
+মানে CMP010-এ আজ কোনো non-SA/GA user PID access-ই পায় না। এটা এই session-এর আগে থেকেই ছিল, এই
+session-এ তৈরি করা হয়নি, আর কোন department-এ PID access দেওয়া উচিত সেটা অনুমান করে ঠিক করিনি —
+আলাদাভাবে decide করা দরকার।
+
+**✅ Companion/dependency permission gap পাওয়া গেছে ও fix করা হয়েছে (real bug, PID-এর বাইরেও
+প্রভাব ফেলছিল):** PID Detail page-এর UOM-conversion helper (`listMaterialUomConversionsForProcurement`,
+`GET /api/procurement/materials/uom-conversion`) route-acl-registry.ts-এ ভুলভাবে `PROC_PO_LIST`
+resource-এ gated ছিল — অথচ handler-টা pure `erp_master.material_uom_conversion` lookup, কোনো
+PO reference বা company scope নেই। প্রমাণ পাওয়া গেছে prod-এ সরাসরি: PROC_PI_LIST:VIEW আছে এমন
+কয়েকজন user-এর PROC_PO_LIST:VIEW নেই — একই bug Opening Stock page-এও (pre-existing, PID-এর
+কারণে তৈরি হয়নি) already silently affect করছিল একজন user-কে। Fix: resourceCode
+`OM_MATERIAL_LIST`-এ বদলানো হয়েছে (`route-acl-registry.ts`, একই commit-এ
+`resource-code-domain-guard.mjs`-এর BASELINE-এ intentional cross-domain-share হিসেবে note করা
+হয়েছে, আর `PAGE-DEPENDENCY-MANIFEST.json`-এর ৪টা matching entry আপডেট করা হয়েছে)। **এটা code
+change — dev-এ commit+push করা হয়েছে, কিন্তু prod-এ পৌঁছাতে আরেকটা PR merge to main লাগবে।**
+
+**✅ PAGE-DEPENDENCY-MANIFEST.json স্টেল entry ঠিক করা হয়েছে:** PID-এর ৩টা নতুন page
+(Create/Print/Difference-Report) manifest-এ ছিলই না (SU24 script নিজেই ধরেছিল
+`routed_page_without_manifest_entry`), আর PIDocumentDetailPage/ListPage-এর পুরনো entry redesign-
+এর আগের action-tier বহন করছিল (addPIItem-কে এখনো WRITE দেখাচ্ছিল, EDIT না)। সব ঠিক করা হয়েছে,
+re-run-এ `routed_page_without_manifest_entry: []`।
+
 **Phase 6 — ইচ্ছাকৃতভাবে এই pass-এ করা হয়নি (business owner confirm, আলাদা focused pass হিসেবে
 পরে হবে):** §119.9-এ lock করা posting-block extension + atomic migration Process PO
 (`process_order.handlers.ts`-এর INT/MTEST/reverse path), Packing PO Final, PR19 (

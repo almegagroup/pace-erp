@@ -42,6 +42,13 @@ const BASELINE = new Map([
   // Production one — it's a helper endpoint *for* that page's SFG/INT entry flow,
   // not a separate feature. Documented inline at route-acl-registry.ts:304-305.
   ["PROC_OPENING_STOCK_LIST", "derived-opening-rate is a helper for IN05 Opening Stock's own entry flow, not a separate feature — see inline comment at the route"],
+  // GET:/api/procurement/materials/uom-conversion is a pure erp_master.material_uom_conversion
+  // lookup with no PO reference and no company scope in the handler — intentionally reused as-is
+  // by procurement (PID, Opening Stock) via the Material Master's own resource, same "common
+  // master-data screen shared across modules" shape this baseline already documents above. Was
+  // PROC_PO_LIST before 2026-08-14, which silently 403'd it for any PID/Opening-Stock user without
+  // PO List access — see inline comment at the route.
+  ["OM_MATERIAL_LIST", "material_uom_conversion lookup is material-master data, intentionally shared by procurement pages (PID, Opening Stock) via OM's own resource — see inline comment at the route"],
 ]);
 
 const src = readFileSync(REGISTRY_FILE, "utf8");
