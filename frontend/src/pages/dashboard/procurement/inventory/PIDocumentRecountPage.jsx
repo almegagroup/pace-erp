@@ -16,7 +16,7 @@ import { getActiveScreenContext, openScreen } from "../../../../navigation/scree
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import {
-  enterPICount,
+  changePICount,
   getPIDocument,
   listMaterialUomConversionsForProcurement,
   submitPIDForApproval,
@@ -145,7 +145,7 @@ export default function PIDocumentRecountPage() {
             physical_qty: physicalQty,
             ...(enteredMeta?.enteredUomCode ? { entered_uom_code: enteredMeta.enteredUomCode, entered_qty: enteredMeta.enteredQty } : {}),
           };
-      await enterPICount(detail.id, itemId, payload);
+      await changePICount(detail.id, itemId, payload);
       setNotice("Count updated.");
       await detailQuery.refetch();
     } catch (saveError) {

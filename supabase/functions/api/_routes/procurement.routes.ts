@@ -163,6 +163,7 @@ import {
 import {
   addPIItemHandler,
   cancelPIDHandler,
+  changeCountHandler,
   createPIDHandler,
   enterCountHandler,
   getMaterialLocationBreakdownHandler,
@@ -793,6 +794,11 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/count$/.test(pathname) && req.method === "PUT") {
     return await enterCountHandler(req, ctx);
+  }
+
+  // MI05 (IN09) — Change Count, §MI04-MI05-split-2026-08-14. Distinct route from MI04's /count.
+  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/change-count$/.test(pathname) && req.method === "PUT") {
+    return await changeCountHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/recount$/.test(pathname) && req.method === "POST") {
