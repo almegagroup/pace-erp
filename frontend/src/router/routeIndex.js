@@ -123,6 +123,15 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/:id"],
     ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/pgi/create"],
     ["/dashboard/procurement/physical-inventory",      "/dashboard/procurement/physical-inventory/:id"],
+    // §119.4 companion pages (MI01 Create, MI21 Print, MI04 Count Entry, MI05 Change Count) —
+    // none of these have their own menu_master row (they piggyback on PROC_PI_LIST's ACL
+    // resource, same as the :id Detail route above), so each needs its own explicit pair here
+    // or ProtectedBranchShell's route guard resets straight to the dashboard. Found live
+    // 2026-08-14 — Print silently redirected home because this was missing.
+    ["/dashboard/procurement/physical-inventory",      "/dashboard/procurement/physical-inventory/create"],
+    ["/dashboard/procurement/physical-inventory",      "/dashboard/procurement/physical-inventory/:id/print"],
+    ["/dashboard/procurement/physical-inventory",      "/dashboard/procurement/physical-inventory/:id/count"],
+    ["/dashboard/procurement/physical-inventory",      "/dashboard/procurement/physical-inventory/:id/recount"],
     ["/dashboard/procurement/planning",                "/dashboard/procurement/planning/report"],
 
     ["/dashboard/procurement/opening-stock", "/dashboard/procurement/opening-stock/:id"],
