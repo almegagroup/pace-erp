@@ -58,16 +58,18 @@ export default function PIDocumentPrintPage() {
       </div>
 
       {/* thead {display:table-header-group} makes this repeat on every printed page —
-          the "Header Freeze" requirement (§119.15). */}
+          the "Header Freeze" requirement (§119.15). Columns locked 2026-08-14: Sl. No, Item
+          Name, External Code, SLoc, Status (=stock type — distinguishes the multiple rows a
+          single material/location can have, one per Unrestricted/QI/Blocked, per §MI01-ignore-
+          zero-2026-08-14) + a blank fill-in column, since that's the actual point of the sheet. */}
       <table className="w-full border-collapse text-sm">
         <thead className="print-repeat-header">
           <tr className="border-b-2 border-slate-900">
-            <th className="border border-slate-400 px-2 py-1 text-left">Line</th>
-            <th className="border border-slate-400 px-2 py-1 text-left">Material</th>
-            <th className="border border-slate-400 px-2 py-1 text-left">Batch</th>
-            <th className="border border-slate-400 px-2 py-1 text-left">Location</th>
-            <th className="border border-slate-400 px-2 py-1 text-left">Stock Type</th>
-            <th className="border border-slate-400 px-2 py-1 text-left">UoM</th>
+            <th className="border border-slate-400 px-2 py-1 text-left">Sl. No</th>
+            <th className="border border-slate-400 px-2 py-1 text-left">Item Name</th>
+            <th className="border border-slate-400 px-2 py-1 text-left">External Code</th>
+            <th className="border border-slate-400 px-2 py-1 text-left">SLoc</th>
+            <th className="border border-slate-400 px-2 py-1 text-left">Status</th>
             <th className="border border-slate-400 px-2 py-1 text-left">Physical Count (fill in)</th>
           </tr>
         </thead>
@@ -75,11 +77,10 @@ export default function PIDocumentPrintPage() {
           {items.map((row) => (
             <tr key={row.id}>
               <td className="border border-slate-300 px-2 py-2">{row.line_number}</td>
-              <td className="border border-slate-300 px-2 py-2">{row.material_name ? `${row.material_name} (${row.material_pace_code ?? "—"})` : "—"}</td>
-              <td className="border border-slate-300 px-2 py-2">{row.batch_number ?? "—"}</td>
+              <td className="border border-slate-300 px-2 py-2">{row.material_name ?? "—"}</td>
+              <td className="border border-slate-300 px-2 py-2">{row.material_external_code ?? "—"}</td>
               <td className="border border-slate-300 px-2 py-2">{row.storage_location_code ?? "—"}</td>
               <td className="border border-slate-300 px-2 py-2">{row.stock_type}</td>
-              <td className="border border-slate-300 px-2 py-2">{row.base_uom_code}</td>
               <td className="border border-slate-300 px-2 py-2">&nbsp;</td>
             </tr>
           ))}

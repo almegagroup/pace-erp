@@ -288,6 +288,7 @@ async function getBookSnapshotsForMaterial(
   storageLocationId: string,
   materialId: string,
   material: JsonRecord,
+  ignoreZeroStock = true,
 ): Promise<Array<{ material_id: string; stock_type: string; book_qty: number; base_uom_code: string; batch_number: string | null; packing_order_id: string | null }>> {
   const materialType = toUpperTrimmedString(material.material_type);
   if (!PI_MATERIAL_TYPES.has(materialType)) return [];
@@ -380,7 +381,7 @@ async function getBookSnapshotsForMaterial(
   }
 
   return [...aggregates.values()]
-    .filter((entry) => entry.qty > 0)
+    .filter((entry) => (ignoreZeroStock ? entry.qty > 0 : true))
     .map((entry) => ({
       material_id: materialId,
       stock_type: entry.stock_type,
@@ -401,8 +402,11 @@ type ItemCandidate = {
   packing_order_id: string | null;
 };
 
-// LOCATION_WISE: every material with positive book stock at ONE location.
-async function getLocationWiseCandidates(companyId: string, storageLocationId: string): Promise<ItemCandidate[]> {
+// LOCATION_WISE: every material at ONE location, across every stock type that ever moved there
+// (§MI01-ignore-zero-2026-08-14) — ignoreZeroStock=true (default) keeps the original behavior
+// (only positive-book-qty combos); false includes net-zero combos too, so a full sweep can catch
+// phantom stock (system says 0, physically something's there) as well as confirm true zeros.
+async function getLocationWiseCandidates(companyId: string, storageLocationId: string, ignoreZeroStock = true): Promise<ItemCandidate[]> {
   const { data: ledgerMaterialRows, error } = await serviceRoleClient
     .schema("erp_inventory")
     .from("stock_ledger")
@@ -417,7 +421,7 @@ async function getLocationWiseCandidates(companyId: string, storageLocationId: s
   for (const materialId of materialIds) {
     const material = materialInfo.get(materialId);
     if (!material) continue;
-    const snaps = await getBookSnapshotsForMaterial(companyId, storageLocationId, materialId, material);
+    const snaps = await getBookSnapshotsForMaterial(companyId, storageLocationId, materialId, material, ignoreZeroStock);
     for (const snap of snaps) {
       results.push({ ...snap, storage_location_id: storageLocationId });
     }
@@ -605,6 +609,10 @@ export async function createPIDHandler(
     const mode = toUpperTrimmedString(body.mode);
     const notes = toTrimmedString(body.notes);
     const isOpeningStockSource = body.is_opening_stock_source === true;
+    // §MI01-ignore-zero-2026-08-14 — LOCATION_WISE only (ITEM_WISE already has its own explicit
+    // "found but not in system" zero-qty handling per row, §119.12). Defaults true (unchanged
+    // existing behavior) unless the caller explicitly opts into a full sweep.
+    const ignoreZeroStock = body.ignore_zero_stock !== false;
     const rawItems = Array.isArray(body.items) ? (body.items as JsonRecord[]) : [];
 
     if (!companyId || !countDate || !postingDate || !PID_MODES.has(mode)) {
@@ -622,7 +630,7 @@ export async function createPIDHandler(
       if (locScope.company_id !== companyId) {
         return piErrorResponse(req, ctx, "PI_CREATE_INVALID", 400, "storage_location_id does not belong to company_id.");
       }
-      candidates = await getLocationWiseCandidates(companyId, storageLocationId);
+      candidates = await getLocationWiseCandidates(companyId, storageLocationId, ignoreZeroStock);
     } else {
       const targetItems = rawItems
         .map((entry) => ({
@@ -843,7 +851,10 @@ export async function getPIDHandler(
     const packingOrderIds = [...new Set(items.map((i) => toTrimmedString(i.packing_order_id)).filter(Boolean))];
     const [materialRows, locationRows, packingOrderRows] = await Promise.all([
       materialIds.length
-        ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type").in("id", materialIds)
+        // §PID-print-2026-08-14 — external_code, for the Print (MI21) sheet's own "External
+        // Code" column. Per §83.3 this is reporting-only and RM/PM often has none — the
+        // frontend must fall back to "—", never assume every material carries it.
+        ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type, external_code").in("id", materialIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       locationIds.length
         ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
@@ -871,6 +882,7 @@ export async function getPIDHandler(
             material_pace_code: material?.pace_code ?? null,
             material_name: material?.material_name ?? null,
             material_type: material?.material_type ?? null,
+            material_external_code: material?.external_code ?? null,
             storage_location_code: location?.location_code ?? null,
             storage_location_name: location?.location_name ?? null,
             packing_order_number: packingOrder?.po_number ?? null,
@@ -1429,29 +1441,50 @@ export async function postDifferencesHandler(
       );
     }
 
+    // §MI07-batch-2026-08-14 — business owner directive: keep atomicity, but scope it to
+    // whichever items were selected in THIS Post action, not the whole document. item_ids is
+    // required and non-empty — the frontend always sends an explicit selection (select-all
+    // included), never an implicit "post everything".
+    const body = await parseBody(req);
+    const requestedItemIds = new Set(
+      Array.isArray(body.item_ids) ? (body.item_ids as unknown[]).map((v) => toTrimmedString(v)).filter(Boolean) : [],
+    );
+    if (requestedItemIds.size === 0) {
+      return piErrorResponse(req, ctx, "PI_POST_ITEM_IDS_REQUIRED", 400, "item_ids (the selected batch) is required and cannot be empty.");
+    }
+
     const items = await fetchPIItems(documentId);
     const companyId = toTrimmedString(document.company_id);
-    const piMatDoc = await generateMaterialDocNumber(companyId);
 
+    const unknownIds = [...requestedItemIds].filter((id) => !items.some((item) => String(item.id) === id));
+    if (unknownIds.length > 0) {
+      return piErrorResponse(req, ctx, "PI_POST_ITEM_IDS_INVALID", 400, "One or more item_ids do not belong to this document.");
+    }
+    const batchItems = items.filter((item) => requestedItemIds.has(String(item.id)));
+    const uncountedInBatch = batchItems.filter((item) => item.physical_qty === null || item.physical_qty === undefined);
+    if (uncountedInBatch.length > 0) {
+      return piErrorResponse(req, ctx, "PI_POST_BATCH_NOT_COUNTED", 409, "Every selected item must already have a physical count.");
+    }
+    const alreadyPostedInBatch = batchItems.filter((item) => Boolean(item.posted_stock_document_id));
+    if (alreadyPostedInBatch.length > 0) {
+      return piErrorResponse(req, ctx, "PI_POST_BATCH_ALREADY_POSTED", 409, "One or more selected items are already posted.");
+    }
+
+    const piMatDoc = await generateMaterialDocNumber(companyId);
     const materialIds = [...new Set(items.map((i) => toTrimmedString(i.material_id)))];
     const materialInfo = await getMaterialInfo(materialIds);
-    const rateKeys = items
+    const rateKeys = batchItems
       .filter((item) => (parseNullableNumber(item.difference_qty) ?? 0) !== 0)
       .map((item) => ({ materialId: toTrimmedString(item.material_id), slocId: toTrimmedString(item.storage_location_id), stockType: toUpperTrimmedString(item.stock_type) }));
     const rateMap = await fetchCurrentValuationRates(companyId, rateKeys);
 
     const movements: MovementSpec[] = [];
-    const zeroDiffItemIds: string[] = [];
 
-    for (const item of items) {
-      if (item.posted_stock_document_id) continue; // already posted (idempotency — shouldn't
-                                                     // happen given document-wide atomicity, kept
-                                                     // as a defensive no-op).
+    for (const item of batchItems) {
       const differenceQty = parseNullableNumber(item.difference_qty) ?? 0;
-      if (differenceQty === 0) {
-        zeroDiffItemIds.push(String(item.id));
-        continue;
-      }
+      if (differenceQty === 0) continue; // no ledger movement needed — block release for these
+                                          // is handled document-wide inside complete_pid_post,
+                                          // regardless of batch selection.
       const movementType = derivePIMovementType(String(item.stock_type), differenceQty);
       const rateKey = `${toTrimmedString(item.material_id)}|${toTrimmedString(item.storage_location_id)}|${toUpperTrimmedString(item.stock_type)}`;
       const rate = rateMap.get(rateKey) ?? 0;
@@ -1478,23 +1511,41 @@ export async function postDifferencesHandler(
     }
 
     // §119.14 — batch-tracked SFG/FG genealogy adjustment (reco-only, main RM/PM/INT stock
-    // untouched). Built here (TS does the arithmetic, same discipline as complete_process_po_
-    // verify/§107.8) and handed to complete_pid_post as prepared context.
-    const genealogy = await buildGenealogyAdjustments(companyId, String(document.document_number), items, materialInfo);
+    // untouched), scoped to this batch's items only. Built here (TS does the arithmetic, same
+    // discipline as complete_process_po_verify/§107.8) and handed to complete_pid_post.
+    const genealogy = await buildGenealogyAdjustments(companyId, String(document.document_number), batchItems, materialInfo);
 
     if (movements.length === 0 && genealogy.processOrderRecoRows.length === 0 && genealogy.packingOrderRecoRows.length === 0) {
-      // Every item was zero-diff and nothing to adjust — still must reach POSTED + release
-      // blocks. post_document requires >=1 movement, so post_document/complete_pid_post is
-      // still the vehicle, but there's nothing to post: fall back to a direct, single-purpose
-      // update (no ledger activity means no atomicity risk either).
-      const { error: blockDeleteError } = await serviceRoleClient
-        .schema("erp_inventory").from("physical_inventory_block").delete().eq("pi_document_id", documentId);
-      if (blockDeleteError) throw new Error("PI_BLOCK_RELEASE_FAILED");
-      const { error: docError } = await serviceRoleClient
-        .schema("erp_procurement").from("physical_inventory_document")
-        .update({ status: "POSTED", posted_by: ctx.auth_user_id, posted_at: new Date().toISOString() })
-        .eq("id", documentId);
-      if (docError) throw new Error("PI_POST_STATUS_UPDATE_FAILED");
+      // Selected batch was entirely zero-diff and nothing to adjust — still must release those
+      // items' blocks and check whether the whole document is now done. post_document requires
+      // >=1 movement, so there's nothing for it to post here — mirror complete_pid_post's own
+      // block-release + conditional-status logic directly (no ledger activity means no
+      // atomicity risk either).
+      const batchMaterialLocationBatch = batchItems.map((item) => ({
+        material_id: toTrimmedString(item.material_id),
+        storage_location_id: toTrimmedString(item.storage_location_id),
+        batch_number: item.batch_number ?? null,
+      }));
+      for (const combo of batchMaterialLocationBatch) {
+        let delQuery = serviceRoleClient
+          .schema("erp_inventory").from("physical_inventory_block").delete()
+          .eq("pi_document_id", documentId)
+          .eq("material_id", combo.material_id)
+          .eq("storage_location_id", combo.storage_location_id);
+        delQuery = combo.batch_number ? delQuery.eq("batch_number", combo.batch_number) : delQuery.is("batch_number", null);
+        const { error: delErr } = await delQuery;
+        if (delErr) throw new Error("PI_BLOCK_RELEASE_FAILED");
+      }
+      const { data: remaining } = await serviceRoleClient
+        .schema("erp_procurement").from("physical_inventory_item").select("id")
+        .eq("document_id", documentId).neq("difference_qty", 0).is("posted_stock_document_id", null).limit(1);
+      if (!remaining || remaining.length === 0) {
+        const { error: docError } = await serviceRoleClient
+          .schema("erp_procurement").from("physical_inventory_document")
+          .update({ status: "POSTED", posted_by: ctx.auth_user_id, posted_at: new Date().toISOString() })
+          .eq("id", documentId);
+        if (docError) throw new Error("PI_POST_STATUS_UPDATE_FAILED");
+      }
       return okResponse(await hydratePID(documentId), ctx.request_id, req);
     }
 
@@ -1505,7 +1556,6 @@ export async function postDifferencesHandler(
       postedBy: ctx.auth_user_id,
       context: {
         posted_by: ctx.auth_user_id,
-        zero_diff_item_ids: zeroDiffItemIds,
         process_order_reco_rows: genealogy.processOrderRecoRows,
         packing_order_reco_rows: genealogy.packingOrderRecoRows,
         process_order_header_updates: genealogy.processOrderHeaderUpdates,

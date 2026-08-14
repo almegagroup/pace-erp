@@ -3280,6 +3280,44 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/inventory/PIDocumentRecountPage.jsx",
+    "dependencyCount": 4,
+    "deps": [
+      {
+        "fn": "getPIDocument",
+        "method": "GET",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}",
+        "resourceCode": "PROC_PI_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "enterPICount",
+        "method": "PUT",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/count",
+        "resourceCode": "PROC_PI_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "submitPIDForApproval",
+        "method": "POST",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/submit",
+        "resourceCode": "PROC_PI_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "listMaterialUomConversionsForProcurement",
+        "method": "GET",
+        "path": "/api/procurement/materials/uom-conversion",
+        "resourceCode": "OM_MATERIAL_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/inventory/PIDocumentCreatePage.jsx",
     "dependencyCount": 3,
     "deps": [

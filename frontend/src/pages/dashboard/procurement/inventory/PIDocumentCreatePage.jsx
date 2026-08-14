@@ -45,6 +45,11 @@ export default function PIDocumentCreatePage() {
   const [postingDate, setPostingDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
   const [isOpeningStockSource, setIsOpeningStockSource] = useState(false);
+  // §MI01-ignore-zero-2026-08-14 — unchecked by default: a full physical sweep should include
+  // every material that ever moved through this location, even ones currently at zero book
+  // stock (that's exactly the case a physical count is meant to catch — phantom stock the
+  // system doesn't know about). Checking this trades completeness for a faster, leaner sweep.
+  const [ignoreZeroStock, setIgnoreZeroStock] = useState(false);
 
   // ITEM_WISE staging
   const [searchMaterialId, setSearchMaterialId] = useState("");
@@ -139,7 +144,7 @@ export default function PIDocumentCreatePage() {
         notes: notes.trim() || null,
         is_opening_stock_source: isOpeningStockSource,
         ...(mode === "LOCATION_WISE"
-          ? { storage_location_id: storageLocationId }
+          ? { storage_location_id: storageLocationId, ignore_zero_stock: ignoreZeroStock }
           : { items: stagedItems.map((row) => ({ material_id: row.material_id, stock_type: row.stock_type, storage_location_id: row.storage_location_id })) }),
       };
       const created = await createPIDocument(payload);
@@ -258,6 +263,25 @@ export default function PIDocumentCreatePage() {
                 </span>
               </label>
             </div>
+            {mode === "LOCATION_WISE" ? (
+              <div className="flex items-end md:col-span-2">
+                <label className="flex items-start gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={ignoreZeroStock}
+                    onChange={(event) => setIgnoreZeroStock(event.target.checked)}
+                    className="mt-0.5 h-4 w-4"
+                  />
+                  <span>
+                    <span className="font-semibold">Ignore Zero Stock</span> — skip materials with zero book
+                    quantity at this location. Unchecked (default) includes them too, so the count can catch
+                    stock the system doesn't know about, not just confirm what it already expects. A material
+                    can appear as multiple rows here — one per stock type (Unrestricted/QI/Blocked) currently
+                    or previously present at this location.
+                  </span>
+                </label>
+              </div>
+            ) : null}
           </div>
         </ErpSectionCard>
 

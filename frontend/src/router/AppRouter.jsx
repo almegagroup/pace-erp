@@ -176,6 +176,7 @@ import PIDocumentCreatePage from "../pages/dashboard/procurement/inventory/PIDoc
 import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
 import PIDocumentPrintPage from "../pages/dashboard/procurement/inventory/PIDocumentPrintPage.jsx";
 import PIDocumentCountEntryPage from "../pages/dashboard/procurement/inventory/PIDocumentCountEntryPage.jsx";
+import PIDocumentRecountPage from "../pages/dashboard/procurement/inventory/PIDocumentRecountPage.jsx";
 import PIDifferenceReportPage from "../pages/dashboard/procurement/inventory/PIDifferenceReportPage.jsx";
 import OpeningStockListPage from "../pages/dashboard/procurement/opening-stock/OpeningStockListPage.jsx";
 import OpeningStockDetailPage from "../pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx";
@@ -804,6 +805,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/physical-inventory/:id/count"
                     element={<PIDocumentCountEntryPage />}
+                  />
+                  <Route
+                    path="procurement/physical-inventory/:id/recount"
+                    element={<PIDocumentRecountPage />}
                   />
                   <Route
                     path="procurement/physical-inventory/:id"
