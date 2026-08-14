@@ -577,6 +577,17 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // §119.4 — MI05 dedicated Change Count screen, companion (same PROC_PI_LIST resource as MI04,
+  // WRITE tier). Only reachable once MI04 has locked (status COUNTED) — full re-edit + Submit
+  // for Approval, split out 2026-08-14.
+  PROC_PI_RECOUNT: {
+    screen_code: "PROC_PI_RECOUNT",
+    route: "/dashboard/procurement/physical-inventory/:id/recount",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   // §119.4/§119.15 — MI21 print/count-sheet, companion.
   PROC_PI_PRINT: {
     screen_code: "PROC_PI_PRINT",

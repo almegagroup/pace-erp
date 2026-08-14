@@ -1,12 +1,18 @@
 /*
  * PIDocumentDetailPage — MI02/MI03/MI07 review + oversight (§119.4). MI04 (blind count entry)
- * moved out to its own page, PIDocumentCountEntryPage.jsx, 2026-08-14 — the whole point of a
- * physical count is a blind comparison against the system's book quantity, so the screen where
- * someone types in what they physically found must never show that book quantity. This page is
- * the opposite: it's for reviewing what's already been counted (Book Qty/Difference are exactly
- * what a supervisor/auditor needs here to decide whether to Recount, Submit, Reopen, or Post) —
- * by the time an item has a physical_qty on this page, the blind-entry moment has already
- * happened, so showing the variance here is not a bias risk, it's the actual job of this screen.
+ * and MI05 (Change Count) live on their own pages, PIDocumentCountEntryPage.jsx and
+ * PIDocumentRecountPage.jsx — the whole point of a physical count is a blind comparison against
+ * the system's book quantity, so the screen where someone types in what they physically found
+ * must never show that book quantity, and correcting an already-made decision is a distinct step
+ * from making it. This page is pure review: Book Qty/Difference are exactly what a
+ * supervisor/auditor needs here to decide whether to Cancel, Reopen, or Post — by the time an
+ * item has a physical_qty on this page, the blind-entry moment has already happened, so showing
+ * the variance here is not a bias risk, it's the actual job of this screen.
+ *
+ * MI07 Post is batch-selective (§MI07-batch-2026-08-14, business-owner directive): the item grid
+ * becomes selectable once status is PENDING_APPROVAL — select any subset (or all) and Post; that
+ * selection posts atomically together, and the document can go through more than one Post action
+ * until every non-zero-difference item is posted.
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -30,8 +36,6 @@ import {
   postPIDifferences,
   removePIItem,
   reopenPIDocument,
-  requestPIRecount,
-  submitPIDForApproval,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
@@ -43,6 +47,7 @@ import {
 
 const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 const PI_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "SFG", "FG"]);
+const PAGE_SIZE = 25;
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -127,6 +132,8 @@ export default function PIDocumentDetailPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [reasonModal, setReasonModal] = useState(null); // "reopen" | "cancel" | null
+  const [selectedItemIds, setSelectedItemIds] = useState(() => new Set());
+  const [currentPage, setCurrentPage] = useState(0);
 
   const detailQuery = useQuery({
     queryKey: ["procurement", "pi-document-detail", id],
@@ -153,7 +160,7 @@ export default function PIDocumentDetailPage() {
     },
   });
 
-  const items = Array.isArray(detail?.items) ? detail.items : [];
+  const items = useMemo(() => (Array.isArray(detail?.items) ? detail.items : []), [detail]);
   const materialOptions = useMemo(
     () =>
       materials
@@ -169,29 +176,22 @@ export default function PIDocumentDetailPage() {
   const status = String(detail?.status || "").toUpperCase();
   const countedItems = items.filter((row) => row.physical_qty !== null && row.physical_qty !== undefined).length;
   const pendingItems = items.length - countedItems;
-  const canEditCounts = ["OPEN", "COUNTED"].includes(status);
+  // MI04 (Count Entry) only stays open while OPEN; MI05 (Change Count) only opens once COUNTED.
+  const canEnterCounts = status === "OPEN";
+  const canChangeCounts = status === "COUNTED";
   const canAddOrRemoveItems = status === "OPEN";
   const canCancel = status === "OPEN";
-  const canSubmit = status === "COUNTED";
   const canReopen = status === "PENDING_APPROVAL";
-  const canPost = status === "PENDING_APPROVAL";
+  // §MI07-batch — postable items: PENDING_APPROVAL, non-zero difference, not already posted.
+  const postableItems = useMemo(
+    () => (status === "PENDING_APPROVAL" ? items.filter((row) => Number(row.difference_qty ?? 0) !== 0 && !row.posted_stock_document_id) : []),
+    [items, status],
+  );
+  const canPost = status === "PENDING_APPROVAL" && postableItems.length > 0;
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const pagedItems = useMemo(() => items.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE), [items, currentPage]);
 
   const queryError = detailQuery.error?.message || materialQuery.error?.message || locationQuery.error?.message || "";
-
-  async function handleRecount(itemId) {
-    if (!detail?.id) return;
-    setSaving(true);
-    setError("");
-    try {
-      await requestPIRecount(detail.id, itemId);
-      setNotice("Recount requested.");
-      await detailQuery.refetch();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PI_RECOUNT_FAILED");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function handleRemoveItem(itemId) {
     if (!detail?.id) return;
@@ -222,28 +222,6 @@ export default function PIDocumentDetailPage() {
       await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PI_ITEM_ADD_FAILED");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleSubmitForApproval() {
-    if (!detail?.id) return;
-    const confirmed = await openActionConfirm({
-      eyebrow: "Physical Inventory",
-      title: "Submit for approval?",
-      message: "This locks counting — MI04/MI05 will be disabled until Reopened.",
-      confirmLabel: "Submit",
-    });
-    if (!confirmed) return;
-    setSaving(true);
-    setError("");
-    try {
-      await submitPIDForApproval(detail.id);
-      setNotice("Submitted for approval.");
-      await detailQuery.refetch();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PI_SUBMIT_FAILED");
     } finally {
       setSaving(false);
     }
@@ -283,21 +261,22 @@ export default function PIDocumentDetailPage() {
     }
   }
 
-  async function handlePostDifferences() {
-    if (!detail?.id) return;
-    // §119.9 — document-wide atomic: everything posts together or nothing does.
+  async function handlePostSelected() {
+    if (!detail?.id || selectedItemIds.size === 0) return;
+    const idsToPost = [...selectedItemIds];
     const confirmed = await openActionConfirm({
       eyebrow: "Physical Inventory",
-      title: "Post stock differences?",
-      message: "This posts every item's difference to the inventory ledger in one transaction. Cannot be undone.",
+      title: `Post ${idsToPost.length} selected item${idsToPost.length === 1 ? "" : "s"}?`,
+      message: "This posts the selected items' differences to the inventory ledger in one atomic transaction. Cannot be undone. Any items you don't select can be posted later in a separate batch.",
       confirmLabel: "Post",
     });
     if (!confirmed) return;
     setSaving(true);
     setError("");
     try {
-      await postPIDifferences(detail.id);
-      setNotice("PI differences posted.");
+      await postPIDifferences(detail.id, idsToPost);
+      setNotice(`${idsToPost.length} item(s) posted.`);
+      setSelectedItemIds(new Set());
       await detailQuery.refetch();
     } catch (saveError) {
       // §119.5 — authority errors (staff-vs-auditor-vs-director) surface here verbatim.
@@ -305,6 +284,21 @@ export default function PIDocumentDetailPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function toggleSelectAll() {
+    setSelectedItemIds((current) =>
+      current.size === postableItems.length ? new Set() : new Set(postableItems.map((row) => row.id)),
+    );
+  }
+
+  function toggleSelectItem(itemId) {
+    setSelectedItemIds((current) => {
+      const next = new Set(current);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
   }
 
   function openPrint() {
@@ -315,6 +309,11 @@ export default function PIDocumentDetailPage() {
   function openCountEntry() {
     openScreen(OPERATION_SCREENS.PROC_PI_COUNT_ENTRY.screen_code, { context: { id } });
     navigate(`/dashboard/procurement/physical-inventory/${encodeURIComponent(id)}/count`);
+  }
+
+  function openRecount() {
+    openScreen(OPERATION_SCREENS.PROC_PI_RECOUNT.screen_code, { context: { id } });
+    navigate(`/dashboard/procurement/physical-inventory/${encodeURIComponent(id)}/recount`);
   }
 
   return (
@@ -336,7 +335,8 @@ export default function PIDocumentDetailPage() {
           },
         },
         { key: "print", label: "Print Count Sheet", tone: "neutral", onClick: openPrint },
-        ...(canEditCounts ? [{ key: "count-entry", label: "Enter Counts", tone: "primary", onClick: openCountEntry }] : []),
+        ...(canEnterCounts ? [{ key: "count-entry", label: "Enter Counts (MI04)", tone: "primary", onClick: openCountEntry }] : []),
+        ...(canChangeCounts ? [{ key: "recount", label: "Change Counts (MI05)", tone: "primary", onClick: openRecount }] : []),
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
@@ -344,9 +344,14 @@ export default function PIDocumentDetailPage() {
           onClick: () => void Promise.all([detailQuery.refetch(), materialQuery.refetch(), locationQuery.refetch()]),
         },
         ...(canCancel ? [{ key: "cancel", label: "Cancel Document", tone: "danger", onClick: () => setReasonModal("cancel"), disabled: saving }] : []),
-        ...(canSubmit ? [{ key: "submit", label: saving ? "Submitting..." : "Submit for Approval", tone: "primary", onClick: () => void handleSubmitForApproval(), disabled: saving }] : []),
         ...(canReopen ? [{ key: "reopen", label: "Reopen", tone: "neutral", onClick: () => setReasonModal("reopen"), disabled: saving }] : []),
-        ...(canPost ? [{ key: "post", label: saving ? "Posting..." : "Post Differences", tone: "primary", onClick: () => void handlePostDifferences(), disabled: saving }] : []),
+        ...(canPost ? [{
+          key: "post",
+          label: saving ? "Posting..." : `Post Selected (${selectedItemIds.size})`,
+          tone: "primary",
+          onClick: () => void handlePostSelected(),
+          disabled: saving || selectedItemIds.size === 0,
+        }] : []),
       ]}
     >
       {reasonModal === "reopen" ? (
@@ -383,6 +388,14 @@ export default function PIDocumentDetailPage() {
             </div>
           </ErpSectionCard>
 
+          {status === "PENDING_APPROVAL" ? (
+            <div className="border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+              Select which items to post below (or Select All) — the selected batch posts atomically
+              together. You can post in more than one batch; the document is fully POSTED once every
+              non-zero-difference item has been posted.
+            </div>
+          ) : null}
+
           <ErpSectionCard
             eyebrow="Count Progress"
             title="Item counts"
@@ -390,6 +403,23 @@ export default function PIDocumentDetailPage() {
           >
             <ErpDenseGrid
               columns={[
+                ...(status === "PENDING_APPROVAL" ? [{
+                  key: "select",
+                  label: <input type="checkbox" checked={postableItems.length > 0 && selectedItemIds.size === postableItems.length} onChange={toggleSelectAll} className="h-4 w-4" />,
+                  width: "40px",
+                  render: (row) => {
+                    const isPostable = Number(row.difference_qty ?? 0) !== 0 && !row.posted_stock_document_id;
+                    if (!isPostable) return row.posted_stock_document_id ? <span className="text-[10px] text-emerald-700">Posted</span> : null;
+                    return (
+                      <input
+                        type="checkbox"
+                        checked={selectedItemIds.has(row.id)}
+                        onChange={() => toggleSelectItem(row.id)}
+                        className="h-4 w-4"
+                      />
+                    );
+                  },
+                }] : []),
                 { key: "line_number", label: "Line", width: "60px" },
                 {
                   key: "material_id",
@@ -411,8 +441,8 @@ export default function PIDocumentDetailPage() {
                   key: "physical_qty",
                   label: "Physical Qty",
                   width: "140px",
-                  // Read-only here on purpose — entry happens only on the blind Count Entry
-                  // (MI04) page, never on this review screen (see file header comment).
+                  // Read-only here on purpose — entry happens only on MI04/MI05, never on this
+                  // review screen (see file header comment).
                   render: (row) => (row.physical_qty === null || row.physical_qty === undefined ? <span className="text-slate-400">Not counted</span> : <span>{row.physical_qty}</span>),
                 },
                 {
@@ -429,28 +459,18 @@ export default function PIDocumentDetailPage() {
                 {
                   key: "actions",
                   label: "Actions",
-                  width: "160px",
+                  width: "100px",
                   render: (row) => {
                     const hasCount = row.physical_qty !== null && row.physical_qty !== undefined;
-                    const isPosted = Boolean(row.posted_stock_document_id);
-                    return (
-                      <div className="flex gap-1">
-                        {canEditCounts && !isPosted && hasCount ? (
-                          <button type="button" onClick={() => void handleRecount(row.id)} className="border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-900">
-                            Recount
-                          </button>
-                        ) : null}
-                        {canAddOrRemoveItems && !hasCount ? (
-                          <button type="button" onClick={() => void handleRemoveItem(row.id)} className="border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-900">
-                            Remove
-                          </button>
-                        ) : null}
-                      </div>
-                    );
+                    return canAddOrRemoveItems && !hasCount ? (
+                      <button type="button" onClick={() => void handleRemoveItem(row.id)} className="border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-900">
+                        Remove
+                      </button>
+                    ) : null;
                   },
                 },
               ]}
-              rows={items}
+              rows={pagedItems}
               rowKey={(row) => row.id}
               getRowProps={(row) => {
                 if (row.physical_qty === null || row.physical_qty === undefined) return {};
@@ -460,6 +480,13 @@ export default function PIDocumentDetailPage() {
               emptyMessage="No PI items found."
               maxHeight="460px"
             />
+            <div className="mt-2 flex items-center justify-between text-sm text-slate-600">
+              <span>Page {currentPage + 1} of {totalPages} ({items.length} items)</span>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setCurrentPage((page) => Math.max(0, page - 1))} disabled={currentPage === 0} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Prev</button>
+                <button type="button" onClick={() => setCurrentPage((page) => Math.min(totalPages - 1, page + 1))} disabled={currentPage >= totalPages - 1} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Next</button>
+              </div>
+            </div>
           </ErpSectionCard>
 
           {canAddOrRemoveItems ? (
@@ -494,4 +521,3 @@ export default function PIDocumentDetailPage() {
     </ErpScreenScaffold>
   );
 }
-

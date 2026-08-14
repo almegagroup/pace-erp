@@ -18332,6 +18332,58 @@ change — dev-এ commit+push করা হয়েছে, কিন্তু 
 এর আগের action-tier বহন করছিল (addPIItem-কে এখনো WRITE দেখাচ্ছিল, EDIT না)। সব ঠিক করা হয়েছে,
 re-run-এ `routed_page_without_manifest_entry: []`।
 
+### 119.19 — MI04/MI05/MI07 SAP-exact redesign + Ignore Zero Stock + Print columns (2026-08-14)
+
+Business owner-এর সাথে MI0x-by-MI0x SAP মিলিয়ে দেখার পর কয়েকটা real deviation পাওয়া গেল, সেগুলো
+এখন ঠিক করা হয়েছে:
+
+**MI04 — এখন সত্যিকারের "লক":** আগে MI04 (Count Entry) status OPEN বা COUNTED দুটোতেই খোলা থাকতো।
+এখন শুধু OPEN-এ খোলা — শেষ item-এ decision বসার সাথে সাথে status COUNTED হয়ে যায় আর MI04
+permanently বন্ধ হয়ে যায় (আবার খোলা যায় না)। এরপর যেকোনো change MI05 দিয়েই করতে হবে।
+
+**MI05 — নতুন dedicated page (`PIDocumentRecountPage.jsx`, route `.../:id/recount`):** শুধু
+status COUNTED-এ খোলে। সব item (Count + Zero Check দুটোই) Book Qty সহ দেখায় (এখানে bias-এর
+ঝুঁকি নেই, blind-entry মুহূর্ত আগেই পার হয়ে গেছে) — যেকোনো item-এর value বদলানো যায়, Count↔Zero
+দুদিকেই টগল করা যায়। **Submit for Approval এখন এই page থেকেই হয়**, Detail page থেকে সরানো
+হয়েছে। পুরনো "Recount trigger" (clear + blind re-entry) mechanism (`requestPIRecount`) আর UI-তে
+নেই — backend handler থেকে গেছে (touch করা হয়নি) কিন্তু কোথাও call হয় না এখন, কারণ MI05-এর direct-
+edit সেই দরকারটা মিটিয়ে দেয়।
+
+**MI07 — batch-selective posting:** আগে পুরো document একসাথে atomic post হতো। এখন item-level
+checkbox + select-all দিয়ে যেকোনো subset বেছে "Post Selected" করা যায় — সেই selected batch-টা
+নিজে atomic (সব-নাহলে-কিছুই-না), বাকি item পরে আলাদা batch-এ post করা যায়। Document তখনই পুরো
+POSTED হয় যখন সব non-zero-difference item post হয়ে গেছে। DB function
+`erp_procurement.complete_pid_post()` rewrite করা হয়েছে (migration
+`20260814110000_pid_batch_selective_post.sql`) — block release এখন per-item scoped (zero-diff
+item-দের block সবসময় release হয়, non-zero item শুধু নিজের batch post হলে), status conditional
+(সব done হলেই POSTED)। dev+prod দুটোতেই সরাসরি apply করা হয়েছে (pure function replace, low-risk)।
+
+**MI01 — "Ignore Zero Stock" checkbox (LOCATION_WISE mode only):** default **unchecked** — মানে
+default-এ zero book-qty material-ও PID row হিসেবে আসবে (true SAP audit completeness — system
+বলছে ০ কিন্তু আসলে stock থাকতে পারে, সেটাই তো physical count ধরার কথা)। Checked করলে পুরনো
+lean/fast behavior (শুধু positive book-qty)। Backend: `getBookSnapshotsForMaterial`-এর qty>0
+filter এখন conditional।
+
+**একই material+location-এ multiple stock-type row — confirm করা হয়েছে, already সঠিক ছিল:**
+business owner-এর প্রশ্ন ছিল একই material একই location-এ Unrestricted+Blocked+QA তিনটেতেই থাকলে
+৩টে আলাদা row হবে কিনা, MI04/05/07/20 জুড়ে সঠিকভাবে চলবে কিনা — code check করে confirm করা
+হয়েছে: `getBookSnapshotsForMaterial`-এর aggregation key stock_type-সহ, তাই already আলাদা row
+তৈরি হয় প্রতিটা stock_type-এর জন্য, আর `stock_type` column item-এর নিজস্ব field হিসেবে
+MI04/05/07/20 সব জায়গাতেই সঠিকভাবে বহন হয় — কোনো code change লাগেনি, শুধু verify করা হয়েছে।
+
+**MI21 Print — column set locked:** Sl. No, Item Name, External Code, SLoc, Status(=stock type,
+একই material+location-এর একাধিক row আলাদা করার জন্য) + blank fill-in column। `external_code`
+নতুন করে `getPIDHandler`-এর material bulk-resolve-এ যোগ করা হয়েছে (§83.3-এর "reporting-only,
+RM/PM-এ প্রায়ই থাকে না" rule অনুযায়ী "—" fallback সহ)।
+
+**🔴 আলাদা, real bug পাওয়া গেছে একই session-এ (routing, PID redesign-এরই অংশ হিসেবে introduce
+হয়েছিল, PR #238-এই ছিল):** `routeIndex.js`-এর `companionRoutePairs`-এ PID-এর Create/Print/Count-
+Entry/Recount route গুলোর একটাও register করা ছিল না — `ProtectedBranchShell`-এর route-guard
+এগুলোকে "access নেই" ধরে dashboard-এ reset করে দিচ্ছিল। শুধু Detail page (`/:id`) কাজ করছিল কারণ
+সেটাই একমাত্র আগে থেকে register করা ছিল। Live click-through-এ Print button ক্লিক করে dashboard-এ
+চলে যাওয়া থেকে ধরা পড়ে। Fix করা হয়েছে (commit `15479eac`, বাকি সবকিছুর আগে আলাদাভাবে push করা
+হয়েছে কারণ এটা basic navigation-ই ভেঙে দিচ্ছিল)।
+
 **Phase 6 — ইচ্ছাকৃতভাবে এই pass-এ করা হয়নি (business owner confirm, আলাদা focused pass হিসেবে
 পরে হবে):** §119.9-এ lock করা posting-block extension + atomic migration Process PO
 (`process_order.handlers.ts`-এর INT/MTEST/reverse path), Packing PO Final, PR19 (

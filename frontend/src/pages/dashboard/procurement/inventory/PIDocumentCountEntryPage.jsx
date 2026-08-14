@@ -8,7 +8,7 @@
  * the review/oversight page, shows those — but only after a count is already locked in, when
  * there's nothing left to bias).
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import UomQuantityInput from "../../../../components/forms/UomQuantityInput.jsx";
@@ -17,6 +17,8 @@ import ErpScreenScaffold, { ErpFieldPreview } from "../../../../components/templ
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { enterPICount, getPIDocument, listMaterialUomConversionsForProcurement } from "../procurementApi.js";
+
+const PAGE_SIZE = 25;
 
 function formatDate(value) {
   if (!value) return "—";
@@ -166,6 +168,7 @@ export default function PIDocumentCountEntryPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [currentPage, setCurrentPage] = useState(0);
 
   const detailQuery = useQuery({
     queryKey: ["procurement", "pi-document-detail", id],
@@ -173,11 +176,17 @@ export default function PIDocumentCountEntryPage() {
     enabled: Boolean(id),
   });
   const detail = detailQuery.data ?? null;
-  const items = Array.isArray(detail?.items) ? detail.items : [];
+  const items = useMemo(() => (Array.isArray(detail?.items) ? detail.items : []), [detail]);
   const status = String(detail?.status || "").toUpperCase();
-  const canEditCounts = ["OPEN", "COUNTED"].includes(status);
+  // MI04 only stays open while the document is OPEN (i.e. at least one item still undecided).
+  // The instant every item has a Count or Zero Check, status flips to COUNTED and this page
+  // locks — further changes go through MI05 (Change Count), not back through here.
+  const canEditCounts = status === "OPEN";
+  const isFullyLocked = status !== "OPEN";
   const countedItems = items.filter((row) => row.physical_qty !== null && row.physical_qty !== undefined).length;
   const pendingItems = items.length - countedItems;
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const pagedItems = useMemo(() => items.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE), [items, currentPage]);
 
   async function saveCount(itemId, physicalQty, isZeroStock, enteredMeta) {
     if (!detail?.id) return;
@@ -206,6 +215,11 @@ export default function PIDocumentCountEntryPage() {
     navigate(`/dashboard/procurement/physical-inventory/${encodeURIComponent(id)}`);
   }
 
+  function openRecount() {
+    openScreen(OPERATION_SCREENS.PROC_PI_RECOUNT.screen_code, { context: { id } });
+    navigate(`/dashboard/procurement/physical-inventory/${encodeURIComponent(id)}/recount`);
+  }
+
   const loading = detailQuery.isLoading;
 
   return (
@@ -232,11 +246,6 @@ export default function PIDocumentCountEntryPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          <div className="border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-            Count what you physically find. The system's book quantity is not shown here on
-            purpose — that's the whole point of a physical count.
-          </div>
-
           <div className="grid gap-4 xl:grid-cols-4">
             <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
             <ErpFieldPreview label="Count Date" value={formatDate(detail.count_date)} />
@@ -247,54 +256,78 @@ export default function PIDocumentCountEntryPage() {
             <ErpFieldPreview label="Progress" value={`Counted ${countedItems}/${items.length}`} caption={`Pending ${pendingItems}`} />
           </div>
 
-          {!canEditCounts ? (
+          {isFullyLocked ? (
             <div className="border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              This document's status is {status} — counts can no longer be entered here.
+              Every item already has a Count or Zero Check — MI04 is locked and permanently closed
+              for this document. {status === "COUNTED" ? (
+                <button type="button" onClick={openRecount} className="ml-1 font-semibold underline">
+                  Go to MI05 (Change Count) to make further changes.
+                </button>
+              ) : (
+                <>Status is {status}.</>
+              )}
             </div>
-          ) : null}
+          ) : (
+            <div className="border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+              Count what you physically find. The system's book quantity is not shown here on
+              purpose — that's the whole point of a physical count. This page stays open until
+              every item has a Count or Zero Check, then locks permanently.
+            </div>
+          )}
 
-          <ErpDenseGrid
-            columns={[
-              { key: "line_number", label: "Line", width: "60px" },
-              {
-                key: "material_id",
-                label: "Material",
-                render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
-              },
-              { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
-              { key: "stock_type", label: "Stock Type", width: "150px" },
-              {
-                key: "storage_location_id",
-                label: "Location",
-                width: "150px",
-                render: (row) => (row.storage_location_code || row.storage_location_name ? `${row.storage_location_code ?? "—"}` : "—"),
-              },
-              {
-                key: "physical_qty",
-                label: "Physical Count",
-                width: "300px",
-                render: (row) => {
-                  const cellProps = {
-                    row,
-                    canEdit: canEditCounts && !row.posted_stock_document_id,
-                    active: activeItemId === row.id,
-                    onActivate: () => setActiveItemId(row.id),
-                    onSave: (qty, isZero, meta) => void saveCount(row.id, qty, isZero, meta),
-                    saving,
-                  };
-                  // FG Scenario 2 — variable-fill packs (no material-level fixed conversion),
-                  // the packing order's own fill_qty_per_pack is the only signal for this.
-                  return row.packing_order_fill_qty_per_pack !== null && row.packing_order_fill_qty_per_pack !== undefined
-                    ? <PackCountCell {...cellProps} />
-                    : <BlindCountCell {...cellProps} />;
-                },
-              },
-            ]}
-            rows={items}
-            rowKey={(row) => row.id}
-            emptyMessage="No items on this PI document."
-            maxHeight="520px"
-          />
+          {!isFullyLocked ? (
+            <>
+              <ErpDenseGrid
+                columns={[
+                  { key: "line_number", label: "Line", width: "60px" },
+                  {
+                    key: "material_id",
+                    label: "Material",
+                    render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
+                  },
+                  { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
+                  { key: "stock_type", label: "Stock Type", width: "150px" },
+                  {
+                    key: "storage_location_id",
+                    label: "Location",
+                    width: "150px",
+                    render: (row) => (row.storage_location_code || row.storage_location_name ? `${row.storage_location_code ?? "—"}` : "—"),
+                  },
+                  {
+                    key: "physical_qty",
+                    label: "Physical Count",
+                    width: "300px",
+                    render: (row) => {
+                      const cellProps = {
+                        row,
+                        canEdit: canEditCounts && !row.posted_stock_document_id,
+                        active: activeItemId === row.id,
+                        onActivate: () => setActiveItemId(row.id),
+                        onSave: (qty, isZero, meta) => void saveCount(row.id, qty, isZero, meta),
+                        saving,
+                      };
+                      // FG Scenario 2 — variable-fill packs (no material-level fixed conversion),
+                      // the packing order's own fill_qty_per_pack is the only signal for this.
+                      return row.packing_order_fill_qty_per_pack !== null && row.packing_order_fill_qty_per_pack !== undefined
+                        ? <PackCountCell {...cellProps} />
+                        : <BlindCountCell {...cellProps} />;
+                    },
+                  },
+                ]}
+                rows={pagedItems}
+                rowKey={(row) => row.id}
+                emptyMessage="No items on this PI document."
+                maxHeight="520px"
+              />
+              <div className="flex items-center justify-between text-sm text-slate-600">
+                <span>Page {currentPage + 1} of {totalPages} ({items.length} items)</span>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setCurrentPage((page) => Math.max(0, page - 1))} disabled={currentPage === 0} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Prev</button>
+                  <button type="button" onClick={() => setCurrentPage((page) => Math.min(totalPages - 1, page + 1))} disabled={currentPage >= totalPages - 1} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Next</button>
+                </div>
+              </div>
+            </>
+          ) : null}
         </div>
       )}
     </ErpScreenScaffold>
