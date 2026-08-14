@@ -18376,6 +18376,36 @@ MI04/05/07/20 সব জায়গাতেই সঠিকভাবে বহ
 নতুন করে `getPIDHandler`-এর material bulk-resolve-এ যোগ করা হয়েছে (§83.3-এর "reporting-only,
 RM/PM-এ প্রায়ই থাকে না" rule অনুযায়ী "—" fallback সহ)।
 
+### 119.20 — MI04/MI05 truly standalone (IN08/IN09), same day follow-up
+
+User-এর প্রশ্নে ধরা পড়লো: MI04/MI05 আগে দুটো আলাদা page ছিল ঠিকই, কিন্তু **backend-এ কোনো পার্থক্যই
+ছিল না** — দুটোই একই endpoint (`PUT .../items/:id/count`) call করত, আর সেই handler শুধু "status
+OPEN অথবা COUNTED" check করত — কোন page থেকে call এসেছে সেটা backend জানতোই না। মানে আলাদা করাটা
+পুরোপুরি frontend-level UX ছিল, backend-enforced না — কেউ frontend bypass করে সরাসরি API call
+করলে MI04-এর lock বা MI05-এর "শুধু COUNTED-এ" rule কিছুই আটকাতো না।
+
+Business owner-এর সিদ্ধান্ত: SAP-এর মতোই সত্যিকারের আলাদা resource করা হবে, কিন্তু **authority
+অপরিবর্তিত থাকবে** ("ACL decision-এর কোনো change হবেনা")।
+
+**যা করা হলো:**
+- Backend `enterCountHandler` (MI04, IN08) এখন **শুধু status=OPEN**-এ কাজ করে (আগে OPEN+COUNTED
+  দুটোতেই করত)
+- নতুন `changeCountHandler` (MI05, IN09) — নতুন route `PUT .../items/:id/change-count`, **শুধু
+  status=COUNTED**-এ কাজ করে
+- `route-acl-registry.ts`-এ দুটো এখন আলাদা resourceCode (`PROC_PI_COUNT_ENTRY`, `PROC_PI_RECOUNT`),
+  আগে দুটোই `PROC_PI_LIST` ছিল
+- `PIDocumentRecountPage.jsx` এখন `changePICount()` (নতুন endpoint) call করে, আগের `enterPICount`
+  না
+- **DB/ACL registration — dev ও prod দুটো ভিন্ন mechanism, দুটোতেই সঠিকভাবে করা হয়েছে:**
+  - prod: capability-based (`CAP_PI_AUDITOR`+`CAP_PI_COUNT_ENTRY`+`CAP_PROC_INVENTORY`, PROC_PI_LIST-এর
+    WRITE থেকে হুবহু copy করে নতুন resource দুটোতে বসানো হয়েছে)
+  - dev: role_menu_permissions-based (`L1_AUDITOR`+`L1_USER`, একইভাবে copy করা)
+  - **যাচাই করা হয়েছে: `precomputed_acl_view`-এ তিনটে resource-ই (PROC_PI_LIST, PROC_PI_COUNT_ENTRY,
+    PROC_PI_RECOUNT) হুবহু একই সংখ্যক user (prod-এ ৩৬, dev-এ ২২) — authority সত্যিই অপরিবর্তিত
+    আছে, confirm করা হয়েছে, শুধু assume করা হয়নি**
+  - ACL-MASTER drift-check আবার চালানো হয়েছে (empty result, কোনো gap নেই)
+- tx_code: MI04=**IN08**, MI05=**IN09**
+
 **🔴 আলাদা, real bug পাওয়া গেছে একই session-এ (routing, PID redesign-এরই অংশ হিসেবে introduce
 হয়েছিল, PR #238-এই ছিল):** `routeIndex.js`-এর `companionRoutePairs`-এ PID-এর Create/Print/Count-
 Entry/Recount route গুলোর একটাও register করা ছিল না — `ProtectedBranchShell`-এর route-guard

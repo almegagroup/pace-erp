@@ -565,10 +565,11 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  // §119.4 — MI04 dedicated blind count-entry page, companion (no menu_master row, uses
-  // PROC_PI_LIST's own WRITE-tier ACL resource — same as the count-entry endpoint itself).
-  // Split out 2026-08-14 from the Detail page so the review screen's Book Qty/Difference
-  // columns are never visible during actual blind count entry.
+  // §MI04-MI05-split-2026-08-14 — MI04, tx_code IN08. Now a standalone ACL resource (own
+  // menu_master row) with its own endpoint (changeCountHandler is the MI05 sibling) — same
+  // WRITE-tier authority as before, business owner directive was "no ACL decision change",
+  // only the resource identity became real (matches SAP's genuinely separate MI04 transaction).
+  // Blind — never shows book_qty, that split happened 2026-08-14 too (see PIDocumentDetailPage).
   PROC_PI_COUNT_ENTRY: {
     screen_code: "PROC_PI_COUNT_ENTRY",
     route: "/dashboard/procurement/physical-inventory/:id/count",
@@ -577,9 +578,9 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  // §119.4 — MI05 dedicated Change Count screen, companion (same PROC_PI_LIST resource as MI04,
-  // WRITE tier). Only reachable once MI04 has locked (status COUNTED) — full re-edit + Submit
-  // for Approval, split out 2026-08-14.
+  // §MI04-MI05-split-2026-08-14 — MI05, tx_code IN09. Standalone ACL resource, own endpoint
+  // (PUT .../change-count). Only reachable once MI04 has locked (status COUNTED) — full re-edit
+  // + Submit for Approval.
   PROC_PI_RECOUNT: {
     screen_code: "PROC_PI_RECOUNT",
     route: "/dashboard/procurement/physical-inventory/:id/recount",

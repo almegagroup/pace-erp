@@ -1124,9 +1124,31 @@ export async function cancelPIDHandler(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
-// MI04/MI05 — count entry, recount
+// MI04 — blind count entry (IN08), MI05 — Change Count (IN09)
+// §MI04-MI05-split-2026-08-14 — business owner directive: make these genuinely separate SAP-
+// style transactions, not just two frontend pages calling the same endpoint. Each now has its
+// own route, its own status guard (MI04 strictly OPEN-only, MI05 strictly COUNTED-only — no
+// endpoint accepts both anymore), and its own ACL resource_code in route-acl-registry.ts. The
+// two share the same authority grants (business owner: "ACL decision-এর কোনো change হবেনা") —
+// only the resource identity is now real, not the access rules.
 // ═══════════════════════════════════════════════════════════════════════════════════════
 
+function buildCountUpdatePayload(ctx: ProcurementHandlerContext, body: JsonRecord): { isZeroStock: boolean; physicalQty: number | null; enteredUomCode: string | null; enteredQty: number | null } {
+  // §119.6 — Zero Stock checkbox: pure frontend mutual-exclusion, no new column. If the
+  // checkbox is ticked the frontend sends is_zero_stock:true and no physical_qty (or 0) —
+  // either way this always resolves to physical_qty=0.
+  const isZeroStock = body.is_zero_stock === true;
+  const physicalQty = isZeroStock ? 0 : parseNonNegativeNumber(body.physical_qty);
+  // Multi-UoM (§119.8): caller may send entered_qty+entered_uom_code (already converted to
+  // base UoM client-side via UomQuantityInput, same as IN05 Opening Stock) alongside
+  // physical_qty for audit.
+  const enteredUomCode = toTrimmedString(body.entered_uom_code) || null;
+  const enteredQty = parseNullableNumber(body.entered_qty);
+  return { isZeroStock, physicalQty, enteredUomCode, enteredQty };
+}
+
+// MI04 (IN08) — the blind first pass. Strictly OPEN only; once every item has a decision the
+// document flips to COUNTED and this endpoint refuses everything from then on (MI05 takes over).
 export async function enterCountHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -1136,15 +1158,7 @@ export async function enterCountHandler(
     const documentId = getDocumentIdFromPath(req);
     const itemId = getItemIdFromPath(req);
     const body = await parseBody(req);
-    // §119.6 — Zero Stock checkbox: pure frontend mutual-exclusion, no new column. If the
-    // checkbox is ticked the frontend sends is_zero_stock:true and no physical_qty (or 0) —
-    // either way this always resolves to physical_qty=0.
-    const isZeroStock = body.is_zero_stock === true;
-    const physicalQty = isZeroStock ? 0 : parseNonNegativeNumber(body.physical_qty);
-    // Multi-UoM (§119.8): caller may send entered_qty+entered_uom_code (already converted to
-    // base UoM client-side via UomQuantityInput, same as IN05) alongside physical_qty for audit.
-    const enteredUomCode = toTrimmedString(body.entered_uom_code) || null;
-    const enteredQty = parseNullableNumber(body.entered_qty);
+    const { isZeroStock, physicalQty, enteredUomCode, enteredQty } = buildCountUpdatePayload(ctx, body);
 
     if (!documentId || !itemId || physicalQty === null) {
       return piErrorResponse(req, ctx, "PI_COUNT_INVALID", 400, "Valid physical_qty >= 0 (or is_zero_stock) is required.");
@@ -1153,8 +1167,8 @@ export async function enterCountHandler(
     const document = await fetchPID(documentId);
     await assertPIDCompanyActionAccess(ctx, toTrimmedString(document.company_id), "WRITE");
     const status = toUpperTrimmedString(document.status);
-    if (!["OPEN", "COUNTED"].includes(status)) {
-      return piErrorResponse(req, ctx, "PI_COUNT_BLOCKED", 409, "Counts can only be entered while PI document is OPEN or COUNTED.");
+    if (status !== "OPEN") {
+      return piErrorResponse(req, ctx, "PI_COUNT_BLOCKED", 409, "MI04 count entry is only available while the document is OPEN — every item already has a decision, use MI05 (Change Count) instead.");
     }
 
     const { data: item, error: itemError } = await serviceRoleClient
@@ -1184,7 +1198,7 @@ export async function enterCountHandler(
         .from("physical_inventory_document")
         .update({ status: "COUNTED" })
         .eq("id", documentId)
-        .in("status", ["OPEN", "COUNTED"]);
+        .eq("status", "OPEN");
 
       if (documentError) {
         return piErrorResponse(req, ctx, "PI_COUNT_STATUS_UPDATE_FAILED", 500, "Unable to update PI document status.");
@@ -1194,6 +1208,58 @@ export async function enterCountHandler(
     return okResponse(await hydratePID(documentId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PI_COUNT_SAVE_FAILED";
+    const status = code === "PI_SCOPE_VIOLATION" ? 403 : code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
+    return piErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// MI05 (IN09) — Change Count. Strictly COUNTED only (MI04 must have already locked). Same write
+// shape as MI04 but a distinct endpoint/resource, matching real SAP's separate transaction.
+export async function changeCountHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const documentId = getDocumentIdFromPath(req);
+    const itemId = getItemIdFromPath(req);
+    const body = await parseBody(req);
+    const { isZeroStock: _isZeroStock, physicalQty, enteredUomCode, enteredQty } = buildCountUpdatePayload(ctx, body);
+
+    if (!documentId || !itemId || physicalQty === null) {
+      return piErrorResponse(req, ctx, "PI_COUNT_INVALID", 400, "Valid physical_qty >= 0 (or is_zero_stock) is required.");
+    }
+
+    const document = await fetchPID(documentId);
+    await assertPIDCompanyActionAccess(ctx, toTrimmedString(document.company_id), "WRITE");
+    const status = toUpperTrimmedString(document.status);
+    if (status !== "COUNTED") {
+      return piErrorResponse(req, ctx, "PI_CHANGE_COUNT_BLOCKED", 409, "MI05 Change Count is only available once the document is fully COUNTED (MI04 locked) — reopen it first if it is Pending Approval.");
+    }
+
+    const { data: item, error: itemError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("physical_inventory_item")
+      .update({
+        physical_qty: physicalQty,
+        counted_by: ctx.auth_user_id,
+        counted_at: new Date().toISOString(),
+        is_recount_requested: false,
+        ...(enteredUomCode ? { entered_uom_code: enteredUomCode, entered_qty: enteredQty } : {}),
+      })
+      .eq("id", itemId)
+      .eq("document_id", documentId)
+      .is("posted_stock_document_id", null)
+      .select("*")
+      .single();
+
+    if (itemError || !item) {
+      return piErrorResponse(req, ctx, "PI_CHANGE_COUNT_SAVE_FAILED", 500, "Unable to save changed count.");
+    }
+
+    return okResponse(await hydratePID(documentId), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PI_CHANGE_COUNT_SAVE_FAILED";
     const status = code === "PI_SCOPE_VIOLATION" ? 403 : code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
     return piErrorResponse(req, ctx, code, status, code);
   }

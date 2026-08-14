@@ -1040,10 +1040,21 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { DELETE: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT" } },
   },
   {
+    // §MI04-MI05-split-2026-08-14 — MI04 (IN08), its own resource now, not a PROC_PI_LIST
+    // companion action. Same WRITE-tier capability grants as before (business owner: no ACL
+    // authority change), only the resource identity is now real.
     pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/count$/,
-    methods: { PUT: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "WRITE" } },
+    methods: { PUT: { skipAcl: false, resourceCode: "PROC_PI_COUNT_ENTRY", action: "WRITE" } },
   },
   {
+    // MI05 (IN09) — Change Count, distinct endpoint (changeCountHandler) from MI04's /count.
+    pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/change-count$/,
+    methods: { PUT: { skipAcl: false, resourceCode: "PROC_PI_RECOUNT", action: "WRITE" } },
+  },
+  {
+    // Legacy "clear back to pending" action — no longer called by any frontend page since MI05
+    // now allows direct value changes (§MI04-MI05-split-2026-08-14), left wired for API
+    // compatibility. Stays on PROC_PI_LIST (was never MI04/MI05-specific).
     pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/recount$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "WRITE" } },
   },

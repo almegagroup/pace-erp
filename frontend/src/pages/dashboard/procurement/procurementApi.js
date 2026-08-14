@@ -1035,10 +1035,20 @@ export function addPIItem(id, data) {
   return fetchProcurement("POST", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/items`, data);
 }
 
+// MI04 (IN08) — blind first-pass count entry, OPEN-only.
 export function enterPICount(id, itemId, data) {
   return fetchProcurement(
     "PUT",
     `/api/procurement/physical-inventory/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/count`,
+    data
+  );
+}
+
+// MI05 (IN09) — Change Count, COUNTED-only. §MI04-MI05-split-2026-08-14.
+export function changePICount(id, itemId, data) {
+  return fetchProcurement(
+    "PUT",
+    `/api/procurement/physical-inventory/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/change-count`,
     data
   );
 }
