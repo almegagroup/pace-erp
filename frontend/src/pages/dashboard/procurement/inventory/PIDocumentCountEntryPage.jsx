@@ -7,6 +7,13 @@
  * anywhere, even though the underlying PID item record carries them (PIDocumentDetailPage.jsx,
  * the review/oversight page, shows those — but only after a count is already locked in, when
  * there's nothing left to bias).
+ *
+ * §MI04-batch-save-2026-08-15 — every row is edited locally (edits keyed by item id, kept
+ * across pagination) and nothing hits the API until "Save" is clicked. The earlier design saved
+ * on every keystroke/checkbox toggle (UomQuantityInput's onChange fired an immediate PUT per
+ * digit typed) — business owner correctly called this out as wrong: a counter should be able to
+ * fill in the whole sheet, then commit it all at once, same as every other bulk-entry page in
+ * this app (Opening Stock's UomQuantityInput usage already works this way).
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -27,17 +34,17 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString("en-GB");
 }
 
+function hasPendingValue(edit) {
+  return Boolean(edit) && (edit.isZeroStock || (edit.physicalQty !== null && edit.physicalQty !== undefined));
+}
+
 // FG Scenario 2 (variable-fill MTO/HPS/MTEST barrels/IBCs, §UoM-2026-08-14) — no material-level
 // fixed conversion exists for these (fill varies Packing PO to Packing PO, §83.14 balance-barrel),
 // so the counter enters Num Pack (blind — how many barrels/containers physically found) × a
 // Per-Pack Qty defaulted from that specific Packing PO's own recorded fill (that's a package
 // label attribute, not a book-stock total, so prefilling it is not the same bias risk as showing
 // book_qty — the counter is still blindly counting the actual number of packs).
-function PackCountCell({ row, canEdit, active, onActivate, onSave, saving }) {
-  const [numPacks, setNumPacks] = useState("");
-  const [perPackQty, setPerPackQty] = useState(row.packing_order_fill_qty_per_pack ?? "");
-  const [isZero, setIsZero] = useState(row.physical_qty === 0);
-
+function PackCountCell({ row, canEdit, edit, onEditChange, disabled }) {
   const isPosted = Boolean(row.posted_stock_document_id);
   const hasCount = row.physical_qty !== null && row.physical_qty !== undefined;
 
@@ -45,31 +52,32 @@ function PackCountCell({ row, canEdit, active, onActivate, onSave, saving }) {
     return <span className="text-sm text-slate-600">{hasCount ? `${row.physical_qty} ${row.base_uom_code ?? ""}` : "Not counted"}</span>;
   }
 
-  if (!active && hasCount) {
-    return (
-      <button type="button" onClick={onActivate} className="rounded border border-slate-300 bg-white px-2 py-1 text-sm font-semibold text-slate-900">
-        {row.physical_qty} {row.base_uom_code ?? ""} — edit
-      </button>
-    );
-  }
-
+  const isZero = edit?.isZeroStock ?? false;
+  const numPacks = edit?.numPacks ?? "";
+  const perPackQty = edit?.perPackQty ?? (row.packing_order_fill_qty_per_pack ?? "");
   const derivedQty = Number(numPacks) > 0 && Number(perPackQty) > 0 ? Number(numPacks) * Number(perPackQty) : null;
 
-  function commit() {
-    if (derivedQty === null) return;
-    onSave(derivedQty, false, { enteredQty: derivedQty, enteredUomCode: row.base_uom_code });
+  function updateQty(nextNumPacks, nextPerPackQty) {
+    const qty = Number(nextNumPacks) > 0 && Number(nextPerPackQty) > 0 ? Number(nextNumPacks) * Number(nextPerPackQty) : null;
+    onEditChange({
+      numPacks: nextNumPacks,
+      perPackQty: nextPerPackQty,
+      isZeroStock: false,
+      physicalQty: qty,
+      enteredQty: qty,
+      enteredUomCode: row.base_uom_code,
+    });
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2" onFocus={onActivate}>
+    <div className="flex flex-wrap items-center gap-2">
       <input
         type="number"
         min="0"
         placeholder="Num Pack"
         value={numPacks}
-        disabled={isZero || saving}
-        onChange={(event) => setNumPacks(event.target.value)}
-        onBlur={commit}
+        disabled={isZero || disabled}
+        onChange={(event) => updateQty(event.target.value, perPackQty)}
         className="h-8 w-24 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
       />
       <span className="text-xs text-slate-500">×</span>
@@ -79,9 +87,8 @@ function PackCountCell({ row, canEdit, active, onActivate, onSave, saving }) {
         step="0.0001"
         placeholder="Per-Pack Qty"
         value={perPackQty}
-        disabled={isZero || saving}
-        onChange={(event) => setPerPackQty(event.target.value)}
-        onBlur={commit}
+        disabled={isZero || disabled}
+        onChange={(event) => updateQty(numPacks, event.target.value)}
         className="h-8 w-28 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
       />
       <span className="text-xs text-slate-500">{row.base_uom_code}</span>
@@ -90,11 +97,10 @@ function PackCountCell({ row, canEdit, active, onActivate, onSave, saving }) {
         <input
           type="checkbox"
           checked={isZero}
-          disabled={saving}
+          disabled={disabled}
           onChange={(event) => {
             const checked = event.target.checked;
-            setIsZero(checked);
-            if (checked) onSave(0, true);
+            onEditChange({ isZeroStock: checked, physicalQty: checked ? 0 : null, numPacks, perPackQty });
           }}
           className="h-3.5 w-3.5"
         />
@@ -106,12 +112,11 @@ function PackCountCell({ row, canEdit, active, onActivate, onSave, saving }) {
 
 // Same blind-entry cell shape as the old inline one on the Detail page, minus any book-qty
 // awareness — this component never receives that field at all, so there is nothing to leak.
-function BlindCountCell({ row, canEdit, active, onActivate, onSave, saving }) {
-  const [isZero, setIsZero] = useState(row.physical_qty === 0);
+function BlindCountCell({ row, canEdit, edit, onEditChange, disabled }) {
   const conversionsQuery = useQuery({
     queryKey: ["procurement", "pi-material-uom-conversions", row.material_id],
     queryFn: () => listMaterialUomConversionsForProcurement(row.material_id),
-    enabled: canEdit && active,
+    enabled: canEdit,
   });
 
   const isPosted = Boolean(row.posted_stock_document_id);
@@ -121,35 +126,29 @@ function BlindCountCell({ row, canEdit, active, onActivate, onSave, saving }) {
     return <span className="text-sm text-slate-600">{hasCount ? `${row.physical_qty} ${row.base_uom_code ?? ""}` : "Not counted"}</span>;
   }
 
-  if (!active && hasCount) {
-    return (
-      <button type="button" onClick={onActivate} className="rounded border border-slate-300 bg-white px-2 py-1 text-sm font-semibold text-slate-900">
-        {row.physical_qty} {row.base_uom_code ?? ""} — edit
-      </button>
-    );
-  }
+  const isZero = edit?.isZeroStock ?? false;
+  const seedValue = edit && !edit.isZeroStock && edit.physicalQty != null ? edit.physicalQty : (hasCount ? row.physical_qty : undefined);
 
   return (
-    <div className="flex flex-wrap items-center gap-2" onFocus={onActivate}>
+    <div className="flex flex-wrap items-center gap-2">
       <UomQuantityInput
         key={row.id}
         baseUomCode={row.base_uom_code}
         conversions={Array.isArray(conversionsQuery.data?.data) ? conversionsQuery.data.data : []}
-        value={hasCount ? row.physical_qty : undefined}
-        disabled={isZero || saving}
+        value={seedValue}
+        disabled={isZero || disabled}
         onChange={(baseQty, { enteredQty, enteredUomCode }) => {
-          if (baseQty !== null) onSave(baseQty, false, { enteredQty, enteredUomCode });
+          onEditChange({ physicalQty: baseQty, isZeroStock: false, enteredQty, enteredUomCode });
         }}
       />
       <label className="flex items-center gap-1 text-xs text-slate-600">
         <input
           type="checkbox"
           checked={isZero}
-          disabled={saving}
+          disabled={disabled}
           onChange={(event) => {
             const checked = event.target.checked;
-            setIsZero(checked);
-            if (checked) onSave(0, true);
+            onEditChange({ isZeroStock: checked, physicalQty: checked ? 0 : null });
           }}
           className="h-3.5 w-3.5"
         />
@@ -171,7 +170,7 @@ export default function PIDocumentCountEntryPage() {
   const [resolvedId, setResolvedId] = useState(linkedId);
   const id = resolvedId;
 
-  const [activeItemId, setActiveItemId] = useState("");
+  const [edits, setEdits] = useState({}); // { [itemId]: { physicalQty, isZeroStock, enteredQty, enteredUomCode, numPacks, perPackQty } }
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -195,20 +194,37 @@ export default function PIDocumentCountEntryPage() {
   const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
   const pagedItems = useMemo(() => items.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE), [items, currentPage]);
 
-  async function saveCount(itemId, physicalQty, isZeroStock, enteredMeta) {
-    if (!detail?.id) return;
+  const pendingEntries = useMemo(
+    () => Object.entries(edits).filter(([, edit]) => hasPendingValue(edit)),
+    [edits],
+  );
+
+  function updateEdit(itemId, patch) {
+    setEdits((current) => ({ ...current, [itemId]: { ...current[itemId], ...patch } }));
+  }
+
+  async function handleSaveAll() {
+    if (!detail?.id || pendingEntries.length === 0) {
+      setNotice("Nothing to save.");
+      return;
+    }
     setSaving(true);
     setError("");
     setNotice("");
     try {
-      const payload = isZeroStock
-        ? { is_zero_stock: true }
-        : {
-            physical_qty: physicalQty,
-            ...(enteredMeta?.enteredUomCode ? { entered_uom_code: enteredMeta.enteredUomCode, entered_qty: enteredMeta.enteredQty } : {}),
-          };
-      await enterPICount(detail.id, itemId, payload);
-      setNotice("Count saved.");
+      // INDEPENDENT (§8B) — each entry is a separate PID item row, no shared state or ordering
+      // dependency between them, safe to fire in parallel.
+      await Promise.all(pendingEntries.map(([itemId, edit]) => {
+        const payload = edit.isZeroStock
+          ? { is_zero_stock: true }
+          : {
+              physical_qty: edit.physicalQty,
+              ...(edit.enteredUomCode ? { entered_uom_code: edit.enteredUomCode, entered_qty: edit.enteredQty } : {}),
+            };
+        return enterPICount(detail.id, itemId, payload);
+      }));
+      setEdits({});
+      setNotice(`Saved ${pendingEntries.length} item${pendingEntries.length === 1 ? "" : "s"}.`);
       await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PI_COUNT_SAVE_FAILED");
@@ -238,7 +254,14 @@ export default function PIDocumentCountEntryPage() {
         ...(notice ? [{ key: "count-entry-notice", tone: "success", message: notice }] : []),
       ]}
       actions={id ? [
-        { key: "review", label: "Review / Submit", tone: "primary", onClick: openDetail },
+        {
+          key: "save",
+          label: saving ? "Saving..." : `Save${pendingEntries.length ? ` (${pendingEntries.length})` : ""}`,
+          tone: "primary",
+          onClick: () => void handleSaveAll(),
+          disabled: saving || pendingEntries.length === 0 || isFullyLocked,
+        },
+        { key: "review", label: "Review / Submit", tone: "neutral", onClick: openDetail },
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
@@ -266,7 +289,7 @@ export default function PIDocumentCountEntryPage() {
               label="Storage Location"
               value={detail.mode === "LOCATION_WISE" ? (detail.storage_location_name || detail.storage_location_code || "—") : "Multiple (ITEM_WISE)"}
             />
-            <ErpFieldPreview label="Progress" value={`Counted ${countedItems}/${items.length}`} caption={`Pending ${pendingItems}`} />
+            <ErpFieldPreview label="Progress" value={`Counted ${countedItems}/${items.length}`} caption={`Pending ${pendingItems} · Unsaved ${pendingEntries.length}`} />
           </div>
 
           {isFullyLocked ? (
@@ -283,8 +306,9 @@ export default function PIDocumentCountEntryPage() {
           ) : (
             <div className="border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
               Count what you physically find. The system's book quantity is not shown here on
-              purpose — that's the whole point of a physical count. This page stays open until
-              every item has a Count or Zero Check, then locks permanently.
+              purpose — that's the whole point of a physical count. Fill in as many rows as you
+              like across pages, then click Save to commit them all at once. This page stays open
+              until every item has a Count or Zero Check, then locks permanently.
             </div>
           )}
 
@@ -314,10 +338,9 @@ export default function PIDocumentCountEntryPage() {
                       const cellProps = {
                         row,
                         canEdit: canEditCounts && !row.posted_stock_document_id,
-                        active: activeItemId === row.id,
-                        onActivate: () => setActiveItemId(row.id),
-                        onSave: (qty, isZero, meta) => void saveCount(row.id, qty, isZero, meta),
-                        saving,
+                        edit: edits[row.id],
+                        onEditChange: (patch) => updateEdit(row.id, patch),
+                        disabled: saving,
                       };
                       // FG Scenario 2 — variable-fill packs (no material-level fixed conversion),
                       // the packing order's own fill_qty_per_pack is the only signal for this.

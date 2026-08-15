@@ -913,7 +913,8 @@ export async function getPIDHandler(
     // counter type "Num Pack" blind — it does NOT expose num_packs from the PO record itself,
     // that would just be the book count again.
     const packingOrderIds = [...new Set(items.map((i) => toTrimmedString(i.packing_order_id)).filter(Boolean))];
-    const [materialRows, locationRows, packingOrderRows] = await Promise.all([
+    const companyId = toTrimmedString(document.company_id);
+    const [materialRows, locationRows, packingOrderRows, companyRows] = await Promise.all([
       materialIds.length
         // §PID-print-2026-08-14 — external_code, for the Print (MI21) sheet's own "External
         // Code" column. Per §83.3 this is reporting-only and RM/PM often has none — the
@@ -926,15 +927,24 @@ export async function getPIDHandler(
       packingOrderIds.length
         ? serviceRoleClient.schema("erp_production").from("packing_order").select("id, po_number, fill_qty_per_pack").in("id", packingOrderIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
+      // §8A — getPIDHandler never resolved company_name/company_code at all (only the list and
+      // resolve-by-number endpoints did), so Detail/Print/MI04/MI05 always showed a blank
+      // Company field. Fixed alongside the storage-location column-name bug found in the same pass.
+      companyId
+        ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").eq("id", companyId).maybeSingle()
+        : Promise.resolve({ data: null as JsonRecord | null }),
     ]);
 
     const materialMap = new Map(((materialRows.data ?? []) as JsonRecord[]).map((m) => [String(m.id), m]));
     const locationMap = new Map(((locationRows.data ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
     const packingOrderMap = new Map(((packingOrderRows.data ?? []) as JsonRecord[]).map((p) => [String(p.id), p]));
+    const company = companyRows.data as JsonRecord | null;
 
     return okResponse(
       {
         ...hydrated,
+        company_code: company?.company_code ?? null,
+        company_name: company?.company_name ?? null,
         storage_location_code: locationMap.get(toTrimmedString(document.storage_location_id))?.code ?? null,
         storage_location_name: locationMap.get(toTrimmedString(document.storage_location_id))?.name ?? null,
         items: items.map((item) => {

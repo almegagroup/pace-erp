@@ -5,6 +5,10 @@
  * is shown here on purpose (the blind-entry moment already happened, so there's nothing left to
  * bias), and any item can be changed either direction — Count -> new Count, Count -> Zero Check,
  * Zero Check -> Count. Submit for Approval lives on this page, not the Detail/review page.
+ *
+ * §MI04-batch-save-2026-08-15 — same local-edit-then-Save pattern as MI04 (see that file's header
+ * for the full "why": saving on every keystroke was a real bug, not intended behavior). Submit for
+ * Approval refuses to run while unsaved edits are pending, rather than silently discarding them.
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -31,18 +35,19 @@ function toneForDifference(value) {
   return "text-slate-600";
 }
 
+function hasPendingValue(edit) {
+  return Boolean(edit) && (edit.isZeroStock || (edit.physicalQty !== null && edit.physicalQty !== undefined));
+}
+
 // Same three entry shapes as MI04 (blind UomQuantityInput / pack-count), but Book Qty is visible
 // alongside — the counter/supervisor here is correcting an already-made decision, not making a
 // blind first pass.
-function RecountCell({ row, canEdit, active, onActivate, onSave, saving }) {
-  const [isZero, setIsZero] = useState(row.physical_qty === 0);
-  const [numPacks, setNumPacks] = useState("");
-  const [perPackQty, setPerPackQty] = useState(row.packing_order_fill_qty_per_pack ?? "");
+function RecountCell({ row, canEdit, edit, onEditChange, disabled }) {
   const isPackMode = row.packing_order_fill_qty_per_pack !== null && row.packing_order_fill_qty_per_pack !== undefined;
   const conversionsQuery = useQuery({
     queryKey: ["procurement", "pi-material-uom-conversions", row.material_id],
     queryFn: () => listMaterialUomConversionsForProcurement(row.material_id),
-    enabled: canEdit && active && !isPackMode,
+    enabled: canEdit && !isPackMode,
   });
 
   const isPosted = Boolean(row.posted_stock_document_id);
@@ -52,28 +57,34 @@ function RecountCell({ row, canEdit, active, onActivate, onSave, saving }) {
     return <span className="text-sm text-slate-600">{hasCount ? `${row.physical_qty} ${row.base_uom_code ?? ""}` : "Not counted"}</span>;
   }
 
-  if (!active) {
-    return (
-      <button type="button" onClick={onActivate} className="rounded border border-slate-300 bg-white px-2 py-1 text-sm font-semibold text-slate-900">
-        {hasCount ? `${row.physical_qty} ${row.base_uom_code ?? ""}` : "Not counted"} — change
-      </button>
-    );
-  }
-
+  const isZero = edit?.isZeroStock ?? false;
+  const numPacks = edit?.numPacks ?? "";
+  const perPackQty = edit?.perPackQty ?? (row.packing_order_fill_qty_per_pack ?? "");
   const derivedPackQty = Number(numPacks) > 0 && Number(perPackQty) > 0 ? Number(numPacks) * Number(perPackQty) : null;
+  const seedValue = edit && !edit.isZeroStock && edit.physicalQty != null ? edit.physicalQty : (hasCount ? row.physical_qty : undefined);
+
+  function updatePackQty(nextNumPacks, nextPerPackQty) {
+    const qty = Number(nextNumPacks) > 0 && Number(nextPerPackQty) > 0 ? Number(nextNumPacks) * Number(nextPerPackQty) : null;
+    onEditChange({
+      numPacks: nextNumPacks,
+      perPackQty: nextPerPackQty,
+      isZeroStock: false,
+      physicalQty: qty,
+      enteredQty: qty,
+      enteredUomCode: row.base_uom_code,
+    });
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-2">
       {isPackMode ? (
         <>
-          <input type="number" min="0" placeholder="Num Pack" value={numPacks} disabled={isZero || saving}
-            onChange={(event) => setNumPacks(event.target.value)}
-            onBlur={() => derivedPackQty !== null && onSave(derivedPackQty, false, { enteredQty: derivedPackQty, enteredUomCode: row.base_uom_code })}
+          <input type="number" min="0" placeholder="Num Pack" value={numPacks} disabled={isZero || disabled}
+            onChange={(event) => updatePackQty(event.target.value, perPackQty)}
             className="h-8 w-20 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
           <span className="text-xs text-slate-500">×</span>
-          <input type="number" min="0" step="0.0001" placeholder="Per-Pack Qty" value={perPackQty} disabled={isZero || saving}
-            onChange={(event) => setPerPackQty(event.target.value)}
-            onBlur={() => derivedPackQty !== null && onSave(derivedPackQty, false, { enteredQty: derivedPackQty, enteredUomCode: row.base_uom_code })}
+          <input type="number" min="0" step="0.0001" placeholder="Per-Pack Qty" value={perPackQty} disabled={isZero || disabled}
+            onChange={(event) => updatePackQty(numPacks, event.target.value)}
             className="h-8 w-24 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
           {derivedPackQty !== null ? <span className="text-xs font-semibold text-slate-700">= {derivedPackQty}</span> : null}
         </>
@@ -82,10 +93,10 @@ function RecountCell({ row, canEdit, active, onActivate, onSave, saving }) {
           key={row.id}
           baseUomCode={row.base_uom_code}
           conversions={Array.isArray(conversionsQuery.data?.data) ? conversionsQuery.data.data : []}
-          value={hasCount ? row.physical_qty : undefined}
-          disabled={isZero || saving}
+          value={seedValue}
+          disabled={isZero || disabled}
           onChange={(baseQty, { enteredQty, enteredUomCode }) => {
-            if (baseQty !== null) onSave(baseQty, false, { enteredQty, enteredUomCode });
+            onEditChange({ physicalQty: baseQty, isZeroStock: false, enteredQty, enteredUomCode });
           }}
         />
       )}
@@ -93,11 +104,10 @@ function RecountCell({ row, canEdit, active, onActivate, onSave, saving }) {
         <input
           type="checkbox"
           checked={isZero}
-          disabled={saving}
+          disabled={disabled}
           onChange={(event) => {
             const checked = event.target.checked;
-            setIsZero(checked);
-            if (checked) onSave(0, true);
+            onEditChange({ isZeroStock: checked, physicalQty: checked ? 0 : null, numPacks, perPackQty });
           }}
           className="h-3.5 w-3.5"
         />
@@ -119,7 +129,7 @@ export default function PIDocumentRecountPage() {
   const [resolvedId, setResolvedId] = useState(linkedId);
   const id = resolvedId;
 
-  const [activeItemId, setActiveItemId] = useState("");
+  const [edits, setEdits] = useState({}); // { [itemId]: { physicalQty, isZeroStock, enteredQty, enteredUomCode, numPacks, perPackQty } }
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -140,20 +150,37 @@ export default function PIDocumentRecountPage() {
   const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
   const pagedItems = useMemo(() => items.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE), [items, currentPage]);
 
-  async function saveCount(itemId, physicalQty, isZeroStock, enteredMeta) {
-    if (!detail?.id) return;
+  const pendingEntries = useMemo(
+    () => Object.entries(edits).filter(([, edit]) => hasPendingValue(edit)),
+    [edits],
+  );
+
+  function updateEdit(itemId, patch) {
+    setEdits((current) => ({ ...current, [itemId]: { ...current[itemId], ...patch } }));
+  }
+
+  async function handleSaveAll() {
+    if (!detail?.id || pendingEntries.length === 0) {
+      setNotice("Nothing to save.");
+      return;
+    }
     setSaving(true);
     setError("");
     setNotice("");
     try {
-      const payload = isZeroStock
-        ? { is_zero_stock: true }
-        : {
-            physical_qty: physicalQty,
-            ...(enteredMeta?.enteredUomCode ? { entered_uom_code: enteredMeta.enteredUomCode, entered_qty: enteredMeta.enteredQty } : {}),
-          };
-      await changePICount(detail.id, itemId, payload);
-      setNotice("Count updated.");
+      // INDEPENDENT (§8B) — each entry is a separate PID item row, no shared state or ordering
+      // dependency between them, safe to fire in parallel.
+      await Promise.all(pendingEntries.map(([itemId, edit]) => {
+        const payload = edit.isZeroStock
+          ? { is_zero_stock: true }
+          : {
+              physical_qty: edit.physicalQty,
+              ...(edit.enteredUomCode ? { entered_uom_code: edit.enteredUomCode, entered_qty: edit.enteredQty } : {}),
+            };
+        return changePICount(detail.id, itemId, payload);
+      }));
+      setEdits({});
+      setNotice(`Saved ${pendingEntries.length} item${pendingEntries.length === 1 ? "" : "s"}.`);
       await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PI_COUNT_SAVE_FAILED");
@@ -164,6 +191,10 @@ export default function PIDocumentRecountPage() {
 
   async function handleSubmitForApproval() {
     if (!detail?.id) return;
+    if (pendingEntries.length > 0) {
+      setError("You have unsaved changes — click Save before submitting for approval.");
+      return;
+    }
     const confirmed = await openActionConfirm({
       eyebrow: "Physical Inventory",
       title: "Submit for approval?",
@@ -200,8 +231,15 @@ export default function PIDocumentRecountPage() {
         ...(notice ? [{ key: "recount-notice", tone: "success", message: notice }] : []),
       ]}
       actions={id ? [
+        {
+          key: "save",
+          label: saving ? "Saving..." : `Save${pendingEntries.length ? ` (${pendingEntries.length})` : ""}`,
+          tone: "primary",
+          onClick: () => void handleSaveAll(),
+          disabled: saving || pendingEntries.length === 0 || !canEdit,
+        },
         { key: "back", label: "Back To Detail", tone: "neutral", onClick: openDetail },
-        ...(canSubmit ? [{ key: "submit", label: saving ? "Submitting..." : "Submit for Approval", tone: "primary", onClick: () => void handleSubmitForApproval(), disabled: saving }] : []),
+        ...(canSubmit ? [{ key: "submit", label: saving ? "Submitting..." : "Submit for Approval", tone: "neutral", onClick: () => void handleSubmitForApproval(), disabled: saving }] : []),
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
@@ -243,8 +281,8 @@ export default function PIDocumentRecountPage() {
             </div>
           ) : (
             <div className="border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-              Every item already has a Count or Zero Check. Change any of them below, then Submit
-              for Approval when satisfied.
+              Every item already has a Count or Zero Check. Change any of them below, click Save to
+              commit, then Submit for Approval when satisfied. Unsaved: {pendingEntries.length}.
             </div>
           )}
 
@@ -273,10 +311,9 @@ export default function PIDocumentRecountPage() {
                   <RecountCell
                     row={row}
                     canEdit={canEdit && !row.posted_stock_document_id}
-                    active={activeItemId === row.id}
-                    onActivate={() => setActiveItemId(row.id)}
-                    onSave={(qty, isZero, meta) => void saveCount(row.id, qty, isZero, meta)}
-                    saving={saving}
+                    edit={edits[row.id]}
+                    onEditChange={(patch) => updateEdit(row.id, patch)}
+                    disabled={saving}
                   />
                 ),
               },
@@ -285,17 +322,27 @@ export default function PIDocumentRecountPage() {
                 label: "Difference",
                 width: "110px",
                 render: (row) => {
-                  if (row.physical_qty === null || row.physical_qty === undefined) return <span className="text-slate-400">—</span>;
-                  const diff = Number(row.difference_qty ?? 0);
-                  return <span className={`font-semibold ${toneForDifference(diff)}`}>{diff.toFixed(4)}</span>;
+                  const edit = edits[row.id];
+                  const pending = hasPendingValue(edit);
+                  const effectiveQty = pending ? edit.physicalQty : row.physical_qty;
+                  if (effectiveQty === null || effectiveQty === undefined) return <span className="text-slate-400">—</span>;
+                  const diff = Number(effectiveQty) - Number(row.book_qty ?? 0);
+                  return (
+                    <span className={`font-semibold ${toneForDifference(diff)}`}>
+                      {diff.toFixed(4)}{pending ? <span className="ml-1 text-xs font-normal text-amber-600">(unsaved)</span> : null}
+                    </span>
+                  );
                 },
               },
             ]}
             rows={pagedItems}
             rowKey={(row) => row.id}
             getRowProps={(row) => {
-              if (row.physical_qty === null || row.physical_qty === undefined) return {};
-              const diff = Number(row.difference_qty ?? 0);
+              const edit = edits[row.id];
+              const pending = hasPendingValue(edit);
+              const effectiveQty = pending ? edit.physicalQty : row.physical_qty;
+              if (effectiveQty === null || effectiveQty === undefined) return {};
+              const diff = Number(effectiveQty) - Number(row.book_qty ?? 0);
               return { className: diff < 0 ? "bg-rose-50" : diff > 0 ? "bg-emerald-50" : "bg-slate-50" };
             }}
             emptyMessage="No items on this PI document."
