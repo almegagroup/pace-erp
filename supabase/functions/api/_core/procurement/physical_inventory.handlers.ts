@@ -921,7 +921,7 @@ export async function getPIDHandler(
         ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type, external_code").in("id", materialIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       locationIds.length
-        ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
+        ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       packingOrderIds.length
         ? serviceRoleClient.schema("erp_production").from("packing_order").select("id, po_number, fill_qty_per_pack").in("id", packingOrderIds)
@@ -935,8 +935,8 @@ export async function getPIDHandler(
     return okResponse(
       {
         ...hydrated,
-        storage_location_code: locationMap.get(toTrimmedString(document.storage_location_id))?.location_code ?? null,
-        storage_location_name: locationMap.get(toTrimmedString(document.storage_location_id))?.location_name ?? null,
+        storage_location_code: locationMap.get(toTrimmedString(document.storage_location_id))?.code ?? null,
+        storage_location_name: locationMap.get(toTrimmedString(document.storage_location_id))?.name ?? null,
         items: items.map((item) => {
           const material = materialMap.get(toTrimmedString(item.material_id));
           const location = locationMap.get(toTrimmedString(item.storage_location_id));
@@ -947,8 +947,8 @@ export async function getPIDHandler(
             material_name: material?.material_name ?? null,
             material_type: material?.material_type ?? null,
             material_external_code: material?.external_code ?? null,
-            storage_location_code: location?.location_code ?? null,
-            storage_location_name: location?.location_name ?? null,
+            storage_location_code: location?.code ?? null,
+            storage_location_name: location?.name ?? null,
             packing_order_number: packingOrder?.po_number ?? null,
             packing_order_fill_qty_per_pack: packingOrder?.fill_qty_per_pack ?? null,
           };
@@ -1866,7 +1866,7 @@ export async function getMaterialLocationBreakdownHandler(
     }
 
     const { data: locationRows } = locationIds.length
-      ? await serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds)
+      ? await serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds)
       : { data: [] as JsonRecord[] };
     const locationMap = new Map(((locationRows ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
 
@@ -1874,8 +1874,8 @@ export async function getMaterialLocationBreakdownHandler(
       material: { id: materialId, pace_code: material.pace_code, material_name: material.material_name, material_type: material.material_type, base_uom_code: material.base_uom_code },
       items: breakdown.map((row) => ({
         ...row,
-        storage_location_code: locationMap.get(toTrimmedString(row.storage_location_id))?.location_code ?? null,
-        storage_location_name: locationMap.get(toTrimmedString(row.storage_location_id))?.location_name ?? null,
+        storage_location_code: locationMap.get(toTrimmedString(row.storage_location_id))?.code ?? null,
+        storage_location_name: locationMap.get(toTrimmedString(row.storage_location_id))?.name ?? null,
       })),
     }, ctx.request_id, req);
   } catch (error) {
@@ -1978,7 +1978,7 @@ export async function listPIDifferencesHandler(
 
     const [companyRows, locationRows, materialRows] = await Promise.all([
       companyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds) : Promise.resolve({ data: [] as JsonRecord[] }),
-      locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, location_code, location_name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[] }),
+      locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       matIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type").in("id", matIds) : Promise.resolve({ data: [] as JsonRecord[] }),
     ]);
     const companyMap = new Map(((companyRows.data ?? []) as JsonRecord[]).map((c) => [String(c.id), c]));
@@ -1998,8 +1998,8 @@ export async function listPIDifferencesHandler(
         posting_date: doc?.posting_date ?? null,
         company_code: company?.company_code ?? null,
         company_name: company?.company_name ?? null,
-        storage_location_code: location?.location_code ?? null,
-        storage_location_name: location?.location_name ?? null,
+        storage_location_code: location?.code ?? null,
+        storage_location_name: location?.name ?? null,
         material_pace_code: material?.pace_code ?? null,
         material_name: material?.material_name ?? null,
         batch_number: item.batch_number ?? null,
