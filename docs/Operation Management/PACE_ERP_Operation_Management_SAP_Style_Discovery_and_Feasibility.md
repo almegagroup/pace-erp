@@ -18424,7 +18424,7 @@ modal response দেয় না (§119.9 সিদ্ধান্ত ২ — 
 
 ---
 
-## Section 120 — MTEST/ZTEST Full Redesign: Two-Order Model, Pack BOM 001 Reusable PM Templates, Batch Number Per-Company Format (🔶 DESIGN PARTIALLY LOCKED — 2026-08-15, IMPLEMENTATION NOT STARTED)
+## Section 120 — MTEST/ZTEST Full Redesign: Two-Order Model, Pack BOM 001 Reusable PM Templates, Batch Number Per-Company Format (✅ DESIGN LOCKED — 2026-08-15, IMPLEMENTATION NOT STARTED)
 
 **প্রেক্ষাপট:** locked module sequence অনুযায়ী (CLAUDE.md §6) IN01/PID সম্পূর্ণ হওয়ার পরের ধাপ।
 "ZTEST" আর "MTEST" একই জিনিস — business owner আগেই confirm করেছিলেন (§114.5), দুটো নাম একই
@@ -18494,28 +18494,51 @@ fill-এর flexibility থাকবে।
 **Implementation এখনো শুরু হয়নি** — এই দুটো frontend fix করার আগে ঠিক UI copy/label
 ("PM Lines (template — qty entered fresh per Packing PO)" জাতীয় কিছু) confirm করে নিতে হবে।
 
-### 120.4 — Batch number: company-ভিত্তিক আলাদা format/structure (🔴 OPEN, LOCKED না)
+### 120.4 — Batch number: company-ভিত্তিক আলাদা format, SA page থেকে selectable (✅ LOCKED — 2026-08-15)
 
-Business owner-এর requirement: MTEST batch number-এর জন্য **শুধু prefix না, পুরো numbering
-format/logic-ই company-ভেদে আলাদা** হতে হবে (যেমন কোনো company-তে date-embedded pattern, কোনোটায়
-শুধু sequential — এই দুটোর কোনোটাই এখনো concrete confirm হয়নি, উদাহরণ হিসেবে লেখা)।
+**বর্তমান বাস্তবতা (dev DB সরাসরি চেক করা):** `erp_production.batch_number_series` টেবিলে
+**MTEST-এর জন্য একটাও row নেই** কোনো company-তে — আজকের অবস্থায় MTEST batch series আদৌ
+configure-ই করা হয়নি, "redesign" শুরুর আগেই এটা একটা খালি slate। টেবিলের বর্তমান column shape:
+`id, company_id, prodshade_material_id, batch_type, prefix, current_count, active, created_by,
+created_at, last_updated_at` — কোনো format/pattern column নেই, শুধু prefix + running counter
+(৫-ডিজিট zero-pad, code-level hardcoded)। এই একই টেবিল/mechanism MTO/HPS/MTS সবার batch series-এর
+জন্যও ব্যবহার হয় — তাই নতুন column-গুলোর জন্য **default value বসিয়ে existing MTO/HPS/MTS আচরণ
+অপরিবর্তিত রাখতে হবে**, শুধু MTEST-এর নতুন row-গুলো নতুন format ব্যবহার করবে।
 
-**বর্তমান বাস্তবতা (2026-08-15, dev DB সরাসরি চেক করা):** `erp_production.batch_number_series`
-টেবিলে **MTEST-এর জন্য একটাও row নেই** কোনো company-তে — মানে আজকের অবস্থায় MTEST batch series
-আদৌ configure-ই করা হয়নি, "redesign" শুরুর আগেই এটা একটা খালি slate। টেবিলের বর্তমান column shape:
-`id, company_id, prodshade_material_id, batch_type, prefix, current_count, active,
-created_by, created_at, last_updated_at` — কোনো format/pattern column নেই, শুধু prefix + running
-counter (৫-ডিজিট zero-pad, code-level hardcoded, `generate_doc_number()`-এর মতো টেবিল-driven না)।
-এই একই টেবিল/mechanism MTO/HPS/MTS সবার batch series-এর জন্যও ব্যবহার হয় — তাই এখানে বদল করলে
-সেগুলোতেও প্রভাব না পড়ে সেটা নিশ্চিত করতে হবে (MTEST-স্কোপড করে বদলাতে হবে, generic mechanism
-না)।
+**দুটো company-র দুটো real example (business owner):**
+- **CMP003:** `{PREFIX}{DD-MM-YYYY}/{SERIAL}` — যেমন serial `101` হলে, ১৫ আগস্ট ২০২৬-এ generate
+  হলে `PREFIX15-08-2026/00101` (serial **৫-ডিজিট zero-padded**, বাকি system-এর সাথে মেলানো)।
+  Serial **কখনো reset হয় না** — date শুধু generation-day-র stamp, counter-কে প্রভাবিত করে না।
+- **CMP006:** `{PREFIX}{MMYY}/{SERIAL}` — যেমন August 2026-এ `BMAM0826/0001` (prefix=`BMAM`,
+  month-year=`0826`, serial **৪-ডিজিট zero-padded**)। Serial **প্রতি ক্যালেন্ডার মাসে reset হয়**
+  — নতুন মাসের প্রথম batch সবসময় serial `0001`/`00001` (pad width অনুযায়ী) থেকে শুরু।
 
-**এখনো দরকার (business owner-এর কাছ থেকে concrete answer বাকি):** প্রতিটা company-র জন্য exact
-pattern কী হবে — এই detail না পেলে design lock করা যাবে না, শুধু "company-ভেদে আলাদা format
-লাগবে" এইটুকুই এখন পর্যন্ত locked, বাস্তব pattern-গুলো এখনো open।
+**Locked design — ৩টা selectable "Numbering Method", hardcoded per-company mapping না:**
+
+`erp_production.batch_number_series`-এ নতুন ২টা column যোগ হবে:
+- `numbering_method` (TEXT, CHECK constraint, ডিফল্ট `'PLAIN'`) — এই মুহূর্তে ৩টা valid value:
+  1. `PLAIN` — বর্তমান আচরণ, অপরিবর্তিত: `{PREFIX}{SERIAL}`, কোনো date component নেই, কোনো
+     reset নেই। **সব existing MTO/HPS/MTS row এই ডিফল্টেই থাকবে, কোনো পরিবর্তন হবে না।**
+  2. `CONTINUOUS_DATE` — CMP003-style: `{PREFIX}{DD-MM-YYYY}/{SERIAL}`, কখনো reset হয় না।
+  3. `MONTHLY_RESET_MONYY` — CMP006-style: `{PREFIX}{MMYY}/{SERIAL}`, প্রতি মাসে serial reset।
+- `serial_pad_width` (INTEGER, ডিফল্ট ৫) — প্রতিটা row নিজের zero-pad width বেছে নিতে পারবে (CMP003
+  MTEST=৫, CMP006 MTEST=৪ — উদাহরণেই এই পার্থক্য স্পষ্ট, তাই এটাও per-row configurable হতেই হবে,
+  একটা fixed সংখ্যা না)।
+- `reset_period` (TEXT, nullable) — শুধু `MONTHLY_RESET_MONYY`-এর জন্য দরকার: শেষ কোন MMYY-তে
+  counter reset হয়েছিল সেটা track করে। Generation-এর সময় current MMYY-র সাথে না মিললে, একই atomic
+  `UPDATE ... RETURNING`-এর ভেতরেই `current_count=0`, `reset_period=<current MMYY>` বসিয়ে fresh
+  শুরু হবে (§8B-এর counter rule অনুযায়ী — কখনো আলাদা SELECT তারপর UPDATE না, single atomic
+  statement-ই থাকতে হবে, race-condition এড়াতে)।
+
+**SA page (`SAProductionBatchSeriesPage.jsx`):** প্রতিটা row-এ Prefix field-এর পাশে নতুন
+**"Numbering Method"** dropdown (Plain / Continuous + Date / Monthly Reset) আর **"Serial Digits"**
+input যোগ হবে। SA যেকোনো company + batch_type combo-র জন্য যেকোনো method বেছে নিতে পারবে — কোনো
+company-name hardcode করা থাকবে না কোড-এ, তাই future-এ নতুন company এলে SA নিজেই ঠিক করে দেবে কোন
+method লাগবে। নতুন কোনো ৪র্থ method future-এ লাগলে সেটা code-এ যোগ করতে হবে (নতুন enum value +
+generation logic), কিন্তু company-to-method **assignment** সবসময় SA-র হাতেই থাকবে, hardcode না।
 
 ### 120.5 — Implementation status
 
-কিছুই এখনো build হয়নি — এই session-এ শুধু design lock হয়েছে (§120.1-120.3), §120.4 এখনো আংশিক
-open। পরবর্তী session-এ §120.4-এর concrete pattern confirm হওয়ার পর, task brief লিখে Codex-কে
-implement করতে দেওয়া হবে, CLAUDE.md-এর established Claude/Codex split workflow অনুযায়ী।
+Design সম্পূর্ণ locked (§120.1–§120.4)। কিছুই এখনো build হয়নি — পরবর্তী ধাপ: এই পুরো section
+অনুযায়ী task brief লিখে Codex-কে implement করতে দেওয়া, CLAUDE.md-এর established Claude/Codex
+split workflow অনুযায়ী।

@@ -495,19 +495,22 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 >    সেই একই pattern-এ মেলানো হয়েছে (SA/GA/DIRECTOR/ACL-MASTER সবাই bypass পায়, বাকি সবার জন্য
 >    strict block বহাল)।
 >    CMP010-এ কোনো PID capability wired নেই (pre-existing gap, touch করা হয়নি) — flagged।
-> 2. **MTEST + ZTEST redesign** — 🔶 **DESIGN আংশিক LOCKED (2026-08-15), IMPLEMENTATION শুরু হয়নি,
->    এখনো এটাই চলমান কাজ।** পূর্ণ detail feasibility doc **Section 120**-এ। সংক্ষেপে: (ZTEST=MTEST,
->    একই জিনিস, §114.5 আগেই confirm) (a) Process PO lifecycle এখন MTO/HPS-এর সাথে EXACT মেলে,
->    Verify সহ — 2026-08-12-এর "Verify ছাড়া" lock সম্পূর্ণ reverse (সেই lock কখনো doc-এ লেখাই
->    হয়নি, শুধু session-memory-তে ছিল — এই gap-ও এবার ঠিক করা হলো); (b) Packing PO (PTEST) এখন
->    genuine আলাদা document, Process PO-র VERIFIED batch থেকে draw করবে; (c) Pack Code 001
->    `bom_required=false`-ই থাকছে (per-pack qty case-to-case আলাদা), কিন্তু PM material list
->    Pack BOM-এ একবার সেভ করে reusable করতে হবে (qty প্রতিবার আলাদা ভরতে হবে) — backend already
->    ready, শুধু ২টা frontend gap (`PackBomCreatePage.jsx`-এর PM Lines table non-fixed code-এ
->    disabled, `ProductionPOCreatePage.jsx`-এর Packing tab Pack BOM-এর PM lines ignore করে);
->    (d) batch number company-ভেদে আলাদা format/logic লাগবে (শুধু prefix না) — **এখনো OPEN**,
->    concrete per-company pattern business owner-এর কাছ থেকে বাকি, dev DB-তে MTEST-এর কোনো batch
->    series row-ই এখনো নেই। — **➡️ পরের ধাপ: §120.4-এর pattern confirm হওয়ার পর task brief লিখে
+> 2. **MTEST + ZTEST redesign** — ✅ **DESIGN সম্পূর্ণ LOCKED (2026-08-15), IMPLEMENTATION শুরু
+>    হয়নি — এখনো এটাই চলমান কাজ।** পূর্ণ detail feasibility doc **Section 120**-এ। সংক্ষেপে:
+>    (ZTEST=MTEST, একই জিনিস, §114.5 আগেই confirm) (a) Process PO lifecycle এখন MTO/HPS-এর সাথে
+>    EXACT মেলে, Verify সহ — 2026-08-12-এর "Verify ছাড়া" lock সম্পূর্ণ reverse (সেই lock কখনো
+>    doc-এ লেখাই হয়নি, শুধু session-memory-তে ছিল — এই gap-ও এবার ঠিক করা হলো); (b) Packing PO
+>    (PTEST) এখন genuine আলাদা document, Process PO-র VERIFIED batch থেকে draw করবে; (c) Pack
+>    Code 001 `bom_required=false`-ই থাকছে (per-pack qty case-to-case আলাদা), কিন্তু PM material
+>    list Pack BOM-এ একবার সেভ করে reusable করতে হবে (qty প্রতিবার আলাদা ভরতে হবে) — backend
+>    already ready, শুধু ২টা frontend gap (`PackBomCreatePage.jsx`-এর PM Lines table non-fixed
+>    code-এ disabled, `ProductionPOCreatePage.jsx`-এর Packing tab Pack BOM-এর PM lines ignore
+>    করে); (d) batch number — `batch_number_series`-এ নতুন `numbering_method` (PLAIN/
+>    CONTINUOUS_DATE/MONTHLY_RESET_MONYY, ডিফল্ট PLAIN — MTO/HPS/MTS অপরিবর্তিত থাকবে) +
+>    `serial_pad_width` + `reset_period` column, SA Batch Series page-এ dropdown দিয়ে
+>    company-ভিত্তিক selectable, কোনো company-name hardcode না। CMP003 = Continuous+Date
+>    (`PREFIX15-08-2026/00101`, কখনো reset হয় না), CMP006 = Monthly Reset
+>    (`BMAM0826/0001`, প্রতি মাসে reset)। — **➡️ পরের ধাপ: এই স্পেক অনুযায়ী task brief লিখে
 >    implement শুরু**
 > 3. **RM Sale Module Revisit** — test, fixes, finalize (§113-এর SO/STO/PGI/Invoice
 >    implementation-এর উপর built, RM/PM/INT scope — FG Dispatch Phase 2 না)
