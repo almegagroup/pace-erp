@@ -21,8 +21,9 @@ import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/opera
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import {
   changePICount,
-  getPIDocument,
+  getPIRecountWorkspace,
   listMaterialUomConversionsForProcurement,
+  resolvePIDByNumberForRecount,
   submitPIDForApproval,
 } from "../procurementApi.js";
 import PIDNumberEntryStep from "./PIDNumberEntryStep.jsx";
@@ -136,8 +137,8 @@ export default function PIDocumentRecountPage() {
   const [currentPage, setCurrentPage] = useState(0);
 
   const detailQuery = useQuery({
-    queryKey: ["procurement", "pi-document-detail", id],
-    queryFn: () => getPIDocument(id),
+    queryKey: ["procurement", "pi-recount-workspace", id],
+    queryFn: () => getPIRecountWorkspace(id),
     enabled: Boolean(id),
   });
   const detail = detailQuery.data ?? null;
@@ -253,6 +254,7 @@ export default function PIDocumentRecountPage() {
           heading="Enter PID number"
           helperText="Type the PID you want to change counts on. MI04 must already be fully counted (status COUNTED) before MI05 will accept it."
           onResolved={(doc) => setResolvedId(doc.id)}
+          resolveFn={resolvePIDByNumberForRecount}
           extraValidate={(doc) => {
             if (String(doc.status || "").toUpperCase() === "OPEN") {
               return "This PID still has pending items in MI04. Complete MI04 first.";

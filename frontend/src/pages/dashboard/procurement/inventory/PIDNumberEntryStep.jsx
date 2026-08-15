@@ -5,7 +5,6 @@
  * that (same visual convention as ProductionPOCreatePage.jsx's Page 1/Page 2 stepper).
  */
 import { useState } from "react";
-import { resolvePIDByNumber } from "../procurementApi.js";
 
 function formatDate(value) {
   if (!value) return "—";
@@ -13,7 +12,7 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString("en-GB");
 }
 
-export default function PIDNumberEntryStep({ heading, helperText, onResolved, extraValidate }) {
+export default function PIDNumberEntryStep({ heading, helperText, onResolved, extraValidate, resolveFn }) {
   const [value, setValue] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -29,7 +28,7 @@ export default function PIDNumberEntryStep({ heading, helperText, onResolved, ex
     setError("");
     setPreview(null);
     try {
-      const doc = await resolvePIDByNumber(documentNumber);
+      const doc = await resolveFn(documentNumber);
       const validationError = extraValidate ? extraValidate(doc) : null;
       if (validationError) {
         setError(validationError);

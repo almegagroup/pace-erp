@@ -167,13 +167,17 @@ import {
   createPIDHandler,
   enterCountHandler,
   getMaterialLocationBreakdownHandler,
+  getPIDCountWorkspaceHandler,
   getPIDHandler,
+  getPIDRecountWorkspaceHandler,
   listPIDifferencesHandler,
   listPIDsHandler,
   postDifferencesHandler,
   removePIItemHandler,
   reopenPIDHandler,
   requestRecountHandler,
+  resolvePIDByNumberForCountHandler,
+  resolvePIDByNumberForRecountHandler,
   resolvePIDByNumberHandler,
   submitPIDForApprovalHandler,
 } from "../_core/procurement/physical_inventory.handlers.ts";
@@ -456,6 +460,10 @@ export async function dispatchProcurementRoutes(
     // own Page 2 loads. Hyphenated, non-slash-nested path, same reason as the two siblings above.
     case "GET:/api/procurement/physical-inventory-resolve":
       return await resolvePIDByNumberHandler(req, ctx);
+    case "GET:/api/procurement/physical-inventory-resolve-count":
+      return await resolvePIDByNumberForCountHandler(req, ctx);
+    case "GET:/api/procurement/physical-inventory-resolve-recount":
+      return await resolvePIDByNumberForRecountHandler(req, ctx);
     case "POST:/api/procurement/gate-entries":
       return await createGateEntryHandler(req, ctx);
     case "GET:/api/procurement/gate-entries":
@@ -787,6 +795,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/physical-inventory\/[^/]+$/.test(pathname) && req.method === "GET") {
     return await getPIDHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/count-workspace$/.test(pathname) && req.method === "GET") {
+    return await getPIDCountWorkspaceHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/recount-workspace$/.test(pathname) && req.method === "GET") {
+    return await getPIDRecountWorkspaceHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items$/.test(pathname) && req.method === "POST") {

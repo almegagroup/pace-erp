@@ -135,6 +135,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // loading. Same read tier as list/get (PROC_PI_LIST:VIEW) — the actual count/recount mutation
   // is separately gated on PROC_PI_COUNT_ENTRY/PROC_PI_RECOUNT:WRITE further down.
   "GET:/api/procurement/physical-inventory-resolve": { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "VIEW" },
+  // 2026-08-15 — IN08/IN09 must stay reachable even after IN01 is narrowed. Their standalone
+  // Page-1 PID lookup therefore needs its own resource-scoped read endpoint instead of piggybacking
+  // on PROC_PI_LIST:VIEW.
+  "GET:/api/procurement/physical-inventory-resolve-count": { skipAcl: false, resourceCode: "PROC_PI_COUNT_ENTRY", action: "VIEW" },
+  "GET:/api/procurement/physical-inventory-resolve-recount": { skipAcl: false, resourceCode: "PROC_PI_RECOUNT", action: "VIEW" },
 
   // ── Procurement: Opening Stock ────────────────────────────────────────────
   "GET:/api/procurement/opening-stock":               { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW"  },
@@ -1030,6 +1035,14 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/physical-inventory\/[^/]+$/,
     methods: { GET: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/count-workspace$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_PI_COUNT_ENTRY", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/recount-workspace$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_PI_RECOUNT", action: "VIEW" } },
   },
   {
     // Group 9 (2026-08-06): adding an item defines what's being counted (PID

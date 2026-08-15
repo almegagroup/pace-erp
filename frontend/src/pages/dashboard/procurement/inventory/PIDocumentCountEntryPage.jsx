@@ -23,7 +23,12 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { enterPICount, getPIDocument, listMaterialUomConversionsForProcurement } from "../procurementApi.js";
+import {
+  enterPICount,
+  getPICountWorkspace,
+  listMaterialUomConversionsForProcurement,
+  resolvePIDByNumberForCount,
+} from "../procurementApi.js";
 import PIDNumberEntryStep from "./PIDNumberEntryStep.jsx";
 
 const PAGE_SIZE = 25;
@@ -177,8 +182,8 @@ export default function PIDocumentCountEntryPage() {
   const [currentPage, setCurrentPage] = useState(0);
 
   const detailQuery = useQuery({
-    queryKey: ["procurement", "pi-document-detail", id],
-    queryFn: () => getPIDocument(id),
+    queryKey: ["procurement", "pi-count-workspace", id],
+    queryFn: () => getPICountWorkspace(id),
     enabled: Boolean(id),
   });
   const detail = detailQuery.data ?? null;
@@ -275,6 +280,7 @@ export default function PIDocumentCountEntryPage() {
           heading="Enter PID number"
           helperText="Type the PID you want to count. This is global across companies — if it belongs to a different company, you'll be told so."
           onResolved={(doc) => setResolvedId(doc.id)}
+          resolveFn={resolvePIDByNumberForCount}
         />
       ) : loading || !detail ? (
         <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
