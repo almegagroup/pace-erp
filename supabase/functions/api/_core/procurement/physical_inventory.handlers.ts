@@ -819,6 +819,70 @@ export async function listPIDsHandler(
   }
 }
 
+// MI04/MI05 standalone entry (§MI04-MI05-sidebar-restore) — user types the PID number on the
+// page itself (SAP T-code style) instead of the URL already carrying an :id. Looks the document
+// up WITHOUT company scoping first so a cross-company hit can return a specific, honest message
+// ("this PID is not for your company") instead of an indistinguishable 404.
+export async function resolvePIDByNumberHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const documentNumber = toTrimmedString(url.searchParams.get("document_number"));
+    if (!documentNumber) {
+      return piErrorResponse(req, ctx, "PI_DOCUMENT_NUMBER_REQUIRED", 400, "PID number is required.");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("physical_inventory_document")
+      .select("id, company_id, status, count_date, mode")
+      .eq("document_number", documentNumber)
+      .maybeSingle();
+
+    if (error) {
+      return piErrorResponse(req, ctx, "PI_RESOLVE_FAILED", 500, "Unable to look up this PID number.");
+    }
+    if (!data?.id) {
+      return piErrorResponse(req, ctx, "PI_NOT_FOUND", 404, "No physical inventory document found with this number.");
+    }
+
+    const companyId = toTrimmedString(data.company_id);
+    const scopedCompanyIds = await listPIScopedCompanyIds(ctx);
+    if (scopedCompanyIds && !scopedCompanyIds.includes(companyId)) {
+      return piErrorResponse(req, ctx, "PI_WRONG_COMPANY", 403, "This PID is not for your company.");
+    }
+
+    const { data: companyRow } = await serviceRoleClient
+      .schema("erp_master")
+      .from("companies")
+      .select("company_code, company_name")
+      .eq("id", companyId)
+      .maybeSingle();
+
+    return okResponse(
+      {
+        id: data.id,
+        document_number: documentNumber,
+        company_id: companyId,
+        company_code: companyRow?.company_code ?? null,
+        company_name: companyRow?.company_name ?? null,
+        status: data.status,
+        count_date: data.count_date ?? null,
+        mode: data.mode ?? null,
+      },
+      ctx.request_id,
+      req,
+    );
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PI_RESOLVE_FAILED";
+    const status = code === "PI_SCOPE_VIOLATION" ? 403 : 500;
+    return piErrorResponse(req, ctx, code, status, code);
+  }
+}
+
 export async function getPIDHandler(
   req: Request,
   ctx: ProcurementHandlerContext,

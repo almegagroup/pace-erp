@@ -565,14 +565,19 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  // §MI04-MI05-split-2026-08-14 — MI04, tx_code IN08. Now a standalone ACL resource (own
-  // menu_master row) with its own endpoint (changeCountHandler is the MI05 sibling) — same
-  // WRITE-tier authority as before, business owner directive was "no ACL decision change",
-  // only the resource identity became real (matches SAP's genuinely separate MI04 transaction).
+  // §MI04-MI05-split-2026-08-14 — MI04, tx_code IN08. Standalone ACL resource (own menu_master
+  // row) with its own endpoint (changeCountHandler is the MI05 sibling) — same WRITE-tier
+  // authority as before, business owner directive was "no ACL decision change", only the
+  // resource identity became real (matches SAP's genuinely separate MI04 transaction).
   // Blind — never shows book_qty, that split happened 2026-08-14 too (see PIDocumentDetailPage).
+  // §MI04-MI05-sidebar-restore (2026-08-15) — canonical route is now id-less (sidebar-linked,
+  // SAP T-code style: user types the PID number on Page 1). The companion :id/count route still
+  // exists in AppRouter.jsx for direct-jump buttons (PID Detail, MI05's own cross-link) — it is
+  // NOT this screen_code's own route, so it doesn't need its own SCREEN_REGISTRY entry
+  // (companionRoutePairs in routeIndex.js covers its reachability).
   PROC_PI_COUNT_ENTRY: {
     screen_code: "PROC_PI_COUNT_ENTRY",
-    route: "/dashboard/procurement/physical-inventory/:id/count",
+    route: "/dashboard/procurement/physical-inventory/count",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
@@ -580,10 +585,11 @@ export const OPERATION_SCREENS = Object.freeze({
 
   // §MI04-MI05-split-2026-08-14 — MI05, tx_code IN09. Standalone ACL resource, own endpoint
   // (PUT .../change-count). Only reachable once MI04 has locked (status COUNTED) — full re-edit
-  // + Submit for Approval.
+  // + Submit for Approval. §MI04-MI05-sidebar-restore — same id-less canonical route as MI04
+  // above; companion :id/recount route still exists for direct-jump buttons.
   PROC_PI_RECOUNT: {
     screen_code: "PROC_PI_RECOUNT",
-    route: "/dashboard/procurement/physical-inventory/:id/recount",
+    route: "/dashboard/procurement/physical-inventory/recount",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

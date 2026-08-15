@@ -1031,6 +1031,12 @@ export function getPIDocument(id) {
   return fetchProcurement("GET", `/api/procurement/physical-inventory/${encodeURIComponent(id)}`);
 }
 
+// MI04/MI05 standalone entry — resolves a typed PID number to its id/company/status before
+// Page 1 hands off to Page 2. §MI04-MI05-sidebar-restore.
+export function resolvePIDByNumber(documentNumber) {
+  return fetchProcurement("GET", "/api/procurement/physical-inventory-resolve", undefined, { document_number: documentNumber });
+}
+
 export function addPIItem(id, data) {
   return fetchProcurement("POST", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/items`, data);
 }

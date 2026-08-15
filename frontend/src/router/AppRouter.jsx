@@ -802,6 +802,16 @@ export default function AppRouter() {
                     path="procurement/physical-inventory/:id/print"
                     element={<PIDocumentPrintPage />}
                   />
+                  {/* §MI04-MI05-sidebar-restore — standalone entry, no :id, sidebar-linked. */}
+                  <Route
+                    path="procurement/physical-inventory/count"
+                    element={<PIDocumentCountEntryPage />}
+                  />
+                  <Route
+                    path="procurement/physical-inventory/recount"
+                    element={<PIDocumentRecountPage />}
+                  />
+                  {/* Companion :id variants — direct-jump from PID Detail / the other MI0x page. */}
                   <Route
                     path="procurement/physical-inventory/:id/count"
                     element={<PIDocumentCountEntryPage />}

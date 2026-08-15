@@ -131,6 +131,10 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // §119.12 — Create page (ITEM_WISE) material-location preview. Same EDIT tier as create
   // itself (Auditor-only) since this is part of the Create flow, not a general report.
   "GET:/api/procurement/physical-inventory-material-locations": { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT" },
+  // §MI04-MI05-sidebar-restore — PID-number lookup that MI04/MI05's own Page 1 calls before
+  // loading. Same read tier as list/get (PROC_PI_LIST:VIEW) — the actual count/recount mutation
+  // is separately gated on PROC_PI_COUNT_ENTRY/PROC_PI_RECOUNT:WRITE further down.
+  "GET:/api/procurement/physical-inventory-resolve": { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "VIEW" },
 
   // ── Procurement: Opening Stock ────────────────────────────────────────────
   "GET:/api/procurement/opening-stock":               { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW"  },

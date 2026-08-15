@@ -17,6 +17,7 @@ import ErpScreenScaffold, { ErpFieldPreview } from "../../../../components/templ
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { enterPICount, getPIDocument, listMaterialUomConversionsForProcurement } from "../procurementApi.js";
+import PIDNumberEntryStep from "./PIDNumberEntryStep.jsx";
 
 const PAGE_SIZE = 25;
 
@@ -162,7 +163,13 @@ export default function PIDocumentCountEntryPage() {
   const navigate = useNavigate();
   const { id: routeId = "" } = useParams();
   const screenContext = (() => { try { return getActiveScreenContext() ?? {}; } catch { return {}; } })();
-  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
+  const linkedId = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
+
+  // §MI04-MI05-sidebar-restore — standalone entry: no linked id means Page 1 (type the PID
+  // number) runs first; a linked id (companion button from PID Detail / MI05's "Go to MI04")
+  // skips straight to Page 2, same as before.
+  const [resolvedId, setResolvedId] = useState(linkedId);
+  const id = resolvedId;
 
   const [activeItemId, setActiveItemId] = useState("");
   const [saving, setSaving] = useState(false);
@@ -230,7 +237,7 @@ export default function PIDocumentCountEntryPage() {
         ...(error ? [{ key: "count-entry-error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "count-entry-notice", tone: "success", message: notice }] : []),
       ]}
-      actions={[
+      actions={id ? [
         { key: "review", label: "Review / Submit", tone: "primary", onClick: openDetail },
         {
           key: "refresh",
@@ -238,9 +245,15 @@ export default function PIDocumentCountEntryPage() {
           tone: "neutral",
           onClick: () => void detailQuery.refetch(),
         },
-      ]}
+      ] : []}
     >
-      {loading || !detail ? (
+      {!id ? (
+        <PIDNumberEntryStep
+          heading="Enter PID number"
+          helperText="Type the PID you want to count. This is global across companies — if it belongs to a different company, you'll be told so."
+          onResolved={(doc) => setResolvedId(doc.id)}
+        />
+      ) : loading || !detail ? (
         <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
           {loading ? "Loading PI document..." : "PI document is unavailable."}
         </div>
