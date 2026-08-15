@@ -86,21 +86,38 @@ old `unit_value: 0` shortcut. Confirm this is understood and intended (it follow
 locked instruction, but it is a real behavior change worth being explicit about in the PR
 description).
 
-**⚠️ Concrete blocker you will hit immediately — resolve before implementation, do not guess:**
-`verifyProcessOrderHandler` hard-blocks with `PROD_PO_CONVERSION_RATE_MISSING` if
+**⚠️ Concrete blocker — LOCKED decision, but the mechanism needs care, read this fully before
+coding:** `verifyProcessOrderHandler` hard-blocks with `PROD_PO_CONVERSION_RATE_MISSING` if
 `resolveConversionRate(companyId, segment_code, materialId, today)` returns null. Today,
 `deriveSegmentCode()` (`ProductionPOCreatePage.jsx`) has no MTEST case and falls through to
 `return ""` for MTEST — meaning `segment_code` would be blank on every MTEST Process PO, and
 `resolveConversionRate` will never find a matching config, so **every MTEST Verify will hard-block**
-unless this is resolved. Two ways to resolve it, and this needs a decision (from the business owner
-via Claude, not a unilateral pick):
-  (a) MTEST derives its `segment_code` from whatever segment its Prodshade actually belongs to
-      (e.g. testing an Admix formulation → segment `ADMIX`), same rate config as that segment's real
-      production POs use — this matches "completely like MTO/HPS" literally.
-  (b) MTEST gets the same treatment §104.8 gives INT's conversion cost — optional, resolves to 0 and
-      proceeds if unconfigured, since these are test batches.
-  **Do not implement either silently — flag this back to Claude/business owner as an explicit open
-  question if it isn't resolved by the time you reach this step**, and do not merge with MTEST simply
+unless this is resolved.
+
+**Locked (business owner, 2026-08-15): MTEST's `segment_code` must resolve to the real family
+segment (`ADMIX`/`HPS`/`IWC`/`POWDER`) of whatever Prodshade is actually under test** — the same
+rate config that Prodshade's real MTO/HPS/MTS production POs already use, matching "completely like
+MTO/HPS" literally. `segment_code` must never end up blank for a real MTEST PO.
+
+**The mechanism is not straightforward — investigate before implementing, do not assume a simple
+one-line fix:** `deriveSegmentCode(poType, mtsSegmentCode)` derives segment from `poType` alone for
+MTO/HPS/INT (`MTO→ADMIX`, `HPS→HPS`, `INT→INT`), which works because those Process POs' own
+`po_type` directly encodes the family. MTEST cannot use the same trick — a Stroke usable for MTEST
+testing is itself stored with `stroke_master.po_type = 'MTEST'` (confirmed:
+`strokeOptions`/`strokePoType === "MTEST" || strokePoType === "INT"` filter in
+`ProductionPOCreatePage.jsx`), **not** the underlying family it's actually testing — so there is no
+field to read "ADMIX" or "HPS" off of the selected Stroke directly. MTS already solves an
+analogous problem the same way you should default to here: MTS also cannot auto-derive its segment
+(`IWC` vs `POWDER`) from `po_type` alone, so it exposes a manual **segment dropdown**
+(`MTS_SEGMENTS = ["IWC", "POWDER"]`, wired through `mtsSegmentCode` state →
+`deriveSegmentCode("MTS", mtsSegmentCode)`). **Default plan: give MTEST the same manual
+segment-selection field at Process PO create**, reusing the real family options (`ADMIX`, `HPS`,
+`IWC`, `POWDER` — confirm the exact canonical list against `conversion_cost_config`'s own segment
+values, don't invent new segment strings), wired the same way MTS's dropdown is. Only deviate from
+this (e.g. auto-deriving from the selected Prodshade material or its linked Stroke history) if you
+find a genuine, already-existing field/relationship that reliably carries this information for
+every MTEST creation path (both the Prodshade+Stroke path and the direct-FG-SKU `mtestSkuPath`) —
+do not invent a new implicit linkage, and do not merge with MTEST simply
   hard-blocked in dev because no one configured a segment/rate for it — that would make this whole
   redesign untestable.
 
