@@ -86,7 +86,7 @@ function mapPackingTypeToSourceType(poType: string): string {
   if (normalized === "PMTO") return "MTO";
   if (normalized === "PHPS") return "HPS";
   if (normalized === "PMTS") return "MTS";
-  if (normalized === "PTEST") return "ZTEST";
+  if (normalized === "PTEST") return "MTEST";
   return "";
 }
 
@@ -209,7 +209,7 @@ async function getMachineMapByIds(ids: string[]): Promise<Map<string, JsonRecord
 // is also removed" (false) — those are two independent decisions. PMTS now behaves
 // exactly like PMTO/PHPS: user picks which Process PO batch to draw SFG from.
 function isBatchBlindPackingType(poType: string): boolean {
-  return poType === "PTEST";
+  return false;
 }
 
 async function getMaterialGroupMemberIdsByGroupIds(groupIds: string[]): Promise<Map<string, string[]>> {
@@ -1208,15 +1208,15 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     const body = await parseBody(req);
 
     const companyId = toTrimmedString(body.company_id);
-    const sourcePoType = toUpperTrimmedString(body.source_po_type || mapPackingTypeToSourceType(toTrimmedString(body.po_type)));
-    const normalizedSourcePoType = sourcePoType === "MTEST" ? "ZTEST" : sourcePoType;
-    const poType = toUpperTrimmedString(body.po_type) || mapSourceTypeToPackingType(normalizedSourcePoType);
+    const requestedSourcePoType = toUpperTrimmedString(body.source_po_type || mapPackingTypeToSourceType(toTrimmedString(body.po_type)));
+    const canonicalSourcePoType = requestedSourcePoType === "ZTEST" ? "MTEST" : requestedSourcePoType;
+    const poType = toUpperTrimmedString(body.po_type) || mapSourceTypeToPackingType(canonicalSourcePoType);
     const materialId = toTrimmedString(body.material_id);
     const numPacks = parsePositiveInt(body.num_packs);
     const fillQtyPerPack = numberOrNull(body.fill_qty_per_pack);
     const pmLocationInputs = Array.isArray(body.pm_lines) ? body.pm_lines as JsonRecord[] : [];
 
-    if (!companyId || !VALID_PACK_PO_TYPES.has(poType) || !["MTO", "HPS", "MTS", "ZTEST"].includes(normalizedSourcePoType) || !materialId || !numPacks) {
+    if (!companyId || !VALID_PACK_PO_TYPES.has(poType) || !["MTO", "HPS", "MTS", "MTEST"].includes(canonicalSourcePoType) || !materialId || !numPacks) {
       return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id, po_type, material_id and num_packs required");
     }
     await assertPackingCompanyScope(ctx, companyId);
@@ -1420,7 +1420,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         company_id: companyId,
         po_number: poNumber,
         po_type: poType,
-        source_po_type: normalizedSourcePoType,
+        source_po_type: canonicalSourcePoType,
         process_order_id: null,
         machine_id: null,
         batch_number: null,
@@ -1434,7 +1434,7 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
         planned_qty_kg: plannedQtyKg,
         total_qty_kg: plannedQtyKg,
         status: "STANDARD",
-        segment_code: normalizedSourcePoType,
+        segment_code: canonicalSourcePoType,
         created_by: ctx.auth_user_id,
         created_at: now,
         last_updated_at: now,

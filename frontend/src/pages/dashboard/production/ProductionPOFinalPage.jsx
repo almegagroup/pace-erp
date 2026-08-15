@@ -187,7 +187,7 @@ function PackingPoFinalTab() {
   // §108.2 item 8 (2026-07-24, business owner correction): PMTS reversed back to
   // batch-selection like PMTO/PHPS — "Fixed BOM/pack size" and "batch choice" are
   // independent decisions; only PTEST (MTEST) stays generically batch-blind.
-  const isBatchBlind = po?.po_type === "PTEST";
+  const isBatchBlind = false;
   // §108.2 item 7 — PMTS has no Approved/AP-Approved reco workflow (§108.4); the
   // backend already skips the reco insert entirely for PMTS at Final/COR6.
   const hidePmApproval = po?.po_type === "PMTS";
@@ -1081,8 +1081,8 @@ function ProcessPoFinalTab() {
   // (process_order.handlers.ts skips the reco insert entirely for MTS at Verify).
   // INT/MTEST join the same exemption (locked 2026-08-12) — neither has an AP-Reco/
   // billing relationship, and both now post stock at Final instead of Verify.
-  const hideRmApproval = po?.po_type === "MTS" || po?.po_type === "INT" || po?.po_type === "MTEST";
-  const isDirectPostType = po?.po_type === "INT" || po?.po_type === "MTEST";
+  const hideRmApproval = po?.po_type === "MTS" || po?.po_type === "INT";
+  const isDirectPostType = po?.po_type === "INT";
   const lookupMessage = useMemo(() => {
     if (lookupQ.error) return lookupQ.error.message || "Process PO lookup failed.";
     if (!submittedPoNumber || lookupQ.isFetching) return "";
@@ -1210,8 +1210,8 @@ function ProcessPoFinalTab() {
           is_rm: true,
         };
       });
-      // INT/MTEST: output qty is the independently-entered manual field (posts
-      // immediately, no Verify). MTO/HPS/MTS: unchanged, derived from RM approved qty.
+      // INT: output qty is the independently-entered manual field (posts
+      // immediately, no Verify). MTO/HPS/MTS/MTEST: unchanged, derived from RM approved qty.
       const outputActualQty = isDirectPostType
         ? Number(manualOutputQty || 0)
         : rows.reduce((sum, row) => sum + computeRowValues(row).apApproved, 0);

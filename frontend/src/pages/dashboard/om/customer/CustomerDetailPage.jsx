@@ -32,9 +32,13 @@ import {
 const FO_CUSTOMER_TYPE_OPTIONS = [
   { value: "", label: "-- Not an FO party --" },
   { value: "MTO_HPS", label: "MTO / HPS" },
-  { value: "ZTEST", label: "ZTEST" },
+  { value: "MTEST", label: "MTEST" },
   { value: "MTS", label: "MTS" },
 ];
+
+function normalizeFoCustomerType(value) {
+  return String(value || "").toUpperCase() === "ZTEST" ? "MTEST" : String(value || "");
+}
 
 function getAllowedStatusTargets(status) {
   const transitions = {
@@ -109,7 +113,7 @@ export default function CustomerDetailPage() {
       primary_contact_person: customer.primary_contact_person ?? "",
       phone: customer.phone ?? "",
       primary_email: customer.primary_email ?? "",
-      fo_customer_type: customer.fo_customer_type ?? "",
+      fo_customer_type: normalizeFoCustomerType(customer.fo_customer_type),
     });
   }, [customer]);
 
@@ -236,7 +240,7 @@ export default function CustomerDetailPage() {
             <div className="grid gap-3 md:grid-cols-4">
               <ErpFieldPreview label="Status" value={customer.status} tone="sky" />
               <ErpFieldPreview label="Type" value={customer.customer_type} />
-              <ErpFieldPreview label="FO Type" value={customer.fo_customer_type || "Not an FO party"} />
+              <ErpFieldPreview label="FO Type" value={normalizeFoCustomerType(customer.fo_customer_type) || "Not an FO party"} />
               <ErpFieldPreview label="Currency" value={customer.currency_code} />
               <ErpFieldPreview label="GST Number" value={customer.gst_number} />
               <ErpFieldPreview

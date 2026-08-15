@@ -22,7 +22,7 @@ import {
 const FO_TYPE_OPTIONS = [
   { value: "", label: "-- Select --" },
   { value: "MTO_HPS", label: "MTO / HPS" },
-  { value: "ZTEST", label: "ZTEST" },
+  { value: "MTEST", label: "MTEST" },
   { value: "MTS", label: "MTS" },
 ];
 

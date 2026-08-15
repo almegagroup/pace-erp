@@ -509,7 +509,7 @@ export async function listMappedMaterialIdsForVendor(vendorId) {
  * @property {string} [vendor_id] Required unless `customer_name` is set.
  * @property {string} [parent_customer_id]
  * @property {"DOMESTIC"|"EXPORT"} customer_type
- * @property {"MTO_HPS"|"ZTEST"|"MTS"} [fo_customer_type]
+ * @property {"MTO_HPS"|"MTEST"|"MTS"} [fo_customer_type]
  * @property {string} delivery_address
  * @property {string} [billing_address]
  * @property {string} billing_state Required for both DOMESTIC and EXPORT.
@@ -585,7 +585,7 @@ export async function getCustomer(id) {
  * @property {string} [primary_email]
  * @property {string} [currency_code]
  * @property {"REGISTERED"|"UNREGISTERED"|"COMPOSITION"|"EXPORT"|""} [gst_category]
- * @property {"MTO_HPS"|"ZTEST"|"MTS"|""} [fo_customer_type]
+ * @property {"MTO_HPS"|"MTEST"|"MTS"|""} [fo_customer_type]
  */
 
 /**

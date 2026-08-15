@@ -20,7 +20,7 @@ type JsonRecord = Record<string, unknown>;
 const CUSTOMER_STATUSES = new Set(["ACTIVE", "INACTIVE"]);
 const DISPATCH_TYPES = new Set(["DIRECT", "DEPOT"]);
 const REGISTRATION_TYPES = new Set(["REGISTERED", "UNREGISTERED"]);
-const FO_TYPES = new Set(["MTO_HPS", "ZTEST", "MTS"]);
+const FO_TYPES = new Set(["MTO_HPS", "MTEST", "MTS"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -32,6 +32,11 @@ function toTrimmedString(value: unknown): string {
 
 function toUpperTrimmedString(value: unknown): string {
   return toTrimmedString(value).toUpperCase();
+}
+
+function normalizeFoCustomerType(value: unknown): string {
+  const normalized = toUpperTrimmedString(value);
+  return normalized === "ZTEST" ? "MTEST" : normalized;
 }
 
 function mm05Error(req: Request, ctx: OmHandlerContext, code: string, status: number, message: string): Response {
@@ -349,7 +354,7 @@ export async function createDispatchCustomerHandler(req: Request, ctx: OmHandler
     const body = await parseBody(req);
     const name = toTrimmedString(body.name);
     const registrationType = toUpperTrimmedString(body.registration_type);
-    const foCustomerType = toUpperTrimmedString(body.fo_customer_type);
+    const foCustomerType = normalizeFoCustomerType(body.fo_customer_type);
     const state = requireIndianState(req, ctx, body.state);
     if (state instanceof Response) return state;
     const fullAddress = toTrimmedString(body.full_address);
@@ -405,7 +410,7 @@ export async function upgradeDispatchCustomerToRegisteredHandler(req: Request, c
     const gstNumber = toTrimmedString(body.gst_number);
     const overwriteFields = ((body.overwrite_fields ?? {}) as JsonRecord);
     const nextName = toTrimmedString(overwriteFields.name) || toTrimmedString(customer.name);
-    const nextFoType = toUpperTrimmedString(overwriteFields.fo_customer_type) || toUpperTrimmedString(customer.fo_customer_type);
+    const nextFoType = normalizeFoCustomerType(overwriteFields.fo_customer_type) || normalizeFoCustomerType(customer.fo_customer_type);
     if (nextFoType && !FO_TYPES.has(nextFoType)) {
       return mm05Error(req, ctx, "OM_INVALID_FO_CUSTOMER_TYPE", 400, "Invalid FO customer type.");
     }

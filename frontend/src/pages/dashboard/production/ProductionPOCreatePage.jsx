@@ -42,7 +42,8 @@ import { GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
 const MTS_SEGMENTS = ["IWC", "POWDER"];
-const PACKING_SOURCE_TYPES = ["MTO", "HPS", "MTS", "ZTEST"];
+const MTEST_SEGMENTS = ["ADMIX", "HPS", "IWC", "POWDER"];
+const PACKING_SOURCE_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
 const TABS = ["Process PO", "Packing PO"];
 
 const EMPTY_PROCESS = {
@@ -54,6 +55,7 @@ const EMPTY_PROCESS = {
   planned_qty_kg: "",
   planned_start_date: "",
   mts_segment_code: "",
+  mtest_segment_code: "",
 };
 
 const EMPTY_PACKING = {
@@ -126,11 +128,12 @@ function storageLocationLabel(location) {
   return [location?.code || location?.location_code, location?.name || location?.location_name].filter(Boolean).join(" - ");
 }
 
-function deriveSegmentCode(poType, mtsSegmentCode) {
+function deriveSegmentCode(poType, mtsSegmentCode, mtestSegmentCode) {
   if (poType === "MTO") return "ADMIX";
   if (poType === "HPS") return "HPS";
   if (poType === "INT") return "INT";
   if (poType === "MTS") return mtsSegmentCode || "";
+  if (poType === "MTEST") return mtestSegmentCode || "";
   return "";
 }
 
@@ -179,7 +182,6 @@ export default function ProductionPOCreatePage() {
     () => new Map(materialRows.map((material) => [material.id, material])),
     [materialRows],
   );
-
   const approvedStrokesQ = useQuery({
     queryKey: ["production-create-approved-strokes", effectiveCompanyId],
     queryFn: () => listStrokeMasters({
@@ -199,25 +201,9 @@ export default function ProductionPOCreatePage() {
     [approvedStrokesQ.data, materialById],
   );
 
-  const fgMaterialOptions = useMemo(
-    () => materialRows
-      .filter((material) => String(material.material_type || "").toUpperCase() === "FG")
-      .map((material) => ({
-        value: material.id,
-        label: materialLabel(material) || "SKU",
-      })),
-    [materialRows],
-  );
-
   const prodshadeOptions = useMemo(() => {
     const approvedRows = approvedStrokes.filter((stroke) => {
       const strokePoType = String(stroke.po_type || "").toUpperCase();
-      const materialType = String(stroke.material?.material_type || "").toUpperCase();
-
-      if (processForm.po_type === "MTEST") {
-        return materialType === "SFG" || strokePoType === "INT";
-      }
-
       return strokePoType === String(processForm.po_type || "").toUpperCase();
     });
 
@@ -230,21 +216,17 @@ export default function ProductionPOCreatePage() {
       approvedOptions.push({ value: materialId, label: prodshadeLabel(item) || "Material" });
     });
 
-    if (processForm.po_type !== "MTEST") return approvedOptions;
-
-    const seen = new Set(approvedOptions.map((option) => option.value));
-    const merged = [...approvedOptions];
-    for (const option of fgMaterialOptions) {
-      if (!seen.has(option.value)) merged.push(option);
-    }
-    return merged;
-  }, [approvedStrokes, fgMaterialOptions, processForm.po_type]);
+    return approvedOptions;
+  }, [approvedStrokes, processForm.po_type]);
 
   const selectedMaterial = materialById.get(processForm.prodshade_material_id) ?? null;
-  const selectedMaterialType = String(selectedMaterial?.material_type || "").toUpperCase();
-  const derivedSegmentCode = deriveSegmentCode(processForm.po_type, processForm.mts_segment_code);
+  const derivedSegmentCode = deriveSegmentCode(
+    processForm.po_type,
+    processForm.mts_segment_code,
+    processForm.mtest_segment_code,
+  );
   const machineRequired = ["MTO", "HPS", "MTS", "INT"].includes(processForm.po_type);
-  const mtestSkuPath = processForm.po_type === "MTEST" && selectedMaterialType === "FG";
+  const isMtest = processForm.po_type === "MTEST";
 
   const strokesQ = useQuery({
     queryKey: ["production-create-strokes", effectiveCompanyId, processForm.prodshade_material_id],
@@ -253,18 +235,12 @@ export default function ProductionPOCreatePage() {
       material_id: processForm.prodshade_material_id || undefined,
       status: "APPROVED",
     }),
-    enabled: Boolean(effectiveCompanyId && processForm.prodshade_material_id && !mtestSkuPath),
+    enabled: Boolean(effectiveCompanyId && processForm.prodshade_material_id),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
   const strokeOptions = useMemo(
     () => (strokesQ.data ?? [])
-      .filter((stroke) => {
-        if (processForm.po_type === "MTEST") {
-          const strokePoType = String(stroke.po_type || "").toUpperCase();
-          return strokePoType === "MTEST" || strokePoType === "INT";
-        }
-        return String(stroke.po_type || "").toUpperCase() === String(processForm.po_type || "").toUpperCase();
-      })
+      .filter((stroke) => String(stroke.po_type || "").toUpperCase() === String(processForm.po_type || "").toUpperCase())
       .map((stroke) => ({ value: stroke.id, label: strokeLabel(stroke) })),
     [processForm.po_type, strokesQ.data],
   );
@@ -314,7 +290,6 @@ export default function ProductionPOCreatePage() {
     })),
     [storageLocationQ.storageLocations],
   );
-
   const segmentLocationsQ = useQuery({
     queryKey: ["production-create-segment-locations", effectiveCompanyId],
     queryFn: () => listSegmentLocations({ company_id: effectiveCompanyId }),
@@ -430,9 +405,19 @@ export default function ProductionPOCreatePage() {
     [packingForm.pm_lines, packingGroupById, packingNumPacks, packingPmBomLines],
   );
 
-  // 599/000/001 (bomRequired=false): Pack BOM carries no PM lines at all for
-  // these pack codes (§83.15 "PM optional/zero") — the user adds fresh lines
-  // here, exactly like Process PO's own manual RM/PM entry pattern.
+  const packingBomPmTemplateLines = useMemo(
+    () => packingPmBomLines.map((line) => ({
+      material_id: line.material_id || "",
+      dosage_per_pack: line.qty == null ? "" : String(line.qty),
+      storage_location_id: "",
+      has_alternate: Boolean(line.has_alternate),
+      material_group_id: line.material_group_id || "",
+    })),
+    [packingPmBomLines],
+  );
+
+  // Non-fixed pack codes still support ad-hoc PM lines, but they now start
+  // from the saved Pack BOM material template instead of an empty list.
   const packingPmMaterialsQ = useQuery({
     queryKey: ["packing-create-pm-materials"],
     queryFn: () => listMaterials({ material_type: "PM", limit: 500 }),
@@ -464,6 +449,16 @@ export default function ProductionPOCreatePage() {
     }),
     [packingGroupById, packingManualPmLines, packingNumPacks, packingPmMaterialsQ.data],
   );
+
+  useEffect(() => {
+    if (!selectedPackingBomRow?.id) {
+      setPackingManualPmLines([]);
+      return;
+    }
+    if (!packingBomRequired) {
+      setPackingManualPmLines(packingBomPmTemplateLines);
+    }
+  }, [packingBomPmTemplateLines, packingBomRequired, selectedPackingBomRow?.id]);
 
   const packingEffectivePmLines = packingBomRequired ? packingBomPmPreviewLines : packingManualPmPreviewLines;
 
@@ -501,7 +496,9 @@ export default function ProductionPOCreatePage() {
 
   const strokeLines = Array.isArray(strokeDetailQ.data?.lines) ? strokeDetailQ.data.lines : [];
   const strokePreviewRows = useMemo(
-    () => strokeLines.map((line) => {
+    () => {
+      if (isMtest) return [];
+      return strokeLines.map((line) => {
       const selectedStorageLocationId = lineLocationOverrides[line.material_id] || line.default_storage_location_id || "";
       const plannedQty = (Number(line.dosage_pct ?? 0) / 100) * Number(processForm.planned_qty_kg || 0);
       const alternateOptions = [];
@@ -539,8 +536,9 @@ export default function ProductionPOCreatePage() {
         storage_location_id: selectedStorageLocationId,
         standard_qty: plannedQty,
       };
-    }),
-    [lineActualMaterialOverrides, lineLocationOverrides, processForm.planned_qty_kg, strokeLines],
+      });
+    },
+    [isMtest, lineActualMaterialOverrides, lineLocationOverrides, processForm.planned_qty_kg, strokeLines],
   );
 
   useEffect(() => {
@@ -641,12 +639,14 @@ export default function ProductionPOCreatePage() {
         next.planned_qty_kg = "";
         next.planned_start_date = "";
         next.mts_segment_code = "";
+        next.mtest_segment_code = "";
       }
       if (field === "po_type") {
         next.prodshade_material_id = "";
         next.stroke_master_id = "";
         next.machine_id = "";
         next.mts_segment_code = "";
+        next.mtest_segment_code = "";
         next.planned_qty_kg = "";
       }
       if (field === "prodshade_material_id") {
@@ -768,15 +768,11 @@ export default function ProductionPOCreatePage() {
       toast("Company, PO Type, and Material are required.", "error");
       return;
     }
-    if (mtestSkuPath) {
-      setProcessStep(3);
-      return;
-    }
     setProcessStep(2);
   }
 
   function handleStepTwoNext() {
-    if (processForm.po_type !== "MTEST" && !processForm.stroke_master_id) {
+    if (!processForm.stroke_master_id) {
       toast("Stroke is required for this Process PO type.", "error");
       return;
     }
@@ -786,10 +782,6 @@ export default function ProductionPOCreatePage() {
   async function handleCreateProcess(event) {
     event.preventDefault();
 
-    if (processForm.po_type === "MTEST") {
-      toast("MTEST create remains blocked here because the locked brief/frontend contract does not define the full create payload for this repo.", "error");
-      return;
-    }
     if (!effectiveCompanyId || !processForm.prodshade_material_id || !processForm.planned_qty_kg || !derivedSegmentCode) {
       toast("Company, Material, Segment, and Batch Size are required.", "error");
       return;
@@ -984,14 +976,13 @@ export default function ProductionPOCreatePage() {
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="flex flex-col gap-1 md:col-span-2">
                     <label className="text-xs font-medium text-slate-600">
-                      Stroke
-                      {processForm.po_type === "MTEST" ? <span className="text-slate-400"> (optional)</span> : <span className="text-rose-500"> *</span>}
+                      Stroke <span className="text-rose-500"> *</span>
                     </label>
                     <ErpComboboxField
                       value={processForm.stroke_master_id}
                       onChange={(value) => updateProcess("stroke_master_id", value)}
                       options={strokeOptions}
-                      placeholder={processForm.po_type === "MTEST" ? "-- Optional stroke --" : "-- Select stroke --"}
+                      placeholder="-- Select stroke --"
                       emptyStateLabel={strokesQ.isLoading ? "Loading strokes..." : "No approved strokes for this company + material"}
                     />
                   </div>
@@ -1072,6 +1063,16 @@ export default function ProductionPOCreatePage() {
                         onChange={(value) => updateProcess("mts_segment_code", value)}
                         options={MTS_SEGMENTS.map((segment) => ({ value: segment, label: segment }))}
                         placeholder="-- Select segment --"
+                      />
+                    </div>
+                  ) : processForm.po_type === "MTEST" ? (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-slate-600">Family Segment <span className="text-rose-500">*</span></label>
+                      <ErpComboboxField
+                        value={processForm.mtest_segment_code}
+                        onChange={(value) => updateProcess("mtest_segment_code", value)}
+                        options={MTEST_SEGMENTS.map((segment) => ({ value: segment, label: segment }))}
+                        placeholder="-- Select family segment --"
                       />
                     </div>
                   ) : (
@@ -1272,7 +1273,7 @@ export default function ProductionPOCreatePage() {
                 <div className="flex justify-between">
                   <button
                     type="button"
-                    onClick={() => setProcessStep(processForm.po_type === "MTEST" && mtestSkuPath ? 1 : 2)}
+                    onClick={() => setProcessStep(2)}
                     className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
                   >
                     Back

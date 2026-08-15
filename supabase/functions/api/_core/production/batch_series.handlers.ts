@@ -24,6 +24,8 @@ import {
 } from "./production.shared.ts";
 
 type JsonRecord = Record<string, unknown>;
+const NUMBERING_METHODS = new Set(["PLAIN", "CONTINUOUS_DATE", "MONTHLY_RESET_MONYY"]);
+
 type BatchNumberInstanceRow = {
   id: string;
   company_id: string;
@@ -48,6 +50,41 @@ function batchError(req: Request, ctx: ProdHandlerContext, code: string, status:
 function createdOkResponse(data: unknown, requestId: string, req?: Request): Response {
   const response = okResponse(data, requestId, req);
   return new Response(response.body, { status: 201, headers: response.headers });
+}
+
+function parseSerialPadWidth(value: unknown, fallback = 5): number {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 10) {
+    throw new Error("PROD_BATCH_SERIES_INVALID");
+  }
+  return parsed;
+}
+
+function parseNumberingMethod(value: unknown, fallback = "PLAIN"): string {
+  const normalized = toUpperTrimmedString(value);
+  if (!normalized) return fallback;
+  if (!NUMBERING_METHODS.has(normalized)) {
+    throw new Error("PROD_BATCH_SERIES_INVALID");
+  }
+  return normalized;
+}
+
+function buildPreviewBatchNumber(row: JsonRecord, nextCount: number, today = new Date()): string {
+  const prefix = toTrimmedString(row.prefix);
+  const numberingMethod = parseNumberingMethod(row.numbering_method, "PLAIN");
+  const serialPadWidth = parseSerialPadWidth(row.serial_pad_width, 5);
+  const paddedSerial = String(nextCount).padStart(serialPadWidth, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const year = String(today.getFullYear());
+  if (numberingMethod === "CONTINUOUS_DATE") {
+    return `${prefix}${day}-${month}-${year}/${paddedSerial}`;
+  }
+  if (numberingMethod === "MONTHLY_RESET_MONYY") {
+    return `${prefix}${month}${year.slice(-2)}/${paddedSerial}`;
+  }
+  return `${prefix}${paddedSerial}`;
 }
 
 async function getMaterialMapByIds(
@@ -297,7 +334,7 @@ export async function listBatchSeriesHandler(req: Request, ctx: ProdHandlerConte
       .schema("erp_production").from("batch_number_series")
       .select(`
         id, company_id, prodshade_material_id, batch_type, prefix,
-        current_count, active, created_at
+        current_count, numbering_method, serial_pad_width, reset_period, active, created_at
       `)
       .order("batch_type").order("prefix");
 
@@ -319,6 +356,12 @@ export async function listBatchSeriesHandler(req: Request, ctx: ProdHandlerConte
       data: rows.map((row) => ({
         ...row,
         material: materialMap.get(String(row.prodshade_material_id ?? "")) ?? null,
+        next_batch_preview: buildPreviewBatchNumber(
+          row,
+          Number(row.current_count ?? 0) >= ((10 ** Number(row.serial_pad_width ?? 5)) - 1)
+            ? 1
+            : Number(row.current_count ?? 0) + 1,
+        ),
       })),
     }, ctx.request_id, req);
   } catch (err) {
@@ -336,6 +379,8 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
     const batchType = toUpperTrimmedString(body.batch_type);
     const prefix = toTrimmedString(body.prefix);
     const rawCurrentCount = body.current_count;
+    const numberingMethod = parseNumberingMethod(body.numbering_method, "PLAIN");
+    const serialPadWidth = parseSerialPadWidth(body.serial_pad_width, 5);
     // MTS (IWC+Powder) is per-Prodshade; MTO/HPS/MTEST are company-level (83.7, corrected 2026-07-11).
     const isCompanyLevel = batchType === "MTO" || batchType === "HPS" || batchType === "MTEST";
     const materialId = isCompanyLevel ? null : (toTrimmedString(body.prodshade_material_id) || null);
@@ -350,8 +395,9 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
     }
     if (rawCurrentCount !== undefined && rawCurrentCount !== null && String(rawCurrentCount).trim() !== "") {
       const parsedCurrentCount = Number(rawCurrentCount);
-      if (!Number.isInteger(parsedCurrentCount) || parsedCurrentCount < 0 || parsedCurrentCount > 99999) {
-        return batchError(req, ctx, "PROD_BATCH_SERIES_INVALID", 400, "current_count must be an integer between 0 and 99999");
+      const maxCount = (10 ** serialPadWidth) - 1;
+      if (!Number.isInteger(parsedCurrentCount) || parsedCurrentCount < 0 || parsedCurrentCount > maxCount) {
+        return batchError(req, ctx, "PROD_BATCH_SERIES_INVALID", 400, `current_count must be an integer between 0 and ${maxCount}`);
       }
       currentCount = parsedCurrentCount;
     }
@@ -364,6 +410,9 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
         batch_type: batchType,
         prefix,
         current_count: currentCount,
+        numbering_method: numberingMethod,
+        serial_pad_width: serialPadWidth,
+        reset_period: numberingMethod === "MONTHLY_RESET_MONYY" ? null : null,
         active: true,
         created_by: ctx.auth_user_id,
       })
@@ -389,13 +438,38 @@ export async function updateBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
     const id = getIdFromPath(req);
     if (!id) return batchError(req, ctx, "PROD_BATCH_SERIES_ID_MISSING", 400, "ID required");
 
+    const { data: existing, error: existingErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("batch_number_series")
+      .select("id, serial_pad_width")
+      .eq("id", id)
+      .maybeSingle();
+    if (existingErr) {
+      console.error("[batch_series.updateBatchSeries] lookup failed:", JSON.stringify(existingErr));
+      throw new Error("PROD_BATCH_SERIES_UPDATE_FAILED");
+    }
+    if (!existing) {
+      return batchError(req, ctx, "PROD_BATCH_SERIES_ID_MISSING", 404, "Batch series not found");
+    }
+
     const body = await parseBody(req);
     const updates: JsonRecord = { last_updated_at: new Date().toISOString() };
     if (body.prefix !== undefined) updates.prefix = toTrimmedString(body.prefix);
     if (body.active !== undefined) updates.active = body.active === true || body.active === "true";
+    if (body.numbering_method !== undefined) {
+      updates.numbering_method = parseNumberingMethod(body.numbering_method, "PLAIN");
+      if (updates.numbering_method !== "MONTHLY_RESET_MONYY") {
+        updates.reset_period = null;
+      }
+    }
+    if (body.serial_pad_width !== undefined) {
+      updates.serial_pad_width = parseSerialPadWidth(body.serial_pad_width, 5);
+    }
     if (body.current_count !== undefined) {
       const n = Number(body.current_count);
-      if (Number.isInteger(n) && n >= 0 && n <= 99999) updates.current_count = n;
+      const serialPadWidth = parseSerialPadWidth(body.serial_pad_width ?? (existing as JsonRecord).serial_pad_width ?? 5, 5);
+      const maxCount = (10 ** serialPadWidth) - 1;
+      if (Number.isInteger(n) && n >= 0 && n <= maxCount) updates.current_count = n;
     }
 
     const { error } = await serviceRoleClient
@@ -588,34 +662,21 @@ export async function generateBatchNumber(
   // MTO/HPS/MTEST: company-level (no prodshade). MTS (IWC+Powder): per-prodshade.
   const isCompanyLevel = batchType === "MTO" || batchType === "HPS" || batchType === "MTEST";
   const effectiveProdshadeId = isCompanyLevel ? null : prodshadeId;
-
-  let query = serviceRoleClient
-    .schema("erp_production").from("batch_number_series")
-    .select("id, prefix, current_count")
-    .eq("company_id", companyId)
-    .eq("batch_type", batchType)
-    .eq("active", true);
-
-  if (effectiveProdshadeId) {
-    query = query.eq("prodshade_material_id", effectiveProdshadeId);
-  } else {
-    query = query.is("prodshade_material_id", null);
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .rpc("generate_batch_series_number", {
+      p_company_id: companyId,
+      p_batch_type: batchType,
+      p_prodshade_material_id: effectiveProdshadeId,
+      p_today: new Date().toISOString().slice(0, 10),
+    })
+    .maybeSingle();
+  if (error) {
+    console.error("[batch_series.generateBatchNumber] rpc failed:", JSON.stringify(error));
+    throw new Error("PROD_BATCH_SERIES_GENERATE_FAILED");
   }
-
-  const { data } = await query.maybeSingle();
-  if (!data) {
+  if (!data || !toTrimmedString((data as JsonRecord).batch_number)) {
     throw new Error(`PROD_BATCH_SERIES_NOT_FOUND: type=${batchType}`);
   }
-
-  const series = data as JsonRecord;
-  const currentCount = Number(series.current_count);
-  const nextCount = currentCount >= 99999 ? 1 : currentCount + 1;
-  const paddedCount = String(nextCount).padStart(5, "0");
-  const batchNumber = `${series.prefix}${paddedCount}`;
-
-  await serviceRoleClient.schema("erp_production").from("batch_number_series")
-    .update({ current_count: nextCount, last_updated_at: new Date().toISOString() })
-    .eq("id", series.id);
-
-  return batchNumber;
+  return String((data as JsonRecord).batch_number);
 }

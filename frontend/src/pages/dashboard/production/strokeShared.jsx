@@ -371,7 +371,7 @@ export function ChangeBomLinesTable({ lines, setLines, materialsByType, groups, 
 // Same mechanism as Stroke Master RM lines (material_category_group alternates)
 // but PM-only, no Dosage%, absolute Qty per outer pack unit, UOM auto-derived
 // from the selected PM material's base_uom_code (locked spec: not editable).
-export function PackBomLinesTable({ lines, setLines, materials, groups, onCreateGroup, onAddMember, disabled }) {
+export function PackBomLinesTable({ lines, setLines, materials, groups, onCreateGroup, onAddMember, disabled, qtyDisabled = false }) {
   function addLine() {
     setLines((l) => [...l, { _key: Math.random().toString(36).slice(2), material_id: "", qty: "", uom_code: "", has_alternate: false, material_group_id: "", is_primary_container: false }]);
   }
@@ -428,7 +428,7 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
                     type="number" step="0.001" min="0"
                     value={line.qty}
                     onChange={(e) => updateLine(line._key, { qty: e.target.value })}
-                    disabled={disabled}
+                    disabled={disabled || qtyDisabled}
                   />
                 </td>
                 <td className={`${td} text-slate-500`}>{line.uom_code || "—"}</td>
