@@ -26,7 +26,7 @@ import {
 const FO_CUSTOMER_TYPE_OPTIONS = [
   { value: "", label: "-- Not an FO party --" },
   { value: "MTO_HPS", label: "MTO / HPS" },
-  { value: "ZTEST", label: "ZTEST" },
+  { value: "MTEST", label: "MTEST" },
   { value: "MTS", label: "MTS" },
 ];
 

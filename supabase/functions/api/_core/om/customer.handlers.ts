@@ -23,7 +23,7 @@ const ALLOWED_GST_CATEGORIES = new Set(["REGISTERED", "UNREGISTERED", "COMPOSITI
 // §83.18-REVISED (2026-07-23): separate from customer_type above (unrelated
 // DOMESTIC/EXPORT commercial classification) -- this filters the Plan Feed (FO) Party
 // dropdown by PO Type. Optional/nullable: RM/PM Sales customers never set it.
-const ALLOWED_FO_CUSTOMER_TYPES = new Set(["MTO_HPS", "ZTEST", "MTS"]);
+const ALLOWED_FO_CUSTOMER_TYPES = new Set(["MTO_HPS", "MTEST", "MTS"]);
 const CUSTOMER_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL", "ACTIVE", "INACTIVE", "BLOCKED"]);
 const CUSTOMER_TRANSITIONS = new Map<string, Set<string>>([
   ["DRAFT", new Set(["ACTIVE", "INACTIVE", "PENDING_APPROVAL"])],
@@ -39,6 +39,11 @@ function parseBody(req: Request): Promise<JsonRecord> {
 
 function toTrimmedString(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function normalizeFoCustomerType(value: unknown): string {
+  const normalized = toTrimmedString(value).toUpperCase();
+  return normalized === "ZTEST" ? "MTEST" : normalized;
 }
 
 function parsePositiveInt(value: unknown, fallback: number): number {
@@ -169,7 +174,7 @@ export async function createCustomerHandler(
     const customerType = toTrimmedString(body.customer_type).toUpperCase();
     const deliveryAddress = toTrimmedString(body.delivery_address);
     const billingState = toTrimmedString(body.billing_state);
-    const foCustomerTypeRaw = toTrimmedString(body.fo_customer_type).toUpperCase();
+    const foCustomerTypeRaw = normalizeFoCustomerType(body.fo_customer_type);
     const gstCategory = toTrimmedString(body.gst_category).toUpperCase();
     // §113.6 — a customer created with no company mapping produces an
     // unscoped row every other company can see; mandatory at create time.
@@ -320,7 +325,7 @@ export async function listCustomersHandler(
 
     const url = new URL(req.url);
     const customerType = toTrimmedString(url.searchParams.get("customer_type")).toUpperCase();
-    const foCustomerType = toTrimmedString(url.searchParams.get("fo_customer_type")).toUpperCase();
+    const foCustomerType = normalizeFoCustomerType(url.searchParams.get("fo_customer_type"));
     const statusFilter = toTrimmedString(url.searchParams.get("status")).toUpperCase();
     const search = normalizeSearch(toTrimmedString(url.searchParams.get("search")));
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
@@ -360,7 +365,9 @@ export async function listCustomersHandler(
       query = query.eq("customer_type", customerType);
     }
     if (foCustomerType) {
-      query = query.eq("fo_customer_type", foCustomerType);
+      query = foCustomerType === "MTEST"
+        ? query.in("fo_customer_type", ["MTEST", "ZTEST"])
+        : query.eq("fo_customer_type", foCustomerType);
     }
     if (statusFilter) {
       query = query.eq("status", statusFilter);
@@ -466,7 +473,7 @@ export async function updateCustomerHandler(
     }
 
     if (body.fo_customer_type !== undefined) {
-      const foCustomerType = toTrimmedString(body.fo_customer_type).toUpperCase();
+      const foCustomerType = normalizeFoCustomerType(body.fo_customer_type);
       if (foCustomerType && !ALLOWED_FO_CUSTOMER_TYPES.has(foCustomerType)) {
         return customerErrorResponse(req, ctx, "OM_INVALID_FO_CUSTOMER_TYPE", 400, "Invalid FO customer type");
       }

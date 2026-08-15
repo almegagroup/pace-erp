@@ -8038,12 +8038,13 @@ Step 5: Save
 
 #### Production Cycle — Standard → QA Approval → Final → Verify (LOCKED — 2026-07-03)
 
-**Full cycle applies to: MTO, HPS** — Standard → QA Online Approval → Start Batch → Final → Verify
+**Full cycle applies to: MTO, HPS, MTEST** — Standard → QA Online Approval → Start Batch → Final → Verify (see §120 — MTEST corrected 2026-08-15 to the exact same 5-stage cycle as MTO/HPS)
 **IWC (MTS):** Standard → Start Batch → Final → Verify (**no QA Online Approval**)
 **INT Process PO:** simple cycle only (no QA approval, no batch number — see 83.5)
-**MTEST:** one-step cycle — fully manual (see 83.4 PO Types)
 
-> **Confirmed 2026-07-11:** MTEST is single-action like INT — no separate Standard/Final/Verify stages, one page/one save completes it. Unlike INT, MTEST **does** get a batch number (company-level series, generated at that single save — per 83.7). No stroke, no BOM for MTEST either way — RM lines entered fully manually.
+~~**MTEST:** one-step cycle — fully manual (see 83.4 PO Types)~~
+~~**Confirmed 2026-07-11:** MTEST is single-action like INT — no separate Standard/Final/Verify stages, one page/one save completes it. Unlike INT, MTEST **does** get a batch number (company-level series, generated at that single save — per 83.7). No stroke, no BOM for MTEST either way — RM lines entered fully manually.~~
+> **Superseded twice, see §120 for the current lock:** a 2026-08-12 session first corrected this to "MTEST runs the full MTO/HPS lifecycle minus Verify" (captured only in Claude's session memory at the time, never written back into this doc — that gap is itself corrected here) — then on 2026-08-15 the business owner locked MTEST to the **exact same 5-stage cycle as MTO/HPS, Verify included**. No stroke/BOM still holds — RM lines are entered manually either way, that part was never in question.
 
 **Process PO Status Flow (MTO/HPS):**
 
@@ -18420,3 +18421,124 @@ Entry/Recount route গুলোর একটাও register করা ছিল
 `partial_reversal.handlers.ts`)-এ — এই তিনটা ফাইল এখনো PID-এর posting block respect করে না
 (আজকের অবস্থাই বহাল)। এছাড়া GRN/STO/SO/RTV/DeliveryOrder-এর existing block-check-ও এখনো informative
 modal response দেয় না (§119.9 সিদ্ধান্ত ২ — শুধু PID নিজের handler retrofit হয়েছে)।
+
+---
+
+## Section 120 — MTEST/ZTEST Full Redesign: Two-Order Model, Pack BOM 001 Reusable PM Templates, Batch Number Per-Company Format (✅ DESIGN LOCKED — 2026-08-15, IMPLEMENTATION NOT STARTED)
+
+**প্রেক্ষাপট:** locked module sequence অনুযায়ী (CLAUDE.md §6) IN01/PID সম্পূর্ণ হওয়ার পরের ধাপ।
+"ZTEST" আর "MTEST" একই জিনিস — business owner আগেই confirm করেছিলেন (§114.5), দুটো নাম একই
+PO type/dispatch type বোঝায়, এই section-এ সব জায়গায় "MTEST" লেখা হলেও ZTEST-ও একই কথা।
+
+### 120.1 — Process PO lifecycle: MTO/HPS-এর সাথে EXACT মেলাতে হবে, Verify সহ (LOCKED)
+
+**আগের (2026-08-12) lock সম্পূর্ণ reverse হলো।** সেই session-এ lock হয়েছিল "MTEST চলবে
+MTO/HPS-এর মতোই কিন্তু Verify ছাড়া" (Standard → QA Approve → Start Batch → BATCH_STARTED →
+Final, Final-ই সব post করে দেয়) — কিন্তু সেই lock টা **কখনো এই doc-এ লেখা হয়নি**, শুধু Claude-র
+session memory-তে ছিল (§120.1-এর নিচে সেই gap-টাও এই session-এ ধরা পড়ে সংশোধন করা হলো, দেখো
+§8.4-এর উপরের strikethrough note)।
+
+**নতুন lock (2026-08-15, business owner):** MTEST Process PO এখন **হুবহু MTO/HPS-এর মতোই পাঁচ
+ধাপের পুরো cycle-এ যাবে** — Standard → QA Online Approval → Start Batch (batch number পায়,
+§83.7 অনুযায়ী) → BATCH_STARTED → Final → **Verify**। Verify ধাপ ফিরে এলো, আগের "Final-ই সব
+post করে দেয়" শর্টকাট বাতিল।
+
+যা অপরিবর্তিত থাকছে: কোনো Stroke/BOM নেই, RM line manually বসাতে হয় (কোনো auto-populate নেই)।
+Machine এখনো optional (§83.9 exemption অপরিবর্তিত)।
+
+### 120.2 — Packing PO: genuine two-order model, PTEST (LOCKED)
+
+MTEST এখন সত্যিকারের MTO/HPS-এর মতো **দুটো আলাদা document**-এ ভাগ হবে — Process PO (MTEST,
+§120.1) → তারপর আলাদা **Packing PO (PTEST)**, যেটা Process PO-র VERIFIED batch থেকে SFG draw
+করে Pack BOM অনুযায়ী pack করে। `packingPoTypeForProcessType()`-এ MTEST→PTEST mapping আগে থেকেই
+কোডে আছে (production.utils.ts-জাতীয় ফাইলে) — কিন্তু বাস্তবে কখনো exercise হয়নি কারণ MTEST আগে
+এক-ধাপেই শেষ হয়ে যেত। এখন Process PO Verify হওয়ার পরই Packing PO (PTEST) তৈরি করা যাবে, ঠিক
+MTO/HPS-এর মতোই।
+
+### 120.3 — Pack Code 001: bom_required=false-ই থাকবে, কিন্তু PM material list পুনর্ব্যবহারযোগ্য করতে হবে (LOCKED, সিদ্ধান্ত পরিবর্তিত)
+
+**প্রথমে business owner বলেছিলেন Pack BOM 001-কে Fixed BOM (bom_required=true) করতে হবে —
+পরে নিজেই সংশোধন করেন:** per-pack quantity case-to-case আলাদা হয় বলে **001 non-fixed
+(`bom_required=false`)-ই থাকবে**, 599/510/000-এর মতো একই category-তে। কিন্তু আসল সমস্যাটা হলো
+— এখন প্রতিটা Packing PO তৈরির সময় PM material নতুন করে খুঁজে বসাতে হয়, যদিও একই pack code-এ
+সাধারণত একই কয়েকটা PM material (label, cap, pouch ইত্যাদি) বারবার ব্যবহার হয়। **সমাধান: PM
+material-এর তালিকা (identity) Pack BOM-এ একবার সেভ করে রাখা যাবে, কিন্তু quantity প্রতিটা
+Packing PO-তে আলাদা করে ভরতে হবে** — material বারবার খোঁজার ঝামেলা যাবে, কিন্তু per-instance
+fill-এর flexibility থাকবে।
+
+**Code-verified আসল অবস্থা (2026-08-15) — এটা আসলে অর্ধেক already তৈরি:**
+
+- **Backend সম্পূর্ণ প্রস্তুত, কোনো change লাগবে না।** `createPackBomHandler`
+  (`pack_bom.handlers.ts`) non-fixed pack code (599/000/001)-এর জন্যও `pmLines` নিতে পারে —
+  শুধু `qty` জোর করে `null` রাখে (`qty: bomRequired ? parsePositiveNumber(line.qty) : null`)।
+  BOM সাথে সাথে ACTIVE হয়ে যায় (`initialStatus = bomRequired ? "DRAFT" : "ACTIVE"`), কোনো PR06
+  approval লাগে না — এটা আগে থেকেই এই ভাবে কাজ করার জন্য বানানো ছিল, শুধু frontend কখনো ব্যবহার
+  করেনি।
+- **আসল গ্যাপ শুধু Frontend-এ, দুই জায়গায়:**
+  1. `PackBomCreatePage.jsx` — "PM Lines" table পুরোপুরি `disabled={!bomRequired}` করা আছে
+     (`<PackBomLinesTable ... disabled={!bomRequired} />`)। মানে non-fixed pack code-এর জন্য
+     material select করার UI-ই বন্ধ, যদিও backend সেটা accept করতেই পারে। **Fix করতে হবে:**
+     material select column enable থাকবে non-fixed code-এও, শুধু qty column optional/hidden
+     থাকবে (submit logic-এ `validPm = pmLines.filter((line) => line.material_id && (!bomRequired
+     || Number(line.qty) > 0))` ইতিমধ্যেই non-fixed-এর জন্য শুধু `material_id` চায়, qty না —
+     এই অংশ কোনো change ছাড়াই কাজ করবে)।
+  2. `ProductionPOCreatePage.jsx`-এর Packing PO tab — এখন non-fixed pack code হলে সবসময় খালি
+     `packingManualPmLines` (fresh `useState([])`) দিয়ে শুরু করে, Pack BOM-এ যদি PM lines থাকেও
+     সেগুলো সম্পূর্ণ ignore করা হয় (`packingEffectivePmLines = packingBomRequired ?
+     packingBomPmPreviewLines : packingManualPmPreviewLines` — non-fixed হলে কখনো
+     `packingBomPmPreviewLines` পড়েই না)। **Fix করতে হবে:** non-fixed pack code হলেও, যদি
+     সংশ্লিষ্ট Pack BOM-এ PM lines সেভ করা থাকে, সেগুলোকে material-pre-filled/qty-blank টেমপ্লেট
+     হিসেবে load করতে হবে (user শুধু qty ভরবে) — সাথে user চাইলে template-এর বাইরেও নতুন ad-hoc
+     PM line যোগ করতে পারবে (কোনো নির্দিষ্ট case-এ অতিরিক্ত কিছু লাগলে)।
+
+**Implementation এখনো শুরু হয়নি** — এই দুটো frontend fix করার আগে ঠিক UI copy/label
+("PM Lines (template — qty entered fresh per Packing PO)" জাতীয় কিছু) confirm করে নিতে হবে।
+
+### 120.4 — Batch number: company-ভিত্তিক আলাদা format, SA page থেকে selectable (✅ LOCKED — 2026-08-15)
+
+**বর্তমান বাস্তবতা (dev DB সরাসরি চেক করা):** `erp_production.batch_number_series` টেবিলে
+**MTEST-এর জন্য একটাও row নেই** কোনো company-তে — আজকের অবস্থায় MTEST batch series আদৌ
+configure-ই করা হয়নি, "redesign" শুরুর আগেই এটা একটা খালি slate। টেবিলের বর্তমান column shape:
+`id, company_id, prodshade_material_id, batch_type, prefix, current_count, active, created_by,
+created_at, last_updated_at` — কোনো format/pattern column নেই, শুধু prefix + running counter
+(৫-ডিজিট zero-pad, code-level hardcoded)। এই একই টেবিল/mechanism MTO/HPS/MTS সবার batch series-এর
+জন্যও ব্যবহার হয় — তাই নতুন column-গুলোর জন্য **default value বসিয়ে existing MTO/HPS/MTS আচরণ
+অপরিবর্তিত রাখতে হবে**, শুধু MTEST-এর নতুন row-গুলো নতুন format ব্যবহার করবে।
+
+**দুটো company-র দুটো real example (business owner):**
+- **CMP003:** `{PREFIX}{DD-MM-YYYY}/{SERIAL}` — যেমন serial `101` হলে, ১৫ আগস্ট ২০২৬-এ generate
+  হলে `PREFIX15-08-2026/00101` (serial **৫-ডিজিট zero-padded**, বাকি system-এর সাথে মেলানো)।
+  Serial **কখনো reset হয় না** — date শুধু generation-day-র stamp, counter-কে প্রভাবিত করে না।
+- **CMP006:** `{PREFIX}{MMYY}/{SERIAL}` — যেমন August 2026-এ `BMAM0826/0001` (prefix=`BMAM`,
+  month-year=`0826`, serial **৪-ডিজিট zero-padded**)। Serial **প্রতি ক্যালেন্ডার মাসে reset হয়**
+  — নতুন মাসের প্রথম batch সবসময় serial `0001`/`00001` (pad width অনুযায়ী) থেকে শুরু।
+
+**Locked design — ৩টা selectable "Numbering Method", hardcoded per-company mapping না:**
+
+`erp_production.batch_number_series`-এ নতুন ২টা column যোগ হবে:
+- `numbering_method` (TEXT, CHECK constraint, ডিফল্ট `'PLAIN'`) — এই মুহূর্তে ৩টা valid value:
+  1. `PLAIN` — বর্তমান আচরণ, অপরিবর্তিত: `{PREFIX}{SERIAL}`, কোনো date component নেই, কোনো
+     reset নেই। **সব existing MTO/HPS/MTS row এই ডিফল্টেই থাকবে, কোনো পরিবর্তন হবে না।**
+  2. `CONTINUOUS_DATE` — CMP003-style: `{PREFIX}{DD-MM-YYYY}/{SERIAL}`, কখনো reset হয় না।
+  3. `MONTHLY_RESET_MONYY` — CMP006-style: `{PREFIX}{MMYY}/{SERIAL}`, প্রতি মাসে serial reset।
+- `serial_pad_width` (INTEGER, ডিফল্ট ৫) — প্রতিটা row নিজের zero-pad width বেছে নিতে পারবে (CMP003
+  MTEST=৫, CMP006 MTEST=৪ — উদাহরণেই এই পার্থক্য স্পষ্ট, তাই এটাও per-row configurable হতেই হবে,
+  একটা fixed সংখ্যা না)।
+- `reset_period` (TEXT, nullable) — শুধু `MONTHLY_RESET_MONYY`-এর জন্য দরকার: শেষ কোন MMYY-তে
+  counter reset হয়েছিল সেটা track করে। Generation-এর সময় current MMYY-র সাথে না মিললে, একই atomic
+  `UPDATE ... RETURNING`-এর ভেতরেই `current_count=0`, `reset_period=<current MMYY>` বসিয়ে fresh
+  শুরু হবে (§8B-এর counter rule অনুযায়ী — কখনো আলাদা SELECT তারপর UPDATE না, single atomic
+  statement-ই থাকতে হবে, race-condition এড়াতে)।
+
+**SA page (`SAProductionBatchSeriesPage.jsx`):** প্রতিটা row-এ Prefix field-এর পাশে নতুন
+**"Numbering Method"** dropdown (Plain / Continuous + Date / Monthly Reset) আর **"Serial Digits"**
+input যোগ হবে। SA যেকোনো company + batch_type combo-র জন্য যেকোনো method বেছে নিতে পারবে — কোনো
+company-name hardcode করা থাকবে না কোড-এ, তাই future-এ নতুন company এলে SA নিজেই ঠিক করে দেবে কোন
+method লাগবে। নতুন কোনো ৪র্থ method future-এ লাগলে সেটা code-এ যোগ করতে হবে (নতুন enum value +
+generation logic), কিন্তু company-to-method **assignment** সবসময় SA-র হাতেই থাকবে, hardcode না।
+
+### 120.5 — Implementation status
+
+Design সম্পূর্ণ locked (§120.1–§120.4)। কিছুই এখনো build হয়নি — পরবর্তী ধাপ: এই পুরো section
+অনুযায়ী task brief লিখে Codex-কে implement করতে দেওয়া, CLAUDE.md-এর established Claude/Codex
+split workflow অনুযায়ী।

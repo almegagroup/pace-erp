@@ -3922,3 +3922,50 @@ it provides no enforcement value as a CI step in its current form.
 - Verification:
   - `frontend` production build passed on Sunday, August 9, 2026 after this follow-up patch as well.
   - The same unrelated pre-existing `GRNListPage.jsx` duplicate `emptyMessage` warning remains unchanged.
+
+### 2026-08-15 18:40 IST - Gate-27 MTEST/ZTEST redesign sequence pass
+- Task: continued the `CODEX-MTEST-ZTEST-REDESIGN-TASK-BRIEF.md` implementation sequence after re-reading the brief, the feasibility lock for Gate-27 production flows, `CLAUDE.md`, and the existing Gate-27 batch/packing entries in this log. This pass focused on the still-open vertical gaps between migration/backend changes already in progress and the actual visible frontend/admin flows.
+- Backend alignment completed:
+  - Added `supabase/migrations/20260815123000_gate27_mtest_ztest_batch_series_redesign.sql` to extend `erp_production.batch_number_series` with `numbering_method`, `serial_pad_width`, and `reset_period`, plus the DB-side `erp_production.generate_batch_series_number(...)` RPC so batch numbering is atomic and rule-driven instead of frontend-assumed.
+  - Updated `supabase/functions/api/_core/production/process_order.handlers.ts` so `MTEST` no longer posts at Final; it now follows the same Final -> Verify lifecycle as other non-INT flows.
+  - Updated `supabase/functions/api/_core/production/packing_order.handlers.ts` so `PTEST` resolves to canonical source type `MTEST` instead of the old `ZTEST` branch, while preserving compatibility for older payload variants.
+  - Updated `supabase/functions/api/_core/production/batch_series.handlers.ts` so list/create/update/generate all understand numbering method + digit width and return a backend-calculated `next_batch_preview`.
+- Frontend alignment completed:
+  - `frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx`
+    - surfaced the previously missing `MTEST` header fields (`Family Segment`, `Output Storage Location`);
+    - replaced the old empty/no-op MTEST create path with a real manual RM/INT line-entry table on Page 3;
+    - removed the stroke-derived shortage block for MTEST only, while keeping the old guarded path for MTO/HPS/MTS/INT.
+  - `frontend/src/pages/dashboard/production/PackBomCreatePage.jsx` + `frontend/src/pages/dashboard/production/strokeShared.jsx`
+    - corrected the non-fixed Pack BOM behavior so PM material/group mapping remains editable even when fixed quantity is not required;
+    - introduced `qtyDisabled` in the shared PM-line table so only quantity can be locked while material/group controls stay usable.
+  - `frontend/src/admin/sa/screens/SAProductionBatchSeriesPage.jsx`
+    - rebuilt the screen around the new backend contract so SA can create/edit numbering method, serial digit width, current count, and see backend-generated next-batch previews.
+- Files touched in this pass:
+  - `supabase/migrations/20260815123000_gate27_mtest_ztest_batch_series_redesign.sql`
+  - `supabase/functions/api/_core/production/process_order.handlers.ts`
+  - `supabase/functions/api/_core/production/packing_order.handlers.ts`
+  - `supabase/functions/api/_core/production/batch_series.handlers.ts`
+  - `frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx`
+  - `frontend/src/pages/dashboard/production/PackBomCreatePage.jsx`
+  - `frontend/src/pages/dashboard/production/strokeShared.jsx`
+  - `frontend/src/admin/sa/screens/SAProductionBatchSeriesPage.jsx`
+- Verification:
+  - `frontend` production build passed on Saturday, August 15, 2026 after these changes when run outside the Windows sandbox.
+  - Repo-pattern audit confirmed `.schema(...).rpc(...)` is already used elsewhere in backend handlers, so the new batch-series RPC call follows an existing local pattern rather than introducing a one-off style.
+- Honest limitations / next follow-up:
+  - Local backend import-smoke verification still could not be truthfully claimed in this terminal context because the known host-level Node `EPERM` realpath/lstat issue triggers before script code runs unless the command is elevated with repo-safe env setup.
+  - This pass closes the visible/admin sequence gaps that were still missing, but it does not claim the full MTEST/ZTEST redesign brief is completely closed until the remaining live business journeys are replayed end-to-end on dev/prod data.
+
+### 2026-08-15 19:30 IST - Gate-27 MTEST FO-type legacy rename closure
+- Task: closed the remaining legacy `ZTEST` naming gap that was still left in the FO party/customer-type layer after the core MTEST/PTEST lifecycle alignment.
+- Backend:
+  - Updated `supabase/functions/api/_core/om/customer.handlers.ts` so FO customer type validation now treats `MTEST` as the canonical value, while still accepting incoming legacy `ZTEST` payloads as an alias during the transition.
+  - Updated `supabase/functions/api/_core/om/customer.handlers.ts` list filtering so an `MTEST` filter matches both persisted `MTEST` and not-yet-migrated `ZTEST` rows, preventing an empty Party dropdown during rollout.
+  - Updated `supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts` so MM05 dispatch-customer create/upgrade also uses canonical `MTEST` with the same legacy alias normalization.
+  - Added `supabase/migrations/20260815193000_gate27_mtest_fo_type_rename.sql` to drop the old FO-type check constraints, update persisted `ZTEST` rows to `MTEST` in both `erp_master.customer_master` and `erp_master.fg_dispatch_customer`, and recreate the constraints with the new allowed set (`MTO_HPS`, `MTEST`, `MTS`).
+- Frontend:
+  - Updated `frontend/src/pages/dashboard/production/PlanFeedPage.jsx` so Plan Feed now uses `MTEST` as the real selected FO type, and normalizes any still-legacy customer rows from `ZTEST` to `MTEST` for display/edit safety before the migration is applied.
+  - Updated `frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx`, `frontend/src/pages/dashboard/om/customer/CustomerCreateForm.jsx`, `frontend/src/pages/dashboard/om/customer/CustomerDetailPage.jsx`, and `frontend/src/pages/dashboard/om/omApi.js` so every OM/dispatch/customer FO-type picker and payload typedef now uses `MTEST` instead of `ZTEST`.
+- Verification:
+  - `frontend` production build passed on Saturday, August 15, 2026 after this follow-up rename pass as well.
+  - Repo scan confirmed the only remaining runtime `ZTEST` references are intentional backward-compatibility shims in packing/type-mapping code plus historical docs/migrations.

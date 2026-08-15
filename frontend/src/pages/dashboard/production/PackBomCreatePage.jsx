@@ -323,6 +323,11 @@ export default function PackBomCreatePage() {
             </div>
 
             <ErpSectionCard title="PM Lines">
+              {!bomRequired && (
+                <p className="mb-3 text-xs text-slate-500">
+                  This pack code is non-fixed. Material/group mapping stays editable here, while quantity can remain blank until Packing PO time.
+                </p>
+              )}
               <PackBomLinesTable
                 lines={pmLines}
                 setLines={setPmLines}
@@ -330,7 +335,7 @@ export default function PackBomCreatePage() {
                 groups={groupsQ.data ?? []}
                 onCreateGroup={openCreateGroupModal}
                 onAddMember={(groupId) => setMemberModal(groupId)}
-                disabled={!bomRequired}
+                qtyDisabled={!bomRequired}
               />
             </ErpSectionCard>
             <div className="flex justify-between">

@@ -32,9 +32,13 @@ const TABS = [
 
 const FO_CUSTOMER_TYPES = [
   { value: "MTO_HPS", label: "MTO / HPS" },
-  { value: "ZTEST", label: "ZTEST" },
+  { value: "MTEST", label: "MTEST" },
   { value: "MTS", label: "MTS" },
 ];
+
+function normalizeFoCustomerType(value) {
+  return String(value || "").toUpperCase() === "ZTEST" ? "MTEST" : String(value || "");
+}
 
 const ERRORS = {
   PROD_PLAN_FEED_INVALID: "Company, FO number, party, SKU, ordered qty, and order date are required.",
@@ -193,11 +197,18 @@ export default function PlanFeedPage() {
     queryFn: () => listMaterials({ material_type: "FG", status: "ACTIVE", limit: 500 }),
     select: (d) => d?.data ?? [],
   });
-  const customerOptions = useMemo(
-    () => (customersQ.data ?? []).map((c) => ({ value: c.id, label: customerLabel(c) })),
+  const normalizedCustomers = useMemo(
+    () => (customersQ.data ?? []).map((customer) => ({
+      ...customer,
+      fo_customer_type: normalizeFoCustomerType(customer.fo_customer_type),
+    })),
     [customersQ.data],
   );
-  const customerMap = useMemo(() => new Map((customersQ.data ?? []).map((c) => [c.id, c])), [customersQ.data]);
+  const customerOptions = useMemo(
+    () => normalizedCustomers.map((c) => ({ value: c.id, label: customerLabel(c) })),
+    [normalizedCustomers],
+  );
+  const customerMap = useMemo(() => new Map(normalizedCustomers.map((c) => [c.id, c])), [normalizedCustomers]);
 
   // ── Create tab state ──────────────────────────────────────────────────────
   const [form, setForm] = useState({ ...EMPTY_FO });

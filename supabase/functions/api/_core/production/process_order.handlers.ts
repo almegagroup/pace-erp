@@ -1660,7 +1660,6 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const machineId = toTrimmedString(body.machine_id) || null;
     const plannedQty = parsePositiveNumber(body.planned_qty ?? body.planned_qty_kg);
     const plannedStartDate = toTrimmedString(body.planned_start_date) || null;
-    const outputStorageLocationId = toTrimmedString(body.output_storage_location_id) || null;
     const notes = toTrimmedString(body.notes);
     const lineOverrideMap = buildLineOverrideMap(body.line_location_overrides);
 
@@ -1680,8 +1679,8 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const machineValidation = await validateRequiredMachine(req, ctx, companyId, poType, machineId);
     if (machineValidation) return machineValidation;
 
-    if (poType !== "MTEST" && !strokeId) {
-      return poErr(req, ctx, "PROD_PO_STROKE_REQUIRED", 400, "stroke_master_id required for non-MTEST orders");
+    if (!strokeId) {
+      return poErr(req, ctx, "PROD_PO_STROKE_REQUIRED", 400, "stroke_master_id required");
     }
 
     if (strokeId) {
@@ -1700,7 +1699,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       }
     }
 
-    if (strokeId && poType !== "MTEST") {
+    if (strokeId) {
       const { data: strokeLines, error: strokeLinesErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
@@ -1788,7 +1787,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const poId = String((insertedPo as JsonRecord).id);
     const insertedLines: JsonRecord[] = [];
 
-    if (strokeId && poType !== "MTEST") {
+    if (strokeId) {
       const { data: strokeLines, error: strokeLineErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
@@ -1842,15 +1841,6 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     }
 
     const manualLines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
-    if (poType === "MTEST") {
-      if (!outputStorageLocationId) {
-        return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 400, "Storage location required for MTEST - segment config is not used for this type");
-      }
-      const missingLineLocation = manualLines.some((line) => !toTrimmedString(line.storage_location_id));
-      if (missingLineLocation) {
-        return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 400, "Storage location required for MTEST - segment config is not used for this type");
-      }
-    }
     if (manualLines.length > 0) {
       const manualRows = manualLines.map((line, index) => ({
         process_order_id: poId,
@@ -2087,7 +2077,7 @@ export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandle
     }
 
     const lines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
-    if (lines.length === 0 && po.po_type !== "MTEST") {
+    if (lines.length === 0) {
       return poErr(req, ctx, "PROD_PO_NO_LINES", 422, "Cannot approve without RM lines");
     }
 
@@ -2639,11 +2629,9 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
       }
     }
 
-    // Locked 2026-08-12: INT and MTEST have no Verify stage — everything posts here at
-    // Final instead (RM issue + output receipt, straight to UNRESTRICTED, no QI hold —
-    // matches the pre-existing rule that INT/MTEST P101 receipts skip QI per §83.5).
-    // MTO/HPS/MTS keep the original two-step Final(record)->Verify(post) split untouched.
-    const postsAtFinal = po.po_type === "INT" || po.po_type === "MTEST";
+    // Locked 2026-08-15 (§120.1): INT is still the only direct-post type at Final.
+    // MTEST now follows the exact same Final(record)->Verify(post) split as MTO/HPS.
+    const postsAtFinal = po.po_type === "INT";
     if (postsAtFinal) {
       const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
       if (!shopfloorSlocId) {
@@ -2661,8 +2649,7 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
       const matDoc = await generateMaterialDocNumber(String(po.company_id));
 
       // §104.8: INT costs what its RM cost (real weighted-average issue rate, rolled up
-      // into the output). MTEST valuation stays the pre-existing simplified unit_value: 0
-      // (test batches, doesn't feed MTO cost) — only INT gets real rate resolution.
+      // into the output). INT remains the only Final-posting path here.
       const isInt = po.po_type === "INT";
       const rateMap = isInt
         ? await fetchUnrestrictedRates(
@@ -3256,7 +3243,7 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
     // §108.2 — MTS/INT/MTEST have no Approved/AP-Approved reco workflow at all (same
     // exemption PR11 Final already applies for these three po_types): a correction-time
     // reco row would just be dead, unused data for them.
-    const skipReco = ["MTS", "INT", "MTEST"].includes(String(po.po_type ?? ""));
+    const skipReco = ["MTS", "INT"].includes(String(po.po_type ?? ""));
     const recoRows: JsonRecord[] = [];
     const postings: JsonRecord[] = [];
     let newLineDisplayOffset = 0;
