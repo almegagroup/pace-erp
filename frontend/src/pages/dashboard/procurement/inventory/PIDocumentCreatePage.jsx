@@ -347,8 +347,8 @@ export default function PIDocumentCreatePage() {
           <ErpSectionCard eyebrow="Staged" title={`${stagedItems.length} item${stagedItems.length === 1 ? "" : "s"} staged`}>
             <ErpDenseGrid
               columns={[
-                { key: "material", label: "Material", render: (row) => `${row.material?.material_name ?? "Material"} (${row.material?.pace_code ?? row.material_id})` },
-                { key: "storage_location_name", label: "Location", width: "200px", render: (row) => `${row.storage_location_code ?? row.storage_location_id} — ${row.storage_location_name ?? ""}` },
+                { key: "material", label: "Material", render: (row) => `${row.material?.material_name ?? "Material"} (${row.material?.pace_code ?? "—"})` },
+                { key: "storage_location_name", label: "Location", width: "200px", render: (row) => (row.storage_location_code || row.storage_location_name ? `${row.storage_location_code ?? "—"} — ${row.storage_location_name ?? "—"}` : "—") },
                 { key: "stock_type", label: "Stock Type", width: "140px" },
                 { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
                 { key: "book_qty", label: "Book Qty", width: "100px" },
