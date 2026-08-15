@@ -174,6 +174,7 @@ import {
   removePIItemHandler,
   reopenPIDHandler,
   requestRecountHandler,
+  resolvePIDByNumberHandler,
   submitPIDForApprovalHandler,
 } from "../_core/procurement/physical_inventory.handlers.ts";
 import {
@@ -451,6 +452,10 @@ export async function dispatchProcurementRoutes(
       return await listPIDifferencesHandler(req, ctx);
     case "GET:/api/procurement/physical-inventory-material-locations":
       return await getMaterialLocationBreakdownHandler(req, ctx);
+    // MI04/MI05 standalone entry — resolve a typed PID number to its id before either page's
+    // own Page 2 loads. Hyphenated, non-slash-nested path, same reason as the two siblings above.
+    case "GET:/api/procurement/physical-inventory-resolve":
+      return await resolvePIDByNumberHandler(req, ctx);
     case "POST:/api/procurement/gate-entries":
       return await createGateEntryHandler(req, ctx);
     case "GET:/api/procurement/gate-entries":

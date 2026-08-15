@@ -169,6 +169,11 @@ export const ERROR_MESSAGES = {
   DAY_KIND_INVALID: "Day kind must be HOLIDAY, WEEK_OFF, or WORKING_DAY.",
 
   INSUFFICIENT_STOCK: "Insufficient stock available for this transaction.",
+
+  PI_DOCUMENT_NUMBER_REQUIRED: "PID number is required.",
+  PI_NOT_FOUND: "No physical inventory document found with this number.",
+  PI_WRONG_COMPANY: "This PID is not for your company.",
+  PI_RESOLVE_FAILED: null,
 };
 
 export const GENERIC_PERMISSION_MESSAGE = "You do not have permission to perform this action.";

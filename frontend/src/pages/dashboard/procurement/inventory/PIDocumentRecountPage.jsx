@@ -21,6 +21,7 @@ import {
   listMaterialUomConversionsForProcurement,
   submitPIDForApproval,
 } from "../procurementApi.js";
+import PIDNumberEntryStep from "./PIDNumberEntryStep.jsx";
 
 const PAGE_SIZE = 25;
 
@@ -110,7 +111,13 @@ export default function PIDocumentRecountPage() {
   const navigate = useNavigate();
   const { id: routeId = "" } = useParams();
   const screenContext = (() => { try { return getActiveScreenContext() ?? {}; } catch { return {}; } })();
-  const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
+  const linkedId = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
+
+  // §MI04-MI05-sidebar-restore — same Page 1 pattern as MI04, plus an extra gate: MI05 only
+  // makes sense once MI04 has locked (status COUNTED) — reject the resolve here with a clear
+  // message rather than silently landing on a page with nothing editable.
+  const [resolvedId, setResolvedId] = useState(linkedId);
+  const id = resolvedId;
 
   const [activeItemId, setActiveItemId] = useState("");
   const [saving, setSaving] = useState(false);
@@ -192,7 +199,7 @@ export default function PIDocumentRecountPage() {
         ...(error ? [{ key: "recount-error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "recount-notice", tone: "success", message: notice }] : []),
       ]}
-      actions={[
+      actions={id ? [
         { key: "back", label: "Back To Detail", tone: "neutral", onClick: openDetail },
         ...(canSubmit ? [{ key: "submit", label: saving ? "Submitting..." : "Submit for Approval", tone: "primary", onClick: () => void handleSubmitForApproval(), disabled: saving }] : []),
         {
@@ -201,9 +208,21 @@ export default function PIDocumentRecountPage() {
           tone: "neutral",
           onClick: () => void detailQuery.refetch(),
         },
-      ]}
+      ] : []}
     >
-      {loading || !detail ? (
+      {!id ? (
+        <PIDNumberEntryStep
+          heading="Enter PID number"
+          helperText="Type the PID you want to change counts on. MI04 must already be fully counted (status COUNTED) before MI05 will accept it."
+          onResolved={(doc) => setResolvedId(doc.id)}
+          extraValidate={(doc) => {
+            if (String(doc.status || "").toUpperCase() === "OPEN") {
+              return "This PID still has pending items in MI04. Complete MI04 first.";
+            }
+            return null;
+          }}
+        />
+      ) : loading || !detail ? (
         <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
           {loading ? "Loading PI document..." : "PI document is unavailable."}
         </div>
