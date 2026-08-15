@@ -1031,10 +1031,26 @@ export function getPIDocument(id) {
   return fetchProcurement("GET", `/api/procurement/physical-inventory/${encodeURIComponent(id)}`);
 }
 
+export function getPICountWorkspace(id) {
+  return fetchProcurement("GET", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/count-workspace`);
+}
+
+export function getPIRecountWorkspace(id) {
+  return fetchProcurement("GET", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/recount-workspace`);
+}
+
 // MI04/MI05 standalone entry — resolves a typed PID number to its id/company/status before
 // Page 1 hands off to Page 2. §MI04-MI05-sidebar-restore.
 export function resolvePIDByNumber(documentNumber) {
   return fetchProcurement("GET", "/api/procurement/physical-inventory-resolve", undefined, { document_number: documentNumber });
+}
+
+export function resolvePIDByNumberForCount(documentNumber) {
+  return fetchProcurement("GET", "/api/procurement/physical-inventory-resolve-count", undefined, { document_number: documentNumber });
+}
+
+export function resolvePIDByNumberForRecount(documentNumber) {
+  return fetchProcurement("GET", "/api/procurement/physical-inventory-resolve-recount", undefined, { document_number: documentNumber });
 }
 
 export function addPIItem(id, data) {

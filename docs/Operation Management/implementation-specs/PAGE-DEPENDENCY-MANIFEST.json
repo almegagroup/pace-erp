@@ -3240,10 +3240,10 @@
     "dependencyCount": 3,
     "deps": [
       {
-        "fn": "getPIDocument",
+        "fn": "getPICountWorkspace",
         "method": "GET",
-        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}",
-        "resourceCode": "PROC_PI_LIST",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/count-workspace",
+        "resourceCode": "PROC_PI_COUNT_ENTRY",
         "action": "VIEW",
         "skipAcl": false
       },
@@ -3251,7 +3251,7 @@
         "fn": "enterPICount",
         "method": "PUT",
         "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/count",
-        "resourceCode": "PROC_PI_LIST",
+        "resourceCode": "PROC_PI_COUNT_ENTRY",
         "action": "WRITE",
         "skipAcl": false
       },
@@ -3284,18 +3284,18 @@
     "dependencyCount": 4,
     "deps": [
       {
-        "fn": "getPIDocument",
+        "fn": "getPIRecountWorkspace",
         "method": "GET",
-        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}",
-        "resourceCode": "PROC_PI_LIST",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/recount-workspace",
+        "resourceCode": "PROC_PI_RECOUNT",
         "action": "VIEW",
         "skipAcl": false
       },
       {
-        "fn": "enterPICount",
+        "fn": "changePICount",
         "method": "PUT",
-        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/count",
-        "resourceCode": "PROC_PI_LIST",
+        "path": "/api/procurement/physical-inventory/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/change-count",
+        "resourceCode": "PROC_PI_RECOUNT",
         "action": "WRITE",
         "skipAcl": false
       },

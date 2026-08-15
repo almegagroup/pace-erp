@@ -3969,3 +3969,54 @@ it provides no enforcement value as a CI step in its current form.
 - Verification:
   - `frontend` production build passed on Saturday, August 15, 2026 after this follow-up rename pass as well.
   - Repo scan confirmed the only remaining runtime `ZTEST` references are intentional backward-compatibility shims in packing/type-mapping code plus historical docs/migrations.
+
+### 2026-08-15 21:10 IST - IN01 maker-checker split + IN08/IN09 dependency decoupling
+- Trigger: the locked inventory access correction narrowed `IN01` (Physical Inventory list/detail) to Director + Auditor-only access, but a follow-up repo audit showed `IN08` (MI04 Count Entry) and `IN09` (MI05 Change Count) still depended on `PROC_PI_LIST:VIEW` for both Page-1 PID lookup and Page-2 document loading. That meant tightening IN01 would accidentally strand valid IN08/IN09 users even though those pages already had their own resources (`PROC_PI_COUNT_ENTRY`, `PROC_PI_RECOUNT`).
+- Backend changes:
+  - `supabase/functions/api/_core/procurement/physical_inventory.handlers.ts`
+    - added resource-scoped read helpers for PID lookup/load:
+      - `resolvePIDByNumberForCountHandler`
+      - `resolvePIDByNumberForRecountHandler`
+      - `getPIDCountWorkspaceHandler`
+      - `getPIDRecountWorkspaceHandler`
+    - tightened `resolvePidActionAuthority()` to distinguish `L1_AUDITOR` vs `L2_AUDITOR` instead of treating every Auditor the same:
+      - any `L2_AUDITOR` maker on the document -> `DIRECTOR` only
+      - `L1_AUDITOR` maker(s) with no `L2_AUDITOR` maker -> `L2_AUDITOR` or `DIRECTOR`
+      - non-auditor maker path keeps the older `Auditor or Director` fallback
+      - non-Director self-approval remains blocked
+  - `supabase/functions/api/_routes/procurement.routes.ts`
+    - wired the four new count/recount read routes
+  - `supabase/functions/api/_acl/route-acl-registry.ts`
+    - mapped the new routes to `PROC_PI_COUNT_ENTRY:VIEW` and `PROC_PI_RECOUNT:VIEW`
+- Frontend changes:
+  - `frontend/src/pages/dashboard/procurement/procurementApi.js`
+    - added `getPICountWorkspace`, `getPIRecountWorkspace`, `resolvePIDByNumberForCount`, and `resolvePIDByNumberForRecount`
+  - `frontend/src/pages/dashboard/procurement/inventory/PIDocumentCountEntryPage.jsx`
+    - now loads via `PROC_PI_COUNT_ENTRY`'s own read endpoint
+  - `frontend/src/pages/dashboard/procurement/inventory/PIDocumentRecountPage.jsx`
+    - now loads via `PROC_PI_RECOUNT`'s own read endpoint
+  - `frontend/src/pages/dashboard/procurement/inventory/PIDNumberEntryStep.jsx`
+    - now accepts the caller's resolve function instead of hardcoding the IN01 lookup endpoint
+  - `frontend/src/router/routeIndex.js`
+    - dynamic `/physical-inventory/:id/count` and `/physical-inventory/:id/recount` companion-route authorization now derives from their own base routes (`/count`, `/recount`) instead of piggybacking on `/physical-inventory`
+- Dependency manifest:
+  - `docs/Operation Management/implementation-specs/PAGE-DEPENDENCY-MANIFEST.json`
+    - updated IN08/IN09 dependencies to the new resource-scoped read/write paths so future ACL audits do not keep reading stale `PROC_PI_LIST` coupling
+- Honest rollout note:
+  - this pass changes code and manifest only; it does **not** itself apply the corresponding prod/dev ACL data narrowing for `PROC_PI_LIST` menu visibility. The point of the decoupling is that when that ACL data change is applied, IN08/IN09 will remain reachable instead of breaking as collateral damage.
+
+### 2026-08-15 — IN01 approval mechanism alignment (PO/STO pattern)
+
+- Status: DONE
+- Rule check: Followed `R-04` exactly. No ACL/operational data migration was created; ACL rollout remains a direct-SQL/runbook task.
+- Backend:
+  - `supabase/functions/api/_core/procurement/physical_inventory.handlers.ts`
+    - removed the local hardcoded auditor-vs-director approval branch from `resolvePidActionAuthority()`
+    - switched IN01 / MI07 approval authority to the same `acl.approver_map` + scoped work-context resolution mechanism used by PO/STO
+    - approval maker identity is now `submitted_by`, because IN01 approval formally starts at Submit-for-Approval, not at every earlier count entry
+- ACL rollout artifact:
+  - `docs/Operation Management/implementation-specs/CODEX-IN01-APPROVER-MAP-ROLLOUT.sql`
+    - direct-SQL playbook for `acl.resource_approval_policy`, `acl.approver_map`, and the required post-change ACL snapshot/version checklist
+- Why no migration:
+  - `acl.approver_map`, `acl.resource_approval_policy`, ACL versions, snapshots, and menu rebuilds are environment data, not schema/system-design DDL
+  - per `R-04`, those changes must be executed separately in each database by direct SQL / MCP, not shipped as an auto-applied migration

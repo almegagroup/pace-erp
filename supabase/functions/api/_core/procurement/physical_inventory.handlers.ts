@@ -15,7 +15,7 @@ import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/com
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
-import { ROLE } from "../../_shared/role_ladder.ts";
+import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -27,8 +27,22 @@ type ProcurementHandlerContext = {
 };
 type PidRow = Record<string, unknown>;
 type PiItemRow = Record<string, unknown>;
+type ApproverMapRow = {
+  approver_user_id: string | null;
+  approver_role_code: string | null;
+  approver_work_context_id: string | null;
+  resource_code: string | null;
+  action_code: string | null;
+  scope_type: string | null;
+  subject_user_id: string | null;
+  subject_work_context_id: string | null;
+  subject_role_code: string | null;
+  approval_stage: number;
+};
 
 const PID_RESOURCE = "PROC_PI_LIST";
+const PID_COUNT_RESOURCE = "PROC_PI_COUNT_ENTRY";
+const PID_RECOUNT_RESOURCE = "PROC_PI_RECOUNT";
 const PID_MODES = new Set(["LOCATION_WISE", "ITEM_WISE"]);
 const PID_STATUSES = new Set(["OPEN", "COUNTED", "PENDING_APPROVAL", "POSTED", "CANCELLED"]);
 const STOCK_TYPES = new Set(["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"]);
@@ -37,7 +51,6 @@ const STOCK_TYPES = new Set(["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"]);
 const PI_BLENDED_MATERIAL_TYPES = new Set(["RM", "PM", "INT"]);
 const PI_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "SFG", "FG"]);
 const BATCH_TRACKED_PO_TYPES = new Set(["MTO", "HPS", "MTEST"]);
-const AUDITOR_ROLES = new Set<string>([ROLE.L1_AUDITOR, ROLE.L2_AUDITOR]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -194,9 +207,9 @@ async function assertPIDocumentCompanyScope(
 // §119.2/Phase-2 write-ACL fix: membership (assertCompanyScope) is necessary but not sufficient —
 // this additionally proves an action-level grant on PROC_PI_LIST at the SPECIFIC target company,
 // not just the session's active one. `action` must match whatever the route registry already
-// gates that same path with (EDIT for create/add-item/cancel/remove-item — Auditor-only tier;
-// WRITE for count/recount/submit — count-entry tier; APPROVE for reopen/post — escalating tier,
-// on top of which resolvePidActionAuthority() layers the Auditor-vs-Director split).
+// gates that same path with (EDIT for create/add-item/cancel/remove-item; WRITE for
+// count/recount/submit; APPROVE for reopen/post). Reopen/Post then apply the separate
+// approver_map-driven maker-checker check inside resolvePidActionAuthority().
 async function assertPIDCompanyActionAccess(
   ctx: ProcurementHandlerContext,
   companyId: string,
@@ -210,6 +223,18 @@ async function assertPIDCompanyActionAccess(
 
 async function assertPIDCompanyEditAccess(ctx: ProcurementHandlerContext, companyId: string): Promise<void> {
   return assertPIDCompanyActionAccess(ctx, companyId, "EDIT");
+}
+
+async function assertPIDCompanyResourceAccess(
+  ctx: ProcurementHandlerContext,
+  companyId: string,
+  resourceCode: string,
+  action: "VIEW" | "WRITE",
+): Promise<void> {
+  await assertPIDocumentCompanyScope(ctx, companyId);
+  if (isCompanyScopeAdminBypass(ctx)) return;
+  const allowed = await canMaintainCompanyResource(ctx, companyId, resourceCode, action);
+  if (!allowed) throw new Error("PI_SCOPE_VIOLATION");
 }
 
 async function listPIScopedCompanyIds(ctx: ProcurementHandlerContext): Promise<string[] | null> {
@@ -525,64 +550,81 @@ async function countNullPhysicalQty(documentId: string): Promise<number> {
   return Number((data ?? []).length);
 }
 
-// §119.5 — escalating maker-checker: whoever COUNTED this document determines who may Post/Reopen
-// it. Document-level (any one counted item's counter is representative — §119.5, mixed-counter
-// scenario deliberately not guarded against, business owner confirm). SA/GA always pass (blanket).
+async function loadPidApproverRules(companyId: string): Promise<ApproverMapRow[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("acl")
+    .from("approver_map")
+    .select("approver_user_id, approver_role_code, approver_work_context_id, resource_code, action_code, scope_type, subject_user_id, subject_work_context_id, subject_role_code, approval_stage")
+    .eq("resource_code", PID_RESOURCE)
+    .eq("action_code", "APPROVE")
+    .eq("company_id", companyId);
+
+  if (error) {
+    throw new Error("PI_APPROVER_LOOKUP_FAILED");
+  }
+
+  return (data as ApproverMapRow[] | null) ?? [];
+}
+
+async function getUserRoleCode(userId: string): Promise<string | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("user_roles")
+    .select("role_code")
+    .eq("auth_user_id", userId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return String((data as Record<string, unknown>).role_code ?? "") || null;
+}
+
+// §119.5 / 2026-08-15 correction — IN01 approval must now follow the same generic
+// approver_map-driven mechanism as PO/STO, keyed to the person who explicitly submits the
+// document for approval (`submitted_by`). Counting may be multi-user, but the maker-checker
+// workflow itself formally starts at Submit, not at every earlier count keystroke.
 async function resolvePidActionAuthority(
   ctx: ProcurementHandlerContext,
-  documentId: string,
-): Promise<{ allowed: boolean; requiredTier: "AUDITOR_OR_DIRECTOR" | "DIRECTOR_ONLY"; selfApproval?: boolean }> {
-  // SA/GA (isCompanyScopeAdminBypass) plus DIRECTOR/ACL-MASTER (hasBlanketApprovalOverride) all
-  // get the same full bypass here that PO/STO/PTO already grant them (§_shared/approval_override.ts)
-  // -- including self-approval -- per business-owner decision 2026-08-14: PID intentionally matches
-  // the rest of the system's "ultimate authority can self-approve, no top-of-chain deadlock" design
-  // rather than being a stricter one-off exception.
+  document: PidRow,
+): Promise<{ allowed: boolean; selfApproval?: boolean }> {
   if (isCompanyScopeAdminBypass(ctx) || hasBlanketApprovalOverride(ctx)) {
-    return { allowed: true, requiredTier: "AUDITOR_OR_DIRECTOR" };
+    return { allowed: true };
   }
 
-  const { data: countedItems } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("physical_inventory_item")
-    .select("counted_by")
-    .eq("document_id", documentId)
-    .not("counted_by", "is", null);
-
-  const counterIds = [...new Set(
-    ((countedItems ?? []) as { counted_by: string | null }[])
-      .map((row) => toTrimmedString(row.counted_by))
-      .filter(Boolean),
-  )];
-
-  // Self-approval block — the maker-checker split is meaningless if whoever entered a count can
-  // also be the one who posts/reopens it, no matter what role they hold (including DIRECTOR,
-  // which inherits count-entry WRITE access via the role-rank hierarchy and would otherwise
-  // trivially satisfy both tiers below). Checked before the role-tier logic, not merged into it.
-  const callerId = toTrimmedString(ctx.auth_user_id);
-  if (callerId && counterIds.includes(callerId)) {
-    return { allowed: false, requiredTier: "AUDITOR_OR_DIRECTOR", selfApproval: true };
+  const companyId = toTrimmedString(document.company_id);
+  const submittedBy = toTrimmedString(document.submitted_by);
+  if (!submittedBy) {
+    throw new Error("PI_SUBMITTER_REQUIRED");
   }
 
-  // Escalation must key off EVERY counter on the document, not just one arbitrary row — if any
-  // portion was counted by an Auditor, the whole document escalates to Director-only.
-  let counterIsAuditor = false;
-  if (counterIds.length > 0) {
-    const { data: counterRoles } = await serviceRoleClient
-      .schema("erp_acl")
-      .from("user_roles")
-      .select("auth_user_id, role_code")
-      .in("auth_user_id", counterIds);
-    counterIsAuditor = ((counterRoles ?? []) as { role_code: string | null }[])
-      .some((row) => AUDITOR_ROLES.has(toUpperTrimmedString(row.role_code)));
+  if (submittedBy === ctx.auth_user_id) {
+    return { allowed: false, selfApproval: true };
   }
 
-  const callerRole = toUpperTrimmedString(ctx.roleCode);
-  const requiredTier = counterIsAuditor ? "DIRECTOR_ONLY" : "AUDITOR_OR_DIRECTOR";
-  const allowed = requiredTier === "DIRECTOR_ONLY"
-    ? callerRole === ROLE.DIRECTOR
-    : callerRole === ROLE.DIRECTOR || AUDITOR_ROLES.has(callerRole);
+  const rules = await loadPidApproverRules(companyId);
+  if (rules.length === 0) {
+    return { allowed: false };
+  }
 
-  return { allowed, requiredTier };
+  const submitterRoleCode = await getUserRoleCode(submittedBy);
+  const scopedRules = pickScopedApproverRules(
+    {
+      resource_code: PID_RESOURCE,
+      action_code: "APPROVE",
+      requester_auth_user_id: submittedBy,
+      requester_role_code: submitterRoleCode,
+    },
+    rules,
+  );
+
+  const allowed = scopedRules.length > 0
+    ? matchesApprover(scopedRules, {
+      auth_user_id: ctx.auth_user_id,
+      roleCode: ctx.roleCode,
+      approverWorkContextIds: await loadApproverWorkContextIds(serviceRoleClient, ctx.auth_user_id, companyId),
+    })
+    : false;
+
+  return { allowed };
 }
 
 function isItemFullyProcessed(item: PiItemRow): boolean {
@@ -827,6 +869,14 @@ export async function resolvePIDByNumberHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
+  return resolvePIDByNumberForResource(req, ctx, PID_RESOURCE);
+}
+
+async function resolvePIDByNumberForResource(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+  resourceCode: string,
+): Promise<Response> {
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
@@ -854,6 +904,7 @@ export async function resolvePIDByNumberHandler(
     if (scopedCompanyIds && !scopedCompanyIds.includes(companyId)) {
       return piErrorResponse(req, ctx, "PI_WRONG_COMPANY", 403, "This PID is not for your company.");
     }
+    await assertPIDCompanyResourceAccess(ctx, companyId, resourceCode, "VIEW");
 
     const { data: companyRow } = await serviceRoleClient
       .schema("erp_master")
@@ -883,9 +934,32 @@ export async function resolvePIDByNumberHandler(
   }
 }
 
+export async function resolvePIDByNumberForCountHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  return resolvePIDByNumberForResource(req, ctx, PID_COUNT_RESOURCE);
+}
+
+export async function resolvePIDByNumberForRecountHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  return resolvePIDByNumberForResource(req, ctx, PID_RECOUNT_RESOURCE);
+}
+
 export async function getPIDHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  return getPIDForResource(req, ctx, PID_RESOURCE, "VIEW");
+}
+
+async function getPIDForResource(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+  resourceCode: string,
+  action: "VIEW" | "WRITE",
 ): Promise<Response> {
   try {
     assertProcurementReadRole(ctx);
@@ -895,7 +969,7 @@ export async function getPIDHandler(
     }
 
     const document = await fetchPID(documentId);
-    await assertPIDocumentCompanyScope(ctx, toTrimmedString(document.company_id));
+    await assertPIDCompanyResourceAccess(ctx, toTrimmedString(document.company_id), resourceCode, action);
     const hydrated = await hydratePID(documentId);
 
     // §8A — resolve material/location names in bulk, never raw UUIDs in the response.
@@ -972,6 +1046,20 @@ export async function getPIDHandler(
     const status = code === "PI_SCOPE_VIOLATION" ? 403 : code === "PI_DOCUMENT_NOT_FOUND" ? 404 : 500;
     return piErrorResponse(req, ctx, code, status, code);
   }
+}
+
+export async function getPIDCountWorkspaceHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  return getPIDForResource(req, ctx, PID_COUNT_RESOURCE, "VIEW");
+}
+
+export async function getPIDRecountWorkspaceHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  return getPIDForResource(req, ctx, PID_RECOUNT_RESOURCE, "VIEW");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -1456,7 +1544,7 @@ export async function reopenPIDHandler(
     }
 
     // §119.5/§119.6 — Reopen authority = exactly whoever can Post this specific document.
-    const authority = await resolvePidActionAuthority(ctx, documentId);
+    const authority = await resolvePidActionAuthority(ctx, document);
     if (!authority.allowed) {
       return piErrorResponse(
         req,
@@ -1464,10 +1552,8 @@ export async function reopenPIDHandler(
         "PI_REOPEN_AUTHORITY_REQUIRED",
         403,
         authority.selfApproval
-          ? "You entered a count on this document — someone else must reopen it."
-          : authority.requiredTier === "DIRECTOR_ONLY"
-          ? "This document was counted by an Auditor — only Director can reopen it."
-          : "Only an Auditor or Director can reopen this document.",
+          ? "You submitted this document yourself — someone else must reopen it."
+          : "You are not a configured approver for this document.",
       );
     }
 
@@ -1566,7 +1652,7 @@ export async function postDifferencesHandler(
     }
 
     // §119.5 — escalating maker-checker authority check.
-    const authority = await resolvePidActionAuthority(ctx, documentId);
+    const authority = await resolvePidActionAuthority(ctx, document);
     if (!authority.allowed) {
       return piErrorResponse(
         req,
@@ -1574,10 +1660,8 @@ export async function postDifferencesHandler(
         "PI_POST_AUTHORITY_REQUIRED",
         403,
         authority.selfApproval
-          ? "You entered a count on this document — someone else must post it."
-          : authority.requiredTier === "DIRECTOR_ONLY"
-          ? "This document was counted by an Auditor — only Director can post it."
-          : "Only an Auditor or Director can post this document.",
+          ? "You submitted this document yourself — someone else must post it."
+          : "You are not a configured approver for this document.",
       );
     }
 
