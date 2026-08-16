@@ -15,12 +15,15 @@
  * fill in the whole sheet, then commit it all at once, same as every other bulk-entry page in
  * this app (Opening Stock's UomQuantityInput usage already works this way).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import UomQuantityInput from "../../../../components/forms/UomQuantityInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
-import ErpScreenScaffold, { ErpFieldPreview } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold, {
+  ErpFieldPreview,
+  ErpSectionCard,
+} from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
@@ -30,6 +33,7 @@ import {
   resolvePIDByNumberForCount,
 } from "../procurementApi.js";
 import PIDNumberEntryStep from "./PIDNumberEntryStep.jsx";
+import { getPIStatusMeta } from "./piStatusPresentation.js";
 
 const PAGE_SIZE = 25;
 
@@ -189,6 +193,7 @@ export default function PIDocumentCountEntryPage() {
   const detail = detailQuery.data ?? null;
   const items = useMemo(() => (Array.isArray(detail?.items) ? detail.items : []), [detail]);
   const status = String(detail?.status || "").toUpperCase();
+  const statusMeta = useMemo(() => getPIStatusMeta(detail?.status), [detail?.status]);
   // MI04 only stays open while the document is OPEN (i.e. at least one item still undecided).
   // The instant every item has a Count or Zero Check, status flips to COUNTED and this page
   // locks — further changes go through MI05 (Change Count), not back through here.
@@ -208,6 +213,17 @@ export default function PIDocumentCountEntryPage() {
         ? "MI04 is finished for this PID. Continue in MI05 if any counted value needs correction before approval."
         : `MI04 is closed because the PID is already ${status}.`)
     : "MI04 blind count entry is active. Record only what was physically found, save in batches, and move to MI05 only after every line is counted.";
+
+  useEffect(() => {
+    setEdits({});
+    setError("");
+    setNotice("");
+    setCurrentPage(0);
+  }, [id]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, Math.max(totalPages - 1, 0)));
+  }, [totalPages]);
 
   function updateEdit(itemId, patch) {
     setEdits((current) => ({ ...current, [itemId]: { ...current[itemId], ...patch } }));
@@ -265,6 +281,13 @@ export default function PIDocumentCountEntryPage() {
         ...(id ? [{ key: "count-entry-stage", tone: isFullyLocked ? "warning" : "info", message: stageMessage }] : []),
       ]}
       actions={id ? [
+        { key: "back", label: "Back To Detail", tone: "neutral", onClick: openDetail },
+        {
+          key: "refresh",
+          label: loading ? "Refreshing..." : "Refresh",
+          tone: "neutral",
+          onClick: () => void detailQuery.refetch(),
+        },
         {
           key: "save",
           label: saving ? "Saving..." : `Save${pendingEntries.length ? ` (${pendingEntries.length})` : ""}`,
@@ -272,13 +295,7 @@ export default function PIDocumentCountEntryPage() {
           onClick: () => void handleSaveAll(),
           disabled: saving || pendingEntries.length === 0 || isFullyLocked,
         },
-        { key: "review", label: "Review / Submit", tone: "neutral", onClick: openDetail },
-        {
-          key: "refresh",
-          label: loading ? "Refreshing..." : "Refresh",
-          tone: "neutral",
-          onClick: () => void detailQuery.refetch(),
-        },
+        { key: "review", label: "Open Review / Submit", tone: "neutral", onClick: openDetail },
       ] : []}
     >
       {!id ? (
@@ -296,7 +313,8 @@ export default function PIDocumentCountEntryPage() {
         <div className="grid gap-4">
           <div className="grid gap-4 xl:grid-cols-4">
             <ErpFieldPreview label="Step" value="MI04 Count Entry" tone="sky" />
-            <ErpFieldPreview label="Status" value={detail.status || "—"} />
+            <ErpFieldPreview label="Page" value="Page 2 · Blind Count Entry" />
+            <ErpFieldPreview label="Status" value={statusMeta.label} tone={statusMeta.previewTone} />
             <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
             <ErpFieldPreview label="Count Date" value={formatDate(detail.count_date)} />
             <ErpFieldPreview
@@ -306,28 +324,38 @@ export default function PIDocumentCountEntryPage() {
             <ErpFieldPreview label="Progress" value={`Counted ${countedItems}/${items.length}`} caption={`Pending ${pendingItems} · Unsaved ${pendingEntries.length}`} />
           </div>
 
-          {isFullyLocked ? (
-            <div className="border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              Every item already has a Count or Zero Check — MI04 is locked and permanently closed
-              for this document. {status === "COUNTED" ? (
-                <button type="button" onClick={openRecount} className="ml-1 font-semibold underline">
-                  Go to MI05 (Change Count) to make further changes.
-                </button>
-              ) : (
-                <>Status is {status}.</>
-              )}
+          <ErpSectionCard eyebrow="Page 2" title="Blind Count Workspace">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <ErpFieldPreview label="Mode" value={detail.mode || "—"} />
+              <ErpFieldPreview
+                label="Storage Location"
+                value={detail.mode === "LOCATION_WISE" ? (detail.storage_location_name || detail.storage_location_code || "—") : "Multiple (ITEM_WISE)"}
+              />
+              <ErpFieldPreview label="Rows In PID" value={`${items.length}`} />
+              <ErpFieldPreview label="Pending Save" value={`${pendingEntries.length}`} />
             </div>
-          ) : (
-            <div className="border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-              Count what you physically find. The system's book quantity is not shown here on
-              purpose — that's the whole point of a physical count. Fill in as many rows as you
-              like across pages, then click Save to commit them all at once. This page stays open
-              until every item has a Count or Zero Check, then locks permanently.
-            </div>
-          )}
 
-          {!isFullyLocked ? (
-            <>
+            {isFullyLocked ? (
+              <div className="mt-4 border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                Every item already has a Count or Zero Check. MI04 is closed for this PID. {status === "COUNTED" ? (
+                  <button type="button" onClick={openRecount} className="ml-1 font-semibold underline">
+                    Go to MI05 (Change Count) to make further changes.
+                  </button>
+                ) : (
+                  <>Current status: {statusMeta.label}.</>
+                )}
+              </div>
+            ) : (
+              <div className="mt-4 border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                Count what you physically find. The system's book quantity is not shown here on
+                purpose — that's the whole point of a physical count. Fill in as many rows as you
+                like across pages, then click Save to commit them all at once. This page stays open
+                until every item has a Count or Zero Check, then locks permanently.
+              </div>
+            )}
+
+            {!isFullyLocked ? (
+              <div className="mt-4 grid gap-3">
               <ErpDenseGrid
                 columns={[
                   { key: "line_number", label: "Line", width: "60px" },
@@ -376,8 +404,9 @@ export default function PIDocumentCountEntryPage() {
                   <button type="button" onClick={() => setCurrentPage((page) => Math.min(totalPages - 1, page + 1))} disabled={currentPage >= totalPages - 1} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Next</button>
                 </div>
               </div>
-            </>
-          ) : null}
+              </div>
+            ) : null}
+          </ErpSectionCard>
         </div>
       )}
     </ErpScreenScaffold>

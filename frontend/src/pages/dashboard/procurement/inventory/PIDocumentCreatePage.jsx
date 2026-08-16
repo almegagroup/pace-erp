@@ -14,6 +14,7 @@ import TransactionCompanySelector from "../../../../components/inputs/Transactio
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listStorageLocations } from "../../om/omApi.js";
@@ -79,6 +80,7 @@ export default function PIDocumentCreatePage() {
   const [locations, setLocations] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [page, setPage] = useState(1);
 
   const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" });
   const materialOptions = useMemo(
@@ -174,6 +176,15 @@ export default function PIDocumentCreatePage() {
 
   const canCreate = companyId && countDate && postingDate
     && (mode === "LOCATION_WISE" ? Boolean(storageLocationId) : stagedItems.length > 0);
+  const headerReady = Boolean(companyId && countDate && postingDate);
+  const scopeReady = mode === "LOCATION_WISE" ? Boolean(storageLocationId) : stagedItems.length > 0;
+  const selectedLocationLabel = locationOptions.find((option) => option.value === storageLocationId)?.label ?? "—";
+
+  useScreenBackInterceptor(() => {
+    if (page <= 1) return false;
+    setPage((current) => Math.max(1, current - 1));
+    return true;
+  });
 
   async function handleCreate() {
     setError("");
@@ -225,25 +236,44 @@ export default function PIDocumentCreatePage() {
       actions={[
         {
           key: "back",
-          label: "Back To List",
+          label: page === 1 ? "Back To List" : "Back",
           tone: "neutral",
           onClick: () => {
+            if (page > 1) {
+              setPage((current) => Math.max(1, current - 1));
+              return;
+            }
             openScreen(OPERATION_SCREENS.PROC_PI_LIST.screen_code);
             navigate("/dashboard/procurement/physical-inventory");
           },
         },
+        ...(page === 1 ? [{
+          key: "next-header",
+          label: "Continue To Scope",
+          tone: "primary",
+          onClick: () => setPage(2),
+          disabled: !headerReady,
+        }] : []),
+        ...(page === 2 ? [{
+          key: "next-scope",
+          label: "Continue To Review",
+          tone: "primary",
+          onClick: () => setPage(3),
+          disabled: !scopeReady,
+        }] : []),
         {
           key: "create",
           label: saving ? "Creating..." : "Create PID",
           tone: "primary",
           onClick: () => void handleCreate(),
-          disabled: saving || !canCreate,
+          disabled: saving || !canCreate || page !== 3,
         },
       ]}
     >
       <div className="grid gap-4">
         <div className="grid gap-4 xl:grid-cols-4">
           <ErpFieldPreview label="Step" value="MI01 Create" tone="sky" />
+          <ErpFieldPreview label="Page" value={page === 1 ? "Header" : page === 2 ? "Scope Build" : "Review"} />
           <ErpFieldPreview label="Mode" value={mode === "LOCATION_WISE" ? "Location-wise" : "Item-wise"} />
           <ErpFieldPreview label="Company Scope" value={companyId ? "Selected" : "Required"} />
           <ErpFieldPreview
@@ -253,7 +283,8 @@ export default function PIDocumentCreatePage() {
           />
         </div>
 
-        <ErpSectionCard eyebrow="Header" title="Document header">
+        {page === 1 ? (
+        <ErpSectionCard eyebrow="Page 1" title="Document Header">
           <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
             <div className="md:col-span-1 xl:col-span-2">
               <TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={setCompanyId} label="Company" />
@@ -356,9 +387,47 @@ export default function PIDocumentCreatePage() {
             ) : null}
           </div>
         </ErpSectionCard>
+        ) : null}
 
-        {mode === "ITEM_WISE" ? (
-          <ErpSectionCard eyebrow="Item Selection" title="Search material, pick locations">
+        {page === 2 && mode === "LOCATION_WISE" ? (
+          <ErpSectionCard eyebrow="Page 2" title="Scope Selection">
+            <div className="grid gap-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <ErpFieldPreview label="Company" value={companyId ? "Resolved" : "—"} />
+                <ErpFieldPreview label="Mode" value="Location-wise" />
+                <ErpFieldPreview label="Ready" value={storageLocationId ? "Yes" : "No"} caption="Choose one storage location" />
+              </div>
+              <label className="grid max-w-xl gap-1 text-xs font-semibold text-slate-700">
+                Storage Location <span className="text-rose-500">*</span>
+                <select
+                  value={storageLocationId}
+                  onChange={(event) => setStorageLocationId(event.target.value)}
+                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                >
+                  <option value="">Select storage location</option>
+                  {locationOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-start gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={ignoreZeroStock}
+                  onChange={(event) => setIgnoreZeroStock(event.target.checked)}
+                  className="mt-0.5 h-4 w-4"
+                />
+                <span>
+                  <span className="font-semibold">Ignore Zero Stock</span> — skip materials with zero book
+                  quantity at this location. Leave unchecked for a full physical sweep.
+                </span>
+              </label>
+            </div>
+          </ErpSectionCard>
+        ) : null}
+
+        {page === 2 && mode === "ITEM_WISE" ? (
+          <ErpSectionCard eyebrow="Page 2" title="Build Item Scope">
             <div className="grid gap-3">
               <ErpDenseFormRow label="Material">
                 <ErpComboboxField
@@ -415,8 +484,8 @@ export default function PIDocumentCreatePage() {
           </ErpSectionCard>
         ) : null}
 
-        {mode === "ITEM_WISE" ? (
-          <ErpSectionCard eyebrow="Staged" title={`${stagedItems.length} item${stagedItems.length === 1 ? "" : "s"} staged`}>
+        {page === 2 && mode === "ITEM_WISE" ? (
+          <ErpSectionCard eyebrow="Scope Review" title={`${stagedItems.length} item${stagedItems.length === 1 ? "" : "s"} staged`}>
             <ErpDenseGrid
               columns={[
                 { key: "material", label: "Material", render: (row) => `${row.material?.material_name ?? "Material"} (${row.material?.pace_code ?? "—"})` },
@@ -440,6 +509,46 @@ export default function PIDocumentCreatePage() {
               emptyMessage="No items staged yet — search a material above."
               maxHeight="300px"
             />
+          </ErpSectionCard>
+        ) : null}
+
+        {page === 3 ? (
+          <ErpSectionCard eyebrow="Page 3" title="Review Before Create">
+            <div className="grid gap-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <ErpFieldPreview label="Company" value={companyId ? "Resolved" : "—"} />
+                <ErpFieldPreview label="Count Date" value={countDate || "—"} />
+                <ErpFieldPreview label="Posting Date" value={postingDate || "—"} />
+                <ErpFieldPreview label="Opening Source" value={isOpeningStockSource ? "Yes" : "No"} />
+              </div>
+              {mode === "LOCATION_WISE" ? (
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <ErpFieldPreview label="Scope Mode" value="Location-wise" />
+                  <ErpFieldPreview label="Storage Location" value={selectedLocationLabel} />
+                  <ErpFieldPreview label="Ignore Zero Stock" value={ignoreZeroStock ? "Yes" : "No"} />
+                </div>
+              ) : (
+                <ErpDenseGrid
+                  columns={[
+                    { key: "material", label: "Material", render: (row) => `${row.material?.material_name ?? "Material"} (${row.material?.pace_code ?? "—"})` },
+                    { key: "storage_location_name", label: "Location", width: "200px", render: (row) => (row.storage_location_code || row.storage_location_name ? `${row.storage_location_code ?? "—"} — ${row.storage_location_name ?? "—"}` : "—") },
+                    { key: "stock_type", label: "Stock Type", width: "140px" },
+                    { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
+                    { key: "book_qty", label: "Book Qty", width: "100px" },
+                  ]}
+                  rows={stagedItems}
+                  rowKey={stagedKey}
+                  emptyMessage="No items staged yet."
+                  maxHeight="320px"
+                />
+              )}
+              {notes.trim() ? (
+                <div className="rounded border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Notes</div>
+                  <div className="mt-1 whitespace-pre-wrap">{notes.trim()}</div>
+                </div>
+              ) : null}
+            </div>
           </ErpSectionCard>
         ) : null}
       </div>

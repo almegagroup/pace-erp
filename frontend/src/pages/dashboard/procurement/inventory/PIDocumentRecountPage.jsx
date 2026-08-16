@@ -10,12 +10,15 @@
  * for the full "why": saving on every keystroke was a real bug, not intended behavior). Submit for
  * Approval refuses to run while unsaved edits are pending, rather than silently discarding them.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import UomQuantityInput from "../../../../components/forms/UomQuantityInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
-import ErpScreenScaffold, { ErpFieldPreview } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold, {
+  ErpFieldPreview,
+  ErpSectionCard,
+} from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
@@ -27,6 +30,7 @@ import {
   submitPIDForApproval,
 } from "../procurementApi.js";
 import PIDNumberEntryStep from "./PIDNumberEntryStep.jsx";
+import { getPIStatusMeta } from "./piStatusPresentation.js";
 
 const PAGE_SIZE = 25;
 
@@ -144,6 +148,7 @@ export default function PIDocumentRecountPage() {
   const detail = detailQuery.data ?? null;
   const items = useMemo(() => (Array.isArray(detail?.items) ? detail.items : []), [detail]);
   const status = String(detail?.status || "").toUpperCase();
+  const statusMeta = useMemo(() => getPIStatusMeta(detail?.status), [detail?.status]);
   // MI05 only makes sense once MI04 has locked (status COUNTED) — before that, changes belong
   // on MI04; after Submit (PENDING_APPROVAL+) counting is frozen entirely.
   const canEdit = status === "COUNTED";
@@ -158,6 +163,17 @@ export default function PIDocumentRecountPage() {
   const stageMessage = canEdit
     ? "MI05 change-count mode is active. Review the book quantity and differences, save any corrections, then submit the PID for approval."
     : `MI05 is closed because this PID is currently ${status}.`;
+
+  useEffect(() => {
+    setEdits({});
+    setError("");
+    setNotice("");
+    setCurrentPage(0);
+  }, [id]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, Math.max(totalPages - 1, 0)));
+  }, [totalPages]);
 
   function updateEdit(itemId, patch) {
     setEdits((current) => ({ ...current, [itemId]: { ...current[itemId], ...patch } }));
@@ -236,6 +252,13 @@ export default function PIDocumentRecountPage() {
         ...(id ? [{ key: "recount-stage", tone: canEdit ? "info" : "warning", message: stageMessage }] : []),
       ]}
       actions={id ? [
+        { key: "back", label: "Back To Detail", tone: "neutral", onClick: openDetail },
+        {
+          key: "refresh",
+          label: loading ? "Refreshing..." : "Refresh",
+          tone: "neutral",
+          onClick: () => void detailQuery.refetch(),
+        },
         {
           key: "save",
           label: saving ? "Saving..." : `Save${pendingEntries.length ? ` (${pendingEntries.length})` : ""}`,
@@ -243,14 +266,7 @@ export default function PIDocumentRecountPage() {
           onClick: () => void handleSaveAll(),
           disabled: saving || pendingEntries.length === 0 || !canEdit,
         },
-        { key: "back", label: "Back To Detail", tone: "neutral", onClick: openDetail },
         ...(canSubmit ? [{ key: "submit", label: saving ? "Submitting..." : "Submit for Approval", tone: "neutral", onClick: () => void handleSubmitForApproval(), disabled: saving }] : []),
-        {
-          key: "refresh",
-          label: loading ? "Refreshing..." : "Refresh",
-          tone: "neutral",
-          onClick: () => void detailQuery.refetch(),
-        },
       ] : []}
     >
       {!id ? (
@@ -272,96 +288,111 @@ export default function PIDocumentRecountPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          <div className="grid gap-4 xl:grid-cols-3">
+          <div className="grid gap-4 xl:grid-cols-4">
             <ErpFieldPreview label="Step" value="MI05 Change Count" tone="sky" />
-            <ErpFieldPreview label="Status" value={detail.status || "—"} />
+            <ErpFieldPreview label="Page" value="Page 2 · Review And Correct" />
+            <ErpFieldPreview label="Status" value={statusMeta.label} tone={statusMeta.previewTone} />
             <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
             <ErpFieldPreview
               label="Storage Location"
               value={detail.mode === "LOCATION_WISE" ? (detail.storage_location_name || detail.storage_location_code || "—") : "Multiple (ITEM_WISE)"}
             />
+            <ErpFieldPreview label="Progress" value={`${items.length} item${items.length === 1 ? "" : "s"}`} caption={`Unsaved ${pendingEntries.length}`} />
           </div>
 
-          {!canEdit ? (
-            <div className="border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              This document's status is {status} — changes can no longer be made here.
+          <ErpSectionCard eyebrow="Page 2" title="Correction Workspace">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <ErpFieldPreview label="Mode" value={detail.mode || "—"} />
+              <ErpFieldPreview
+                label="Storage Location"
+                value={detail.mode === "LOCATION_WISE" ? (detail.storage_location_name || detail.storage_location_code || "—") : "Multiple (ITEM_WISE)"}
+              />
+              <ErpFieldPreview label="Rows In PID" value={`${items.length}`} />
+              <ErpFieldPreview label="Pending Save" value={`${pendingEntries.length}`} />
             </div>
-          ) : (
-            <div className="border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-              Every item already has a Count or Zero Check. Change any of them below, click Save to
-              commit, then Submit for Approval when satisfied. Unsaved: {pendingEntries.length}.
-            </div>
-          )}
 
-          <ErpDenseGrid
-            columns={[
-              { key: "line_number", label: "Line", width: "60px" },
-              {
-                key: "material_id",
-                label: "Material",
-                render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
-              },
-              { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
-              { key: "stock_type", label: "Stock Type", width: "140px" },
-              {
-                key: "storage_location_id",
-                label: "Location",
-                width: "140px",
-                render: (row) => (row.storage_location_code || row.storage_location_name ? `${row.storage_location_code ?? "—"}` : "—"),
-              },
-              { key: "book_qty", label: "Book Qty", width: "100px" },
-              {
-                key: "physical_qty",
-                label: "Physical Count",
-                width: "260px",
-                render: (row) => (
-                  <RecountCell
-                    row={row}
-                    canEdit={canEdit && !row.posted_stock_document_id}
-                    edit={edits[row.id]}
-                    onEditChange={(patch) => updateEdit(row.id, patch)}
-                    disabled={saving}
-                  />
-                ),
-              },
-              {
-                key: "difference_qty",
-                label: "Difference",
-                width: "110px",
-                render: (row) => {
+            {!canEdit ? (
+              <div className="mt-4 border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                This PID is currently {statusMeta.label}. MI05 is closed, so count changes can no longer be made here.
+              </div>
+            ) : (
+              <div className="mt-4 border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                Every item already has a Count or Zero Check. Review any needed corrections below, click Save to commit them, then Submit for Approval when satisfied. Unsaved: {pendingEntries.length}.
+              </div>
+            )}
+
+            <div className="mt-4 grid gap-3">
+              <ErpDenseGrid
+                columns={[
+                  { key: "line_number", label: "Line", width: "60px" },
+                  {
+                    key: "material_id",
+                    label: "Material",
+                    render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
+                  },
+                  { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
+                  { key: "stock_type", label: "Stock Type", width: "140px" },
+                  {
+                    key: "storage_location_id",
+                    label: "Location",
+                    width: "140px",
+                    render: (row) => (row.storage_location_code || row.storage_location_name ? `${row.storage_location_code ?? "—"}` : "—"),
+                  },
+                  { key: "book_qty", label: "Book Qty", width: "100px" },
+                  {
+                    key: "physical_qty",
+                    label: "Physical Count",
+                    width: "260px",
+                    render: (row) => (
+                      <RecountCell
+                        row={row}
+                        canEdit={canEdit && !row.posted_stock_document_id}
+                        edit={edits[row.id]}
+                        onEditChange={(patch) => updateEdit(row.id, patch)}
+                        disabled={saving}
+                      />
+                    ),
+                  },
+                  {
+                    key: "difference_qty",
+                    label: "Difference",
+                    width: "110px",
+                    render: (row) => {
+                      const edit = edits[row.id];
+                      const pending = hasPendingValue(edit);
+                      const effectiveQty = pending ? edit.physicalQty : row.physical_qty;
+                      if (effectiveQty === null || effectiveQty === undefined) return <span className="text-slate-400">—</span>;
+                      const diff = Number(effectiveQty) - Number(row.book_qty ?? 0);
+                      return (
+                        <span className={`font-semibold ${toneForDifference(diff)}`}>
+                          {diff.toFixed(4)}{pending ? <span className="ml-1 text-xs font-normal text-amber-600">(unsaved)</span> : null}
+                        </span>
+                      );
+                    },
+                  },
+                ]}
+                rows={pagedItems}
+                rowKey={(row) => row.id}
+                getRowProps={(row) => {
                   const edit = edits[row.id];
                   const pending = hasPendingValue(edit);
                   const effectiveQty = pending ? edit.physicalQty : row.physical_qty;
-                  if (effectiveQty === null || effectiveQty === undefined) return <span className="text-slate-400">—</span>;
+                  if (effectiveQty === null || effectiveQty === undefined) return {};
                   const diff = Number(effectiveQty) - Number(row.book_qty ?? 0);
-                  return (
-                    <span className={`font-semibold ${toneForDifference(diff)}`}>
-                      {diff.toFixed(4)}{pending ? <span className="ml-1 text-xs font-normal text-amber-600">(unsaved)</span> : null}
-                    </span>
-                  );
-                },
-              },
-            ]}
-            rows={pagedItems}
-            rowKey={(row) => row.id}
-            getRowProps={(row) => {
-              const edit = edits[row.id];
-              const pending = hasPendingValue(edit);
-              const effectiveQty = pending ? edit.physicalQty : row.physical_qty;
-              if (effectiveQty === null || effectiveQty === undefined) return {};
-              const diff = Number(effectiveQty) - Number(row.book_qty ?? 0);
-              return { className: diff < 0 ? "bg-rose-50" : diff > 0 ? "bg-emerald-50" : "bg-slate-50" };
-            }}
-            emptyMessage="No items on this PI document."
-            maxHeight="520px"
-          />
-          <div className="flex items-center justify-between text-sm text-slate-600">
-            <span>Page {currentPage + 1} of {totalPages} ({items.length} items)</span>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setCurrentPage((page) => Math.max(0, page - 1))} disabled={currentPage === 0} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Prev</button>
-              <button type="button" onClick={() => setCurrentPage((page) => Math.min(totalPages - 1, page + 1))} disabled={currentPage >= totalPages - 1} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Next</button>
+                  return { className: diff < 0 ? "bg-rose-50" : diff > 0 ? "bg-emerald-50" : "bg-slate-50" };
+                }}
+                emptyMessage="No items on this PI document."
+                maxHeight="520px"
+              />
+              <div className="flex items-center justify-between text-sm text-slate-600">
+                <span>Page {currentPage + 1} of {totalPages} ({items.length} items)</span>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setCurrentPage((page) => Math.max(0, page - 1))} disabled={currentPage === 0} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Prev</button>
+                  <button type="button" onClick={() => setCurrentPage((page) => Math.min(totalPages - 1, page + 1))} disabled={currentPage >= totalPages - 1} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Next</button>
+                </div>
+              </div>
             </div>
-          </div>
+          </ErpSectionCard>
         </div>
       )}
     </ErpScreenScaffold>

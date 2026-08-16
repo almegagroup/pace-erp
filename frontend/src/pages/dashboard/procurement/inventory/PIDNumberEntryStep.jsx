@@ -44,8 +44,8 @@ export default function PIDNumberEntryStep({ heading, helperText, onResolved, ex
 
   return (
     <div className="flex max-w-lg flex-col gap-4">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 1</p>
+      <div className="rounded border border-slate-200 bg-white px-4 py-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 1 of 2</p>
         <h3 className="text-lg font-semibold text-slate-900">{heading}</h3>
         {helperText ? <p className="mt-1 text-sm text-slate-600">{helperText}</p> : null}
       </div>
@@ -57,6 +57,7 @@ export default function PIDNumberEntryStep({ heading, helperText, onResolved, ex
         <div className="flex gap-2">
           <input
             type="text"
+            autoFocus
             value={value}
             onChange={(event) => {
               setValue(event.target.value);
@@ -86,9 +87,15 @@ export default function PIDNumberEntryStep({ heading, helperText, onResolved, ex
 
       {preview ? (
         <>
-          <div className="rounded border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-            Company <b>{preview.company_code || preview.company_name || "—"}</b> · Count date{" "}
-            <b>{formatDate(preview.count_date)}</b>
+          <div className="rounded border border-emerald-300 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-700">PID resolved</div>
+            <div className="mt-1">
+              Company <b>{preview.company_code || preview.company_name || "—"}</b> · Count date{" "}
+              <b>{formatDate(preview.count_date)}</b>
+            </div>
+            <div className="mt-1 text-xs">
+              Status <b>{preview.status || "—"}</b> · Mode <b>{preview.mode || "—"}</b>
+            </div>
           </div>
           <div className="flex justify-end">
             <button
@@ -96,7 +103,7 @@ export default function PIDNumberEntryStep({ heading, helperText, onResolved, ex
               onClick={() => onResolved(preview)}
               className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700"
             >
-              Continue
+              Continue To Page 2
             </button>
           </div>
         </>
