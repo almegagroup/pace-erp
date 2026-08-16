@@ -405,6 +405,7 @@ async function hydrateSo(soId: string, ctx?: ProcurementHandlerContext): Promise
 export async function hasPhysicalInventoryBlock(
   materialId: string,
   storageLocationId: string,
+  stockType: string,
 ): Promise<boolean> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
@@ -412,6 +413,7 @@ export async function hasPhysicalInventoryBlock(
     .select("id")
     .eq("material_id", materialId)
     .eq("storage_location_id", storageLocationId)
+    .eq("stock_type", stockType)
     .maybeSingle();
 
   if (error) {
@@ -1252,6 +1254,7 @@ export async function issueSOStockHandler(
       const postingBlocked = await hasPhysicalInventoryBlock(
         String(soLine.material_id),
         storageLocationId,
+        "UNRESTRICTED",
       );
       if (postingBlocked) {
         return salesErrorResponse(
