@@ -637,12 +637,33 @@ async function checkPostingBlock(
   }
   if (!data?.pi_document_id) return null;
 
-  const { data: doc } = await serviceRoleClient
+  const { data: doc, error: docError } = await serviceRoleClient
     .schema("erp_procurement")
     .from("physical_inventory_document")
-    .select("document_number")
+    .select("id, document_number, status")
     .eq("id", String(data.pi_document_id))
     .maybeSingle();
+  if (docError) {
+    throw new Error("PI_BLOCK_LOOKUP_FAILED");
+  }
+
+  const documentStatus = toUpperTrimmedString(doc?.status);
+  const isActiveBlockDocument = documentStatus === "OPEN" || documentStatus === "COUNTED" || documentStatus === "PENDING_APPROVAL";
+  if (!doc?.id || !isActiveBlockDocument) {
+    let cleanupQuery = serviceRoleClient
+      .schema("erp_inventory")
+      .from("physical_inventory_block")
+      .delete()
+      .eq("material_id", materialId)
+      .eq("storage_location_id", storageLocationId)
+      .eq("pi_document_id", String(data.pi_document_id));
+    cleanupQuery = batchNumber ? cleanupQuery.eq("batch_number", batchNumber) : cleanupQuery.is("batch_number", null);
+    const { error: cleanupError } = await cleanupQuery;
+    if (cleanupError) {
+      throw new Error("PI_BLOCK_RELEASE_FAILED");
+    }
+    return null;
+  }
 
   return {
     pi_document_id: String(data.pi_document_id),
@@ -661,6 +682,66 @@ function blockedResponse(req: Request, ctx: ProcurementHandlerContext, block: { 
     `This item is blocked by active Physical Inventory ${block.document_number}.`,
     { pi_document_id: block.pi_document_id, pi_document_number: block.document_number },
   );
+}
+
+async function cleanupPIDDraftCreation(documentId: string): Promise<void> {
+  const { error: blockCleanupError } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("physical_inventory_block")
+    .delete()
+    .eq("pi_document_id", documentId);
+  if (blockCleanupError) {
+    throw new Error("PI_CREATE_ROLLBACK_FAILED");
+  }
+
+  const { error: itemCleanupError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("physical_inventory_item")
+    .delete()
+    .eq("document_id", documentId);
+  if (itemCleanupError) {
+    throw new Error("PI_CREATE_ROLLBACK_FAILED");
+  }
+
+  const { error: documentCleanupError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("physical_inventory_document")
+    .delete()
+    .eq("id", documentId);
+  if (documentCleanupError) {
+    throw new Error("PI_CREATE_ROLLBACK_FAILED");
+  }
+}
+
+async function cleanupPIDItemCreation(
+  documentId: string,
+  itemId: string,
+  materialId: string,
+  storageLocationId: string,
+  batchNumber: string | null,
+): Promise<void> {
+  let blockCleanupQuery = serviceRoleClient
+    .schema("erp_inventory")
+    .from("physical_inventory_block")
+    .delete()
+    .eq("pi_document_id", documentId)
+    .eq("material_id", materialId)
+    .eq("storage_location_id", storageLocationId);
+  blockCleanupQuery = batchNumber ? blockCleanupQuery.eq("batch_number", batchNumber) : blockCleanupQuery.is("batch_number", null);
+  const { error: blockCleanupError } = await blockCleanupQuery;
+  if (blockCleanupError) {
+    throw new Error("PI_ITEM_ADD_ROLLBACK_FAILED");
+  }
+
+  const { error: itemCleanupError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("physical_inventory_item")
+    .delete()
+    .eq("id", itemId)
+    .eq("document_id", documentId);
+  if (itemCleanupError) {
+    throw new Error("PI_ITEM_ADD_ROLLBACK_FAILED");
+  }
 }
 
 async function countNullPhysicalQty(documentId: string): Promise<number> {
@@ -879,6 +960,7 @@ export async function createPIDHandler(
         .insert(itemPayload);
 
       if (itemError) {
+        await cleanupPIDDraftCreation(String(document.id));
         return piErrorResponse(req, ctx, "PI_ITEM_CREATE_FAILED", 500, "Unable to create physical inventory items.");
       }
 
@@ -894,6 +976,7 @@ export async function createPIDHandler(
         .insert(blockPayload);
 
       if (blockError) {
+        await cleanupPIDDraftCreation(String(document.id));
         const status = String(blockError.code || "").startsWith("23") ? 409 : 500;
         return piErrorResponse(
           req,
@@ -1311,6 +1394,7 @@ export async function addPIItemHandler(
         });
 
       if (blockError) {
+        await cleanupPIDItemCreation(documentId, String(item.id), materialId, storageLocationId, target.batch_number ?? null);
         const status = String(blockError.code || "").startsWith("23") ? 409 : 500;
         return piErrorResponse(
           req,

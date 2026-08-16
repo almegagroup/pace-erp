@@ -20,6 +20,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import UomQuantityInput from "../../../../components/forms/UomQuantityInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -216,6 +217,9 @@ export default function PIDocumentCountEntryPage() {
   const pendingItems = items.length - countedItems;
   const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
   const pagedItems = useMemo(() => items.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE), [items, currentPage]);
+  const paginationPage = currentPage + 1;
+  const startIndex = items.length === 0 ? 0 : currentPage * PAGE_SIZE + 1;
+  const endIndex = items.length === 0 ? 0 : Math.min(items.length, currentPage * PAGE_SIZE + pagedItems.length);
 
   const pendingEntries = useMemo(
     () => Object.entries(edits).filter(([, edit]) => hasPendingValue(edit)),
@@ -337,90 +341,90 @@ export default function PIDocumentCountEntryPage() {
             <ErpFieldPreview label="Progress" value={`Counted ${countedItems}/${items.length}`} caption={`Pending ${pendingItems} · Unsaved ${pendingEntries.length}`} />
           </div>
 
-          <ErpSectionCard eyebrow="Page 2" title="Blind Count Workspace">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <ErpFieldPreview label="Mode" value={getModeLabel(detail.mode)} />
-              <ErpFieldPreview
-                label="Storage Location"
-                value={getStorageScopeLabel(detail)}
-              />
-              <ErpFieldPreview label="Rows In PID" value={`${items.length}`} />
-              <ErpFieldPreview label="Pending Save" value={`${pendingEntries.length}`} />
-            </div>
+          <div className="grid gap-4">
+            <ErpSectionCard eyebrow="Page 2" title="Blind Count Workspace">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <ErpFieldPreview label="Mode" value={getModeLabel(detail.mode)} />
+                <ErpFieldPreview
+                  label="Storage Location"
+                  value={getStorageScopeLabel(detail)}
+                />
+                <ErpFieldPreview label="Rows In PID" value={`${items.length}`} />
+                <ErpFieldPreview label="Pending Save" value={`${pendingEntries.length}`} />
+              </div>
 
-            {isFullyLocked ? (
-              <div className="mt-4 border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                Every item already has a Count or Zero Check. MI04 is closed for this PID. {status === "COUNTED" ? (
-                  <button type="button" onClick={openRecount} className="ml-1 font-semibold underline">
-                    Go to MI05 (Change Count) to make further changes.
-                  </button>
-                ) : (
-                  <>Current status: {statusMeta.label}.</>
-                )}
-              </div>
-            ) : (
-              <div className="mt-4 border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                Count what you physically find. The system's book quantity is not shown here on
-                purpose — that's the whole point of a physical count. Fill in as many rows as you
-                like across pages, then click Save to commit them all at once. This page stays open
-                until every item has a Count or Zero Check, then locks permanently.
-              </div>
-            )}
+              {isFullyLocked ? (
+                <div className="mt-4 border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  Every item already has a Count or Zero Check. MI04 is closed for this PID. {status === "COUNTED" ? (
+                    <button type="button" onClick={openRecount} className="ml-1 font-semibold underline">
+                      Go to MI05 (Change Count) to make further changes.
+                    </button>
+                  ) : (
+                    <>Current status: {statusMeta.label}.</>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-4 border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                  Count what you physically find. The system's book quantity is not shown here on
+                  purpose — that's the whole point of a physical count. Fill in as many rows as you
+                  like across pages, then click Save to commit them all at once. This page stays open
+                  until every item has a Count or Zero Check, then locks permanently.
+                </div>
+              )}
+            </ErpSectionCard>
 
             {!isFullyLocked ? (
-              <div className="mt-4 grid gap-3">
-              <ErpDenseGrid
-                columns={[
-                  { key: "line_number", label: "Line", width: "60px" },
-                  {
-                    key: "material_id",
-                    label: "Material",
-                    render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
-                  },
-                  { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
-                  { key: "stock_type", label: "Stock Type", width: "150px" },
-                  {
-                    key: "storage_location_id",
-                    label: "Location",
-                    width: "150px",
-                    render: (row) => (row.storage_location_code || row.storage_location_name ? `${row.storage_location_code ?? "—"}` : "—"),
-                  },
-                  {
-                    key: "physical_qty",
-                    label: "Physical Count",
-                    width: "300px",
-                    render: (row) => {
-                      const cellProps = {
-                        row,
-                        canEdit: canEditCounts && !row.posted_stock_document_id,
-                        edit: edits[row.id],
-                        onEditChange: (patch) => updateEdit(row.id, patch),
-                        disabled: saving,
-                      };
-                      // FG Scenario 2 — variable-fill packs (no material-level fixed conversion),
-                      // the packing order's own fill_qty_per_pack is the only signal for this.
-                      return row.packing_order_fill_qty_per_pack !== null && row.packing_order_fill_qty_per_pack !== undefined
-                        ? <PackCountCell {...cellProps} />
-                        : <BlindCountCell {...cellProps} />;
+              <div className="grid gap-3">
+                <ErpPaginationStrip
+                  page={paginationPage}
+                  setPage={(next) => setCurrentPage(Math.max(0, Number(next) - 1))}
+                  totalPages={totalPages}
+                  startIndex={startIndex}
+                  endIndex={endIndex}
+                  totalItems={items.length}
+                />
+                <ErpDenseGrid
+                  columns={[
+                    { key: "line_number", label: "Line", width: "60px" },
+                    {
+                      key: "material_id",
+                      label: "Material",
+                      render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
                     },
-                  },
-                ]}
-                rows={pagedItems}
-                rowKey={(row) => row.id}
-                rowTabIndex={-1}
-                emptyMessage="No items on this PI document."
-                maxHeight="520px"
-              />
-              <div className="flex items-center justify-between text-sm text-slate-600">
-                <span>Page {currentPage + 1} of {totalPages} ({items.length} items)</span>
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => setCurrentPage((page) => Math.max(0, page - 1))} disabled={currentPage === 0} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Prev</button>
-                  <button type="button" onClick={() => setCurrentPage((page) => Math.min(totalPages - 1, page + 1))} disabled={currentPage >= totalPages - 1} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Next</button>
-                </div>
-              </div>
+                    { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
+                    { key: "stock_type", label: "Stock Type", width: "150px" },
+                    {
+                      key: "storage_location_id",
+                      label: "Location",
+                      width: "150px",
+                      render: (row) => (row.storage_location_code || row.storage_location_name ? `${row.storage_location_code ?? "—"}` : "—"),
+                    },
+                    {
+                      key: "physical_qty",
+                      label: "Physical Count",
+                      width: "300px",
+                      render: (row) => {
+                        const cellProps = {
+                          row,
+                          canEdit: canEditCounts && !row.posted_stock_document_id,
+                          edit: edits[row.id],
+                          onEditChange: (patch) => updateEdit(row.id, patch),
+                          disabled: saving,
+                        };
+                        return row.packing_order_fill_qty_per_pack !== null && row.packing_order_fill_qty_per_pack !== undefined
+                          ? <PackCountCell {...cellProps} />
+                          : <BlindCountCell {...cellProps} />;
+                      },
+                    },
+                  ]}
+                  rows={pagedItems}
+                  rowKey={(row) => row.id}
+                  rowTabIndex={-1}
+                  emptyMessage="No items on this PI document."
+                />
               </div>
             ) : null}
-          </ErpSectionCard>
+          </div>
         </div>
       )}
     </ErpScreenScaffold>
