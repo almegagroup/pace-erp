@@ -27,6 +27,17 @@ import {
 const PI_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "SFG", "FG"]);
 const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 
+function getModeLabel(mode) {
+  if (mode === "LOCATION_WISE") return "Location-wise";
+  if (mode === "ITEM_WISE") return "Item-wise";
+  if (mode === "MANUAL_WISE") return "Manual item-wise";
+  return String(mode || "—");
+}
+
+function getMultiModeScopeCaption(mode) {
+  return mode === "MANUAL_WISE" ? "Manually staged rows" : "Staged stock-backed rows";
+}
+
 function normalizeLocationRows(payload) {
   if (Array.isArray(payload?.data)) return payload.data;
   return Array.isArray(payload) ? payload : [];
@@ -48,8 +59,21 @@ function normalizeCreateErrorMessage(message, mode) {
   if (text.includes("storage_location_id is required for LOCATION_WISE mode")) {
     return "Choose a storage location before creating a location-wise PID.";
   }
+  if (text.includes("At least one valid PI item is required for this mode")) {
+    return "Stage at least one valid PID row before creating this document.";
+  }
+  if (text.includes("PI_COMPANY_MATERIAL_SCOPE_INVALID")) {
+    return "The selected material is not mapped to the current company.";
+  }
+  if (text.includes("PI_ITEM_MATERIAL_INVALID")) {
+    return "Only RM, PM, Intermediate, SFG, and FG materials are allowed in PID.";
+  }
   if (text === "PI_CREATE_FAILED") {
-    return mode === "LOCATION_WISE" ? "Could not create the location-wise PID." : "Could not create the item-wise PID.";
+    return mode === "LOCATION_WISE"
+      ? "Could not create the location-wise PID."
+      : mode === "MANUAL_WISE"
+        ? "Could not create the manual item-wise PID."
+        : "Could not create the item-wise PID.";
   }
   return text;
 }
@@ -76,13 +100,19 @@ export default function PIDocumentCreatePage() {
   const [breakdownLoading, setBreakdownLoading] = useState(false);
   const [checkedKeys, setCheckedKeys] = useState({});
   const [stagedItems, setStagedItems] = useState([]); // [{material_id, stock_type, storage_location_id, batch_number, packing_order_id, book_qty, ...display}]
+  const [manualDraft, setManualDraft] = useState({ material_id: "", stock_type: "UNRESTRICTED", storage_location_id: "" });
 
   const [locations, setLocations] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
 
-  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" });
+  const materialQuery = useMaterialOptionsQuery({
+    limit: MASTER_PICKER_FETCH_LIMIT,
+    offset: 0,
+    status: "ACTIVE",
+    ...(mode === "MANUAL_WISE" && companyId ? { company_id: companyId } : {}),
+  });
   const materialOptions = useMemo(
     () =>
       materialQuery.materials
@@ -109,6 +139,7 @@ export default function PIDocumentCreatePage() {
     setBreakdown(null);
     setCheckedKeys({});
     setStagedItems([]);
+    setManualDraft({ material_id: "", stock_type: "UNRESTRICTED", storage_location_id: "" });
     setError("");
   }, [companyId]);
 
@@ -117,6 +148,7 @@ export default function PIDocumentCreatePage() {
     setSearchMaterialId("");
     setBreakdown(null);
     setCheckedKeys({});
+    setManualDraft({ material_id: "", stock_type: "UNRESTRICTED", storage_location_id: "" });
     if (mode === "LOCATION_WISE") {
       setStagedItems([]);
       return;
@@ -172,6 +204,38 @@ export default function PIDocumentCreatePage() {
 
   function removeStaged(row) {
     setStagedItems((current) => current.filter((entry) => stagedKey(entry) !== stagedKey(row)));
+  }
+
+  function addManualDraftToStaged() {
+    if (!manualDraft.material_id || !manualDraft.storage_location_id || !manualDraft.stock_type) {
+      setError("Material, storage location, and stock type are required before staging a manual PID row.");
+      return;
+    }
+    const material = materialQuery.materials.find((row) => String(row.id) === String(manualDraft.material_id));
+    const location = locations.find((row) => String(row.id) === String(manualDraft.storage_location_id));
+    if (!material || !location) {
+      setError("Select a valid company-mapped material and storage location before staging.");
+      return;
+    }
+    const row = {
+      material_id: manualDraft.material_id,
+      stock_type: manualDraft.stock_type,
+      storage_location_id: manualDraft.storage_location_id,
+      batch_number: null,
+      packing_order_id: null,
+      book_qty: 0,
+      base_uom_code: material.base_uom_code ?? "",
+      material,
+      storage_location_code: location.code ?? location.storage_location_code ?? null,
+      storage_location_name: location.name ?? location.storage_location_name ?? null,
+      scope_source: "MANUAL",
+    };
+    setStagedItems((current) => {
+      const existingKeys = new Set(current.map(stagedKey));
+      return existingKeys.has(stagedKey(row)) ? current : [...current, row];
+    });
+    setManualDraft((current) => ({ ...current, material_id: "" }));
+    setError("");
   }
 
   const canCreate = companyId && countDate && postingDate
@@ -230,7 +294,9 @@ export default function PIDocumentCreatePage() {
           tone: "info",
           message: mode === "LOCATION_WISE"
             ? "MI01 Location-wise: choose the company and one storage location, then create the PID scope in one step."
-            : "MI01 Item-wise: search a material, pick the exact location rows you want, stage them, then create the PID.",
+            : mode === "ITEM_WISE"
+              ? "MI01 Item-wise: search a material, pick the exact location rows you want, stage them, then create the PID."
+              : "MI01 Manual item-wise: choose a company-mapped material, storage location, and stock type, stage multiple rows, then create the PID.",
         },
       ]}
       actions={[
@@ -274,12 +340,12 @@ export default function PIDocumentCreatePage() {
         <div className="grid gap-4 xl:grid-cols-4">
           <ErpFieldPreview label="Step" value="MI01 Create" tone="sky" />
           <ErpFieldPreview label="Page" value={page === 1 ? "Header" : page === 2 ? "Scope Build" : "Review"} />
-          <ErpFieldPreview label="Mode" value={mode === "LOCATION_WISE" ? "Location-wise" : "Item-wise"} />
+          <ErpFieldPreview label="Mode" value={getModeLabel(mode)} />
           <ErpFieldPreview label="Company Scope" value={companyId ? "Selected" : "Required"} />
           <ErpFieldPreview
             label="Ready To Create"
             value={canCreate ? "Yes" : "No"}
-            caption={mode === "LOCATION_WISE" ? "Need company + location + dates" : `Staged ${stagedItems.length}`}
+            caption={mode === "LOCATION_WISE" ? "Need company + location + dates" : `${getMultiModeScopeCaption(mode)} ${stagedItems.length}`}
           />
         </div>
 
@@ -298,6 +364,7 @@ export default function PIDocumentCreatePage() {
               >
                 <option value="LOCATION_WISE">Location-wise</option>
                 <option value="ITEM_WISE">Item-wise</option>
+                <option value="MANUAL_WISE">Manual item-wise</option>
               </select>
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
@@ -484,7 +551,59 @@ export default function PIDocumentCreatePage() {
           </ErpSectionCard>
         ) : null}
 
-        {page === 2 && mode === "ITEM_WISE" ? (
+        {page === 2 && mode === "MANUAL_WISE" ? (
+          <ErpSectionCard eyebrow="Page 2" title="Build Manual Scope">
+            <div className="grid gap-3">
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px_auto]">
+                <ErpDenseFormRow label="Material" required>
+                  <ErpComboboxField
+                    value={manualDraft.material_id}
+                    onChange={(value) => setManualDraft((current) => ({ ...current, material_id: value }))}
+                    options={materialOptions}
+                    blankLabel={companyId ? "Select company-mapped material" : "Select company first"}
+                  />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Storage Location" required>
+                  <select
+                    value={manualDraft.storage_location_id}
+                    onChange={(event) => setManualDraft((current) => ({ ...current, storage_location_id: event.target.value }))}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select location</option>
+                    {locationOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Stock Type" required>
+                  <select
+                    value={manualDraft.stock_type}
+                    onChange={(event) => setManualDraft((current) => ({ ...current, stock_type: event.target.value }))}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    {STOCK_TYPES.map((entry) => (
+                      <option key={entry} value={entry}>{entry}</option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    onClick={addManualDraftToStaged}
+                    className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+                  >
+                    Add row
+                  </button>
+                </div>
+              </div>
+              <div className="rounded border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+                Manual item-wise mode lets you seed a PID even when there is no current stock row at that location. If stock already exists, backend will still resolve the real book quantity and batch/PO grain automatically.
+              </div>
+            </div>
+          </ErpSectionCard>
+        ) : null}
+
+        {page === 2 && mode !== "LOCATION_WISE" ? (
           <ErpSectionCard eyebrow="Scope Review" title={`${stagedItems.length} item${stagedItems.length === 1 ? "" : "s"} staged`}>
             <ErpDenseGrid
               columns={[
@@ -493,6 +612,7 @@ export default function PIDocumentCreatePage() {
                 { key: "stock_type", label: "Stock Type", width: "140px" },
                 { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
                 { key: "book_qty", label: "Book Qty", width: "100px" },
+                { key: "scope_source", label: "Source", width: "120px", render: (row) => row.scope_source === "MANUAL" ? "Manual" : "Stock" },
                 {
                   key: "actions",
                   label: "",
@@ -535,6 +655,7 @@ export default function PIDocumentCreatePage() {
                     { key: "stock_type", label: "Stock Type", width: "140px" },
                     { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
                     { key: "book_qty", label: "Book Qty", width: "100px" },
+                    { key: "scope_source", label: "Source", width: "120px", render: (row) => row.scope_source === "MANUAL" ? "Manual" : "Stock" },
                   ]}
                   rows={stagedItems}
                   rowKey={stagedKey}

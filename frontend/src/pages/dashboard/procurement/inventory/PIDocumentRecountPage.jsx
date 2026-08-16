@@ -34,6 +34,19 @@ import { getPIStatusMeta } from "./piStatusPresentation.js";
 
 const PAGE_SIZE = 25;
 
+function getModeLabel(mode) {
+  if (mode === "LOCATION_WISE") return "Location-wise";
+  if (mode === "ITEM_WISE") return "Item-wise";
+  if (mode === "MANUAL_WISE") return "Manual item-wise";
+  return String(mode || "—");
+}
+
+function getStorageScopeLabel(detail) {
+  return detail?.mode === "LOCATION_WISE"
+    ? (detail.storage_location_name || detail.storage_location_code || "—")
+    : `Multiple (${getModeLabel(detail?.mode)})`;
+}
+
 function toneForDifference(value) {
   if (value < 0) return "text-rose-700";
   if (value > 0) return "text-emerald-700";
@@ -295,17 +308,17 @@ export default function PIDocumentRecountPage() {
             <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
             <ErpFieldPreview
               label="Storage Location"
-              value={detail.mode === "LOCATION_WISE" ? (detail.storage_location_name || detail.storage_location_code || "—") : "Multiple (ITEM_WISE)"}
+              value={getStorageScopeLabel(detail)}
             />
             <ErpFieldPreview label="Progress" value={`${items.length} item${items.length === 1 ? "" : "s"}`} caption={`Unsaved ${pendingEntries.length}`} />
           </div>
 
           <ErpSectionCard eyebrow="Page 2" title="Correction Workspace">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <ErpFieldPreview label="Mode" value={detail.mode || "—"} />
+              <ErpFieldPreview label="Mode" value={getModeLabel(detail.mode)} />
               <ErpFieldPreview
                 label="Storage Location"
-                value={detail.mode === "LOCATION_WISE" ? (detail.storage_location_name || detail.storage_location_code || "—") : "Multiple (ITEM_WISE)"}
+                value={getStorageScopeLabel(detail)}
               />
               <ErpFieldPreview label="Rows In PID" value={`${items.length}`} />
               <ErpFieldPreview label="Pending Save" value={`${pendingEntries.length}`} />
@@ -373,6 +386,7 @@ export default function PIDocumentRecountPage() {
                 ]}
                 rows={pagedItems}
                 rowKey={(row) => row.id}
+                rowTabIndex={-1}
                 getRowProps={(row) => {
                   const edit = edits[row.id];
                   const pending = hasPendingValue(edit);

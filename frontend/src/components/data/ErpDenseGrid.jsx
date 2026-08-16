@@ -41,6 +41,7 @@ export default function ErpDenseGrid({
   stickyHeader = true,
   maxHeight = "calc(100vh - 200px)",
   emptyMessage = "No rows available.",
+  rowTabIndex = 0,
   // Opt-in only — default false, so every existing caller of this component
   // keeps its exact current (non-virtualized) rendering. Pass true for
   // reports that can load a large, unpaginated row set (e.g. IN02) so the
@@ -104,7 +105,7 @@ export default function ErpDenseGrid({
       <tr
         key={rowKey ? rowKey(row, index) : `${index}`}
         ref={(el) => { rowRefs.current[index] = el; }}
-        tabIndex={0}
+        tabIndex={rowTabIndex}
         {...mergedRowProps}
         className={`h-[var(--erp-row-height)] cursor-pointer border-b border-slate-200 bg-white text-[12px] text-slate-800 outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${externalRowProps.className ?? ""}`.trim()}
       >

@@ -51,6 +51,19 @@ const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 const PI_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "SFG", "FG"]);
 const PAGE_SIZE = 25;
 
+function getModeLabel(mode) {
+  if (mode === "LOCATION_WISE") return "Location-wise";
+  if (mode === "ITEM_WISE") return "Item-wise";
+  if (mode === "MANUAL_WISE") return "Manual item-wise";
+  return String(mode || "—");
+}
+
+function getStorageScopeLabel(detail) {
+  return detail?.mode === "LOCATION_WISE"
+    ? (detail.storage_location_name || detail.storage_location_code || "—")
+    : `Multiple (${getModeLabel(detail?.mode)})`;
+}
+
 function formatDate(value) {
   if (!value) return "—";
   const date = new Date(value);
@@ -442,18 +455,18 @@ export default function PIDocumentDetailPage() {
           <div className="grid gap-4 xl:grid-cols-4">
             <ErpFieldPreview label="Step" value={status === "OPEN" ? "MI02 / MI03" : status === "COUNTED" ? "MI03 -> MI05" : status === "PENDING_APPROVAL" ? "MI03 / MI07" : "MI03 Display"} />
             <ErpFieldPreview label="Page" value={page === 1 ? "Overview" : page === 2 ? (status === "PENDING_APPROVAL" ? "Review / Post" : "Item Grid") : "Adjust Scope"} />
-            <ErpFieldPreview label="Status" value={statusMeta.label} tone={statusMeta.previewTone} />
-            <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
-            <ErpFieldPreview
-              label="Storage Location"
-              value={detail.mode === "LOCATION_WISE" ? (detail.storage_location_name || detail.storage_location_code || "—") : "Multiple (ITEM_WISE)"}
-            />
+          <ErpFieldPreview label="Status" value={statusMeta.label} tone={statusMeta.previewTone} />
+          <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
+          <ErpFieldPreview
+            label="Storage Location"
+            value={getStorageScopeLabel(detail)}
+          />
             <ErpFieldPreview label="Progress" value={`Counted ${countedItems}/${items.length}`} caption={`Pending ${pendingItems}`} />
           </div>
 
           <ErpSectionCard eyebrow="Header" title={detail.document_number || "PI Document"}>
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-              <ErpFieldPreview label="Mode" value={detail.mode || "—"} />
+              <ErpFieldPreview label="Mode" value={getModeLabel(detail.mode)} />
               <ErpFieldPreview label="Count Date" value={formatDate(detail.count_date)} />
               <ErpFieldPreview label="Posting Date" value={formatDate(detail.posting_date)} />
               <ErpFieldPreview label="Opening Stock Source" value={detail.is_opening_stock_source ? "Yes" : "No"} />
