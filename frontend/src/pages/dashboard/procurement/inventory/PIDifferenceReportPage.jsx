@@ -8,8 +8,12 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
-import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpScreenScaffold, {
+  ErpFieldPreview,
+  ErpSectionCard,
+} from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { listPIDifferences } from "../procurementApi.js";
 
@@ -36,6 +40,7 @@ export default function PIDifferenceReportPage() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [page, setPage] = useState(1);
 
   async function loadDifferences(nextFilters = filters) {
     setLoading(true);
@@ -66,126 +71,157 @@ export default function PIDifferenceReportPage() {
     void loadDifferences(filters);
   }, [effectiveCompanyId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useScreenBackInterceptor(() => {
+    if (page !== 2) return false;
+    setPage(1);
+    return true;
+  });
+
   async function applyFilters(patch) {
     const next = { ...filters, ...patch };
     setFilters(next);
     await loadDifferences(next);
   }
 
-  const gainCount = rows.filter((r) => Number(r.difference_qty) > 0).length;
-  const lossCount = rows.filter((r) => Number(r.difference_qty) < 0).length;
-  // §119.15 fix — a CANCELLED document's items never posted and never will; counting them as
-  // "pending" is misleading (implies still-actionable work).
-  const pendingCount = rows.filter((r) => r.status_label === "PENDING").length;
+  async function handleSearch() {
+    await loadDifferences(filters);
+    setPage(2);
+  }
+
+  const gainCount = rows.filter((row) => Number(row.difference_qty) > 0).length;
+  const lossCount = rows.filter((row) => Number(row.difference_qty) < 0).length;
+  const pendingCount = rows.filter((row) => row.status_label === "PENDING").length;
 
   return (
-    <ErpMasterListTemplate
+    <ErpScreenScaffold
       eyebrow="Procurement Inventory"
       title="Physical Inventory — Difference Report"
-      notices={error ? [{ key: "pi-diff-error", tone: "error", message: error }] : []}
-      actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadDifferences(filters) },
+      notices={[
+        ...(error ? [{ key: "pi-diff-error", tone: "error", message: error }] : []),
+        {
+          key: "pi-diff-guide",
+          tone: "info",
+          message: "IN07 is the MI20-style cross-document review page. Use it to analyze pending and posted differences across the selected company.",
+        },
       ]}
-      filterSection={{
-        eyebrow: "Filters",
-        title: "Company, document, status",
-        children: (
-          <div className="grid gap-3 xl:grid-cols-4">
-            <div className="xl:col-span-4">
+      actions={
+        page === 1
+          ? [
+              { key: "search", label: loading ? "Searching..." : "Search", tone: "primary", hint: "F8", onClick: () => void handleSearch() },
+            ]
+          : [
+              { key: "back", label: "Back To Filters", tone: "neutral", hint: "Esc", onClick: () => setPage(1) },
+              { key: "refresh", label: loading ? "Searching..." : "Search Again", tone: "primary", hint: "F8", onClick: () => void handleSearch() },
+            ]
+      }
+    >
+      <div className="grid gap-4">
+        <div className="grid gap-4 xl:grid-cols-4">
+          <ErpFieldPreview label="Step" value="MI20 Difference Report" tone="sky" />
+          <ErpFieldPreview label="Page" value={page === 1 ? "Filters" : "Output Grid"} />
+          <ErpFieldPreview label="Company Scope" value={effectiveCompanyId ? "Selected" : "Required"} />
+          <ErpFieldPreview label="Loaded Rows" value={`${rows.length}`} caption={`Gain ${gainCount} · Loss ${lossCount} · Pending ${pendingCount}`} />
+        </div>
+
+        {page === 1 ? (
+          <ErpSectionCard eyebrow="Page 1" title="Report Filters">
+            <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              IN07 / MI20 review: compare gains, losses, and still-pending post rows without opening each PID individually.
+            </div>
+            <div className="mt-3 grid gap-3">
               <TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={setCompanyId} label="Company" />
+              <div className="grid gap-3 xl:grid-cols-5">
+                <ErpDenseFormRow label="PID Document #">
+                  <input
+                    value={filters.document_number}
+                    onChange={(event) => void applyFilters({ document_number: event.target.value })}
+                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    placeholder="Search document #"
+                  />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Status">
+                  <select value={filters.status} onChange={(event) => void applyFilters({ status: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500">
+                    {STATUS_OPTIONS.map((entry) => (<option key={entry || "ALL"} value={entry}>{entry || "ALL"}</option>))}
+                  </select>
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Difference Type">
+                  <select value={filters.difference_type} onChange={(event) => void applyFilters({ difference_type: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500">
+                    {DIFF_TYPE_OPTIONS.map((entry) => (<option key={entry || "ALL"} value={entry}>{entry || "ALL"}</option>))}
+                  </select>
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Posting Date From">
+                  <input type="date" value={filters.date_from} onChange={(event) => void applyFilters({ date_from: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Posting Date To">
+                  <input type="date" value={filters.date_to} onChange={(event) => void applyFilters({ date_to: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                </ErpDenseFormRow>
+              </div>
+              <div className="grid gap-2 md:grid-cols-3">
+                <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Gain</div>
+                  <div className="mt-1 text-base font-semibold text-emerald-700">{gainCount}</div>
+                </div>
+                <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Loss</div>
+                  <div className="mt-1 text-base font-semibold text-rose-700">{lossCount}</div>
+                </div>
+                <div className="rounded border border-slate-200 bg-white px-3 py-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Pending Post</div>
+                  <div className="mt-1 text-base font-semibold text-sky-700">{pendingCount}</div>
+                </div>
+              </div>
             </div>
-            <ErpDenseFormRow label="PID Document #">
-              <input
-                value={filters.document_number}
-                onChange={(event) => void applyFilters({ document_number: event.target.value })}
-                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                placeholder="Search document #"
-              />
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="Status">
-              <select value={filters.status} onChange={(event) => void applyFilters({ status: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500">
-                {STATUS_OPTIONS.map((entry) => (<option key={entry || "ALL"} value={entry}>{entry || "ALL"}</option>))}
-              </select>
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="Difference Type">
-              <select value={filters.difference_type} onChange={(event) => void applyFilters({ difference_type: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500">
-                {DIFF_TYPE_OPTIONS.map((entry) => (<option key={entry || "ALL"} value={entry}>{entry || "ALL"}</option>))}
-              </select>
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="Posting Date From">
-              <input type="date" value={filters.date_from} onChange={(event) => void applyFilters({ date_from: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="Posting Date To">
-              <input type="date" value={filters.date_to} onChange={(event) => void applyFilters({ date_to: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-            </ErpDenseFormRow>
-            <div className="grid grid-cols-3 gap-2 xl:col-span-2">
-              <div className="rounded border border-slate-200 bg-white px-3 py-2">
-                <div className="text-[10px] font-semibold uppercase text-slate-500">Gain</div>
-                <div className="text-lg font-semibold text-emerald-700">{gainCount}</div>
-              </div>
-              <div className="rounded border border-slate-200 bg-white px-3 py-2">
-                <div className="text-[10px] font-semibold uppercase text-slate-500">Loss</div>
-                <div className="text-lg font-semibold text-rose-700">{lossCount}</div>
-              </div>
-              <div className="rounded border border-slate-200 bg-white px-3 py-2">
-                <div className="text-[10px] font-semibold uppercase text-slate-500">Pending Post</div>
-                <div className="text-lg font-semibold text-sky-700">{pendingCount}</div>
-              </div>
-            </div>
-          </div>
-        ),
-      }}
-      listSection={{
-        eyebrow: "Differences",
-        title: loading ? "Loading differences" : `${rows.length} row${rows.length === 1 ? "" : "s"}`,
-        children: (
-          <ErpDenseGrid
-            virtualize
-            columns={[
-              { key: "pi_document_number", label: "PID #", width: "130px" },
-              { key: "posting_date", label: "Posting Date", width: "110px", render: (row) => formatDate(row.posting_date) },
-              { key: "pi_status", label: "PID Status", width: "120px" },
-              { key: "company_name", label: "Company", width: "140px", render: (row) => row.company_name ?? row.company_code ?? "—" },
-              { key: "storage_location_name", label: "Location", width: "140px", render: (row) => row.storage_location_code ?? "—" },
-              { key: "material_name", label: "Material", render: (row) => (row.material_name ? `${row.material_name} (${row.material_pace_code ?? "—"})` : "—") },
-              { key: "batch_number", label: "Batch", width: "100px", render: (row) => row.batch_number ?? "—" },
-              { key: "stock_type", label: "Stock Type", width: "130px" },
-              { key: "book_qty", label: "Book Qty", width: "100px" },
-              { key: "physical_qty", label: "Physical Qty", width: "100px", render: (row) => row.physical_qty ?? "—" },
-              {
-                key: "difference_qty",
-                label: "Difference",
-                width: "100px",
-                render: (row) => <span className={`font-semibold ${toneForDifference(Number(row.difference_qty))}`}>{Number(row.difference_qty).toFixed(4)}</span>,
-              },
-              { key: "difference_pct", label: "Diff %", width: "80px", render: (row) => (row.difference_pct === null ? "—" : `${row.difference_pct}%`) },
-              { key: "base_uom_code", label: "UoM", width: "70px" },
-              { key: "movement_type", label: "Movement", width: "90px", render: (row) => row.movement_type ?? "—" },
-              {
-                key: "status_label",
-                label: "Status",
-                width: "90px",
-                render: (row) => {
-                  const tone = row.status_label === "POSTED"
-                    ? "bg-emerald-100 text-emerald-800"
-                    : row.status_label === "CANCELLED"
-                    ? "bg-slate-200 text-slate-600"
-                    : "bg-amber-100 text-amber-800";
-                  return (
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${tone}`}>
-                      {row.status_label === "POSTED" ? "Posted" : row.status_label === "CANCELLED" ? "Cancelled" : "Pending"}
-                    </span>
-                  );
+          </ErpSectionCard>
+        ) : (
+          <ErpSectionCard eyebrow="Page 2" title={loading ? "Loading Differences" : `${rows.length} Difference Row${rows.length === 1 ? "" : "s"}`}>
+            <ErpDenseGrid
+              virtualize
+              columns={[
+                { key: "pi_document_number", label: "PID #", width: "130px" },
+                { key: "posting_date", label: "Posting Date", width: "110px", render: (row) => formatDate(row.posting_date) },
+                { key: "pi_status", label: "PID Status", width: "120px" },
+                { key: "company_name", label: "Company", width: "140px", render: (row) => row.company_name ?? row.company_code ?? "—" },
+                { key: "storage_location_name", label: "Location", width: "140px", render: (row) => row.storage_location_code ?? "—" },
+                { key: "material_name", label: "Material", render: (row) => (row.material_name ? `${row.material_name} (${row.material_pace_code ?? "—"})` : "—") },
+                { key: "batch_number", label: "Batch", width: "100px", render: (row) => row.batch_number ?? "—" },
+                { key: "stock_type", label: "Stock Type", width: "130px" },
+                { key: "book_qty", label: "Book Qty", width: "100px" },
+                { key: "physical_qty", label: "Physical Qty", width: "100px", render: (row) => row.physical_qty ?? "—" },
+                {
+                  key: "difference_qty",
+                  label: "Difference",
+                  width: "100px",
+                  render: (row) => <span className={`font-semibold ${toneForDifference(Number(row.difference_qty))}`}>{Number(row.difference_qty).toFixed(4)}</span>,
                 },
-              },
-            ]}
-            rows={rows}
-            rowKey={(row, index) => `${row.pi_document_id}-${index}`}
-            emptyMessage={loading ? "Loading differences..." : "No differences found for this filter."}
-            maxHeight="620px"
-          />
-        ),
-      }}
-    />
+                { key: "difference_pct", label: "Diff %", width: "80px", render: (row) => (row.difference_pct === null ? "—" : `${row.difference_pct}%`) },
+                { key: "base_uom_code", label: "UoM", width: "70px" },
+                { key: "movement_type", label: "Movement", width: "90px", render: (row) => row.movement_type ?? "—" },
+                {
+                  key: "status_label",
+                  label: "Status",
+                  width: "90px",
+                  render: (row) => {
+                    const tone = row.status_label === "POSTED"
+                      ? "bg-emerald-100 text-emerald-800"
+                      : row.status_label === "CANCELLED"
+                      ? "bg-slate-200 text-slate-600"
+                      : "bg-amber-100 text-amber-800";
+                    return (
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${tone}`}>
+                        {row.status_label === "POSTED" ? "Posted" : row.status_label === "CANCELLED" ? "Cancelled" : "Pending"}
+                      </span>
+                    );
+                  },
+                },
+              ]}
+              rows={rows}
+              rowKey={(row, index) => `${row.pi_document_id}-${index}`}
+              emptyMessage={loading ? "Loading differences..." : "No differences found for this filter."}
+              maxHeight="620px"
+            />
+          </ErpSectionCard>
+        )}
+      </div>
+    </ErpScreenScaffold>
   );
 }

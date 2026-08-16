@@ -14,7 +14,7 @@
  * selection posts atomically together, and the document can go through more than one Post action
  * until every non-zero-difference item is posted.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
@@ -26,6 +26,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -44,26 +45,11 @@ import {
   useMaterialOptionsQuery,
   useStorageLocationsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { getPIStatusMeta } from "./piStatusPresentation.js";
 
 const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 const PI_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "SFG", "FG"]);
 const PAGE_SIZE = 25;
-
-function statusTone(status) {
-  switch (String(status || "").toUpperCase()) {
-    case "COUNTED":
-      return "amber";
-    case "PENDING_APPROVAL":
-      return "violet";
-    case "POSTED":
-      return "emerald";
-    case "CANCELLED":
-      return "slate";
-    case "OPEN":
-    default:
-      return "sky";
-  }
-}
 
 function formatDate(value) {
   if (!value) return "—";
@@ -81,6 +67,38 @@ function toneForDifference(value) {
   if (value < 0) return "text-rose-700";
   if (value > 0) return "text-emerald-700";
   return "text-slate-600";
+}
+
+function buildStageMessage(status, counts) {
+  switch (status) {
+    case "OPEN":
+      return {
+        tone: "info",
+        message: `MI02 change mode is active. Scope can still be adjusted, and MI04 count entry remains open. Counted ${counts.counted}/${counts.total}; pending ${counts.pending}.`,
+      };
+    case "COUNTED":
+      return {
+        tone: "info",
+        message: "MI04 is complete. Use MI05 to review and change counts before submitting for approval.",
+      };
+    case "PENDING_APPROVAL":
+      return {
+        tone: "info",
+        message: "MI05 is locked. Review the variances below, select the lines you want to post, then complete MI07-style posting.",
+      };
+    case "POSTED":
+      return {
+        tone: "success",
+        message: "This PID is fully posted. The review screen is now display-only.",
+      };
+    case "CANCELLED":
+      return {
+        tone: "warning",
+        message: "This PID has been cancelled. It remains visible for review, but no further processing is allowed.",
+      };
+    default:
+      return null;
+  }
 }
 
 // §8A — Reason modal for Reopen/Cancel (mandatory reason, small inline modal — the shared
@@ -134,6 +152,7 @@ export default function PIDocumentDetailPage() {
   const [reasonModal, setReasonModal] = useState(null); // "reopen" | "cancel" | null
   const [selectedItemIds, setSelectedItemIds] = useState(() => new Set());
   const [currentPage, setCurrentPage] = useState(0);
+  const [page, setPage] = useState(1);
 
   const detailQuery = useQuery({
     queryKey: ["procurement", "pi-document-detail", id],
@@ -161,6 +180,7 @@ export default function PIDocumentDetailPage() {
   });
 
   const items = useMemo(() => (Array.isArray(detail?.items) ? detail.items : []), [detail]);
+  const statusMeta = useMemo(() => getPIStatusMeta(detail?.status), [detail?.status]);
   const materialOptions = useMemo(
     () =>
       materials
@@ -190,6 +210,35 @@ export default function PIDocumentDetailPage() {
   const canPost = status === "PENDING_APPROVAL" && postableItems.length > 0;
   const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
   const pagedItems = useMemo(() => items.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE), [items, currentPage]);
+  const stageNotice = buildStageMessage(status, { counted: countedItems, total: items.length, pending: pendingItems });
+
+  useEffect(() => {
+    setError("");
+    setNotice("");
+    setSelectedItemIds(new Set());
+    setCurrentPage(0);
+    setItemForm({ material_id: "", stock_type: "UNRESTRICTED", storage_location_id: "" });
+    setPage(1);
+  }, [id]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, Math.max(totalPages - 1, 0)));
+  }, [totalPages]);
+
+  useEffect(() => {
+    setSelectedItemIds((current) => {
+      if (current.size === 0) return current;
+      const valid = new Set(postableItems.map((row) => row.id));
+      const next = new Set([...current].filter((itemId) => valid.has(itemId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [postableItems]);
+
+  useScreenBackInterceptor(() => {
+    if (page <= 1) return false;
+    setPage((current) => Math.max(1, current - 1));
+    return true;
+  });
 
   const queryError = detailQuery.error?.message || materialQuery.error?.message || locationQuery.error?.message || "";
 
@@ -323,26 +372,49 @@ export default function PIDocumentDetailPage() {
       notices={[
         ...((error || queryError) ? [{ key: "pi-detail-error", tone: "error", message: error || queryError }] : []),
         ...(notice ? [{ key: "pi-detail-notice", tone: "success", message: notice }] : []),
+        ...(stageNotice ? [{ key: "pi-detail-stage", tone: stageNotice.tone, message: stageNotice.message }] : []),
       ]}
       actions={[
         {
           key: "back",
-          label: "Back To List",
+          label: page === 1 ? "Back To List" : "Back",
           tone: "neutral",
           onClick: () => {
+            if (page > 1) {
+              setPage((current) => Math.max(1, current - 1));
+              return;
+            }
             openScreen(OPERATION_SCREENS.PROC_PI_LIST.screen_code);
             navigate("/dashboard/procurement/physical-inventory");
           },
         },
-        { key: "print", label: "Print Count Sheet", tone: "neutral", onClick: openPrint },
-        ...(canEnterCounts ? [{ key: "count-entry", label: "Enter Counts (MI04)", tone: "primary", onClick: openCountEntry }] : []),
-        ...(canChangeCounts ? [{ key: "recount", label: "Change Counts (MI05)", tone: "primary", onClick: openRecount }] : []),
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
           onClick: () => void Promise.all([detailQuery.refetch(), materialQuery.refetch(), locationQuery.refetch()]),
         },
+        {
+          key: "overview",
+          label: "Overview",
+          tone: page === 1 ? "primary" : "neutral",
+          onClick: () => setPage(1),
+        },
+        {
+          key: "items",
+          label: status === "PENDING_APPROVAL" ? "Review / Post" : "Item Grid",
+          tone: page === 2 ? "primary" : "neutral",
+          onClick: () => setPage(2),
+        },
+        ...(canAddOrRemoveItems ? [{
+          key: "scope",
+          label: "Adjust Scope",
+          tone: page === 3 ? "primary" : "neutral",
+          onClick: () => setPage(3),
+        }] : []),
+        { key: "print", label: "Print Count Sheet", tone: "neutral", onClick: openPrint },
+        ...(canEnterCounts ? [{ key: "count-entry", label: "Enter Counts (MI04)", tone: "primary", onClick: openCountEntry }] : []),
+        ...(canChangeCounts ? [{ key: "recount", label: "Change Counts (MI05)", tone: "primary", onClick: openRecount }] : []),
         ...(canCancel ? [{ key: "cancel", label: "Cancel Document", tone: "danger", onClick: () => setReasonModal("cancel"), disabled: saving }] : []),
         ...(canReopen ? [{ key: "reopen", label: "Reopen", tone: "neutral", onClick: () => setReasonModal("reopen"), disabled: saving }] : []),
         ...(canPost ? [{
@@ -368,7 +440,9 @@ export default function PIDocumentDetailPage() {
       ) : (
         <div className="grid gap-4">
           <div className="grid gap-4 xl:grid-cols-4">
-            <ErpFieldPreview label="Status" value={detail.status || "—"} tone={statusTone(detail.status)} />
+            <ErpFieldPreview label="Step" value={status === "OPEN" ? "MI02 / MI03" : status === "COUNTED" ? "MI03 -> MI05" : status === "PENDING_APPROVAL" ? "MI03 / MI07" : "MI03 Display"} />
+            <ErpFieldPreview label="Page" value={page === 1 ? "Overview" : page === 2 ? (status === "PENDING_APPROVAL" ? "Review / Post" : "Item Grid") : "Adjust Scope"} />
+            <ErpFieldPreview label="Status" value={statusMeta.label} tone={statusMeta.previewTone} />
             <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
             <ErpFieldPreview
               label="Storage Location"
@@ -388,7 +462,27 @@ export default function PIDocumentDetailPage() {
             </div>
           </ErpSectionCard>
 
-          {status === "PENDING_APPROVAL" ? (
+          {page === 1 ? (
+            <>
+              <ErpSectionCard eyebrow="Page 1" title="Stage Overview">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <ErpFieldPreview label="Mode" value={detail.mode || "—"} />
+                  <ErpFieldPreview label="Count Date" value={formatDate(detail.count_date)} />
+                  <ErpFieldPreview label="Posting Date" value={formatDate(detail.posting_date)} />
+                  <ErpFieldPreview label="Progress" value={`Counted ${countedItems}/${items.length}`} caption={`Pending ${pendingItems}`} />
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <ErpFieldPreview label="Opening Stock Source" value={detail.is_opening_stock_source ? "Yes" : "No"} />
+                  <ErpFieldPreview label="Submitted At" value={formatDateTime(detail.submitted_at)} />
+                  <ErpFieldPreview label="Posted At" value={formatDateTime(detail.posted_at)} />
+                  <ErpFieldPreview label="Variance Rows" value={`${items.filter((row) => Number(row.difference_qty ?? 0) !== 0).length}`} caption="Non-zero difference lines" />
+                </div>
+              </ErpSectionCard>
+              <DocumentFlowSection docType="PID" docId={detail.id} />
+            </>
+          ) : null}
+
+          {page === 2 && status === "PENDING_APPROVAL" ? (
             <div className="border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
               Select which items to post below (or Select All) — the selected batch posts atomically
               together. You can post in more than one batch; the document is fully POSTED once every
@@ -396,9 +490,10 @@ export default function PIDocumentDetailPage() {
             </div>
           ) : null}
 
+          {page === 2 ? (
           <ErpSectionCard
-            eyebrow="Count Progress"
-            title="Item counts"
+            eyebrow="Page 2"
+            title={status === "PENDING_APPROVAL" ? "Review And Post" : "Item Grid"}
             aside={<div className="text-sm font-semibold text-slate-600">Counted {countedItems}/{items.length} | Pending {pendingItems}</div>}
           >
             <ErpDenseGrid
@@ -488,9 +583,10 @@ export default function PIDocumentDetailPage() {
               </div>
             </div>
           </ErpSectionCard>
+          ) : null}
 
-          {canAddOrRemoveItems ? (
-            <ErpSectionCard eyebrow="Add Item" title="Add item to current PI document (MI02)">
+          {page === 3 && canAddOrRemoveItems ? (
+            <ErpSectionCard eyebrow="Page 3" title="Adjust Scope (MI02)">
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_200px_200px_auto]">
                 <ErpDenseFormRow label="Material" required>
                   <ErpComboboxField value={itemForm.material_id} onChange={(value) => setItemForm((current) => ({ ...current, material_id: value }))} options={materialOptions} blankLabel="Select material" />
@@ -514,8 +610,6 @@ export default function PIDocumentDetailPage() {
               </div>
             </ErpSectionCard>
           ) : null}
-
-          <DocumentFlowSection docType="PID" docId={detail.id} />
         </div>
       )}
     </ErpScreenScaffold>

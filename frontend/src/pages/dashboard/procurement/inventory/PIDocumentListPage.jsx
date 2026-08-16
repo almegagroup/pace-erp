@@ -4,31 +4,18 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
-import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpScreenScaffold, {
+  ErpFieldPreview,
+  ErpSectionCard,
+} from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listPIDocuments } from "../procurementApi.js";
+import { getPIStatusMeta } from "./piStatusPresentation.js";
 
-// §119.6 — PENDING_APPROVAL/CANCELLED added to the state machine.
 const STATUS_OPTIONS = ["", "OPEN", "COUNTED", "PENDING_APPROVAL", "POSTED", "CANCELLED"];
-
-function statusTone(status) {
-  switch (String(status || "").toUpperCase()) {
-    case "COUNTED":
-      return "bg-amber-100 text-amber-800";
-    case "PENDING_APPROVAL":
-      return "bg-violet-100 text-violet-800";
-    case "POSTED":
-      return "bg-emerald-100 text-emerald-800";
-    case "CANCELLED":
-      return "bg-slate-200 text-slate-600";
-    case "OPEN":
-    default:
-      return "bg-sky-100 text-sky-800";
-  }
-}
 
 function formatDate(value) {
   if (!value) return "—";
@@ -109,14 +96,21 @@ export default function PIDocumentListPage() {
   }
 
   return (
-    <ErpMasterListTemplate
+    <ErpScreenScaffold
       eyebrow="Procurement Inventory"
       title="Physical Inventory Documents"
-      notices={error ? [{ key: "pi-list-error", tone: "error", message: error }] : []}
+      notices={[
+        ...(error ? [{ key: "pi-list-error", tone: "error", message: error }] : []),
+        {
+          key: "pi-list-guide",
+          tone: "info",
+          message: "IN01 is the MI01/MI02/MI03 control point: create new PIDs here, open a document for review/change, then hand off to MI04 and MI05 for counting.",
+        },
+      ]}
       actions={[
         {
           key: "differences",
-          label: "Difference Report",
+          label: "Open MI20 / IN07",
           tone: "neutral",
           onClick: openDifferenceReport,
         },
@@ -135,10 +129,24 @@ export default function PIDocumentListPage() {
           onClick: openCreate,
         },
       ]}
-      filterSection={{
-        eyebrow: "Summary",
-        title: "Register",
-        children: (
+    >
+      <div className="grid gap-4">
+        <div className="grid gap-4 xl:grid-cols-4">
+          <ErpFieldPreview label="Step" value="IN01 / MI01-MI03" tone="sky" />
+          <ErpFieldPreview label="Company Scope" value={effectiveCompanyId ? "Selected" : "Required"} />
+          <ErpFieldPreview label="Register Rows" value={`${rows.length}`} caption={`Open ${metrics[1].value} · Pending ${metrics[2].value}`} />
+          <ErpFieldPreview label="Companion Flow" value="MI04 / MI05 / MI07 / MI20" />
+        </div>
+
+        <ErpSectionCard
+          eyebrow="Transaction Map"
+          title="Physical Inventory Transaction Shell"
+          aside={(
+            <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              MI01 Create · MI02 Change · MI03 Display · MI04 Count · MI05 Change Count · MI07 Post · MI20 Differences
+            </div>
+          )}
+        >
           <div className="grid gap-3 xl:grid-cols-4">
             <div className="xl:col-span-4">
               <TransactionCompanySelector
@@ -156,12 +164,17 @@ export default function PIDocumentListPage() {
               </div>
             ))}
           </div>
-        ),
-      }}
-      listSection={{
-        eyebrow: "PI Register",
-        title: loading ? "Loading physical inventory documents" : `${rows.length} document row${rows.length === 1 ? "" : "s"}`,
-        children: (
+        </ErpSectionCard>
+
+        <ErpSectionCard
+          eyebrow="PI Register"
+          title={loading ? "Loading Physical Inventory Documents" : `${rows.length} Document Row${rows.length === 1 ? "" : "s"}`}
+          aside={(
+            <div className="rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+              Double-click a row to open MI02/MI03 review. Use MI20 / IN07 for cross-document difference analysis.
+            </div>
+          )}
+        >
           <div className="grid gap-3">
             <div className="grid gap-3 md:grid-cols-2">
               <ErpDenseFormRow label="Status Filter">
@@ -197,11 +210,14 @@ export default function PIDocumentListPage() {
                   key: "status",
                   label: "Status",
                   width: "130px",
-                  render: (row) => (
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${statusTone(row.status)}`}>
-                      {row.status}
-                    </span>
-                  ),
+                  render: (row) => {
+                    const statusMeta = getPIStatusMeta(row.status);
+                    return (
+                      <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${statusMeta.badgeClassName}`}>
+                        {statusMeta.label}
+                      </span>
+                    );
+                  },
                 },
               ]}
               rows={rows}
@@ -213,10 +229,10 @@ export default function PIDocumentListPage() {
               })}
               emptyMessage={loading ? "Loading physical inventory documents..." : effectiveCompanyId ? "No physical inventory documents found." : "No company resolved for this session."}
               maxHeight="560px"
-            />
-          </div>
-        ),
-      }}
-    />
+              />
+            </div>
+        </ErpSectionCard>
+      </div>
+    </ErpScreenScaffold>
   );
 }

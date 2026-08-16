@@ -35,7 +35,7 @@ export default function PIDocumentPrintPage() {
   }
 
   return (
-    <div className="p-6 print:p-0">
+    <div className="bg-slate-50 p-6 print:bg-white print:p-0">
       <div className="mb-4 flex items-center justify-between print:hidden">
         <div className="text-sm text-slate-500">Physical count sheet — for floor counting, book quantity intentionally hidden.</div>
         <button
@@ -47,45 +47,52 @@ export default function PIDocumentPrintPage() {
         </button>
       </div>
 
-      <div className="mb-4">
-        <div className="text-lg font-semibold text-slate-900">Physical Inventory Count Sheet</div>
-        <div className="mt-1 grid grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-700 md:grid-cols-4">
-          <div><span className="font-semibold">PID #:</span> {detail.document_number}</div>
-          <div><span className="font-semibold">Company:</span> {detail.company_name ?? detail.company_code ?? "—"}</div>
-          <div><span className="font-semibold">Count Date:</span> {formatDate(detail.count_date)}</div>
-          <div><span className="font-semibold">Mode:</span> {detail.mode}</div>
+      <div className="rounded border border-slate-300 bg-white p-6 shadow-sm print:border-none print:p-0 print:shadow-none">
+        <div className="mb-5 border-b border-slate-300 pb-4">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">MI21 Count Sheet</div>
+          <div className="mt-1 text-lg font-semibold text-slate-900">Physical Inventory Count Sheet</div>
+          <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm text-slate-700 md:grid-cols-4">
+            <div><span className="font-semibold">PID #:</span> {detail.document_number}</div>
+            <div><span className="font-semibold">Company:</span> {detail.company_name ?? detail.company_code ?? "—"}</div>
+            <div><span className="font-semibold">Count Date:</span> {formatDate(detail.count_date)}</div>
+            <div><span className="font-semibold">Mode:</span> {detail.mode}</div>
+            <div><span className="font-semibold">Status:</span> {detail.status ?? "—"}</div>
+            <div><span className="font-semibold">Items:</span> {items.length}</div>
+            <div><span className="font-semibold">Posting Date:</span> {formatDate(detail.posting_date)}</div>
+            <div><span className="font-semibold">Print Use:</span> Floor Count Entry</div>
+          </div>
         </div>
-      </div>
 
-      {/* thead {display:table-header-group} makes this repeat on every printed page —
-          the "Header Freeze" requirement (§119.15). Columns locked 2026-08-14: Sl. No, Item
-          Name, External Code, SLoc, Status (=stock type — distinguishes the multiple rows a
-          single material/location can have, one per Unrestricted/QI/Blocked, per §MI01-ignore-
-          zero-2026-08-14) + a blank fill-in column, since that's the actual point of the sheet. */}
-      <table className="w-full border-collapse text-sm">
-        <thead className="print-repeat-header">
-          <tr className="border-b-2 border-slate-900">
-            <th className="border border-slate-400 px-2 py-1 text-left">Sl. No</th>
-            <th className="border border-slate-400 px-2 py-1 text-left">Item Name</th>
-            <th className="border border-slate-400 px-2 py-1 text-left">External Code</th>
-            <th className="border border-slate-400 px-2 py-1 text-left">SLoc</th>
-            <th className="border border-slate-400 px-2 py-1 text-left">Status</th>
-            <th className="border border-slate-400 px-2 py-1 text-left">Physical Count (fill in)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((row) => (
-            <tr key={row.id}>
-              <td className="border border-slate-300 px-2 py-2">{row.line_number}</td>
-              <td className="border border-slate-300 px-2 py-2">{row.material_name ?? "—"}</td>
-              <td className="border border-slate-300 px-2 py-2">{row.material_external_code ?? "—"}</td>
-              <td className="border border-slate-300 px-2 py-2">{row.storage_location_code ?? "—"}</td>
-              <td className="border border-slate-300 px-2 py-2">{row.stock_type}</td>
-              <td className="border border-slate-300 px-2 py-2">&nbsp;</td>
+        {/* thead {display:table-header-group} makes this repeat on every printed page —
+            the "Header Freeze" requirement (§119.15). Columns locked 2026-08-14: Sl. No, Item
+            Name, External Code, SLoc, Status (=stock type — distinguishes the multiple rows a
+            single material/location can have, one per Unrestricted/QI/Blocked, per §MI01-ignore-
+            zero-2026-08-14) + a blank fill-in column, since that's the actual point of the sheet. */}
+        <table className="w-full border-collapse text-sm">
+          <thead className="print-repeat-header">
+            <tr className="border-b-2 border-slate-900">
+              <th className="border border-slate-400 bg-slate-100 px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-[0.08em]">Sl. No</th>
+              <th className="border border-slate-400 bg-slate-100 px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-[0.08em]">Item Name</th>
+              <th className="border border-slate-400 bg-slate-100 px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-[0.08em]">External Code</th>
+              <th className="border border-slate-400 bg-slate-100 px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-[0.08em]">SLoc</th>
+              <th className="border border-slate-400 bg-slate-100 px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-[0.08em]">Status</th>
+              <th className="border border-slate-400 bg-slate-100 px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-[0.08em]">Physical Count (fill in)</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {items.map((row) => (
+              <tr key={row.id}>
+                <td className="border border-slate-300 px-2 py-2">{row.line_number}</td>
+                <td className="border border-slate-300 px-2 py-2">{row.material_name ?? "—"}</td>
+                <td className="border border-slate-300 px-2 py-2">{row.material_external_code ?? "—"}</td>
+                <td className="border border-slate-300 px-2 py-2">{row.storage_location_code ?? "—"}</td>
+                <td className="border border-slate-300 px-2 py-2">{row.stock_type}</td>
+                <td className="border border-slate-300 px-2 py-2">&nbsp;</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       <style>{`
         @media print {
