@@ -15,6 +15,8 @@ export default function ErpPaginationStrip({
   const ownerId = useId();
   const canPrevious = page > 1;
   const canNext = page < totalPages;
+  const goToPrevious = () => setPage(Math.max(1, page - 1));
+  const goToNext = () => setPage(Math.min(totalPages, page + 1));
 
   useEffect(() => {
     if (totalItems <= 0) {
@@ -24,10 +26,10 @@ export default function ErpPaginationStrip({
     return registerErpPaginationController(ownerId, {
       canPrevious,
       canNext,
-      previous: () => setPage((current) => Math.max(1, current - 1)),
-      next: () => setPage((current) => Math.min(totalPages, current + 1)),
+      previous: goToPrevious,
+      next: goToNext,
     });
-  }, [canNext, canPrevious, ownerId, setPage, totalItems, totalPages]);
+  }, [canNext, canPrevious, goToNext, goToPrevious, ownerId, totalItems]);
 
   useEffect(() => {
     if (totalItems <= 0) {
@@ -60,7 +62,7 @@ export default function ErpPaginationStrip({
           type="button"
           disabled={!canPrevious}
           onFocus={() => activateErpPaginationController(ownerId)}
-          onClick={() => setPage((current) => Math.max(1, current - 1))}
+          onClick={goToPrevious}
           className="border border-slate-300 bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Prev
@@ -72,7 +74,7 @@ export default function ErpPaginationStrip({
           type="button"
           disabled={!canNext}
           onFocus={() => activateErpPaginationController(ownerId)}
-          onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+          onClick={goToNext}
           className="border border-slate-300 bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Next

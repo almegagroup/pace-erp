@@ -16,10 +16,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import UomQuantityInput from "../../../../components/forms/UomQuantityInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
@@ -56,6 +53,16 @@ function toneForDifference(value) {
 
 function hasPendingValue(edit) {
   return Boolean(edit) && (edit.isZeroStock || (edit.physicalQty !== null && edit.physicalQty !== undefined));
+}
+
+function CompactMetaCell({ label, value, caption = "" }) {
+  return (
+    <div className="border border-slate-300 bg-white px-3 py-2">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</div>
+      <div className="mt-1 text-sm font-semibold text-slate-900">{value || "—"}</div>
+      {caption ? <div className="mt-1 text-[11px] text-slate-500">{caption}</div> : null}
+    </div>
+  );
 }
 
 // Same three entry shapes as MI04 (blind UomQuantityInput / pack-count), but Book Qty is visible
@@ -305,40 +312,21 @@ export default function PIDocumentRecountPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          <div className="grid gap-4 xl:grid-cols-4">
-            <ErpFieldPreview label="Step" value="MI05 Change Count" tone="sky" />
-            <ErpFieldPreview label="Page" value="Page 2 · Review And Correct" />
-            <ErpFieldPreview label="Status" value={statusMeta.label} tone={statusMeta.previewTone} />
-            <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
-            <ErpFieldPreview
-              label="Storage Location"
-              value={getStorageScopeLabel(detail)}
-            />
-            <ErpFieldPreview label="Progress" value={`${items.length} item${items.length === 1 ? "" : "s"}`} caption={`Unsaved ${pendingEntries.length}`} />
+          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+            <CompactMetaCell label="Step" value="MI05 Change Count" />
+            <CompactMetaCell label="Status" value={statusMeta.label} />
+            <CompactMetaCell label="Mode" value={getModeLabel(detail.mode)} />
+            <CompactMetaCell label="Location" value={getStorageScopeLabel(detail)} />
+            <CompactMetaCell label="Rows" value={`${items.length}`} caption={`Page ${paginationPage}/${totalPages}`} />
+            <CompactMetaCell label="Pending Save" value={`${pendingEntries.length}`} />
           </div>
 
           <div className="grid gap-4">
-            <ErpSectionCard eyebrow="Page 2" title="Correction Workspace">
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <ErpFieldPreview label="Mode" value={getModeLabel(detail.mode)} />
-                <ErpFieldPreview
-                  label="Storage Location"
-                  value={getStorageScopeLabel(detail)}
-                />
-                <ErpFieldPreview label="Rows In PID" value={`${items.length}`} />
-                <ErpFieldPreview label="Pending Save" value={`${pendingEntries.length}`} />
-              </div>
-
-              {!canEdit ? (
-                <div className="mt-4 border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                  This PID is currently {statusMeta.label}. MI05 is closed, so count changes can no longer be made here.
-                </div>
-              ) : (
-                <div className="mt-4 border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                  Every item already has a Count or Zero Check. Review any needed corrections below, click Save to commit them, then Submit for Approval when satisfied. Unsaved: {pendingEntries.length}.
-                </div>
-              )}
-            </ErpSectionCard>
+            <div className={`border px-3 py-2 text-sm ${canEdit ? "border-sky-200 bg-sky-50 text-sky-900" : "border-amber-300 bg-amber-50 text-amber-900"}`}>
+              {canEdit
+                ? `Review corrected counts, save in batch, then Submit for Approval. Unsaved: ${pendingEntries.length}.`
+                : `This PID is currently ${statusMeta.label}. MI05 is closed, so count changes can no longer be made here.`}
+            </div>
 
             <div className="grid gap-3">
               <ErpPaginationStrip
@@ -401,6 +389,7 @@ export default function PIDocumentRecountPage() {
                 rows={pagedItems}
                 rowKey={(row) => row.id}
                 rowTabIndex={-1}
+                maxHeight="calc(100vh - 340px)"
                 getRowProps={(row) => {
                   const edit = edits[row.id];
                   const pending = hasPendingValue(edit);
