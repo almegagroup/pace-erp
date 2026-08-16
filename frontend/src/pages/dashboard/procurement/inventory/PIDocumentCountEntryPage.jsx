@@ -21,10 +21,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import UomQuantityInput from "../../../../components/forms/UomQuantityInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
@@ -59,6 +56,16 @@ function formatDate(value) {
 
 function hasPendingValue(edit) {
   return Boolean(edit) && (edit.isZeroStock || (edit.physicalQty !== null && edit.physicalQty !== undefined));
+}
+
+function CompactMetaCell({ label, value, caption = "" }) {
+  return (
+    <div className="border border-slate-300 bg-white px-3 py-2">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</div>
+      <div className="mt-1 text-sm font-semibold text-slate-900">{value || "—"}</div>
+      {caption ? <div className="mt-1 text-[11px] text-slate-500">{caption}</div> : null}
+    </div>
+  );
 }
 
 // FG Scenario 2 (variable-fill MTO/HPS/MTEST barrels/IBCs, §UoM-2026-08-14) — no material-level
@@ -328,50 +335,31 @@ export default function PIDocumentCountEntryPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          <div className="grid gap-4 xl:grid-cols-4">
-            <ErpFieldPreview label="Step" value="MI04 Count Entry" tone="sky" />
-            <ErpFieldPreview label="Page" value="Page 2 · Blind Count Entry" />
-            <ErpFieldPreview label="Status" value={statusMeta.label} tone={statusMeta.previewTone} />
-            <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
-            <ErpFieldPreview label="Count Date" value={formatDate(detail.count_date)} />
-            <ErpFieldPreview
-              label="Storage Location"
-              value={getStorageScopeLabel(detail)}
-            />
-            <ErpFieldPreview label="Progress" value={`Counted ${countedItems}/${items.length}`} caption={`Pending ${pendingItems} · Unsaved ${pendingEntries.length}`} />
+          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+            <CompactMetaCell label="Step" value="MI04 Count Entry" />
+            <CompactMetaCell label="Status" value={statusMeta.label} />
+            <CompactMetaCell label="Count Date" value={formatDate(detail.count_date)} />
+            <CompactMetaCell label="Location" value={getStorageScopeLabel(detail)} />
+            <CompactMetaCell label="Rows" value={String(items.length)} caption={`Page ${paginationPage}/${totalPages}`} />
+            <CompactMetaCell label="Progress" value={`Counted ${countedItems}/${items.length}`} caption={`Pending ${pendingItems} · Unsaved ${pendingEntries.length}`} />
           </div>
 
           <div className="grid gap-4">
-            <ErpSectionCard eyebrow="Page 2" title="Blind Count Workspace">
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <ErpFieldPreview label="Mode" value={getModeLabel(detail.mode)} />
-                <ErpFieldPreview
-                  label="Storage Location"
-                  value={getStorageScopeLabel(detail)}
-                />
-                <ErpFieldPreview label="Rows In PID" value={`${items.length}`} />
-                <ErpFieldPreview label="Pending Save" value={`${pendingEntries.length}`} />
-              </div>
-
+            <div className={`border px-3 py-2 text-sm ${isFullyLocked ? "border-amber-300 bg-amber-50 text-amber-900" : "border-sky-200 bg-sky-50 text-sky-900"}`}>
               {isFullyLocked ? (
-                <div className="mt-4 border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <>
                   Every item already has a Count or Zero Check. MI04 is closed for this PID. {status === "COUNTED" ? (
                     <button type="button" onClick={openRecount} className="ml-1 font-semibold underline">
-                      Go to MI05 (Change Count) to make further changes.
+                      Go to MI05 (Change Count)
                     </button>
                   ) : (
                     <>Current status: {statusMeta.label}.</>
                   )}
-                </div>
+                </>
               ) : (
-                <div className="mt-4 border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                  Count what you physically find. The system's book quantity is not shown here on
-                  purpose — that's the whole point of a physical count. Fill in as many rows as you
-                  like across pages, then click Save to commit them all at once. This page stays open
-                  until every item has a Count or Zero Check, then locks permanently.
-                </div>
+                <>Blind count mode. Enter only what was physically found, then Save in batch.</>
               )}
-            </ErpSectionCard>
+            </div>
 
             {!isFullyLocked ? (
               <div className="grid gap-3">
@@ -420,6 +408,7 @@ export default function PIDocumentCountEntryPage() {
                   rows={pagedItems}
                   rowKey={(row) => row.id}
                   rowTabIndex={-1}
+                  maxHeight="calc(100vh - 340px)"
                   emptyMessage="No items on this PI document."
                 />
               </div>
