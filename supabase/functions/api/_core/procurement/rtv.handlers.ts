@@ -236,6 +236,7 @@ async function getSnapshot(companyId: string, materialId: string, storageLocatio
 async function hasPhysicalInventoryBlock(
   materialId: string,
   storageLocationId: string,
+  stockType: string,
 ): Promise<boolean> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
@@ -243,6 +244,7 @@ async function hasPhysicalInventoryBlock(
     .select("id")
     .eq("material_id", materialId)
     .eq("storage_location_id", storageLocationId)
+    .eq("stock_type", stockType)
     .maybeSingle();
 
   if (error) {
@@ -532,11 +534,11 @@ export async function postRTVHandler(
       const unitValue = parseNullableNumber(line.grn_rate) ?? 0;
       const isDirectPath = hasDirectOverride(line, directLineIds);
       const blockedSnapshot = await getSnapshot(companyId, materialId, storageLocationId, "BLOCKED");
-      const postingBlocked = await hasPhysicalInventoryBlock(
-        materialId,
-        storageLocationId,
-      );
-      if (postingBlocked) {
+      const blockedStockPostingBlocked = await hasPhysicalInventoryBlock(materialId, storageLocationId, "BLOCKED");
+      const unrestrictedPostingBlocked = isDirectPath
+        ? await hasPhysicalInventoryBlock(materialId, storageLocationId, "UNRESTRICTED")
+        : false;
+      if (blockedStockPostingBlocked || unrestrictedPostingBlocked) {
         return rtvErrorResponse(
           req,
           ctx,

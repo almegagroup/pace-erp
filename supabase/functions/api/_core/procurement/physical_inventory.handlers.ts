@@ -621,6 +621,7 @@ async function getManualWiseCandidates(
 async function checkPostingBlock(
   materialId: string,
   storageLocationId: string,
+  stockType: string,
   batchNumber: string | null,
 ): Promise<{ pi_document_id: string; document_number: string } | null> {
   let query = serviceRoleClient
@@ -628,7 +629,8 @@ async function checkPostingBlock(
     .from("physical_inventory_block")
     .select("pi_document_id")
     .eq("material_id", materialId)
-    .eq("storage_location_id", storageLocationId);
+    .eq("storage_location_id", storageLocationId)
+    .eq("stock_type", stockType);
   query = batchNumber ? query.eq("batch_number", batchNumber) : query.is("batch_number", null);
   const { data, error } = await query.maybeSingle();
 
@@ -656,6 +658,7 @@ async function checkPostingBlock(
       .delete()
       .eq("material_id", materialId)
       .eq("storage_location_id", storageLocationId)
+      .eq("stock_type", stockType)
       .eq("pi_document_id", String(data.pi_document_id));
     cleanupQuery = batchNumber ? cleanupQuery.eq("batch_number", batchNumber) : cleanupQuery.is("batch_number", null);
     const { error: cleanupError } = await cleanupQuery;
@@ -682,6 +685,30 @@ function blockedResponse(req: Request, ctx: ProcurementHandlerContext, block: { 
     `This item is blocked by active Physical Inventory ${block.document_number}.`,
     { pi_document_id: block.pi_document_id, pi_document_number: block.document_number },
   );
+}
+
+function getPIBlockKey(candidate: { material_id: string; storage_location_id: string; stock_type: string; batch_number: string | null }): string {
+  return `${candidate.material_id}::${candidate.storage_location_id}::${candidate.stock_type}::${candidate.batch_number ?? ""}`;
+}
+
+function buildUniquePIBlockPayload(
+  candidates: Array<{ material_id: string; storage_location_id: string; stock_type: string; batch_number: string | null }>,
+  documentId: string,
+): Array<{ material_id: string; storage_location_id: string; stock_type: string; batch_number: string | null; pi_document_id: string }> {
+  const unique = new Map<string, { material_id: string; storage_location_id: string; stock_type: string; batch_number: string | null; pi_document_id: string }>();
+  for (const candidate of candidates) {
+    const key = getPIBlockKey(candidate);
+    if (!unique.has(key)) {
+      unique.set(key, {
+        material_id: candidate.material_id,
+        storage_location_id: candidate.storage_location_id,
+        stock_type: candidate.stock_type,
+        batch_number: candidate.batch_number,
+        pi_document_id: documentId,
+      });
+    }
+  }
+  return [...unique.values()];
 }
 
 async function cleanupPIDDraftCreation(documentId: string): Promise<void> {
@@ -718,6 +745,7 @@ async function cleanupPIDItemCreation(
   itemId: string,
   materialId: string,
   storageLocationId: string,
+  stockType: string,
   batchNumber: string | null,
 ): Promise<void> {
   let blockCleanupQuery = serviceRoleClient
@@ -726,7 +754,8 @@ async function cleanupPIDItemCreation(
     .delete()
     .eq("pi_document_id", documentId)
     .eq("material_id", materialId)
-    .eq("storage_location_id", storageLocationId);
+    .eq("storage_location_id", storageLocationId)
+    .eq("stock_type", stockType);
   blockCleanupQuery = batchNumber ? blockCleanupQuery.eq("batch_number", batchNumber) : blockCleanupQuery.is("batch_number", null);
   const { error: blockCleanupError } = await blockCleanupQuery;
   if (blockCleanupError) {
@@ -914,7 +943,7 @@ export async function createPIDHandler(
 
     // §119.12 step 6 — check every staged combo's block BEFORE creating anything.
     for (const candidate of candidates) {
-      const block = await checkPostingBlock(candidate.material_id, candidate.storage_location_id, candidate.batch_number);
+      const block = await checkPostingBlock(candidate.material_id, candidate.storage_location_id, candidate.stock_type, candidate.batch_number);
       if (block) return blockedResponse(req, ctx, block);
     }
 
@@ -964,12 +993,7 @@ export async function createPIDHandler(
         return piErrorResponse(req, ctx, "PI_ITEM_CREATE_FAILED", 500, "Unable to create physical inventory items.");
       }
 
-      const blockPayload = candidates.map((candidate) => ({
-        material_id: candidate.material_id,
-        storage_location_id: candidate.storage_location_id,
-        batch_number: candidate.batch_number,
-        pi_document_id: document.id,
-      }));
+      const blockPayload = buildUniquePIBlockPayload(candidates, String(document.id));
       const { error: blockError } = await serviceRoleClient
         .schema("erp_inventory")
         .from("physical_inventory_block")
@@ -1349,7 +1373,7 @@ export async function addPIItemHandler(
     }
 
     for (const target of targets) {
-      const block = await checkPostingBlock(materialId, storageLocationId, target.batch_number);
+      const block = await checkPostingBlock(materialId, storageLocationId, stockType, target.batch_number);
       if (block) return blockedResponse(req, ctx, block);
     }
 
@@ -1389,12 +1413,18 @@ export async function addPIItemHandler(
         .insert({
           material_id: materialId,
           storage_location_id: storageLocationId,
+          stock_type: stockType,
           batch_number: target.batch_number,
           pi_document_id: documentId,
         });
 
       if (blockError) {
-        await cleanupPIDItemCreation(documentId, String(item.id), materialId, storageLocationId, target.batch_number ?? null);
+        const existingBlock = await checkPostingBlock(materialId, storageLocationId, stockType, target.batch_number ?? null);
+        if (existingBlock?.pi_document_id === documentId) {
+          insertedItems.push(item);
+          continue;
+        }
+        await cleanupPIDItemCreation(documentId, String(item.id), materialId, storageLocationId, stockType, target.batch_number ?? null);
         const status = String(blockError.code || "").startsWith("23") ? 409 : 500;
         return piErrorResponse(
           req,
@@ -1461,7 +1491,8 @@ export async function removePIItemHandler(
       .delete()
       .eq("pi_document_id", documentId)
       .eq("material_id", String(item.material_id))
-      .eq("storage_location_id", String(item.storage_location_id));
+      .eq("storage_location_id", String(item.storage_location_id))
+      .eq("stock_type", toUpperTrimmedString(item.stock_type));
     blockQuery = item.batch_number
       ? blockQuery.eq("batch_number", String(item.batch_number))
       : blockQuery.is("batch_number", null);
@@ -1986,6 +2017,7 @@ export async function postDifferencesHandler(
       const batchMaterialLocationBatch = batchItems.map((item) => ({
         material_id: toTrimmedString(item.material_id),
         storage_location_id: toTrimmedString(item.storage_location_id),
+        stock_type: toUpperTrimmedString(item.stock_type),
         batch_number: item.batch_number ?? null,
       }));
       for (const combo of batchMaterialLocationBatch) {
@@ -1993,7 +2025,8 @@ export async function postDifferencesHandler(
           .schema("erp_inventory").from("physical_inventory_block").delete()
           .eq("pi_document_id", documentId)
           .eq("material_id", combo.material_id)
-          .eq("storage_location_id", combo.storage_location_id);
+          .eq("storage_location_id", combo.storage_location_id)
+          .eq("stock_type", combo.stock_type);
         delQuery = combo.batch_number ? delQuery.eq("batch_number", combo.batch_number) : delQuery.is("batch_number", null);
         const { error: delErr } = await delQuery;
         if (delErr) throw new Error("PI_BLOCK_RELEASE_FAILED");

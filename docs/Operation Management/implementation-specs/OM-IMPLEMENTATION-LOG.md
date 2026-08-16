@@ -723,6 +723,7 @@ Gate-20 VERIFIED by Claude on 2026-05-12.
 - 20.3 procurementApi.js: all 7 functions (listPIDocuments, createPIDocument, getPIDocument, addPIItem, enterPICount, requestPIRecount, postPIDifferences) ✅
 - 20.3 operationScreens.js: PROC_PI_LIST + PROC_PI_DETAIL ✅
 - 20.3 AppRouter.jsx: imports + routes for procurement/physical-inventory and procurement/physical-inventory/:id ✅
+- 2026-08-16 root-cause fix: `physical_inventory_block` grain aligned with real PID item grain (`material + storage_location + stock_type + optional batch`). New migration `20260816110000_pid_block_stock_type_scope.sql` backfills/repairs active blocks and updates GRN/STO/SO/RTV/PGI guard checks so multi-stock-type materials at the same location no longer false-conflict under one PID. ✅
 
 ---
 

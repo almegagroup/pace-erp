@@ -161,6 +161,7 @@ async function verifyLocationMapped(companyId: string, storageLocationId: string
 async function hasPhysicalInventoryBlock(
   materialId: string,
   storageLocationId: string,
+  stockType: string,
 ): Promise<boolean> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
@@ -168,6 +169,7 @@ async function hasPhysicalInventoryBlock(
     .select("id")
     .eq("material_id", materialId)
     .eq("storage_location_id", storageLocationId)
+    .eq("stock_type", stockType)
     .maybeSingle();
   if (error) throw new Error("MATERIAL_POSTING_BLOCK_LOOKUP_FAILED");
   return Boolean(data?.id);
@@ -673,7 +675,7 @@ export async function createAndPostGRNFromLineHandler(
       return procurementErrorResponse(req, ctx, "GRN_STORAGE_REQUIRED", 400, "Storage location is required.");
     }
     await verifyLocationMapped(String(gateEntry.company_id), storageLocationId);
-    const pidBlocked = await hasPhysicalInventoryBlock(String(geLine.material_id), storageLocationId);
+    const pidBlocked = await hasPhysicalInventoryBlock(String(geLine.material_id), storageLocationId, targetStockType);
     if (pidBlocked) {
       return procurementErrorResponse(req, ctx, "MATERIAL_POSTING_BLOCKED", 409, "Material has an active physical inventory count in progress.");
     }

@@ -464,6 +464,7 @@ async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promi
 async function hasPhysicalInventoryBlock(
   materialId: string,
   storageLocationId: string,
+  stockType: string,
 ): Promise<boolean> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
@@ -471,6 +472,7 @@ async function hasPhysicalInventoryBlock(
     .select("id")
     .eq("material_id", materialId)
     .eq("storage_location_id", storageLocationId)
+    .eq("stock_type", stockType)
     .maybeSingle();
 
   if (error) {
@@ -2185,6 +2187,7 @@ export async function dispatchSTOHandler(
       const postingBlocked = await hasPhysicalInventoryBlock(
         String(line.material_id),
         String(line.sending_storage_location_id),
+        "UNRESTRICTED",
       );
       if (postingBlocked) {
         return stoErrorResponse(

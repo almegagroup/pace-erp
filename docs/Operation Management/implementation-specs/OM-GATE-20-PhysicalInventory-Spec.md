@@ -122,14 +122,16 @@ CREATE TABLE IF NOT EXISTS erp_inventory.physical_inventory_block (
   material_id           uuid NOT NULL,
   plant_id              uuid NOT NULL,
   storage_location_id   uuid NOT NULL,
+  stock_type            text NOT NULL
+                          CHECK (stock_type IN ('UNRESTRICTED', 'QUALITY_INSPECTION', 'BLOCKED')),
   pi_document_id        uuid NOT NULL,
   created_at            timestamptz NOT NULL DEFAULT now(),
 
-  UNIQUE (material_id, plant_id, storage_location_id)         -- one active block per material+plant+sloc
+  UNIQUE (material_id, plant_id, storage_location_id, stock_type)  -- one active block per counted stock bucket
 );
 
 COMMENT ON TABLE erp_inventory.physical_inventory_block IS
-'Posting block set on material+plant+sloc when a PI item is active. Cleared per-item on post.';
+'Posting block set on material+plant+sloc+stock_type when a PI item is active. Cleared per-item on post.';
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_pid_plant_status
@@ -141,8 +143,8 @@ CREATE INDEX IF NOT EXISTS idx_pii_document_id
 CREATE INDEX IF NOT EXISTS idx_pii_material
   ON erp_procurement.physical_inventory_item (material_id);
 
-CREATE INDEX IF NOT EXISTS idx_pib_material_plant_sloc
-  ON erp_inventory.physical_inventory_block (material_id, plant_id, storage_location_id);
+CREATE INDEX IF NOT EXISTS idx_pib_material_plant_sloc_stock_type
+  ON erp_inventory.physical_inventory_block (material_id, plant_id, storage_location_id, stock_type);
 
 -- Grants
 GRANT ALL ON erp_procurement.physical_inventory_document TO service_role;
