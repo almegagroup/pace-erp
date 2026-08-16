@@ -43,7 +43,7 @@ type ApproverMapRow = {
 const PID_RESOURCE = "PROC_PI_LIST";
 const PID_COUNT_RESOURCE = "PROC_PI_COUNT_ENTRY";
 const PID_RECOUNT_RESOURCE = "PROC_PI_RECOUNT";
-const PID_MODES = new Set(["LOCATION_WISE", "ITEM_WISE"]);
+const PID_MODES = new Set(["LOCATION_WISE", "ITEM_WISE", "MANUAL_WISE"]);
 const PID_STATUSES = new Set(["OPEN", "COUNTED", "PENDING_APPROVAL", "POSTED", "CANCELLED"]);
 const STOCK_TYPES = new Set(["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"]);
 // §119.7 — RM/PM/INT/MTS-FG/MTS-SFG are blended (no batch dimension). SFG/FG under MTO/HPS/MTEST
@@ -51,6 +51,11 @@ const STOCK_TYPES = new Set(["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"]);
 const PI_BLENDED_MATERIAL_TYPES = new Set(["RM", "PM", "INT"]);
 const PI_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "SFG", "FG"]);
 const BATCH_TRACKED_PO_TYPES = new Set(["MTO", "HPS", "MTEST"]);
+const PI_STOCK_TYPE_SORT_ORDER = new Map([
+  ["UNRESTRICTED", 1],
+  ["QUALITY_INSPECTION", 2],
+  ["BLOCKED", 3],
+]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -80,6 +85,51 @@ function parseNullableNumber(value: unknown): number | null {
 function parseNonNegativeNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function getPiStockTypeSortRank(stockType: unknown): number {
+  return PI_STOCK_TYPE_SORT_ORDER.get(toUpperTrimmedString(stockType)) ?? 99;
+}
+
+function comparePiItemDisplayOrder(
+  left: JsonRecord,
+  right: JsonRecord,
+  materialNameById?: Map<string, string>,
+): number {
+  const leftMaterialName = toUpperTrimmedString(
+    materialNameById?.get(toTrimmedString(left.material_id))
+      ?? left.material_name
+      ?? left.material_pace_code
+      ?? left.material_id,
+  );
+  const rightMaterialName = toUpperTrimmedString(
+    materialNameById?.get(toTrimmedString(right.material_id))
+      ?? right.material_name
+      ?? right.material_pace_code
+      ?? right.material_id,
+  );
+  if (leftMaterialName !== rightMaterialName) {
+    return leftMaterialName.localeCompare(rightMaterialName);
+  }
+
+  const stockTypeDelta = getPiStockTypeSortRank(left.stock_type) - getPiStockTypeSortRank(right.stock_type);
+  if (stockTypeDelta !== 0) {
+    return stockTypeDelta;
+  }
+
+  const leftLocation = toUpperTrimmedString(left.storage_location_code ?? left.storage_location_id);
+  const rightLocation = toUpperTrimmedString(right.storage_location_code ?? right.storage_location_id);
+  if (leftLocation !== rightLocation) {
+    return leftLocation.localeCompare(rightLocation);
+  }
+
+  const leftBatch = toUpperTrimmedString(left.batch_number);
+  const rightBatch = toUpperTrimmedString(right.batch_number);
+  if (leftBatch !== rightBatch) {
+    return leftBatch.localeCompare(rightBatch);
+  }
+
+  return Number(left.line_number ?? 0) - Number(right.line_number ?? 0);
 }
 
 function getPathSegments(req: Request): string[] {
@@ -171,15 +221,24 @@ async function hydratePID(documentId: string): Promise<JsonRecord> {
   };
 }
 
-async function getStorageLocationScope(storageLocationId: string): Promise<{ company_id: string }> {
-  const { data, error } = await serviceRoleClient
+async function getStorageLocationScope(
+  storageLocationId: string,
+  companyId?: string,
+): Promise<{ company_id: string }> {
+  let query = serviceRoleClient
     .schema("erp_inventory")
     .from("storage_location_plant_map")
     .select("company_id")
     .eq("storage_location_id", storageLocationId)
     .eq("active", true)
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+
+  const scopedCompanyId = toTrimmedString(companyId);
+  if (scopedCompanyId) {
+    query = query.eq("company_id", scopedCompanyId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error || !data?.company_id) {
     throw new Error("PI_STORAGE_LOCATION_SCOPE_NOT_FOUND");
@@ -490,6 +549,75 @@ async function getItemWiseCandidates(
   return results;
 }
 
+async function listCompanyMappedMaterialIds(
+  companyId: string,
+  materialIds: string[],
+): Promise<Set<string>> {
+  const uniqueMaterialIds = [...new Set(materialIds.map((entry) => toTrimmedString(entry)).filter(Boolean))];
+  if (uniqueMaterialIds.length === 0) {
+    return new Set();
+  }
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_company_ext")
+    .select("material_id")
+    .eq("company_id", companyId)
+    .in("material_id", uniqueMaterialIds);
+
+  if (error) {
+    throw new Error("PI_COMPANY_MATERIAL_LOOKUP_FAILED");
+  }
+
+  return new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean));
+}
+
+async function getManualWiseCandidates(
+  companyId: string,
+  rawItems: Array<{ material_id: string; stock_type: string; storage_location_id: string }>,
+): Promise<ItemCandidate[]> {
+  const targets = rawItems.filter((entry) => entry.material_id && entry.storage_location_id && STOCK_TYPES.has(entry.stock_type));
+  const materialInfo = await getMaterialInfo([...new Set(targets.map((entry) => entry.material_id))]);
+  const mappedMaterialIds = await listCompanyMappedMaterialIds(companyId, targets.map((entry) => entry.material_id));
+  const results: ItemCandidate[] = [];
+
+  for (const target of targets) {
+    const material = materialInfo.get(target.material_id);
+    if (!material) {
+      throw new Error("PI_ITEM_MATERIAL_INVALID");
+    }
+    if (!mappedMaterialIds.has(target.material_id)) {
+      throw new Error("PI_COMPANY_MATERIAL_SCOPE_INVALID");
+    }
+
+    const locScope = await getStorageLocationScope(target.storage_location_id, companyId);
+    if (locScope.company_id !== companyId) {
+      throw new Error("PI_STORAGE_LOCATION_SCOPE_NOT_FOUND");
+    }
+
+    const snaps = await getBookSnapshotsForMaterial(companyId, target.storage_location_id, target.material_id, material);
+    const matches = snaps.filter((entry) => entry.stock_type === target.stock_type);
+    if (matches.length > 0) {
+      for (const snap of matches) {
+        results.push({ ...snap, storage_location_id: target.storage_location_id });
+      }
+      continue;
+    }
+
+    results.push({
+      material_id: target.material_id,
+      stock_type: target.stock_type,
+      book_qty: 0,
+      base_uom_code: toTrimmedString(material.base_uom_code),
+      storage_location_id: target.storage_location_id,
+      batch_number: null,
+      packing_order_id: null,
+    });
+  }
+
+  return results;
+}
+
 async function checkPostingBlock(
   materialId: string,
   storageLocationId: string,
@@ -668,12 +796,12 @@ export async function createPIDHandler(
 
     let candidates: ItemCandidate[];
     if (mode === "LOCATION_WISE") {
-      const locScope = await getStorageLocationScope(storageLocationId);
+      const locScope = await getStorageLocationScope(storageLocationId, companyId);
       if (locScope.company_id !== companyId) {
         return piErrorResponse(req, ctx, "PI_CREATE_INVALID", 400, "storage_location_id does not belong to company_id.");
       }
       candidates = await getLocationWiseCandidates(companyId, storageLocationId, ignoreZeroStock);
-    } else {
+    } else if (mode === "ITEM_WISE") {
       const targetItems = rawItems
         .map((entry) => ({
           material_id: toTrimmedString(entry.material_id),
@@ -682,7 +810,26 @@ export async function createPIDHandler(
         }))
         .filter((entry) => entry.material_id && entry.storage_location_id && STOCK_TYPES.has(entry.stock_type));
       candidates = targetItems.length > 0 ? await getItemWiseCandidates(companyId, targetItems) : [];
+    } else {
+      const targetItems = rawItems
+        .map((entry) => ({
+          material_id: toTrimmedString(entry.material_id),
+          stock_type: toUpperTrimmedString(entry.stock_type),
+          storage_location_id: toTrimmedString(entry.storage_location_id),
+        }))
+        .filter((entry) => entry.material_id && entry.storage_location_id && STOCK_TYPES.has(entry.stock_type));
+      candidates = targetItems.length > 0 ? await getManualWiseCandidates(companyId, targetItems) : [];
     }
+
+    if (mode !== "LOCATION_WISE" && candidates.length === 0) {
+      return piErrorResponse(req, ctx, "PI_CREATE_INVALID", 400, "At least one valid PI item is required for this mode.");
+    }
+
+    const materialNameById = new Map(
+      [...(await getMaterialInfo([...new Set(candidates.map((candidate) => candidate.material_id))])).entries()]
+        .map(([materialId, material]) => [materialId, toTrimmedString(material.material_name) || toTrimmedString(material.pace_code) || materialId]),
+    );
+    candidates.sort((left, right) => comparePiItemDisplayOrder(left as unknown as JsonRecord, right as unknown as JsonRecord, materialNameById));
 
     // §119.12 step 6 — check every staged combo's block BEFORE creating anything.
     for (const candidate of candidates) {
@@ -1013,6 +1160,28 @@ async function getPIDForResource(
     const locationMap = new Map(((locationRows.data ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
     const packingOrderMap = new Map(((packingOrderRows.data ?? []) as JsonRecord[]).map((p) => [String(p.id), p]));
     const company = companyRows.data as JsonRecord | null;
+    const sortedItems = items
+      .map((item) => {
+        const material = materialMap.get(toTrimmedString(item.material_id));
+        const location = locationMap.get(toTrimmedString(item.storage_location_id));
+        const packingOrder = packingOrderMap.get(toTrimmedString(item.packing_order_id));
+        return {
+          ...item,
+          material_pace_code: material?.pace_code ?? null,
+          material_name: material?.material_name ?? null,
+          material_type: material?.material_type ?? null,
+          material_external_code: material?.external_code ?? null,
+          storage_location_code: location?.code ?? null,
+          storage_location_name: location?.name ?? null,
+          packing_order_number: packingOrder?.po_number ?? null,
+          packing_order_fill_qty_per_pack: packingOrder?.fill_qty_per_pack ?? null,
+        };
+      })
+      .sort((left, right) => comparePiItemDisplayOrder(left, right))
+      .map((item, index) => ({
+        ...item,
+        line_number: index + 1,
+      }));
 
     return okResponse(
       {
@@ -1021,22 +1190,7 @@ async function getPIDForResource(
         company_name: company?.company_name ?? null,
         storage_location_code: locationMap.get(toTrimmedString(document.storage_location_id))?.code ?? null,
         storage_location_name: locationMap.get(toTrimmedString(document.storage_location_id))?.name ?? null,
-        items: items.map((item) => {
-          const material = materialMap.get(toTrimmedString(item.material_id));
-          const location = locationMap.get(toTrimmedString(item.storage_location_id));
-          const packingOrder = packingOrderMap.get(toTrimmedString(item.packing_order_id));
-          return {
-            ...item,
-            material_pace_code: material?.pace_code ?? null,
-            material_name: material?.material_name ?? null,
-            material_type: material?.material_type ?? null,
-            material_external_code: material?.external_code ?? null,
-            storage_location_code: location?.code ?? null,
-            storage_location_name: location?.name ?? null,
-            packing_order_number: packingOrder?.po_number ?? null,
-            packing_order_fill_qty_per_pack: packingOrder?.fill_qty_per_pack ?? null,
-          };
-        }),
+        items: sortedItems,
       },
       ctx.request_id,
       req,
@@ -1088,7 +1242,7 @@ export async function addPIItemHandler(
       return piErrorResponse(req, ctx, "PI_ITEM_ADD_BLOCKED", 409, "Items can only be added while PI document is OPEN.");
     }
 
-    const locScope = await getStorageLocationScope(storageLocationId);
+    const locScope = await getStorageLocationScope(storageLocationId, toTrimmedString(document.company_id));
     if (locScope.company_id !== toTrimmedString(document.company_id)) {
       return piErrorResponse(req, ctx, "PI_ITEM_ADD_INVALID", 400, "storage_location_id does not belong to this document's company.");
     }

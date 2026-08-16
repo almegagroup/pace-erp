@@ -37,6 +37,19 @@ import { getPIStatusMeta } from "./piStatusPresentation.js";
 
 const PAGE_SIZE = 25;
 
+function getModeLabel(mode) {
+  if (mode === "LOCATION_WISE") return "Location-wise";
+  if (mode === "ITEM_WISE") return "Item-wise";
+  if (mode === "MANUAL_WISE") return "Manual item-wise";
+  return String(mode || "—");
+}
+
+function getStorageScopeLabel(detail) {
+  return detail?.mode === "LOCATION_WISE"
+    ? (detail.storage_location_name || detail.storage_location_code || "—")
+    : `Multiple (${getModeLabel(detail?.mode)})`;
+}
+
 function formatDate(value) {
   if (!value) return "—";
   const date = new Date(value);
@@ -319,17 +332,17 @@ export default function PIDocumentCountEntryPage() {
             <ErpFieldPreview label="Count Date" value={formatDate(detail.count_date)} />
             <ErpFieldPreview
               label="Storage Location"
-              value={detail.mode === "LOCATION_WISE" ? (detail.storage_location_name || detail.storage_location_code || "—") : "Multiple (ITEM_WISE)"}
+              value={getStorageScopeLabel(detail)}
             />
             <ErpFieldPreview label="Progress" value={`Counted ${countedItems}/${items.length}`} caption={`Pending ${pendingItems} · Unsaved ${pendingEntries.length}`} />
           </div>
 
           <ErpSectionCard eyebrow="Page 2" title="Blind Count Workspace">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <ErpFieldPreview label="Mode" value={detail.mode || "—"} />
+              <ErpFieldPreview label="Mode" value={getModeLabel(detail.mode)} />
               <ErpFieldPreview
                 label="Storage Location"
-                value={detail.mode === "LOCATION_WISE" ? (detail.storage_location_name || detail.storage_location_code || "—") : "Multiple (ITEM_WISE)"}
+                value={getStorageScopeLabel(detail)}
               />
               <ErpFieldPreview label="Rows In PID" value={`${items.length}`} />
               <ErpFieldPreview label="Pending Save" value={`${pendingEntries.length}`} />
@@ -394,6 +407,7 @@ export default function PIDocumentCountEntryPage() {
                 ]}
                 rows={pagedItems}
                 rowKey={(row) => row.id}
+                rowTabIndex={-1}
                 emptyMessage="No items on this PI document."
                 maxHeight="520px"
               />
