@@ -83,6 +83,38 @@ function toneForDifference(value) {
   return "text-slate-600";
 }
 
+function buildStageMessage(status, counts) {
+  switch (status) {
+    case "OPEN":
+      return {
+        tone: "info",
+        message: `MI02 change mode is active. Scope can still be adjusted, and MI04 count entry remains open. Counted ${counts.counted}/${counts.total}; pending ${counts.pending}.`,
+      };
+    case "COUNTED":
+      return {
+        tone: "info",
+        message: "MI04 is complete. Use MI05 to review and change counts before submitting for approval.",
+      };
+    case "PENDING_APPROVAL":
+      return {
+        tone: "info",
+        message: "MI05 is locked. Review the variances below, select the lines you want to post, then complete MI07-style posting.",
+      };
+    case "POSTED":
+      return {
+        tone: "success",
+        message: "This PID is fully posted. The review screen is now display-only.",
+      };
+    case "CANCELLED":
+      return {
+        tone: "warning",
+        message: "This PID has been cancelled. It remains visible for review, but no further processing is allowed.",
+      };
+    default:
+      return null;
+  }
+}
+
 // §8A — Reason modal for Reopen/Cancel (mandatory reason, small inline modal — the shared
 // actionConfirm store is boolean-only, this codebase's established pattern for Recalculate/
 // COR6-style corrections is a small dedicated reason prompt, not a new shared component).
@@ -190,6 +222,7 @@ export default function PIDocumentDetailPage() {
   const canPost = status === "PENDING_APPROVAL" && postableItems.length > 0;
   const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
   const pagedItems = useMemo(() => items.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE), [items, currentPage]);
+  const stageNotice = buildStageMessage(status, { counted: countedItems, total: items.length, pending: pendingItems });
 
   const queryError = detailQuery.error?.message || materialQuery.error?.message || locationQuery.error?.message || "";
 
@@ -323,6 +356,7 @@ export default function PIDocumentDetailPage() {
       notices={[
         ...((error || queryError) ? [{ key: "pi-detail-error", tone: "error", message: error || queryError }] : []),
         ...(notice ? [{ key: "pi-detail-notice", tone: "success", message: notice }] : []),
+        ...(stageNotice ? [{ key: "pi-detail-stage", tone: stageNotice.tone, message: stageNotice.message }] : []),
       ]}
       actions={[
         {
@@ -368,6 +402,7 @@ export default function PIDocumentDetailPage() {
       ) : (
         <div className="grid gap-4">
           <div className="grid gap-4 xl:grid-cols-4">
+            <ErpFieldPreview label="Step" value={status === "OPEN" ? "MI02 / MI03" : status === "COUNTED" ? "MI03 -> MI05" : status === "PENDING_APPROVAL" ? "MI03 / MI07" : "MI03 Display"} />
             <ErpFieldPreview label="Status" value={detail.status || "—"} tone={statusTone(detail.status)} />
             <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
             <ErpFieldPreview

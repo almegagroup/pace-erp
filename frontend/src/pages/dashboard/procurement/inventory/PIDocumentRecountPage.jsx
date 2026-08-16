@@ -155,6 +155,9 @@ export default function PIDocumentRecountPage() {
     () => Object.entries(edits).filter(([, edit]) => hasPendingValue(edit)),
     [edits],
   );
+  const stageMessage = canEdit
+    ? "MI05 change-count mode is active. Review the book quantity and differences, save any corrections, then submit the PID for approval."
+    : `MI05 is closed because this PID is currently ${status}.`;
 
   function updateEdit(itemId, patch) {
     setEdits((current) => ({ ...current, [itemId]: { ...current[itemId], ...patch } }));
@@ -230,6 +233,7 @@ export default function PIDocumentRecountPage() {
       notices={[
         ...(error ? [{ key: "recount-error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "recount-notice", tone: "success", message: notice }] : []),
+        ...(id ? [{ key: "recount-stage", tone: canEdit ? "info" : "warning", message: stageMessage }] : []),
       ]}
       actions={id ? [
         {
@@ -269,6 +273,7 @@ export default function PIDocumentRecountPage() {
       ) : (
         <div className="grid gap-4">
           <div className="grid gap-4 xl:grid-cols-3">
+            <ErpFieldPreview label="Step" value="MI05 Change Count" tone="sky" />
             <ErpFieldPreview label="Status" value={detail.status || "—"} />
             <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
             <ErpFieldPreview

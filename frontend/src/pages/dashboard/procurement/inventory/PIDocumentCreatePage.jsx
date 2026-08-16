@@ -5,14 +5,14 @@
  * Auditor search a material, see its stock across EVERY location (§119.12 correction — one PID
  * can now span multiple locations), and stage rows before actually creating the document.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
-import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -33,6 +33,24 @@ function normalizeLocationRows(payload) {
 
 function stagedKey(row) {
   return [row.material_id, row.stock_type, row.storage_location_id, row.batch_number ?? "", row.packing_order_id ?? ""].join("::");
+}
+
+function normalizeCreateErrorMessage(message, mode) {
+  const text = String(message || "").trim();
+  if (!text) return "PID create failed.";
+  if (text.includes("storage_location_id does not belong to company_id")) {
+    return "The selected storage location no longer matches the current company. Re-select the location and try again.";
+  }
+  if (text.includes("company_id, count_date, posting_date, and valid mode are required")) {
+    return "Company, mode, count date, and posting date are required.";
+  }
+  if (text.includes("storage_location_id is required for LOCATION_WISE mode")) {
+    return "Choose a storage location before creating a location-wise PID.";
+  }
+  if (text === "PI_CREATE_FAILED") {
+    return mode === "LOCATION_WISE" ? "Could not create the location-wise PID." : "Could not create the item-wise PID.";
+  }
+  return text;
 }
 
 export default function PIDocumentCreatePage() {
@@ -71,7 +89,7 @@ export default function PIDocumentCreatePage() {
     [materialQuery.materials],
   );
 
-  useMemo(() => {
+  useEffect(() => {
     let active = true;
     if (!companyId) {
       setLocations([]);
@@ -82,6 +100,35 @@ export default function PIDocumentCreatePage() {
       .catch(() => { if (active) setLocations([]); });
     return () => { active = false; };
   }, [companyId]);
+
+  useEffect(() => {
+    setStorageLocationId("");
+    setSearchMaterialId("");
+    setBreakdown(null);
+    setCheckedKeys({});
+    setStagedItems([]);
+    setError("");
+  }, [companyId]);
+
+  useEffect(() => {
+    setError("");
+    setSearchMaterialId("");
+    setBreakdown(null);
+    setCheckedKeys({});
+    if (mode === "LOCATION_WISE") {
+      setStagedItems([]);
+      return;
+    }
+    setStorageLocationId("");
+  }, [mode]);
+
+  useEffect(() => {
+    if (!storageLocationId) return;
+    const stillExists = locations.some((row) => String(row.id || "") === String(storageLocationId));
+    if (!stillExists) {
+      setStorageLocationId("");
+    }
+  }, [locations, storageLocationId]);
 
   const locationOptions = useMemo(
     () => locations.map((row) => ({ value: row.id, label: `${row.code ?? row.storage_location_code ?? row.id} — ${row.name ?? row.storage_location_name ?? ""}`.trim() })),
@@ -155,7 +202,7 @@ export default function PIDocumentCreatePage() {
     } catch (saveError) {
       // §119.9 — a blocked material surfaces which PID document owns the block.
       const message = saveError instanceof Error ? saveError.message : "PI_CREATE_FAILED";
-      setError(message);
+      setError(normalizeCreateErrorMessage(message, mode));
     } finally {
       setSaving(false);
     }
@@ -165,7 +212,16 @@ export default function PIDocumentCreatePage() {
     <ErpScreenScaffold
       eyebrow="Procurement Inventory"
       title="New Physical Inventory Document"
-      notices={error ? [{ key: "pi-create-error", tone: "error", message: error }] : []}
+      notices={[
+        ...(error ? [{ key: "pi-create-error", tone: "error", message: error }] : []),
+        {
+          key: "pi-create-stage",
+          tone: "info",
+          message: mode === "LOCATION_WISE"
+            ? "MI01 Location-wise: choose the company and one storage location, then create the PID scope in one step."
+            : "MI01 Item-wise: search a material, pick the exact location rows you want, stage them, then create the PID.",
+        },
+      ]}
       actions={[
         {
           key: "back",
@@ -186,6 +242,17 @@ export default function PIDocumentCreatePage() {
       ]}
     >
       <div className="grid gap-4">
+        <div className="grid gap-4 xl:grid-cols-4">
+          <ErpFieldPreview label="Step" value="MI01 Create" tone="sky" />
+          <ErpFieldPreview label="Mode" value={mode === "LOCATION_WISE" ? "Location-wise" : "Item-wise"} />
+          <ErpFieldPreview label="Company Scope" value={companyId ? "Selected" : "Required"} />
+          <ErpFieldPreview
+            label="Ready To Create"
+            value={canCreate ? "Yes" : "No"}
+            caption={mode === "LOCATION_WISE" ? "Need company + location + dates" : `Staged ${stagedItems.length}`}
+          />
+        </div>
+
         <ErpSectionCard eyebrow="Header" title="Document header">
           <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
             <div className="md:col-span-1 xl:col-span-2">
@@ -237,6 +304,11 @@ export default function PIDocumentCreatePage() {
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
+                {companyId && locationOptions.length === 0 ? (
+                  <span className="text-[11px] font-normal text-amber-700">
+                    No active storage location is currently available for the selected company.
+                  </span>
+                ) : null}
               </label>
             ) : null}
           </div>

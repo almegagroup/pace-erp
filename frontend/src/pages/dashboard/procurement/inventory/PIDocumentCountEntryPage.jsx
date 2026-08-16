@@ -203,6 +203,11 @@ export default function PIDocumentCountEntryPage() {
     () => Object.entries(edits).filter(([, edit]) => hasPendingValue(edit)),
     [edits],
   );
+  const stageMessage = isFullyLocked
+    ? (status === "COUNTED"
+        ? "MI04 is finished for this PID. Continue in MI05 if any counted value needs correction before approval."
+        : `MI04 is closed because the PID is already ${status}.`)
+    : "MI04 blind count entry is active. Record only what was physically found, save in batches, and move to MI05 only after every line is counted.";
 
   function updateEdit(itemId, patch) {
     setEdits((current) => ({ ...current, [itemId]: { ...current[itemId], ...patch } }));
@@ -257,6 +262,7 @@ export default function PIDocumentCountEntryPage() {
       notices={[
         ...(error ? [{ key: "count-entry-error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "count-entry-notice", tone: "success", message: notice }] : []),
+        ...(id ? [{ key: "count-entry-stage", tone: isFullyLocked ? "warning" : "info", message: stageMessage }] : []),
       ]}
       actions={id ? [
         {
@@ -289,6 +295,8 @@ export default function PIDocumentCountEntryPage() {
       ) : (
         <div className="grid gap-4">
           <div className="grid gap-4 xl:grid-cols-4">
+            <ErpFieldPreview label="Step" value="MI04 Count Entry" tone="sky" />
+            <ErpFieldPreview label="Status" value={detail.status || "—"} />
             <ErpFieldPreview label="Company" value={detail.company_name || detail.company_code || "—"} />
             <ErpFieldPreview label="Count Date" value={formatDate(detail.count_date)} />
             <ErpFieldPreview
