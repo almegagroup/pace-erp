@@ -15,6 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import UomQuantityInput from "../../../../components/forms/UomQuantityInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -168,6 +169,9 @@ export default function PIDocumentRecountPage() {
   const canSubmit = status === "COUNTED";
   const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
   const pagedItems = useMemo(() => items.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE), [items, currentPage]);
+  const paginationPage = currentPage + 1;
+  const startIndex = items.length === 0 ? 0 : currentPage * PAGE_SIZE + 1;
+  const endIndex = items.length === 0 ? 0 : Math.min(items.length, currentPage * PAGE_SIZE + pagedItems.length);
 
   const pendingEntries = useMemo(
     () => Object.entries(edits).filter(([, edit]) => hasPendingValue(edit)),
@@ -313,28 +317,38 @@ export default function PIDocumentRecountPage() {
             <ErpFieldPreview label="Progress" value={`${items.length} item${items.length === 1 ? "" : "s"}`} caption={`Unsaved ${pendingEntries.length}`} />
           </div>
 
-          <ErpSectionCard eyebrow="Page 2" title="Correction Workspace">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <ErpFieldPreview label="Mode" value={getModeLabel(detail.mode)} />
-              <ErpFieldPreview
-                label="Storage Location"
-                value={getStorageScopeLabel(detail)}
+          <div className="grid gap-4">
+            <ErpSectionCard eyebrow="Page 2" title="Correction Workspace">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <ErpFieldPreview label="Mode" value={getModeLabel(detail.mode)} />
+                <ErpFieldPreview
+                  label="Storage Location"
+                  value={getStorageScopeLabel(detail)}
+                />
+                <ErpFieldPreview label="Rows In PID" value={`${items.length}`} />
+                <ErpFieldPreview label="Pending Save" value={`${pendingEntries.length}`} />
+              </div>
+
+              {!canEdit ? (
+                <div className="mt-4 border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  This PID is currently {statusMeta.label}. MI05 is closed, so count changes can no longer be made here.
+                </div>
+              ) : (
+                <div className="mt-4 border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                  Every item already has a Count or Zero Check. Review any needed corrections below, click Save to commit them, then Submit for Approval when satisfied. Unsaved: {pendingEntries.length}.
+                </div>
+              )}
+            </ErpSectionCard>
+
+            <div className="grid gap-3">
+              <ErpPaginationStrip
+                page={paginationPage}
+                setPage={(next) => setCurrentPage(Math.max(0, Number(next) - 1))}
+                totalPages={totalPages}
+                startIndex={startIndex}
+                endIndex={endIndex}
+                totalItems={items.length}
               />
-              <ErpFieldPreview label="Rows In PID" value={`${items.length}`} />
-              <ErpFieldPreview label="Pending Save" value={`${pendingEntries.length}`} />
-            </div>
-
-            {!canEdit ? (
-              <div className="mt-4 border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                This PID is currently {statusMeta.label}. MI05 is closed, so count changes can no longer be made here.
-              </div>
-            ) : (
-              <div className="mt-4 border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                Every item already has a Count or Zero Check. Review any needed corrections below, click Save to commit them, then Submit for Approval when satisfied. Unsaved: {pendingEntries.length}.
-              </div>
-            )}
-
-            <div className="mt-4 grid gap-3">
               <ErpDenseGrid
                 columns={[
                   { key: "line_number", label: "Line", width: "60px" },
@@ -396,17 +410,9 @@ export default function PIDocumentRecountPage() {
                   return { className: diff < 0 ? "bg-rose-50" : diff > 0 ? "bg-emerald-50" : "bg-slate-50" };
                 }}
                 emptyMessage="No items on this PI document."
-                maxHeight="520px"
               />
-              <div className="flex items-center justify-between text-sm text-slate-600">
-                <span>Page {currentPage + 1} of {totalPages} ({items.length} items)</span>
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => setCurrentPage((page) => Math.max(0, page - 1))} disabled={currentPage === 0} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Prev</button>
-                  <button type="button" onClick={() => setCurrentPage((page) => Math.min(totalPages - 1, page + 1))} disabled={currentPage >= totalPages - 1} className="border border-slate-300 bg-white px-3 py-1 font-semibold text-slate-700 disabled:opacity-40">Next</button>
-                </div>
-              </div>
             </div>
-          </ErpSectionCard>
+          </div>
         </div>
       )}
     </ErpScreenScaffold>
