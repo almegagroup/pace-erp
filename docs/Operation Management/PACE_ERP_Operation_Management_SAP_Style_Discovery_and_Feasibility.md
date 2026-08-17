@@ -18101,6 +18101,30 @@ PR19 চালানো হয়**, সেই হিসাব automatically rec
 **✅ LOCKED:** batch reco-র **সবগুলো field-ই** proportionately adjust হবে — `actual_qty`,
 `ap_approved_qty`, **এবং `variance_qty`** — শুধু physical qty-তে না, পুরো batch-এর সব dimension-এই।
 
+### 119.14.1 — CORRECTED (2026-08-18, business owner reverses §119.14's "no flag, always proportional" — supersedes that lock's flag-removal decision, the rest of §119.14 unchanged)
+
+**যা পাল্টালো:** §119.14 লক করেছিল "Batch-tracked SFG/FG-এ PID হলেই — Loss বা Gain, দুটোতেই, সবসময়,
+automatically — reco proportionately adjust হবে, flag ছাড়াই"। Live prod data দেখে (CMP003/CMP006-এ
+একগুচ্ছ ব্যাচে 0.3-0.8 kg-এর ছোট leftover, batch-এর তুলনায় নগণ্য) ধরা পড়ল — **এই ধরনের ছোট leftover
+স্বাভাবিক এবং প্রতিনিয়ত ঘটবে**; প্রতিটাতেই বাধ্যতামূলক proportional adjustment করাটা ভুল aggressive —
+সবসময় নয়, শুধু ইচ্ছাকৃতভাবে বেছে নেওয়া হলেই reco touch হওয়া উচিত।
+
+**নতুন LOCKED design:** MI07-এ প্রতিটা batch-tracked SFG (এবং একইভাবে FG) row-এর পাশে একটা
+per-row **"Reco?" checkbox** (default **unchecked**)।
+
+| Checkbox | SFG/FG main stock (701/702) | RM/PM/INT reco (`process_order_line_reco`/`packing_order_line_reco`) |
+|---|---|---|
+| ☐ Unchecked (default) | Plain 701/702, আগের মতোই | **টাচ হয় না** — কোনো adjustment row লেখা হবে না |
+| ✅ Checked | Plain 701/702, আগের মতোই | §119.14-এর proportional adjustment (`buildGenealogyAdjustments`) — dosage%-ভিত্তিক, আগের logic হুবহু reuse |
+
+- RM/PM/INT main stock এখনো কোনো অবস্থাতেই touch হয় না (§119.14-এর সেই অংশ অপরিবর্তিত)
+- Checkbox শুধু batch-tracked SFG/FG row-এই দেখাবে (যেখানে genealogy chain আছে) — RM/PM/INT আর
+  MTS-typed SFG/FG-এ (batch-blind) checkbox-এর প্রশ্নই আসে না, ওরা সবসময়ই plain 701/702
+- **BE:** PID line-এ নতুন column `apply_reco_adjustment boolean default false`; MI07 post-time শুধু
+  `apply_reco_adjustment = true` হওয়া line-গুলোর জন্যই `buildGenealogyAdjustments()` চালাবে
+- **FE:** `PIDocumentDetailPage.jsx`-এর MI07 item grid-এ নতুন checkbox column, শুধু batch-tracked
+  SFG/FG row-এ enable, বাকি row-এ disabled/hidden
+
 ### 119.15 — LOCKED: MI20 (Difference Report) + MI21 (Print) — TX Code, Mechanism (2026-08-13)
 
 **MI20 — Difference Report:**

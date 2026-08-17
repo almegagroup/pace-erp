@@ -1083,8 +1083,11 @@ export function requestPIRecount(id, itemId) {
 }
 
 // itemIds — the selected batch (§MI07-batch-2026-08-14) — required, non-empty.
-export function postPIDifferences(id, itemIds) {
-  return fetchProcurement("POST", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/post`, { item_ids: itemIds });
+// recoItemIds — §119.14.1 opt-in subset of itemIds whose batch-tracked SFG/FG
+// reco (RM/PM/INT) should be proportionally adjusted; everything else posts
+// 701/702 against the SFG/FG stock only.
+export function postPIDifferences(id, itemIds, recoItemIds = []) {
+  return fetchProcurement("POST", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/post`, { item_ids: itemIds, reco_item_ids: recoItemIds });
 }
 
 // §119.11 MI02 — item remove / document cancel.
