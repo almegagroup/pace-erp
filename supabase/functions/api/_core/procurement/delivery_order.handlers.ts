@@ -18,6 +18,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
@@ -58,7 +59,7 @@ function parsePositiveNumber(value: unknown): number | null {
 }
 
 function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIsoInKolkata();
 }
 
 function getPathSegments(req: Request): string[] {

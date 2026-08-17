@@ -12,6 +12,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -32,7 +33,7 @@ type JsonRecord = Record<string, unknown>;
 const VALID_PO_TYPES = new Set(["MTO", "HPS"]);
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIsoInKolkata();
 }
 
 function prErr(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {

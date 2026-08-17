@@ -10,6 +10,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
@@ -668,7 +669,7 @@ export async function generateBatchNumber(
       p_company_id: companyId,
       p_batch_type: batchType,
       p_prodshade_material_id: effectiveProdshadeId,
-      p_today: new Date().toISOString().slice(0, 10),
+      p_today: todayIsoInKolkata(),
     })
     .maybeSingle();
   if (error) {
