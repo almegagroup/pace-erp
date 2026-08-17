@@ -53,12 +53,12 @@ export default function LocationTransferRequestListPage() {
   }
 
   function openCreate() {
-    openScreen(OPERATION_SCREENS.PROC_LOC_TRANSFER_REQ.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_LOC_TRANSFER_REQ_CREATE.screen_code);
     navigate("/dashboard/procurement/location-transfer/create");
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_LOC_TRANSFER_REQ.screen_code, { context: { id: row.id } });
+    openScreen(OPERATION_SCREENS.PROC_LOC_TRANSFER_REQ_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/location-transfer/${encodeURIComponent(row.id)}`);
   }
 

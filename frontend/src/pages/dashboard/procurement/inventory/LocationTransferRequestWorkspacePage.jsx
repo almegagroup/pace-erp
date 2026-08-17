@@ -250,7 +250,7 @@ export default function LocationTransferRequestWorkspacePage() {
         : await updateLocationTransferRequest(requestId, payload);
       if (saved?.id) {
         setNotice("IN10 request saved.");
-        openScreen(OPERATION_SCREENS.PROC_LOC_TRANSFER_REQ.screen_code, { context: { id: saved.id } });
+        openScreen(OPERATION_SCREENS.PROC_LOC_TRANSFER_REQ_DETAIL.screen_code, { context: { id: saved.id } });
         navigate(`/dashboard/procurement/location-transfer/${encodeURIComponent(saved.id)}`);
       }
     } catch (saveError) {

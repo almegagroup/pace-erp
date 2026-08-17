@@ -8,6 +8,17 @@
 
 export const PRODUCTION_DECIMAL_STEP = "0.000001";
 
+function trimTrailingZeros(text) {
+  return text.replace(/(\.\d*?[1-9])0+$/u, "$1").replace(/\.0+$/u, "");
+}
+
+function normalizeFloatingArtifact(text, numeric) {
+  const fractional = text.split(".")[1] ?? "";
+  if (fractional.length <= 8) return null;
+  if (!/(?:0{6,}|9{6,})$/u.test(fractional)) return null;
+  return trimTrailingZeros(numeric.toFixed(5));
+}
+
 export function formatPreciseNumber(value, fallback = "--") {
   if (value === null || value === undefined || value === "") return fallback;
   const text = String(value).trim();
@@ -15,9 +26,9 @@ export function formatPreciseNumber(value, fallback = "--") {
   const numeric = Number(text);
   if (!Number.isFinite(numeric)) return fallback;
   if (/[eE]/.test(text)) {
-    return numeric.toLocaleString(undefined, { useGrouping: false, maximumFractionDigits: 12 });
+    return trimTrailingZeros(numeric.toLocaleString(undefined, { useGrouping: false, maximumFractionDigits: 12 }));
   }
-  return text;
+  return normalizeFloatingArtifact(text, numeric) ?? text;
 }
 
 export function multiplyPreciseValues(left, right) {
