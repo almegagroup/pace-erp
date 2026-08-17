@@ -1,0 +1,546 @@
+<title>PO / STO Sample Copy — PACE ERP</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --page-bg: #eef0f2;
+    --chrome-ink: #23262a;
+    --chrome-muted: #6b7178;
+    --chrome-line: #d7dbe0;
+    --accent: #7a2a2a;
+    --accent-soft: #f3e8e6;
+
+    --paper: #fdfbf9;
+    --ink: #22201e;
+    --muted: #8a8078;
+    --line: #ddd5d1;
+    --line-strong: #b8ada7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page-bg: #15171a;
+      --chrome-ink: #e8e6e3;
+      --chrome-muted: #9a9da2;
+      --chrome-line: #33373c;
+      --accent-soft: #2a2020;
+    }
+  }
+  :root[data-theme="dark"] {
+    --page-bg: #15171a;
+    --chrome-ink: #e8e6e3;
+    --chrome-muted: #9a9da2;
+    --chrome-line: #33373c;
+    --accent-soft: #2a2020;
+  }
+  :root[data-theme="light"] {
+    --page-bg: #eef0f2;
+    --chrome-ink: #23262a;
+    --chrome-muted: #6b7178;
+    --chrome-line: #d7dbe0;
+    --accent-soft: #f3e8e6;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--page-bg);
+    color: var(--chrome-ink);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell { min-height: 100vh; padding: 32px 20px 64px; }
+
+  .toolbar {
+    max-width: 900px; margin: 0 auto 4px;
+    display: flex; align-items: baseline; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px;
+  }
+  .toolbar h1 {
+    font-size: 15px; font-weight: 600; letter-spacing: 0.02em;
+    margin: 0; color: var(--chrome-ink);
+  }
+  .status { font-size: 12px; color: var(--chrome-muted); }
+
+  .tabs {
+    max-width: 900px; margin: 18px auto 24px;
+    display: flex; gap: 6px;
+    border-bottom: 1px solid var(--chrome-line);
+  }
+  .tab {
+    appearance: none; border: none; background: transparent;
+    font-family: inherit; font-size: 13px; font-weight: 600;
+    letter-spacing: 0.01em;
+    padding: 10px 4px; margin-right: 22px;
+    color: var(--chrome-muted); cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s ease, border-color 0.15s ease;
+  }
+  .tab:hover { color: var(--chrome-ink); }
+  .tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .note {
+    max-width: 900px; margin: 0 auto 28px;
+    font-size: 12.5px; line-height: 1.55; color: var(--chrome-muted);
+    padding: 10px 14px; background: var(--accent-soft);
+    border-radius: 6px; border: 1px solid var(--chrome-line);
+  }
+  .note b { color: var(--chrome-ink); }
+  .note ul { margin: 6px 0 2px; padding-left: 18px; }
+  .note li { margin-bottom: 2px; }
+
+  .paper-wrap { max-width: 900px; margin: 0 auto; overflow-x: auto; }
+  .paper {
+    background: var(--paper); color: var(--ink);
+    width: 840px; margin: 0 auto;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.10), 0 12px 32px rgba(0,0,0,0.16);
+    padding: 38px 48px 36px;
+    font-family: "Iowan Old Style", "Palatino Linotype", Georgia, "Times New Roman", serif;
+  }
+  .doc { display: none; }
+  .doc.active { display: block; }
+
+  /* Letterhead-style masthead: self company (issuer) */
+  .masthead {
+    display: grid; grid-template-columns: 1.15fr 1fr auto; gap: 18px;
+    align-items: end;
+    padding-bottom: 12px; border-bottom: 2.5px solid var(--accent);
+  }
+  .qr-col { text-align: center; }
+  .qr-box {
+    width: 64px; height: 64px; border: 1px solid var(--line-strong);
+    padding: 3px; background: #fff;
+  }
+  .qr-box svg { width: 100%; height: 100%; display: block; }
+  .qr-caption {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 7px; color: var(--muted); margin-top: 3px; line-height: 1.3;
+    max-width: 78px;
+  }
+  .brand-name {
+    font-size: 22px; font-weight: 700; color: var(--accent);
+    letter-spacing: 0.01em; margin: 0 0 5px;
+  }
+  .brand-meta {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 10.5px; color: var(--muted); line-height: 1.55; max-width: 380px;
+  }
+  .brand-ids table {
+    width: 100%; border-collapse: collapse;
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 11px;
+  }
+  .brand-ids td { padding: 1.5px 0; }
+  .brand-ids td.k {
+    color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
+    font-size: 9px; font-weight: 700; padding-right: 10px; white-space: nowrap;
+    vertical-align: top; padding-top: 3px;
+  }
+  .brand-ids td.v { font-weight: 600; text-align: right; }
+
+  /* Below masthead: other-party block + document-identity block */
+  .parties {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 28px;
+    margin: 20px 0 20px;
+  }
+  .party-label {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.11em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 6px;
+  }
+  .party-name { font-size: 14.5px; font-weight: 700; margin: 0 0 4px; }
+  .party-line {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 11.5px; line-height: 1.55; color: var(--ink);
+  }
+  .party-line + .party-line { margin-top: 1px; }
+  .party-line.muted { color: var(--muted); }
+  .party-block { border-top: 1px solid var(--line); padding-top: 10px; }
+
+  .doc-info { text-align: right; }
+  .doc-title {
+    font-size: 13.5px; font-weight: 700; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--ink); margin: 0 0 8px;
+  }
+  .doc-id-table {
+    margin-left: auto;
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 11.5px; border-collapse: collapse;
+  }
+  .doc-id-table td { padding: 1.5px 0; }
+  .doc-id-table td.k { color: var(--muted); padding-right: 14px; text-align: right; }
+  .doc-id-table td.v { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+
+  table.items {
+    width: 100%; border-collapse: collapse; margin: 6px 0 18px;
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 11.5px;
+  }
+  table.items caption {
+    text-align: left; font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--accent); padding-bottom: 6px;
+  }
+  table.items th {
+    background: var(--accent-soft); color: var(--ink);
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    text-align: left; padding: 7px 10px; border-top: 1px solid var(--line-strong);
+    border-bottom: 1px solid var(--line-strong);
+  }
+  table.items th.num, table.items td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.items td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.items tfoot td { border-bottom: none; border-top: 1px solid var(--line-strong); font-weight: 700; padding-top: 8px; }
+
+  .foot-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 28px; margin-top: 14px; }
+  .terms {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 10.5px; line-height: 1.75; color: var(--muted);
+  }
+  .terms .h { font-weight: 700; color: var(--ink); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px; }
+  .terms .row { display: flex; gap: 6px; }
+  .terms .row .lbl { color: var(--ink); font-weight: 600; min-width: 78px; }
+
+  .sign { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 11px; text-align: right; }
+  .sign-box { margin-top: 40px; border-top: 1px solid var(--ink); padding-top: 6px; display: inline-block; min-width: 190px; }
+  .sign-role { color: var(--muted); font-size: 10px; }
+
+  .std-notes {
+    margin-top: 22px; padding-top: 12px; border-top: 1px dashed var(--line-strong);
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 9.5px; color: var(--muted);
+  }
+  .std-notes ol { margin: 0; padding-left: 16px; }
+  .std-notes li { margin-bottom: 2px; line-height: 1.5; }
+
+  .draft-flag {
+    display: inline-block; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 8.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid var(--accent); border-radius: 3px;
+    padding: 1px 5px; margin-left: 8px; vertical-align: middle;
+  }
+
+  .paper { position: relative; }
+  .watermark {
+    position: absolute; top: 42%; left: 50%;
+    transform: translate(-50%, -50%) rotate(-28deg);
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 74px; font-weight: 800; letter-spacing: 0.06em;
+    white-space: nowrap; pointer-events: none; z-index: 5;
+  }
+  .watermark.cancelled { color: rgba(180, 30, 30, 0.28); }
+  .watermark.revised { color: rgba(30, 90, 160, 0.28); }
+
+  @media (max-width: 620px) {
+    .paper { width: 100%; padding: 26px 18px; }
+    .parties, .foot-grid, .masthead { grid-template-columns: 1fr; }
+    .doc-info { text-align: left; }
+    .doc-id-table { margin-left: 0; }
+    .doc-id-table td.k, .doc-id-table td.v { text-align: left; }
+    .brand-ids td.v { text-align: left; }
+  }
+
+  /* A4 = 210mm x 297mm ≈ 794 x 1123 CSS px at 96dpi. Screen preview below is
+     sized to match exactly, so what's checked on screen is what prints. */
+  .paper { width: 794px; }
+  @page { size: A4; margin: 12mm; }
+  @media print {
+    body { background: #fff; }
+    .shell { padding: 0; }
+    .toolbar, .tabs, .note { display: none !important; }
+    .paper-wrap { max-width: none; overflow: visible; }
+    .paper {
+      width: auto; margin: 0; padding: 0; box-shadow: none;
+      background: #fff; color: #000;
+    }
+    .doc { display: none !important; }
+    .doc.active { display: block !important; page-break-after: always; }
+    .draft-flag { display: none !important; }
+  }
+</style>
+
+<div class="shell">
+  <div class="toolbar">
+    <h1>PO / STO Copy — Layout Sample v2</h1>
+    <div class="status">Factor 1 locked · masthead + party layout revised per feedback · Factor 3–5 still draft</div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" id="tab-po" aria-selected="true" onclick="showDoc('po')">Purchase Order</button>
+    <button class="tab" role="tab" id="tab-sto" aria-selected="false" onclick="showDoc('sto')">Stock Transfer Order</button>
+  </div>
+
+  <div class="note" id="note-po">
+    <b>What changed:</b> the masthead is now the issuing company's own letterhead (Buyer, for PO) — no
+    "Buyer/Consignee" label anywhere. The old Buyer/Consignee block is gone; that slot now holds the
+    document identity (PO No. + PO Date, no company code). Payment Term shows the master's <b>name</b>
+    ("60 Days from Invoice"), not its code. GST and Rebate lines only appear when that PO actually
+    carries them — nothing hardcoded. <b>This copy shows the REVISED watermark</b> — title stays
+    "Purchase Order" as normal, no "Revised Purchase Order" text change; the watermark alone signals
+    the state (same treatment as CANCELLED, shown on the STO tab).
+  </div>
+  <div class="note" id="note-sto" style="display:none;">
+    <b>Same pattern for STO:</b> masthead = Sending Company's own letterhead. The other party
+    (Receiving Company) sits where Vendor sits on the PO, and the STO No./Date sits where the PO
+    No./Date sits. CIN still only shows when the company actually has one (Sending Co. here does,
+    Receiving Co. doesn't — same conditional rule as before). <b>This copy shows the CANCELLED
+    watermark</b> — same visual treatment as REVISED (shown on the PO tab), just different text/color.
+  </div>
+
+  <div class="paper-wrap">
+    <div class="paper">
+
+      <!-- PURCHASE ORDER -->
+      <div class="doc active" id="doc-po">
+        <div class="watermark revised">REVISED</div>
+        <div class="masthead">
+          <div>
+            <p class="brand-name">Almega Surface Coats LLP</p>
+            <p class="brand-meta">
+              J.L. No. 144, Block – Amta 1, Mouza – Sherpur, P.O. Panpur,<br />
+              P.S. Amta, Dist. Howrah, West Bengal – 711401
+            </p>
+          </div>
+          <div class="brand-ids">
+            <table>
+              <tr><td class="k">GSTIN</td><td class="v">19ABGFA1415N1ZD</td></tr>
+              <tr><td class="k">Mobile</td><td class="v">+91 9681725062 /<br />+91 8617711877</td></tr>
+              <tr><td class="k">Email</td><td class="v">scm@almegagroup.in /<br />scm1@almegagroup.in</td></tr>
+            </table>
+          </div>
+          <div class="qr-col">
+            <div class="qr-box">
+              <svg viewBox="0 0 29 29" xmlns="http://www.w3.org/2000/svg">
+                <rect width="29" height="29" fill="#fff"/>
+                <g fill="#111">
+                  <rect x="0" y="0" width="7" height="7"/><rect x="1" y="1" width="5" height="5" fill="#fff"/><rect x="2" y="2" width="3" height="3"/>
+                  <rect x="22" y="0" width="7" height="7"/><rect x="23" y="1" width="5" height="5" fill="#fff"/><rect x="24" y="2" width="3" height="3"/>
+                  <rect x="0" y="22" width="7" height="7"/><rect x="1" y="23" width="5" height="5" fill="#fff"/><rect x="2" y="24" width="3" height="3"/>
+                  <rect x="9" y="1" width="1" height="1"/><rect x="11" y="1" width="1" height="1"/><rect x="14" y="1" width="1" height="1"/><rect x="17" y="1" width="1" height="1"/><rect x="19" y="1" width="1" height="1"/>
+                  <rect x="9" y="3" width="2" height="1"/><rect x="13" y="3" width="1" height="1"/><rect x="16" y="3" width="2" height="1"/><rect x="19" y="3" width="1" height="1"/>
+                  <rect x="10" y="5" width="1" height="1"/><rect x="12" y="5" width="1" height="1"/><rect x="15" y="5" width="1" height="1"/><rect x="18" y="5" width="1" height="1"/><rect x="20" y="5" width="1" height="1"/>
+                  <rect x="1" y="9" width="1" height="1"/><rect x="3" y="9" width="1" height="1"/><rect x="6" y="9" width="2" height="1"/><rect x="10" y="9" width="1" height="2"/><rect x="13" y="9" width="1" height="1"/><rect x="16" y="9" width="1" height="2"/><rect x="19" y="9" width="2" height="1"/><rect x="23" y="9" width="1" height="1"/><rect x="26" y="9" width="2" height="1"/>
+                  <rect x="0" y="11" width="2" height="1"/><rect x="4" y="11" width="1" height="1"/><rect x="8" y="11" width="1" height="1"/><rect x="12" y="11" width="2" height="1"/><rect x="17" y="11" width="1" height="1"/><rect x="21" y="11" width="1" height="1"/><rect x="24" y="11" width="1" height="1"/><rect x="27" y="11" width="1" height="1"/>
+                  <rect x="2" y="13" width="1" height="1"/><rect x="5" y="13" width="2" height="1"/><rect x="9" y="13" width="1" height="1"/><rect x="14" y="13" width="1" height="2"/><rect x="18" y="13" width="2" height="1"/><rect x="22" y="13" width="1" height="1"/><rect x="25" y="13" width="2" height="1"/>
+                  <rect x="0" y="15" width="1" height="1"/><rect x="3" y="15" width="1" height="1"/><rect x="7" y="15" width="1" height="1"/><rect x="11" y="15" width="1" height="1"/><rect x="16" y="15" width="1" height="1"/><rect x="20" y="15" width="1" height="1"/><rect x="23" y="15" width="1" height="1"/><rect x="26" y="15" width="1" height="1"/>
+                  <rect x="1" y="17" width="1" height="1"/><rect x="4" y="17" width="2" height="1"/><rect x="9" y="17" width="1" height="1"/><rect x="13" y="17" width="1" height="1"/><rect x="17" y="17" width="1" height="1"/><rect x="21" y="17" width="2" height="1"/><rect x="25" y="17" width="1" height="1"/><rect x="27" y="17" width="1" height="1"/>
+                  <rect x="9" y="20" width="1" height="1"/><rect x="12" y="20" width="1" height="1"/><rect x="15" y="20" width="1" height="1"/><rect x="18" y="20" width="1" height="1"/><rect x="21" y="20" width="1" height="1"/><rect x="24" y="20" width="1" height="1"/>
+                  <rect x="10" y="23" width="1" height="1"/><rect x="13" y="23" width="1" height="1"/><rect x="17" y="23" width="2" height="1"/><rect x="20" y="23" width="1" height="1"/><rect x="23" y="23" width="1" height="1"/><rect x="26" y="23" width="1" height="1"/>
+                  <rect x="9" y="26" width="1" height="1"/><rect x="12" y="26" width="2" height="1"/><rect x="16" y="26" width="1" height="1"/><rect x="19" y="26" width="1" height="1"/><rect x="22" y="26" width="2" height="1"/><rect x="26" y="26" width="1" height="1"/>
+                </g>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="parties">
+          <div class="party-block">
+            <p class="party-label">Vendor</p>
+            <p class="party-name">Tirupati Chemicals Pvt. Ltd.</p>
+            <p class="party-line">GSTIN: 19AABCT4521M1Z8</p>
+            <p class="party-line">Plot 12, Domjur Industrial Park, Domjur,<br />Howrah, West Bengal – 711405</p>
+            <p class="party-line">Sanjay Rathi — +91 98300 11224</p>
+            <p class="party-line muted">purchase@tirupatichem.in</p>
+          </div>
+          <div class="party-block doc-info">
+            <p class="doc-title">Purchase Order</p>
+            <table class="doc-id-table">
+              <tr><td class="k">PO No.</td><td class="v">9300004821</td></tr>
+              <tr><td class="k">PO Date</td><td class="v">05-Aug-2026</td></tr>
+            </table>
+          </div>
+        </div>
+
+        <table class="items">
+          <caption>Order Detail <span class="draft-flag">draft columns</span></caption>
+          <thead>
+            <tr>
+              <th style="width:8%">Sr.</th>
+              <th>Material</th>
+              <th class="num" style="width:12%">Qty</th>
+              <th style="width:8%">UOM</th>
+              <th class="num" style="width:13%">Rate (₹)</th>
+              <th class="num" style="width:15%">Amount (₹)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>Tartaric Acid, Food Grade — PAC-TA-004</td>
+              <td class="num">5,000.000</td>
+              <td>KG</td>
+              <td class="num">74.60</td>
+              <td class="num">3,73,000.00</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr><td colspan="5">Total</td><td class="num">3,73,000.00</td></tr>
+          </tfoot>
+        </table>
+
+        <div class="foot-grid">
+          <div class="terms">
+            <p class="h">Terms <span class="draft-flag">draft</span></p>
+            <div class="row"><span class="lbl">Payment</span><span>60 Days from Invoice</span></div>
+            <div class="row"><span class="lbl">Delivery</span><span>12-Aug-2026</span></div>
+            <div class="row"><span class="lbl">Freight</span><span>To-Pay</span></div>
+            <div class="row"><span class="lbl">GST</span><span>Exclusive</span></div>
+            <div class="row"><span class="lbl">Remarks</span><span>Batch created together for the Aug PO run — release only after QA sign-off. <span class="draft-flag">general, shared across this vendor's batch</span></span></div>
+            <div class="row"><span class="lbl"></span><span>Urgent — line stopped, please prioritise dispatch. <span class="draft-flag">specific to this PO</span></span></div>
+          </div>
+          <div class="terms">
+            <p class="h">Import Detail <span class="draft-flag">shown only when vendor is Import type</span></p>
+            <div class="row"><span class="lbl">Port</span><span>Nhava Sheva (INNSA1)</span></div>
+            <div class="row"><span class="lbl">Shipment</span><span>Sea — FCL</span></div>
+            <div class="row"><span class="lbl">Trade Type</span><span>Direct Import</span></div>
+            <div class="row"><span class="lbl">Movement</span><span>CFS</span></div>
+          </div>
+        </div>
+
+        <div class="foot-grid" style="margin-top:4px;">
+          <div></div>
+          <div class="sign">
+            <div class="sign-box"><div class="sign-role">Authorised Signatory</div></div>
+          </div>
+        </div>
+
+        <div class="std-notes">
+          <ol>
+            <li>Packaging items should be recyclable.</li>
+            <li>Vehicles should be with active PUC certificate.</li>
+            <li>Material transaction should be as per consignee's health &amp; safety norms.</li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- STOCK TRANSFER ORDER -->
+      <div class="doc" id="doc-sto">
+        <div class="watermark cancelled">CANCELLED</div>
+        <div class="masthead">
+          <div>
+            <p class="brand-name">Almega Coatings Private Limited</p>
+            <p class="brand-meta">
+              Unit 1, A-1 Building, Oasis Corporate Park, Near Reliance Petrol Pump,<br />
+              Sonale Village, Bhiwandi, Thane, Maharashtra – 421302
+            </p>
+          </div>
+          <div class="brand-ids">
+            <table>
+              <tr><td class="k">GSTIN</td><td class="v">27AATCA0358F1ZK</td></tr>
+              <tr><td class="k">CIN</td><td class="v">U24299MH2019PTC334240</td></tr>
+              <tr><td class="k">Mobile</td><td class="v">+91 8689969955 /<br />+91 8806925869</td></tr>
+              <tr><td class="k">Email</td><td class="v">scm@almegagroup.in /<br />scm1@almegagroup.in</td></tr>
+            </table>
+          </div>
+          <div class="qr-col">
+            <div class="qr-box">
+              <svg viewBox="0 0 29 29" xmlns="http://www.w3.org/2000/svg">
+                <rect width="29" height="29" fill="#fff"/>
+                <g fill="#111">
+                  <rect x="0" y="0" width="7" height="7"/><rect x="1" y="1" width="5" height="5" fill="#fff"/><rect x="2" y="2" width="3" height="3"/>
+                  <rect x="22" y="0" width="7" height="7"/><rect x="23" y="1" width="5" height="5" fill="#fff"/><rect x="24" y="2" width="3" height="3"/>
+                  <rect x="0" y="22" width="7" height="7"/><rect x="1" y="23" width="5" height="5" fill="#fff"/><rect x="2" y="24" width="3" height="3"/>
+                  <rect x="9" y="2" width="1" height="1"/><rect x="12" y="2" width="1" height="1"/><rect x="15" y="2" width="1" height="1"/><rect x="18" y="2" width="1" height="1"/><rect x="20" y="2" width="1" height="1"/>
+                  <rect x="10" y="4" width="2" height="1"/><rect x="14" y="4" width="1" height="1"/><rect x="17" y="4" width="2" height="1"/>
+                  <rect x="9" y="6" width="1" height="1"/><rect x="11" y="6" width="1" height="1"/><rect x="16" y="6" width="1" height="1"/><rect x="19" y="6" width="1" height="1"/>
+                  <rect x="1" y="9" width="2" height="1"/><rect x="5" y="9" width="1" height="1"/><rect x="9" y="9" width="1" height="2"/><rect x="12" y="9" width="1" height="1"/><rect x="15" y="9" width="1" height="2"/><rect x="20" y="9" width="2" height="1"/><rect x="24" y="9" width="1" height="1"/><rect x="27" y="9" width="1" height="1"/>
+                  <rect x="0" y="11" width="1" height="1"/><rect x="3" y="11" width="1" height="1"/><rect x="7" y="11" width="1" height="1"/><rect x="11" y="11" width="2" height="1"/><rect x="16" y="11" width="1" height="1"/><rect x="20" y="11" width="1" height="1"/><rect x="23" y="11" width="2" height="1"/><rect x="26" y="11" width="1" height="1"/>
+                  <rect x="2" y="13" width="1" height="1"/><rect x="6" y="13" width="1" height="1"/><rect x="9" y="13" width="1" height="1"/><rect x="13" y="13" width="1" height="2"/><rect x="17" y="13" width="2" height="1"/><rect x="21" y="13" width="1" height="1"/><rect x="24" y="13" width="1" height="1"/>
+                  <rect x="0" y="15" width="2" height="1"/><rect x="4" y="15" width="1" height="1"/><rect x="8" y="15" width="1" height="1"/><rect x="12" y="15" width="1" height="1"/><rect x="15" y="15" width="1" height="1"/><rect x="19" y="15" width="1" height="1"/><rect x="22" y="15" width="1" height="1"/><rect x="25" y="15" width="2" height="1"/>
+                  <rect x="1" y="17" width="1" height="1"/><rect x="5" y="17" width="2" height="1"/><rect x="10" y="17" width="1" height="1"/><rect x="14" y="17" width="1" height="1"/><rect x="18" y="17" width="1" height="1"/><rect x="22" y="17" width="2" height="1"/><rect x="26" y="17" width="1" height="1"/>
+                  <rect x="9" y="20" width="1" height="1"/><rect x="13" y="20" width="1" height="1"/><rect x="16" y="20" width="1" height="1"/><rect x="19" y="20" width="1" height="1"/><rect x="23" y="20" width="1" height="1"/>
+                  <rect x="10" y="23" width="1" height="1"/><rect x="14" y="23" width="2" height="1"/><rect x="18" y="23" width="1" height="1"/><rect x="21" y="23" width="1" height="1"/><rect x="25" y="23" width="1" height="1"/>
+                  <rect x="9" y="26" width="2" height="1"/><rect x="13" y="26" width="1" height="1"/><rect x="17" y="26" width="1" height="1"/><rect x="20" y="26" width="2" height="1"/><rect x="24" y="26" width="1" height="1"/>
+                </g>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="parties">
+          <div class="party-block">
+            <p class="party-label">Receiving Company</p>
+            <p class="party-name">Almega Surface Coats LLP</p>
+            <p class="party-line">GSTIN: 19ABGFA1415N1ZD</p>
+            <p class="party-line">J.L. No. 144, Block – Amta 1, Mouza – Sherpur,<br />P.O. Panpur, Howrah, West Bengal – 711401</p>
+            <p class="party-line">+91 9681725062 / +91 8617711877</p>
+            <p class="party-line muted">scm@almegagroup.in / scm1@almegagroup.in</p>
+          </div>
+          <div class="party-block doc-info">
+            <p class="doc-title">Stock Transfer Order</p>
+            <table class="doc-id-table">
+              <tr><td class="k">STO No.</td><td class="v">9000002214</td></tr>
+              <tr><td class="k">STO Date</td><td class="v">05-Aug-2026</td></tr>
+            </table>
+          </div>
+        </div>
+
+        <table class="items">
+          <caption>Transfer Lines <span class="draft-flag">draft columns</span></caption>
+          <thead>
+            <tr>
+              <th style="width:7%">Sr.</th>
+              <th>Material</th>
+              <th class="num" style="width:12%">Qty</th>
+              <th style="width:8%">UOM</th>
+              <th style="width:16%">Batch</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>Titanium Dioxide, Rutile Grade</td><td class="num">2,000.000</td><td>KG</td><td>TD-24118</td></tr>
+            <tr><td>2</td><td>PU Resin, Aliphatic</td><td class="num">850.500</td><td>KG</td><td>PU-24091</td></tr>
+            <tr><td>3</td><td>HDPE Drum, 210 L</td><td class="num">140</td><td>NOS</td><td>—</td></tr>
+          </tbody>
+          <tfoot>
+            <tr><td colspan="4">3 line items</td><td></td></tr>
+          </tfoot>
+        </table>
+
+        <div class="foot-grid">
+          <div class="terms">
+            <p class="h">Movement <span class="draft-flag">draft</span></p>
+            <div class="row"><span class="lbl">Delivery</span><span>Delivery dates will be informed accordingly</span></div>
+            <div class="row"><span class="lbl">Remarks</span><span>Via Om Road Carriers, Vehicle MH-04-AB-7742 — handle with care. <span class="draft-flag">header Remarks field, printed as typed</span></span></div>
+          </div>
+          <div class="sign">
+            <div class="sign-box"><div class="sign-role">Authorised Signatory — Sending Plant</div></div>
+          </div>
+        </div>
+
+        <div class="std-notes">
+          <ol>
+            <li>Packaging items should be recyclable.</li>
+            <li>Vehicles should be with active PUC certificate.</li>
+            <li>Material transaction should be as per consignee's health &amp; safety norms.</li>
+          </ol>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="note" style="margin-top:24px;">
+    <b>Open questions from your points 8–10 (findings, not yet decided):</b>
+    <ul>
+      <li><b>Port (import PO):</b> a <code>destination_port_id</code> column already exists on
+        <code>purchase_order</code>, but PO Create's screen has no Port field wired to it today —
+        real gap, needs to be added to the form.</li>
+      <li><b>CFS:</b> no field exists anywhere in the PO schema. Per §111.5, CFS is normally only
+        known at the landed-cost/GRN stage, well after the PO is placed — not something the buyer
+        usually knows at PO-creation time. Confirm this is really wanted on the PO copy before I
+        design a field for it.</li>
+      <li><b>Remarks / "+Add Field":</b> two separate things today — a header-level Remarks
+        (one per create session, shared by every material's PO) and a per-material Remarks (its own
+        PO only). "+Add Field" is a bare list of free-text strings with <b>no field name</b> attached
+        to each one — needs a decision on how/whether to print these.</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+  function showDoc(which) {
+    document.getElementById('doc-po').classList.toggle('active', which === 'po');
+    document.getElementById('doc-sto').classList.toggle('active', which === 'sto');
+    document.getElementById('tab-po').setAttribute('aria-selected', which === 'po');
+    document.getElementById('tab-sto').setAttribute('aria-selected', which === 'sto');
+    document.getElementById('note-po').style.display = which === 'po' ? 'block' : 'none';
+    document.getElementById('note-sto').style.display = which === 'sto' ? 'block' : 'none';
+  }
+</script>
