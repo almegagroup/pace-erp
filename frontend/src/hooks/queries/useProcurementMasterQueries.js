@@ -39,6 +39,6 @@ export function usePortOptionsQuery(params = {}, options = {}) {
   });
   return {
     ...query,
-    ports: maybeArray(query.data?.data),
+    ports: maybeArray(query.data),
   };
 }
