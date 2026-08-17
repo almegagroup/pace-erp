@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
@@ -1131,7 +1132,7 @@ export async function createPOHandler(
     const vendorId = toTrimmedString(body.vendor_id);
     const vendorType = toUpperTrimmedString(body.vendor_type);
     const deliveryType = toUpperTrimmedString(body.delivery_type || "STANDARD");
-    const poDate = toTrimmedString(body.po_date) || new Date().toISOString().slice(0, 10);
+    const poDate = toTrimmedString(body.po_date) || todayIsoInKolkata();
     const isOpeningPo = body.is_opening_po === true;
     const openingPoNumber = toTrimmedString(body.po_number);
     const costCenterId = toTrimmedString(body.cost_center_id);

@@ -10,6 +10,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
@@ -99,7 +100,7 @@ function mapSourceTypeToPackingType(sourceType: string): string {
   return "";
 }
 
-function todayIso(): string { return new Date().toISOString().slice(0, 10); }
+function todayIso(): string { return todayIsoInKolkata(); }
 
 function buildAvailabilityKey(materialId: string, storageLocationId: string): string {
   return `${materialId}::${storageLocationId}`;

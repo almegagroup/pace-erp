@@ -7,6 +7,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -58,7 +59,7 @@ function getCompanyScope(ctx: ProdHandlerContext): string {
 }
 
 function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIsoInKolkata();
 }
 
 function roundQty(value: number): number {

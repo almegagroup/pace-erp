@@ -10,6 +10,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
@@ -86,7 +87,7 @@ function roundQty(value: number): number {
 }
 
 function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIsoInKolkata();
 }
 
 function qaErrorResponse(

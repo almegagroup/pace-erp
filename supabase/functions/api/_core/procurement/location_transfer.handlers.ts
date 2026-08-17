@@ -7,6 +7,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
@@ -94,7 +95,7 @@ function nowIsoString(): string {
 }
 
 function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIsoInKolkata();
 }
 
 function getPathSegments(req: Request): string[] {
@@ -106,7 +107,9 @@ function getRequestIdFromPath(req: Request): string {
 }
 
 function getPostingIdFromPath(req: Request): string {
-  return getPathSegments(req)[5] ?? "";
+  // /api/procurement/location-transfer-postings/:postingId/reverse
+  //  0    1           2                            3          4
+  return getPathSegments(req)[3] ?? "";
 }
 
 function ltrErrorResponse(
