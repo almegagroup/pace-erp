@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -46,9 +46,10 @@ function formatNumber(value) {
 
 export default function LocationTransferRequestWorkspacePage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const params = useParams();
   const { runtimeContext } = useMenu();
-  const isCreateMode = params.id === "create";
+  const isCreateMode = location.pathname.endsWith("/location-transfer/create");
   const requestId = !isCreateMode ? String(params.id || "").trim() : "";
 
   const [companyId, setCompanyId] = useState(() => resolveDefaultTransactionCompanyId(runtimeContext));
