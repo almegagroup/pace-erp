@@ -21,3 +21,26 @@ export function todayIsoInKolkata(): string {
     day: "2-digit",
   }).format(new Date());
 }
+
+// For display-only timestamp columns (e.g. report "entry date/time" fields).
+// Same problem as todayIsoInKolkata but for a full timestamp instead of just
+// today's date: passing a timestamptz string straight through to the UI shows
+// it in UTC, which can land on a different calendar day than an IST-correct
+// date column on the same row -- found live 2026-08-18, IN02 Stock Ledger's
+// "Entry Date/Time" showed the 17th next to a "Posting Date" of the 18th for
+// the same event.
+export function formatDateTimeInKolkata(isoTimestamp: string | null | undefined): string | null {
+  if (!isoTimestamp) return null;
+  const date = new Date(isoTimestamp);
+  if (Number.isNaN(date.getTime())) return isoTimestamp;
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Calcutta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date).replace(",", "");
+}
