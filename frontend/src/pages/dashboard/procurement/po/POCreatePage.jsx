@@ -299,7 +299,12 @@ export default function POCreatePage() {
     () =>
       filterOptions.companies
         .filter((entry) => availableCompanyIds.size === 0 || availableCompanyIds.has(entry.id))
-        .map((entry) => ({ value: entry.id, label: entry.company_name || entry.company_code || entry.id })),
+        .map((entry) => ({
+          value: entry.id,
+          label: entry.company_name || entry.company_code || entry.id,
+          company_code: entry.company_code || entry.id,
+          company_name: entry.company_name || entry.company_code || entry.id,
+        })),
     [filterOptions.companies, availableCompanyIds]
   );
   const vendorOptions = useMemo(
@@ -822,8 +827,8 @@ export default function POCreatePage() {
                   <ErpCompanySelector
                     companies={companyOptions.map((entry) => ({
                       id: entry.value,
-                      company_code: entry.label.split("|")[0]?.trim() || entry.value,
-                      company_name: entry.label.split("|").slice(1).join("|").trim() || entry.label,
+                      company_code: entry.company_code,
+                      company_name: entry.company_name,
                     }))}
                     value={form.company_id}
                     onChange={(value) => updateHeaderField("company_id", value)}
