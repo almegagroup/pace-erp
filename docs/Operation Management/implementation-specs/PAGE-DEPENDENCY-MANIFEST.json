@@ -3376,6 +3376,104 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/inventory/LocationTransferRequestListPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "listLocationTransferRequests",
+        "method": "GET",
+        "path": "/api/procurement/location-transfer-requests",
+        "resourceCode": "PROC_LOC_TRANSFER_REQ",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/inventory/LocationTransferRequestWorkspacePage.jsx",
+    "dependencyCount": 6,
+    "deps": [
+      {
+        "fn": "getLocationTransferRequest",
+        "method": "GET",
+        "path": "/api/procurement/location-transfer-requests/${encodeURIComponent(id)}",
+        "resourceCode": "PROC_LOC_TRANSFER_REQ",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createLocationTransferRequest",
+        "method": "POST",
+        "path": "/api/procurement/location-transfer-requests",
+        "resourceCode": "PROC_LOC_TRANSFER_REQ",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "updateLocationTransferRequest",
+        "method": "PUT",
+        "path": "/api/procurement/location-transfer-requests/${encodeURIComponent(id)}",
+        "resourceCode": "PROC_LOC_TRANSFER_REQ",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "cancelLocationTransferRequest",
+        "method": "POST",
+        "path": "/api/procurement/location-transfer-requests/${encodeURIComponent(id)}/cancel",
+        "resourceCode": "PROC_LOC_TRANSFER_REQ",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "previewLocationTransferAvailability",
+        "method": "POST",
+        "path": "/api/procurement/location-transfer-availability-preview",
+        "resourceCode": "PROC_LOC_TRANSFER_REQ",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "listMaterials",
+        "method": "GET",
+        "path": "/api/om/materials?${params.toString()}",
+        "resourceCode": "OM_MATERIAL_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/inventory/LocationTransferWorkbenchPage.jsx",
+    "dependencyCount": 3,
+    "deps": [
+      {
+        "fn": "getLocationTransferWorkbench",
+        "method": "GET",
+        "path": "/api/procurement/location-transfer-workbench",
+        "resourceCode": "PROC_LOC_TRANSFER_POST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "postLocationTransfer",
+        "method": "POST",
+        "path": "/api/procurement/location-transfer-postings",
+        "resourceCode": "PROC_LOC_TRANSFER_POST",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "reverseLocationTransferPosting",
+        "method": "POST",
+        "path": "/api/procurement/location-transfer-postings/${encodeURIComponent(postingId)}/reverse",
+        "resourceCode": "PROC_LOC_TRANSFER_REVERSE",
+        "action": "WRITE",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/masters/CHAMasterPage.jsx",
     "dependencyCount": 17,
     "deps": [

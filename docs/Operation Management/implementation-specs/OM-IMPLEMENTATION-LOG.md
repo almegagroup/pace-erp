@@ -4021,3 +4021,103 @@ it provides no enforcement value as a CI step in its current form.
 - Why no migration:
   - `acl.approver_map`, `acl.resource_approval_policy`, ACL versions, snapshots, and menu rebuilds are environment data, not schema/system-design DDL
   - per `R-04`, those changes must be executed separately in each database by direct SQL / MCP, not shipped as an auto-applied migration
+
+### 2026-08-17 10:05 IST - IN10/IN11 location-transfer implementation foundation started
+
+- Status: IN_PROGRESS
+- Design anchor:
+  - `docs/Operation Management/PACE_ERP_Operation_Management_SAP_Style_Discovery_and_Feasibility.md`
+    - Section 121 (IN10/IN11 design lock)
+  - `docs/Operation Management/implementation-specs/CODEX-IN10-IN11-LOCATION-TRANSFER-MB21-MIGO-TASK-BRIEF.md`
+- DB:
+  - created `supabase/migrations/20260817040750_inventory_location_transfer_request_workbench.sql`
+  - this migration adds:
+    - `erp_inventory.location_transfer_request`
+    - `erp_inventory.location_transfer_request_line`
+    - `erp_inventory.location_transfer_posting`
+    - `erp_production.reservation_document.source_lot_ref`
+    - request/posting indexes, restrictive RLS, and `LTR` document-number seed
+- Backend:
+  - added `supabase/functions/api/_core/procurement/location_transfer.handlers.ts`
+  - implemented first-pass handlers for:
+    - IN10 list
+    - IN10 create
+    - IN10 detail
+    - IN10 update
+    - IN10 cancel
+    - IN11 workbench load
+    - IN11 post
+    - IN11 reverse
+  - wired routes in `supabase/functions/api/_routes/procurement.routes.ts`
+  - wired ACL registry entries in `supabase/functions/api/_acl/route-acl-registry.ts`
+    - `PROC_LOC_TRANSFER_REQ`
+    - `PROC_LOC_TRANSFER_POST`
+    - `PROC_LOC_TRANSFER_REVERSE`
+- Frontend:
+  - added API helpers in `frontend/src/pages/dashboard/procurement/procurementApi.js`
+  - added first-pass full-screen pages:
+    - `frontend/src/pages/dashboard/procurement/inventory/LocationTransferRequestListPage.jsx`
+    - `frontend/src/pages/dashboard/procurement/inventory/LocationTransferRequestWorkspacePage.jsx`
+    - `frontend/src/pages/dashboard/procurement/inventory/LocationTransferWorkbenchPage.jsx`
+  - routed them through:
+    - `frontend/src/router/AppRouter.jsx`
+    - `frontend/src/router/routeIndex.js`
+    - `frontend/src/navigation/screens/projects/operationModule/operationScreens.js`
+- Verification:
+  - backend import wiring passed on Monday, August 17, 2026 (`location_transfer.handlers.ts` + `procurement.routes.ts`)
+  - frontend production build passed on Monday, August 17, 2026 after the IN10/IN11 page wiring
+- Honest note:
+  - this is the implementation foundation pass, not the final polish pass yet
+  - next pass must tighten SAP-level FE behavior:
+    - stricter staged page flow in IN10
+    - line-level availability preview / disabled-save UX
+    - richer IN11 reference selection and posting-history detail
+    - final dependency / bug-guard sweep against the locked brief
+
+### 2026-08-17 13:05 IST - IN10/IN11 SAP-style flow hardening and dependency closure
+
+- Status: IN_PROGRESS
+- Backend hardening:
+  - `supabase/functions/api/_core/procurement/location_transfer.handlers.ts`
+    - added business-number lookup support for IN11, so the posting workbench can open by `LTR` request number inside company scope instead of technical UUID only
+    - added availability-preview endpoint logic for IN10 save-time validation
+    - enriched request/workbench payloads with live `available_qty`, `live_qty`, and `reserved_other_qty` so FE can show the real stock picture before save/post
+  - `supabase/functions/api/_routes/procurement.routes.ts`
+    - added `POST /api/procurement/location-transfer-availability-preview`
+  - `supabase/functions/api/_acl/route-acl-registry.ts`
+    - added exact ACL mapping for the new preview route
+    - completed exact/pattern route registration for IN10/IN11 request/post/reverse actions
+- Frontend hardening:
+  - `frontend/src/pages/dashboard/procurement/inventory/LocationTransferRequestWorkspacePage.jsx`
+    - reshaped into a stricter 3-page MB21/MB22-style flow:
+      - page 1 = header / scope
+      - page 2 = request-line entry
+      - page 3 = review-before-save
+    - save now stays blocked while:
+      - company is missing
+      - any row is incomplete
+      - source = target
+      - requested qty <= 0
+      - preview is still refreshing
+      - any row exceeds available quantity
+  - `frontend/src/pages/dashboard/procurement/inventory/LocationTransferWorkbenchPage.jsx`
+    - reshaped into a fuller IN11 / MIGO-style workbench with:
+      - company + business-number selection
+      - open-line posting grid
+      - posting history / reverse panel
+  - `frontend/src/pages/dashboard/procurement/inventory/LocationTransferRequestListPage.jsx`
+    - tightened into a proper selection-screen + register layout with direct IN11 jump
+- Dependency / verification closure:
+  - `docs/Operation Management/implementation-specs/PAGE-DEPENDENCY-MANIFEST.json`
+    - added routed page dependency coverage for:
+      - `LocationTransferRequestListPage.jsx`
+      - `LocationTransferRequestWorkspacePage.jsx`
+      - `LocationTransferWorkbenchPage.jsx`
+  - frontend build passed on Monday, August 17, 2026 after the IN10/IN11 hardening pass
+  - dependency scan was rerun specifically because the routed-page manifest warning exposed missing IN10/IN11 dependency registration
+- Honest note:
+  - core IN10/IN11 journey is now wired end-to-end across migration, backend, ACL, route registry, frontend pages, and dependency manifest
+  - remaining work is no longer “foundation missing”; it is the final completeness pass:
+    - transaction-specific bug sweep against the brief
+    - live environment verification after deploy
+    - follow-on IN11 cancellation edge-case checks once real documents exist

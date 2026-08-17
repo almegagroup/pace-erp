@@ -1115,6 +1115,46 @@ export function getPIMaterialLocationBreakdown(params) {
   return fetchProcurement("GET", "/api/procurement/physical-inventory-material-locations", undefined, params);
 }
 
+export function listLocationTransferRequests(params) {
+  return fetchProcurement("GET", "/api/procurement/location-transfer-requests", undefined, params);
+}
+
+export function createLocationTransferRequest(data) {
+  return fetchProcurement("POST", "/api/procurement/location-transfer-requests", data);
+}
+
+export function getLocationTransferRequest(id) {
+  return fetchProcurement("GET", `/api/procurement/location-transfer-requests/${encodeURIComponent(id)}`);
+}
+
+export function updateLocationTransferRequest(id, data) {
+  return fetchProcurement("PUT", `/api/procurement/location-transfer-requests/${encodeURIComponent(id)}`, data);
+}
+
+export function cancelLocationTransferRequest(id, reason) {
+  return fetchProcurement("POST", `/api/procurement/location-transfer-requests/${encodeURIComponent(id)}/cancel`, { reason });
+}
+
+export function getLocationTransferWorkbench(requestId) {
+  return fetchProcurement("GET", "/api/procurement/location-transfer-workbench", undefined, { request_id: requestId });
+}
+
+export function getLocationTransferWorkbenchByNumber(params) {
+  return fetchProcurement("GET", "/api/procurement/location-transfer-workbench", undefined, params);
+}
+
+export function previewLocationTransferAvailability(data) {
+  return fetchProcurement("POST", "/api/procurement/location-transfer-availability-preview", data);
+}
+
+export function postLocationTransfer(data) {
+  return fetchProcurement("POST", "/api/procurement/location-transfer-postings", data);
+}
+
+export function reverseLocationTransferPosting(postingId, remarks) {
+  return fetchProcurement("POST", `/api/procurement/location-transfer-postings/${encodeURIComponent(postingId)}/reverse`, { remarks });
+}
+
 export function getStockLedgerReport(params) {
   return fetchProcurement("GET", "/api/procurement/stock-ledger", undefined, params);
 }

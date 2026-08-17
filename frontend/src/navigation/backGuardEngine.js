@@ -21,6 +21,26 @@ import { runScreenBackInterceptor } from "../store/screenBackInterceptor.js";
 
 let backGuardEnabled = false;
 
+function resolveScreenRoute(screen) {
+  const route = screen?.route ?? null;
+  const context = screen?.context ?? {};
+
+  if (!route) {
+    return null;
+  }
+
+  if (!route.includes(":")) {
+    return route;
+  }
+
+  return route.replace(/:([^/]+)/g, (token, key) => {
+    const value = context[key];
+    return value == null || value === ""
+      ? token
+      : encodeURIComponent(String(value));
+  });
+}
+
 export function enableBackGuard() {
   if (backGuardEnabled) return;
   backGuardEnabled = true;
@@ -30,7 +50,7 @@ export function enableBackGuard() {
 
 function onBrowserBack(event) {
   const active = getActiveScreen();
-  const activeRoute = active?.route ?? null;
+  const activeRoute = resolveScreenRoute(active);
 
   if (!activeRoute || isPublicRoute(activeRoute)) {
     return;
@@ -38,7 +58,7 @@ function onBrowserBack(event) {
 
   if (runScreenBackInterceptor()) {
     event.preventDefault();
-    globalThis.history.pushState(null, "", activeRoute);
+    globalThis.history.replaceState(null, "", activeRoute);
     return;
   }
 
@@ -54,7 +74,7 @@ function onBrowserBack(event) {
   if (stack.length === 1) {
     event.preventDefault();
     if (activeRoute) {
-      globalThis.history.pushState(null, "", activeRoute);
+      globalThis.history.replaceState(null, "", activeRoute);
     }
     void confirmAndRequestLogout();
     return;
@@ -64,15 +84,10 @@ function onBrowserBack(event) {
   if (!isBackAllowed(previous?.screen_code)) {
     event.preventDefault();
     if (activeRoute) {
-      globalThis.history.pushState(null, "", activeRoute);
+      globalThis.history.replaceState(null, "", activeRoute);
     }
     return;
   }
 
   popScreen();
-
-  const nextActive = getActiveScreen();
-  if (nextActive?.route) {
-    globalThis.history.pushState(null, "", nextActive.route);
-  }
 }

@@ -18542,3 +18542,468 @@ generation logic), কিন্তু company-to-method **assignment** সবস
 Design সম্পূর্ণ locked (§120.1–§120.4)। কিছুই এখনো build হয়নি — পরবর্তী ধাপ: এই পুরো section
 অনুযায়ী task brief লিখে Codex-কে implement করতে দেওয়া, CLAUDE.md-এর established Claude/Codex
 split workflow অনুযায়ী।
+
+---
+
+## Section 121 — Inventory Location Transfer Redesign: IN10 (MB21/MB22-style) + IN11 (MIGO-style) (✅ DESIGN LOCKED — 2026-08-17, IMPLEMENTATION NOT STARTED)
+
+**Scope boundary:** this section is only for **same-company, storage-location-to-storage-location transfer** inside the Inventory menu. It deliberately does **not** reuse the existing PTO approval model, because that model is for cross-company / plant-transfer business (`erp_procurement.plant_transfer_order`, approval-driven, transport/GST-heavy, procurement-owned). This new design is the PACE equivalent of **SAP MB21 + MB22 + MIGO** for internal location transfer work.
+
+### 121.1 — Business intent and exact user journey (LOCKED)
+
+User need:
+
+1. User opens **IN10** and creates a **Location Transfer Request**.
+2. Request belongs to **one company only**.
+3. Request can have **multiple material lines**.
+4. Every line chooses:
+   - source storage location
+   - target storage location
+   - material
+   - requested quantity
+   - UOM
+   - stock type (default `UNRESTRICTED`; future-proof for other transferable stock types)
+   - optional batch/lot identity when the material family requires exact identity
+5. Save in IN10 creates a **soft reservation only**. No stock moves at this stage.
+6. Until posted, user can:
+   - edit quantity / remarks
+   - add/remove lines
+   - cancel the whole request
+7. User later opens **IN11** (MIGO-style posting page), enters or picks the request/document, reviews remaining open quantity, and posts the actual movement.
+8. Posting creates the real **P311** stock movement.
+9. If a posted transfer must be undone, user uses **IN11** again to post the matching **P312** reversal.
+10. Once a line is fully posted, IN10 can no longer edit that line's commercial identity. If a request is fully posted, IN10 becomes display/history only.
+
+**No approval step exists anywhere in this flow.** No approval inbox, no maker-checker, no rank-escalation. This is intentionally closer to SAP MB21/MB22 + MIGO operational flow than to PTO/STO.
+
+### 121.2 — Why the current shortcut flow is not enough (LOCKED)
+
+Current code already has a direct `/api/procurement/sloc-transfer` path (`pto.handlers.ts`) that immediately posts **P311**. That is useful as a low-level movement primitive, but it is **not** the right business design for this page because:
+
+- it skips the **request/reservation stage** entirely
+- it gives no editable **pre-post document**
+- it cannot model **MB21/MB22-style hold first, move later**
+- it cannot support future **partial posting / remaining balance** cleanly
+- it is wired under the **PTO / plant-transfer ACL family**, which is the wrong business ownership shape for this Inventory page
+
+**Locked decision:** keep the low-level P311 posting capability as an implementation primitive if useful, but the user-facing IN10/IN11 redesign must sit on a new, inventory-owned document model.
+
+### 121.3 — New document model (LOCKED)
+
+New persistent tables are required. Reusing `erp_procurement.plant_transfer_order` is explicitly rejected.
+
+**Header table:** `erp_inventory.location_transfer_request`
+
+Minimum fields:
+
+- `id`
+- `ltr_number` — business document number for IN10
+- `company_id`
+- `status` — `OPEN`, `PARTIALLY_POSTED`, `POSTED`, `CANCELLED`
+- `posting_status_summary` — derived/helper text if useful in FE, not a separate business state
+- `request_date`
+- `required_by_date`
+- `remarks`
+- `created_by`, `created_at`
+- `last_updated_by`, `last_updated_at`
+- `cancelled_by`, `cancelled_at`, `cancellation_reason`
+
+**Line table:** `erp_inventory.location_transfer_request_line`
+
+Minimum fields:
+
+- `id`
+- `request_id`
+- `line_no`
+- `source_storage_location_id`
+- `target_storage_location_id`
+- `material_id`
+- `requested_qty`
+- `uom_code`
+- `stock_type_code`
+- `batch_number` nullable
+- `source_lot_ref` nullable
+- `posted_qty` default `0`
+- `open_qty` derived-or-stored, but must always equal `requested_qty - posted_qty + reversed_qty_adjustment`
+- `status` — `OPEN`, `PARTIALLY_POSTED`, `POSTED`, `CANCELLED`
+- `remarks`
+- `created_by`, `created_at`
+- `last_updated_by`, `last_updated_at`
+
+**Posting event table:** `erp_inventory.location_transfer_posting`
+
+This is the audit bridge between request lines and real material documents. One request line may be posted more than once in future, and reversed separately.
+
+Minimum fields:
+
+- `id`
+- `request_id`
+- `request_line_id`
+- `movement_type_code` — `P311` or `P312`
+- `posted_qty`
+- `uom_code`
+- `batch_number` nullable
+- `source_lot_ref` nullable
+- `material_doc_number`
+- `material_doc_year`
+- `stock_document_id_out`
+- `stock_document_id_in`
+- `reversal_of_posting_id` nullable
+- `posted_by`, `posted_at`
+- `remarks`
+
+### 121.4 — Reservation model (LOCKED)
+
+The existing `erp_production.reservation_document` mechanism is reused, but **not by itself** — it is the stock-hold layer under the new IN10 request document.
+
+**Reservation source type:** existing `LOCATION_TRANSFER` value remains the source type.
+
+At IN10 save:
+
+- each open request line creates one reservation row
+- reservation is keyed by:
+  - `source_type = 'LOCATION_TRANSFER'`
+  - `source_id = request_id`
+  - `source_line_id = request_line_id`
+  - `company_id`
+  - `material_id`
+  - `storage_location_id = source_storage_location_id`
+  - `required_qty = requested_qty`
+- `issued_qty = posted_qty`
+- `balance_qty = open_qty`
+- `batch_number` when batch-specific
+
+**Availability lock (explicit, business owner clarified 2026-08-17):**
+
+- IN10 reservation can be created **only against currently available quantity**
+- "available" means: source-side stock at the correct identity grain **minus already-open reservations**
+- system must hard-block over-reservation at save/update time
+- if **any one line** in the editable request grid has `requested_qty > available_qty`, the whole IN10 save is blocked
+- in that state, the **Save** action must stay inactive/disabled in the UI until every line is valid
+- IN11 posting can also consume **only the still-available / still-open quantity**
+- if stock dropped after IN10 save (because another transaction posted first, or a sibling reservation/posting consumed it), IN11 must hard-block the post until the quantity is corrected
+
+**Real new requirement:** reservation also needs `source_lot_ref` for exact FG-style identity, because in prod the live stock grain is:
+
+- RM/PM/INT: normal pool by material + location
+- SFG: batch-specific
+- FG: exact lot often needs `batch_number` **plus** `source_lot_ref` (Packing PO identity)
+
+`batch_number` alone is not sufficient for every future-safe location transfer scenario. Therefore the reservation layer must support both dimensions when needed.
+
+**Locked schema change:** add nullable `source_lot_ref` to `erp_production.reservation_document`.
+
+### 121.5 — Stock identity rules by material family (LOCKED)
+
+This page must not flatten all stock into one generic bucket.
+
+- **RM / PM / INT:** reserve and post by `(company, source_sloc, material, stock_type)`; `batch_number` and `source_lot_ref` usually null.
+- **SFG:** reserve and post by `(company, source_sloc, material, stock_type, batch_number)`.
+- **FG:** reserve and post by `(company, source_sloc, material, stock_type, batch_number, source_lot_ref)` when such identity exists in stock history; this preserves the exact barrel/group lineage already used elsewhere in production/dispatch reporting.
+
+**Rule:** IN10 line creation must force whichever identity fields are required for that material family. It must not silently reserve a broader pool than the real stock identity.
+
+### 121.6 — Posting and reversal behavior (LOCKED)
+
+**IN10 save:** no stock movement.
+
+**IN10 reservation gate:** user may request/post only up to the source-side available quantity at the exact required identity grain. Over-reservation is a hard block, not a warning.
+
+**IN11 post:**
+
+- creates real `P311`
+- for each posting event:
+  - one OUT leg from source sloc
+  - one IN leg to target sloc
+  - same material/batch/lot identity on both legs
+- request-line `posted_qty`, `open_qty`, and status update atomically
+- matching reservation row updates `issued_qty`, `balance_qty`, and status atomically
+- before posting, system must re-check live availability at the same identity grain; if the remaining source-side available quantity is now lower than the requested post quantity, posting is hard-blocked
+
+**IN11 reversal:**
+
+- only previously-posted quantity can be reversed
+- creates real `P312`
+- links to the original posting event (`reversal_of_posting_id`)
+- adjusts request-line posted/open quantities and reservation balances atomically
+
+**Header status rule:**
+
+- all lines open -> header `OPEN`
+- mixture of open and posted -> `PARTIALLY_POSTED`
+- all lines fully posted -> `POSTED`
+- explicit user cancel before any effective posting remains open -> `CANCELLED`
+
+**Cancellation lock:**
+
+- a request with zero posted quantity may be cancelled in IN10
+- once any line has a real posting event, the document cannot be hard-cancelled away; further undo happens through **IN11 reversal**, not IN10 cancel
+
+### 121.7 — SAP-style page architecture, adapted to PACE components (LOCKED)
+
+**Global UX lock for this redesign: everything must not be forced into one page.**
+
+Business owner explicitly rejected the "one giant page with every form, summary, and table stacked together" pattern. Therefore:
+
+- use **staged page flow** where the user's task naturally changes phase
+- use **full-page workspaces** where the main job is line review, posting, or document execution
+- keep only the minimum context header visible above the workspace
+- every serious line table must use **ErpDenseGrid**
+- avoid large read-only cards that consume the first screen and push the real working table below the fold
+
+**Page-splitting rule (LOCKED):**
+
+- if the user is still choosing criteria / finding a document -> selection screen page
+- if the user is editing request lines -> dedicated request workspace page
+- if the user is posting / reversing material movement -> dedicated full-page posting workspace
+- if the user is viewing history / audit trail -> dedicated detail/history page or full-page detail mode
+
+This is the same general discipline already locked elsewhere in the system: criteria page first, then full-page result/workspace where needed, instead of putting every stage in a single long screen.
+
+**IN10 — Location Transfer Request**
+
+SAP inspiration:
+
+- MB21 create reservation
+- MB22 change reservation
+
+PACE implementation pattern:
+
+- Transaction shell header
+- Compact document-summary cards
+- line-entry table uses **ErpDenseGrid**
+- same keyboard-first rhythm as the polished PID pages
+- **not one single long page for list + create + detail + posting**
+
+Pages/modes:
+
+1. **IN10 list/selection screen**
+   - criteria-first
+   - company, status, doc number, source sloc, target sloc, material, date range
+   - F8/Execute opens results
+   - result list itself should open in a dedicated result state, not stay buried under the filter form
+   - result grid uses **ErpDenseGrid**
+2. **IN10 create/change page**
+   - header block compact, not giant form cards
+   - editable line grid is the main workspace
+   - add line, delete line, copy line, clear line
+   - availability / reserved / open indicators per line
+   - if any line is over-quantity vs available, show that line as invalid and disable the page-level **Save**
+   - this is its own working page/state; do not keep the list result and edit grid stacked together
+   - line grid uses **ErpDenseGrid**
+3. **IN10 detail/history mode**
+   - same shell, read-only when posted/cancelled
+   - document flow / posting history can open in its own full-page detail mode if the line history is long
+   - detail grids also use **ErpDenseGrid**
+
+**IN11 — Goods Movement Workbench**
+
+SAP inspiration:
+
+- MIGO with reference-document-driven posting
+
+PACE implementation pattern:
+
+- selection screen first: action + company + reference type + document number
+- execute opens full-page posting workspace
+- same **full-page report/workspace** behavior the business owner asked for on IN03/PO11-style pages
+- must remain compatible with the app's new-window / alternate-window behavior
+- selection screen and posting workspace must not be collapsed into one overlong screen
+
+IN11 actions:
+
+1. `POST_TRANSFER`
+2. `REVERSE_TRANSFER`
+3. future-safe placeholder: other inventory material-document actions may reuse the shell later, but **not in this phase**
+
+**Component rules (LOCKED):**
+
+- use `ErpSelectionScreen` for criteria-first pages
+- use `ErpDenseGrid` for every serious line table
+- use existing transaction-shell header / shortcut rail / action-bar pattern
+- no giant static summary panels that push the real grid below the fold
+- uneditable context fields should be compressed into dense summary cards or inline labels
+
+### 121.7.1 — Screen flow mock (LOCKED)
+
+**IN10 flow**
+
+`Page 1 — Selection`
+
+- company
+- status
+- request number
+- source sloc
+- target sloc
+- material
+- request date range
+- actions: `Create New`, `Execute`, `Back`
+
+`Page 2 — Result List`
+
+- full-width result grid (`ErpDenseGrid`)
+- actions: `Open`, `Create New`, `Change Criteria`, `Refresh`
+
+`Page 3 — Create / Change Workspace`
+
+- compact header strip
+- request summary cards
+- main editable line grid (`ErpDenseGrid`)
+- actions: `Save`, `Add Line`, `Delete Line`, `Copy Line`, `Cancel Request`, `Back to List`
+
+`Page 4 — Detail / History`
+
+- compact header
+- request lines grid (`ErpDenseGrid`)
+- posting/reservation history grid (`ErpDenseGrid`)
+- actions: `Display`, `Back`, `Open in IN11`
+
+**IN11 flow**
+
+`Page 1 — Posting Selection`
+
+- action type: `Post Transfer` / `Reverse Transfer`
+- company
+- request/document number
+- actions: `Execute`, `Back`
+
+`Page 2 — Full-Page Posting Workspace`
+
+- compact identity header
+- document summary strip
+- full-page line grid (`ErpDenseGrid`)
+- posting preview / reversal preview area
+- actions: `Post`, `Reverse`, `Change Criteria`, `Refresh`
+
+`Page 3 — Material Document Result / Detail`
+
+- posted lines grid (`ErpDenseGrid`)
+- material document references
+- reversal links where relevant
+- actions: `Display Detail`, `Back to IN11`
+
+### 121.8 — ACL and authority model (LOCKED)
+
+**Menu / TX codes:**
+
+- `IN10` — Location Transfer Request
+- `IN11` — Goods Movement Workbench
+
+**Access rule (current locked business decision):**
+
+- company-scoped
+- **L1_USER through L3_MANAGER** get full operational access
+- same user may create in IN10 and post/reverse in IN11
+- no approval separation in current phase
+
+**But design for future split now:**
+
+do **not** use one shared resource code for create/post/reverse.
+
+Locked resource split:
+
+- `PROC_LOC_TRANSFER_REQ` — IN10 page and request maintenance
+- `PROC_LOC_TRANSFER_POST` — IN11 posting action
+- `PROC_LOC_TRANSFER_REVERSE` — IN11 reversal/cancellation action
+
+This keeps future ACL changes possible without redesigning handlers.
+
+**Dependency classification (using the locked taxonomy):**
+
+- Material lookup: Type খ
+- Storage location lookup: Type খ
+- Batch/lot picker lookup: Type খ
+- Availability preview sourced from stock/reservation tables: internal backend read, no standalone access needed
+- No Type গ dependency is intentionally introduced in this phase
+
+### 121.9 — Mandatory bug-check pass against the recurring patterns (LOCKED)
+
+This redesign must explicitly check all 13 recurring patterns before implementation is called done:
+
+1. no hardcoded rank/role gate as the real authority
+2. company-scope validation on every read/write/post/reverse path
+3. do not reuse old PTO or broad transfer capability blindly
+4. ACL version capture sequence must use a fresh version, not re-capture an old one
+5. ACL-MASTER coverage must be checked explicitly
+6. create/post/reverse must not share one resource code
+7. no fake maker-checker logic should be left half-wired from PTO
+8. route-registry entries must match the real new routes exactly
+9. do not read company options from admin/global sources in FE when runtime scope exists
+10. no hidden old menu rows / stale tx reuse without deliberate registration
+11. no frontend-only visibility assumption; backend must enforce too
+12. no local hardcoded role array inside FE/BE pages
+13. every backend-required field must be present in the FE payload
+
+### 121.10 — DB touchpoints (LOCKED)
+
+**New tables required:**
+
+- `erp_inventory.location_transfer_request`
+- `erp_inventory.location_transfer_request_line`
+- `erp_inventory.location_transfer_posting`
+
+**Existing tables reused:**
+
+- `erp_production.reservation_document`
+- `erp_inventory.stock_document`
+- `erp_inventory.stock_ledger`
+- `erp_inventory.stock_snapshot`
+- `erp_inventory.location_transfer_rule` (read-only rule/reference if still useful)
+- `erp_inventory.movement_type_master`
+- `erp_inventory.storage_location_master`
+- `erp_master.material_master`
+- company/material scope tables already used elsewhere for company validation
+
+**Existing schema changes required:**
+
+- add `source_lot_ref` to `erp_production.reservation_document`
+
+### 121.11 — Backend scope (LOCKED)
+
+Backend must provide:
+
+- IN10 list handler
+- IN10 create handler
+- IN10 detail handler
+- IN10 update handler
+- IN10 cancel handler
+- IN11 search/reference-loader handler
+- IN11 post handler
+- IN11 reverse handler
+- shared availability/reservation computation helper
+- shared identity resolver for RM/PM/INT vs SFG vs FG
+
+**Important:** if the current direct `/api/procurement/sloc-transfer` primitive is reused internally, it must be wrapped under the new inventory document flow, not exposed as the user-facing business API for IN10.
+
+### 121.12 — Frontend scope (LOCKED)
+
+Frontend must provide:
+
+- IN10 selection/list page
+- IN10 create/change/detail workspace
+- IN11 selection screen
+- IN11 full-page posting/reversal workspace
+- dense keyboard flow in editable grids
+- page up / page down / enter rhythm matching the better inventory pages
+- compact, SAP-inspired, non-bloated shell using existing PACE components
+
+### 121.13 — Verification lock (must pass before task can be called closed)
+
+1. Create a same-company request in IN10 with multiple lines.
+2. Confirm reservation rows exist and available balance drops immediately.
+3. Try to reserve above available quantity in IN10 and confirm hard-block.
+4. Re-open the request in IN10 and edit/cancel while still unposted.
+5. Open IN11, load the request, post one line or full quantity as designed, and confirm P311 material documents are created.
+6. Force a reduced-availability scenario after reservation, then try IN11 post and confirm hard-block until quantity is corrected.
+7. Confirm request-line and reservation balances update exactly.
+8. Reverse a posted quantity in IN11 and confirm P312, request balance rollback, and reservation rollback.
+9. Validate RM/PM/INT generic pool behavior.
+10. Validate SFG batch-specific behavior.
+11. Validate FG batch + `source_lot_ref` exact-identity behavior.
+12. Validate company-scope isolation for single-company and multi-company users.
+13. Run dependency check against the Page Dependency Manifest.
+14. Run the 13-bug-pattern pass explicitly.
+
+### 121.14 — Implementation status
+
+Design is now fully locked. No migration, backend, frontend, ACL data, or verification work for IN10/IN11 has been started under this final design yet. Next step is a dedicated Codex task brief implementing this section exactly, with no reinterpretation.

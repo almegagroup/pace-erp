@@ -123,6 +123,9 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/:id"],
     ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/pgi/create"],
     ["/dashboard/procurement/physical-inventory",      "/dashboard/procurement/physical-inventory/:id"],
+    ["/dashboard/procurement/location-transfer",       "/dashboard/procurement/location-transfer/create"],
+    ["/dashboard/procurement/location-transfer",       "/dashboard/procurement/location-transfer/:id"],
+    ["/dashboard/procurement/location-transfer/post",  "/dashboard/procurement/location-transfer/:id"],
     // §119.4 companions — Create/Print still piggyback on IN01's own route visibility, but MI04
     // and MI05 have their own screen codes and must authorize from those routes directly. Without
     // this split, narrowing IN01 would incorrectly throw IN08/IN09 users back to the dashboard.
