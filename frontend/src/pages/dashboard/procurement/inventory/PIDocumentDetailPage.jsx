@@ -164,6 +164,8 @@ export default function PIDocumentDetailPage() {
   const [notice, setNotice] = useState("");
   const [reasonModal, setReasonModal] = useState(null); // "reopen" | "cancel" | null
   const [selectedItemIds, setSelectedItemIds] = useState(() => new Set());
+  // §119.14.1 — per-row opt-in for batch-tracked SFG/FG reco cascade, default unchecked.
+  const [recoItemIds, setRecoItemIds] = useState(() => new Set());
   const [currentPage, setCurrentPage] = useState(0);
   const [page, setPage] = useState(1);
 
@@ -229,6 +231,7 @@ export default function PIDocumentDetailPage() {
     setError("");
     setNotice("");
     setSelectedItemIds(new Set());
+    setRecoItemIds(new Set());
     setCurrentPage(0);
     setItemForm({ material_id: "", stock_type: "UNRESTRICTED", storage_location_id: "" });
     setPage(1);
@@ -240,6 +243,12 @@ export default function PIDocumentDetailPage() {
 
   useEffect(() => {
     setSelectedItemIds((current) => {
+      if (current.size === 0) return current;
+      const valid = new Set(postableItems.map((row) => row.id));
+      const next = new Set([...current].filter((itemId) => valid.has(itemId)));
+      return next.size === current.size ? current : next;
+    });
+    setRecoItemIds((current) => {
       if (current.size === 0) return current;
       const valid = new Set(postableItems.map((row) => row.id));
       const next = new Set([...current].filter((itemId) => valid.has(itemId)));
@@ -336,9 +345,11 @@ export default function PIDocumentDetailPage() {
     setSaving(true);
     setError("");
     try {
-      await postPIDifferences(detail.id, idsToPost);
+      const recoIdsToPost = idsToPost.filter((itemId) => recoItemIds.has(itemId));
+      await postPIDifferences(detail.id, idsToPost, recoIdsToPost);
       setNotice(`${idsToPost.length} item(s) posted.`);
       setSelectedItemIds(new Set());
+      setRecoItemIds(new Set());
       await detailQuery.refetch();
     } catch (saveError) {
       // §119.5 — authority errors (staff-vs-auditor-vs-director) surface here verbatim.
@@ -356,6 +367,15 @@ export default function PIDocumentDetailPage() {
 
   function toggleSelectItem(itemId) {
     setSelectedItemIds((current) => {
+      const next = new Set(current);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }
+
+  function toggleRecoItem(itemId) {
+    setRecoItemIds((current) => {
       const next = new Set(current);
       if (next.has(itemId)) next.delete(itemId);
       else next.add(itemId);
@@ -499,7 +519,9 @@ export default function PIDocumentDetailPage() {
             <div className="border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
               Select which items to post below (or Select All) — the selected batch posts atomically
               together. You can post in more than one batch; the document is fully POSTED once every
-              non-zero-difference item has been posted.
+              non-zero-difference item has been posted. For batch-tracked SFG/FG rows, tick "Reco?" only
+              if this difference should also proportionally adjust that batch's RM/PM/INT reco — leave it
+              unchecked for routine small leftovers (only the SFG/FG stock itself will move).
             </div>
           ) : null}
 
@@ -536,6 +558,27 @@ export default function PIDocumentDetailPage() {
                   render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
                 },
                 { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
+                ...(status === "PENDING_APPROVAL" ? [{
+                  key: "apply_reco_adjustment",
+                  label: "Reco?",
+                  width: "70px",
+                  // §119.14.1 — only batch-tracked SFG/FG rows can cascade to RM/PM/INT reco;
+                  // everything else (RM/PM/INT, MTS-typed, non-batch) never shows this control.
+                  render: (row) => {
+                    const isBatchTrackedSfgFg = Boolean(row.batch_number) && ["SFG", "FG"].includes(String(row.material_type || "").toUpperCase());
+                    const isPostable = Number(row.difference_qty ?? 0) !== 0 && !row.posted_stock_document_id;
+                    if (!isBatchTrackedSfgFg || !isPostable) return <span className="text-slate-300">—</span>;
+                    return (
+                      <input
+                        type="checkbox"
+                        checked={recoItemIds.has(row.id)}
+                        onChange={() => toggleRecoItem(row.id)}
+                        title="Also proportionally adjust RM/PM/INT reco for this batch"
+                        className="h-4 w-4"
+                      />
+                    );
+                  },
+                }] : []),
                 { key: "stock_type", label: "Stock Type", width: "150px" },
                 {
                   key: "storage_location_id",

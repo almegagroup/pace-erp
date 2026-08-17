@@ -1963,6 +1963,27 @@ export async function postDifferencesHandler(
       return piErrorResponse(req, ctx, "PI_POST_BATCH_ALREADY_POSTED", 409, "One or more selected items are already posted.");
     }
 
+    // §119.14.1 — per-row "Reco?" opt-in. Only items explicitly ticked in this Post action
+    // get apply_reco_adjustment persisted true; everything else stays at its default false
+    // (plain 701/702 against SFG/FG stock only, no RM/PM/INT reco cascade).
+    const recoItemIds = new Set(
+      Array.isArray(body.reco_item_ids) ? (body.reco_item_ids as unknown[]).map((v) => toTrimmedString(v)).filter(Boolean) : [],
+    );
+    const idsToFlag = [...recoItemIds].filter((id) => requestedItemIds.has(id));
+    if (idsToFlag.length > 0) {
+      const { error: flagError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("physical_inventory_item")
+        .update({ apply_reco_adjustment: true })
+        .in("id", idsToFlag);
+      if (flagError) throw new Error("PI_RECO_FLAG_UPDATE_FAILED");
+      for (const item of batchItems) {
+        if (idsToFlag.includes(String(item.id))) {
+          (item as JsonRecord).apply_reco_adjustment = true;
+        }
+      }
+    }
+
     const piMatDoc = await generateMaterialDocNumber(companyId);
     const materialIds = [...new Set(items.map((i) => toTrimmedString(i.material_id)))];
     const materialInfo = await getMaterialInfo(materialIds);
@@ -2085,10 +2106,17 @@ async function buildGenealogyAdjustments(
   const processOrderHeaderUpdates: JsonRecord[] = [];
   const packingOrderHeaderUpdates: JsonRecord[] = [];
 
+  // §119.14.1 — reco cascade is opt-in per row (apply_reco_adjustment), not automatic.
+  // Small batch-tracked SFG/FG residuals are routine; forcing a proportional RM/PM/INT
+  // reco write for every one of them was too aggressive. Unchecked rows still post
+  // 701/702 against the SFG/FG stock itself (movements above), just skip this cascade.
   const batchTrackedItems = items.filter((item) => {
     const differenceQty = parseNullableNumber(item.difference_qty) ?? 0;
     const materialType = toUpperTrimmedString(materialInfo.get(toTrimmedString(item.material_id))?.material_type);
-    return differenceQty !== 0 && toTrimmedString(item.batch_number) && (materialType === "SFG" || materialType === "FG");
+    return differenceQty !== 0
+      && toTrimmedString(item.batch_number)
+      && (materialType === "SFG" || materialType === "FG")
+      && item.apply_reco_adjustment === true;
   });
   if (batchTrackedItems.length === 0) {
     return { processOrderRecoRows, packingOrderRecoRows, processOrderHeaderUpdates, packingOrderHeaderUpdates };
