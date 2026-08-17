@@ -563,14 +563,33 @@ async function syncReservationForLine(
     last_updated_by: updatedBy,
     last_updated_at: nowIsoString(),
   };
-  const { error } = await serviceRoleClient
+
+  const { data: existing, error: lookupError } = await serviceRoleClient
     .schema("erp_production")
     .from("reservation_document")
-    .upsert({
-      ...payload,
-      created_by: updatedBy,
-    }, { onConflict: "source_line_id" });
-  if (error) throw new Error("LTR_RESERVATION_SYNC_FAILED");
+    .select("id")
+    .eq("source_type", "LOCATION_TRANSFER")
+    .eq("source_line_id", lineId)
+    .maybeSingle();
+  if (lookupError) throw new Error("LTR_RESERVATION_SYNC_FAILED");
+
+  if (existing?.id) {
+    const { error } = await serviceRoleClient
+      .schema("erp_production")
+      .from("reservation_document")
+      .update(payload)
+      .eq("id", existing.id as string);
+    if (error) throw new Error("LTR_RESERVATION_SYNC_FAILED");
+  } else {
+    const { error } = await serviceRoleClient
+      .schema("erp_production")
+      .from("reservation_document")
+      .insert({
+        ...payload,
+        created_by: updatedBy,
+      });
+    if (error) throw new Error("LTR_RESERVATION_SYNC_FAILED");
+  }
 }
 
 async function cancelReservationsForRequest(requestId: string, updatedBy: string): Promise<void> {
