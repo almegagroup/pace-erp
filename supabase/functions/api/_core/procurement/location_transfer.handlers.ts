@@ -9,7 +9,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
-import { generateMaterialDocNumber, type MaterialDocumentRef } from "../../_shared/materialDocument.ts";
+import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -588,51 +588,29 @@ async function cancelReservationsForRequest(requestId: string, updatedBy: string
   if (error) throw new Error("LTR_RESERVATION_CANCEL_FAILED");
 }
 
-async function postTransferMovement(params: {
-  companyId: string;
-  materialId: string;
-  storageLocationId: string;
-  quantity: number;
-  uomCode: string;
-  valuationRate: number;
-  stockTypeCode: string;
-  direction: "IN" | "OUT";
-  postedBy: string;
-  documentNumber: string;
-  matDoc: MaterialDocumentRef;
+async function postTransferDocument(params: {
   requestId: string;
-  movementTypeCode: "P311" | "P312";
-  batchNumber?: string | null;
-}): Promise<{ stockDocumentId: string; stockLedgerId: string }> {
-  const { data, error } = await serviceRoleClient
+  action: "POST" | "REVERSE";
+  postedBy: string;
+  movements: JsonRecord[];
+  context: JsonRecord;
+}): Promise<void> {
+  const { error } = await serviceRoleClient
     .schema("erp_inventory")
-    .rpc("post_stock_movement", {
-      p_document_number: params.documentNumber,
-      p_document_date: todayIsoDate(),
-      p_posting_date: todayIsoDate(),
-      p_movement_type_code: params.movementTypeCode,
-      p_company_id: params.companyId,
-      p_storage_location_id: params.storageLocationId,
-      p_material_id: params.materialId,
-      p_quantity: params.quantity,
-      p_base_uom_code: params.uomCode,
-      p_unit_value: params.valuationRate,
-      p_stock_type_code: params.stockTypeCode,
-      p_direction: params.direction,
-      p_posted_by: params.postedBy,
-      p_reversal_of_id: null,
-      p_batch_number: params.batchNumber ?? null,
-      p_material_doc_number: params.matDoc.docNumber,
-      p_material_doc_year: params.matDoc.docYear,
-      p_reference_document_number: params.documentNumber,
+    .rpc("post_document", {
       p_reference_document_type: "LTR",
       p_reference_document_id: params.requestId,
+      p_movements: params.movements,
+      p_posted_by: params.postedBy,
+      p_context: {
+        action: params.action,
+        ...params.context,
+      },
     });
-  if (error || !Array.isArray(data) || data.length === 0) throw new Error("LTR_STOCK_POSTING_FAILED");
-  return {
-    stockDocumentId: toTrimmedString((data[0] as JsonRecord).stock_document_id),
-    stockLedgerId: toTrimmedString((data[0] as JsonRecord).stock_ledger_id),
-  };
+  if (error) {
+    console.error("[location_transfer.postTransferDocument] rpc failed:", JSON.stringify(error));
+    throw new Error("LTR_POST_DOCUMENT_FAILED");
+  }
 }
 
 async function hydrateRequestPayload(requestId: string): Promise<JsonRecord> {
@@ -1081,7 +1059,10 @@ export async function postLocationTransferHandler(
     const lineMap = new Map(lineRows.map((line) => [toTrimmedString(line.id), line]));
     const requestNumber = toTrimmedString(requestRow.ltr_number);
     const matDoc = await generateMaterialDocNumber(companyId);
-    const now = nowIsoString();
+    const postingDate = todayIsoDate();
+    const movementTypeCode = "P311";
+    const movements: JsonRecord[] = [];
+    const completionLines: JsonRecord[] = [];
 
     for (const entry of postingLines) {
       const line = lineMap.get(entry.request_line_id);
@@ -1109,89 +1090,64 @@ export async function postLocationTransferHandler(
         throw new Error("LTR_REQUEST_QTY_EXCEEDS_AVAILABLE");
       }
 
-      const outMovement = await postTransferMovement({
-        companyId,
-        materialId: toTrimmedString(line.material_id),
-        storageLocationId: toTrimmedString(line.source_storage_location_id),
+      const outLineRef = `${entry.request_line_id}::OUT`;
+      const inLineRef = `${entry.request_line_id}::IN`;
+      const commonMovement = {
+        document_number: requestNumber,
+        document_date: postingDate,
+        posting_date: postingDate,
+        movement_type_code: movementTypeCode,
+        company_id: companyId,
+        material_id: toTrimmedString(line.material_id),
         quantity: entry.quantity,
-        uomCode: toTrimmedString(line.uom_code) || "KG",
-        valuationRate: availability.valuationRate,
-        stockTypeCode: toUpperTrimmedString(line.stock_type_code),
+        base_uom_code: toTrimmedString(line.uom_code) || "KG",
+        unit_value: availability.valuationRate,
+        stock_type_code: toUpperTrimmedString(line.stock_type_code),
+        batch_number: toTrimmedString(line.batch_number) || null,
+        material_doc_number: matDoc.docNumber,
+        material_doc_year: matDoc.docYear,
+        reference_document_number: requestNumber,
+      };
+      movements.push({
+        ...commonMovement,
+        line_ref: outLineRef,
+        storage_location_id: toTrimmedString(line.source_storage_location_id),
         direction: "OUT",
-        postedBy: ctx.auth_user_id,
-        documentNumber: requestNumber,
-        matDoc,
-        requestId,
-        movementTypeCode: "P311",
-        batchNumber: toTrimmedString(line.batch_number) || null,
+        reversal_of_id: null,
       });
-      const inMovement = await postTransferMovement({
-        companyId,
-        materialId: toTrimmedString(line.material_id),
-        storageLocationId: toTrimmedString(line.target_storage_location_id),
-        quantity: entry.quantity,
-        uomCode: toTrimmedString(line.uom_code) || "KG",
-        valuationRate: availability.valuationRate,
-        stockTypeCode: toUpperTrimmedString(line.stock_type_code),
+      movements.push({
+        ...commonMovement,
+        line_ref: inLineRef,
+        storage_location_id: toTrimmedString(line.target_storage_location_id),
         direction: "IN",
-        postedBy: ctx.auth_user_id,
-        documentNumber: requestNumber,
-        matDoc,
-        requestId,
-        movementTypeCode: "P311",
-        batchNumber: toTrimmedString(line.batch_number) || null,
+        reversal_of_id: null,
       });
-
-      const { error: postingError } = await serviceRoleClient
-        .schema("erp_inventory")
-        .from("location_transfer_posting")
-        .insert({
-          request_id: requestId,
-          request_line_id: entry.request_line_id,
-          movement_type_code: "P311",
-          posted_qty: entry.quantity,
-          uom_code: toTrimmedString(line.uom_code) || "KG",
-          batch_number: toTrimmedString(line.batch_number) || null,
-          source_lot_ref: toTrimmedString(line.source_lot_ref) || null,
-          material_doc_number: matDoc.docNumber,
-          material_doc_year: matDoc.docYear,
-          stock_document_id_out: outMovement.stockDocumentId,
-          stock_document_id_in: inMovement.stockDocumentId,
-          remarks: entry.remarks ?? null,
-          posted_by: ctx.auth_user_id,
-          posted_at: now,
-        });
-      if (postingError) throw new Error("LTR_POSTING_CREATE_FAILED");
-
-      const nextPostedQty = Number((postedQty + entry.quantity).toFixed(6));
-      const nextLineStatus = deriveLineStatus(requestedQty, nextPostedQty);
-      const { error: lineUpdateError } = await serviceRoleClient
-        .schema("erp_inventory")
-        .from("location_transfer_request_line")
-        .update({
-          posted_qty: nextPostedQty,
-          status: nextLineStatus,
-          last_updated_by: ctx.auth_user_id,
-          last_updated_at: now,
-        })
-        .eq("id", entry.request_line_id);
-      if (lineUpdateError) throw new Error("LTR_LINE_UPDATE_FAILED");
-
-      await syncReservationForLine(requestId, entry.request_line_id, line, companyId, nextPostedQty, ctx.auth_user_id);
+      completionLines.push({
+        request_line_id: entry.request_line_id,
+        posted_qty: entry.quantity,
+        uom_code: toTrimmedString(line.uom_code) || "KG",
+        batch_number: toTrimmedString(line.batch_number) || null,
+        source_lot_ref: toTrimmedString(line.source_lot_ref) || null,
+        remarks: entry.remarks ?? null,
+        movement_type_code: movementTypeCode,
+        material_doc_number: matDoc.docNumber,
+        material_doc_year: matDoc.docYear,
+        out_line_ref: outLineRef,
+        in_line_ref: inLineRef,
+      });
     }
 
-    const refreshedLines = await fetchRequestLines(requestId);
-    const nextHeaderStatus = deriveHeaderStatusFromLines(refreshedLines);
-    const { error: headerUpdateError } = await serviceRoleClient
-      .schema("erp_inventory")
-      .from("location_transfer_request")
-      .update({
-        status: nextHeaderStatus,
-        last_updated_by: ctx.auth_user_id,
-        last_updated_at: now,
-      })
-      .eq("id", requestId);
-    if (headerUpdateError) throw new Error("LTR_UPDATE_FAILED");
+    await postTransferDocument({
+      requestId,
+      action: "POST",
+      postedBy: ctx.auth_user_id,
+      movements,
+      context: {
+        request_id: requestId,
+        posted_by: ctx.auth_user_id,
+        posting_lines: completionLines,
+      },
+    });
 
     return okResponse(await hydrateRequestPayload(requestId), ctx.request_id, req);
   } catch (error) {
@@ -1201,8 +1157,10 @@ export async function postLocationTransferHandler(
         ? "LTR_SCOPE_VIOLATION"
         : message === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || message === "LTR_POST_QTY_EXCEEDS_OPEN"
           ? message
+          : message === "LTR_POST_DOCUMENT_FAILED"
+            ? "LTR_POST_DOCUMENT_FAILED"
           : "LTR_POST_FAILED";
-    const status = code === "LTR_SCOPE_VIOLATION" ? 403 : code === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || code === "LTR_POST_QTY_EXCEEDS_OPEN" ? 409 : 400;
+    const status = code === "LTR_SCOPE_VIOLATION" ? 403 : code === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || code === "LTR_POST_QTY_EXCEEDS_OPEN" ? 409 : code === "LTR_POST_DOCUMENT_FAILED" ? 500 : 400;
     return ltrErrorResponse(req, ctx, code, status, message);
   }
 }
@@ -1254,109 +1212,92 @@ export async function reverseLocationTransferPostingHandler(
       materialId,
       stockTypeCode,
       batchNumber,
+      sourceLotRef: toTrimmedString((posting as JsonRecord).source_lot_ref) || toTrimmedString(line.source_lot_ref) || null,
     });
     if (quantity > targetBalance.quantity + EPSILON) {
       return ltrErrorResponse(req, ctx, "LTR_REVERSE_INVALID", 409, "Target location no longer has enough quantity to reverse.");
     }
 
-    const outMovement = await postTransferMovement({
-      companyId,
-      materialId,
-      storageLocationId: targetStorageLocationId,
-      quantity,
-      uomCode,
-      valuationRate: targetBalance.valuationRate,
-      stockTypeCode,
-      direction: "OUT",
-      postedBy: ctx.auth_user_id,
-      documentNumber: toTrimmedString(requestRow.ltr_number),
-      matDoc,
-      requestId: toTrimmedString((posting as JsonRecord).request_id),
-      movementTypeCode: "P312",
-      batchNumber,
-    });
-    const inMovement = await postTransferMovement({
-      companyId,
-      materialId,
-      storageLocationId: sourceStorageLocationId,
-      quantity,
-      uomCode,
-      valuationRate: targetBalance.valuationRate,
-      stockTypeCode,
-      direction: "IN",
-      postedBy: ctx.auth_user_id,
-      documentNumber: toTrimmedString(requestRow.ltr_number),
-      matDoc,
-      requestId: toTrimmedString((posting as JsonRecord).request_id),
-      movementTypeCode: "P312",
-      batchNumber,
-    });
+    const reverseBody = await parseBody(req);
+    const requestNumber = toTrimmedString(requestRow.ltr_number);
+    const postingDate = todayIsoDate();
+    const requestLineId = toTrimmedString((posting as JsonRecord).request_line_id);
+    const outLineRef = `${requestLineId}::REV::OUT::${postingId}`;
+    const inLineRef = `${requestLineId}::REV::IN::${postingId}`;
 
-    const now = nowIsoString();
-    const { error: reverseInsertError } = await serviceRoleClient
-      .schema("erp_inventory")
-      .from("location_transfer_posting")
-      .insert({
+    await postTransferDocument({
+      requestId: toTrimmedString((posting as JsonRecord).request_id),
+      action: "REVERSE",
+      postedBy: ctx.auth_user_id,
+      movements: [
+        {
+          line_ref: outLineRef,
+          document_number: requestNumber,
+          document_date: postingDate,
+          posting_date: postingDate,
+          movement_type_code: "P312",
+          company_id: companyId,
+          storage_location_id: targetStorageLocationId,
+          material_id: materialId,
+          quantity,
+          base_uom_code: uomCode,
+          unit_value: targetBalance.valuationRate,
+          stock_type_code: stockTypeCode,
+          direction: "OUT",
+          reversal_of_id: null,
+          batch_number: batchNumber,
+          material_doc_number: matDoc.docNumber,
+          material_doc_year: matDoc.docYear,
+          reference_document_number: requestNumber,
+        },
+        {
+          line_ref: inLineRef,
+          document_number: requestNumber,
+          document_date: postingDate,
+          posting_date: postingDate,
+          movement_type_code: "P312",
+          company_id: companyId,
+          storage_location_id: sourceStorageLocationId,
+          material_id: materialId,
+          quantity,
+          base_uom_code: uomCode,
+          unit_value: targetBalance.valuationRate,
+          stock_type_code: stockTypeCode,
+          direction: "IN",
+          reversal_of_id: null,
+          batch_number: batchNumber,
+          material_doc_number: matDoc.docNumber,
+          material_doc_year: matDoc.docYear,
+          reference_document_number: requestNumber,
+        },
+      ],
+      context: {
         request_id: toTrimmedString((posting as JsonRecord).request_id),
-        request_line_id: toTrimmedString((posting as JsonRecord).request_line_id),
-        movement_type_code: "P312",
-        posted_qty: quantity,
-        uom_code: uomCode,
-        batch_number: batchNumber,
-        source_lot_ref: toTrimmedString((posting as JsonRecord).source_lot_ref) || null,
-        material_doc_number: matDoc.docNumber,
-        material_doc_year: matDoc.docYear,
-        stock_document_id_out: outMovement.stockDocumentId,
-        stock_document_id_in: inMovement.stockDocumentId,
-        reversal_of_posting_id: postingId,
-        remarks: toTrimmedString((await parseBody(req)).remarks) || null,
         posted_by: ctx.auth_user_id,
-        posted_at: now,
-      });
-    if (reverseInsertError) throw new Error("LTR_REVERSE_FAILED");
-
-    const currentPostedQty = Number(parseNullableNumber(line.posted_qty) ?? 0);
-    const nextPostedQty = Number(Math.max(0, currentPostedQty - quantity).toFixed(6));
-    const nextLineStatus = deriveLineStatus(Number(parseNullableNumber(line.requested_qty) ?? 0), nextPostedQty);
-    const { error: lineUpdateError } = await serviceRoleClient
-      .schema("erp_inventory")
-      .from("location_transfer_request_line")
-      .update({
-        posted_qty: nextPostedQty,
-        status: nextLineStatus,
-        last_updated_by: ctx.auth_user_id,
-        last_updated_at: now,
-      })
-      .eq("id", toTrimmedString(line.id));
-    if (lineUpdateError) throw new Error("LTR_LINE_UPDATE_FAILED");
-
-    await syncReservationForLine(
-      toTrimmedString((posting as JsonRecord).request_id),
-      toTrimmedString(line.id),
-      line,
-      companyId,
-      nextPostedQty,
-      ctx.auth_user_id,
-    );
-
-    const refreshedLines = await fetchRequestLines(toTrimmedString((posting as JsonRecord).request_id));
-    const nextHeaderStatus = deriveHeaderStatusFromLines(refreshedLines);
-    const { error: headerUpdateError } = await serviceRoleClient
-      .schema("erp_inventory")
-      .from("location_transfer_request")
-      .update({
-        status: nextHeaderStatus,
-        last_updated_by: ctx.auth_user_id,
-        last_updated_at: now,
-      })
-      .eq("id", toTrimmedString((posting as JsonRecord).request_id));
-    if (headerUpdateError) throw new Error("LTR_UPDATE_FAILED");
+        posting_lines: [
+          {
+            request_line_id: requestLineId,
+            posted_qty: quantity,
+            uom_code: uomCode,
+            batch_number: batchNumber,
+            source_lot_ref: toTrimmedString((posting as JsonRecord).source_lot_ref) || null,
+            remarks: toTrimmedString(reverseBody.remarks) || null,
+            movement_type_code: "P312",
+            material_doc_number: matDoc.docNumber,
+            material_doc_year: matDoc.docYear,
+            reversal_of_posting_id: postingId,
+            out_line_ref: outLineRef,
+            in_line_ref: inLineRef,
+          },
+        ],
+      },
+    });
 
     return okResponse(await hydrateRequestPayload(toTrimmedString((posting as JsonRecord).request_id)), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "LTR_REVERSE_FAILED";
-    const code = message === "LTR_SCOPE_VIOLATION" ? "LTR_SCOPE_VIOLATION" : message === "LTR_REVERSE_INVALID" ? "LTR_REVERSE_INVALID" : "LTR_REVERSE_FAILED";
-    const status = code === "LTR_SCOPE_VIOLATION" ? 403 : code === "LTR_REVERSE_INVALID" ? 409 : 400;
+    const code = message === "LTR_SCOPE_VIOLATION" ? "LTR_SCOPE_VIOLATION" : message === "LTR_REVERSE_INVALID" ? "LTR_REVERSE_INVALID" : message === "LTR_POST_DOCUMENT_FAILED" ? "LTR_POST_DOCUMENT_FAILED" : "LTR_REVERSE_FAILED";
+    const status = code === "LTR_SCOPE_VIOLATION" ? 403 : code === "LTR_REVERSE_INVALID" ? 409 : code === "LTR_POST_DOCUMENT_FAILED" ? 500 : 400;
     return ltrErrorResponse(req, ctx, code, status, message);
   }
 }

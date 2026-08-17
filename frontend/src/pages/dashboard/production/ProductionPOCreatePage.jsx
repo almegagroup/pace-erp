@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { pushToast } from "../../../store/uiToast.js";
@@ -160,6 +160,7 @@ export default function ProductionPOCreatePage() {
   const [lineLocationOverrides, setLineLocationOverrides] = useState({});
   const [debouncedCreatePreview, setDebouncedCreatePreview] = useState([]);
   const [batchQtyLiter, setBatchQtyLiter] = useState("");
+  const packingManualTemplateKeyRef = useRef("");
 
   const { runtimeContext } = useMenu();
   const companies = runtimeContext?.availableCompanies ?? [];
@@ -336,7 +337,10 @@ export default function ProductionPOCreatePage() {
   const packingBomLines = packingBom?.lines ?? [];
   const packingOutputLine = packingBomLines.find((line) => line.line_type === "OUTPUT") ?? null;
   const packingSfgLine = packingBomLines.find((line) => line.line_type === "SFG") ?? null;
-  const packingPmBomLines = packingBomLines.filter((line) => line.line_type === "INPUT");
+  const packingPmBomLines = useMemo(
+    () => packingBomLines.filter((line) => line.line_type === "INPUT"),
+    [packingBomLines],
+  );
 
   const packCodesQ = useQuery({
     queryKey: ["packing-create-pack-codes"],
@@ -415,6 +419,15 @@ export default function ProductionPOCreatePage() {
     })),
     [packingPmBomLines],
   );
+  const packingManualTemplateKey = useMemo(
+    () => `${selectedPackingBomRow?.id || ""}::${packingBomPmTemplateLines.map((line) => [
+      line.material_id || "",
+      line.dosage_per_pack || "",
+      line.material_group_id || "",
+      line.has_alternate ? "1" : "0",
+    ].join("|")).join("~")}`,
+    [packingBomPmTemplateLines, selectedPackingBomRow?.id],
+  );
 
   // Non-fixed pack codes still support ad-hoc PM lines, but they now start
   // from the saved Pack BOM material template instead of an empty list.
@@ -452,13 +465,19 @@ export default function ProductionPOCreatePage() {
 
   useEffect(() => {
     if (!selectedPackingBomRow?.id) {
+      packingManualTemplateKeyRef.current = "";
       setPackingManualPmLines([]);
       return;
     }
-    if (!packingBomRequired) {
+    if (packingBomRequired) {
+      packingManualTemplateKeyRef.current = `FIXED::${selectedPackingBomRow.id}`;
+      return;
+    }
+    if (packingManualTemplateKeyRef.current !== packingManualTemplateKey) {
+      packingManualTemplateKeyRef.current = packingManualTemplateKey;
       setPackingManualPmLines(packingBomPmTemplateLines);
     }
-  }, [packingBomPmTemplateLines, packingBomRequired, selectedPackingBomRow?.id]);
+  }, [packingBomPmTemplateLines, packingBomRequired, packingManualTemplateKey, selectedPackingBomRow?.id]);
 
   const packingEffectivePmLines = packingBomRequired ? packingBomPmPreviewLines : packingManualPmPreviewLines;
 
