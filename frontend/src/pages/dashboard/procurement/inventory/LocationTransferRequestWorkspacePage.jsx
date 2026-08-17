@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
@@ -59,6 +60,7 @@ export default function LocationTransferRequestWorkspacePage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
+  const [debouncedPreviewPayload, setDebouncedPreviewPayload] = useState([]);
 
   const detailQuery = useQuery({
     queryKey: ["procurement", "location-transfer-request", requestId],
@@ -118,14 +120,33 @@ export default function LocationTransferRequestWorkspacePage() {
   );
 
   const previewEligibleLines = useMemo(
-    () => lines.filter((line) =>
-      line.source_storage_location_id
-      && line.target_storage_location_id
-      && line.material_id
-      && line.stock_type_code
-      && line.requested_qty !== ""),
+    () => lines
+      .filter((line) =>
+        line.source_storage_location_id
+        && line.target_storage_location_id
+        && line.material_id
+        && line.stock_type_code)
+      .map((line) => ({
+        client_row_id: line.client_row_id,
+        id: line.id || null,
+        source_storage_location_id: line.source_storage_location_id,
+        target_storage_location_id: line.target_storage_location_id,
+        material_id: line.material_id,
+        requested_qty: Number(line.requested_qty || 0),
+        uom_code: line.uom_code || "KG",
+        stock_type_code: line.stock_type_code,
+        batch_number: line.batch_number || null,
+        source_lot_ref: line.source_lot_ref || null,
+      })),
     [lines],
   );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedPreviewPayload(previewEligibleLines);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [previewEligibleLines]);
 
   const availabilityQuery = useQuery({
     queryKey: [
@@ -133,41 +154,37 @@ export default function LocationTransferRequestWorkspacePage() {
       "location-transfer-availability-preview",
       requestId || "new",
       companyId,
-      previewEligibleLines.map((line) => ({
-        client_row_id: line.client_row_id,
-        id: line.id || null,
-        source_storage_location_id: line.source_storage_location_id,
-        target_storage_location_id: line.target_storage_location_id,
-        material_id: line.material_id,
-        requested_qty: Number(line.requested_qty || 0),
-        uom_code: line.uom_code || "KG",
-        stock_type_code: line.stock_type_code,
-        batch_number: line.batch_number || null,
-        source_lot_ref: line.source_lot_ref || null,
-      })),
+      debouncedPreviewPayload,
     ],
-    enabled: Boolean(companyId) && previewEligibleLines.length > 0,
+    enabled: Boolean(companyId) && debouncedPreviewPayload.length > 0,
     queryFn: () => previewLocationTransferAvailability({
       company_id: companyId,
       request_id: requestId || null,
-      lines: previewEligibleLines.map((line) => ({
-        client_row_id: line.client_row_id,
-        id: line.id || null,
-        source_storage_location_id: line.source_storage_location_id,
-        target_storage_location_id: line.target_storage_location_id,
-        material_id: line.material_id,
-        requested_qty: Number(line.requested_qty || 0),
-        uom_code: line.uom_code || "KG",
-        stock_type_code: line.stock_type_code,
-        batch_number: line.batch_number || null,
-        source_lot_ref: line.source_lot_ref || null,
-      })),
+      lines: debouncedPreviewPayload,
     }),
   });
 
   const availabilityByRowId = useMemo(
     () => new Map((availabilityQuery.data?.rows ?? []).map((row) => [row.client_row_id, row])),
     [availabilityQuery.data],
+  );
+
+  const rowStatusById = useMemo(
+    () => new Map(lines.map((line) => {
+      const preview = availabilityByRowId.get(line.client_row_id);
+      const requestedQty = Number(line.requested_qty || 0);
+      const availableQty = Number(preview?.available_qty ?? 0);
+      const hasCoreFields = Boolean(
+        line.source_storage_location_id
+        && line.target_storage_location_id
+        && line.material_id
+        && line.stock_type_code,
+      );
+      const isQtyEntered = line.requested_qty !== "";
+      const isShort = Boolean(preview && isQtyEntered && requestedQty > availableQty);
+      return [line.client_row_id, { preview, hasCoreFields, isQtyEntered, isShort }];
+    })),
+    [availabilityByRowId, lines],
   );
 
   const headerStatus = isCreateMode ? "Draft In Entry" : String(detailQuery.data?.status || "OPEN");
@@ -206,17 +223,23 @@ export default function LocationTransferRequestWorkspacePage() {
         return "Source and target location cannot be the same.";
       }
     }
-    if (previewEligibleLines.length !== lines.length) {
-      return "Every line must be preview-ready before save.";
+    if (debouncedPreviewPayload.length !== previewEligibleLines.length) {
+      return "Availability preview is refreshing.";
     }
     if (availabilityQuery.isFetching) {
       return "Availability preview is refreshing.";
+    }
+    if (lines.some((line) => !rowStatusById.get(line.client_row_id)?.preview)) {
+      return "Every line must load availability preview before save.";
+    }
+    if (lines.some((line) => rowStatusById.get(line.client_row_id)?.isShort)) {
+      return "One or more rows exceed available quantity.";
     }
     if (availabilityQuery.data?.has_invalid_rows) {
       return "One or more rows exceed available quantity.";
     }
     return "";
-  }, [availabilityQuery.data, availabilityQuery.isFetching, companyId, lines, previewEligibleLines.length]);
+  }, [availabilityQuery.data, availabilityQuery.isFetching, companyId, debouncedPreviewPayload.length, lines, previewEligibleLines.length, rowStatusById]);
 
   async function handleSave() {
     setError("");
@@ -438,14 +461,14 @@ export default function LocationTransferRequestWorkspacePage() {
                     label: "Material",
                     width: "230px",
                     render: (row, index) => (
-                      <select
+                      <ErpComboboxField
                         value={row.material_id}
-                        onChange={(event) => patchLine(index, { material_id: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
-                      >
-                        <option value="">Select</option>
-                        {materialOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                      </select>
+                        onChange={(value) => patchLine(index, { material_id: value })}
+                        options={materialOptions}
+                        placeholder="Select material"
+                        blankLabel="Select material"
+                        inputClassName="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+                      />
                     ),
                   },
                   {
@@ -470,7 +493,9 @@ export default function LocationTransferRequestWorkspacePage() {
                       <input
                         value={row.requested_qty}
                         onChange={(event) => patchLine(index, { requested_qty: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
+                        className={`h-8 w-full border bg-white px-2 text-xs text-slate-900 ${
+                          rowStatusById.get(row.client_row_id)?.isShort ? "border-rose-500 bg-rose-50 text-rose-700" : "border-slate-300"
+                        }`}
                       />
                     ),
                   },
@@ -480,7 +505,12 @@ export default function LocationTransferRequestWorkspacePage() {
                     width: "100px",
                     render: (row) => {
                       const preview = availabilityByRowId.get(row.client_row_id);
-                      return preview ? formatNumber(preview.available_qty) : "—";
+                      const isShort = rowStatusById.get(row.client_row_id)?.isShort;
+                      return (
+                        <span className={isShort ? "font-semibold text-rose-700" : ""}>
+                          {preview ? formatNumber(preview.available_qty) : "—"}
+                        </span>
+                      );
                     },
                   },
                   {
@@ -512,9 +542,13 @@ export default function LocationTransferRequestWorkspacePage() {
                     label: "Validation",
                     width: "200px",
                     render: (row) => {
-                      const preview = availabilityByRowId.get(row.client_row_id);
-                      if (!preview) return "Complete row to preview";
-                      return preview.is_valid ? "Ready" : preview.invalid_reason || "Blocked";
+                      const status = rowStatusById.get(row.client_row_id);
+                      const preview = status?.preview;
+                      if (!status?.hasCoreFields) return "Select source, target, material";
+                      if (!preview) return "Loading availability...";
+                      if (status.isShort) return <span className="font-semibold text-rose-700">Qty exceeds available</span>;
+                      if (!status.isQtyEntered) return <span className="text-slate-500">Enter qty to validate</span>;
+                      return preview.is_valid ? <span className="font-semibold text-emerald-700">Ready</span> : (preview.invalid_reason || "Blocked");
                     },
                   },
                   {
@@ -534,6 +568,9 @@ export default function LocationTransferRequestWorkspacePage() {
                 ]}
                 rows={lines}
                 rowKey={(row) => row.client_row_id}
+                getRowProps={(row) => ({
+                  className: rowStatusById.get(row.client_row_id)?.isShort ? "bg-rose-50" : "",
+                })}
                 emptyMessage="Add the first transfer line."
                 maxHeight="calc(100vh - 330px)"
               />
