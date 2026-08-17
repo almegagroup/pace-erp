@@ -124,6 +124,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // WRITE action before this, which made the two-tier design unimplementable.
   "GET:/api/procurement/physical-inventory":          { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "VIEW"  },
   "POST:/api/procurement/physical-inventory":         { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT"  },
+  "GET:/api/procurement/location-transfer-requests":  { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REQ", action: "VIEW"  },
+  "POST:/api/procurement/location-transfer-requests": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REQ", action: "WRITE" },
+  "POST:/api/procurement/location-transfer-availability-preview": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REQ", action: "WRITE" },
+  "GET:/api/procurement/location-transfer-workbench": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "VIEW"  },
+  "POST:/api/procurement/location-transfer-postings": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "WRITE" },
   // §119.15 — MI20 IN07, own resourceCode (not PROC_PI_LIST) matching the IN02/IN03/PR21
   // pattern: a separate cross-document report gets its own resource, "everyone" per §119.5,
   // never shared with the document-lifecycle resource (bug pattern #6, §117.6's own note).
@@ -1032,6 +1037,22 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
 
   // ── Physical Inventory ────────────────────────────────────────────────────
+  {
+    pattern: /^\/api\/procurement\/location-transfer-requests\/[^/]+$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REQ", action: "VIEW" },
+      PUT: { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REQ", action: "EDIT" },
+      PATCH: { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REQ", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/procurement\/location-transfer-requests\/[^/]+\/cancel$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REQ", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/location-transfer-postings\/[^/]+\/reverse$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REVERSE", action: "WRITE" } },
+  },
   {
     pattern: /^\/api\/procurement\/physical-inventory\/[^/]+$/,
     methods: { GET: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "VIEW" } },

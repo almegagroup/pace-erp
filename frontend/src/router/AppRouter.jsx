@@ -178,6 +178,9 @@ import PIDocumentPrintPage from "../pages/dashboard/procurement/inventory/PIDocu
 import PIDocumentCountEntryPage from "../pages/dashboard/procurement/inventory/PIDocumentCountEntryPage.jsx";
 import PIDocumentRecountPage from "../pages/dashboard/procurement/inventory/PIDocumentRecountPage.jsx";
 import PIDifferenceReportPage from "../pages/dashboard/procurement/inventory/PIDifferenceReportPage.jsx";
+import LocationTransferRequestListPage from "../pages/dashboard/procurement/inventory/LocationTransferRequestListPage.jsx";
+import LocationTransferRequestWorkspacePage from "../pages/dashboard/procurement/inventory/LocationTransferRequestWorkspacePage.jsx";
+import LocationTransferWorkbenchPage from "../pages/dashboard/procurement/inventory/LocationTransferWorkbenchPage.jsx";
 import OpeningStockListPage from "../pages/dashboard/procurement/opening-stock/OpeningStockListPage.jsx";
 import OpeningStockDetailPage from "../pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx";
 import OpeningStockApprovalPage from "../pages/dashboard/procurement/opening-stock/OpeningStockApprovalPage.jsx";
@@ -823,6 +826,22 @@ export default function AppRouter() {
                   <Route
                     path="procurement/physical-inventory/:id"
                     element={<PIDocumentDetailPage />}
+                  />
+                  <Route
+                    path="procurement/location-transfer"
+                    element={<LocationTransferRequestListPage />}
+                  />
+                  <Route
+                    path="procurement/location-transfer/create"
+                    element={<LocationTransferRequestWorkspacePage />}
+                  />
+                  <Route
+                    path="procurement/location-transfer/post"
+                    element={<LocationTransferWorkbenchPage />}
+                  />
+                  <Route
+                    path="procurement/location-transfer/:id"
+                    element={<LocationTransferRequestWorkspacePage />}
                   />
 
                   {/* ── Gate-27: L3 Production (PR00–PR17) ──────────── */}

@@ -613,6 +613,22 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_LOC_TRANSFER_REQ: {
+    screen_code: "PROC_LOC_TRANSFER_REQ",
+    route: "/dashboard/procurement/location-transfer",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_LOC_TRANSFER_POST: {
+    screen_code: "PROC_LOC_TRANSFER_POST",
+    route: "/dashboard/procurement/location-transfer/post",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_PAYMENT_TERMS_MASTER: {
     screen_code: "PROC_PAYMENT_TERMS_MASTER",
     route: "/dashboard/procurement/masters/payment-terms",

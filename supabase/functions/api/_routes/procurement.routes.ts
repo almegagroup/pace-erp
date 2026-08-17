@@ -182,6 +182,17 @@ import {
   submitPIDForApprovalHandler,
 } from "../_core/procurement/physical_inventory.handlers.ts";
 import {
+  cancelLocationTransferRequestHandler,
+  createLocationTransferRequestHandler,
+  getLocationTransferRequestHandler,
+  getLocationTransferWorkbenchHandler,
+  listLocationTransferRequestsHandler,
+  postLocationTransferHandler,
+  previewLocationTransferAvailabilityHandler,
+  reverseLocationTransferPostingHandler,
+  updateLocationTransferRequestHandler,
+} from "../_core/procurement/location_transfer.handlers.ts";
+import {
   createCHAHandler,
   deleteImportLeadTimeHandler,
   deleteDomesticLeadTimeHandler,
@@ -456,6 +467,16 @@ export async function dispatchProcurementRoutes(
       return await listPIDifferencesHandler(req, ctx);
     case "GET:/api/procurement/physical-inventory-material-locations":
       return await getMaterialLocationBreakdownHandler(req, ctx);
+    case "GET:/api/procurement/location-transfer-requests":
+      return await listLocationTransferRequestsHandler(req, ctx);
+    case "POST:/api/procurement/location-transfer-requests":
+      return await createLocationTransferRequestHandler(req, ctx);
+    case "POST:/api/procurement/location-transfer-availability-preview":
+      return await previewLocationTransferAvailabilityHandler(req, ctx);
+    case "GET:/api/procurement/location-transfer-workbench":
+      return await getLocationTransferWorkbenchHandler(req, ctx);
+    case "POST:/api/procurement/location-transfer-postings":
+      return await postLocationTransferHandler(req, ctx);
     // MI04/MI05 standalone entry — resolve a typed PID number to its id before either page's
     // own Page 2 loads. Hyphenated, non-slash-nested path, same reason as the two siblings above.
     case "GET:/api/procurement/physical-inventory-resolve":
@@ -840,6 +861,23 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/physical-inventory\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
     return await postDifferencesHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/location-transfer-requests\/[^/]+$/.test(pathname)) {
+    if (req.method === "GET") {
+      return await getLocationTransferRequestHandler(req, ctx);
+    }
+    if (req.method === "PUT" || req.method === "PATCH") {
+      return await updateLocationTransferRequestHandler(req, ctx);
+    }
+  }
+
+  if (/^\/api\/procurement\/location-transfer-requests\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+    return await cancelLocationTransferRequestHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/location-transfer-postings\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
+    return await reverseLocationTransferPostingHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/port-transit\/[^/]+$/.test(pathname) && req.method === "DELETE") {
