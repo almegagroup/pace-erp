@@ -621,6 +621,22 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_LOC_TRANSFER_REQ_CREATE: {
+    screen_code: "PROC_LOC_TRANSFER_REQ_CREATE",
+    route: "/dashboard/procurement/location-transfer/create",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_LOC_TRANSFER_REQ_DETAIL: {
+    screen_code: "PROC_LOC_TRANSFER_REQ_DETAIL",
+    route: "/dashboard/procurement/location-transfer/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_LOC_TRANSFER_POST: {
     screen_code: "PROC_LOC_TRANSFER_POST",
     route: "/dashboard/procurement/location-transfer/post",
