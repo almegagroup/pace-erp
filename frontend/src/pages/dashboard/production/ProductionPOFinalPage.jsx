@@ -26,6 +26,7 @@ import {
   listPackingOrders,
   listPackingSfgBatches,
 } from "./prodApi.js";
+import { formatPreciseNumber, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 
 const FINAL_TABS = ["Process PO", "Packing PO"];
 const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }));
@@ -51,8 +52,7 @@ function slocLabelSimple(location) {
 }
 
 function qtyFmt(value) {
-  const n = Number(value ?? 0);
-  return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 3 }) : "-";
+  return formatPreciseNumber(value, "-");
 }
 
 function PACKING_ERR(error) {
@@ -640,7 +640,7 @@ function PackingPoFinalTab() {
                               <td className="px-3 py-2 text-right">
                                 {isPm ? (
                                   <input
-                                    type="number" min="0" step="0.001"
+                                    type="number" min="0" step={PRODUCTION_DECIMAL_STEP}
                                     className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                     value={pmActualQty[line.id] ?? ""}
                                     placeholder={qtyFmt(standardQty)}
@@ -670,19 +670,19 @@ function PackingPoFinalTab() {
                                 <td className="px-3 py-2 text-right">
                                   {isPm && finalValues.approved === "PARTIAL" && !finalValues.autoYes ? (
                                     <input
-                                      type="number" min="0" step="0.001"
+                                      type="number" min="0" step={PRODUCTION_DECIMAL_STEP}
                                       className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                       value={pmApApproved[line.id] ?? ""}
                                       onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
                                     />
                                   ) : isPm ? (
-                                    <span className="font-mono">{finalValues.apApproved.toFixed(3)}</span>
+                                    <span className="font-mono">{formatPreciseNumber(finalValues.apApproved, "0")}</span>
                                   ) : (
                                     <span className="text-slate-400">—</span>
                                   )}
                                 </td>
                               )}
-                              <td className="px-3 py-2 text-right font-mono">{isPm ? finalValues.variance.toFixed(3) : "—"}</td>
+                              <td className="px-3 py-2 text-right font-mono">{isPm ? formatPreciseNumber(finalValues.variance, "0") : "—"}</td>
                             </>
                           ) : (
                             <>
@@ -705,19 +705,19 @@ function PackingPoFinalTab() {
                                 <td className="px-3 py-2 text-right">
                                   {correctionValues && correctionValues.approved === "PARTIAL" ? (
                                     <input
-                                      type="number" min="0" step="0.001"
+                                      type="number" min="0" step={PRODUCTION_DECIMAL_STEP}
                                       className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                       value={pmApApproved[line.id] ?? ""}
                                       onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
                                     />
                                   ) : correctionValues ? (
-                                    <span className="font-mono">{correctionValues.apApproved.toFixed(3)}</span>
+                                    <span className="font-mono">{formatPreciseNumber(correctionValues.apApproved, "0")}</span>
                                   ) : (
                                     <span className="text-slate-400">—</span>
                                   )}
                                 </td>
                               )}
-                              <td className="px-3 py-2 text-right font-mono">{correctionValues ? correctionValues.variance.toFixed(3) : "—"}</td>
+                              <td className="px-3 py-2 text-right font-mono">{correctionValues ? formatPreciseNumber(correctionValues.variance, "0") : "—"}</td>
                             </>
                           )}
 
@@ -726,7 +726,7 @@ function PackingPoFinalTab() {
                               <input
                                 type="number"
                                 min="0"
-                                step="0.001"
+                                step={PRODUCTION_DECIMAL_STEP}
                                 className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                 value={correctionQty[line.id] ?? ""}
                                 placeholder="qty"
@@ -772,7 +772,7 @@ function PackingPoFinalTab() {
                         <td className="px-3 py-2 text-right font-mono">0.000</td>
                         <td className="px-3 py-2 text-right">
                           <input
-                            type="number" min="0" step="0.001"
+                            type="number" min="0" step={PRODUCTION_DECIMAL_STEP}
                             className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                             value={row.actual_qty}
                             onChange={(event) => updateNewPmRow(row.key, { actual_qty: event.target.value })}
@@ -789,7 +789,7 @@ function PackingPoFinalTab() {
                         <td className="px-3 py-2 text-right">
                           {row.approved_status === "PARTIAL" ? (
                             <input
-                              type="number" min="0" step="0.001"
+                              type="number" min="0" step={PRODUCTION_DECIMAL_STEP}
                               className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                               value={row.ap_approved_qty}
                               onChange={(event) => updateNewPmRow(row.key, { ap_approved_qty: event.target.value })}
@@ -842,7 +842,7 @@ function PackingPoFinalTab() {
                         <td className="px-3 py-2 text-right text-slate-400">—</td>
                         <td className="px-3 py-2 text-right">
                           <input
-                            type="number" min="0" step="0.001"
+                            type="number" min="0" step={PRODUCTION_DECIMAL_STEP}
                             className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                             value={row.delta_qty}
                             placeholder="qty"
@@ -1383,7 +1383,7 @@ function ProcessPoFinalTab() {
                                 />
                               )}
                             </td>
-                            <td className="px-3 py-2 text-right font-mono">{row.dosage_pct === "" ? "--" : Number(row.dosage_pct).toFixed(3)}</td>
+                            <td className="px-3 py-2 text-right font-mono">{formatPreciseNumber(row.dosage_pct, "--")}</td>
                             <td className="px-3 py-2">
                               <ErpComboboxField
                                 value={row.actual_material_id}
@@ -1402,12 +1402,12 @@ function ProcessPoFinalTab() {
                                 emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
                               />
                             </td>
-                            <td className="px-3 py-2 text-right font-mono">{values.planned.toFixed(3)}</td>
+                            <td className="px-3 py-2 text-right font-mono">{formatPreciseNumber(values.planned, "0")}</td>
                             <td className="px-3 py-2 text-right">
                               <input
                                 type="number"
                                 min="0"
-                                step="0.001"
+                                step={PRODUCTION_DECIMAL_STEP}
                                 className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                 value={row.actual_qty}
                                 onChange={(event) => updateRow(row.key, { actual_qty: event.target.value })}
@@ -1433,17 +1433,17 @@ function ProcessPoFinalTab() {
                                   <input
                                     type="number"
                                     min="0"
-                                    step="0.001"
+                                    step={PRODUCTION_DECIMAL_STEP}
                                     className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                     value={row.ap_approved_qty}
                                     onChange={(event) => updateRow(row.key, { ap_approved_qty: event.target.value })}
                                   />
                                 ) : (
-                                  <span className="font-mono">{values.apApproved.toFixed(3)}</span>
+                                  <span className="font-mono">{formatPreciseNumber(values.apApproved, "0")}</span>
                                 )}
                               </td>
                             )}
-                            <td className="px-3 py-2 text-right font-mono">{values.variance.toFixed(3)}</td>
+                            <td className="px-3 py-2 text-right font-mono">{formatPreciseNumber(values.variance, "0")}</td>
                             <td className="px-3 py-2">P261</td>
                             <td className="px-3 py-2 text-center">
                               {!row.is_formulation_line && (
@@ -1482,23 +1482,23 @@ function ProcessPoFinalTab() {
                     <tbody>
                       <tr>
                         <td className="border-b border-slate-100 px-3 py-2">{materialLabel(po.material) || "--"}</td>
-                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{Number(po.planned_qty || 0).toFixed(3)}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(po.planned_qty, "0")}</td>
                         <td className="border-b border-slate-100 px-3 py-2 text-right">
                           {isDirectPostType ? (
                             <input
                               type="number"
                               min="0"
-                              step="0.001"
+                              step={PRODUCTION_DECIMAL_STEP}
                               className="w-28 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                               value={manualOutputQty}
                               onChange={(event) => setManualOutputQty(event.target.value)}
                             />
                           ) : (
-                            <span className="font-mono">{outputActualQty.toFixed(3)}</span>
+                            <span className="font-mono">{formatPreciseNumber(outputActualQty, "0")}</span>
                           )}
                         </td>
-                        {!hideRmApproval && <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputApprovedQty.toFixed(3)}</td>}
-                        {!isDirectPostType && <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputVariance.toFixed(3)}</td>}
+                        {!hideRmApproval && <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(outputApprovedQty, "0")}</td>}
+                        {!isDirectPostType && <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(outputVariance, "0")}</td>}
                         <td className="border-b border-slate-100 px-3 py-2">P101</td>
                       </tr>
                     </tbody>

@@ -39,6 +39,7 @@ import {
 } from "../om/omApi.js";
 import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
 import { GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
+import { formatPreciseNumber, multiplyPreciseValues, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
 const MTS_SEGMENTS = ["IWC", "POWDER"];
@@ -111,8 +112,7 @@ function slocLabel(location) {
 }
 
 function qtyFmt(value) {
-  const n = Number(value ?? 0);
-  return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 3 }) : "-";
+  return formatPreciseNumber(value, "-");
 }
 
 function strokeLabel(stroke) {
@@ -1124,7 +1124,7 @@ export default function ProductionPOCreatePage() {
                         <input
                           type="number"
                           min="0.01"
-                          step="0.01"
+                          step={PRODUCTION_DECIMAL_STEP}
                           className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
                           value={batchQtyLiter}
                           disabled={!processForm.stroke_master_id || literConversionMissing || strokeDetailQ.isLoading}
@@ -1133,7 +1133,7 @@ export default function ProductionPOCreatePage() {
                             setBatchQtyLiter(literValue);
                             const liters = Number(literValue);
                             if (literToKgFactor && Number.isFinite(liters) && liters > 0) {
-                              updateProcess("planned_qty_kg", (liters * literToKgFactor).toFixed(4));
+                              updateProcess("planned_qty_kg", multiplyPreciseValues(liters, literToKgFactor));
                             } else {
                               updateProcess("planned_qty_kg", "");
                             }
@@ -1159,7 +1159,7 @@ export default function ProductionPOCreatePage() {
                       <input
                         type="number"
                         min="0.01"
-                        step="0.01"
+                        step={PRODUCTION_DECIMAL_STEP}
                         className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
                         value={processForm.planned_qty_kg}
                         onChange={(event) => updateProcess("planned_qty_kg", event.target.value)}
@@ -1247,7 +1247,7 @@ export default function ProductionPOCreatePage() {
                               <td className="border-b border-slate-100 px-3 py-2">{row.line_no}</td>
                               <td className="border-b border-slate-100 px-3 py-2">{row.material_type}</td>
                               <td className="border-b border-slate-100 px-3 py-2">{row.material_label || "--"}</td>
-                              <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{row.dosage_pct.toFixed(3)}</td>
+                              <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.dosage_pct, "0")}</td>
                               <td className="border-b border-slate-100 px-3 py-2">
                                 <ErpComboboxField
                                   value={row.actual_material_id}
@@ -1270,10 +1270,10 @@ export default function ProductionPOCreatePage() {
                                   emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
                                 />
                               </td>
-                              <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{row.standard_qty.toFixed(3)}</td>
+                              <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.standard_qty, "0")}</td>
                               <td className="border-b border-slate-100 px-3 py-2">P261</td>
                               <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
-                                {row.available_qty == null ? "--" : row.available_qty.toFixed(3)}
+                                {formatPreciseNumber(row.available_qty, "--")}
                               </td>
                             </tr>
                           );
@@ -1429,7 +1429,7 @@ export default function ProductionPOCreatePage() {
                       <input
                         type="number"
                         min="0.001"
-                        step="0.001"
+                        step={PRODUCTION_DECIMAL_STEP}
                         className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
                         value={packingForm.fill_qty_per_pack}
                         onChange={(event) => setPackingForm((current) => ({ ...current, fill_qty_per_pack: event.target.value }))}
@@ -1579,7 +1579,7 @@ export default function ProductionPOCreatePage() {
                                     className="h-8 w-24 rounded border border-slate-300 px-2 text-right font-mono text-sm"
                                     type="number"
                                     min="0.001"
-                                    step="0.001"
+                                    step={PRODUCTION_DECIMAL_STEP}
                                     value={packingManualPmLines[line.index]?.dosage_per_pack ?? ""}
                                     onChange={(event) => updatePackingManualPmLine(line.index, { dosage_per_pack: event.target.value })}
                                   />
