@@ -18882,6 +18882,34 @@ IN11 actions:
 - reversal links where relevant
 - actions: `Display Detail`, `Back to IN11`
 
+### 121.7.2 — IN10/IN11 UX correction (LOCKED — 2026-08-17, supersedes §121.7's page-split reading and §121.7.1's literal multi-page mock)
+
+**Why this correction exists:** the first build (same day, migrations `20260817040750`/`20260817093000`) implemented §121.7.1's page mock too literally — IN10 became a **forced linear wizard** (Header page → "Continue" → Lines page → "Continue" → Review page, Save disabled until the third page) and IN11 became **three stacked cards on one scrolling page**, merely titled "Page 1/2/3" with no real navigation between them. Business owner review against actual SAP MB21/MB22/MIGO behavior found both wrong in opposite directions: MB21 is genuinely **one screen** (header + line table together, Save never gated behind "visiting" a step); MIGO is genuinely **one screen with real internal power** (action-type switch, item overview grid, per-line detail drill-down, Check-before-Post) — neither is a forced wizard, and neither is everything-stacked-with-fake-page-labels. §121.7's "don't force everything into one page" rule was about not merging **different tasks** (list vs create vs post vs history) into one page — it was never meant to force a **single task** (fill header + lines, or load + review + post) into artificial linear steps.
+
+**IN10 — single workspace (replaces the 3-page wizard):**
+
+- One screen, one route for create and edit: compact header row (Company, Request Date, Required By, Remarks) directly above the editable line grid (`ErpDenseGrid`) — both visible and editable at the same time, no "Continue" gate between them.
+- **Save is never disabled by "which page you're on"** — only by real line-level validity (missing fields, qty exceeding available). This must always stay true even as other fields change.
+- `Copy Line` action added next to `Add Line` / `Remove Line` (was in the original spec, missing from the first build).
+- **Posted-line lock (was unenforced in the first build):** once a line's `posted_qty > 0`, its source/target/material/stock-type/qty inputs become read-only in the same workspace — no separate "detail/history" route needed for this; the same screen just renders that row non-editable.
+- Posting/reservation history is a **collapsed section within the same workspace** (default collapsed, expand on demand) — not a separate page/route. This still satisfies §121.7.1's original "detail/history mode" intent without adding page-navigation overhead.
+- The four decorative metric-preview tiles (Transaction/Status/Rows/Availability) at the top are replaced by one slim status strip — keep the working area (header + grid) as close to the top of the screen as possible.
+- Material-family identity rule (§121.5) gets an explicit validation message instead of relying on the implicit "0 available" side-effect — e.g. `LTR_BATCH_REQUIRED_FOR_SFG` / `LTR_LOT_REQUIRED_FOR_FG`, shown inline on the row.
+
+**IN11 — one MIGO-style workbench (replaces the 3-stacked-card page and the literal 3-route mock):**
+
+One screen, one route, driven by an explicit **Action** switch — same shape as MIGO's own movement-type/reference-type switch, everything else on the page follows from that one choice:
+
+- Top row (always visible): `Action` select (`Post Transfer` / `Reverse Transfer` / `Display History`) + `Company` + **Reservation/Request Number** as the hero field — large, autofocus, **Enter-to-load** (typing the number and pressing Enter is the load action; a separate "Execute" click is not required, matching MIGO's own reference-number behavior).
+- **Post Transfer:** item-overview grid (`ErpDenseGrid`) with a per-row `OK` checkbox, Material, Source→Target, Requested, Open, and an inline editable Post-Qty cell. Clicking a row opens an **item-detail panel** below the grid with three tabs — `Quantity` (Requested/Posted/Open/Post-qty), `Where` (Source SLoc/Target SLoc/Batch/Source lot ref), `Availability` (live stock / reserved-by-others / available-now for that exact line) — mirroring MIGO's own Material/Quantity/Where tab strip. A `Check` button re-validates every ticked line before posting and shows a pass/fail summary inline (which lines are ready, which are skipped/blocked) — `Post` itself still re-validates server-side regardless (§121.6's hard-block rule is unchanged), `Check` is a preview, not a substitute.
+- **Reverse Transfer:** the same grid area switches to a posting-history list (radio-select one posting, not multi-select) with a `Reverse` action — this is also where "which posting do I reverse" is decided, so posting history is a **first-class working view for this action**, not an afterthought footnote.
+- **Display History:** the same grid area, read-only, no action buttons — this absorbs the original mock's separate "Page 3 — Material Document Result/Detail" so no third route is needed; it is simply another value of the same Action switch.
+- No separate "Selection screen" vs "Posting workspace" route split — the Action+Number row and the grid/detail area live on the same screen, exactly as MIGO does not force a page change between choosing the reference and working the items.
+
+**Net effect on §121.7.1's screen-flow mock:** IN10's "Page 1/2/3/4" and IN11's "Page 1/2/3" route-per-page structure is **retired** in favor of the single-workspace / single-action-driven-workbench shape above. The underlying backend contracts (§121.3, §121.4, §121.6, §121.10, §121.11) are unaffected — this correction is UI/UX-layer only.
+
+**Known bug found and fixed same day (2026-08-17), unrelated to the UX correction above:** `complete_location_transfer_action()` (the `post_document` completion function backing IN11's Post/Reverse) used `ON CONFLICT (source_line_id)` against `erp_production.reservation_document`, which has no unique constraint on that column (by design — `process_order` intentionally keeps a CANCELLED reservation row and inserts a fresh one on material swap, same `source_line_id`). Every IN11 Post/Reverse call would fail with `42P10`. Fixed via migration `20260817150000` (select-then-insert/update, matching the equivalent fix already applied to the TypeScript `syncReservationForLine` in the IN10 create/update path) — applied to dev and prod, function body verified to no longer contain `ON CONFLICT`.
+
 ### 121.8 — ACL and authority model (LOCKED)
 
 **Menu / TX codes:**
@@ -19006,4 +19034,11 @@ Frontend must provide:
 
 ### 121.14 — Implementation status
 
-Design is now fully locked. No migration, backend, frontend, ACL data, or verification work for IN10/IN11 has been started under this final design yet. Next step is a dedicated Codex task brief implementing this section exactly, with no reinterpretation.
+**Corrected 2026-08-17 (was stale the same day it was written) — DB/backend already built, UI/UX redesign now locked per §121.7.2, frontend rebuild in progress.**
+
+- ✅ DB tables (`location_transfer_request`/`_line`/`_posting`, `reservation_document.source_lot_ref`) — migration `20260817040750`, live in dev+prod.
+- ✅ Backend handlers (IN10 list/create/get/update/cancel/availability-preview, IN11 workbench/post/reverse) — `location_transfer.handlers.ts`, live in dev+prod.
+- ✅ `complete_location_transfer_action()` reservation-upsert bug — found and fixed same day, migration `20260817150000`.
+- 🔴 First frontend build (`LocationTransferRequestWorkspacePage.jsx`, `LocationTransferWorkbenchPage.jsx`) did not match the intended MB21/MB22/MIGO simplicity — built as a forced 3-step wizard (IN10) and a 3-stacked-card single page mislabeled "Page 1/2/3" (IN11). Corrected design now locked in §121.7.2 — single-workspace IN10, single Action-driven MIGO-style workbench for IN11. Frontend rebuild against §121.7.2 is the current work, implemented directly (not via Codex task brief for this pass).
+- ⏳ Not yet done: `PROC_LOC_TRANSFER_REQ`/`POST`/`REVERSE` ACL version-capture confirmed only for CMP003/CMP006 in prod — CMP010/CMP014 still need `capture_acl_version_source` + snapshot rebuild before non-bypass users in those companies can reach IN10/IN11.
+- ⏳ Not yet done: end-to-end verification against §121.13's checklist (this was never run against the first build).

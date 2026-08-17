@@ -4,9 +4,10 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import UomQuantityInput from "../../../../components/forms/UomQuantityInput.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
-import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
@@ -15,6 +16,7 @@ import {
   cancelLocationTransferRequest,
   createLocationTransferRequest,
   getLocationTransferRequest,
+  listMaterialUomConversionsForProcurement,
   previewLocationTransferAvailability,
   updateLocationTransferRequest,
 } from "../procurementApi.js";
@@ -44,6 +46,34 @@ function formatNumber(value) {
   return Number.isFinite(numeric) ? numeric.toFixed(3) : "0.000";
 }
 
+// Same reusable multi-UoM entry as IN05/MI04 (§110) -- user types in whichever
+// unit they think in (dispatch/pack), this converts to base UoM and only the
+// base-UoM qty ever reaches line state. Its own useQuery needs a real
+// component (not a bare render callback) to stay hook-rules-legal per row.
+function RequestedQtyCell({ row, isShort, onChange }) {
+  const conversionsQuery = useQuery({
+    queryKey: ["procurement", "ltr-material-uom-conversions", row.material_id],
+    queryFn: () => listMaterialUomConversionsForProcurement(row.material_id),
+    enabled: Boolean(row.material_id),
+  });
+  return (
+    <UomQuantityInput
+      key={row.material_id}
+      baseUomCode={row.uom_code || "KG"}
+      conversions={Array.isArray(conversionsQuery.data?.data) ? conversionsQuery.data.data : []}
+      value={row.requested_qty !== "" ? Number(row.requested_qty) : undefined}
+      onChange={(baseQty) => onChange(baseQty != null ? String(baseQty) : "")}
+      className={isShort ? "border border-rose-400 bg-rose-50 px-1" : ""}
+    />
+  );
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("en-GB");
+}
+
 export default function LocationTransferRequestWorkspacePage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -57,11 +87,13 @@ export default function LocationTransferRequestWorkspacePage() {
   const [requiredByDate, setRequiredByDate] = useState("");
   const [remarks, setRemarks] = useState("");
   const [lines, setLines] = useState([createDraftLine()]);
-  const [page, setPage] = useState(1);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
-  const [debouncedPreviewPayload, setDebouncedPreviewPayload] = useState([]);
+  const [checking, setChecking] = useState(false);
+  const [availabilityResult, setAvailabilityResult] = useState(null);
+  const [checkedSignature, setCheckedSignature] = useState("");
 
   const detailQuery = useQuery({
     queryKey: ["procurement", "location-transfer-request", requestId],
@@ -119,14 +151,16 @@ export default function LocationTransferRequestWorkspacePage() {
     })),
     [slocQuery.storageLocations],
   );
+  const materialLabelById = useMemo(() => new Map(materialOptions.map((entry) => [entry.value, entry.label])), [materialOptions]);
+  const slocLabelById = useMemo(() => new Map(slocOptions.map((entry) => [entry.value, entry.label])), [slocOptions]);
 
-  const previewEligibleLines = useMemo(
+  function isLineLocked(line) {
+    return Number(line.posted_qty || 0) > 0;
+  }
+
+  const openCheckPayload = useMemo(
     () => lines
-      .filter((line) =>
-        line.source_storage_location_id
-        && line.target_storage_location_id
-        && line.material_id
-        && line.stock_type_code)
+      .filter((line) => !isLineLocked(line))
       .map((line) => ({
         client_row_id: line.client_row_id,
         id: line.id || null,
@@ -141,54 +175,16 @@ export default function LocationTransferRequestWorkspacePage() {
       })),
     [lines],
   );
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setDebouncedPreviewPayload(previewEligibleLines);
-    }, 350);
-    return () => window.clearTimeout(timer);
-  }, [previewEligibleLines]);
-
-  const availabilityQuery = useQuery({
-    queryKey: [
-      "procurement",
-      "location-transfer-availability-preview",
-      requestId || "new",
-      companyId,
-      debouncedPreviewPayload,
-    ],
-    enabled: Boolean(companyId) && debouncedPreviewPayload.length > 0,
-    queryFn: () => previewLocationTransferAvailability({
-      company_id: companyId,
-      request_id: requestId || null,
-      lines: debouncedPreviewPayload,
-    }),
-  });
+  const currentSignature = JSON.stringify(openCheckPayload);
+  const isStale = availabilityResult !== null && currentSignature !== checkedSignature;
 
   const availabilityByRowId = useMemo(
-    () => new Map((availabilityQuery.data?.rows ?? []).map((row) => [row.client_row_id, row])),
-    [availabilityQuery.data],
+    () => new Map((availabilityResult?.rows ?? []).map((row) => [row.client_row_id, row])),
+    [availabilityResult],
   );
 
-  const rowStatusById = useMemo(
-    () => new Map(lines.map((line) => {
-      const preview = availabilityByRowId.get(line.client_row_id);
-      const requestedQty = Number(line.requested_qty || 0);
-      const availableQty = Number(preview?.available_qty ?? 0);
-      const hasCoreFields = Boolean(
-        line.source_storage_location_id
-        && line.target_storage_location_id
-        && line.material_id
-        && line.stock_type_code,
-      );
-      const isQtyEntered = line.requested_qty !== "";
-      const isShort = Boolean(preview && isQtyEntered && requestedQty > availableQty);
-      return [line.client_row_id, { preview, hasCoreFields, isQtyEntered, isShort }];
-    })),
-    [availabilityByRowId, lines],
-  );
-
-  const headerStatus = isCreateMode ? "Draft In Entry" : String(detailQuery.data?.status || "OPEN");
+  const headerStatus = isCreateMode ? "Draft" : String(detailQuery.data?.status || "OPEN");
+  const postings = Array.isArray(detailQuery.data?.postings) ? detailQuery.data.postings : [];
 
   function patchLine(index, patch) {
     setLines((current) => current.map((line, lineIndex) => {
@@ -206,51 +202,87 @@ export default function LocationTransferRequestWorkspacePage() {
     setLines((current) => [...current, createDraftLine()]);
   }
 
-  function removeLine(index) {
-    setLines((current) => (current.length <= 1 ? current : current.filter((_, lineIndex) => lineIndex !== index)));
+  function copyLine(index) {
+    setLines((current) => {
+      const source = current[index];
+      const copy = {
+        ...source,
+        client_row_id: `ROW-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: "",
+        posted_qty: 0,
+        status: "OPEN",
+      };
+      const next = [...current];
+      next.splice(index + 1, 0, copy);
+      return next;
+    });
   }
 
-  const invalidReason = useMemo(() => {
+  function removeLine(index) {
+    setLines((current) => {
+      if (current.length <= 1) return current;
+      if (isLineLocked(current[index])) return current;
+      return current.filter((_, lineIndex) => lineIndex !== index);
+    });
+  }
+
+  const structuralError = useMemo(() => {
     if (!companyId) return "Company is required.";
     if (lines.length === 0) return "At least one line is required.";
     for (const line of lines) {
+      if (isLineLocked(line)) continue;
       if (!line.source_storage_location_id || !line.target_storage_location_id || !line.material_id || !line.stock_type_code) {
-        return "Every line needs source, target, material, and stock type.";
+        return "Every open line needs source, target, material, and stock type.";
       }
       if (!(Number(line.requested_qty) > 0)) {
-        return "Every line needs a requested quantity above zero.";
+        return "Every open line needs a requested quantity above zero.";
       }
       if (String(line.source_storage_location_id) === String(line.target_storage_location_id)) {
         return "Source and target location cannot be the same.";
       }
     }
-    if (debouncedPreviewPayload.length !== previewEligibleLines.length) {
-      return "Availability preview is refreshing.";
-    }
-    if (availabilityQuery.isFetching) {
-      return "Availability preview is refreshing.";
-    }
-    if (lines.some((line) => !rowStatusById.get(line.client_row_id)?.preview)) {
-      return "Every line must load availability preview before save.";
-    }
-    if (lines.some((line) => rowStatusById.get(line.client_row_id)?.isShort)) {
-      return "One or more rows exceed available quantity.";
-    }
-    if (availabilityQuery.data?.has_invalid_rows) {
-      return "One or more rows exceed available quantity.";
-    }
     return "";
-  }, [availabilityQuery.data, availabilityQuery.isFetching, companyId, debouncedPreviewPayload.length, lines, previewEligibleLines.length, rowStatusById]);
+  }, [companyId, lines]);
+
+  async function runAvailabilityCheck() {
+    if (structuralError) {
+      setError(structuralError);
+      return null;
+    }
+    setError("");
+    setChecking(true);
+    try {
+      const result = openCheckPayload.length > 0
+        ? await previewLocationTransferAvailability({ company_id: companyId, request_id: requestId || null, lines: openCheckPayload })
+        : { rows: [], has_invalid_rows: false };
+      setAvailabilityResult(result);
+      setCheckedSignature(currentSignature);
+      return result;
+    } catch (checkError) {
+      setError(checkError instanceof Error ? checkError.message : "Availability check failed.");
+      return null;
+    } finally {
+      setChecking(false);
+    }
+  }
 
   async function handleSave() {
     setError("");
     setNotice("");
-    if (invalidReason) {
-      setError(invalidReason);
+    if (structuralError) {
+      setError(structuralError);
       return;
     }
     setSaving(true);
     try {
+      const result = await runAvailabilityCheck();
+      if (!result) {
+        return;
+      }
+      if (result.has_invalid_rows) {
+        setError("One or more lines exceed available quantity — check the Available column, adjust, then save again.");
+        return;
+      }
       const payload = {
         company_id: companyId,
         request_date: requestDate,
@@ -297,16 +329,26 @@ export default function LocationTransferRequestWorkspacePage() {
     }
   }
 
+  const statusStripLabel = checking
+    ? "Checking availability…"
+    : availabilityResult?.has_invalid_rows
+      ? "Blocked — over quantity"
+      : availabilityResult
+        ? isStale ? "Changed since last check" : "Checked — ready to save"
+        : "Not checked yet";
+  const statusStripTone = checking || (availabilityResult && isStale)
+    ? "text-slate-500"
+    : availabilityResult?.has_invalid_rows
+      ? "font-semibold text-rose-600"
+      : availabilityResult
+        ? "text-emerald-600"
+        : "text-slate-500";
+
   return (
     <ErpScreenScaffold
       eyebrow="Inventory"
       title={isCreateMode ? "Location Transfer Request / Create" : `Location Transfer Request / ${detailQuery.data?.ltr_number ?? "Display"}`}
       notices={[
-        {
-          key: "ltr-workspace-guide",
-          tone: "info",
-          message: "IN10 follows MB21 / MB22 logic: maintain the request first, verify availability, then open IN11 for actual goods movement.",
-        },
         ...(notice ? [{ key: "ltr-workspace-notice", tone: "success", message: notice }] : []),
         ...(error ? [{ key: "ltr-workspace-error", tone: "error", message: error }] : []),
         ...(detailQuery.error instanceof Error ? [{ key: "ltr-workspace-query-error", tone: "error", message: detailQuery.error.message }] : []),
@@ -314,31 +356,13 @@ export default function LocationTransferRequestWorkspacePage() {
       actions={[
         {
           key: "back",
-          label: page === 1 ? "Back To IN10" : "Back",
+          label: "Back To IN10",
           tone: "neutral",
           onClick: () => {
-            if (page > 1) {
-              setPage((current) => Math.max(1, current - 1));
-              return;
-            }
             openScreen(OPERATION_SCREENS.PROC_LOC_TRANSFER_REQ.screen_code);
             navigate("/dashboard/procurement/location-transfer");
           },
         },
-        ...(page === 1 ? [{
-          key: "next-header",
-          label: "Continue To Lines",
-          tone: "primary",
-          onClick: () => setPage(2),
-          disabled: !companyId,
-        }] : []),
-        ...(page === 2 ? [{
-          key: "next-review",
-          label: "Continue To Review",
-          tone: "primary",
-          onClick: () => setPage(3),
-          disabled: lines.length === 0,
-        }] : []),
         ...(!isCreateMode ? [{
           key: "open-in11",
           label: "Open IN11",
@@ -359,283 +383,279 @@ export default function LocationTransferRequestWorkspacePage() {
           label: saving ? "Saving..." : isCreateMode ? "Create Request" : "Save Changes",
           tone: "primary",
           onClick: () => void handleSave(),
-          disabled: saving || Boolean(invalidReason) || page !== 3,
+          disabled: saving || checking || Boolean(structuralError),
         },
       ]}
     >
-      <div className="grid gap-4">
-        <div className="grid gap-4 xl:grid-cols-4">
-          <ErpFieldPreview label="Transaction" value="IN10" tone="sky" />
-          <ErpFieldPreview label="Status" value={headerStatus} />
-          <ErpFieldPreview label="Rows" value={`${lines.length}`} caption={invalidReason || "Every row is preview-valid."} />
-          <ErpFieldPreview label="Availability" value={availabilityQuery.isFetching ? "Refreshing" : availabilityQuery.data?.has_invalid_rows ? "Blocked" : "Ready"} />
+      <div className="grid gap-3">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+          <span className="font-semibold text-slate-900">IN10</span>
+          <span>Status: {headerStatus}</span>
+          <span>{lines.length} line{lines.length === 1 ? "" : "s"}</span>
+          <span className={statusStripTone}>{statusStripLabel}</span>
         </div>
 
-        {page === 1 ? (
-          <ErpSectionCard eyebrow="Page 1" title="Header / Company Scope">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <div className="xl:col-span-2">
-                <TransactionCompanySelector
-                  runtimeContext={runtimeContext}
-                  value={companyId}
-                  onChange={setCompanyId}
-                  label="Company"
-                  disabled={!isCreateMode}
-                />
-              </div>
-              <ErpDenseFormRow label="Request Date">
-                <input
-                  type="date"
-                  value={requestDate}
-                  onChange={(event) => setRequestDate(event.target.value)}
-                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                />
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Required By">
-                <input
-                  type="date"
-                  value={requiredByDate}
-                  onChange={(event) => setRequiredByDate(event.target.value)}
-                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                />
-              </ErpDenseFormRow>
-              <div className="xl:col-span-4">
-                <ErpDenseFormRow label="Remarks">
-                  <input
-                    value={remarks}
-                    onChange={(event) => setRemarks(event.target.value)}
-                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                  />
-                </ErpDenseFormRow>
-              </div>
+        <ErpSectionCard eyebrow="Header" title="Company & request details">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="xl:col-span-2">
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={companyId}
+                onChange={setCompanyId}
+                label="Company"
+                disabled={!isCreateMode}
+              />
             </div>
-          </ErpSectionCard>
-        ) : null}
+            <ErpDenseFormRow label="Request Date">
+              <input
+                type="date"
+                value={requestDate}
+                onChange={(event) => setRequestDate(event.target.value)}
+                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+              />
+            </ErpDenseFormRow>
+            <ErpDenseFormRow label="Required By">
+              <input
+                type="date"
+                value={requiredByDate}
+                onChange={(event) => setRequiredByDate(event.target.value)}
+                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+              />
+            </ErpDenseFormRow>
+            <div className="xl:col-span-4">
+              <ErpDenseFormRow label="Remarks">
+                <input
+                  value={remarks}
+                  onChange={(event) => setRemarks(event.target.value)}
+                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                />
+              </ErpDenseFormRow>
+            </div>
+          </div>
+        </ErpSectionCard>
 
-        {page === 2 ? (
-          <ErpSectionCard eyebrow="Page 2" title="Editable Request Lines">
-            <div className="grid gap-3">
-              <div className="flex items-center justify-between rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                <span>Source-side availability is calculated from the live backend stock + other active reservations. Save stays blocked until every row is valid.</span>
-                <button
-                  type="button"
-                  onClick={addLine}
-                  className="border border-slate-300 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700 hover:border-sky-500 hover:text-sky-700"
-                >
-                  Add Line
-                </button>
-              </div>
-              <ErpDenseGrid
-                columns={[
-                  {
-                    key: "source_storage_location_id",
-                    label: "Source SLOC",
-                    width: "180px",
-                    render: (row, index) => (
-                      <select
-                        value={row.source_storage_location_id}
-                        onChange={(event) => patchLine(index, { source_storage_location_id: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
-                      >
-                        <option value="">Select</option>
-                        {slocOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                      </select>
-                    ),
-                  },
-                  {
-                    key: "target_storage_location_id",
-                    label: "Target SLOC",
-                    width: "180px",
-                    render: (row, index) => (
-                      <select
-                        value={row.target_storage_location_id}
-                        onChange={(event) => patchLine(index, { target_storage_location_id: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
-                      >
-                        <option value="">Select</option>
-                        {slocOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                      </select>
-                    ),
-                  },
-                  {
-                    key: "material_id",
-                    label: "Material",
-                    width: "230px",
-                    render: (row, index) => (
-                      <ErpComboboxField
-                        value={row.material_id}
-                        onChange={(value) => patchLine(index, { material_id: value })}
-                        options={materialOptions}
-                        placeholder="Select material"
-                        blankLabel="Select material"
-                        inputClassName="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+        <ErpSectionCard
+          eyebrow="Lines"
+          title="Transfer lines"
+          actions={[
+            { key: "check", label: checking ? "Checking..." : "Check Availability", tone: "neutral", onClick: () => void runAvailabilityCheck(), disabled: checking },
+            { key: "add-line", label: "+ Add Line", tone: "primary", onClick: addLine },
+          ]}
+        >
+          <div className="grid gap-3">
+            <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              Fill in every line first, then click Check Availability (or Save — it checks first automatically). Lines with a posting already against them are locked — reverse in IN11 to change them.
+            </div>
+            <ErpDenseGrid
+              columns={[
+                {
+                  key: "source_storage_location_id",
+                  label: "Source SLOC",
+                  width: "180px",
+                  render: (row, index) => isLineLocked(row) ? (
+                    <span className="text-slate-600">{slocLabelById.get(row.source_storage_location_id) || "—"}</span>
+                  ) : (
+                    <select
+                      value={row.source_storage_location_id}
+                      onChange={(event) => patchLine(index, { source_storage_location_id: event.target.value })}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
+                    >
+                      <option value="">Select</option>
+                      {slocOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  ),
+                },
+                {
+                  key: "target_storage_location_id",
+                  label: "Target SLOC",
+                  width: "180px",
+                  render: (row, index) => isLineLocked(row) ? (
+                    <span className="text-slate-600">{slocLabelById.get(row.target_storage_location_id) || "—"}</span>
+                  ) : (
+                    <select
+                      value={row.target_storage_location_id}
+                      onChange={(event) => patchLine(index, { target_storage_location_id: event.target.value })}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
+                    >
+                      <option value="">Select</option>
+                      {slocOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  ),
+                },
+                {
+                  key: "material_id",
+                  label: "Material",
+                  width: "230px",
+                  render: (row, index) => isLineLocked(row) ? (
+                    <span className="text-slate-600">{materialLabelById.get(row.material_id) || "—"}</span>
+                  ) : (
+                    <ErpComboboxField
+                      value={row.material_id}
+                      onChange={(value) => patchLine(index, { material_id: value })}
+                      options={materialOptions}
+                      placeholder="Select material"
+                      blankLabel="Select material"
+                      inputClassName="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+                    />
+                  ),
+                },
+                {
+                  key: "stock_type_code",
+                  label: "Stock Type",
+                  width: "140px",
+                  render: (row, index) => isLineLocked(row) ? (
+                    <span className="text-slate-600">{row.stock_type_code}</span>
+                  ) : (
+                    <select
+                      value={row.stock_type_code}
+                      onChange={(event) => patchLine(index, { stock_type_code: event.target.value })}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
+                    >
+                      {STOCK_TYPES.map((option) => <option key={option} value={option}>{option}</option>)}
+                    </select>
+                  ),
+                },
+                {
+                  key: "requested_qty",
+                  label: "Req. Qty",
+                  width: "230px",
+                  render: (row, index) => {
+                    if (isLineLocked(row)) return <span className="text-slate-600">{formatNumber(row.requested_qty)} {row.uom_code}</span>;
+                    const preview = availabilityByRowId.get(row.client_row_id);
+                    const isShort = Boolean(preview && !isStale && Number(row.requested_qty || 0) > Number(preview.available_qty ?? 0));
+                    return (
+                      <RequestedQtyCell
+                        row={row}
+                        isShort={isShort}
+                        onChange={(nextValue) => patchLine(index, { requested_qty: nextValue })}
                       />
-                    ),
+                    );
                   },
-                  {
-                    key: "stock_type_code",
-                    label: "Stock Type",
-                    width: "140px",
-                    render: (row, index) => (
-                      <select
-                        value={row.stock_type_code}
-                        onChange={(event) => patchLine(index, { stock_type_code: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
-                      >
-                        {STOCK_TYPES.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    ),
+                },
+                {
+                  key: "posted_qty",
+                  label: "Posted",
+                  width: "90px",
+                  render: (row) => <span className="text-slate-500">{formatNumber(row.posted_qty)}</span>,
+                },
+                {
+                  key: "available_qty",
+                  label: "Available",
+                  width: "100px",
+                  render: (row) => {
+                    if (isLineLocked(row)) return <span>—</span>;
+                    const preview = availabilityByRowId.get(row.client_row_id);
+                    if (!preview || isStale) return <span className="text-slate-400">Not checked</span>;
+                    const isShort = Number(row.requested_qty || 0) > Number(preview.available_qty ?? 0);
+                    return <span className={isShort ? "font-semibold text-rose-700" : ""}>{formatNumber(preview.available_qty)}</span>;
                   },
-                  {
-                    key: "requested_qty",
-                    label: "Req. Qty",
-                    width: "110px",
-                    render: (row, index) => (
-                      <input
-                        value={row.requested_qty}
-                        onChange={(event) => patchLine(index, { requested_qty: event.target.value })}
-                        className={`h-8 w-full border bg-white px-2 text-xs text-slate-900 ${
-                          rowStatusById.get(row.client_row_id)?.isShort ? "border-rose-500 bg-rose-50 text-rose-700" : "border-slate-300"
-                        }`}
-                      />
-                    ),
+                },
+                {
+                  key: "batch_number",
+                  label: "Batch",
+                  width: "120px",
+                  render: (row, index) => isLineLocked(row) ? (
+                    <span className="text-slate-600">{row.batch_number || "—"}</span>
+                  ) : (
+                    <input
+                      value={row.batch_number}
+                      onChange={(event) => patchLine(index, { batch_number: event.target.value })}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
+                    />
+                  ),
+                },
+                {
+                  key: "source_lot_ref",
+                  label: "Source Lot",
+                  width: "120px",
+                  render: (row, index) => isLineLocked(row) ? (
+                    <span className="text-slate-600">{row.source_lot_ref || "—"}</span>
+                  ) : (
+                    <input
+                      value={row.source_lot_ref}
+                      onChange={(event) => patchLine(index, { source_lot_ref: event.target.value })}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
+                    />
+                  ),
+                },
+                {
+                  key: "validity",
+                  label: "Validation",
+                  width: "190px",
+                  render: (row) => {
+                    if (isLineLocked(row)) return <span className="text-slate-500">{row.status}</span>;
+                    const preview = availabilityByRowId.get(row.client_row_id);
+                    if (!preview || isStale) return <span className="text-slate-400">Not checked yet</span>;
+                    return preview.is_valid ? <span className="font-semibold text-emerald-700">Ready</span> : (preview.invalid_reason || "Blocked");
                   },
-                  {
-                    key: "available_qty",
-                    label: "Available",
-                    width: "100px",
-                    render: (row) => {
-                      const preview = availabilityByRowId.get(row.client_row_id);
-                      const isShort = rowStatusById.get(row.client_row_id)?.isShort;
-                      return (
-                        <span className={isShort ? "font-semibold text-rose-700" : ""}>
-                          {preview ? formatNumber(preview.available_qty) : "—"}
-                        </span>
-                      );
-                    },
-                  },
-                  {
-                    key: "batch_number",
-                    label: "Batch",
-                    width: "120px",
-                    render: (row, index) => (
-                      <input
-                        value={row.batch_number}
-                        onChange={(event) => patchLine(index, { batch_number: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
-                      />
-                    ),
-                  },
-                  {
-                    key: "source_lot_ref",
-                    label: "Source Lot",
-                    width: "120px",
-                    render: (row, index) => (
-                      <input
-                        value={row.source_lot_ref}
-                        onChange={(event) => patchLine(index, { source_lot_ref: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900"
-                      />
-                    ),
-                  },
-                  {
-                    key: "validity",
-                    label: "Validation",
-                    width: "200px",
-                    render: (row) => {
-                      const status = rowStatusById.get(row.client_row_id);
-                      const preview = status?.preview;
-                      if (!status?.hasCoreFields) return "Select source, target, material";
-                      if (!preview) return "Loading availability...";
-                      if (status.isShort) return <span className="font-semibold text-rose-700">Qty exceeds available</span>;
-                      if (!status.isQtyEntered) return <span className="text-slate-500">Enter qty to validate</span>;
-                      return preview.is_valid ? <span className="font-semibold text-emerald-700">Ready</span> : (preview.invalid_reason || "Blocked");
-                    },
-                  },
-                  {
-                    key: "remove",
-                    label: "Action",
-                    width: "90px",
-                    render: (_row, index) => (
+                },
+                {
+                  key: "actions",
+                  label: "Action",
+                  width: "130px",
+                  render: (row, index) => (
+                    <div className="flex gap-1">
                       <button
                         type="button"
-                        onClick={() => removeLine(index)}
-                        className="border border-rose-300 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-rose-700"
+                        onClick={() => copyLine(index)}
+                        className="border border-slate-300 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700"
                       >
-                        Remove
+                        Copy
                       </button>
-                    ),
-                  },
-                ]}
-                rows={lines}
-                rowKey={(row) => row.client_row_id}
-                getRowProps={(row) => ({
-                  className: rowStatusById.get(row.client_row_id)?.isShort ? "bg-rose-50" : "",
-                })}
-                emptyMessage="Add the first transfer line."
-                maxHeight="calc(100vh - 330px)"
-              />
-            </div>
-          </ErpSectionCard>
-        ) : null}
+                      {!isLineLocked(row) ? (
+                        <button
+                          type="button"
+                          onClick={() => removeLine(index)}
+                          className="border border-rose-300 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-rose-700"
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </div>
+                  ),
+                },
+              ]}
+              rows={lines}
+              rowKey={(row) => row.client_row_id}
+              getRowProps={(row) => {
+                if (isLineLocked(row)) return { className: "bg-slate-50" };
+                const preview = availabilityByRowId.get(row.client_row_id);
+                const isShort = preview && !isStale && Number(row.requested_qty || 0) > Number(preview.available_qty ?? 0);
+                return { className: isShort ? "bg-rose-50" : "" };
+              }}
+              emptyMessage="Add the first transfer line."
+              maxHeight="calc(100vh - 460px)"
+            />
+          </div>
+        </ErpSectionCard>
 
-        {page === 3 ? (
-          <ErpSectionCard eyebrow="Page 3" title="Review Before Save">
-            <div className="grid gap-3">
-              <div className="grid gap-3 xl:grid-cols-4">
-                <ErpFieldPreview label="Company Ready" value={companyId ? "Yes" : "No"} />
-                <ErpFieldPreview label="Preview Status" value={availabilityQuery.isFetching ? "Refreshing" : availabilityQuery.data?.has_invalid_rows ? "Blocked" : "Ready"} />
-                <ErpFieldPreview label="Rows In Request" value={`${lines.length}`} />
-                <ErpFieldPreview label="Save State" value={invalidReason ? "Disabled" : "Ready"} caption={invalidReason || "All rows passed preview."} />
+        {!isCreateMode ? (
+          <ErpSectionCard eyebrow="History" title="Posting & reservation history">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((current) => !current)}
+              className="border border-slate-300 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700 hover:border-sky-500 hover:text-sky-700"
+            >
+              {historyOpen ? "Hide" : "Show"} posting history ({postings.length})
+            </button>
+            {historyOpen ? (
+              <div className="mt-3">
+                <ErpDenseGrid
+                  columns={[
+                    { key: "movement_type_code", label: "MvT", width: "80px" },
+                    { key: "posted_qty", label: "Qty", width: "100px", render: (row) => formatNumber(row.posted_qty) },
+                    { key: "material_doc_number", label: "Material Doc", width: "150px" },
+                    { key: "material_doc_year", label: "Year", width: "100px" },
+                    { key: "posted_by_label", label: "Posted By", width: "200px", render: (row) => row.posted_by_label || "—" },
+                    { key: "posted_at", label: "Posted At", width: "170px", render: (row) => formatDateTime(row.posted_at) },
+                  ]}
+                  rows={postings}
+                  rowKey={(row) => row.id}
+                  emptyMessage="No posting history yet."
+                  maxHeight="260px"
+                />
               </div>
-              <ErpDenseGrid
-                columns={[
-                  { key: "line_no", label: "Line", width: "60px", render: (_row, index) => index + 1 },
-                  {
-                    key: "material",
-                    label: "Material",
-                    width: "240px",
-                    render: (row) => materialOptions.find((option) => option.value === row.material_id)?.label || "—",
-                  },
-                  {
-                    key: "source",
-                    label: "Source",
-                    width: "180px",
-                    render: (row) => slocOptions.find((option) => option.value === row.source_storage_location_id)?.label || "—",
-                  },
-                  {
-                    key: "target",
-                    label: "Target",
-                    width: "180px",
-                    render: (row) => slocOptions.find((option) => option.value === row.target_storage_location_id)?.label || "—",
-                  },
-                  { key: "requested_qty", label: "Req. Qty", width: "100px" },
-                  {
-                    key: "available_qty",
-                    label: "Available",
-                    width: "100px",
-                    render: (row) => {
-                      const preview = availabilityByRowId.get(row.client_row_id);
-                      return preview ? formatNumber(preview.available_qty) : "—";
-                    },
-                  },
-                  {
-                    key: "validation",
-                    label: "Validation",
-                    width: "220px",
-                    render: (row) => {
-                      const preview = availabilityByRowId.get(row.client_row_id);
-                      if (!preview) return "Preview missing";
-                      return preview.is_valid ? "Ready To Save" : preview.invalid_reason || "Blocked";
-                    },
-                  },
-                ]}
-                rows={lines}
-                rowKey={(row) => row.client_row_id}
-                emptyMessage="No lines to review."
-                maxHeight="360px"
-              />
-            </div>
+            ) : null}
           </ErpSectionCard>
         ) : null}
       </div>
