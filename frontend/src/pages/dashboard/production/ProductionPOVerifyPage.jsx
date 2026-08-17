@@ -19,6 +19,7 @@ import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationO
 import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { availabilityPreviewProcessOrder, correctProcessOrder, getProcessOrder, listProcessOrders, verifyProcessOrder } from "./prodApi.js";
+import { formatPreciseNumber, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 
 const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }));
 const RM_CORRECTION_MOVEMENT_OPTIONS = [
@@ -595,7 +596,7 @@ export default function ProductionPOVerifyPage() {
                                 />
                               )}
                             </td>
-                            <td className="px-3 py-2 text-right font-mono">{row.dosage_pct === "" ? "--" : Number(row.dosage_pct).toFixed(3)}</td>
+                            <td className="px-3 py-2 text-right font-mono">{formatPreciseNumber(row.dosage_pct, "--")}</td>
                             <td className="px-3 py-2">
                               {isCorrectionMode ? (
                                 <span className="text-slate-500">{actualMaterialLabel}</span>
@@ -622,15 +623,15 @@ export default function ProductionPOVerifyPage() {
                                 />
                               )}
                             </td>
-                            <td className="px-3 py-2 text-right font-mono">{values.planned.toFixed(3)}</td>
+                            <td className="px-3 py-2 text-right font-mono">{formatPreciseNumber(values.planned, "0")}</td>
                             <td className="px-3 py-2 text-right">
                               {isCorrectionMode ? (
-                                <span className="font-mono">{values.actual.toFixed(3)}</span>
+                                <span className="font-mono">{formatPreciseNumber(values.actual, "0")}</span>
                               ) : (
                                 <input
                                   type="number"
                                   min="0"
-                                  step="0.001"
+                                  step={PRODUCTION_DECIMAL_STEP}
                                   className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                   value={row.actual_qty}
                                   onChange={(event) => updateRow(row.key, { actual_qty: event.target.value })}
@@ -665,13 +666,13 @@ export default function ProductionPOVerifyPage() {
                                 hasCorrectionQty && correctionValues.approved === "PARTIAL" ? (
                                   <input
                                     type="number"
-                                    step="0.001"
+                                    step={PRODUCTION_DECIMAL_STEP}
                                     className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                     value={correctionApApproved[row.id] ?? ""}
                                     onChange={(event) => setCorrectionApApproved((current) => ({ ...current, [row.id]: event.target.value }))}
                                   />
                                 ) : hasCorrectionQty ? (
-                                  <span className="font-mono">{correctionValues.apApproved.toFixed(3)}</span>
+                                  <span className="font-mono">{formatPreciseNumber(correctionValues.apApproved, "0")}</span>
                                 ) : (
                                   <span className="text-slate-400">—</span>
                                 )
@@ -679,24 +680,24 @@ export default function ProductionPOVerifyPage() {
                                 <input
                                   type="number"
                                   min="0"
-                                  step="0.001"
+                                  step={PRODUCTION_DECIMAL_STEP}
                                   className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                   value={row.ap_approved_qty}
                                   onChange={(event) => updateRow(row.key, { ap_approved_qty: event.target.value })}
                                 />
                               ) : (
-                                <span className="font-mono">{values.apApproved.toFixed(3)}</span>
+                                <span className="font-mono">{formatPreciseNumber(values.apApproved, "0")}</span>
                               )}
                             </td>
                             <td className="px-3 py-2 text-right font-mono">
-                              {isCorrectionMode ? (hasCorrectionQty ? correctionValues.variance.toFixed(3) : "—") : values.variance.toFixed(3)}
+                              {isCorrectionMode ? (hasCorrectionQty ? formatPreciseNumber(correctionValues.variance, "0") : "—") : formatPreciseNumber(values.variance, "0")}
                             </td>
                             {isCorrectionMode ? (
                               <td className="px-3 py-2 text-right">
                                 <input
                                   type="number"
                                   min="0"
-                                  step="0.001"
+                                  step={PRODUCTION_DECIMAL_STEP}
                                   className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                                   value={correctionQty[row.id] ?? ""}
                                   placeholder="qty"
@@ -759,7 +760,7 @@ export default function ProductionPOVerifyPage() {
                             <input
                               type="number"
                               min="0"
-                              step="0.001"
+                              step={PRODUCTION_DECIMAL_STEP}
                               className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
                               value={row.delta_qty}
                               placeholder="qty"
@@ -807,10 +808,10 @@ export default function ProductionPOVerifyPage() {
                     <tbody>
                       <tr>
                         <td className="border-b border-slate-100 px-3 py-2">{materialLabel(po.material) || "--"}</td>
-                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{Number(po.planned_qty || 0).toFixed(3)}</td>
-                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputActualQty.toFixed(3)}</td>
-                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputApprovedQty.toFixed(3)}</td>
-                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputVariance.toFixed(3)}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(po.planned_qty, "0")}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(outputActualQty, "0")}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(outputApprovedQty, "0")}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(outputVariance, "0")}</td>
                         <td className="border-b border-slate-100 px-3 py-2">P101</td>
                       </tr>
                     </tbody>
@@ -823,7 +824,7 @@ export default function ProductionPOVerifyPage() {
                       <input
                         type="number"
                         min="0"
-                        step="0.001"
+                        step={PRODUCTION_DECIMAL_STEP}
                         className="w-32 rounded border border-slate-300 px-2 py-1.5 text-right font-mono text-sm"
                         value={outputDeltaQty}
                         placeholder="qty"

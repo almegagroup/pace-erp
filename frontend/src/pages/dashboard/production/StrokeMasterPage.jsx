@@ -34,6 +34,7 @@ import {
   friendlyStrokeErr, dosageSumOf, renderDrawerActions, Field,
   StrokeLinesTable, GroupCreateModal, MemberAddModal,
 } from "./strokeShared.jsx";
+import { formatPreciseNumber } from "./productionPrecision.js";
 
 const STATUS_BADGE = {
   DRAFT:       "bg-amber-100 text-amber-800",
@@ -250,7 +251,7 @@ export default function StrokeMasterPage() {
     if (!validateHeader(form)) return;
     const sum = dosageSumOf(lines);
     if (lines.some((l) => l.material_id) && Math.abs(sum - 100) > 0.01) {
-      toast(`Dosage must sum to 100. Current: ${sum.toFixed(2)}%`, "error"); return;
+      toast(`Dosage must sum to 100. Current: ${formatPreciseNumber(sum, "0")}%`, "error"); return;
     }
     setSaving(true);
     try {
@@ -282,7 +283,7 @@ export default function StrokeMasterPage() {
       return;
     }
     const sum = dosageSumOf(detailEditLines);
-    if (Math.abs(sum - 100) > 0.01) { toast(`Dosage must sum to 100. Current: ${sum.toFixed(2)}%`, "error"); return; }
+    if (Math.abs(sum - 100) > 0.01) { toast(`Dosage must sum to 100. Current: ${formatPreciseNumber(sum, "0")}%`, "error"); return; }
     setSaving(true);
     try {
       await updateStrokeMaster(detail.id, {
@@ -314,7 +315,7 @@ export default function StrokeMasterPage() {
     }
     const sum = dosageSumOf(detailEditLines);
     if (Math.abs(sum - 100) > 0.01) {
-      toast(`Dosage must sum to 100. Current: ${sum.toFixed(2)}%`, "error");
+      toast(`Dosage must sum to 100. Current: ${formatPreciseNumber(sum, "0")}%`, "error");
       return;
     }
     setSaving(true);
@@ -640,13 +641,13 @@ export default function StrokeMasterPage() {
                           <td className="py-1.5 px-2">{l.material?.pace_code ?? "—"} — {l.material?.material_name ?? ""}</td>
                           <td className="py-1.5 px-2 text-slate-500">{l.material_group?.group_name ?? "—"}</td>
                           <td className="py-1.5 px-2 text-slate-500">{l.default_storage_location ? l.default_storage_location.code : "—"}</td>
-                          <td className="py-1.5 px-2 text-right font-mono">{Number(l.dosage_pct).toFixed(2)}%</td>
+                          <td className="py-1.5 px-2 text-right font-mono">{formatPreciseNumber(l.dosage_pct, "0")}%</td>
                         </tr>
                       ))}
                       <tr className="bg-slate-50 font-semibold">
                         <td colSpan={5} className="py-1.5 px-2 text-right text-slate-500 text-xs">Total</td>
                         <td className="py-1.5 px-2 text-right font-mono">
-                          {detail.lines.reduce((s, l) => s + Number(l.dosage_pct), 0).toFixed(2)}%
+                          {formatPreciseNumber(detail.lines.reduce((s, l) => s + Number(l.dosage_pct), 0), "0")}%
                         </td>
                       </tr>
                     </tbody>

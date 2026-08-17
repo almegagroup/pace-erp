@@ -10,6 +10,7 @@
 
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import BlockingLayer from "../../../components/layer/BlockingLayer.jsx";
+import { formatPreciseNumber, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 
 export const MATERIAL_TYPE_OPTIONS = [
   { value: "SFG", label: "SFG — Semi-Finished Goods", desc: "Process PO bulk output (Prodshade + Batch), pre-packing." },
@@ -115,7 +116,7 @@ export function StrokeLinesTable({ lines, setLines, materialsByType, groups, sto
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">RM / INT Lines</p>
         <span className={`text-xs font-mono px-2 py-0.5 rounded ${Math.abs(sum - 100) < 0.01 ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-          Σ {sum.toFixed(2)}% / 100%
+          Σ {formatPreciseNumber(sum, "0")}% / 100%
         </span>
       </div>
       <table className="w-full text-sm border-collapse">
@@ -165,7 +166,7 @@ export function StrokeLinesTable({ lines, setLines, materialsByType, groups, sto
                 <td className={`${td} text-right`}>
                   <input
                     className="border border-slate-300 rounded px-2 py-1 text-sm w-20 font-mono text-right"
-                    type="number" step="0.01" min="0" max="100"
+                    type="number" step={PRODUCTION_DECIMAL_STEP} min="0" max="100"
                     value={line.dosage_pct}
                     onChange={(e) => updateLine(i, { dosage_pct: e.target.value })}
                     disabled={disabled}
@@ -296,7 +297,7 @@ export function ChangeBomLinesTable({ lines, setLines, materialsByType, groups, 
               <td className={`${td} text-slate-500`}>{line.line_material_type}</td>
               <td className={td}>{materialLabelById.get(line.current_material_id) ?? "—"}</td>
               <td className={`${td} text-slate-500`}>{line.current_group_id ? (groupLabelById.get(line.current_group_id) ?? "—") : "—"}</td>
-              <td className={`${td} text-right font-mono`}>{Number(line.dosage_pct ?? 0).toFixed(2)}%</td>
+              <td className={`${td} text-right font-mono`}>{formatPreciseNumber(line.dosage_pct, "0")}%</td>
               <td className={td}>
                 {editable ? (
                   <ErpComboboxField
@@ -425,7 +426,7 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
                 <td className={`${td} text-right`}>
                   <input
                     className="border border-slate-300 rounded px-2 py-1 text-sm w-24 font-mono text-right"
-                    type="number" step="0.001" min="0"
+                    type="number" step={PRODUCTION_DECIMAL_STEP} min="0"
                     value={line.qty}
                     onChange={(e) => updateLine(line._key, { qty: e.target.value })}
                     disabled={disabled || qtyDisabled}
@@ -588,7 +589,7 @@ export function PackBomChangeLinesTable({ lines, setLines, materials, groups, on
                 <td className={`${td} text-right`}>
                   <input
                     className="border border-slate-300 rounded px-2 py-1 text-sm w-20 font-mono text-right disabled:bg-slate-50"
-                    type="number" step="0.001" min="0"
+                    type="number" step={PRODUCTION_DECIMAL_STEP} min="0"
                     value={line.qty}
                     disabled={!rowEditable}
                     onChange={(e) => updateLine(line._key, { qty: e.target.value })}

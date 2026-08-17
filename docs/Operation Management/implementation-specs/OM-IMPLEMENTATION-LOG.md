@@ -4121,3 +4121,30 @@ it provides no enforcement value as a CI step in its current form.
     - transaction-specific bug sweep against the brief
     - live environment verification after deploy
     - follow-on IN11 cancellation edge-case checks once real documents exist
+
+### 2026-08-17 16:05 IST - Gate-27 production decimal-precision preservation (Stroke → Process → Packing)
+
+- Root cause closed:
+  - operator-entered decimal values were being force-rounded in live workflow code, not just displayed differently
+  - `process_order.handlers.ts` recalculated Stroke-derived Process PO quantities with `toFixed(4)` during create/edit
+  - `packing_order.handlers.ts` recalculated Packing totals and availability with `toFixed(4)` during edit/preview
+  - core production tables still stored several quantities as `NUMERIC(14,4)` / `NUMERIC(10,4)`, so even correctly-sent values would be truncated at DB level
+- DB change:
+  - added migration `20260817120000_gate27_production_precision_preserve.sql`
+  - widened the production quantity columns from fixed 4-decimal numeric types to uncapped `NUMERIC` on:
+    - `erp_production.stroke_line.dosage_pct`
+    - `erp_production.process_order.{planned_qty, actual_qty}`
+    - `erp_production.process_order_line.{planned_qty, actual_qty}`
+    - `erp_production.packing_order.{fill_qty_per_pack, planned_qty_kg, total_qty_kg, actual_qty_kg, sku_qty, fg_conversion_qty, sfg_conversion_qty}`
+    - `erp_production.packing_order_line.{qty_per_pack, total_qty, actual_qty}`
+- Backend change:
+  - removed forced 4-decimal rounding from Process PO line generation/recalculation
+  - removed forced 4-decimal rounding from Packing PO line/header recalculation and availability preview math
+- Frontend change:
+  - added shared helper `frontend/src/pages/dashboard/production/productionPrecision.js`
+  - replaced fixed `toFixed(2/3)` displays on the targeted Stroke / Process / Packing screens with precision-preserving formatting
+  - changed targeted manual numeric inputs from `0.01` / `0.001` steps to `0.000001`
+  - removed forced `.toFixed(4)` conversion when deriving MTS liter→KG planned qty
+- Verification:
+  - frontend production build passed on Monday, August 17, 2026 after this change set
+  - backend direct import sanity was attempted; source parse path is clean, but the sandbox import check hit environment/permission guards instead of code errors

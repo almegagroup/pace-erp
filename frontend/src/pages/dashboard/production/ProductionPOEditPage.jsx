@@ -25,6 +25,7 @@ import {
   cancelPackingOrder,
 } from "./prodApi.js";
 import { listMachines } from "../om/omApi.js";
+import { formatPreciseNumber, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 
 const EDIT_TABS = ["Process PO", "Packing PO"];
 
@@ -366,7 +367,7 @@ function PackingPoEditTab() {
                     <input
                       type="number"
                       min="0"
-                      step="0.001"
+                      step={PRODUCTION_DECIMAL_STEP}
                       value={fillQty}
                       onChange={(event) => setFillQty(event.target.value)}
                       className="h-8 w-32 border border-slate-300 bg-[#fffef7] px-2 font-mono text-sm outline-none focus:border-sky-500"
@@ -435,7 +436,7 @@ function PackingPoEditTab() {
                             <span className="text-slate-400">—</span>
                           )}
                         </td>
-                        <td className="px-3 py-2 text-right font-mono">{line.preview_total_qty.toFixed(3)}</td>
+                        <td className="px-3 py-2 text-right font-mono">{formatPreciseNumber(line.preview_total_qty, "0")}</td>
                         <td className="px-3 py-2 min-w-[220px]">
                           <ErpComboboxField
                             value={pmOverrides[line.id] ?? line.issue_sloc_id ?? ""}
@@ -782,7 +783,7 @@ function ProcessPoEditTab() {
                 <input
                   type="number"
                   min="0.001"
-                  step="0.001"
+                  step={PRODUCTION_DECIMAL_STEP}
                   className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                   value={batchQty}
                   onChange={(event) => setBatchQty(event.target.value)}
@@ -825,7 +826,7 @@ function ProcessPoEditTab() {
                           <td className="border-b border-slate-100 px-3 py-2">{row.line_no}</td>
                           <td className="border-b border-slate-100 px-3 py-2">{row.material_type}</td>
                           <td className="border-b border-slate-100 px-3 py-2">{row.material_label}</td>
-                          <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{row.dosage_pct.toFixed(3)}</td>
+                          <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.dosage_pct, "0")}</td>
                           <td className="border-b border-slate-100 px-3 py-2">
                             <ErpComboboxField
                               value={row.actual_material_id}
@@ -844,10 +845,10 @@ function ProcessPoEditTab() {
                               emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
                             />
                           </td>
-                          <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{row.standard_qty.toFixed(3)}</td>
+                          <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.standard_qty, "0")}</td>
                           <td className="border-b border-slate-100 px-3 py-2">P261</td>
                           <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
-                            {row.available_qty == null ? "--" : row.available_qty.toFixed(3)}
+                            {formatPreciseNumber(row.available_qty, "--")}
                           </td>
                         </tr>
                       );

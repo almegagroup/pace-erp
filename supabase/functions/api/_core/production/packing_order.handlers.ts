@@ -520,8 +520,8 @@ async function computeSfgTotalFree(
   for (const row of (reservationResult.data ?? []) as JsonRecord[]) {
     reserved += Number(row.balance_qty ?? 0);
   }
-  const free = Number((onHand - reserved).toFixed(4));
-  return { free, short: Number(Math.max(0, neededQty - free).toFixed(4)) };
+  const free = onHand - reserved;
+  return { free, short: Math.max(0, neededQty - free) };
 }
 
 async function computePackingAvailability(
@@ -1648,7 +1648,7 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
       const lt = String(line.line_type ?? "");
       let perPack = parsePositiveNumber(line.qty_per_pack) ?? 0;
       if (!bomRequired && (lt === "FG" || lt === "SFG")) perPack = newFill;
-      const total = Number((perPack * newNumPacks).toFixed(4));
+      const total = perPack * newNumPacks;
 
       let nextActual = toTrimmedString(line.actual_material_id) || null;
       let nextSloc = toTrimmedString(line.issue_sloc_id) || null;
@@ -1723,7 +1723,7 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
     }
 
     const sfgLine = lineUpdates.find((u) => String(lines.find((l) => String(l.id) === u.id)?.line_type) === "SFG");
-    const headerQty = sfgLine ? sfgLine.total_qty : Number((oldFill * newNumPacks).toFixed(4));
+    const headerQty = sfgLine ? sfgLine.total_qty : (oldFill * newNumPacks);
     // packing_order carries planned_qty_kg AND total_qty_kg as separate columns
     // (create writes both — see createPackingOrderHandler). Order List reads
     // planned_qty_kg; missing it here left the list showing the pre-edit qty

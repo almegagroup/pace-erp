@@ -1815,7 +1815,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
             process_order_id: poId,
             material_id: strokeLine.material_id,
             actual_material_id: actualMaterialId,
-            planned_qty: Number(((Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty).toFixed(4)),
+            planned_qty: (Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty,
             actual_qty: null,
             uom_code: "KG",
             issue_sloc_id: override?.storageLocationId
@@ -2343,7 +2343,7 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
         ? (toTrimmedString(bodyLine?.storage_location_id) || null)
         : (toTrimmedString(line.issue_sloc_id) || null);
       const recalculatedPlannedQty = Number(line.dosage_pct ?? 0) > 0
-        ? Number((((Number(line.dosage_pct ?? 0) / 100) * targetPlannedQty)).toFixed(4))
+        ? ((Number(line.dosage_pct ?? 0) / 100) * targetPlannedQty)
         : Number(line.planned_qty ?? 0);
 
       finalLineStates.push({
