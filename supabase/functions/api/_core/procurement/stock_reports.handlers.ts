@@ -10,6 +10,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { formatDateTimeInKolkata } from "../../_shared/dateUtils.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { errorResponse, okResponse } from "../response.ts";
@@ -237,8 +238,7 @@ function resolveAltUomConversion(material: JsonRecord | undefined, conversions: 
 }
 
 function formatDateTimeDisplay(value: string | null): string | null {
-  const text = toTrimmedString(value);
-  return text || null;
+  return formatDateTimeInKolkata(value);
 }
 
 async function searchDistinctTextValues(params: {
