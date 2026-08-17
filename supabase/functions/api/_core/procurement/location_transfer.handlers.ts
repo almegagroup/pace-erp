@@ -383,6 +383,13 @@ async function normalizeLinesForSave(companyId: string, rawLines: unknown, reque
     }
     const material = materialInfo.get(line.material_id);
     if (!material) throw new Error("LTR_MATERIAL_NOT_FOUND");
+    const materialType = toUpperTrimmedString(material.material_type);
+    if (materialType === "SFG" && !line.batch_number) {
+      throw new Error("LTR_BATCH_REQUIRED_FOR_SFG");
+    }
+    if (materialType === "FG" && (!line.batch_number || !line.source_lot_ref)) {
+      throw new Error("LTR_LOT_REQUIRED_FOR_FG");
+    }
     const [sourceScope, targetScope] = await Promise.all([
       getStorageLocationScope(line.source_storage_location_id, companyId),
       getStorageLocationScope(line.target_storage_location_id, companyId),
@@ -456,12 +463,19 @@ async function buildAvailabilityPreview(
       if (!material) {
         invalidReason = "Material not found.";
       } else {
-        const [sourceScope, targetScope] = await Promise.all([
-          getStorageLocationScope(line.source_storage_location_id, companyId),
-          getStorageLocationScope(line.target_storage_location_id, companyId),
-        ]);
-        if (sourceScope.company_id !== companyId || targetScope.company_id !== companyId) {
-          invalidReason = "Source or target location does not belong to this company.";
+        const materialType = toUpperTrimmedString(material.material_type);
+        if (materialType === "SFG" && !line.batch_number) {
+          invalidReason = "Batch number is required for SFG materials.";
+        } else if (materialType === "FG" && (!line.batch_number || !line.source_lot_ref)) {
+          invalidReason = "Batch number and source lot are required for FG materials.";
+        } else {
+          const [sourceScope, targetScope] = await Promise.all([
+            getStorageLocationScope(line.source_storage_location_id, companyId),
+            getStorageLocationScope(line.target_storage_location_id, companyId),
+          ]);
+          if (sourceScope.company_id !== companyId || targetScope.company_id !== companyId) {
+            invalidReason = "Source or target location does not belong to this company.";
+          }
         }
       }
     }
@@ -859,10 +873,25 @@ export async function updateLocationTransferRequestHandler(
       return ltrErrorResponse(req, ctx, "LTR_REQUEST_LOCKED", 409, "This request can no longer be edited.");
     }
     const existingLines = await fetchRequestLines(requestId);
-    if (existingLines.some((line) => Number(parseNullableNumber(line.posted_qty) ?? 0) > EPSILON)) {
-      return ltrErrorResponse(req, ctx, "LTR_PARTIAL_EDIT_FORBIDDEN", 409, "Posted lines cannot be reshaped in IN10.");
+    const lockedLineIds = new Set(
+      existingLines
+        .filter((line) => Number(parseNullableNumber(line.posted_qty) ?? 0) > EPSILON)
+        .map((line) => toTrimmedString(line.id)),
+    );
+    // Lines already posted (in whole or in part) are excluded here, not rejected
+    // wholesale -- §121.6 only locks that specific line's commercial identity,
+    // the rest of the request (other open lines, new lines, header) stays editable.
+    const incomingLines = (Array.isArray(body.lines) ? body.lines : [])
+      .filter((entry) => {
+        const id = toTrimmedString((entry as JsonRecord)?.id);
+        return !id || !lockedLineIds.has(id);
+      });
+    let lines: TransferLineInput[] = [];
+    if (incomingLines.length > 0) {
+      lines = await normalizeLinesForSave(companyId, incomingLines, requestId);
+    } else if (lockedLineIds.size === 0) {
+      throw new Error("LTR_LINE_REQUIRED");
     }
-    const lines = await normalizeLinesForSave(companyId, body.lines, requestId);
     const now = nowIsoString();
 
     const { error: headerError } = await serviceRoleClient
@@ -880,7 +909,9 @@ export async function updateLocationTransferRequestHandler(
 
     const existingLineIds = new Set(existingLines.map((line) => toTrimmedString(line.id)).filter(Boolean));
     const nextLineIds = new Set(lines.map((line) => toTrimmedString(line.id)).filter(Boolean));
-    const deleteIds = [...existingLineIds].filter((id) => !nextLineIds.has(id));
+    // Locked (already-posted) lines are never in `lines` -- they were deliberately
+    // excluded above, not dropped by the caller. Never delete them.
+    const deleteIds = [...existingLineIds].filter((id) => !nextLineIds.has(id) && !lockedLineIds.has(id));
     if (deleteIds.length > 0) {
       const { error: deleteReservationError } = await serviceRoleClient
         .schema("erp_production")
