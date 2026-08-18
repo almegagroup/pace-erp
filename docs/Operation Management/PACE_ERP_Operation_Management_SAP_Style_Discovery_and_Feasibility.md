@@ -19193,18 +19193,17 @@ reporting-only... RM/PM must never be assumed to have it") still applies system-
 material with a blank `external_code` falls back to displaying its PACE code in the same
 column, never a blank cell.
 
-### 122.5 — Access: open report, company-boundary enforced (LOCKED)
+### 122.5 — Access: open report, company-boundary enforced (LOCKED, corrected 2026-08-18)
 
-**No rank/tier gate at all** — reuses the exact capability set already locked for PR13/14/20
-(Basic Rule #4, `PROD-ACL-Access-Decisions.md` Group 10) rather than inventing a new one:
-`CAP_ORDERLIST_MGRTIER` (Production + Quality, every rank L1_User through L3_Manager,
-L4_Manager excluded per Basic Rule #5, routed to DIRECTOR-REPORTS instead),
-`CAP_ORDERLIST_AUDITOR` (Audit), `CAP_G10_DIRECTOR_VIEW` (Director + DIRECTOR-REPORTS work
-context). Verified live in prod that all three capabilities are already held by both
-companies' `ACL-MASTER` work context (`DEPT_DPT030`/`DEPT_DPT031`) — so wiring PR24's new
-resource code into these three existing capabilities' `capability_menu_actions` is
-sufficient; no new capability, no new `role_capabilities`/`work_context_capabilities` rows
-needed anywhere.
+**No rank/tier gate, no department gate at all — literally everyone, exactly like IN02/
+IN03/MI20.** First wired to `CAP_ORDERLIST_MGRTIER`/`CAP_ORDERLIST_AUDITOR`/
+`CAP_G10_DIRECTOR_VIEW` (PR13/14/20's Production+Quality+Audit+Director-only pattern) —
+**corrected same day, business owner instruction: PR24 is a pure report page, the same
+class as IN02/IN03/MI20(IN07), and must use their exact capability, not PR13/14/20's
+narrower department-scoped one.** Reuses `CAP_EVERYONE_REPORTS` (all 11 roles including
+L4_Manager and Director, held by every real department in CMP003/CMP006 — 15 of 15) rather
+than inventing anything new. `capability_menu_actions` now carries a single row:
+`(CAP_EVERYONE_REPORTS, PROD_ORDER_INFO_SYSTEM, VIEW)`.
 
 **Company-boundary rule (no-leak, LOCKED — business owner explicit):** every filter,
 including a typed-in PO Number, is intersected server-side against the caller's own
@@ -19257,15 +19256,21 @@ design lock) — prod, CMP003 + CMP006.**
   Wired into `AppRouter.jsx` (`production/order-information-system`) and
   `operationScreens.js` (`PROD_ORDER_INFO_SYSTEM`).
 - ✅ ACL: `erp_menu.menu_master` + `acl.menu_master` + `menu_tree` (under
-  `GRP_ACL_PRODUCTION`) inserted once (global). Three `capability_menu_actions` rows
-  (`CAP_ORDERLIST_MGRTIER`/`CAP_ORDERLIST_AUDITOR`/`CAP_G10_DIRECTOR_VIEW`, all VIEW) — no new
-  capability needed, confirmed live that ACL-MASTER already held all three. New ACL version
-  per company (v69 CMP003, v68 CMP006), `capture_acl_version_source` +
-  `generate_acl_snapshot` + `rebuild_acl_menu_snapshot` for 8 verification (user, company,
-  work_context) triples. Verified via `precomputed_acl_view` and `erp_menu.menu_snapshot`
-  directly — see `PROD-ACL-Access-Decisions.md` Group 10's PR24 note for the full trail.
-  **CMP010/CMP014 and dev not touched this pass** — same accepted scope limit as IN10/IN11
-  (§121.14).
+  `GRP_ACL_PRODUCTION`) inserted once (global). **Corrected same day** from the initial
+  3-capability PR13/14/20-style wiring to a single `CAP_EVERYONE_REPORTS` row (§122.5) —
+  true "everyone" report access, matching IN02/IN03/MI20. ACL version bumped again per
+  company after the correction (v70 CMP003, v69 CMP006, v4 CMP014 — CMP014 included this
+  time since its Supply Chain department already holds `CAP_EVERYONE_REPORTS`),
+  `capture_acl_version_source` + `generate_acl_snapshot` + `rebuild_acl_menu_snapshot` run
+  again for the original 8 verification triples plus 3 more covering previously-untested
+  departments (Accounts ×2, Stores ×1, one per company + CMP014's own Supply Chain user).
+  Verified via `precomputed_acl_view`: every real department in CMP003/CMP006 (Accounts,
+  Stores, Supply Chain, Production, Quality, Audit, Management, Management-Reports,
+  Director, Director-Reports) resolves `ALLOW`, plus CMP014's Supply Chain. See
+  `PROD-ACL-Access-Decisions.md` Group 10's PR24 note for the full trail. **CMP010 not
+  touched this pass** (no department there currently holds `CAP_EVERYONE_REPORTS` with a
+  real user assigned — same accepted scope limit as IN10/IN11, §121.14); dev not touched
+  either.
 - ✅ CI guards clean: `deno check` (zero new errors, same 5 pre-existing baseline
   confirmed via git-stash before/after), `eslint` (zero errors on all touched frontend
   files), `route-acl-registry-guard.mjs` (0 missing matches), `company-scope-guard.mjs` (0

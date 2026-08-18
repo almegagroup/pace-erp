@@ -1392,6 +1392,45 @@ Breakdown.
   (ACL-MASTER) — full VIEW/EDIT/WRITE/APPROVE on IN01, VIEW on IN02/IN03/
   PR21. ACL-MASTER drift check — clean.
 
+**🔴 Real leak found + fixed, 2026-08-18 — CMP014, not CMP003/CMP006.**
+Business owner asked "who else has IN01 access besides Auditor/Director" as
+a spot-check. Answer surfaced a real one: **P0077 (CMP014, SUPPLY CHAIN)**
+had live `VIEW`+`WRITE` on `PROC_PI_LIST` (`menu_visible=true` — a real
+sidebar-visible leak, not latent), letting a Supply Chain user create/edit
+Physical Inventory documents, a tier this doc reserves for L1/L2_Auditor
+only. **Root cause: a stale, never-refreshed ACL version, not a live grant
+error.** CMP014's `acl_versions` row was captured once, 2026-08-06, with its
+own description saying exactly what happened: *"SUPPLY CHAIN department
+bootstrap — 14 capabilities copied from CMP003, to unblock P0077"* — at that
+moment CMP003's own Supply Chain department still held the broad
+`CAP_PROC_INVENTORY` grant on `PROC_PI_LIST`. That grant was correctly
+narrowed away from Supply Chain in CMP003/CMP006 later the same day as part
+of this very Group 9 pass — but nobody re-captured CMP014's version
+afterward, so its frozen snapshot kept using the pre-narrowing state
+indefinitely. Confirmed via direct diff: **live**
+`acl.work_context_capabilities` for CMP014's Supply Chain (`DEPT_DPT032`)
+already matched CMP003's Supply Chain (`DEPT_DPT018`) exactly (one
+unrelated extra capability on the CMP003 side, `CAP_PROC_PLANNING_EDIT`) —
+this was purely a stale-snapshot bug, zero grant changes needed. Fixed by
+re-running the version pipeline for CMP014 alone: new `acl_versions` v3
+(`f8216d18…`), `capture_acl_version_source` + `generate_acl_snapshot`,
+`rebuild_acl_menu_snapshot` for P0077's own `(user, CMP014, DEPT_DPT032)`
+triple. Verified: P0077 now resolves zero rows on `PROC_PI_LIST` (menu
+snapshot `is_visible=false`), while retaining every other legitimate Supply
+Chain grant untouched (`PROC_CSN_TRACKER` full, `PROC_PO_LIST`/`PROC_STO_
+LIST` VIEW, `PROC_PI_COUNT_ENTRY`/`PROC_PI_DIFFERENCES` still correctly
+present) — 35 resources / 257 ALLOW rows total before and after, only the
+leaked resource changed.
+**Lesson, ties directly to the "note on scope beyond CMP003/CMP006" warning
+already in this doc's Post-Implementation Checklist section:** a company
+bootstrapped via one-time capability copy (not through this doc's normal
+page-by-page process) silently freezes at whatever the *source* company
+held on that exact day — every later narrowing decision made against
+CMP003/CMP006 has to be manually re-propagated, or it never reaches that
+company at all. CMP014 (and likely any future bootstrapped company) needs a
+periodic "diff live `work_context_capabilities` against the reference
+company, re-capture if different" check — not a one-time fix.
+
 **Code audit before deactivating (no edits made, findings logged for a
 future code-fix pass):**
 - Backends: `physical_inventory.handlers.ts` (IN01),
@@ -1470,7 +1509,7 @@ Status: ✅ Decided + implemented in prod (2026-07-29, ACL v29/v26).
 | PR20 | Partial Reversal Report | same as PR13 | same as PR13 | | | | V | V (+ Director-Reports WC) |
 | PR22 | Old Process PO | V C E† | | | | | | V |
 | PR23 | Old Packing PO | V C E† | | | | | | V |
-| PR24 | Order Information System | V (all ranks — same as PR13/14/20) | V (all ranks) | | | | V | V (+ Director-Reports WC) |
+| PR24 | Order Information System | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) — literally everyone, incl. Accounts/Director-Reports/Management-Reports too (not columns here), see note below |
 
 **† = Basic Rule #5 applied 2026-08-06:** every "no ceiling" full-access
 grant in this table (Production on PR00/09/22/23, SCM on PR05/07, QUALITY on
@@ -1543,24 +1582,33 @@ these 3 resources.~~
 direct-implemented (not a Codex brief).** Business owner asked for a
 standalone COOIS-equivalent report (full design: feasibility doc §122) —
 deliberately its own resource (`PROD_ORDER_INFO_SYSTEM`, tx_code `PR24`),
-not folded into PR13. Access design reuses this exact PR13/14/20 pattern
-rather than inventing a new one — same report-page reasoning (Basic Rule
-#4), same three capabilities. **✅ IMPLEMENTED 2026-08-18 (ACL v69 CMP003 /
-v68 CMP006).** `erp_menu.menu_master` + `acl.menu_master` + `menu_tree`
-(under `GRP_ACL_PRODUCTION`) inserted once (global, not per-company); three
-new `capability_menu_actions` rows (`CAP_ORDERLIST_MGRTIER`,
-`CAP_ORDERLIST_AUDITOR`, `CAP_G10_DIRECTOR_VIEW`, all VIEW) — confirmed live
-via `precomputed_acl_view` that all three capabilities were already held by
-both companies' `ACL-MASTER` work context, so no new capability or
-`role_capabilities`/`work_context_capabilities` row was needed anywhere; no
-`user_overrides` conflict (brand new resource, zero rows). Verified: real
-Production/Quality users (P0069/P0062, both companies), Director (P0074),
-DIRECTOR-REPORTS (P0002), and ACL-MASTER (P0076) all resolve `ALLOW`; menu
-snapshot rebuilt for all 8 verification (user, company, work_context)
-triples, `PROD_ORDER_INFO_SYSTEM`/`PR24` confirmed present in
-`erp_menu.menu_snapshot` for each. **Scope note (same limit already accepted
-for IN10/IN11 in §121.14):** CMP003 + CMP006 only, prod only — CMP010/CMP014
-and dev remain a known follow-up, not unique to PR24.
+not folded into PR13. **First wired to PR13/14/20's own pattern
+(`CAP_ORDERLIST_MGRTIER`/`CAP_ORDERLIST_AUDITOR`/`CAP_G10_DIRECTOR_VIEW` —
+Production+Quality+Audit+Director only), then corrected the same day:
+business owner pointed out PR24 is the same class of page as IN02/IN03/MI20
+(pure report, Basic Rule #4), not PR13/14/20's department-scoped variant —
+must use `CAP_EVERYONE_REPORTS` instead, literally everyone.**
+**✅ IMPLEMENTED 2026-08-18, final state (ACL v70 CMP003 / v69 CMP006 / v4
+CMP014).** `erp_menu.menu_master` + `acl.menu_master` + `menu_tree` (under
+`GRP_ACL_PRODUCTION`) inserted once (global, not per-company); final
+`capability_menu_actions` = one row, `(CAP_EVERYONE_REPORTS,
+PROD_ORDER_INFO_SYSTEM, VIEW)` — the 3-capability wiring was deleted
+outright, not left alongside. No new capability, no new
+`role_capabilities`/`work_context_capabilities` row needed anywhere
+(`CAP_EVERYONE_REPORTS` already covers all 11 roles across every real
+department in both companies); no `user_overrides` conflict (brand new
+resource, zero rows). Verified via `precomputed_acl_view`: every department
+in CMP003/CMP006 (Accounts, Stores, Supply Chain, Production, Quality,
+Audit, Management, Management-Reports, Director, Director-Reports,
+ACL-MASTER) resolves `ALLOW` — spot-checked real users per department
+(P0060/P0066 Accounts, P0058 Stores, P0069/P0062 Production/Quality, P0074
+Director, P0002 Director-Reports, P0076 ACL-MASTER), menu snapshot rebuilt
+and confirmed `is_visible=true` for each. **CMP014 included this round**
+(v4) since its Supply Chain department already independently holds
+`CAP_EVERYONE_REPORTS` (P0077 confirmed `ALLOW` + visible). **Scope note
+(same limit already accepted for IN10/IN11 in §121.14):** CMP010 not
+touched (no department there currently holds `CAP_EVERYONE_REPORTS` with a
+real user assigned) — dev also not touched, prod only.
 
 **PR06/PR08 (Pack BOM Approval / Change Pack BOM Approval) — revised
 2026-08-06, business owner instruction:** originally locked as a flat

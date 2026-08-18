@@ -364,7 +364,7 @@ export default function OrderInformationSystemPage() {
             </div>
 
             <div className="flex items-center justify-between border-t border-dashed border-slate-200 pt-3">
-              <span className="text-xs text-slate-400">Open to every Production/Quality/Audit rank — access is company-scoped only, never rank-gated.</span>
+              <span className="text-xs text-slate-400">Open to everyone — access is company-scoped only, never rank or department-gated.</span>
               <button type="button" onClick={handleExecute} className="rounded bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-sky-700">
                 Execute
               </button>
