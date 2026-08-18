@@ -13,6 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { formatDateTimeInKolkata } from "../../_shared/dateUtils.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -536,55 +537,62 @@ export async function getStockLedgerReportHandler(
     const slocIdsForLookup = [...new Set(ledgerRows.map((row) => row.storage_location_id).filter(Boolean))];
     const companyIdsForLookup = [...new Set(ledgerRows.map((row) => row.company_id).filter(Boolean))];
 
-    const [stockDocResp, materialResp, slocResp, companyResp, conversionResp] = await Promise.all([
-      stockDocumentIds.length > 0
-        ? serviceRoleClient
+    // stockDocumentIds/materialIdsForLookup scale 1:1 with the row count -- a wide date range
+    // with no movement-type filter can put hundreds of distinct ids in a single .in() call,
+    // which PostgREST sends as a GET request with the id list encoded in the URL. Found live
+    // 2026-08-19: ~400 distinct stock_document_id values built a URL long enough to be
+    // rejected before ever reaching Postgres/PostgREST (no server-side log trail either,
+    // since the request never got that far) -- chunked via fetchInChunks to keep each request
+    // small regardless of result-set size. See _shared/chunkedIn.ts.
+    let stockDocRows: JsonRecord[];
+    let materialRows: JsonRecord[];
+    let slocRows: JsonRecord[];
+    let companyRows: JsonRecord[];
+    let conversionRows: JsonRecord[];
+    try {
+      [stockDocRows, materialRows, slocRows, companyRows, conversionRows] = await Promise.all([
+        fetchInChunks<JsonRecord>(stockDocumentIds, (idChunk) =>
+          serviceRoleClient
             .schema("erp_inventory")
             .from("stock_document")
             .select("id, document_number, item_number, document_year, reference_document_type, reference_document_number, reference_document_id, reversal_document_id, source_lot_ref, posted_by")
-            .in("id", stockDocumentIds)
-        : Promise.resolve({ data: [], error: null }),
-      materialIdsForLookup.length > 0
-        ? serviceRoleClient
+            .in("id", idChunk)),
+        fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
+          serviceRoleClient
             .schema("erp_master")
             .from("material_master")
             .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, purchase_uom_code, pack_code")
-            .in("id", materialIdsForLookup)
-        : Promise.resolve({ data: [], error: null }),
-      slocIdsForLookup.length > 0
-        ? serviceRoleClient
+            .in("id", idChunk)),
+        fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
+          serviceRoleClient
             .schema("erp_inventory")
             .from("storage_location_master")
             .select("id, code")
-            .in("id", slocIdsForLookup)
-        : Promise.resolve({ data: [], error: null }),
-      companyIdsForLookup.length > 0
-        ? serviceRoleClient
+            .in("id", idChunk)),
+        fetchInChunks<JsonRecord>(companyIdsForLookup, (idChunk) =>
+          serviceRoleClient
             .schema("erp_master")
             .from("companies")
             .select("id, company_code, company_name")
-            .in("id", companyIdsForLookup)
-        : Promise.resolve({ data: [], error: null }),
-      materialIdsForLookup.length > 0
-        ? serviceRoleClient
+            .in("id", idChunk)),
+        fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
+          serviceRoleClient
             .schema("erp_master")
             .from("material_uom_conversion")
             .select("material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion")
-            .in("material_id", materialIdsForLookup)
-            .eq("active", true)
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-
-    if (stockDocResp.error || materialResp.error || slocResp.error || companyResp.error || conversionResp.error) {
+            .in("material_id", idChunk)
+            .eq("active", true)),
+      ]);
+    } catch {
       return reportErrorResponse(req, ctx, "STOCK_LEDGER_FETCH_FAILED", 500, "Unable to fetch stock ledger report.");
     }
 
-    const docMap = new Map(((stockDocResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
-    const materialMap = new Map(((materialResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
-    const slocMap = new Map(((slocResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
-    const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const docMap = new Map(stockDocRows.map((row) => [toTrimmedString(row.id), row]));
+    const materialMap = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
+    const slocMap = new Map(slocRows.map((row) => [toTrimmedString(row.id), row]));
+    const companyMap = new Map(companyRows.map((row) => [toTrimmedString(row.id), row]));
     const conversionsByMaterialId = new Map<string, JsonRecord[]>();
-    for (const row of (conversionResp.data ?? []) as JsonRecord[]) {
+    for (const row of conversionRows) {
       const materialId = toTrimmedString(row.material_id);
       if (!materialId) continue;
       if (!conversionsByMaterialId.has(materialId)) {
@@ -592,7 +600,7 @@ export async function getStockLedgerReportHandler(
       }
       conversionsByMaterialId.get(materialId)?.push(row);
     }
-    const openingLotMap = await buildOpeningStockLotMap((stockDocResp.data ?? []) as JsonRecord[]);
+    const openingLotMap = await buildOpeningStockLotMap(stockDocRows);
 
     const userIds = new Set<string>();
     const fgPoNumbers = new Set<string>();
