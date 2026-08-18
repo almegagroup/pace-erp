@@ -521,6 +521,24 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 > এখন Dispatch-এর **আগে** চলে এসেছে। নতুন session ধাপ ২ (MTEST/ZTEST) দিয়ে শুরু করবে, একটা
 > পুরোপুরি শেষ (design locked + implement + verify) না করে পরেরটায় যাবে না।
 >
+> **✅ IN04 (Reservation List) + IN12 (Stock Status Change) — DESIGN LOCKED (2026-08-19,
+> feasibility §125/§126), IMPLEMENTATION NOT STARTED — orthogonal addition, does not change the
+> 4-step order above.** এসেছে "QA কোনো material-এর status change করবে"-এর discovery থেকে —
+> আসল gap হলো Inward QA/RTV/Opening Stock/Process PO Verify ছাড়া আর কোথাও QA↔Unrestricted↔Blocked
+> movement (P321-P349 family, সব ৬টাই engine-এ আগে থেকে ready) কেউ standalone action হিসেবে করতে
+> পারে না — RM/PM/INT/SFG/FG সব material-এই, শুধু FG না। **IN04** = SAP MB25-equivalent
+> (`reservation_document`-এর উপর নতুন list report, কোনো schema লাগে না, সব status দেখাবে শুধু
+> OPEN না)। **IN12** = SAP MB1B-equivalent (single-page workbench, IN11-এর মতো — Locate stock →
+> Change status → Recent postings + Reverse, §121 Location Transfer-এর reverse pattern কপি করে)।
+> qty check হবে actual/physical balance-এর বিরুদ্ধে, "Available" না (reservation থাকলেও QA
+> quarantine করতে পারবে) — Available negative হলে hard block না, বরং IN04-এ link করা soft warning
+> (কোন reservation affected, নাম ধরে) — reservation নিজে থেকে cancel করবে না, সেটা owning
+> document-এর দায়িত্ব। tx_code prefix IN রাখা হয়েছে যদিও `GRP_ACL_QA` group-এ বসবে (PO06/PR01-19
+> ইতিমধ্যে একই group-এ mixed prefix নিয়ে আছে, prefix ≠ sidebar group, live verify করা)। **IN04
+> আগে implement হবে** (IN12-এর warning IN04-কেই link করে)। **IN12-এর ৩টা প্রশ্ন এখনো open**
+> (approval লাগবে কিনা, কে করতে পারবে, সবগুলো movement pair সত্যিই দরকার কিনা) — task brief
+> লেখার আগে business owner-এর উত্তর লাগবে।
+>
 > ### 📍 2026-08-13 session handoff (আগের brief, এখনো valid প্রেক্ষাপটের জন্য)
 >
 > পূর্ণ handoff brief: **`docs/SESSION-HANDOFF-BRIEF-2026-08-13.md`** — 13 bug pattern
