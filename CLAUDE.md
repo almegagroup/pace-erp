@@ -1549,6 +1549,68 @@ rolled-back transaction দিয়ে dev-এর real data (invoice `920000000
 
 ---
 
+## 8E. Unbounded `.in()` id-list → chunk করতে হবে (Mandatory — LOCKED 2026-08-19)
+
+**কেন:** IN02 (Stock Ledger) আর PR24 (Order Information System) live-এ 500 error দিচ্ছিল।
+Root cause বের করতে অনেক ভুল hypothesis (GENERATED column, RLS, grants, schema-cache reload
+timing) test করে বাতিল করার পর, business owner নিজেই ধরিয়ে দেন আসল pattern: শুধু ২টা narrow
+movement type (`101`+`261`) দিয়ে খুঁজলে ঠিক আছে, কিন্তু সব movement type দিয়ে খুঁজলে (মানে বেশি
+row, বেশি `stock_document_id`) error আসছে — **"data boro holei fetch failed"**।
+
+**আসল কারণ:** `@supabase/supabase-js`-এর `.in("col", [...ids])` GET request — id list URL-এর
+query string-এ বসে (POST body না)। ~৪০০টা UUID একসাথে দিলে URL ~১৫,০০০ character হয়ে যায়,
+যেটা Postgres/PostgREST-এ পৌঁছানোর **আগেই** reject হয়ে যায়। এই কারণেই কোনো server-side log
+(postgres_logs/postgrest_logs/pgbouncer_logs/supavisor_logs — সবগুলো unfiltered query করে
+দেখা হয়েছে) কিছুই দেখায়নি — request কখনো Supabase infra-তে পৌঁছায়ইনি।
+
+**কেন আগে এই বাগ ধরা পড়েনি:** যতদিন design simple ছিল (শুধু IN/OUT, narrow filter, ছোট date
+range) ততদিন id list ছোটই থাকত। এই bug data-scale-dependent — company যত পুরনো হবে, কোনো
+report-এ filter যত broad হবে, id list তত বড় হবে, আর একদিন হঠাৎ ওই ~৪০০-id cliff-এ গিয়ে পড়বে।
+কোনো নতুন code change ছাড়াই শুধু data জমার কারণে ভেঙে যেতে পারে — এটাই সবচেয়ে বিপজ্জনক দিক।
+
+**সমাধান:** `supabase/functions/api/_shared/chunkedIn.ts` — `fetchInChunks<TRow>(ids, queryFn, chunkSize=100)`
+সব id-কে ১০০-১০০ করে chunk করে, প্রতিটা chunk আলাদা `.in()` call হিসেবে **parallel** (`Promise.all`)
+পাঠায়, তারপর সব row একসাথে merge করে রিটার্ন করে। ব্যবহার:
+
+```typescript
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+
+let rows: JsonRecord[];
+try {
+  rows = await fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
+    serviceRoleClient.schema("erp_master").from("material_master")
+      .select("id, material_name").in("id", idChunk));
+} catch {
+  throw new Error("SOME_ERROR_CODE");
+}
+```
+
+**নতুন কোনো handler লেখার সময় বাধ্যতামূলক নিয়ম:**
+- কোনো id array (`materialIds`, `processOrderIds`, `stockDocumentIds`, `workflowIds` ইত্যাদি)
+  company/date-range/report filter থেকে আসছে আর তার length **theoretically unbounded** (cap
+  করা নেই, বা cap থাকলেও ~২০০+ হতে পারে) — সরাসরি `.in("col", ids)` লেখা **নিষিদ্ধ**,
+  `fetchInChunks()` দিয়েই লিখতে হবে।
+- ছোট, genuinely-bounded list (যেমন একটা single order-এর নিজের কয়েকটা line, বা `config`
+  table থেকে আসা ছোট enum-এর মতো set) chunk করার দরকার নেই — কিন্তু সন্দেহ থাকলে chunk করাই
+  নিরাপদ, খরচ প্রায় শূন্য (extra round trip না, `Promise.all`-এ parallel)।
+- `.in()` filter-এর সাথে অন্য `.eq()`/date-range filter থাকলে সেগুলো প্রতিটা chunk-এর query
+  callback-এর ভিতরেই বসাতে হবে (chunk-এর বাইরে না) — pattern দেখো
+  `stock_reports.handlers.ts`-এর `getCurrentStockHandler` বা `costing_group.handlers.ts`-এর
+  `listCostingRateMaterialsHandler`।
+
+**Reference (২০২৬-০৮-১৯ sweep-এ যেসব file-এ apply করা হয়েছে, template হিসেবে দেখো):**
+`stock_reports.handlers.ts` (IN02/IN03), `order_information_system.handlers.ts` (PR24),
+`costing_group.handlers.ts`, `hr/shared.ts` (`loadUserIdentityMap`,
+`loadWorkflowDecisionMap`, `loadWorkflowStateMap`), `opening_genealogy.handlers.ts`,
+`planning.handlers.ts`, `mts_sku_rate.handlers.ts`, `attendance_reports.handlers.ts`,
+`attendance_correction_approval.handlers.ts`, `batch_variance_report.handlers.ts`।
+
+**Enforcement:** এখনো কোনো CI guard script নেই এই pattern-এর জন্য (§8B/§8D-এর মতো ratchet
+script বানানো যেতে পারে ভবিষ্যতে — বাকি আছে)। ততদিন code review-এ নতুন `.in(` দেখলে জিজ্ঞেস
+করো — এই id list কি সত্যিই bounded, না grow করতে পারে? সন্দেহ থাকলে `fetchInChunks` দিয়েই লেখো।
+
+---
+
 ## 9. PACE ERP Build Layers — SAP Equivalent (Design Status)
 
 PACE ERP টা SAP এর equivalent হিসেবে build হচ্ছে। মোট **10টা Layer (L1–L10)**। প্রতিটার design completeness:
