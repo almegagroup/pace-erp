@@ -13,11 +13,12 @@
  *          Location, RM/INT lines) is editable here. Save = Approve.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
@@ -31,6 +32,8 @@ import {
   StrokeLinesTable, GroupCreateModal, MemberAddModal,
 } from "./strokeShared.jsx";
 import { formatPreciseNumber } from "./productionPrecision.js";
+
+const EMPTY_ARRAY = [];
 
 const STATUS_COLORS = {
   DRAFT:        "bg-amber-100 text-amber-800",
@@ -52,6 +55,7 @@ export default function StrokeApprovalPage() {
   const [companyId, setCompanyId] = useState("");
   const [companyInitialized, setCompanyInitialized] = useState(false);
   const [statusFilter, setStatusFilter] = useState("");
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     if (companyInitialized) return;
@@ -82,7 +86,19 @@ export default function StrokeApprovalPage() {
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
 
-  const strokes = strokesQ.data ?? [];
+  const strokes = strokesQ.data ?? EMPTY_ARRAY;
+  const filteredStrokes = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return strokes;
+    return strokes.filter((s) => [
+      companyLabelById.get(s.company_id), prodshadeLabel(s), s.stroke_number, s.po_type,
+      s.description, s.created_by_display, s.created_at?.slice(0, 10), s.status,
+    ].filter(Boolean).join(" ").toLowerCase().includes(needle));
+    // companyLabelById is a new Map every render (derived from runtimeContext, not memoized);
+    // including it here would defeat this memo entirely, and the company list itself changes
+    // rarely if ever post-mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strokes, search]);
   const expandedRow = strokes.find((s) => s.id === expandedId) ?? null;
   const expandedCompanyId = expandedRow?.company_id ?? "";
 
@@ -299,14 +315,25 @@ export default function StrokeApprovalPage() {
               <option value="DEACTIVATED">Deactivated</option>
             </select>
           </div>
+          <div className="min-w-[280px] flex-1">
+            <QuickFilterInput
+              label="Quick Search"
+              value={search}
+              onChange={setSearch}
+              placeholder="Search company, prodshade, stroke #, PO type, description, status..."
+              hint="Matches any column below."
+            />
+          </div>
         </div>
       </ErpSectionCard>
 
-      <ErpSectionCard title={`Strokes (${strokes.length})`} className="overflow-x-visible">
+      <ErpSectionCard title={`Strokes (${filteredStrokes.length}${filteredStrokes.length !== strokes.length ? ` of ${strokes.length}` : ""})`} className="overflow-x-visible">
         {strokesQ.isLoading ? (
           <p className="text-slate-500 text-sm py-4 text-center">Loading…</p>
         ) : strokes.length === 0 ? (
           <p className="text-slate-400 text-sm py-4 text-center">No strokes found for the selected filters.</p>
+        ) : filteredStrokes.length === 0 ? (
+          <p className="text-slate-400 text-sm py-4 text-center">No rows match this search.</p>
         ) : (
           <table className="w-full text-sm border-collapse">
             <thead>
@@ -323,7 +350,7 @@ export default function StrokeApprovalPage() {
               </tr>
             </thead>
             <tbody>
-              {strokes.map((s) => (
+              {filteredStrokes.map((s) => (
                 <React.Fragment key={s.id}>
                   <tr
                     className="hover:bg-sky-50 cursor-pointer border-b border-slate-100 transition-colors"
