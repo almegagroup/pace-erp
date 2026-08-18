@@ -19464,3 +19464,78 @@ lock) -- prod, CMP003 + CMP006.**
 - ✅ `PROD-ACL-Access-Decisions.md` Group 10 note updated, this section written.
 - ⏳ Not yet done: live click-through in the deployed app (no dev login in this environment),
   OM-IMPLEMENTATION-LOG.md entry, commit.
+
+---
+
+## Section 124 — Stock Ledger sign convention: `posted_quantity`/`posted_value` (✅ DESIGN LOCKED + IMPLEMENTED — 2026-08-18)
+
+**Origin:** came up while starting the RM/PM/INT/SFG/FG Dispatch+Costing+Reco discovery —
+business owner noticed live `stock_ledger` rows always store a positive `quantity`/`value`
+regardless of direction (confirmed by live query), unlike SAP's own ledger reports (MB51/COOIS)
+where an OUT-direction line prints as a negative number. Traced through in conversation to a
+clean, low-risk fix before Reco design starts, since Reco is fundamentally signed-sum
+arithmetic across many movement types.
+
+**The actual problem (not cosmetic):** `stock_ledger.quantity`/`value` are stored unsigned,
+with `direction` (`IN`/`OUT`) as a separate column. A naive `SUM(quantity)`/`SUM(value)` across
+mixed IN+OUT rows for a material **adds** the OUT rows instead of netting them — verified live:
+for material R40661V (Water), naive `SUM(quantity)` across its P561/P261/P262 rows gives
+~2,000,147,604 (wrong — adds the 147,604.9 KG of P261 issues instead of subtracting), while the
+correct net is ~1,999,852,394. Every future Reco/Costing/net-balance report would need to
+remember a `CASE WHEN direction='OUT' THEN -value ELSE value END` by hand, every single time —
+exactly the kind of easy-to-miss pattern this codebase's own guard-script discipline (§8B/§8D)
+exists to catch for other bug classes.
+
+**What SAP actually does (corrects an assumption raised mid-discussion):** the negative numbers
+seen in SAP's own reports (MB51/COOIS) are a **report-layer computation**, not necessarily the
+raw stored fact — SAP's underlying movement types carry their own debit/credit indicator
+(quantity + indicator, kept separate), and the signed number is derived at report time. This
+mirrors real double-entry bookkeeping convention (Amount + Dr/Cr indicator, never a bare signed
+number as the primary stored fact) more closely than a literal "make quantity/value themselves
+negative" schema change would. So the correct fix is **not** to replace `quantity`/`value` with
+signed values and drop `direction` (that would collapse two independent facts — magnitude and
+direction — into one, and force every existing report/handler across 13+ modules to be audited
+and changed, all on a live system already processing real production data) — the correct fix is
+to add the **derived signed number as its own column**, exactly what SAP's report layer computes
+on the fly, just materialized once in the schema instead of recomputed ad hoc in every query.
+
+**LOCKED design:** two `GENERATED ALWAYS AS (...) STORED` columns on
+`erp_inventory.stock_ledger`:
+- `posted_quantity` = `CASE WHEN direction = 'OUT' THEN -quantity ELSE quantity END`
+- `posted_value` = `CASE WHEN direction = 'OUT' THEN -value ELSE value END`
+
+(Named `posted_*`, not `signed_*` — business owner's call, plainer/more direct wording.)
+
+Being `GENERATED ALWAYS ... STORED` means every row — historical and future — always carries a
+correct value automatically; there is no backfill step now and no "go find and convert the old
+rows" project ever needed later (the exact future risk the business owner flagged: waiting until
+a hypothetical future SAP-style export/integration to retroactively fix sign on accumulated
+data, at which point the volume would be much larger and the job much bigger). Any future
+export/integration to a real external system just selects `posted_quantity`/`posted_value`
+directly under whatever field name that system expects — a column mapping, not a data-cleanup
+project.
+
+**Zero blast radius on existing code, by design:** `quantity`/`value` are untouched — every
+existing report/page (PR24, PR14, IN02, IN03, MI20, `stock_health_check()`, the WAR engine)
+keeps reading the same unsigned columns exactly as before, still shows "9,660.318" not
+"-9660.318" (correct for a human-readable document). Only future Reco/Costing/net-balance
+queries need to reach for the new columns, via a plain `SUM(posted_quantity)`/
+`SUM(posted_value)` — no `CASE WHEN`, no join, no risk of a report author forgetting the sign
+rule.
+
+**✅ IMPLEMENTED (2026-08-18) — migration `20260818140000_stock_ledger_posted_quantity_value.sql`,
+applied to prod.** Verified against real data (Process PO 9300000063, the same batch used
+throughout §122/§123): RM/INT lines correctly show negative `posted_quantity`/`posted_value`
+(e.g. Water: -7,283.000 / -1,820.75), SFG receipt lines correctly show positive
+(6765PL68: +9,660.318 / +1,68,599.25) — old `quantity`/`value` columns unchanged for every row.
+
+**Bonus validation, found live while verifying (not designed for, a nice side-confirmation):**
+summing `posted_quantity` across this Process PO's entire tagged ledger (all RM/INT issues + SFG
+QI-receipt + QI-release legs) gives **exactly 0.000000** — correct, since nothing was created or
+destroyed, RM mass converted 1:1 into SFG mass and the QI→Unrestricted release is a qty wash (IN
+then OUT of the same amount). Summing `posted_value` over the same set gives **+18,837.62** — the
+*value added* by the transformation, not netting to zero the way quantity does. That number
+matches `conversion_rate (₹1.95/KG) × output qty (9,660.318 KG) ≈ ₹18,837.62` almost exactly —
+i.e. `SUM(posted_value)` over one Process PO's full posting set directly recovers its §104
+conversion cost, with a one-line query, no bespoke costing logic. A strong early signal that this
+column is the right foundation for the upcoming Reco design.
