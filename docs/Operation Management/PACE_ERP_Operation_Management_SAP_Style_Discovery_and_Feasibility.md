@@ -19723,3 +19723,40 @@ time (not yet assigned a number as of this lock).
 2. Is this QA-role-only, or does authority vary by material type (e.g. a different role for FG)?
 3. Are all 6 movement-type pairs genuinely needed in practice, or only a subset (e.g. is
    QA↔Blocked, P323/P349, ever actually used, or does everything route through Unrestricted)?
+
+---
+
+## Section 127 — IN12 implementation + prod rollout, and a live-app assumption corrected (2026-08-19)
+
+**✅ IN12 IMPLEMENTATION COMPLETE** — `listReservationsHandler` (`stock_reports.handlers.ts`),
+route + ACL registry (`PROC_RESERVATION_LIST`), `ReservationListPage.jsx` (mirrors IN02's
+Page1/Page2 + `ErpDenseGrid` + Columns drawer + CSV export exactly). Same pass also fixed IN02's
+Material column (was combining pace_code+name, now name-only, matching IN03 — see §125).
+
+**⚠️ Correction found by business owner's own live screenshot, not by this session's own
+checking — worth stating plainly.** After registering IN12's ACL grant in dev and confirming it
+live in dev's `precomputed_acl_view`/`menu_snapshot`, business owner shared a screenshot of the
+**actual deployed app** (`erp.almegagroup.in`, P0004/CMP003) showing IN02/IN03/IN04 all present in
+the sidebar but IN12 missing. Comparing dev's `menu_snapshot` for that exact user+company (IN02
+`is_visible=false`) against the screenshot (IN02 visibly present) proved the deployed frontend is
+backed by **prod** (`bsjpvkigpllichlknmah`), not dev — the same "dev" naming trap flagged elsewhere
+in this doc for the Render API host. IN12 had only ever been registered in dev.
+
+**Second finding while fixing this — prod's IN02/IN03 carry a capability dev's don't mirror:**
+`acl.capability_menu_actions` in prod showed `PROC_STOCK_LEDGER`/`PROC_CURRENT_STOCK` each granted
+under **two** capabilities — `CAP_PROC_INVENTORY` **and** `CAP_EVERYONE_REPORTS` — while IN12 had
+only been given the first. That's exactly why P0004's Supply Chain work context could see IN02/IN03
+but not IN12: it holds `CAP_EVERYONE_REPORTS`, not `CAP_PROC_INVENTORY`. Added the missing
+`CAP_EVERYONE_REPORTS` grant to `PROC_RESERVATION_LIST` in both prod and dev, re-ran the 4-step
+sequence (new ACL version → `capture_acl_version_source` → `generate_acl_snapshot` →
+`rebuild_acl_menu_snapshot` for every user/work-context in the 4 active companies each place).
+Verified live: P0004/CMP003 now shows `PROC_RESERVATION_LIST` `is_visible=true` in **both** prod and
+dev, matching IN02/IN03 exactly.
+
+**Lesson, stated once so it isn't re-learned the hard way next time:** confirming a new ACL grant in
+`precomputed_acl_view`/`menu_snapshot` in dev is not the same claim as "this is live" — the deployed
+frontend's actual backing project must be confirmed (or the change applied to prod directly,
+matching CLAUDE.md's own MCP-vs-migration rule that ACL/menu data must be applied to both dev and
+prod separately). Also: when granting a new report the "same access as an existing one," diff the
+*actual* `capability_menu_actions` rows for that existing resource rather than assuming a single
+capability — a report can (and here, does) sit behind more than one.

@@ -521,9 +521,10 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 > এখন Dispatch-এর **আগে** চলে এসেছে। নতুন session ধাপ ২ (MTEST/ZTEST) দিয়ে শুরু করবে, একটা
 > পুরোপুরি শেষ (design locked + implement + verify) না করে পরেরটায় যাবে না।
 >
-> **✅ IN12 (Reservation List) + IN13 (Stock Status Change) — DESIGN LOCKED (2026-08-19,
-> feasibility §125/§126), IMPLEMENTATION NOT STARTED — orthogonal addition, does not change the
-> 4-step order above.** এসেছে "QA কোনো material-এর status change করবে"-এর discovery থেকে —
+> **✅ IN12 (Reservation List) — DESIGN LOCKED + IMPLEMENTATION COMPLETE + prod ACL live
+> (2026-08-19, feasibility §125/§127). IN13 (Stock Status Change) — DESIGN LOCKED, IMPLEMENTATION
+> NOT STARTED, ৩টা open question বাকি.** Orthogonal addition, does not change the 4-step order
+> above. এসেছে "QA কোনো material-এর status change করবে"-এর discovery থেকে —
 > আসল gap হলো Inward QA/RTV/Opening Stock/Process PO Verify ছাড়া আর কোথাও QA↔Unrestricted↔Blocked
 > movement (P321-P349 family, সব ৬টাই engine-এ আগে থেকে ready) কেউ standalone action হিসেবে করতে
 > পারে না — RM/PM/INT/SFG/FG সব material-এই, শুধু FG না। **IN12** = SAP MB25-equivalent
