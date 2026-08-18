@@ -11,6 +11,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import { assertProdReadRole, getIdFromPath, toTrimmedString, toUpperTrimmedString } from "./production.shared.ts";
@@ -70,12 +71,17 @@ async function resolveMaterialMap(materialIds: string[]): Promise<Map<string, Js
   const ids = [...new Set(materialIds.filter(Boolean))];
   const map = new Map<string, JsonRecord>();
   if (ids.length === 0) return map;
-  const { data, error } = await serviceRoleClient
-    .schema("erp_master").from("material_master")
-    .select("id, external_code, material_name, document_name, material_type")
-    .in("id", ids);
-  if (error) throw new Error("PROD_BATVAR_MATERIAL_RESOLVE_FAILED");
-  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  let rows: JsonRecord[];
+  try {
+    rows = await fetchInChunks<JsonRecord>(ids, (idChunk) =>
+      serviceRoleClient
+        .schema("erp_master").from("material_master")
+        .select("id, external_code, material_name, document_name, material_type")
+        .in("id", idChunk));
+  } catch {
+    throw new Error("PROD_BATVAR_MATERIAL_RESOLVE_FAILED");
+  }
+  for (const row of rows) map.set(String(row.id), row);
   return map;
 }
 
@@ -88,12 +94,17 @@ async function resolveStrokeMap(strokeIds: string[]): Promise<Map<string, JsonRe
   const ids = [...new Set(strokeIds.filter(Boolean))];
   const map = new Map<string, JsonRecord>();
   if (ids.length === 0) return map;
-  const { data, error } = await serviceRoleClient
-    .schema("erp_production").from("stroke_master")
-    .select("id, stroke_number, description")
-    .in("id", ids);
-  if (error) throw new Error("PROD_BATVAR_STROKE_RESOLVE_FAILED");
-  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  let rows: JsonRecord[];
+  try {
+    rows = await fetchInChunks<JsonRecord>(ids, (idChunk) =>
+      serviceRoleClient
+        .schema("erp_production").from("stroke_master")
+        .select("id, stroke_number, description")
+        .in("id", idChunk));
+  } catch {
+    throw new Error("PROD_BATVAR_STROKE_RESOLVE_FAILED");
+  }
+  for (const row of rows) map.set(String(row.id), row);
   return map;
 }
 
@@ -187,15 +198,19 @@ export async function searchBatchVarianceHandler(req: Request, ctx: ProdHandlerC
     const strokeIds = [...new Set(processOrders.map((o) => toTrimmedString(o.stroke_master_id)).filter(Boolean))];
     const materialIds = [...new Set(processOrders.map((o) => toTrimmedString(o.material_id)).filter(Boolean))];
 
-    const [strokeMap, { data: linkedPacking, error: linkedErr }] = await Promise.all([
-      resolveStrokeMap(strokeIds),
-      serviceRoleClient.schema("erp_production").from("packing_order")
-        .select("id, po_number, process_order_id, material_id, status")
-        .in("process_order_id", processOrderIds),
-    ]);
-    if (linkedErr) throw new Error("PROD_BATVAR_LOOKUP_FAILED");
-
-    const packingRows = (linkedPacking ?? []) as JsonRecord[];
+    let strokeMap: Map<string, JsonRecord>;
+    let packingRows: JsonRecord[];
+    try {
+      [strokeMap, packingRows] = await Promise.all([
+        resolveStrokeMap(strokeIds),
+        fetchInChunks<JsonRecord>(processOrderIds, (idChunk) =>
+          serviceRoleClient.schema("erp_production").from("packing_order")
+            .select("id, po_number, process_order_id, material_id, status")
+            .in("process_order_id", idChunk)),
+      ]);
+    } catch {
+      throw new Error("PROD_BATVAR_LOOKUP_FAILED");
+    }
     const skuMaterialIds = packingRows.map((r) => toTrimmedString(r.material_id)).filter(Boolean);
     const materialMap = await resolveMaterialMap([...materialIds, ...skuMaterialIds]);
 

@@ -11,6 +11,7 @@
 
 import { okResponse, errorResponse } from "../response.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { getActiveAclVersionIdForCompany } from "../../_shared/acl_runtime.ts";
 import { readAclSnapshotDecision } from "../../_shared/acl_snapshot.ts";
 import {
@@ -504,14 +505,19 @@ export async function getLeaveUsageReportHandler(
     const leaveTypeByRequestId = new Map<string, { leave_type_id: string; type_code: string; type_name: string }>();
 
     if (leaveRequestIds.length > 0) {
-      const { data: leaveRows } = await serviceRoleClient
-        .schema("erp_hr")
-        .from("leave_requests")
-        .select("leave_request_id, leave_type_id")
-        .in("leave_request_id", leaveRequestIds);
+      // A full calendar year of leave requests, company-wide, has no fixed upper bound --
+      // chunked for the same reason as the IN02/PR24 URL-length fix (_shared/chunkedIn.ts).
+      const leaveRows = await fetchInChunks<{ leave_request_id: string; leave_type_id: string | null }>(
+        leaveRequestIds,
+        (idChunk) => serviceRoleClient
+          .schema("erp_hr")
+          .from("leave_requests")
+          .select("leave_request_id, leave_type_id")
+          .in("leave_request_id", idChunk),
+      ).catch(() => []);
 
       const leaveTypeIds = [...new Set(
-        (leaveRows ?? []).filter((r) => r.leave_type_id).map((r) => r.leave_type_id as string),
+        leaveRows.filter((r) => r.leave_type_id).map((r) => r.leave_type_id as string),
       )];
 
       // Fetch leave type names

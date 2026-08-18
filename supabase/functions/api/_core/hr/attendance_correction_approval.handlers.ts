@@ -22,6 +22,7 @@
 
 import { okResponse, errorResponse } from "../response.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { getActiveAclVersionIdForCompany } from "../../_shared/acl_runtime.ts";
 import { readAclSnapshotDecision } from "../../_shared/acl_snapshot.ts";
 import {
@@ -168,15 +169,19 @@ async function loadCorrectionRows(opts: {
   if (correctionRows.length === 0) return [];
 
   const workflowIds = correctionRows.map((r) => r.workflow_request_id);
-  const { data: workflowRows, error: wfError } = await serviceRoleClient
-    .schema("acl")
-    .from("workflow_requests")
-    .select("request_id, company_id, requester_auth_user_id, requester_work_context_id, module_code, approval_type, current_state, resource_code, action_code, created_at")
-    .in("request_id", workflowIds);
+  let workflowRows: WorkflowRow[];
+  try {
+    workflowRows = await fetchInChunks<WorkflowRow>(workflowIds, (idChunk) =>
+      serviceRoleClient
+        .schema("acl")
+        .from("workflow_requests")
+        .select("request_id, company_id, requester_auth_user_id, requester_work_context_id, module_code, approval_type, current_state, resource_code, action_code, created_at")
+        .in("request_id", idChunk));
+  } catch {
+    return [];
+  }
 
-  if (wfError || !workflowRows) return [];
-
-  const workflowMap = new Map(workflowRows.map((w) => [w.request_id, w as WorkflowRow]));
+  const workflowMap = new Map(workflowRows.map((w) => [w.request_id, w]));
 
   return correctionRows
     .map((cr) => {

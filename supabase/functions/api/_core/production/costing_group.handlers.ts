@@ -8,6 +8,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
@@ -174,13 +175,18 @@ async function getMaterialMap(materialIds: string[]): Promise<Map<string, JsonRe
   const ids = [...new Set(materialIds.filter(Boolean))];
   const map = new Map<string, JsonRecord>();
   if (ids.length === 0) return map;
-  const { data, error } = await serviceRoleClient
-    .schema("erp_master")
-    .from("material_master")
-    .select("id, pace_code, material_name, base_uom_code")
-    .in("id", ids);
-  if (error) throw new Error("PROD_COST_RATE_LIST_FAILED");
-  for (const row of ((data ?? []) as JsonRecord[])) {
+  let rows: JsonRecord[];
+  try {
+    rows = await fetchInChunks<JsonRecord>(ids, (idChunk) =>
+      serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id, pace_code, material_name, base_uom_code")
+        .in("id", idChunk));
+  } catch {
+    throw new Error("PROD_COST_RATE_LIST_FAILED");
+  }
+  for (const row of rows) {
     map.set(toTrimmedString(row.id), row);
   }
   return map;
@@ -190,13 +196,18 @@ async function getStorageLocationMap(locationIds: string[]): Promise<Map<string,
   const ids = [...new Set(locationIds.filter(Boolean))];
   const map = new Map<string, JsonRecord>();
   if (ids.length === 0) return map;
-  const { data, error } = await serviceRoleClient
-    .schema("erp_inventory")
-    .from("storage_location_master")
-    .select("id, storage_location_code, storage_location_name")
-    .in("id", ids);
-  if (error) throw new Error("PROD_COST_RATE_LIST_FAILED");
-  for (const row of ((data ?? []) as JsonRecord[])) {
+  let rows: JsonRecord[];
+  try {
+    rows = await fetchInChunks<JsonRecord>(ids, (idChunk) =>
+      serviceRoleClient
+        .schema("erp_inventory")
+        .from("storage_location_master")
+        .select("id, storage_location_code, storage_location_name")
+        .in("id", idChunk));
+  } catch {
+    throw new Error("PROD_COST_RATE_LIST_FAILED");
+  }
+  for (const row of rows) {
     map.set(toTrimmedString(row.id), row);
   }
   return map;
@@ -609,40 +620,53 @@ export async function listCostingRateMaterialsHandler(req: Request, ctx: ProdHan
     if (storageLocationIds.length === 0) {
       return okResponse({ data: [] }, ctx.request_id, req);
     }
-    const { data: snapshotRows, error: snapshotError } = await serviceRoleClient
-      .schema("erp_inventory")
-      .from("stock_snapshot")
-      .select("material_id")
-      .eq("company_id", companyId)
-      .in("storage_location_id", storageLocationIds);
-    if (snapshotError) throw new Error("PROD_COST_RATE_LIST_FAILED");
-    const materialIds = uniqueStrings(((snapshotRows ?? []) as JsonRecord[]).map((row) => row.material_id));
+    let snapshotRows: JsonRecord[];
+    try {
+      snapshotRows = await fetchInChunks<JsonRecord>(storageLocationIds, (idChunk) =>
+        serviceRoleClient
+          .schema("erp_inventory")
+          .from("stock_snapshot")
+          .select("material_id")
+          .eq("company_id", companyId)
+          .in("storage_location_id", idChunk));
+    } catch {
+      throw new Error("PROD_COST_RATE_LIST_FAILED");
+    }
+    const materialIds = uniqueStrings(snapshotRows.map((row) => row.material_id));
     if (materialIds.length === 0) {
       return okResponse({ data: [] }, ctx.request_id, req);
     }
-    const [materialMap, membershipResult, rateResult] = await Promise.all([
-      getMaterialMap(materialIds),
-      serviceRoleClient
-        .schema("erp_production")
-        .from("costing_group_member")
-        .select("id, material_id, group_id, group:costing_group!inner(name)")
-        .in("material_id", materialIds),
-      rateMonth
-        ? serviceRoleClient
-          .schema("erp_production")
-          .from("costing_rate_line")
-          .select("id, material_id, rate, status, group_id")
-          .eq("company_id", companyId)
-          .eq("rate_month", rateMonth)
-          .in("material_id", materialIds)
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-    if (membershipResult.error || rateResult.error) throw new Error("PROD_COST_RATE_LIST_FAILED");
+    let membershipRows: JsonRecord[];
+    let rateRows: JsonRecord[];
+    let materialMap: Map<string, JsonRecord>;
+    try {
+      [materialMap, membershipRows, rateRows] = await Promise.all([
+        getMaterialMap(materialIds),
+        fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
+          serviceRoleClient
+            .schema("erp_production")
+            .from("costing_group_member")
+            .select("id, material_id, group_id, group:costing_group!inner(name)")
+            .in("material_id", idChunk)),
+        rateMonth
+          ? fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
+            serviceRoleClient
+              .schema("erp_production")
+              .from("costing_rate_line")
+              .select("id, material_id, rate, status, group_id")
+              .eq("company_id", companyId)
+              .eq("rate_month", rateMonth)
+              .in("material_id", idChunk))
+          : Promise.resolve([]),
+      ]);
+    } catch {
+      throw new Error("PROD_COST_RATE_LIST_FAILED");
+    }
     const membershipMap = new Map<string, JsonRecord>(
-      ((membershipResult.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.material_id), row]),
+      membershipRows.map((row) => [toTrimmedString(row.material_id), row]),
     );
     const rateMap = new Map<string, JsonRecord>(
-      ((rateResult.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.material_id), row]),
+      rateRows.map((row) => [toTrimmedString(row.material_id), row]),
     );
     const rows = materialIds.map((materialId) => {
       const material = materialMap.get(materialId);
