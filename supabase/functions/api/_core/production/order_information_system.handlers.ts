@@ -13,6 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import { assertProdReadRole, toTrimmedString, toUpperTrimmedString } from "./production.shared.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -279,22 +280,35 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     const materialIds = [...new Set(ledgerRows.map((r) => String(r.material_id)).filter(Boolean))];
     const rowCompanyIds = [...new Set(ledgerRows.map((r) => String(r.company_id)).filter(Boolean))];
 
-    const [docResp, materialResp, companyResp] = await Promise.all([
-      serviceRoleClient.schema("erp_inventory").from("stock_document")
-        .select("id, reference_document_type, reference_document_id, reference_document_number")
-        .in("id", stockDocIds),
-      serviceRoleClient.schema("erp_master").from("material_master")
-        .select("id, pace_code, external_code, material_name, material_type")
-        .in("id", materialIds),
-      serviceRoleClient.schema("erp_master").from("companies")
-        .select("id, company_code").in("id", rowCompanyIds),
-    ]);
-    if (docResp.error || materialResp.error || companyResp.error) {
+    // stockDocIds/materialIds scale 1:1 with the row count -- a wide date range with no
+    // narrowing filter can put hundreds of distinct ids in a single .in() call, which
+    // PostgREST sends as a GET request with the id list encoded in the URL. Found live
+    // 2026-08-19 on IN02's equivalent query (~400 ids -> a URL long enough to be rejected
+    // before ever reaching Postgres/PostgREST, no server-side log trail either). Chunked via
+    // fetchInChunks to keep each request small regardless of result-set size.
+    let docRows: JsonRecord[];
+    let materialRows: JsonRecord[];
+    let companyRows: JsonRecord[];
+    try {
+      [docRows, materialRows, companyRows] = await Promise.all([
+        fetchInChunks<JsonRecord>(stockDocIds, (idChunk) =>
+          serviceRoleClient.schema("erp_inventory").from("stock_document")
+            .select("id, reference_document_type, reference_document_id, reference_document_number")
+            .in("id", idChunk)),
+        fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
+          serviceRoleClient.schema("erp_master").from("material_master")
+            .select("id, pace_code, external_code, material_name, material_type")
+            .in("id", idChunk)),
+        fetchInChunks<JsonRecord>(rowCompanyIds, (idChunk) =>
+          serviceRoleClient.schema("erp_master").from("companies")
+            .select("id, company_code").in("id", idChunk)),
+      ]);
+    } catch {
       throw new Error("PROD_OIS_ENRICH_FAILED");
     }
-    const docMap = new Map(((docResp.data ?? []) as JsonRecord[]).map((r) => [String(r.id), r]));
-    const materialMap = new Map(((materialResp.data ?? []) as JsonRecord[]).map((r) => [String(r.id), r]));
-    const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((r) => [String(r.id), r]));
+    const docMap = new Map(docRows.map((r) => [String(r.id), r]));
+    const materialMap = new Map(materialRows.map((r) => [String(r.id), r]));
+    const companyMap = new Map(companyRows.map((r) => [String(r.id), r]));
 
     // APL Qty / Variance / Dosage / Standard sidecar — §122.3. Matched by
     // (process_order_id|packing_order_id) + material_id, is_voided=false. SFG/FG rows never
