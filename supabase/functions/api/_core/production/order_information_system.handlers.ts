@@ -296,13 +296,16 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     const materialMap = new Map(((materialResp.data ?? []) as JsonRecord[]).map((r) => [String(r.id), r]));
     const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((r) => [String(r.id), r]));
 
-    // APL Qty / Variance sidecar — §122.3. Matched by (process_order_id|packing_order_id) +
-    // material_id, is_voided=false. SFG/FG rows never match (reco tracks RM/PM/INT consumption
-    // only) and stay null, not zero — "no reco line" and "zero variance" are different facts.
+    // APL Qty / Variance / Dosage / Standard sidecar — §122.3. Matched by
+    // (process_order_id|packing_order_id) + material_id, is_voided=false. SFG/FG rows never
+    // match (reco tracks RM/PM/INT/PM consumption only) and stay null, not zero — "no reco
+    // line" and "zero variance" are different facts. Dosage %/Standard Qty only exist on
+    // process_order_line_reco (the recipe-driven RM/INT side) — packing_order_line_reco has
+    // no such columns, so PM rows always show blank there, by design, not a bug.
     const [procRecoResp, packRecoResp] = await Promise.all([
       processOrderIds.length > 0
         ? serviceRoleClient.schema("erp_production").from("process_order_line_reco")
-            .select("process_order_id, material_id, ap_approved_qty, variance_qty")
+            .select("process_order_id, material_id, ap_approved_qty, variance_qty, dosage_pct, standard_qty")
             .in("process_order_id", processOrderIds).eq("is_voided", false)
         : Promise.resolve({ data: [], error: null }),
       packingOrderIds.length > 0
@@ -313,23 +316,45 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     ]);
     if (procRecoResp.error || packRecoResp.error) throw new Error("PROD_OIS_ENRICH_FAILED");
 
-    const recoByOrderMaterial = new Map<string, { apl: number; variance: number }>();
+    type RecoAgg = { apl: number; variance: number; dosagePct: number | null; standardQty: number | null };
+    const recoByOrderMaterial = new Map<string, RecoAgg>();
     for (const row of (procRecoResp.data ?? []) as JsonRecord[]) {
       const key = `${row.process_order_id}|${row.material_id}`;
-      const prev = recoByOrderMaterial.get(key) ?? { apl: 0, variance: 0 };
+      const prev = recoByOrderMaterial.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
       recoByOrderMaterial.set(key, {
         apl: prev.apl + (Number(row.ap_approved_qty) || 0),
         variance: prev.variance + (Number(row.variance_qty) || 0),
+        // dosage_pct is a fixed recipe attribute for this material, not a per-event value —
+        // take it as-is rather than summing (identical across every reco row for this pairing).
+        dosagePct: row.dosage_pct != null ? Number(row.dosage_pct) : prev.dosagePct,
+        standardQty: (prev.standardQty ?? 0) + (Number(row.standard_qty) || 0),
       });
     }
     for (const row of (packRecoResp.data ?? []) as JsonRecord[]) {
       const key = `${row.packing_order_id}|${row.material_id}`;
-      const prev = recoByOrderMaterial.get(key) ?? { apl: 0, variance: 0 };
+      const prev = recoByOrderMaterial.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
       recoByOrderMaterial.set(key, {
         apl: prev.apl + (Number(row.ap_approved_qty) || 0),
         variance: prev.variance + (Number(row.variance_qty) || 0),
+        dosagePct: prev.dosagePct,
+        standardQty: prev.standardQty,
       });
     }
+
+    // §122.1 (this pass) — "FG/SFG transactions first within each PO group's list": every
+    // row is tagged with the Process Order it ultimately belongs to (directly via a PROC_PO
+    // reference, via a linked Packing PO's own parent, or via the batch_number union for
+    // non-PO-tagged events like a PID difference), then re-sorted group-by-group with
+    // SFG/FG output rows first, RM/PM/INT/PM input rows after.
+    const processOrderById = new Map(processOrders.map((o) => [String(o.id), o]));
+    const processOrderByBatch = new Map(
+      processOrders.filter((o) => toTrimmedString(o.batch_number)).map((o) => [toTrimmedString(o.batch_number), o]),
+    );
+    const packingOrderToProcessOrder = new Map(
+      linkedPackingOrders
+        .map((po) => [String(po.id), processOrderById.get(String(po.process_order_id))] as const)
+        .filter((entry): entry is [string, JsonRecord] => Boolean(entry[1])),
+    );
 
     const rows = ledgerRows.map((row) => {
       const doc = docMap.get(String(row.stock_document_id));
@@ -339,6 +364,14 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       const refId = toTrimmedString(doc?.reference_document_id);
       const recoKey = refId ? `${refId}|${row.material_id}` : "";
       const reco = recoKey ? recoByOrderMaterial.get(recoKey) : undefined;
+
+      let owningOrder: JsonRecord | undefined;
+      if (refType === "PROC_PO") owningOrder = processOrderById.get(refId);
+      else if (refType === "PACK_PO") owningOrder = packingOrderToProcessOrder.get(refId);
+      if (!owningOrder && toTrimmedString(row.batch_number)) owningOrder = processOrderByBatch.get(toTrimmedString(row.batch_number));
+      const groupPoNumber = owningOrder ? toTrimmedString(owningOrder.po_number) : (toTrimmedString(doc?.reference_document_number) || "UNGROUPED");
+
+      const materialType = toUpperTrimmedString(material?.material_type);
       return {
         id: row.id,
         company_id: row.company_id,
@@ -356,10 +389,36 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
         batch_number: row.batch_number,
         reference_document_type: refType || null,
         reference_document_number: toTrimmedString(doc?.reference_document_number) || null,
+        dosage_pct: reco ? reco.dosagePct : null,
+        standard_qty: reco ? reco.standardQty : null,
         apl_qty: reco ? reco.apl : null,
         variance_qty: reco ? reco.variance : null,
+        _group_po_number: groupPoNumber,
+        _created_at: toTrimmedString(row.created_at),
+        _output_priority: materialType === "SFG" || materialType === "FG" ? 0 : 1,
       };
     });
+
+    const groupMinDate = new Map<string, string>();
+    for (const row of rows) {
+      const key = row._group_po_number;
+      const current = groupMinDate.get(key);
+      if (!current || String(row.posting_date) < current) groupMinDate.set(key, String(row.posting_date));
+    }
+    rows.sort((a, b) => {
+      const groupCompare = (groupMinDate.get(a._group_po_number) ?? "").localeCompare(groupMinDate.get(b._group_po_number) ?? "");
+      if (groupCompare !== 0) return groupCompare;
+      if (a._group_po_number !== b._group_po_number) return a._group_po_number.localeCompare(b._group_po_number);
+      if (a._output_priority !== b._output_priority) return a._output_priority - b._output_priority;
+      const dateCompare = String(a.posting_date ?? "").localeCompare(String(b.posting_date ?? ""));
+      if (dateCompare !== 0) return dateCompare;
+      return a._created_at.localeCompare(b._created_at);
+    });
+    for (const row of rows) {
+      delete (row as JsonRecord)._group_po_number;
+      delete (row as JsonRecord)._created_at;
+      delete (row as JsonRecord)._output_priority;
+    }
 
     return okResponse({
       data: rows,
