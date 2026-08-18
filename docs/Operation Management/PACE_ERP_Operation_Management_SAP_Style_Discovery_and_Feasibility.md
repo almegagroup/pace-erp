@@ -19718,11 +19718,83 @@ number + `location_transfer_posting` log + dedicated reverse action) rather than
 doc type's range — new doc_type in the §8 document-number-series table, added at implementation
 time (not yet assigned a number as of this lock).
 
-**⚠️ Still open, not yet answered — must be resolved before writing the task brief:**
-1. Does posting require approval (maker-checker), or is a single QA action sufficient?
-2. Is this QA-role-only, or does authority vary by material type (e.g. a different role for FG)?
-3. Are all 6 movement-type pairs genuinely needed in practice, or only a subset (e.g. is
-   QA↔Blocked, P323/P349, ever actually used, or does everything route through Unrestricted)?
+**✅ All 3 open questions resolved (2026-08-19 follow-up session) — full design below, ready for a
+task brief.**
+
+### 126.1 — Multi-line entry, not single-material (LOCKED 2026-08-19)
+
+The "Change status" section is a line-item grid, not a single-row form — **Add Row** lets the user
+stage multiple materials' status changes in one session and post them together, same UX shape as
+PO Create's item table. Each row carries its own Material, Storage Location, Batch (or Batch +
+Packing PO for FG), From, To, Qty, Reason — rows are fully independent of each other, not a shared
+header applying to all.
+
+### 126.2 — Per-line, SLoc-scoped stock check (LOCKED 2026-08-19)
+
+Each row's availability check runs against **that row's own** (material, storage location, batch)
+combination independently — never blended across storage locations or across the other rows in the
+same batch of edits. Two rows for the same material at different storage locations are two
+unrelated checks. This was implicit in the original Locate-stock design (§126 above) but is stated
+explicitly here now that entry is multi-line, since a naive implementation could accidentally sum
+balances across rows instead of checking each independently.
+
+### 126.3 — Transition-specific approval: only Block→Unrestricted needs a maker-checker (LOCKED 2026-08-19, resolves open question 1)
+
+**Not a blanket approval rule.** Business owner specified per-transition, and only one of the six
+pairs requires a second sign-off:
+
+| Transition | Movement | Approval? |
+|---|---|---|
+| Unrestricted → QA | P322 | ❌ No — single action, posts immediately |
+| Unrestricted → Blocked | P344 | ❌ No — single action, posts immediately |
+| QA → Blocked | P323 | ❌ No — single action, posts immediately |
+| Blocked → QA | P349 | ❌ No — single action, posts immediately |
+| QA → Unrestricted | P321 | ❌ No — single action, posts immediately |
+| **Blocked → Unrestricted** | **P343** | **✅ Yes — maker-checker required** |
+
+**Why only this one:** every other transition either restricts stock further (Unrestricted→QA,
+Unrestricted→Blocked, QA→Blocked) or moves between two already-restricted states (Blocked→QA,
+QA→Unrestricted is the sole "release" among the no-approval set, matching Inward QA's own existing
+RELEASE decision which has never required a second sign-off). Only Blocked→Unrestricted takes
+material that was flagged as unsafe/unusable and puts it back into fully sellable/consumable stock
+— the one action with real downside if wrong, so it gets the same rigor as a fresh material
+release.
+
+**Mechanism — reuses Stroke Master's exact maker-checker pattern (§83.3), not a new one:** QA
+creates/proposes the Blocked→Unrestricted line → a Manager-tier reviewer reviews (and can edit
+before approving, same as Stroke Approval's PR02) → **the Manager's save/approve action is what
+actually posts P343** — the QA-created row itself never posts stock on its own. All 5 other
+transitions skip this entirely: QA's own Post click is the final action, no second party involved.
+
+### 126.4 — Movement-type scope: all 6 pairs kept (resolves open question 3)
+
+No pair dropped — QA↔Blocked (P323/P349) stays in scope alongside the more obviously-used
+Unrestricted↔QA/Unrestricted↔Blocked pairs, since business owner's transition table above
+explicitly names QA→Blocked and Blocked→QA as real, no-approval-needed actions — confirms they're
+genuinely used, not just theoretically available in the engine.
+
+### 126.5 — Access: role range, not manager-only (LOCKED 2026-08-19, resolves open question 2)
+
+**Not restricted to the same narrow capability as PR17 (Batch Number Release).** PR17 uses
+`CAP_QA_MGR_TIER` ("Manager tier only, no user tier" — its own DB description). IN13 instead uses
+the **broader** `CAP_QA_TIER_L3MGR` ("User tier through L3_Manager" — spans from base L1_USER all
+the way up through L3_Manager) **plus** `CAP_QA_PLANTHEAD` (fallback capability for companies with
+no dedicated QA Manager, L3_Manager role) — same pattern `PROC_QA_QUEUE` (Inward QA) already uses.
+Business owner's own framing: access should reach "from L1_USER up to whichever role also does
+batch number release" — i.e. the ceiling matches PR17's top tier, but the floor starts at the base
+QA user tier, not at management. Action-level split (who can just view vs. who can Post vs. who can
+Approve the one maker-checker transition) follows the same tiered pattern `PROC_QA_QUEUE` already
+uses (base tier VIEW, higher tiers WRITE/EDIT/APPROVE) — exact action-to-tier mapping to be finalized
+at task-brief time, not re-litigated here.
+
+### 126.6 — Page structure confirmed: one page, not report-style Page1/Page2 (LOCKED 2026-08-19)
+
+Single-page workbench (same shape as IN11 — see §121), not a search-then-report split like
+IN02/IN03/IN12. Three sections stacked on one screen: **Locate stock** (material/SLoc/batch picker
++ live 3-way balance) → **Change status** (the multi-line Add-Row grid from §126.1) → **Recent
+postings** (history + per-row Reverse button, mirrors §121's Location Transfer reverse pattern).
+The postings-history table uses `ErpDenseGrid`, same as every other report/register in this app —
+never a hand-rolled `<table>`.
 
 ---
 
