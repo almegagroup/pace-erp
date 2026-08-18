@@ -97,6 +97,10 @@ export const listOldPackingPoBatches = (p) => fetchProd("GET", "/api/production/
 // ── PR24 Order Information System (§122) ──────────────────────────────────────
 export const getOrderInformationReport = (p) => fetchProd("GET", "/api/production/order-information-system", undefined, p);
 
+// ── PR14 Batch Variance Report (§123) ──────────────────────────────────────────
+export const searchBatchVarianceReport = (p) => fetchProd("GET", "/api/production/batch-variance-report", undefined, p);
+export const getBatchVarianceDetail = (id) => fetchProd("GET", `/api/production/batch-variance-report/${id}`);
+
 // ── Stroke Masters ────────────────────────────────────────────────────────────
 export const listStrokeMasters = (p) => fetchProd("GET", "/api/production/stroke-masters", undefined, p);
 export const getStrokeMaster = (id) => fetchProd("GET", `/api/production/stroke-masters/${id}`);

@@ -1505,8 +1505,8 @@ Status: ✅ Decided + implemented in prod (2026-07-29, ACL v29/v26).
 | PR10 | Production PO Edit | — | V C E A† | — | — | — | — | — (see note below — narrower than usual, not even Director) |
 | PR11 | Production PO Final (up to L2_Manager) | V C E | | | | | | V |
 | PR13 | Order List | V (all ranks, all departments — corrected 2026-08-18 to `CAP_EVERYONE_REPORTS`, see note below) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) |
-| PR14 | Batch Variance Report | ⚠️ still the old `CAP_ORDERLIST_MGRTIER`/`_AUDITOR`/`CAP_G10_DIRECTOR_VIEW` pattern (Production+Quality+Audit+Director only) — **no longer actually "same as PR13"** now that PR13 itself moved to `CAP_EVERYONE_REPORTS`; not touched yet, flagged for the same fix if wanted | | | | | | |
-| PR20 | Partial Reversal Report | ⚠️ same as PR14 — not yet moved to `CAP_EVERYONE_REPORTS` | | | | | | |
+| PR14 | Batch Variance Report | V (all ranks, all departments — redesigned + corrected 2026-08-18 to `CAP_EVERYONE_REPORTS`, see note below) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) |
+| PR20 | Partial Reversal Report | ⚠️ still the old `CAP_ORDERLIST_MGRTIER`/`_AUDITOR`/`CAP_G10_DIRECTOR_VIEW` pattern — not yet moved to `CAP_EVERYONE_REPORTS` | | | | | | |
 | PR22 | Old Process PO | V C E† | | | | | | V |
 | PR23 | Old Packing PO | V C E† | | | | | | V |
 | PR24 | Order Information System | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) — literally everyone, incl. Accounts/Director-Reports/Management-Reports too (not columns here), see note below |
@@ -1594,12 +1594,31 @@ snapshot rebuilt and confirmed `is_visible=true` for representative users
 per department, and correctly `false` for a user in a company they don't
 belong to (P0077 checked against CMP003/CMP006, both correctly false, true
 only for their own CMP014).
-**⚠️ PR14/PR20 not touched this round** — they were documented as "same as
-PR13" but that was only ever true of the *old* PR13 design; they still use
+**⚠️ PR20 not touched this round** — it was documented as "same as
+PR13" but that was only ever true of the *old* PR13 design; it still uses
 `CAP_ORDERLIST_MGRTIER`/`CAP_ORDERLIST_AUDITOR`/`CAP_G10_DIRECTOR_VIEW`
 today. If the same "literally everyone" treatment is wanted there too, it's
 the identical mechanical fix (swap capability, re-version, re-verify) — not
 done here since it wasn't asked for this round.
+
+**PR14 (Batch Variance Report) — fully redesigned 2026-08-18 (feasibility
+doc §123), same correction as PR13/PR24.** The page had a confirmed real
+bug (wrong field names, always showed zero variance) and no dedicated
+backend at all — rebuilt from scratch as a 3-screen printable Batch Record
+with its own backend (`batch_variance_report.handlers.ts`). Business owner:
+same class of page as PR13/PR24/IN02/IN03/MI20 — a pure report, must be
+`CAP_EVERYONE_REPORTS`. **✅ IMPLEMENTED (ACL v72 CMP003 / v71 CMP006 / v6
+CMP014).** `capability_menu_actions` for `PROD_BATCH_VARIANCE` changed from
+the 3-capability set to one row, `(CAP_EVERYONE_REPORTS,
+PROD_BATCH_VARIANCE, VIEW)`. Verified via `precomputed_acl_view`: CMP003
+resolves `ALLOW` for 22 users, CMP006 for 19 users, all `VIEW`; menu
+snapshot rebuilt and confirmed `is_visible=true` for one representative
+real user in each of CMP003/CMP006. **CMP014 still resolves only 1 user**
+even after the correction — checked against `PROD_ORDER_INFO_SYSTEM` (PR24,
+identical `CAP_EVERYONE_REPORTS` grant, resolves normally for CMP014's
+Supply Chain department) to confirm this is a pre-existing
+`PROD_BATCH_VARIANCE`-specific menu/module-scoping gap, not a capability
+problem — not investigated further this round, flagged only.
 
 **PR24 (Order Information System) — new page, added 2026-08-18, Claude
 direct-implemented (not a Codex brief).** Business owner asked for a
@@ -1746,11 +1765,15 @@ design is final, not deactivated-pending-design:**
   has zero rows for any `PROD_*` resource — separation of duties here is
   done purely via distinct resource_codes/capabilities, e.g. create vs.
   approve being different pages entirely).
-- **PR14 quirk (not a bug, just a dependency to remember):** has no
+- ~~**PR14 quirk (not a bug, just a dependency to remember):** has no
   dedicated backend — `BatchVariancePage.jsx` reuses PR13's
   `PROD_ORDER_LIST` GET and computes variance client-side. Its own
   `PROD_BATCH_VARIANCE` resource only gates sidebar visibility; the ACL
-  grants for the two must be kept in sync manually.
+  grants for the two must be kept in sync manually.~~ **Superseded 2026-08-18
+  — PR14 fully redesigned (feasibility doc §123), has its own dedicated
+  backend (`batch_variance_report.handlers.ts`, two routes gated on its own
+  `PROD_BATCH_VARIANCE:VIEW`) — no longer piggybacks on `PROD_ORDER_LIST` in
+  any way, this quirk no longer exists.
 
 **Verified via `precomputed_acl_view` (v29, both CMP003/CMP006):** Nilkamal
 gets full PR00/09/11/22/23 + PR10 (via dual dept) + PACKBOM view + PR13/14/20

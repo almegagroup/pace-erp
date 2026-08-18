@@ -366,6 +366,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/plan-feed/find":               { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
   // PR24 §122 — deliberately its own resource, not PROD_ORDER_LIST (PR13 stays the plain list).
   "GET:/api/production/order-information-system":    { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
+  // PR14 §123 — Batch Variance Report, its own resource (report page, CAP_EVERYONE_REPORTS).
+  "GET:/api/production/batch-variance-report":        { skipAcl: false, resourceCode: "PROD_BATCH_VARIANCE", action: "VIEW" },
   "GET:/api/production/process-orders":              { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   "GET:/api/production/process-orders/availability-preview": { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   "POST:/api/production/process-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
@@ -1301,6 +1303,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
       GET:  { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
       POST: { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "EDIT" },
     },
+  },
+  {
+    pattern: /^\/api\/production\/batch-variance-report\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROD_BATCH_VARIANCE", action: "VIEW" } },
   },
   {
     pattern: /^\/api\/production\/process-orders\/[^/]+$/,

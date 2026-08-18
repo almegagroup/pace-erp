@@ -107,6 +107,7 @@ import {
   pruneProcessOrderHandler,
 } from "../_core/production/process_order.handlers.ts";
 import { getOrderInformationReportHandler } from "../_core/production/order_information_system.handlers.ts";
+import { searchBatchVarianceHandler, getBatchVarianceDetailHandler } from "../_core/production/batch_variance_report.handlers.ts";
 import {
   listPackingOrdersHandler,
   getPackingOrderHandler,
@@ -281,6 +282,10 @@ export async function dispatchProductionRoutes(
     case "GET:/api/production/order-information-system":
       return await getOrderInformationReportHandler(req, ctx);
 
+    // PR14 Batch Variance Report
+    case "GET:/api/production/batch-variance-report":
+      return await searchBatchVarianceHandler(req, ctx);
+
     // Process Orders
     case "GET:/api/production/process-orders":
       return await listProcessOrdersHandler(req, ctx);
@@ -395,6 +400,11 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/plan-feed\/[^/]+\/allocations$/.test(pathname)) {
     if (req.method === "GET") return await listFoAllocationsHandler(req, ctx);
     if (req.method === "POST") return await upsertFoAllocationHandler(req, ctx);
+  }
+
+  // PR14 Batch Variance Report /:id detail
+  if (/^\/api\/production\/batch-variance-report\/[^/]+$/.test(pathname)) {
+    if (req.method === "GET") return await getBatchVarianceDetailHandler(req, ctx);
   }
 
   // Process Orders /:id actions
