@@ -97,8 +97,9 @@ const LIST_COLUMNS = [
   { key: "verified_at", label: "Verified", width: "100px", render: (r) => fmtDate(r.verified_at) },
 ];
 
-function RmIntTable({ lines }) {
-  if (!lines || lines.length === 0) {
+function RmIntTable({ lines, sfgOutput }) {
+  const rows = lines ?? [];
+  if (rows.length === 0 && !sfgOutput) {
     return <p className="empty-note">No RM/INT consumption recorded for this batch.</p>;
   }
   return (
@@ -107,7 +108,7 @@ function RmIntTable({ lines }) {
         <tr><th>External Code</th><th>Description</th><th className="num">Dosage</th><th className="num">Standard</th><th className="num">Actual</th><th className="num">APL</th><th className="num">Variance</th></tr>
       </thead>
       <tbody>
-        {lines.map((l, i) => (
+        {rows.map((l, i) => (
           <tr key={i}>
             <td>{l.external_code || "—"}</td>
             <td>{l.description || "—"}</td>
@@ -118,26 +119,40 @@ function RmIntTable({ lines }) {
             <td className="num">{fmtVariance(l.variance_qty) ?? "—"}</td>
           </tr>
         ))}
-        <tr className="total">
-          <td colSpan={3}>Total</td>
-          <td className="num">{fmtQty(sumBy(lines, "standard_qty"))}</td>
-          <td className="num">{fmtQty(sumBy(lines, "actual_qty"))}</td>
-          <td className="num">{fmtQty(sumBy(lines, "ap_approved_qty"))}</td>
-          <td className="num">{fmtVariance(sumBy(lines, "variance_qty"))}</td>
-        </tr>
+        {rows.length > 0 ? (
+          <tr className="total">
+            <td colSpan={3}>Total</td>
+            <td className="num">{fmtQty(sumBy(rows, "standard_qty"))}</td>
+            <td className="num">{fmtQty(sumBy(rows, "actual_qty"))}</td>
+            <td className="num">{fmtQty(sumBy(rows, "ap_approved_qty"))}</td>
+            <td className="num">{fmtVariance(sumBy(rows, "variance_qty"))}</td>
+          </tr>
+        ) : null}
+        {sfgOutput ? (
+          <tr className="output-row">
+            <td className="num dash">—</td>
+            <td>SFG Output — {sfgOutput.description || "—"}</td>
+            <td className="num dash">—</td>
+            <td className="num dash">—</td>
+            <td className="num">{fmtQty(sfgOutput.actual_qty) ?? "—"}</td>
+            <td className="num dash">—</td>
+            <td className="num dash">—</td>
+          </tr>
+        ) : null}
       </tbody>
     </table>
   );
 }
 
-function PmTable({ lines }) {
+function PmTable({ lines, fgOutput }) {
+  const rows = lines ?? [];
   return (
     <table className="items">
       <thead className="print-repeat-head">
         <tr><th>External Code</th><th>Description</th><th className="num">Dosage</th><th className="num">Standard</th><th className="num">Actual</th><th className="num">APL</th><th className="num">Variance</th></tr>
       </thead>
       <tbody>
-        {lines.map((l, i) => (
+        {rows.map((l, i) => (
           <tr key={i}>
             <td>{l.external_code || "—"}</td>
             <td>{l.description || "—"}</td>
@@ -148,6 +163,22 @@ function PmTable({ lines }) {
             <td className="num">{fmtVariance(l.variance_qty) ?? "—"}</td>
           </tr>
         ))}
+        {fgOutput ? (
+          <tr className="output-row">
+            <td className="num dash">—</td>
+            <td>
+              FG Output — {fgOutput.description || "—"}
+              {fgOutput.num_packs != null && fgOutput.fill_qty_per_pack != null
+                ? ` (${fgOutput.num_packs} packs × ${fmtQty(fgOutput.fill_qty_per_pack) ?? fgOutput.fill_qty_per_pack} per barrel)`
+                : ""}
+            </td>
+            <td className="num dash">—</td>
+            <td className="num dash">—</td>
+            <td className="num">{fmtQty(fgOutput.total_qty) ?? "—"}</td>
+            <td className="num dash">—</td>
+            <td className="num dash">—</td>
+          </tr>
+        ) : null}
       </tbody>
     </table>
   );
@@ -180,7 +211,10 @@ function BatchRecordDoc({ detail, showLinkedPacking, showTestResults }) {
       </div>
 
       <div className="section-title">RM / INT Consumption</div>
-      <RmIntTable lines={detail.rm_int_lines} />
+      <RmIntTable
+        lines={detail.rm_int_lines}
+        sfgOutput={order.sfg_actual_qty != null ? { description: order.prodshade_description, actual_qty: order.sfg_actual_qty } : null}
+      />
 
       {showLinkedPacking ? (
         packingOrders.length === 0 ? (
@@ -189,22 +223,27 @@ function BatchRecordDoc({ detail, showLinkedPacking, showTestResults }) {
             <p className="empty-note">No Packing PO linked to this batch.</p>
           </>
         ) : (
-          packingOrders.map((po) => (
-            <React.Fragment key={po.id}>
-              <div className="section-title">Linked Packing PO</div>
-              <div className="section-sub">
-                {po.po_number} &middot; FG {[po.sku_external_code, po.sku_description].filter(Boolean).join(" — ") || "—"}
-                {po.pack_code ? ` · Pack Code ${po.pack_code}` : ""}
-                {po.num_packs != null && po.fill_qty_per_pack != null ? ` · ${po.num_packs} × ${fmtQty(po.fill_qty_per_pack)} KG` : ""}
-                {po.finalized_at ? ` · Finalized ${fmtDate(po.finalized_at)}` : ""}
-              </div>
-              {po.pm_lines.length === 0 ? (
-                <p className="empty-note">No PM lines recorded for this Packing PO.</p>
-              ) : (
-                <PmTable lines={po.pm_lines} />
-              )}
-            </React.Fragment>
-          ))
+          packingOrders.map((po) => {
+            const fgOutput = po.actual_qty_kg != null
+              ? { description: po.sku_description, num_packs: po.num_packs, fill_qty_per_pack: po.fill_qty_per_pack, total_qty: po.actual_qty_kg }
+              : null;
+            return (
+              <React.Fragment key={po.id}>
+                <div className="section-title">Linked Packing PO</div>
+                <div className="section-sub">
+                  {po.po_number} &middot; FG {[po.sku_external_code, po.sku_description].filter(Boolean).join(" — ") || "—"}
+                  {po.pack_code ? ` · Pack Code ${po.pack_code}` : ""}
+                  {po.num_packs != null && po.fill_qty_per_pack != null ? ` · ${po.num_packs} × ${fmtQty(po.fill_qty_per_pack)} KG` : ""}
+                  {po.finalized_at ? ` · Finalized ${fmtDate(po.finalized_at)}` : ""}
+                </div>
+                {po.pm_lines.length === 0 && !fgOutput ? (
+                  <p className="empty-note">No PM lines recorded for this Packing PO.</p>
+                ) : (
+                  <PmTable lines={po.pm_lines} fgOutput={fgOutput} />
+                )}
+              </React.Fragment>
+            );
+          })
         )
       ) : null}
 
@@ -519,11 +558,16 @@ const PRINT_CSS = `
   table.items tbody td.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
   table.items tbody td.dash { color:#b8ada7; }
   table.items tbody tr.total td { font-weight:700; border-top:1.5px solid #7a2a2a; }
+  table.items tbody tr.output-row td { font-weight:700; background:#faf6f2; border-top:1px solid #b8ada7; }
 
   @page { size:A4; margin:0; }
   @media print {
     body { background:#fff; }
     .no-print { display:none !important; }
+    /* ErpScreenScaffold renders its own sticky eyebrow/title/action-button bar above
+       whatever this page returns as children — it isn't reachable via .no-print since it
+       lives outside this component's own markup, so it has to be targeted structurally. */
+    .sticky.top-0.z-20 { display:none !important; }
     .batch-record-shell { background:#fff; padding:0; }
     .paper { width:794px; margin:0 auto; box-shadow:none; }
     .print-repeat-head { display: table-header-group; }

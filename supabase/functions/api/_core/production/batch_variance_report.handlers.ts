@@ -250,7 +250,7 @@ export async function getBatchVarianceDetailHandler(req: Request, ctx: ProdHandl
 
     const { data: order, error: orderErr } = await serviceRoleClient
       .schema("erp_production").from("process_order")
-      .select("id, company_id, po_number, po_type, batch_number, status, material_id, machine_id, stroke_master_id, verified_at")
+      .select("id, company_id, po_number, po_type, batch_number, status, material_id, machine_id, stroke_master_id, verified_at, actual_qty")
       .eq("id", processOrderId)
       .maybeSingle();
     if (orderErr) throw new Error("PROD_BATVAR_DETAIL_FETCH_FAILED");
@@ -270,7 +270,7 @@ export async function getBatchVarianceDetailHandler(req: Request, ctx: ProdHandl
             .select("id, machine_code, machine_name").eq("id", order.machine_id).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
       serviceRoleClient.schema("erp_production").from("packing_order")
-        .select("id, po_number, po_type, pack_code_id, fill_qty_per_pack, num_packs, material_id, status, finalized_at")
+        .select("id, po_number, po_type, pack_code_id, fill_qty_per_pack, num_packs, actual_qty_kg, material_id, status, finalized_at")
         .eq("process_order_id", processOrderId).order("created_at", { ascending: true }),
       serviceRoleClient.schema("erp_production").from("process_order_line_reco")
         .select("material_id, dosage_pct, standard_qty, actual_qty, ap_approved_qty, variance_qty")
@@ -350,6 +350,7 @@ export async function getBatchVarianceDetailHandler(req: Request, ctx: ProdHandl
         pack_code: packCodeMap.get(toTrimmedString(p.pack_code_id)) ?? null,
         fill_qty_per_pack: p.fill_qty_per_pack,
         num_packs: p.num_packs,
+        actual_qty_kg: p.actual_qty_kg,
         finalized_at: p.finalized_at,
         sku_external_code: sku?.external_code ?? null,
         sku_description: materialDescription(sku),
@@ -409,6 +410,7 @@ export async function getBatchVarianceDetailHandler(req: Request, ctx: ProdHandl
         machine_name: machine?.machine_name ?? null,
         prodshade_external_code: prodshade?.external_code ?? null,
         prodshade_description: materialDescription(prodshade),
+        sfg_actual_qty: order.actual_qty,
       },
       rm_int_lines: rmIntLines,
       packing_orders: packingOrdersOut,
