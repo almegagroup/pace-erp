@@ -1392,6 +1392,45 @@ Breakdown.
   (ACL-MASTER) — full VIEW/EDIT/WRITE/APPROVE on IN01, VIEW on IN02/IN03/
   PR21. ACL-MASTER drift check — clean.
 
+**🔴 Real leak found + fixed, 2026-08-18 — CMP014, not CMP003/CMP006.**
+Business owner asked "who else has IN01 access besides Auditor/Director" as
+a spot-check. Answer surfaced a real one: **P0077 (CMP014, SUPPLY CHAIN)**
+had live `VIEW`+`WRITE` on `PROC_PI_LIST` (`menu_visible=true` — a real
+sidebar-visible leak, not latent), letting a Supply Chain user create/edit
+Physical Inventory documents, a tier this doc reserves for L1/L2_Auditor
+only. **Root cause: a stale, never-refreshed ACL version, not a live grant
+error.** CMP014's `acl_versions` row was captured once, 2026-08-06, with its
+own description saying exactly what happened: *"SUPPLY CHAIN department
+bootstrap — 14 capabilities copied from CMP003, to unblock P0077"* — at that
+moment CMP003's own Supply Chain department still held the broad
+`CAP_PROC_INVENTORY` grant on `PROC_PI_LIST`. That grant was correctly
+narrowed away from Supply Chain in CMP003/CMP006 later the same day as part
+of this very Group 9 pass — but nobody re-captured CMP014's version
+afterward, so its frozen snapshot kept using the pre-narrowing state
+indefinitely. Confirmed via direct diff: **live**
+`acl.work_context_capabilities` for CMP014's Supply Chain (`DEPT_DPT032`)
+already matched CMP003's Supply Chain (`DEPT_DPT018`) exactly (one
+unrelated extra capability on the CMP003 side, `CAP_PROC_PLANNING_EDIT`) —
+this was purely a stale-snapshot bug, zero grant changes needed. Fixed by
+re-running the version pipeline for CMP014 alone: new `acl_versions` v3
+(`f8216d18…`), `capture_acl_version_source` + `generate_acl_snapshot`,
+`rebuild_acl_menu_snapshot` for P0077's own `(user, CMP014, DEPT_DPT032)`
+triple. Verified: P0077 now resolves zero rows on `PROC_PI_LIST` (menu
+snapshot `is_visible=false`), while retaining every other legitimate Supply
+Chain grant untouched (`PROC_CSN_TRACKER` full, `PROC_PO_LIST`/`PROC_STO_
+LIST` VIEW, `PROC_PI_COUNT_ENTRY`/`PROC_PI_DIFFERENCES` still correctly
+present) — 35 resources / 257 ALLOW rows total before and after, only the
+leaked resource changed.
+**Lesson, ties directly to the "note on scope beyond CMP003/CMP006" warning
+already in this doc's Post-Implementation Checklist section:** a company
+bootstrapped via one-time capability copy (not through this doc's normal
+page-by-page process) silently freezes at whatever the *source* company
+held on that exact day — every later narrowing decision made against
+CMP003/CMP006 has to be manually re-propagated, or it never reaches that
+company at all. CMP014 (and likely any future bootstrapped company) needs a
+periodic "diff live `work_context_capabilities` against the reference
+company, re-capture if different" check — not a one-time fix.
+
 **Code audit before deactivating (no edits made, findings logged for a
 future code-fix pass):**
 - Backends: `physical_inventory.handlers.ts` (IN01),
