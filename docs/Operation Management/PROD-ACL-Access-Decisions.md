@@ -1470,6 +1470,7 @@ Status: ✅ Decided + implemented in prod (2026-07-29, ACL v29/v26).
 | PR20 | Partial Reversal Report | same as PR13 | same as PR13 | | | | V | V (+ Director-Reports WC) |
 | PR22 | Old Process PO | V C E† | | | | | | V |
 | PR23 | Old Packing PO | V C E† | | | | | | V |
+| PR24 | Order Information System | V (all ranks — same as PR13/14/20) | V (all ranks) | | | | V | V (+ Director-Reports WC) |
 
 **† = Basic Rule #5 applied 2026-08-06:** every "no ceiling" full-access
 grant in this table (Production on PR00/09/22/23, SCM on PR05/07, QUALITY on
@@ -1537,6 +1538,29 @@ Manager-tier (L1/L2/L3_Manager) + Director only, via `CAP_ORDERLIST_MGRTIER`
 — User-tier explicitly excluded, framed as fixing a "leak" from the old
 blanket `CAP_EVERYONE_REPORTS` grant. DIRECTOR-REPORTS held no grant on
 these 3 resources.~~
+
+**PR24 (Order Information System) — new page, added 2026-08-18, Claude
+direct-implemented (not a Codex brief).** Business owner asked for a
+standalone COOIS-equivalent report (full design: feasibility doc §122) —
+deliberately its own resource (`PROD_ORDER_INFO_SYSTEM`, tx_code `PR24`),
+not folded into PR13. Access design reuses this exact PR13/14/20 pattern
+rather than inventing a new one — same report-page reasoning (Basic Rule
+#4), same three capabilities. **✅ IMPLEMENTED 2026-08-18 (ACL v69 CMP003 /
+v68 CMP006).** `erp_menu.menu_master` + `acl.menu_master` + `menu_tree`
+(under `GRP_ACL_PRODUCTION`) inserted once (global, not per-company); three
+new `capability_menu_actions` rows (`CAP_ORDERLIST_MGRTIER`,
+`CAP_ORDERLIST_AUDITOR`, `CAP_G10_DIRECTOR_VIEW`, all VIEW) — confirmed live
+via `precomputed_acl_view` that all three capabilities were already held by
+both companies' `ACL-MASTER` work context, so no new capability or
+`role_capabilities`/`work_context_capabilities` row was needed anywhere; no
+`user_overrides` conflict (brand new resource, zero rows). Verified: real
+Production/Quality users (P0069/P0062, both companies), Director (P0074),
+DIRECTOR-REPORTS (P0002), and ACL-MASTER (P0076) all resolve `ALLOW`; menu
+snapshot rebuilt for all 8 verification (user, company, work_context)
+triples, `PROD_ORDER_INFO_SYSTEM`/`PR24` confirmed present in
+`erp_menu.menu_snapshot` for each. **Scope note (same limit already accepted
+for IN10/IN11 in §121.14):** CMP003 + CMP006 only, prod only — CMP010/CMP014
+and dev remain a known follow-up, not unique to PR24.
 
 **PR06/PR08 (Pack BOM Approval / Change Pack BOM Approval) — revised
 2026-08-06, business owner instruction:** originally locked as a flat

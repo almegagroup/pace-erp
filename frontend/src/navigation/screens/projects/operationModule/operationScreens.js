@@ -814,6 +814,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROD_ORDER_INFO_SYSTEM: {
+    screen_code: "PROD_ORDER_INFO_SYSTEM",
+    route: "/dashboard/production/order-information-system",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROD_BATCH_VARIANCE: {
     screen_code: "PROD_BATCH_VARIANCE",
     route: "/dashboard/production/batch-variance",

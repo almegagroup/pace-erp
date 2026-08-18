@@ -4148,3 +4148,37 @@ it provides no enforcement value as a CI step in its current form.
 - Verification:
   - frontend production build passed on Monday, August 17, 2026 after this change set
   - backend direct import sanity was attempted; source parse path is clean, but the sandbox import check hit environment/permission guards instead of code errors
+
+### 2026-08-18 - PR24 Order Information System (Claude direct-implemented, not a Codex brief)
+
+- Origin: PR13 (Order List) review turned into a full SAP-COOIS-equivalent redesign request;
+  business owner decided the result was substantial enough to be its own standalone page
+  rather than a PR13 reskin. Full design lock: feasibility doc Section 122.
+- New files:
+  - `supabase/functions/api/_core/production/order_information_system.handlers.ts` —
+    `getOrderInformationReportHandler`, the full ledger-join + reco-sidecar report query.
+  - `frontend/src/pages/dashboard/production/OrderInformationSystemPage.jsx` — Page 1
+    selection screen + Page 2 `ErpDenseGrid` transaction report.
+- Wiring: `_routes/production.routes.ts`, `_acl/route-acl-registry.ts`
+  (`PROD_ORDER_INFO_SYSTEM:VIEW`), `prodApi.js`, `AppRouter.jsx`, `operationScreens.js`.
+- ACL (prod, CMP003 v69 / CMP006 v68): new menu resource under `GRP_ACL_PRODUCTION`, reused
+  PR13/14/20's existing `CAP_ORDERLIST_MGRTIER`/`CAP_ORDERLIST_AUDITOR`/`CAP_G10_DIRECTOR_VIEW`
+  capabilities (no new capability needed — confirmed ACL-MASTER already held all three).
+  Verified live via `precomputed_acl_view` + `erp_menu.menu_snapshot` for 8 real
+  (user, company, work_context) triples across both companies.
+- Two real bugs found and fixed live while mocking this page against real prod data
+  (both already committed/verified before this page's own implementation started):
+  1. PR13's Packing Orders tab was missing SKU/Pack Code/Num Packs/Fill Qty/Batch columns —
+     pure frontend gap, backend already returned the data.
+  2. RM/INT/PM issue lines are supposed to carry the batch number of the SFG/FG they were
+     consumed into (traceability label, not "RM is batch-tracked" — that stays unchanged) —
+     9 Process POs + 2 downstream Packing POs verified 2026-08-08→2026-08-11 13:39 UTC
+     predated this stamping fix; 101 `stock_ledger` rows backfilled in prod (label-only,
+     qty/value untouched) using the same disable-rule/correct/re-enable/verify protocol as
+     this session's earlier IST-date backfill.
+- Verification: `deno check` (zero new errors vs. the pre-existing 5-error baseline,
+  confirmed via git-stash before/after), `eslint` (clean), `route-acl-registry-guard.mjs`
+  (0 missing), `company-scope-guard.mjs` (0 unguarded), `resource-code-domain-guard.mjs`
+  (0 cross-domain).
+- Not yet done: live click-through in the deployed app (no dev login in this environment),
+  CMP010/CMP014 + dev ACL provisioning (same accepted scope limit as IN10/IN11).
