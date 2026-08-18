@@ -159,6 +159,7 @@ import TransporterMasterPage from "../pages/dashboard/procurement/masters/Transp
 import CHAMasterPage from "../pages/dashboard/procurement/masters/CHAMasterPage.jsx";
 import StockLedgerReportPage from "../pages/dashboard/procurement/reports/StockLedgerReportPage.jsx";
 import CurrentStockPage from "../pages/dashboard/procurement/reports/CurrentStockPage.jsx";
+import ReservationListPage from "../pages/dashboard/procurement/reports/ReservationListPage.jsx";
 import StockValuationPage from "../pages/dashboard/procurement/reports/StockValuationPage.jsx";
 import LandedCostListPage from "../pages/dashboard/procurement/accounts/LandedCostListPage.jsx";
 import LandedCostDetailPage from "../pages/dashboard/procurement/accounts/LandedCostDetailPage.jsx";
@@ -729,6 +730,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/reports/current-stock"
                     element={<CurrentStockPage />}
+                  />
+                  <Route
+                    path="procurement/reports/reservation-list"
+                    element={<ReservationListPage />}
                   />
                   <Route
                     path="procurement/reports/stock-valuation"

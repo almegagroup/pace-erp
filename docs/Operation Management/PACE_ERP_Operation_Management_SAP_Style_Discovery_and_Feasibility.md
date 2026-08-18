@@ -19551,7 +19551,7 @@ and dev. The design/values above are otherwise still accurate.
 
 ---
 
-## Section 125 — IN04 Reservation List: SAP MB25-equivalent, all reservation statuses (✅ DESIGN LOCKED — 2026-08-19)
+## Section 125 — IN12 Reservation List: SAP MB25-equivalent, all reservation statuses (✅ DESIGN LOCKED — 2026-08-19)
 
 **Origin:** came up while designing §126 (Stock Status Change) — a QA action that blocks/QI-holds
 stock needs to warn the user when it would push a material's derived "Available" quantity
@@ -19575,7 +19575,7 @@ design defaulted to showing only `OPEN`/`PARTIAL` reservations. Business owner c
 `FULLY_ISSUED` and `CANCELLED` reservations must be visible too (real MB25 behavior: shows
 everything by default, filtered down on request). Status becomes a filter, not a hard exclusion.
 
-**Page 1 — search (mirrors IN02/IN03's Page-1/Page-2 split, `report_code = "IN04"`):**
+**Page 1 — search (mirrors IN02/IN03's Page-1/Page-2 split, `report_code = "IN12"`):**
 - Company — `TransactionCompanySelector` (Law 12: single-company locked read-only, multi-company
   real dropdown from `runtimeContext.availableCompanies`), never an admin/global company source.
 - Date range — mandatory, max 365 days (same `dateSpanTooWide()` guard IN02 already has), against
@@ -19607,10 +19607,10 @@ IN02's `getStockLedgerReportHandler` builds `material: \`${materialCode} — ${m
 (same file, ~line 1180) — the frontend grid's `material_label` column shows the name alone,
 External Code as its own separate column. Business owner confirmed IN03's approach is the one to
 follow, and **IN02 is the one that's wrong** — flagged as a separate follow-up fix (not bundled
-into this task, since it touches a different, already-shipped report). IN04 follows IN03: Material
+into this task, since it touches a different, already-shipped report). IN12 follows IN03: Material
 column = name only, External Code its own column, no combined string.
 
-**tx_code: `IN04`** (was unassigned in the existing IN01–IN11 range — confirmed via grep before
+**tx_code: `IN12`** (was unassigned in the existing IN01–IN11 range — confirmed via grep before
 claiming it).
 
 **Feeds into §126** — the Stock Status Change page's "this would strand N reservations" warning
@@ -19619,7 +19619,7 @@ never has to search manually for what's affected.
 
 ---
 
-## Section 126 — Stock Status Change (IN12): SAP MB1B-equivalent, generic Unrestricted/QI/Blocked posting (✅ DESIGN LOCKED — 2026-08-19)
+## Section 126 — Stock Status Change (IN13): SAP MB1B-equivalent, generic Unrestricted/QI/Blocked posting (✅ DESIGN LOCKED — 2026-08-19)
 
 **Origin:** business owner's original ask — "QA needs to be able to change a material's status" —
 turned out not to mean Inward QA (which already exists, RM/PM, GRN-triggered) but a standing gap:
@@ -19693,9 +19693,9 @@ reservations` can compute negative for that material. This matches real SAP beha
 stock can and does go negative under a quality block) — it is a meaningful signal ("some
 reservations can no longer be fulfilled as-is"), not data corruption. **Soft warning, not a hard
 block:** before posting an action that would push Available negative, the page queries
-`reservation_document` (same source §125/IN04 reads) for open reservations against that exact
+`reservation_document` (same source §125/IN12 reads) for open reservations against that exact
 material+location+batch scope and lists them by name (source document number, qty) with a link
-into a pre-filtered IN04 view — so the user never has to search manually. **The page does not
+into a pre-filtered IN12 view — so the user never has to search manually. **The page does not
 cancel/clear those reservations itself** — that decision belongs to whoever owns the source
 document (Production for a Process PO, Sales for a Sales Order, etc.); this page's job ends at
 visibility, not resolution. If the affected order later hits the hard block at its own Verify/Final
@@ -19709,8 +19709,8 @@ prefixes from different owning modules — `PO06` (Inward QA Queue, Procurement-
 Production-owned) already sit in this same sidebar group today. tx_code prefix tracks which
 module's engine/domain a page belongs to; sidebar group tracks where it's displayed — the two are
 independent axes, already proven by this exact group. Since Stock Status Change uses Inventory's
-own engine (`stock_snapshot`, `movement_type_master`, `post_document`), same as §125/IN04, it keeps
-the `IN` prefix — **`IN12`** (`IN01`–`IN11` all already assigned) — while its `menu_tree` parent is
+own engine (`stock_snapshot`, `movement_type_master`, `post_document`), same as §125/IN12, it keeps
+the `IN` prefix — **`IN13`** (`IN01`–`IN11` all already assigned) — while its `menu_tree` parent is
 `GRP_ACL_QA`, not `GRP_ACL_INVENTORY`.
 
 **Own lightweight document number series:** mirrors §121's Location Transfer precedent (`LTR`

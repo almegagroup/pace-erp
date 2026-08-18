@@ -81,6 +81,7 @@ import {
 import {
   getCurrentStockHandler,
   getStockLedgerReportHandler,
+  listReservationsHandler,
   listStockLedgerMovementTypesHandler,
   searchCurrentStockBatchNumbersHandler,
   searchCurrentStockPackingPoNumbersHandler,
@@ -565,6 +566,8 @@ export async function dispatchProcurementRoutes(
       return await getCurrentStockHandler(req, ctx);
     case "GET:/api/procurement/stock-valuation":
       return await getStockValuationHandler(req, ctx);
+    case "GET:/api/procurement/reservations":
+      return await listReservationsHandler(req, ctx);
     case "POST:/api/procurement/ptos":
       return await createPTOHandler(req, ctx);
     case "GET:/api/procurement/ptos":
