@@ -74,7 +74,7 @@ const GRID_COLUMNS = [
     align: "center",
     render: (r) => <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${DIR_COLORS[r.direction] ?? ""}`}>{r.direction}</span>,
   },
-  { key: "quantity", label: "Qty", align: "right", width: "100px", render: (r) => Number(r.quantity ?? 0).toLocaleString(undefined, { minimumFractionDigits: 3 }) },
+  { key: "quantity", label: "Posted Qty", align: "right", width: "100px", render: (r) => Number(r.quantity ?? 0).toLocaleString(undefined, { minimumFractionDigits: 3 }) },
   { key: "batch_number", label: "Batch #", width: "100px", render: (r) => r.batch_number || "--" },
   {
     key: "reference_document_number",
