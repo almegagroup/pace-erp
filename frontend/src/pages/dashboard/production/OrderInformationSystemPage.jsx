@@ -168,6 +168,8 @@ export default function OrderInformationSystemPage() {
         </span>
       ),
     },
+    { key: "standard_qty", label: "Standard Qty", align: "right", width: "100px", render: (r) => (r.standard_qty == null ? <span className="text-slate-300">--</span> : Number(r.standard_qty).toLocaleString(undefined, { minimumFractionDigits: 3 })) },
+    { key: "dosage_pct", label: "Dosage %", align: "right", width: "90px", render: (r) => (r.dosage_pct == null ? <span className="text-slate-300">--</span> : `${Number(r.dosage_pct).toLocaleString(undefined, { maximumFractionDigits: 4 })}%`) },
     { key: "apl_qty", label: "APL Qty", align: "right", width: "100px", render: (r) => (r.apl_qty == null ? <span className="text-slate-300">--</span> : Number(r.apl_qty).toLocaleString(undefined, { minimumFractionDigits: 3 })) },
     {
       key: "variance_qty",

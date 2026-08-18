@@ -19122,7 +19122,21 @@ family as IN02/IN03 — never a hand-rolled `<table>`), row-by-row page-level sc
 inner scroll-box. **Not** a snapshot of current RM/INT lines (that was the mistake in the
 first mock) — every row is one real `stock_ledger` movement. Columns: **Company, Posting
 Date, Material (name), External Code, Movement Type, Direction, Qty, Batch #, Ref. Document
-(type badge + number), APL Qty, Variance.**
+(type badge + number), Standard Qty, Dosage %, APL Qty, Variance.**
+
+**Row order — corrected 2026-08-18, business owner instruction:** rows are not purely
+chronological across the whole report. Every row is first tagged with the **Process Order it
+ultimately belongs to** ("PO group" — resolved via a direct `PROC_PO` reference, via a linked
+Packing PO's own parent Process Order, or via the `batch_number` union for a non-PO-tagged
+event like a PID difference), then sorted **group by group** (groups ordered by their own
+earliest posting date), and **within each group, SFG/FG output rows come first, RM/PM/INT/PM
+input rows after** — matching how a person actually reads a batch's story (what came out,
+then what it was made from), not raw posting-timestamp order. **Standard Qty** and
+**Dosage %** are pulled from `process_order_line_reco` (`standard_qty`, `dosage_pct`) —
+RM/INT rows only, since `packing_order_line_reco` carries no such columns (PM rows show
+blank there, by design, same "blank ≠ zero" convention as APL/Variance) — `dosage_pct` is
+taken as-is (a fixed recipe attribute, never summed across reco rows), `standard_qty` is
+summed the same way `ap_approved_qty`/`variance_qty` already are.
 
 ### 122.2 — Data source: `stock_ledger` join, not the reco table (LOCKED, corrects the first draft)
 
