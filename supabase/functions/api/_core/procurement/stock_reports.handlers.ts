@@ -71,8 +71,10 @@ type StockLedgerRow = {
   movement_type_code: string;
   direction: string;
   quantity: number;
+  posted_quantity: number;
   base_uom_code: string;
   value: number;
+  posted_value: number;
   valuation_rate: number;
   created_at: string | null;
   created_by: string;
@@ -483,7 +485,7 @@ export async function getStockLedgerReportHandler(
     let query = serviceRoleClient
       .schema("erp_inventory")
       .from("stock_ledger")
-      .select("id, ledger_seq, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, base_uom_code, value, valuation_rate, created_at, created_by")
+      .select("id, ledger_seq, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at, created_by")
       .eq("company_id", companyId)
       .order("posting_date", { ascending: true })
       .order("ledger_seq", { ascending: true });
@@ -520,8 +522,10 @@ export async function getStockLedgerReportHandler(
       movement_type_code: toTrimmedString(row.movement_type_code).toUpperCase(),
       direction: toTrimmedString(row.direction).toUpperCase(),
       quantity: Number(row.quantity ?? 0),
+      posted_quantity: Number(row.posted_quantity ?? 0),
       base_uom_code: toTrimmedString(row.base_uom_code),
       value: Number(row.value ?? 0),
+      posted_value: Number(row.posted_value ?? 0),
       valuation_rate: Number(row.valuation_rate ?? 0),
       created_at: toTrimmedString(row.created_at) || null,
       created_by: toTrimmedString(row.created_by),
@@ -720,12 +724,10 @@ export async function getStockLedgerReportHandler(
       const materialLabel = resolveMaterialLabel(material) || "—";
       const materialCode = toTrimmedString(material?.pace_code) || "—";
       const documentName = toTrimmedString(material?.document_name) || null;
-      // Signed: negative for OUT, positive for IN. Computed here from quantity+direction
-      // rather than selecting stock_ledger.posted_quantity directly -- PostgREST's schema
-      // cache needs a reload after that GENERATED column lands (see Section 124), and this
-      // avoids a hard dependency on that timing for a page users hit immediately. pack_quantity
-      // below is a straight division of baseQuantity, so it inherits the correct sign too.
-      const baseQuantity = normalizeNumber(row.direction === "OUT" ? -row.quantity : row.quantity);
+      // Signed: negative for OUT, positive for IN (posted_quantity/posted_value are GENERATED
+      // columns on stock_ledger -- see feasibility doc Section 124). pack_quantity below is a
+      // straight division of baseQuantity, so it inherits the correct sign too.
+      const baseQuantity = normalizeNumber(row.posted_quantity);
       const conversion = resolveAltUomConversion(material, conversionsByMaterialId.get(row.material_id) ?? []);
       const altFactor = Number(conversion?.conversion_factor ?? 0);
       const fgPoNumber = materialType === "FG" ? resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap) : "";
@@ -769,7 +771,7 @@ export async function getStockLedgerReportHandler(
         base_uom_code: row.base_uom_code || "—",
         pack_quantity: packQuantity,
         pack_uom_code: resolvedPackUomCode,
-        value: normalizeNumber(row.direction === "OUT" ? -row.value : row.value, 4),
+        value: normalizeNumber(row.posted_value, 4),
         direction: row.direction || "—",
         reference_document: toTrimmedString(doc?.reference_document_number) || "—",
         packing_po_number: fgPoNumber || "—",

@@ -239,7 +239,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
 
     if (docIds.size > 0) {
       let lq = serviceRoleClient.schema("erp_inventory").from("stock_ledger")
-        .select("id, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, base_uom_code, value, valuation_rate, created_at")
+        .select("id, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at")
         .in("stock_document_id", [...docIds]);
       if (!bypassDateRange) {
         lq = (lq as unknown as { gte: (c: string, v: string) => typeof lq }).gte("posting_date", dateFrom);
@@ -252,7 +252,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
 
     if (batchNumbers.length > 0) {
       let lq = serviceRoleClient.schema("erp_inventory").from("stock_ledger")
-        .select("id, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, base_uom_code, value, valuation_rate, created_at")
+        .select("id, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at")
         .in("batch_number", batchNumbers)
         .in("company_id", companyIdsInScope);
       if (!bypassDateRange) {
@@ -384,11 +384,9 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
         material_type: material?.material_type ?? null,
         movement_type_code: row.movement_type_code,
         direction: row.direction,
-        // Signed: negative for OUT, positive for IN. Computed here from quantity+direction
-        // rather than selecting stock_ledger.posted_quantity directly -- PostgREST's schema
-        // cache needs a reload after that GENERATED column lands (see Section 124), and this
-        // avoids a hard dependency on that timing for a page users hit immediately.
-        quantity: toUpperTrimmedString(row.direction) === "OUT" ? -Number(row.quantity ?? 0) : Number(row.quantity ?? 0),
+        // Signed: negative for OUT, positive for IN (posted_quantity is a GENERATED column
+        // on stock_ledger -- see feasibility doc Section 124).
+        quantity: row.posted_quantity,
         base_uom_code: row.base_uom_code,
         batch_number: row.batch_number,
         reference_document_type: refType || null,
