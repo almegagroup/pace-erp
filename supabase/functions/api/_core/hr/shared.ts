@@ -1,4 +1,5 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { getActiveAclVersionIdForCompany } from "../../_shared/acl_runtime.ts";
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import {
@@ -563,15 +564,16 @@ export async function loadWorkflowDecisionMap(
     return map;
   }
 
-  const { data } = await serviceRoleClient
-    .schema("acl")
-    .from("workflow_decisions")
-    .select("request_id, stage_number, approver_auth_user_id, decision, decided_at")
-    .in("request_id", requestIds)
-    .order("stage_number", { ascending: true })
-    .order("decided_at", { ascending: true });
+  const data = await fetchInChunks<WorkflowDecisionRow>(requestIds, (idChunk) =>
+    serviceRoleClient
+      .schema("acl")
+      .from("workflow_decisions")
+      .select("request_id, stage_number, approver_auth_user_id, decision, decided_at")
+      .in("request_id", idChunk)
+      .order("stage_number", { ascending: true })
+      .order("decided_at", { ascending: true })).catch(() => []);
 
-  for (const row of (data ?? []) as WorkflowDecisionRow[]) {
+  for (const row of data) {
     const bucket = map.get(row.request_id) ?? [];
     bucket.push(row);
     map.set(row.request_id, bucket);
@@ -589,13 +591,14 @@ async function loadWorkflowStateMap(
     return map;
   }
 
-  const { data } = await serviceRoleClient
-    .schema("acl")
-    .from("workflow_requests")
-    .select("request_id, current_state")
-    .in("request_id", requestIds);
+  const data = await fetchInChunks<WorkflowStateLookupRow>(requestIds, (idChunk) =>
+    serviceRoleClient
+      .schema("acl")
+      .from("workflow_requests")
+      .select("request_id, current_state")
+      .in("request_id", idChunk)).catch(() => []);
 
-  for (const row of (data ?? []) as WorkflowStateLookupRow[]) {
+  for (const row of data) {
     map.set(row.request_id, row.current_state);
   }
 
@@ -755,23 +758,26 @@ export async function loadUserIdentityMap(
     return identityMap;
   }
 
-  const { data: users } = await serviceRoleClient
-    .schema("erp_core")
-    .from("users")
-    .select("auth_user_id, user_code")
-    .in("auth_user_id", authUserIds);
+  // authUserIds is bounded by distinct employees appearing in a report's date range/company --
+  // low risk in practice for this business, but chunked defensively for the same reason as
+  // the IN02/PR24 URL-length fix (_shared/chunkedIn.ts).
+  const users = await fetchInChunks<{ auth_user_id: string; user_code: string | null }>(
+    authUserIds,
+    (idChunk) => serviceRoleClient.schema("erp_core").from("users")
+      .select("auth_user_id, user_code").in("auth_user_id", idChunk),
+  ).catch(() => []);
 
-  const { data: signupRows } = await serviceRoleClient
-    .schema("erp_core")
-    .from("signup_requests")
-    .select("auth_user_id, name")
-    .in("auth_user_id", authUserIds);
+  const signupRows = await fetchInChunks<{ auth_user_id: string; name: string | null }>(
+    authUserIds,
+    (idChunk) => serviceRoleClient.schema("erp_core").from("signup_requests")
+      .select("auth_user_id, name").in("auth_user_id", idChunk),
+  ).catch(() => []);
 
-  const { data: authRows } = await serviceRoleClient
-    .schema("auth")
-    .from("users")
-    .select("id, email, raw_user_meta_data")
-    .in("id", authUserIds);
+  const authRows = await fetchInChunks<{ id: string; email: string | null; raw_user_meta_data: unknown }>(
+    authUserIds,
+    (idChunk) => serviceRoleClient.schema("auth").from("users")
+      .select("id, email, raw_user_meta_data").in("id", idChunk),
+  ).catch(() => []);
 
   const signupNameMap = new Map(
     (signupRows ?? []).map((row) => [row.auth_user_id, row.name ?? null]),

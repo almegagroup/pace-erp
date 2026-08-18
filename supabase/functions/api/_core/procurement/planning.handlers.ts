@@ -6,6 +6,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { errorResponse, okResponse } from "../response.ts";
@@ -811,25 +812,28 @@ async function getEligibleMaterialRows(companyId: string): Promise<Array<{ mater
     return [];
   }
 
-  const { data: materialRows, error: materialError } = await serviceRoleClient
-    .schema("erp_master")
-    .from("material_master")
-    .select("id, material_type")
-    .in("id", materialIds)
-    .in("material_type", ["RM", "PM"]);
-  if (materialError) {
+  // materialIds = every distinct material with a nonzero stock_snapshot balance across all
+  // active storage locations in the company's planning sloc group -- no date/row cap, chunked
+  // for the same reason as the IN02/PR24 URL-length fix (_shared/chunkedIn.ts).
+  let materialRows: JsonRecord[];
+  try {
+    materialRows = await fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
+      serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id, material_type")
+        .in("id", idChunk)
+        .in("material_type", ["RM", "PM"]));
+  } catch (materialError) {
     console.error("PO11_ELIGIBLE_MATERIAL_FAILED", {
       company_id: companyId,
       material_ids: materialIds.length,
-      message: materialError.message,
-      details: materialError.details,
-      hint: materialError.hint,
-      code: materialError.code,
+      error: materialError instanceof Error ? materialError.message : materialError,
     });
     throw new Error("PROCUREMENT_PLANNING_ELIGIBLE_MATERIAL_FAILED");
   }
 
-  const allowedMaterialIds = new Set(((materialRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)).filter(Boolean));
+  const allowedMaterialIds = new Set(materialRows.map((row) => toTrimmedString(row.id)).filter(Boolean));
 
   const { data: companyExtRows, error: companyExtError } = await serviceRoleClient
     .schema("erp_master")

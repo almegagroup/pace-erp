@@ -8,6 +8,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { errorResponse, okResponse } from "../response.ts";
@@ -701,19 +702,24 @@ export async function listOldPackingPoBatchesHandler(req: Request, ctx: ProdHand
     const processOrderIds = [...new Set(((openingProcessPoIds ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.process_order_id)).filter(Boolean))];
     if (processOrderIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
-    let query = serviceRoleClient
-      .schema("erp_production")
-      .from("packing_order")
-      .select("id, po_number, po_type, source_po_type, batch_number, material_id, pack_code_id, actual_qty_kg, fill_qty_per_pack, num_packs")
-      .in("process_order_id", processOrderIds)
-      .eq("status", "FINAL")
-      .order("created_at", { ascending: false });
-    if (materialId) {
-      query = query.eq("material_id", materialId);
+    // processOrderIds = every "OPENING" process order the company has ever created, no date
+    // bound -- chunked for the same reason as the IN02/PR24 URL-length fix (_shared/chunkedIn.ts).
+    let pos: JsonRecord[];
+    try {
+      pos = await fetchInChunks<JsonRecord>(processOrderIds, (idChunk) => {
+        let q = serviceRoleClient
+          .schema("erp_production")
+          .from("packing_order")
+          .select("id, po_number, po_type, source_po_type, batch_number, material_id, pack_code_id, actual_qty_kg, fill_qty_per_pack, num_packs, created_at")
+          .in("process_order_id", idChunk)
+          .eq("status", "FINAL");
+        if (materialId) q = q.eq("material_id", materialId);
+        return q;
+      });
+      pos.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+    } catch {
+      throw new Error("PROD_OLD_PACKING_PO_LIST_FAILED");
     }
-
-    const { data: pos, error: poErr } = await query;
-    if (poErr) throw new Error("PROD_OLD_PACKING_PO_LIST_FAILED");
     // Must match opening_stock.handlers.ts's resolveFgOpeningPackingOrder
     // exactly -- that is the save-time authority, and this list only exists
     // to drive the picker that feeds it. Without this filter a material

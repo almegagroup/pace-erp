@@ -1074,22 +1074,28 @@ export async function getCurrentStockHandler(
     const pathAReservationMap = new Map<string, number>();
     const pathARows = rows.filter((row) => row.path_kind === "A");
     if (pathARows.length > 0) {
-      let reservationQuery = serviceRoleClient
-        .schema("erp_production")
-        .from("reservation_document")
-        .select("company_id, material_id, storage_location_id, balance_qty")
-        .eq("status", "OPEN")
-        .in("company_id", [...new Set(pathARows.map((row) => row.company_id))])
-        .in("material_id", [...new Set(pathARows.map((row) => row.material_id))]);
+      // material_id list scales with distinct materials in the current-stock result set --
+      // chunked for the same reason as the IN02/PR24 fix (see _shared/chunkedIn.ts).
+      const pathACompanyIds = [...new Set(pathARows.map((row) => row.company_id))];
+      const pathAMaterialIds = [...new Set(pathARows.map((row) => row.material_id))];
       const pathASlocIds = [...new Set(pathARows.map((row) => row.storage_location_id).filter(Boolean))];
-      if (pathASlocIds.length > 0) {
-        reservationQuery = reservationQuery.in("storage_location_id", pathASlocIds);
-      }
-      const { data: reservationRows, error: reservationError } = await reservationQuery;
-      if (reservationError) {
+      let reservationRows: JsonRecord[];
+      try {
+        reservationRows = await fetchInChunks<JsonRecord>(pathAMaterialIds, (materialChunk) => {
+          let q = serviceRoleClient
+            .schema("erp_production")
+            .from("reservation_document")
+            .select("company_id, material_id, storage_location_id, balance_qty")
+            .eq("status", "OPEN")
+            .in("company_id", pathACompanyIds)
+            .in("material_id", materialChunk);
+          if (pathASlocIds.length > 0) q = q.in("storage_location_id", pathASlocIds);
+          return q;
+        });
+      } catch {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
-      for (const reservation of (reservationRows ?? []) as JsonRecord[]) {
+      for (const reservation of reservationRows) {
         const key = [
           toTrimmedString(reservation.company_id),
           toTrimmedString(reservation.material_id),
@@ -1102,26 +1108,29 @@ export async function getCurrentStockHandler(
     const pathBCReservationMap = new Map<string, number>();
     const pathBCRows = rows.filter((row) => row.path_kind !== "A");
     if (pathBCRows.length > 0) {
-      let reservationQuery = serviceRoleClient
-        .schema("erp_production")
-        .from("reservation_document")
-        .select("company_id, material_id, storage_location_id, batch_number, balance_qty")
-        .eq("status", "OPEN")
-        .in("company_id", [...new Set(pathBCRows.map((row) => row.company_id))])
-        .in("material_id", [...new Set(pathBCRows.map((row) => row.material_id))]);
+      // Same chunking rationale as the Path A block above.
+      const pathBCCompanyIds = [...new Set(pathBCRows.map((row) => row.company_id))];
+      const pathBCMaterialIds = [...new Set(pathBCRows.map((row) => row.material_id))];
       const pathBCSlocIds = [...new Set(pathBCRows.map((row) => row.storage_location_id).filter(Boolean))];
-      if (pathBCSlocIds.length > 0) {
-        reservationQuery = reservationQuery.in("storage_location_id", pathBCSlocIds);
-      }
-      const pathBCBatches = [...new Set(pathBCRows.map((row) => row.batch_number).filter(Boolean))];
-      if (pathBCBatches.length > 0) {
-        reservationQuery = reservationQuery.in("batch_number", pathBCBatches as string[]);
-      }
-      const { data: reservationRows, error: reservationError } = await reservationQuery;
-      if (reservationError) {
+      const pathBCBatches = [...new Set(pathBCRows.map((row) => row.batch_number).filter(Boolean))] as string[];
+      let reservationRows: JsonRecord[];
+      try {
+        reservationRows = await fetchInChunks<JsonRecord>(pathBCMaterialIds, (materialChunk) => {
+          let q = serviceRoleClient
+            .schema("erp_production")
+            .from("reservation_document")
+            .select("company_id, material_id, storage_location_id, batch_number, balance_qty")
+            .eq("status", "OPEN")
+            .in("company_id", pathBCCompanyIds)
+            .in("material_id", materialChunk);
+          if (pathBCSlocIds.length > 0) q = q.in("storage_location_id", pathBCSlocIds);
+          if (pathBCBatches.length > 0) q = q.in("batch_number", pathBCBatches);
+          return q;
+        });
+      } catch {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
-      for (const reservation of (reservationRows ?? []) as JsonRecord[]) {
+      for (const reservation of reservationRows) {
         const key = [
           toTrimmedString(reservation.company_id),
           toTrimmedString(reservation.material_id),

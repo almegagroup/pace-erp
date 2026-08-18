@@ -9,6 +9,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
@@ -238,13 +239,18 @@ async function getScopedMtsSkuRows(companyId: string): Promise<ScopedSkuRow[]> {
   const materialIds = [...new Set(((skuRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   if (materialIds.length === 0) return [];
 
-  const { data: skuMaterials, error: materialError } = await serviceRoleClient
-    .schema("erp_master")
-    .from("material_master")
-    .select("id, pace_code, material_name, base_uom_code, shade_code, pack_code")
-    .in("id", materialIds);
-  if (materialError) {
-    console.error("[mts_sku_rate.getScopedMtsSkuRows.materialMaster] query failed:", JSON.stringify(materialError));
+  // materialIds = the company's entire material_plant_ext catalog, no cap -- chunked for the
+  // same reason as the IN02/PR24 URL-length fix (_shared/chunkedIn.ts).
+  let skuMaterials: JsonRecord[];
+  try {
+    skuMaterials = await fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
+      serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id, pace_code, material_name, base_uom_code, shade_code, pack_code")
+        .in("id", idChunk));
+  } catch (materialError) {
+    console.error("[mts_sku_rate.getScopedMtsSkuRows.materialMaster] query failed:", materialError);
     throw new Error("PROD_MTS_RATE_LIST_FAILED");
   }
 
@@ -265,23 +271,29 @@ async function getScopedMtsSkuRows(companyId: string): Promise<ScopedSkuRow[]> {
   const prodshadeIds = [...new Set(((prodshadeConfigs ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   if (prodshadeIds.length === 0) return [];
 
-  const [prodshadesResult, strokeResult] = await Promise.all([
-    serviceRoleClient
-      .schema("erp_master")
-      .from("material_master")
-      .select("id, shade_code")
-      .in("id", prodshadeIds),
-    serviceRoleClient
-      .schema("erp_production")
-      .from("stroke_master")
-      .select("prodshade_material_id")
-      .eq("company_id", companyId)
-      .eq("po_type", "MTS")
-      .eq("status", "APPROVED"),
-  ]);
-
-  if (prodshadesResult.error) {
-    console.error("[mts_sku_rate.getScopedMtsSkuRows.prodshadeMaterials] query failed:", JSON.stringify(prodshadesResult.error));
+  // prodshadeIds comes from prodshade_pack_config filtered only by active=true -- global
+  // across every company, no cap -- chunked for the same reason as the IN02/PR24 URL-length
+  // fix (_shared/chunkedIn.ts).
+  let prodshadeRows: JsonRecord[];
+  let strokeResult: { data: JsonRecord[] | null; error: unknown };
+  try {
+    [prodshadeRows, strokeResult] = await Promise.all([
+      fetchInChunks<JsonRecord>(prodshadeIds, (idChunk) =>
+        serviceRoleClient
+          .schema("erp_master")
+          .from("material_master")
+          .select("id, shade_code")
+          .in("id", idChunk)),
+      serviceRoleClient
+        .schema("erp_production")
+        .from("stroke_master")
+        .select("prodshade_material_id")
+        .eq("company_id", companyId)
+        .eq("po_type", "MTS")
+        .eq("status", "APPROVED"),
+    ]);
+  } catch (prodshadeError) {
+    console.error("[mts_sku_rate.getScopedMtsSkuRows.prodshadeMaterials] query failed:", prodshadeError);
     throw new Error("PROD_MTS_RATE_LIST_FAILED");
   }
   if (strokeResult.error) {
@@ -290,7 +302,7 @@ async function getScopedMtsSkuRows(companyId: string): Promise<ScopedSkuRow[]> {
   }
 
   const prodshadeMaterialMap = new Map<string, JsonRecord>();
-  for (const row of ((prodshadesResult.data ?? []) as JsonRecord[])) {
+  for (const row of prodshadeRows) {
     prodshadeMaterialMap.set(toTrimmedString(row.id), row);
   }
 

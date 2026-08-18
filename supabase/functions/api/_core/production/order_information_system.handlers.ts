@@ -216,20 +216,24 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     const packingOrderIds = linkedPackingOrders.map((o) => String(o.id));
 
     // ── Step 3: resolve stock_document ids tagged directly to these orders ────────────────
+    // processOrderIds/packingOrderIds are capped at MAX_ORDERS_MATCHED, but each order can
+    // have several stock_document rows over its lifecycle (Standard/Final/Verify/corrections/
+    // reversals), so docIds isn't bounded the same way -- chunked for safety (see
+    // _shared/chunkedIn.ts / the IN02/PR24 URL-length fix).
     const docIds = new Set<string>();
     if (processOrderIds.length > 0) {
-      const { data, error } = await serviceRoleClient
-        .schema("erp_inventory").from("stock_document")
-        .select("id").eq("reference_document_type", "PROC_PO").in("reference_document_id", processOrderIds);
-      if (error) throw new Error("PROD_OIS_LOOKUP_FAILED");
-      for (const row of (data ?? []) as JsonRecord[]) docIds.add(String(row.id));
+      const rows = await fetchInChunks<JsonRecord>(processOrderIds, (idChunk) =>
+        serviceRoleClient.schema("erp_inventory").from("stock_document")
+          .select("id").eq("reference_document_type", "PROC_PO").in("reference_document_id", idChunk))
+        .catch(() => { throw new Error("PROD_OIS_LOOKUP_FAILED"); });
+      for (const row of rows) docIds.add(String(row.id));
     }
     if (packingOrderIds.length > 0) {
-      const { data, error } = await serviceRoleClient
-        .schema("erp_inventory").from("stock_document")
-        .select("id").eq("reference_document_type", "PACK_PO").in("reference_document_id", packingOrderIds);
-      if (error) throw new Error("PROD_OIS_LOOKUP_FAILED");
-      for (const row of (data ?? []) as JsonRecord[]) docIds.add(String(row.id));
+      const rows = await fetchInChunks<JsonRecord>(packingOrderIds, (idChunk) =>
+        serviceRoleClient.schema("erp_inventory").from("stock_document")
+          .select("id").eq("reference_document_type", "PACK_PO").in("reference_document_id", idChunk))
+        .catch(() => { throw new Error("PROD_OIS_LOOKUP_FAILED"); });
+      for (const row of rows) docIds.add(String(row.id));
     }
 
     // ── Step 4: fetch stock_ledger rows — by resolved doc ids, UNION by batch_number ───────
@@ -239,16 +243,23 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     const ledgerRowsById = new Map<string, JsonRecord>();
 
     if (docIds.size > 0) {
-      let lq = serviceRoleClient.schema("erp_inventory").from("stock_ledger")
-        .select("id, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at")
-        .in("stock_document_id", [...docIds]);
-      if (!bypassDateRange) {
-        lq = (lq as unknown as { gte: (c: string, v: string) => typeof lq }).gte("posting_date", dateFrom);
-        lq = (lq as unknown as { lte: (c: string, v: string) => typeof lq }).lte("posting_date", dateTo);
+      const ledgerSelect = "id, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at";
+      let rows: JsonRecord[];
+      try {
+        rows = await fetchInChunks<JsonRecord>([...docIds], (idChunk) => {
+          let lq = serviceRoleClient.schema("erp_inventory").from("stock_ledger")
+            .select(ledgerSelect)
+            .in("stock_document_id", idChunk);
+          if (!bypassDateRange) {
+            lq = (lq as unknown as { gte: (c: string, v: string) => typeof lq }).gte("posting_date", dateFrom);
+            lq = (lq as unknown as { lte: (c: string, v: string) => typeof lq }).lte("posting_date", dateTo);
+          }
+          return lq;
+        });
+      } catch {
+        throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
       }
-      const { data, error } = await lq;
-      if (error) throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
-      for (const row of (data ?? []) as JsonRecord[]) ledgerRowsById.set(String(row.id), row);
+      for (const row of rows) ledgerRowsById.set(String(row.id), row);
     }
 
     if (batchNumbers.length > 0) {
