@@ -11,6 +11,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
@@ -23,6 +24,8 @@ import {
 } from "./prodApi.js";
 import { listMaterials, listCustomers, createCustomer, updateCustomer } from "../om/omApi.js";
 import { INDIAN_STATES } from "../../../data/indianStates.js";
+
+const EMPTY_ARRAY = [];
 
 const TABS = [
   { key: "create", label: "Create FO" },
@@ -559,7 +562,19 @@ export default function PlanFeedPage() {
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
     enabled: tab === "total",
   });
-  const summary = summaryQ.data ?? [];
+  const summary = summaryQ.data ?? EMPTY_ARRAY;
+  const [totalSearch, setTotalSearch] = useState("");
+  const filteredSummary = useMemo(() => {
+    const needle = totalSearch.trim().toLowerCase();
+    if (!needle) return summary;
+    return summary.filter((row) => [
+      row.fo_number, row.party_name, row.sku, row.ordered_stroke_number,
+      row.ordered_qty_kg, row.pack_qty, row.allocated_qty_kg,
+      ...(row.mapped_batch_numbers ?? []),
+      row.production_status, row.dispatched_qty_kg, row.dispatch_status,
+      row.pending_dispatch_kg, row.scheduled_delivery_date,
+    ].filter((v) => v !== null && v !== undefined).join(" ").toLowerCase().includes(needle));
+  }, [summary, totalSearch]);
 
   return (
     <ErpScreenScaffold
@@ -1032,10 +1047,21 @@ export default function PlanFeedPage() {
       {/* ── Tab: Total Table ── */}
       {tab === "total" && (
         <ErpSectionCard title="Total Table — Order Summary">
+          <div className="mb-3 max-w-md">
+            <QuickFilterInput
+              label="Quick Search"
+              value={totalSearch}
+              onChange={setTotalSearch}
+              placeholder="Search FO #, party, SKU, stroke, batch, status..."
+              hint="Matches any column in this table."
+            />
+          </div>
           {summaryQ.isLoading ? (
             <p className="text-slate-400 text-sm py-6 text-center">Loading summary...</p>
           ) : summary.length === 0 ? (
             <p className="text-slate-400 text-sm py-6 text-center">No active FOs found.</p>
+          ) : filteredSummary.length === 0 ? (
+            <p className="text-slate-400 text-sm py-6 text-center">No rows match this search.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse min-w-[1240px]">
@@ -1057,7 +1083,7 @@ export default function PlanFeedPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {summary.map(row => (
+                  {filteredSummary.map(row => (
                     <tr key={row.id ?? row.fo_number} className="border-b border-slate-100 hover:bg-sky-50">
                       <td className="py-2 px-3 font-mono font-semibold text-sky-700">{row.fo_number}</td>
                       <td className="py-2 px-3">{row.party_name}</td>

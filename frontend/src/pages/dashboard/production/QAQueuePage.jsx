@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
@@ -59,6 +60,7 @@ function statusTone(status) {
 export default function QAQueuePage() {
   const qc = useQueryClient();
   const [companyId, setCompanyId] = useState("");
+  const [search, setSearch] = useState("");
   const [expandedOrderId, setExpandedOrderId] = useState("");
   const [saving, setSaving] = useState(false);
   const [rejectOrderId, setRejectOrderId] = useState("");
@@ -166,6 +168,16 @@ export default function QAQueuePage() {
     return rows;
   }, [queueQ.data]);
 
+  const filteredQueue = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return queue;
+    return queue.filter((order) => [
+      order.po_number, order.batch_number, materialLabel(order.material),
+      order.stroke_number, machineLabel(order.machine), order.planned_qty,
+      order.created_by_display, order.status,
+    ].filter(Boolean).join(" ").toLowerCase().includes(needle));
+  }, [queue, search]);
+
   const detailLines = detailQ.data?.lines ?? [];
   const releasedBatches = releasedBatchQ.data ?? [];
 
@@ -188,17 +200,28 @@ export default function QAQueuePage() {
               hint=""
             />
           </div>
+          <div className="min-w-[280px] flex-1">
+            <QuickFilterInput
+              label="Quick Search"
+              value={search}
+              onChange={setSearch}
+              placeholder="Search PO number, batch, prodshade, stroke, machine, status..."
+              hint="Matches any column in the queue below."
+            />
+          </div>
           <div className="pb-1 text-xs text-slate-400">Auto-refreshes every 30 seconds</div>
         </div>
       </ErpSectionCard>
 
-      <ErpSectionCard title={`Queue (${queue.length})`}>
+      <ErpSectionCard title={`Queue (${filteredQueue.length}${filteredQueue.length !== queue.length ? ` of ${queue.length}` : ""})`}>
         {!effectiveCompanyId ? (
           <p className="py-8 text-center text-sm text-slate-400">Select a company to view the QA queue.</p>
         ) : queueQ.isLoading ? (
           <p className="py-4 text-center text-sm text-slate-500">Loading...</p>
         ) : queue.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-400">No MTO/HPS Process Orders found for this queue.</p>
+        ) : filteredQueue.length === 0 ? (
+          <p className="py-8 text-center text-sm text-slate-400">No rows match this search.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1220px] border-collapse text-sm">
@@ -216,7 +239,7 @@ export default function QAQueuePage() {
                 </tr>
               </thead>
               <tbody>
-                {queue.map((order) => {
+                {filteredQueue.map((order) => {
                   const expanded = expandedOrderId === order.id;
                   return (
                     <React.Fragment key={order.id}>

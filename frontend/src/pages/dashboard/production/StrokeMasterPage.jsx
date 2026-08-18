@@ -15,11 +15,12 @@
  *    stroke_line row.
  */
 
-import React, { useState, useRef } from "react";
+import React, { useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { pushToast } from "../../../store/uiToast.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import {
   listStrokeMasters, getStrokeMaster, createStrokeMaster,
@@ -36,6 +37,8 @@ import {
 } from "./strokeShared.jsx";
 import { formatPreciseNumber } from "./productionPrecision.js";
 
+const EMPTY_ARRAY = [];
+
 const STATUS_BADGE = {
   DRAFT:       "bg-amber-100 text-amber-800",
   APPROVED:    "bg-emerald-100 text-emerald-800",
@@ -49,6 +52,7 @@ export default function StrokeMasterPage() {
   const { runtimeContext } = useMenu();
   const [companyFilter, setCompanyFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState("create"); // create | detail
@@ -356,7 +360,16 @@ export default function StrokeMasterPage() {
     finally { setSaving(false); }
   }
 
-  const strokes = strokesQ.data ?? [];
+  const strokes = strokesQ.data ?? EMPTY_ARRAY;
+  const filteredStrokes = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return strokes;
+    return strokes.filter((s) => [
+      s.stroke_number,
+      s.material ? `${s.material.pace_code ?? ""} ${s.material.material_name ?? ""}` : `${s.prod_code ?? ""}${s.shade_code ?? ""}`,
+      s.material_type, s.po_type, s.description, s.status, s.created_at?.slice(0, 10),
+    ].filter(Boolean).join(" ").toLowerCase().includes(needle));
+  }, [strokes, search]);
   const actions = [{ label: "New Stroke", tone: "primary", mnemonic: "N", onClick: openCreate }];
 
   return (
@@ -380,14 +393,25 @@ export default function StrokeMasterPage() {
               <option value="DEACTIVATED">Deactivated</option>
             </select>
           </div>
+          <div className="min-w-[280px] flex-1">
+            <QuickFilterInput
+              label="Quick Search"
+              value={search}
+              onChange={setSearch}
+              placeholder="Search stroke #, prodshade, type, description, status..."
+              hint="Matches any column below."
+            />
+          </div>
         </div>
       </ErpSectionCard>
 
-      <ErpSectionCard title={`Strokes (${strokes.length})`}>
+      <ErpSectionCard title={`Strokes (${filteredStrokes.length}${filteredStrokes.length !== strokes.length ? ` of ${strokes.length}` : ""})`}>
         {strokesQ.isLoading ? (
           <p className="text-slate-500 text-sm py-4 text-center">Loading…</p>
         ) : strokes.length === 0 ? (
           <p className="text-slate-400 text-sm py-4 text-center">No strokes found. Press <kbd className="bg-slate-100 border px-1 rounded text-xs">Alt+N</kbd> to create.</p>
+        ) : filteredStrokes.length === 0 ? (
+          <p className="text-slate-400 text-sm py-4 text-center">No rows match this search.</p>
         ) : (
           <table className="w-full text-sm border-collapse">
             <thead>
@@ -402,7 +426,7 @@ export default function StrokeMasterPage() {
               </tr>
             </thead>
             <tbody>
-              {strokes.map((s) => (
+              {filteredStrokes.map((s) => (
                 <tr key={s.id} className="hover:bg-sky-50 cursor-pointer border-b border-slate-100 transition-colors" onClick={() => openDetail(s.id)}>
                   <td className="py-2 px-3 font-mono font-semibold">{s.stroke_number}</td>
                   <td className="py-2 px-3 text-slate-600">

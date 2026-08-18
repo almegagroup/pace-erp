@@ -10,6 +10,7 @@
 
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
@@ -61,7 +62,7 @@ export default function OrderListPage() {
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const processQ = useQuery({
-    queryKey: ["process-orders", effectiveCompanyId, processStatus, search],
+    queryKey: ["process-orders", effectiveCompanyId, processStatus],
     queryFn: () => listProcessOrders({
       company_id: effectiveCompanyId || undefined,
       status: processStatus || undefined,
@@ -72,21 +73,36 @@ export default function OrderListPage() {
   });
 
   const packingQ = useQuery({
-    queryKey: ["packing-orders", effectiveCompanyId, packingStatus, search],
+    queryKey: ["packing-orders", effectiveCompanyId, packingStatus],
     queryFn: () => listPackingOrders({
       company_id: effectiveCompanyId || undefined,
       status: packingStatus || undefined,
-      search: search || undefined,
     }),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
     enabled: activeTab === 1 && Boolean(effectiveCompanyId),
   });
 
+  // Quick Search matches every column shown in whichever tab is active -- client-side,
+  // since neither list endpoint supports a real cross-column search server-side.
+  const searchNeedle = search.trim().toLowerCase();
   const processOrders = (processQ.data ?? []).filter((order) => {
-    const haystack = [order.po_number, order.material?.material_name, order.material?.pace_code, order.batch_number].filter(Boolean).join(" ").toLowerCase();
-    return haystack.includes(search.trim().toLowerCase());
+    if (!searchNeedle) return true;
+    const haystack = [
+      order.po_number, order.po_type, order.material?.material_name, order.material?.pace_code,
+      order.material?.external_code, order.planned_qty, order.batch_number, order.status,
+      order.created_at?.slice(0, 10),
+    ].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(searchNeedle);
   });
-  const packingOrders = packingQ.data ?? [];
+  const packingOrders = (packingQ.data ?? []).filter((order) => {
+    if (!searchNeedle) return true;
+    const haystack = [
+      order.po_number, order.material?.material_name, order.material?.pace_code, order.material?.external_code,
+      order.pack_code?.pack_code, order.num_packs, order.fill_qty_per_pack, order.planned_qty_kg,
+      order.process_order?.batch_number, order.status, order.created_at?.slice(0, 10),
+    ].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(searchNeedle);
+  });
 
   return (
     <ErpScreenScaffold
@@ -103,13 +119,13 @@ export default function OrderListPage() {
               label="Company"
             />
           </div>
-          <div className="flex min-w-[240px] flex-col gap-1">
-            <label className="text-xs text-slate-500">Search</label>
-            <input
-              className="rounded border border-slate-300 px-2 py-1 text-sm"
-              placeholder="PO number, batch, prodshade..."
+          <div className="min-w-[280px] flex-1">
+            <QuickFilterInput
+              label="Quick Search"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={setSearch}
+              placeholder="Search PO number, prodshade/SKU, batch, status..."
+              hint="Matches any column in whichever tab is open below."
             />
           </div>
         </div>
