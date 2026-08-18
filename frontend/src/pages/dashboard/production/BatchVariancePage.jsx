@@ -12,7 +12,7 @@
  * Authority: Frontend
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
@@ -57,6 +57,9 @@ function fmtPct(value) {
 }
 function sumBy(list, key) {
   return list.reduce((acc, row) => acc + (Number(row[key]) || 0), 0);
+}
+function sanitizeForFileName(value) {
+  return String(value ?? "").trim().replace(/[\\/:*?"<>|]+/g, "-");
 }
 
 const emptyFilters = () => ({
@@ -306,6 +309,19 @@ export default function BatchVariancePage() {
     queryFn: () => getBatchVarianceDetail(selectedOrderId),
     enabled: page === 3 && Boolean(selectedOrderId),
   });
+
+  // Print/Save-as-PDF uses document.title as the default file name — set it to
+  // "Batch Number_Item Name" while the Batch Record is open, restore on the way out.
+  useEffect(() => {
+    if (page !== 3 || !detailQ.data?.process_order) return undefined;
+    const order = detailQ.data.process_order;
+    const itemName = order.prodshade_description || order.prodshade_external_code || "";
+    const fileTitle = [sanitizeForFileName(order.batch_number), sanitizeForFileName(itemName)]
+      .filter(Boolean)
+      .join("_");
+    if (fileTitle) document.title = fileTitle;
+    return () => { document.title = "PACE ERP"; };
+  }, [page, detailQ.data]);
 
   function updateFilter(key, value) {
     setFilters((prev) => ({ ...prev, [key]: value }));
