@@ -19278,3 +19278,189 @@ design lock) — prod, CMP003 + CMP006.**
 - ✅ `PROD-ACL-Access-Decisions.md` Group 10 table + note, this section — done.
 - ⏳ Not yet done: live click-through in the deployed app (no dev login in this
   environment), OM-IMPLEMENTATION-LOG.md entry, commit.
+
+---
+
+## Section 123 — PR14 Batch Variance Report redesign: printable Batch Record for one Process PO batch (✅ DESIGN LOCKED + IMPLEMENTATION COMPLETE — 2026-08-18)
+
+**Origin:** the live `BatchVariancePage.jsx` (PR14) had a confirmed, silent bug — it read
+`o.planned_qty_kg`/`o.actual_qty_kg`/`o.actual_output_kg` off `process_order`, but those
+columns don't exist (real columns are `planned_qty`/`actual_qty`), so `parseFloat(undefined)`
+always resolved to 0 and every row showed zero variance regardless of the real batch. There
+was also no dedicated backend — the page called the generic `listProcessOrders` and computed
+(broken) variance client-side, header-level only, no RM/PM line detail. Mocked against real
+prod data throughout (same Process PO 9300000063 / batch EV02640 used for §122, plus its
+linked Packing PO 9400000037) before writing any code, same discipline as §122.
+
+**What this actually is, corrected mid-design:** the design conversation initially referenced
+SAP transactions "ZBatVar"/"ZBatN"/"ZBatS" as if they were SAP-standard. They are not — any
+`Z`/`Y`-prefixed transaction code is, by SAP's own naming convention, always **customer-specific
+custom development**, never part of standard SAP. SAP's real native mechanism for RM/PM
+planned-vs-actual quantity variance is **COOIS's own Component View** — which is exactly what
+§122/PR24 already builds. What this section designs is closer to a **Batch Record / Certificate-
+of-Analysis-style print document** than a "variance report" in the SAP-standard sense — a
+single batch's full paper trail (RM/INT consumption, linked Packing PO's PM consumption, SFG QA
+results), formatted to print. Kept the existing `PR14` tx code and `PROD_BATCH_VARIANCE`
+resource code (already provisioned) rather than opening a new one, since this redesign replaces
+the page in place rather than sitting alongside it (unlike §122, which was deliberately kept
+separate from PR13).
+
+### 123.1 — Three-screen architecture (LOCKED)
+
+Same "only one screen visible at a time" discipline as PR24/IN02, extended to three screens
+instead of two:
+
+- **Page 1 — Selection Screen.** A single **PO Number** field accepts *either* a Process PO or
+  a Packing PO number — the system detects which (Packing PO numbers are always in the `94xx…`
+  band per §8's global range table, Process PO in `93xx…`) and always resolves back to the
+  **owning Process PO**, since the Batch Record is inherently Process-PO-rooted (a Packing PO
+  never has its own batch number — §83.7). Plus PR24-style criteria (Company, PO Type
+  multi-select, Batch Number, mandatory Posting Date range unless a PO Number is given — same
+  365-day cap and bypass rule as §122.5). Two checkboxes — **Show Linked Packing PO** and
+  **Show Test Results** — control what Page 3 renders, not what Page 2 searches; the list on
+  Page 2 always resolves and shows the linked Packing PO/SKU informationally regardless of the
+  checkboxes, since that's list metadata, not print content.
+- **Page 2 — Matching Batches.** An `ErpDenseGrid` list: Process PO, Prodshade, Packing PO
+  (first + "+N more" if a batch feeds multiple Packing POs per §83.14's "balance barrel" rule),
+  SKU, Batch #, Status, Verified. Enter or double-click a row opens Page 3 for that Process PO
+  — same `onRowActivate`/`getRowProps` pattern as every other list page in this codebase (e.g.
+  `CustomerListPage.jsx`), not a novel interaction.
+- **Page 3 — Batch Record (printable).** See §123.2.
+
+**PO Type filter scope, LOCKED as narrower than PR24's:** only `MTO`/`HPS`/`MTS` are offered.
+`process_order_line_reco` (the RM/INT source table for this report) is only ever written at
+**Verify** — and both INT (Standard→Final direct, no QA/batch/Verify at all) and MTEST (full
+MTO/HPS cycle *minus* Verify) never reach that stage, so they can never produce a row here.
+Offering them in the filter would just be a permanently-empty option.
+
+### 123.2 — Page 3 content and print mechanics (LOCKED, corrected against live screenshots)
+
+Reuses the exact `.paper`/`.parties`/`.doc-id-table`/`table.items` print-CSS system already
+proven in this codebase by `PrintPreviewPage.jsx` (PO19 "Print PO/STO") — same 794px A4-width
+paper, same Georgia-serif body, same `@page { size:A4; margin:0; }`. Two corrections against
+that precedent, both locked after live screenshot review with the business owner:
+
+1. **No masthead / company-branding block, no "PR14 · generated …" line.** PO19's `.masthead`
+   (company name, address, GSTIN, QR code) doesn't apply here — a Batch Record isn't an
+   external commercial document sent to a vendor, it's an internal QA/production paper trail.
+   The header is a single plain centered title, "BATCH VARIANCE REPORT" — nothing else. Company
+   identity is already covered in the doc-id-table block below it (Company Code/Name row).
+2. **The RM/INT and PM tables must be allowed to split across pages** — the opposite of PO19's
+   `table.items { break-inside: avoid; }` (safe there since a PO copy's item table is always
+   1-4 rows; a batch's RM/INT list routinely has 10+ lines). Reuses the `display:
+   table-header-group` repeating-header trick already proven by `PIDocumentPrintPage.jsx`
+   (MI21) instead: `table.items { break-inside: auto; }` at the table level (allows the split)
+   + `table.items tbody tr { break-inside: avoid; }` (never splits mid-row) + `thead.print-repeat-head
+   { display: table-header-group; }` under `@media print` (the header row physically repeats on
+   every printed page the table spans onto). This is the literal requirement given — "content
+   flows to the next page when it doesn't fit, but never splits a table mid-row — the full
+   table continues, and the header repeats on every printed page."
+
+**Header detail block (two columns, 4 rows each) — LOCKED:** Company Code/Name, Process PO
+Number, Order Type, Prodshade Description | Stroke Number, Machine, Batch Posting Date (=
+`process_order.verified_at` — Verify is the batch-posting event), Batch Number.
+
+**Body sections, in order:**
+1. **RM / INT Consumption** — one row per `process_order_line_reco` line (`is_voided=false`):
+   External Code, Description, Dosage, Standard, Actual, APL, Variance — a Total row sums
+   Standard/Actual/APL/Variance. Deliberately **no Movement Type, no Document Detail column** —
+   this is not PR24's ledger view, it's the recipe-vs-actual variance table only.
+2. **Linked Packing PO** — one section per linked Packing PO (plural-safe per §83.14), each with
+   its own sub-header line (PO number, FG SKU, Pack Code, pack count x fill qty, Finalized
+   date) and the **identical table shape** sourced from `packing_order_line_reco`
+   (`is_voided=false`) — Dosage/Standard always render as `--` here since
+   `packing_order_line_reco` has no such columns (PM lines are never recipe-driven the way
+   RM/INT are). Prints `"No Packing PO linked to this batch."` if none exist, and is omitted
+   entirely (not even the section title) if the Page 1 checkbox was unchecked.
+3. **SFG Test Results** — sourced from `sfg_qa_document` (unique per `process_order_id`, per
+   the existing PR18 SFG Result Recording mechanism, §83.4) + its `sfg_qa_test_line` rows,
+   joined to `qa_test_method` for the method name. Columns: Test Parameter, Method, Range
+   (LSL-USL, falling back to the line's own free-text `acceptable_range` when no numeric
+   LSL/USL is set), Result, Pass/Fail. Prints `"No QA test results recorded for this batch
+   yet."` if the QA document doesn't exist yet or has no test lines. Omitted entirely if the
+   Page 1 checkbox was unchecked.
+
+**PACE code must never appear anywhere on this page — verified against live prod data, not
+assumed.** Querying the real rows for the mock's own batch (Process PO 9300000063 / Packing PO
+9400000037) surfaced that the FG SKU and its SFG both carry `pace_code = FG-00032` /
+`SFG-00022` respectively — early mock drafts leaked these into the Linked Packing PO sub-header
+and the SFG Test Results sub-header before being caught and removed. The convention used
+everywhere on this page for material identity is **`external_code -- document_name`** (never
+`pace_code`), matching PR24's §122.4 fallback rule but going one step further: where PR24 falls
+back to `pace_code` when `external_code` is blank (a reporting-context tradeoff acceptable
+there), PR14's print output never shows `pace_code` under any circumstance -- its Description
+column always sources `material_master.document_name` (falling back to `material_name`, never
+to `pace_code`).
+
+**Real data-accuracy bug caught and fixed in the same mock pass:** two of the four PM lines on
+the reference Packing PO (`PM-00029` "Sticker 85 x 70 mm", `PM-00034` "Label 100X200 MM") do
+have real `external_code` values in prod -- an earlier mock draft had shown them as blank
+dashes, which would have been a wrong claim about what the real report shows. Corrected against
+the live row values before publishing.
+
+**Print-CSS overflow bug found and fixed during mocking (worth recording since it's a reusable
+lesson):** the mock's `.doc-id-table td.v` and `table.items tbody td` cells were silently
+inheriting `white-space: nowrap` from an unrelated earlier rule that applied globally to
+`tbody td` (used by the app's normal `ErpDenseGrid`-style tables elsewhere on the page). A long
+unbroken value -- the Machine name (`ASCL/AD/MC-05 -- MIXER VESSEL-14(ADMIX)`) -- never wrapped
+and forced the printable page wider than its fixed 794px width, spilling past the edge. Fixed
+by explicitly setting `white-space: normal` on those cells. A follow-up over-correction
+(`word-break: break-word` applied blanket to every cell, including numeric `.num` columns) then
+broke numbers mid-digit (`"7,323.24" / "6"` on two lines) -- fixed by scoping `word-break` off
+entirely and keeping numeric (`.num`) columns explicitly `white-space: nowrap` (they're short,
+space-free, and never need to wrap), while only the text columns (Description, External Code,
+header detail values) get `white-space: normal`. Both bugs are now understood well enough that
+`BatchVariancePage.jsx`'s real print CSS was written correctly the first time, not by trial and
+error against the live page.
+
+### 123.3 — Access: open report, company-boundary enforced (LOCKED, same correction as §122.5/PR13)
+
+Same rule as PR24/PR13/IN02/IN03/MI20 -- this is a **pure report page**, not a department-scoped
+operational screen, so it uses **`CAP_EVERYONE_REPORTS`** (literally every role, every
+department, in-company), gated only by company scope (never rank or department). PR14 already
+had its resource code (`PROD_BATCH_VARIANCE`) and tx code provisioned from an earlier session,
+but on the **old** PR13/14/20-style 3-capability pattern (`CAP_G10_DIRECTOR_VIEW` +
+`CAP_ORDERLIST_AUDITOR` + `CAP_ORDERLIST_MGRTIER`) -- corrected in the same MCP pass as this
+redesign: those 3 grants deleted, `CAP_EVERYONE_REPORTS`/`VIEW`/`menu_visible=true` inserted,
+ACL versions bumped (v72 CMP003, v71 CMP006, v6 CMP014), `capture_acl_version_source` +
+`generate_acl_snapshot` run for each, `rebuild_acl_menu_snapshot` verified live for one real
+CMP003 user and one real CMP006 user -- both resolve `PROD_BATCH_VARIANCE` visible. CMP014 still
+does not show it (a pre-existing `company_module_map`/menu-scoping gap unrelated to this
+capability fix -- `PROD_ORDER_INFO_SYSTEM` under the identical `CAP_EVERYONE_REPORTS` grant *does*
+resolve for CMP014, confirming the gap is specific to `PROD_BATCH_VARIANCE`'s own menu wiring,
+not the capability). **PR20 (Partial Reversal Report) remains on the old 3-capability pattern --
+not touched this pass**, same flag as left in §122.7/PROD-ACL-Access-Decisions.md.
+
+### 123.4 — Implementation status
+
+**✅ IMPLEMENTATION COMPLETE (2026-08-18, Claude direct-implemented, same session as the design
+lock) -- prod, CMP003 + CMP006.**
+
+- ✅ Design locked (this section).
+- ✅ Backend `_core/production/batch_variance_report.handlers.ts` -- two handlers:
+  `searchBatchVarianceHandler` (`GET /api/production/batch-variance-report`, Page 2's
+  either-Process-or-Packing-PO-number lookup + criteria search, same no-leak company-scope
+  resolver as §122.5) and `getBatchVarianceDetailHandler`
+  (`GET /api/production/batch-variance-report/:id`, Page 3's full detail -- header,
+  `process_order_line_reco` RM/INT lines, all linked Packing Orders with their own
+  `packing_order_line_reco` PM lines, `sfg_qa_document`/`sfg_qa_test_line`/`qa_test_method`
+  join). Routes wired in `_routes/production.routes.ts` (one static case + one `/:id` regex
+  block) and `route-acl-registry.ts` (both the exact-match and pattern-match entries,
+  `PROD_BATCH_VARIANCE:VIEW`).
+- ✅ Frontend `BatchVariancePage.jsx` -- full rewrite, replaces the broken
+  `planned_qty_kg`/`actual_qty_kg` client-side version in place (same route,
+  `production/batch-variance`, same `PROD_BATCH_VARIANCE` screen code -- no new registration
+  needed there). Three screens per §123.1, print mechanics per §123.2.
+- ✅ ACL corrected per §123.3 -- verified live via `precomputed_acl_view` (CMP003: 22 users
+  ALLOW, CMP006: 19 users ALLOW) and `erp_menu.menu_snapshot` (`is_visible=true` for a real
+  user in both companies).
+- ✅ CI guards clean: `deno check` on the new/edited backend files (zero errors; the 5 errors
+  seen when checking `production.routes.ts` as an entry point are pre-existing, in files this
+  change never touched -- confirmed via `git status`), `eslint` (zero errors), `route-acl-
+  registry-guard.mjs` (0 missing matches), `hardcoded-role-check-guard.mjs` (0 new),
+  `company-scope-guard.mjs` (0 unguarded), `frontend-payload-guard.mjs` (0 missing fields),
+  `npm run build` (clean production build, no module-resolution errors -- the exact class of
+  bug that broke PR24's first build).
+- ✅ `PROD-ACL-Access-Decisions.md` Group 10 note updated, this section written.
+- ⏳ Not yet done: live click-through in the deployed app (no dev login in this environment),
+  OM-IMPLEMENTATION-LOG.md entry, commit.

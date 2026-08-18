@@ -4182,3 +4182,44 @@ it provides no enforcement value as a CI step in its current form.
   (0 cross-domain).
 - Not yet done: live click-through in the deployed app (no dev login in this environment),
   CMP010/CMP014 + dev ACL provisioning (same accepted scope limit as IN10/IN11).
+
+### 2026-08-18 - PR14 Batch Variance Report redesign (Claude direct-implemented, not a Codex brief)
+
+- Origin: `BatchVariancePage.jsx` had a confirmed real bug -- it read `planned_qty_kg`/
+  `actual_qty_kg`/`actual_output_kg` off `process_order`, but those columns don't exist (real
+  columns are `planned_qty`/`actual_qty`), so every row always showed zero variance. No
+  dedicated backend either -- reused the generic `listProcessOrders` and computed (broken)
+  variance client-side, header-level only, no RM/PM line detail. Redesigned as a printable
+  Batch Record (RM/INT + linked Packing PO PM lines + SFG QA results), mocked against real
+  prod data throughout before writing code. Full design lock: feasibility doc Section 123.
+- New files:
+  - `supabase/functions/api/_core/production/batch_variance_report.handlers.ts` -- two
+    handlers: `searchBatchVarianceHandler` (list search, either-Process-or-Packing-PO-number
+    lookup) and `getBatchVarianceDetailHandler` (full printable detail for one batch).
+  - `frontend/src/pages/dashboard/production/BatchVariancePage.jsx` -- full rewrite in place
+    (same route/screen code), 3 screens: Selection -> Matching Batches -> printable Batch
+    Record.
+- Wiring: `_routes/production.routes.ts` (one static case + one `/:id` regex block),
+  `_acl/route-acl-registry.ts` (`PROD_BATCH_VARIANCE:VIEW`, both exact and pattern entries),
+  `prodApi.js`. No `AppRouter.jsx`/`operationScreens.js` change needed -- same route/screen
+  code as the page it replaces.
+- ACL (prod, CMP003 v72 / CMP006 v71 / CMP014 v6): corrected PR14's existing
+  `PROD_BATCH_VARIANCE` resource from the old 3-capability pattern
+  (`CAP_ORDERLIST_MGRTIER`/`CAP_ORDERLIST_AUDITOR`/`CAP_G10_DIRECTOR_VIEW`) to
+  `CAP_EVERYONE_REPORTS` -- same correction PR13/PR24 already got this session (report pages
+  are open to everyone in-company, never rank/department-gated). Verified live via
+  `precomputed_acl_view` (CMP003: 22 users ALLOW, CMP006: 19 users ALLOW) and
+  `erp_menu.menu_snapshot` (`is_visible=true` for one real user per company). CMP014 still
+  resolves only 1 user -- confirmed pre-existing menu-scoping gap specific to
+  `PROD_BATCH_VARIANCE` (not the capability -- `PROD_ORDER_INFO_SYSTEM` under the identical
+  grant resolves normally for CMP014), flagged not fixed.
+- Print CSS reuses the proven `.paper`/`.parties`/`.doc-id-table`/`table.items` system from
+  `PrintPreviewPage.jsx` (PO19), with two corrections: no company-branding masthead (plain
+  title only), and the repeating-table-header trick from `PIDocumentPrintPage.jsx` (MI21,
+  `display:table-header-group` under `@media print`) so long RM/INT tables can split across
+  printed pages without ever splitting mid-row.
+- Verification: `deno check` on new/edited backend files (zero errors), `eslint` (clean),
+  `route-acl-registry-guard.mjs` (0 missing), `hardcoded-role-check-guard.mjs` (0 new),
+  `company-scope-guard.mjs` (0 unguarded), `frontend-payload-guard.mjs` (0 missing fields),
+  `npm run build` (clean production build).
+- Not yet done: live click-through in the deployed app (no dev login in this environment).
