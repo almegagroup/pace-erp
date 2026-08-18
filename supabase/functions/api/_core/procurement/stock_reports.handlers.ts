@@ -730,7 +730,6 @@ export async function getStockLedgerReportHandler(
       const company = companyMap.get(row.company_id);
       const materialType = toTrimmedString(material?.material_type);
       const materialLabel = resolveMaterialLabel(material) || "—";
-      const materialCode = toTrimmedString(material?.pace_code) || "—";
       const documentName = toTrimmedString(material?.document_name) || null;
       // Signed: negative for OUT, positive for IN (posted_quantity/posted_value are GENERATED
       // columns on stock_ledger -- see feasibility doc Section 124). pack_quantity below is a
@@ -769,7 +768,7 @@ export async function getStockLedgerReportHandler(
         posting_date: row.posting_date || "—",
         company: company ? toTrimmedString(company.company_code) || "—" : "—",
         material_type: materialType || "—",
-        material: `${materialCode} — ${materialLabel}`,
+        material: materialLabel,
         external_code: toTrimmedString(material?.external_code) || "—",
         document_name: documentName || "—",
         storage_location: toTrimmedString(sloc?.code) || "—",
@@ -1461,5 +1460,243 @@ export async function getStockValuationHandler(
   } catch (error) {
     const code = error instanceof Error ? error.message : "STOCK_VALUATION_FETCH_FAILED";
     return reportErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Unable to fetch stock valuation.");
+  }
+}
+
+// IN12 — Reservation List, SAP MB25-equivalent (feasibility §125). Feeds IN13
+// (Stock Status Change)'s "affected reservations" warning. Material column is
+// name-only (resolveMaterialLabel, no pace_code prefix) to match IN03, not
+// IN02's old combined format — see §125 for the found inconsistency.
+const RESERVATION_SOURCE_TYPE_LABELS: Record<string, string> = {
+  PROCESS_PO: "Process PO",
+  PACKING_PO: "Packing PO",
+  SALES_ORDER: "Sales order",
+  STO: "STO",
+  LOCATION_TRANSFER: "Location transfer",
+};
+
+type ReservationRow = {
+  id: string;
+  reservation_number: string;
+  source_type: string;
+  source_id: string;
+  company_id: string;
+  material_id: string;
+  storage_location_id: string;
+  batch_number: string | null;
+  required_qty: number;
+  uom_code: string;
+  required_by_date: string | null;
+  issued_qty: number;
+  balance_qty: number;
+  status: string;
+  created_by: string;
+  created_at: string | null;
+};
+
+export async function listReservationsHandler(
+  req: Request,
+  ctx: StockReportHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+
+    const url = new URL(req.url);
+    const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
+    const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+    const dateRangeState = validateRequiredDateRange(dateFrom, dateTo);
+    if (dateRangeState === "MISSING") {
+      return reportErrorResponse(req, ctx, "RESERVATION_LIST_DATE_RANGE_REQUIRED", 400, "date_from and date_to are required.");
+    }
+    if (dateRangeState === "INVALID") {
+      return reportErrorResponse(req, ctx, "RESERVATION_LIST_DATE_RANGE_INVALID", 400, "date_from/date_to are invalid.");
+    }
+    if (dateRangeState === "TOO_WIDE") {
+      return reportErrorResponse(req, ctx, "RESERVATION_LIST_DATE_RANGE_TOO_WIDE", 400, "Date range cannot exceed 365 days.");
+    }
+
+    const companyIds = parseMultiValueParams(url, "company_ids", "company_id");
+    const materialIds = parseMultiValueParams(url, "material_ids", "material_id");
+    const storageLocationIds = parseMultiValueParams(url, "storage_location_ids", "storage_location_id");
+    const batchNumbers = parseMultiValueParams(url, "batch_numbers", "batch_number");
+    const sourceTypes = parseMultiValueParams(url, "source_types", "source_type", (value) => value.toUpperCase());
+    const statuses = parseMultiValueParams(url, "statuses", "status", (value) => value.toUpperCase());
+    const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
+
+    let query = serviceRoleClient
+      .schema("erp_production")
+      .from("reservation_document")
+      .select("id, reservation_number, source_type, source_id, company_id, material_id, storage_location_id, batch_number, required_qty, uom_code, required_by_date, issued_qty, balance_qty, status, created_by, created_at")
+      .eq("company_id", companyId)
+      .order("created_at", { ascending: false });
+    query = (query as unknown as { gte: (column: string, value: string) => typeof query }).gte("created_at", dateFrom);
+    query = (query as unknown as { lte: (column: string, value: string) => typeof query }).lte("created_at", `${dateTo}T23:59:59.999Z`);
+
+    if (materialIds.length > 0) query = query.in("material_id", materialIds);
+    if (storageLocationIds.length > 0) query = query.in("storage_location_id", storageLocationIds);
+    if (batchNumbers.length > 0) query = query.in("batch_number", batchNumbers);
+    if (sourceTypes.length > 0) query = query.in("source_type", sourceTypes);
+    if (statuses.length > 0) query = query.in("status", statuses);
+
+    const { data, error } = await query;
+    if (error) {
+      return reportErrorResponse(req, ctx, "RESERVATION_LIST_FETCH_FAILED", 500, "Unable to fetch reservation list.");
+    }
+
+    const reservationRows = ((data ?? []) as JsonRecord[]).map((row) => ({
+      id: toTrimmedString(row.id),
+      reservation_number: toTrimmedString(row.reservation_number),
+      source_type: toTrimmedString(row.source_type).toUpperCase(),
+      source_id: toTrimmedString(row.source_id),
+      company_id: toTrimmedString(row.company_id),
+      material_id: toTrimmedString(row.material_id),
+      storage_location_id: toTrimmedString(row.storage_location_id),
+      batch_number: toTrimmedString(row.batch_number) || null,
+      required_qty: Number(row.required_qty ?? 0),
+      uom_code: toTrimmedString(row.uom_code),
+      required_by_date: toTrimmedString(row.required_by_date) || null,
+      issued_qty: Number(row.issued_qty ?? 0),
+      balance_qty: Number(row.balance_qty ?? 0),
+      status: toTrimmedString(row.status).toUpperCase(),
+      created_by: toTrimmedString(row.created_by),
+      created_at: toTrimmedString(row.created_at) || null,
+    } satisfies ReservationRow));
+
+    const materialIdsForLookup = [...new Set(reservationRows.map((row) => row.material_id).filter(Boolean))];
+    const slocIdsForLookup = [...new Set(reservationRows.map((row) => row.storage_location_id).filter(Boolean))];
+    const userIdsForLookup = [...new Set(reservationRows.map((row) => row.created_by).filter(Boolean))];
+
+    const sourceIdsByType = new Map<string, Set<string>>();
+    for (const row of reservationRows) {
+      if (!row.source_type || !row.source_id) continue;
+      if (!sourceIdsByType.has(row.source_type)) {
+        sourceIdsByType.set(row.source_type, new Set<string>());
+      }
+      sourceIdsByType.get(row.source_type)?.add(row.source_id);
+    }
+
+    let materialRows: JsonRecord[];
+    let slocRows: JsonRecord[];
+    let companyRows: JsonRecord[];
+    let userDisplayMap: Map<string, string>;
+    try {
+      [materialRows, slocRows, companyRows, userDisplayMap] = await Promise.all([
+        fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
+          serviceRoleClient
+            .schema("erp_master")
+            .from("material_master")
+            .select("id, material_name, document_name, external_code")
+            .in("id", idChunk)),
+        fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
+          serviceRoleClient
+            .schema("erp_inventory")
+            .from("storage_location_master")
+            .select("id, code")
+            .in("id", idChunk)),
+        fetchInChunks<JsonRecord>([companyId], (idChunk) =>
+          serviceRoleClient
+            .schema("erp_master")
+            .from("companies")
+            .select("id, company_code, company_name")
+            .in("id", idChunk)),
+        resolveUserDisplayNames(userIdsForLookup),
+      ]);
+    } catch {
+      return reportErrorResponse(req, ctx, "RESERVATION_LIST_FETCH_FAILED", 500, "Unable to fetch reservation list.");
+    }
+
+    const materialMap = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
+    const slocMap = new Map(slocRows.map((row) => [toTrimmedString(row.id), row]));
+    const companyMap = new Map(companyRows.map((row) => [toTrimmedString(row.id), row]));
+
+    // Each source_type points at a different table with its own business
+    // number column — resolve each type's set of ids independently (they
+    // don't depend on each other) and merge into one lookup map, keyed
+    // "TYPE:id" since ids aren't guaranteed unique across different tables.
+    const sourceDocMap = new Map<string, string>();
+    const sourceFetches: Promise<void>[] = [];
+
+    const processPoIds = [...(sourceIdsByType.get("PROCESS_PO") ?? [])];
+    if (processPoIds.length > 0) {
+      sourceFetches.push((async () => {
+        const rows = await fetchInChunks<JsonRecord>(processPoIds, (idChunk) =>
+          serviceRoleClient.schema("erp_production").from("process_order").select("id, po_number").in("id", idChunk));
+        for (const row of rows) sourceDocMap.set(`PROCESS_PO:${toTrimmedString(row.id)}`, toTrimmedString(row.po_number));
+      })());
+    }
+    const packingPoIds = [...(sourceIdsByType.get("PACKING_PO") ?? [])];
+    if (packingPoIds.length > 0) {
+      sourceFetches.push((async () => {
+        const rows = await fetchInChunks<JsonRecord>(packingPoIds, (idChunk) =>
+          serviceRoleClient.schema("erp_production").from("packing_order").select("id, po_number").in("id", idChunk));
+        for (const row of rows) sourceDocMap.set(`PACKING_PO:${toTrimmedString(row.id)}`, toTrimmedString(row.po_number));
+      })());
+    }
+    const salesOrderIds = [...(sourceIdsByType.get("SALES_ORDER") ?? [])];
+    if (salesOrderIds.length > 0) {
+      sourceFetches.push((async () => {
+        const rows = await fetchInChunks<JsonRecord>(salesOrderIds, (idChunk) =>
+          serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number").in("id", idChunk));
+        for (const row of rows) sourceDocMap.set(`SALES_ORDER:${toTrimmedString(row.id)}`, toTrimmedString(row.so_number));
+      })());
+    }
+    const stoIds = [...(sourceIdsByType.get("STO") ?? [])];
+    if (stoIds.length > 0) {
+      sourceFetches.push((async () => {
+        const rows = await fetchInChunks<JsonRecord>(stoIds, (idChunk) =>
+          serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number").in("id", idChunk));
+        for (const row of rows) sourceDocMap.set(`STO:${toTrimmedString(row.id)}`, toTrimmedString(row.sto_number));
+      })());
+    }
+    const locationTransferIds = [...(sourceIdsByType.get("LOCATION_TRANSFER") ?? [])];
+    if (locationTransferIds.length > 0) {
+      sourceFetches.push((async () => {
+        const rows = await fetchInChunks<JsonRecord>(locationTransferIds, (idChunk) =>
+          serviceRoleClient.schema("erp_inventory").from("location_transfer_request").select("id, ltr_number").in("id", idChunk));
+        for (const row of rows) sourceDocMap.set(`LOCATION_TRANSFER:${toTrimmedString(row.id)}`, toTrimmedString(row.ltr_number));
+      })());
+    }
+
+    if (sourceFetches.length > 0) {
+      try {
+        await Promise.all(sourceFetches);
+      } catch {
+        return reportErrorResponse(req, ctx, "RESERVATION_LIST_FETCH_FAILED", 500, "Unable to fetch reservation list.");
+      }
+    }
+
+    const company = companyMap.get(companyId);
+    const companyLabel = toTrimmedString(company?.company_code) || "—";
+
+    const rows = reservationRows.map((row) => {
+      const material = materialMap.get(row.material_id);
+      const sloc = slocMap.get(row.storage_location_id);
+      const materialLabel = resolveMaterialLabel(material) || "—";
+      const userLabel = userDisplayMap.get(row.created_by) || row.created_by || "—";
+      return {
+        id: row.id,
+        reservation_number: row.reservation_number || "—",
+        source_type: RESERVATION_SOURCE_TYPE_LABELS[row.source_type] || row.source_type || "—",
+        source_document: sourceDocMap.get(`${row.source_type}:${row.source_id}`) || "—",
+        company: companyLabel,
+        material: materialLabel,
+        external_code: toTrimmedString(material?.external_code) || "—",
+        storage_location: toTrimmedString(sloc?.code) || "—",
+        batch_number: row.batch_number || "—",
+        required_qty: normalizeNumber(row.required_qty),
+        issued_qty: normalizeNumber(row.issued_qty),
+        balance_qty: normalizeNumber(row.balance_qty),
+        uom_code: row.uom_code || "—",
+        status: row.status || "—",
+        required_by_date: row.required_by_date || "—",
+        created_by: userLabel,
+        created_at: formatDateTimeDisplay(row.created_at) || "—",
+      };
+    });
+
+    return okResponse({ data: rows, total: rows.length }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "RESERVATION_LIST_FETCH_FAILED";
+    return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch reservation list.");
   }
 }

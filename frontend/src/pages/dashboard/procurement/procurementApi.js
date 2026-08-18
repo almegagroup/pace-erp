@@ -1210,6 +1210,10 @@ export function getStockValuation(params) {
   return fetchProcurement("GET", "/api/procurement/stock-valuation", undefined, params);
 }
 
+export function listReservations(params) {
+  return fetchProcurement("GET", "/api/procurement/reservations", undefined, params);
+}
+
 export function getDocumentFlow(params) {
   return fetchProcurement("GET", "/api/procurement/document-flow", undefined, params);
 }

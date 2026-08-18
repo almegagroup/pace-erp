@@ -19539,3 +19539,187 @@ matches `conversion_rate (₹1.95/KG) × output qty (9,660.318 KG) ≈ ₹18,837
 i.e. `SUM(posted_value)` over one Process PO's full posting set directly recovers its §104
 conversion cost, with a one-line query, no bespoke costing logic. A strong early signal that this
 column is the right foundation for the upcoming Reco design.
+
+**⚠️ Correction (2026-08-19) — mechanism changed after this was written, columns/values unaffected.**
+A production incident (IN02/PR24 500 errors, unrelated root cause — see CLAUDE.md §8E) triggered a
+deep investigation that briefly suspected `GENERATED ALWAYS AS (...) STORED` columns as the cause.
+That theory was disproven, but along the way the two columns were converted to plain columns
+maintained by a `BEFORE INSERT` trigger instead (`ALTER COLUMN ... DROP EXPRESSION`, migration
+`20260819000000_stock_ledger_posted_columns_trigger_based.sql`) — functionally identical output,
+same values, same zero-blast-radius guarantee, just not `GENERATED` anymore. Applied to both prod
+and dev. The design/values above are otherwise still accurate.
+
+---
+
+## Section 125 — IN12 Reservation List: SAP MB25-equivalent, all reservation statuses (✅ DESIGN LOCKED — 2026-08-19)
+
+**Origin:** came up while designing §126 (Stock Status Change) — a QA action that blocks/QI-holds
+stock needs to warn the user when it would push a material's derived "Available" quantity
+(`Unrestricted − open reservations`) negative, and that warning needs to name the actual affected
+reservations, not just show a scary number. Business owner immediately recognized this as a
+standing gap on its own — SAP's MMBE (our IN03) has a Menu-bar jump to **MB25 (List of
+Reservations)**, and PACE has no equivalent at all today.
+
+**No new schema needed** — `erp_production.reservation_document` already carries everything a list
+report needs: `reservation_number`, `source_type` (`PROCESS_PO`/`PACKING_PO`/`SALES_ORDER`/`STO`/
+`LOCATION_TRANSFER`, CHECK-enforced), `source_id`/`source_line_id` (drill-through to the owning
+document), `company_id`, `material_id`, `storage_location_id`, `batch_number`, `required_qty`,
+`issued_qty`, `balance_qty`, `uom_code`, `required_by_date`, `status` (`OPEN`/`PARTIAL`/
+`FULLY_ISSUED`/`CANCELLED`, CHECK-enforced), `created_by`/`created_at`. Verified live — no handler
+in the codebase exposes this table as its own browsable list today (only consumed internally, e.g.
+IN03's Net Available computation); this is a genuine, previously-unbuilt report, not a rename of
+something existing.
+
+**Status scope — all four, not just OPEN (locked after explicit challenge):** first draft of this
+design defaulted to showing only `OPEN`/`PARTIAL` reservations. Business owner corrected this —
+`FULLY_ISSUED` and `CANCELLED` reservations must be visible too (real MB25 behavior: shows
+everything by default, filtered down on request). Status becomes a filter, not a hard exclusion.
+
+**Page 1 — search (mirrors IN02/IN03's Page-1/Page-2 split, `report_code = "IN12"`):**
+- Company — `TransactionCompanySelector` (Law 12: single-company locked read-only, multi-company
+  real dropdown from `runtimeContext.availableCompanies`), never an admin/global company source.
+- Date range — mandatory, max 365 days (same `dateSpanTooWide()` guard IN02 already has), against
+  `created_at`.
+- Material / Storage Location / Batch Number / Source Document — `MultiValueFilterField`
+  (type-ahead + bulk-paste, multi-value), not plain single-value text inputs.
+- Source Type — dropdown/multi-select over the 5 CHECK-enforced values.
+- Status — checkbox group, all 4 values, none hard-excluded by default.
+- Execute button.
+
+**Page 2 — results, most recent first (`created_at` descending):**
+- `ErpDenseGrid` (`virtualize={true}` for large result sets, same as IN02), never a hand-rolled
+  `<table>` (per the standing "use existing grid components" rule).
+- `ErpColumnVisibilityDrawer` ("Columns" button) — reuses IN02's existing Global/User saved-layout
+  mechanism (`erp_inventory.report_column_layout` + `report_layout_default`) as-is, no new tables.
+- CSV export via the existing `downloadCsvFile` shared utility.
+- Columns, in order: Reservation Number, Source Type, Source Document (resolved + clickable through
+  to the owning Process PO/Packing PO/SO/STO/Location Transfer, via `source_type`+`source_id`),
+  Company, Material, External Code, Storage Location, Batch Number, Required Qty, Issued Qty,
+  Balance Qty, UoM, Status (badge), Required By date. Created By/Created At/Last Updated behind the
+  Columns drawer, off by default (same "less-critical columns hidden by default" philosophy IN02
+  already uses for its own trailing audit columns).
+
+**Material column — name only, NOT `pace_code — name` (real inconsistency found and corrected
+mid-design, 2026-08-19):** live code check found IN02 and IN03 disagree with each other today.
+IN02's `getStockLedgerReportHandler` builds `material: \`${materialCode} — ${materialLabel}\``
+(`stock_reports.handlers.ts:772`, pace_code and name combined into one string). IN03's
+`getCurrentStockHandler` builds `material_label: materialLabel` with **no pace_code at all**
+(same file, ~line 1180) — the frontend grid's `material_label` column shows the name alone,
+External Code as its own separate column. Business owner confirmed IN03's approach is the one to
+follow, and **IN02 is the one that's wrong** — flagged as a separate follow-up fix (not bundled
+into this task, since it touches a different, already-shipped report). IN12 follows IN03: Material
+column = name only, External Code its own column, no combined string.
+
+**tx_code: `IN12`** (was unassigned in the existing IN01–IN11 range — confirmed via grep before
+claiming it).
+
+**Feeds into §126** — the Stock Status Change page's "this would strand N reservations" warning
+links directly into a pre-filtered view of this page (by material + location + batch), so the user
+never has to search manually for what's affected.
+
+---
+
+## Section 126 — Stock Status Change (IN13): SAP MB1B-equivalent, generic Unrestricted/QI/Blocked posting (✅ DESIGN LOCKED — 2026-08-19)
+
+**Origin:** business owner's original ask — "QA needs to be able to change a material's status" —
+turned out not to mean Inward QA (which already exists, RM/PM, GRN-triggered) but a standing gap:
+**no page lets anyone change an already-at-rest material's stock type independent of any inward
+event.** Confirmed live: the QA→Unrestricted/Unrestricted→QA/QA→Blocked/Blocked→QA/
+Unrestricted→Blocked/Blocked→Unrestricted movement-type family (`P321`/`P322`/`P323`/`P349`/
+`P344`/`P343`) is only ever called from inside 4 document-triggered handlers — `inward_qa.
+handlers.ts`, `opening_stock.handlers.ts`, `rtv.handlers.ts`, `process_order.handlers.ts` (Verify's
+auto-release) — never from a standalone action. This applies to **every material type**, not just
+FG (§116.8's original flag was FG-specific; this generalizes it).
+
+**Movement engine already fully ready, verified live — no new movement types needed:**
+
+| Code | Move | Reversed by |
+|---|---|---|
+| P321 | QA → Unrestricted | P322 |
+| P322 | Unrestricted → QA | P321 |
+| P323 | QA → Blocked | P349 |
+| P349 | Blocked → QA | P323 |
+| P344 | Unrestricted → Blocked | P343 |
+| P343 | Blocked → Unrestricted | P344 |
+
+All 6 codes already registered `active=true` with correct mutual `reversed_by` pairing in
+`movement_type_master` — each pair is simply the other direction of the same move, so reversal
+never requires the user to manually pick "which way to undo," matching this codebase's existing
+CORS/COR6-family reversal idiom.
+
+**SAP precedent — MB1B, not QA32:** considered both. QA32 (Change Quality Inspection Stock) is
+SAP's QM-module-specific transaction, built around formal inspection lots — heavier than what
+PACE's QI/Blocked are today (simple stock-type flags, no inspection lot concept). MB1B (Transfer
+Posting without reference) is the general-purpose transaction — material + plant + storage
+location + batch + movement-type selection + qty, no source document required — and is the direct
+model for this page. Reversal in SAP is a separate dedicated transaction, **MBST (Cancel Material
+Document)**, not MIGO — the user enters the original material document, system posts the paired
+reversal movement type automatically. Confirms the six-pair table above is the right mechanism to
+mirror, not a from-scratch design.
+
+**Scope — RM/PM/INT/SFG/FG uniformly, one page:**
+- RM/PM/INT/SFG: Material + Storage Location + Batch (SFG always batch-level per §116.5's existing
+  lock; RM/PM/INT batch-optional) → qty in base UOM.
+- FG: additionally requires selecting a **Packing PO** (not just a batch) and qty is entered as
+  **pack count**, converted to KG via that PO's own `fill_qty_per_pack` — reuses §116.8's
+  already-locked rule verbatim (FG stock-type changes must never take raw KG entry, to keep IN03's
+  pack-count derivation reliable), not a new rule invented for this page.
+
+**Page structure — one page, workbench-style (like IN11, not IN10's two-stage model):** this is an
+ad-hoc, immediate action (see stock → decide → post), not a plan-then-execute flow, so it doesn't
+need IN10's separate request-then-post split. Three sections on one screen:
+1. **Locate stock** — Material / Storage Location / Batch (or Packing PO for FG) → live balance
+   shown across all three stock types (Unrestricted / Quality Inspection / Blocked) for that exact
+   combination.
+2. **Change status** — From (pre-filled from where qty exists) → To (constrained to a valid pair
+   from the table above) → Qty → mandatory Reason (free text, audit trail) → Post.
+3. **Recent postings** — history table, each row with a **Reverse** button (posts the paired
+   movement type automatically, no second manual entry — mirrors §121's Location Transfer
+   `PROC_LOC_TRANSFER_REVERSE` / `/reverse` precedent exactly).
+
+**Qty check — against the stock-type's actual/physical balance, NOT "Available" (locked after
+explicit challenge-and-resolve in conversation):** "Available" (`Unrestricted − open reservations`)
+is the right check for *consumption* (issuing material against an order), but wrong for a QA
+quarantine decision — QA's authority to flag a physically-present batch as unsafe must not be
+blocked by the fact that some of it happens to be reserved by a future Process PO. Restricting QA
+to Available-only would create a real gap: the reserved portion could never be quarantined at all.
+So the qty check is against the stock-type's actual snapshot balance; the existing engine-level
+negative-balance guard (`post_stock_movement`) still fully protects the real physical number from
+ever going negative — that guarantee is untouched.
+
+**Consequence — "Available" (a derived, non-stored number) can go negative, and that's correct,
+not a bug:** if QA blocks more than the currently-unreserved portion, `Unrestricted − open
+reservations` can compute negative for that material. This matches real SAP behavior (Available
+stock can and does go negative under a quality block) — it is a meaningful signal ("some
+reservations can no longer be fulfilled as-is"), not data corruption. **Soft warning, not a hard
+block:** before posting an action that would push Available negative, the page queries
+`reservation_document` (same source §125/IN12 reads) for open reservations against that exact
+material+location+batch scope and lists them by name (source document number, qty) with a link
+into a pre-filtered IN12 view — so the user never has to search manually. **The page does not
+cancel/clear those reservations itself** — that decision belongs to whoever owns the source
+document (Production for a Process PO, Sales for a Sales Order, etc.); this page's job ends at
+visibility, not resolution. If the affected order later hits the hard block at its own Verify/Final
+stage (§83.5's existing negative-stock guard), that's the correct, already-safe outcome — just
+without an early warning today, which is what this page adds.
+
+**Placement — `GRP_ACL_QA` sidebar group, `IN` tx_code prefix (verified against live precedent,
+not assumed):** confirmed live that `GRP_ACL_QA` ("Quality Assurance") already mixes tx_code
+prefixes from different owning modules — `PO06` (Inward QA Queue, Procurement-owned) and `PR01`–
+`PR19` (Stroke Master, BOM Approval, PO Verify, QA Approval Queue, SFG Result Recording — all
+Production-owned) already sit in this same sidebar group today. tx_code prefix tracks which
+module's engine/domain a page belongs to; sidebar group tracks where it's displayed — the two are
+independent axes, already proven by this exact group. Since Stock Status Change uses Inventory's
+own engine (`stock_snapshot`, `movement_type_master`, `post_document`), same as §125/IN12, it keeps
+the `IN` prefix — **`IN13`** (`IN01`–`IN11` all already assigned) — while its `menu_tree` parent is
+`GRP_ACL_QA`, not `GRP_ACL_INVENTORY`.
+
+**Own lightweight document number series:** mirrors §121's Location Transfer precedent (`LTR`
+number + `location_transfer_posting` log + dedicated reverse action) rather than reusing another
+doc type's range — new doc_type in the §8 document-number-series table, added at implementation
+time (not yet assigned a number as of this lock).
+
+**⚠️ Still open, not yet answered — must be resolved before writing the task brief:**
+1. Does posting require approval (maker-checker), or is a single QA action sufficient?
+2. Is this QA-role-only, or does authority vary by material type (e.g. a different role for FG)?
+3. Are all 6 movement-type pairs genuinely needed in practice, or only a subset (e.g. is
+   QA↔Blocked, P323/P349, ever actually used, or does everything route through Unrestricted)?

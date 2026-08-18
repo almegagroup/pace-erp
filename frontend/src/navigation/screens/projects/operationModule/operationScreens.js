@@ -417,6 +417,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_RESERVATION_LIST: {
+    screen_code: "PROC_RESERVATION_LIST",
+    route: "/dashboard/procurement/reports/reservation-list",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_STOCK_VALUATION: {
     screen_code: "PROC_STOCK_VALUATION",
     route: "/dashboard/procurement/reports/stock-valuation",

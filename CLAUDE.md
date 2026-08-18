@@ -521,6 +521,24 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 > এখন Dispatch-এর **আগে** চলে এসেছে। নতুন session ধাপ ২ (MTEST/ZTEST) দিয়ে শুরু করবে, একটা
 > পুরোপুরি শেষ (design locked + implement + verify) না করে পরেরটায় যাবে না।
 >
+> **✅ IN12 (Reservation List) + IN13 (Stock Status Change) — DESIGN LOCKED (2026-08-19,
+> feasibility §125/§126), IMPLEMENTATION NOT STARTED — orthogonal addition, does not change the
+> 4-step order above.** এসেছে "QA কোনো material-এর status change করবে"-এর discovery থেকে —
+> আসল gap হলো Inward QA/RTV/Opening Stock/Process PO Verify ছাড়া আর কোথাও QA↔Unrestricted↔Blocked
+> movement (P321-P349 family, সব ৬টাই engine-এ আগে থেকে ready) কেউ standalone action হিসেবে করতে
+> পারে না — RM/PM/INT/SFG/FG সব material-এই, শুধু FG না। **IN12** = SAP MB25-equivalent
+> (`reservation_document`-এর উপর নতুন list report, কোনো schema লাগে না, সব status দেখাবে শুধু
+> OPEN না)। **IN13** = SAP MB1B-equivalent (single-page workbench, IN11-এর মতো — Locate stock →
+> Change status → Recent postings + Reverse, §121 Location Transfer-এর reverse pattern কপি করে)।
+> qty check হবে actual/physical balance-এর বিরুদ্ধে, "Available" না (reservation থাকলেও QA
+> quarantine করতে পারবে) — Available negative হলে hard block না, বরং IN12-এ link করা soft warning
+> (কোন reservation affected, নাম ধরে) — reservation নিজে থেকে cancel করবে না, সেটা owning
+> document-এর দায়িত্ব। tx_code prefix IN রাখা হয়েছে যদিও `GRP_ACL_QA` group-এ বসবে (PO06/PR01-19
+> ইতিমধ্যে একই group-এ mixed prefix নিয়ে আছে, prefix ≠ sidebar group, live verify করা)। **IN12
+> আগে implement হবে** (IN13-এর warning IN12-কেই link করে)। **IN13-এর ৩টা প্রশ্ন এখনো open**
+> (approval লাগবে কিনা, কে করতে পারবে, সবগুলো movement pair সত্যিই দরকার কিনা) — task brief
+> লেখার আগে business owner-এর উত্তর লাগবে।
+>
 > ### 📍 2026-08-13 session handoff (আগের brief, এখনো valid প্রেক্ষাপটের জন্য)
 >
 > পূর্ণ handoff brief: **`docs/SESSION-HANDOFF-BRIEF-2026-08-13.md`** — 13 bug pattern
@@ -1546,6 +1564,68 @@ Verify-এর একই pattern-এ migrate করা হলো — একটা
 rolled-back transaction দিয়ে dev-এর real data (invoice `9200000001` reverse + DO `9100000003` create,
 দুটোই) যাচাই করা হয়েছে — stock qty exact match, rollback পরিষ্কার। Guard আবার **১৫/১৫**-এ ফিরে এলো
 (নতুন কল যোগ হয়নি, শুধু যা যোগ হয়েছিল সেটা সরানো হলো)।
+
+---
+
+## 8E. Unbounded `.in()` id-list → chunk করতে হবে (Mandatory — LOCKED 2026-08-19)
+
+**কেন:** IN02 (Stock Ledger) আর PR24 (Order Information System) live-এ 500 error দিচ্ছিল।
+Root cause বের করতে অনেক ভুল hypothesis (GENERATED column, RLS, grants, schema-cache reload
+timing) test করে বাতিল করার পর, business owner নিজেই ধরিয়ে দেন আসল pattern: শুধু ২টা narrow
+movement type (`101`+`261`) দিয়ে খুঁজলে ঠিক আছে, কিন্তু সব movement type দিয়ে খুঁজলে (মানে বেশি
+row, বেশি `stock_document_id`) error আসছে — **"data boro holei fetch failed"**।
+
+**আসল কারণ:** `@supabase/supabase-js`-এর `.in("col", [...ids])` GET request — id list URL-এর
+query string-এ বসে (POST body না)। ~৪০০টা UUID একসাথে দিলে URL ~১৫,০০০ character হয়ে যায়,
+যেটা Postgres/PostgREST-এ পৌঁছানোর **আগেই** reject হয়ে যায়। এই কারণেই কোনো server-side log
+(postgres_logs/postgrest_logs/pgbouncer_logs/supavisor_logs — সবগুলো unfiltered query করে
+দেখা হয়েছে) কিছুই দেখায়নি — request কখনো Supabase infra-তে পৌঁছায়ইনি।
+
+**কেন আগে এই বাগ ধরা পড়েনি:** যতদিন design simple ছিল (শুধু IN/OUT, narrow filter, ছোট date
+range) ততদিন id list ছোটই থাকত। এই bug data-scale-dependent — company যত পুরনো হবে, কোনো
+report-এ filter যত broad হবে, id list তত বড় হবে, আর একদিন হঠাৎ ওই ~৪০০-id cliff-এ গিয়ে পড়বে।
+কোনো নতুন code change ছাড়াই শুধু data জমার কারণে ভেঙে যেতে পারে — এটাই সবচেয়ে বিপজ্জনক দিক।
+
+**সমাধান:** `supabase/functions/api/_shared/chunkedIn.ts` — `fetchInChunks<TRow>(ids, queryFn, chunkSize=100)`
+সব id-কে ১০০-১০০ করে chunk করে, প্রতিটা chunk আলাদা `.in()` call হিসেবে **parallel** (`Promise.all`)
+পাঠায়, তারপর সব row একসাথে merge করে রিটার্ন করে। ব্যবহার:
+
+```typescript
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+
+let rows: JsonRecord[];
+try {
+  rows = await fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
+    serviceRoleClient.schema("erp_master").from("material_master")
+      .select("id, material_name").in("id", idChunk));
+} catch {
+  throw new Error("SOME_ERROR_CODE");
+}
+```
+
+**নতুন কোনো handler লেখার সময় বাধ্যতামূলক নিয়ম:**
+- কোনো id array (`materialIds`, `processOrderIds`, `stockDocumentIds`, `workflowIds` ইত্যাদি)
+  company/date-range/report filter থেকে আসছে আর তার length **theoretically unbounded** (cap
+  করা নেই, বা cap থাকলেও ~২০০+ হতে পারে) — সরাসরি `.in("col", ids)` লেখা **নিষিদ্ধ**,
+  `fetchInChunks()` দিয়েই লিখতে হবে।
+- ছোট, genuinely-bounded list (যেমন একটা single order-এর নিজের কয়েকটা line, বা `config`
+  table থেকে আসা ছোট enum-এর মতো set) chunk করার দরকার নেই — কিন্তু সন্দেহ থাকলে chunk করাই
+  নিরাপদ, খরচ প্রায় শূন্য (extra round trip না, `Promise.all`-এ parallel)।
+- `.in()` filter-এর সাথে অন্য `.eq()`/date-range filter থাকলে সেগুলো প্রতিটা chunk-এর query
+  callback-এর ভিতরেই বসাতে হবে (chunk-এর বাইরে না) — pattern দেখো
+  `stock_reports.handlers.ts`-এর `getCurrentStockHandler` বা `costing_group.handlers.ts`-এর
+  `listCostingRateMaterialsHandler`।
+
+**Reference (২০২৬-০৮-১৯ sweep-এ যেসব file-এ apply করা হয়েছে, template হিসেবে দেখো):**
+`stock_reports.handlers.ts` (IN02/IN03), `order_information_system.handlers.ts` (PR24),
+`costing_group.handlers.ts`, `hr/shared.ts` (`loadUserIdentityMap`,
+`loadWorkflowDecisionMap`, `loadWorkflowStateMap`), `opening_genealogy.handlers.ts`,
+`planning.handlers.ts`, `mts_sku_rate.handlers.ts`, `attendance_reports.handlers.ts`,
+`attendance_correction_approval.handlers.ts`, `batch_variance_report.handlers.ts`।
+
+**Enforcement:** এখনো কোনো CI guard script নেই এই pattern-এর জন্য (§8B/§8D-এর মতো ratchet
+script বানানো যেতে পারে ভবিষ্যতে — বাকি আছে)। ততদিন code review-এ নতুন `.in(` দেখলে জিজ্ঞেস
+করো — এই id list কি সত্যিই bounded, না grow করতে পারে? সন্দেহ থাকলে `fetchInChunks` দিয়েই লেখো।
 
 ---
 
