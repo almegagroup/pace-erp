@@ -670,14 +670,14 @@ export async function generateBatchNumber(
       p_batch_type: batchType,
       p_prodshade_material_id: effectiveProdshadeId,
       p_today: todayIsoInKolkata(),
-    })
-    .maybeSingle();
+    });
   if (error) {
     console.error("[batch_series.generateBatchNumber] rpc failed:", JSON.stringify(error));
     throw new Error("PROD_BATCH_SERIES_GENERATE_FAILED");
   }
-  if (!data || !toTrimmedString((data as JsonRecord).batch_number)) {
+  const row = (Array.isArray(data) ? data[0] : data) as JsonRecord | undefined;
+  if (!row || !toTrimmedString(row.batch_number)) {
     throw new Error(`PROD_BATCH_SERIES_NOT_FOUND: type=${batchType}`);
   }
-  return String((data as JsonRecord).batch_number);
+  return String(row.batch_number);
 }
