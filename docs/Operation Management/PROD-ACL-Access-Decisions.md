@@ -1504,9 +1504,9 @@ Status: ✅ Decided + implemented in prod (2026-07-29, ACL v29/v26).
 | PR09 | Production PO Create | V C E† (+ Plant Head fallback) | | | (Plant Head = V C E) | | | V |
 | PR10 | Production PO Edit | — | V C E A† | — | — | — | — | — (see note below — narrower than usual, not even Director) |
 | PR11 | Production PO Final (up to L2_Manager) | V C E | | | | | | V |
-| PR13 | Order List | V (all ranks — see revision note below) | V (all ranks) | | | | V | V (+ Director-Reports WC) |
-| PR14 | Batch Variance Report | same as PR13 | same as PR13 | | | | V | V (+ Director-Reports WC) |
-| PR20 | Partial Reversal Report | same as PR13 | same as PR13 | | | | V | V (+ Director-Reports WC) |
+| PR13 | Order List | V (all ranks, all departments — corrected 2026-08-18 to `CAP_EVERYONE_REPORTS`, see note below) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) |
+| PR14 | Batch Variance Report | ⚠️ still the old `CAP_ORDERLIST_MGRTIER`/`_AUDITOR`/`CAP_G10_DIRECTOR_VIEW` pattern (Production+Quality+Audit+Director only) — **no longer actually "same as PR13"** now that PR13 itself moved to `CAP_EVERYONE_REPORTS`; not touched yet, flagged for the same fix if wanted | | | | | | |
+| PR20 | Partial Reversal Report | ⚠️ same as PR14 — not yet moved to `CAP_EVERYONE_REPORTS` | | | | | | |
 | PR22 | Old Process PO | V C E† | | | | | | V |
 | PR23 | Old Packing PO | V C E† | | | | | | V |
 | PR24 | Order Information System | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) | V (all ranks) — literally everyone, incl. Accounts/Director-Reports/Management-Reports too (not columns here), see note below |
@@ -1577,6 +1577,29 @@ Manager-tier (L1/L2/L3_Manager) + Director only, via `CAP_ORDERLIST_MGRTIER`
 — User-tier explicitly excluded, framed as fixing a "leak" from the old
 blanket `CAP_EVERYONE_REPORTS` grant. DIRECTOR-REPORTS held no grant on
 these 3 resources.~~
+
+**PR13 (Order List) — corrected again 2026-08-18, same reasoning as PR24's
+same-day fix (above).** Business owner: PR13 is the same class of page as
+IN02/IN03/MI20 and now PR24 — a pure report, must be `CAP_EVERYONE_REPORTS`
+(literally everyone), not `CAP_ORDERLIST_MGRTIER`'s Production+Quality-only
+scope. **✅ IMPLEMENTED (ACL v71 CMP003 / v70 CMP006 / v5 CMP014).**
+`capability_menu_actions` for `PROD_ORDER_LIST` changed from the 3-capability
+set to one row, `(CAP_EVERYONE_REPORTS, PROD_ORDER_LIST, VIEW)` — the legacy
+inert `CAP_PROD_PLANNER` row left untouched (ACL-MASTER-only at the
+work_context level, same as always). Verified via `precomputed_acl_view`:
+every department in CMP003/CMP006 (Accounts, Stores, Supply Chain,
+Production, Quality, Audit, Management, Management-Reports, Director,
+Director-Reports) resolves `ALLOW`, plus CMP014's Supply Chain; menu
+snapshot rebuilt and confirmed `is_visible=true` for representative users
+per department, and correctly `false` for a user in a company they don't
+belong to (P0077 checked against CMP003/CMP006, both correctly false, true
+only for their own CMP014).
+**⚠️ PR14/PR20 not touched this round** — they were documented as "same as
+PR13" but that was only ever true of the *old* PR13 design; they still use
+`CAP_ORDERLIST_MGRTIER`/`CAP_ORDERLIST_AUDITOR`/`CAP_G10_DIRECTOR_VIEW`
+today. If the same "literally everyone" treatment is wanted there too, it's
+the identical mechanical fix (swap capability, re-version, re-verify) — not
+done here since it wasn't asked for this round.
 
 **PR24 (Order Information System) — new page, added 2026-08-18, Claude
 direct-implemented (not a Codex brief).** Business owner asked for a
