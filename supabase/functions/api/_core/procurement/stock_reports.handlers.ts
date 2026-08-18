@@ -724,9 +724,9 @@ export async function getStockLedgerReportHandler(
       const materialLabel = resolveMaterialLabel(material) || "—";
       const materialCode = toTrimmedString(material?.pace_code) || "—";
       const documentName = toTrimmedString(material?.document_name) || null;
-      // Signed: negative for OUT, positive for IN (posted_quantity/posted_value are
-      // GENERATED columns on stock_ledger -- see feasibility doc Section 124). pack_quantity
-      // below is a straight division of baseQuantity, so it inherits the correct sign too.
+      // Signed: negative for OUT, positive for IN (posted_quantity/posted_value are GENERATED
+      // columns on stock_ledger -- see feasibility doc Section 124). pack_quantity below is a
+      // straight division of baseQuantity, so it inherits the correct sign too.
       const baseQuantity = normalizeNumber(row.posted_quantity);
       const conversion = resolveAltUomConversion(material, conversionsByMaterialId.get(row.material_id) ?? []);
       const altFactor = Number(conversion?.conversion_factor ?? 0);
