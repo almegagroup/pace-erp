@@ -15,7 +15,8 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { useMenu } from "../../../context/useMenu.js";
 import { buildTransactionCompanyList } from "../../../components/inputs/transactionCompanyRuntime.js";
-import { getOrderInformationReport, listMachines, listStrokeMasters } from "./prodApi.js";
+import { getOrderInformationReport, listStrokeMasters } from "./prodApi.js";
+import { listMachines } from "../om/omApi.js";
 
 const PROCESS_ORDER_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
 const PACKING_ORDER_TYPES = ["PMTO", "PHPS", "PMTS", "PTEST"];
