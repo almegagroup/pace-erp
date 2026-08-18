@@ -106,6 +106,7 @@ import {
   reverseProcessOrderHandler,
   pruneProcessOrderHandler,
 } from "../_core/production/process_order.handlers.ts";
+import { getOrderInformationReportHandler } from "../_core/production/order_information_system.handlers.ts";
 import {
   listPackingOrdersHandler,
   getPackingOrderHandler,
@@ -275,6 +276,10 @@ export async function dispatchProductionRoutes(
       return await listStrokeOptionsHandler(req, ctx);
     case "GET:/api/production/plan-feed/find":
       return await findPlanFeedByNumberHandler(req, ctx);
+
+    // PR24 Order Information System
+    case "GET:/api/production/order-information-system":
+      return await getOrderInformationReportHandler(req, ctx);
 
     // Process Orders
     case "GET:/api/production/process-orders":

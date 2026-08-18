@@ -200,20 +200,33 @@ export default function OrderListPage() {
                 <thead>
                   <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
                     <th className="border-b px-3 py-2 text-left">PO Number</th>
-                    <th className="border-b px-3 py-2 text-left">Planned Qty</th>
+                    <th className="border-b px-3 py-2 text-left">SKU</th>
+                    <th className="border-b px-3 py-2 text-left">Pack Code</th>
+                    <th className="border-b px-3 py-2 text-right">Num Packs</th>
+                    <th className="border-b px-3 py-2 text-right">Fill Qty / Pack</th>
+                    <th className="border-b px-3 py-2 text-right">Planned Qty (KG)</th>
+                    <th className="border-b px-3 py-2 text-left">Batch #</th>
                     <th className="border-b px-3 py-2 text-left">Status</th>
                     <th className="border-b px-3 py-2 text-left">Created</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {packingOrders.map((order) => (
+                  {packingOrders.map((order) => {
+                    const isFinalized = order.status && order.status !== "STANDARD" && order.status !== "CANCELLED";
+                    return (
                     <tr key={order.id} className="border-b border-slate-100 hover:bg-slate-50">
                       <td className="px-3 py-2 font-mono font-semibold text-sky-700">{order.po_number || "--"}</td>
-                      <td className="px-3 py-2 font-mono">{Number(order.planned_qty_kg || 0).toLocaleString()}</td>
+                      <td className="px-3 py-2">{[order.material?.pace_code, order.material?.material_name].filter(Boolean).join(" - ") || "--"}</td>
+                      <td className="px-3 py-2">{order.pack_code?.pack_code || "--"}</td>
+                      <td className="px-3 py-2 text-right font-mono">{order.num_packs != null ? Number(order.num_packs).toLocaleString() : "--"}</td>
+                      <td className="px-3 py-2 text-right font-mono">{order.fill_qty_per_pack != null ? Number(order.fill_qty_per_pack).toLocaleString() : "--"}</td>
+                      <td className="px-3 py-2 text-right font-mono">{Number(order.planned_qty_kg || 0).toLocaleString()}</td>
+                      <td className="px-3 py-2 font-mono text-slate-500">{isFinalized ? (order.process_order?.batch_number || "--") : ""}</td>
                       <td className="px-3 py-2">{order.status || "--"}</td>
                       <td className="px-3 py-2 text-xs text-slate-400">{order.created_at?.slice(0, 10) || "--"}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             )}

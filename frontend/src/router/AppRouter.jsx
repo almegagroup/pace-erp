@@ -200,6 +200,7 @@ import ProductionPOEditPage from "../pages/dashboard/production/ProductionPOEdit
 import ProductionPOFinalPage from "../pages/dashboard/production/ProductionPOFinalPage.jsx";
 import ProductionPOVerifyPage from "../pages/dashboard/production/ProductionPOVerifyPage.jsx";
 import OrderListPage from "../pages/dashboard/production/OrderListPage.jsx";
+import OrderInformationSystemPage from "../pages/dashboard/production/OrderInformationSystemPage.jsx";
 import BatchVariancePage from "../pages/dashboard/production/BatchVariancePage.jsx";
 import ReversalPage from "../pages/dashboard/production/ReversalPage.jsx";
 import ProductionQAQueuePage from "../pages/dashboard/production/QAQueuePage.jsx";
@@ -859,6 +860,7 @@ export default function AppRouter() {
                   <Route path="production/po-final" element={<ProductionPOFinalPage />} />
                   <Route path="production/po-verify" element={<ProductionPOVerifyPage />} />
                   <Route path="production/order-list" element={<OrderListPage />} />
+                  <Route path="production/order-information-system" element={<OrderInformationSystemPage />} />
                   <Route path="production/batch-variance" element={<BatchVariancePage />} />
                   <Route path="production/reversal" element={<ReversalPage />} />
                   <Route path="production/qa-queue" element={<ProductionQAQueuePage />} />

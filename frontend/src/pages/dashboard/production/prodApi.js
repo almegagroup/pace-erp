@@ -94,6 +94,9 @@ export const listOldProcessPoBatches = (p) => fetchProd("GET", "/api/production/
 export const createOldPackingPo = (body) => fetchProd("POST", "/api/production/old-packing-po", body);
 export const listOldPackingPoBatches = (p) => fetchProd("GET", "/api/production/old-packing-po/batches", undefined, p);
 
+// ── PR24 Order Information System (§122) ──────────────────────────────────────
+export const getOrderInformationReport = (p) => fetchProd("GET", "/api/production/order-information-system", undefined, p);
+
 // ── Stroke Masters ────────────────────────────────────────────────────────────
 export const listStrokeMasters = (p) => fetchProd("GET", "/api/production/stroke-masters", undefined, p);
 export const getStrokeMaster = (id) => fetchProd("GET", `/api/production/stroke-masters/${id}`);

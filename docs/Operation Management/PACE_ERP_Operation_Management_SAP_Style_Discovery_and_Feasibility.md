@@ -19066,3 +19066,196 @@ Frontend must provide:
 - 🔴 First frontend build (`LocationTransferRequestWorkspacePage.jsx`, `LocationTransferWorkbenchPage.jsx`) did not match the intended MB21/MB22/MIGO simplicity — built as a forced 3-step wizard (IN10) and a 3-stacked-card single page mislabeled "Page 1/2/3" (IN11). Corrected design now locked in §121.7.2 — single-workspace IN10, single Action-driven MIGO-style workbench for IN11. Frontend rebuild against §121.7.2 is the current work, implemented directly (not via Codex task brief for this pass).
 - ⏳ Not yet done: `PROC_LOC_TRANSFER_REQ`/`POST`/`REVERSE` ACL version-capture confirmed only for CMP003/CMP006 in prod — CMP010/CMP014 still need `capture_acl_version_source` + snapshot rebuild before non-bypass users in those companies can reach IN10/IN11.
 - ⏳ Not yet done: end-to-end verification against §121.13's checklist (this was never run against the first build).
+
+---
+
+## Section 122 — PR24 Order Information System: Process/Packing Order Transaction Report (✅ DESIGN LOCKED — 2026-08-18, IMPLEMENTATION IN PROGRESS)
+
+**Origin:** came out of a PR13 (Order List) review — business owner wanted PR13's Packing
+Orders tab to show SKU/Num Packs/Fill Qty/Batch (quick fix, landed same session), then asked
+for PR13 to be redesigned in the shape of SAP **COOIS** (Order Information System — a
+cross-order selection screen + ALV list report, not a single-order lookup). Mocked against
+**real prod data** throughout (Process PO 9300000063, batch EV02640, SFG-00022 "6765PL68",
+its linked Packing PO 9400000037, FG-00032 "6765PL68599") rather than invented rows — this
+caught two real, independent bugs along the way (§122.6). Business owner then decided this
+report is **substantial enough to be its own page, not a PR13 reskin** — PR13 stays as the
+existing simple list, untouched.
+
+**Tx code / name / menu — LOCKED:** `PR24` (next free code — PR00 through PR23 all
+confirmed taken, checked directly against every `File-ID: 27.FE-PRxx` header in
+`frontend/src/pages/dashboard/production/`), name **"Order Information System"** (SAP's own
+name for COOIS, used consistently through the whole design conversation), under the
+**Production** menu (`GRP_ACL_PRODUCTION`, same parent as PR13).
+
+### 122.1 — Two-page architecture (LOCKED, corrects an earlier single-page draft)
+
+**Page 1 — Selection Screen.** Criteria only, nothing executes until **Execute** is
+pressed (SAP F8 pattern) — deliberately not a live/auto-refetch-per-keystroke page (same
+lesson already applied to IN10 earlier this session: per-field live querying on a filter
+screen is the wrong UX). Fields, all sourced from real `process_order`/`packing_order`
+columns (verified against the live schema, nothing invented):
+
+- **PO Number** — direct lookup, own row above the rest of the form. Works for **any**
+  PO type (MTO/HPS/MTS/INT/MTEST, Process `93…` or Packing `94…`). Filling this in
+  **bypasses the mandatory date range and every other filter** — it's a bounded
+  single-document lookup, not a broad scan.
+- **Company** — sourced from the user's own permitted-company list (`useMenu()`'s
+  `runtimeContext.availableCompanies`, the IN03-established pattern), never an
+  admin/global company source. Defaults to "all my companies," not a locked single value —
+  this is a report, not a transaction-entry page, so Law 12's single-company-lock rule does
+  not apply here.
+- **Order Type** — MTO / HPS / MTS / INT / MTEST (Process tab) or PMTO / PHPS / PMTS / PTEST
+  (Packing tab).
+- **SKU / Prodshade Material**, **Batch Number**, **Machine** (`machine_id`, Process tab
+  only — no such column on `packing_order`), **Segment** (`segment_code`, both tabs),
+  **Stroke Number** (`stroke_master_id`, Process tab only).
+- **Status** — chip multi-select, matching each tab's real status set.
+- **Has Unapproved Deviation only** — checkbox on `process_order.has_unapproved_deviation`.
+- **Posting Date range — mandatory** (unless a PO Number is entered), max 365 days — same
+  rule IN02 already locked (§117), reused rather than reinvented.
+- **Show Linked Packing Lines** — checkbox. When checked, Page 2 also pulls the FG/SFG/PM
+  movements of any Packing PO(s) linked to each matching Process PO (`packing_order.
+  process_order_id`), in the same table.
+
+**Page 2 — Order Transaction Report.** Full-page **ErpDenseGrid** report (same component
+family as IN02/IN03 — never a hand-rolled `<table>`), row-by-row page-level scroll, no
+inner scroll-box. **Not** a snapshot of current RM/INT lines (that was the mistake in the
+first mock) — every row is one real `stock_ledger` movement. Columns: **Company, Posting
+Date, Material (name), External Code, Movement Type, Direction, Qty, Batch #, Ref. Document
+(type badge + number), APL Qty, Variance.**
+
+### 122.2 — Data source: `stock_ledger` join, not the reco table (LOCKED, corrects the first draft)
+
+The first draft read `process_order_line_reco` for the Component View and only showed the
+current RM/INT snapshot — missing the SFG's own receipt/release movements (P101/P321),
+missing any reversal/correction as its own dated row, and missing the linked Packing PO
+entirely. Verified live against prod that the right source is `erp_inventory.stock_ledger`
+joined to `erp_inventory.stock_document`, scoped by:
+
+```
+(stock_document.reference_document_type = 'PROC_PO' AND reference_document_id = <order.id>)
+  OR (stock_ledger.batch_number = <order's batch_number>)
+```
+
+**Both conditions are required, proven against real data, not assumed:**
+- `reference_document_type='PROC_PO'` alone would **miss** a PID (Physical Inventory)
+  difference posting against the same batch — PID postings are tagged
+  `reference_document_type='PI'`, a different document family entirely, but they still need
+  to show up in this batch's history (exactly the real 0.318 kg write-off done earlier this
+  same session, PID 6500000012).
+- `batch_number` alone would **miss** every RM/PM/INT issue line — those carry no batch
+  number of their own on the ledger row (batch tracking in this ERP applies to SFG/FG only,
+  a design that is correct and stays unchanged — see §122.6 for the separate, real batch-
+  *stamping* bug this session found and fixed, which is not the same thing as RM being
+  "batch-tracked").
+
+When **Show Linked Packing Lines** is checked, the same shape is unioned in for each linked
+Packing PO: `reference_document_type = 'PACK_PO' AND reference_document_id = <packing_order.id>`.
+This surfaces the Packing PO's own PM issues, SFG issue, and FG receipt — proven live against
+Packing PO 9400000037 (4 PM lines + SFG issue + FG receipt, all real).
+
+Verified end-to-end against the real 21-row chain for PO 9300000063: 11 RM/INT issues (11
+Aug) → SFG receipt + QI-release passthrough (11 Aug, same transaction) → linked Packing PO's
+4 PM issues + SFG issue + FG receipt (12 Aug) → the PID write-off (17 Aug) — one flat,
+chronological, dated ledger, no per-event-type special-casing needed in the query itself.
+
+### 122.3 — APL Qty / Variance sidecar (LOCKED)
+
+`process_order_line_reco` (RM/INT rows) and `packing_order_line_reco` (PM rows) are
+LEFT-JOINed onto the ledger rows above, matched by `process_order_id`/`packing_order_id` +
+`material_id`, `is_voided = false`. SFG/FG rows (P101/P321/P261-SFG-issue) have no reco
+counterpart by design (reco tracks RM/PM/INT consumption, never the SFG/FG output itself) —
+those rows show a blank/dash APL and Variance, not zero, since "no reco line exists" and
+"reco line exists with zero variance" are different facts and must render differently.
+
+### 122.4 — Material display: External Code with PACE-code fallback (LOCKED)
+
+Corrects the first mock, which stacked Material Name + PACE code in one cell. Locked: two
+separate grid columns, **Material Name** and **External Code** — never PACE code as the
+primary display for this report (business owner's explicit correction). Verified live: every
+material in the 9300000063/9400000037 chain has `external_code` populated (RM included, e.g.
+WATER → `R40661V`), but the existing CLAUDE.md lock ("`external_code`/`external_sku` are
+reporting-only... RM/PM must never be assumed to have it") still applies system-wide — a
+material with a blank `external_code` falls back to displaying its PACE code in the same
+column, never a blank cell.
+
+### 122.5 — Access: open report, company-boundary enforced (LOCKED)
+
+**No rank/tier gate at all** — reuses the exact capability set already locked for PR13/14/20
+(Basic Rule #4, `PROD-ACL-Access-Decisions.md` Group 10) rather than inventing a new one:
+`CAP_ORDERLIST_MGRTIER` (Production + Quality, every rank L1_User through L3_Manager,
+L4_Manager excluded per Basic Rule #5, routed to DIRECTOR-REPORTS instead),
+`CAP_ORDERLIST_AUDITOR` (Audit), `CAP_G10_DIRECTOR_VIEW` (Director + DIRECTOR-REPORTS work
+context). Verified live in prod that all three capabilities are already held by both
+companies' `ACL-MASTER` work context (`DEPT_DPT030`/`DEPT_DPT031`) — so wiring PR24's new
+resource code into these three existing capabilities' `capability_menu_actions` is
+sufficient; no new capability, no new `role_capabilities`/`work_context_capabilities` rows
+needed anywhere.
+
+**Company-boundary rule (no-leak, LOCKED — business owner explicit):** every filter,
+including a typed-in PO Number, is intersected server-side against the caller's own
+`erp_map.user_companies` (unless SA/GA/ACL-MASTER). A PO Number belonging to a company
+outside the caller's access returns an **empty result**, identical in shape to "this PO
+doesn't exist" — never a 403, never any response that would let a user infer the PO exists
+under a different company. Multi-company users see the union of everything they're
+permitted, no company picker forced. This is the same discipline as Bug Pattern #2
+(Company-scope gap) in CLAUDE.md, applied to a report's free-text search field specifically.
+
+### 122.6 — Two real bugs found live while building this mock, both fixed same session (2026-08-18)
+
+1. **PR13 Packing Orders tab missing columns** — `OrderListPage.jsx`'s Packing Orders table
+   only rendered PO Number/Planned Qty/Status/Created, even though the backend
+   (`listPackingOrdersHandler`) already returned `material`, `pack_code`, `num_packs`,
+   `fill_qty_per_pack`, and the linked Process PO's `batch_number` (blank until the Packing
+   PO leaves STANDARD). Pure frontend gap, fixed same session — see commit `d0bfc48c`.
+2. **RM/INT/PM batch-number stamping — historical gap, already fixed in code, backfilled in
+   prod.** `process_order.handlers.ts`'s Verify (`movements.push(... batchNumber ...)`,
+   line ~2955) is supposed to stamp the SFG's own batch number onto every RM/INT issue line
+   (and, by the same convention, Packing PO Final stamps it onto PM issue lines) — this is
+   **not** "RM is batch-tracked" (RM/PM/INT batch-tracking stays exactly as designed
+   everywhere else in this doc, unchanged), it is "this RM/PM consumption event records
+   which output batch it went into," a traceability label only. Live data showed a clean,
+   bounded historical gap: **9 Process POs verified 2026-08-08 → 2026-08-11 13:39 UTC** (93
+   RM/INT rows) plus their **2 downstream Packing POs** (8 PM rows) predate the fix and were
+   left with `batch_number = NULL`; every order verified after 2026-08-11 13:39 UTC already
+   has it correctly. Backfilled in prod (101 rows, exact target batch resolved per row via
+   `stock_document.reference_document_id → process_order.batch_number`, qty/value
+   untouched) using the same `stock_ledger_no_update` disable → correct → re-enable →
+   verify protocol as the IST-date backfill earlier this session. Dev intentionally left
+   untouched (business owner declined, dev is disposable). Not re-run in this section's own
+   scope beyond prod.
+
+### 122.7 — Implementation status
+
+**✅ IMPLEMENTATION COMPLETE (2026-08-18, Claude direct-implemented, same session as the
+design lock) — prod, CMP003 + CMP006.**
+
+- ✅ Design locked (this section).
+- ✅ Backend handler `_core/production/order_information_system.handlers.ts` —
+  `getOrderInformationReportHandler`, implements the §122.2 doc-id-union + batch-number-union
+  ledger query, §122.3's reco sidecar, §122.4's external-code-with-fallback, §122.5's
+  company-scope (no-leak) rule. Route wired in `_routes/production.routes.ts`
+  (`GET /api/production/order-information-system`) and `route-acl-registry.ts`
+  (`PROD_ORDER_INFO_SYSTEM:VIEW`).
+- ✅ Frontend `OrderInformationSystemPage.jsx` — Page 1 (selection screen, PO Number
+  direct-lookup, mandatory-unless-PO-Number date range, Show Linked Packing Lines) + Page 2
+  (`ErpDenseGrid`, `virtualize`, page-filling `maxHeight`, matching §122.1's column set).
+  Wired into `AppRouter.jsx` (`production/order-information-system`) and
+  `operationScreens.js` (`PROD_ORDER_INFO_SYSTEM`).
+- ✅ ACL: `erp_menu.menu_master` + `acl.menu_master` + `menu_tree` (under
+  `GRP_ACL_PRODUCTION`) inserted once (global). Three `capability_menu_actions` rows
+  (`CAP_ORDERLIST_MGRTIER`/`CAP_ORDERLIST_AUDITOR`/`CAP_G10_DIRECTOR_VIEW`, all VIEW) — no new
+  capability needed, confirmed live that ACL-MASTER already held all three. New ACL version
+  per company (v69 CMP003, v68 CMP006), `capture_acl_version_source` +
+  `generate_acl_snapshot` + `rebuild_acl_menu_snapshot` for 8 verification (user, company,
+  work_context) triples. Verified via `precomputed_acl_view` and `erp_menu.menu_snapshot`
+  directly — see `PROD-ACL-Access-Decisions.md` Group 10's PR24 note for the full trail.
+  **CMP010/CMP014 and dev not touched this pass** — same accepted scope limit as IN10/IN11
+  (§121.14).
+- ✅ CI guards clean: `deno check` (zero new errors, same 5 pre-existing baseline
+  confirmed via git-stash before/after), `eslint` (zero errors on all touched frontend
+  files), `route-acl-registry-guard.mjs` (0 missing matches), `company-scope-guard.mjs` (0
+  unguarded), `resource-code-domain-guard.mjs` (0 cross-domain).
+- ✅ `PROD-ACL-Access-Decisions.md` Group 10 table + note, this section — done.
+- ⏳ Not yet done: live click-through in the deployed app (no dev login in this
+  environment), OM-IMPLEMENTATION-LOG.md entry, commit.
