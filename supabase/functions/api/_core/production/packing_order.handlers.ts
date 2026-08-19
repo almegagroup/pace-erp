@@ -525,10 +525,18 @@ async function computeSfgTotalFree(
   return { free, short: Math.max(0, neededQty - free) };
 }
 
+// Found live 2026-08-19 (same class as process_order.handlers.ts's
+// computePhysicalAvailabilityRows fix, CMP006/PO 9300000092): editPackingOrderHandler's
+// PM re-check ran this against a PO that ALREADY holds its own open PM reservations
+// (created at STANDARD) — without excludeSourceId, the PO's own reservation counted as
+// "someone else's" demand and could self-block a same-or-lower-quantity edit. Excluding
+// the PO's own reservation_document rows (source_type='PACKING_PO', source_id=excludeSourceId)
+// fixes it the same way. Create-time callers (no PO exists yet) simply omit the param.
 async function computePackingAvailability(
   companyId: string,
   sfgNeed: PackingSfgNeed | null,
   pmNeeds: PackingPmNeed[],
+  excludeSourceId?: string,
 ): Promise<{
   sfg: Map<string, { needed_qty: number; available_qty: number; short: number }>;
   pm: Map<string, { needed_qty: number; available_qty: number; short: number }>;
@@ -562,7 +570,7 @@ async function computePackingAvailability(
     serviceRoleClient
       .schema("erp_production")
       .from("reservation_document")
-      .select("material_id, storage_location_id, batch_number, balance_qty")
+      .select("material_id, storage_location_id, batch_number, balance_qty, source_type, source_id")
       .eq("company_id", companyId)
       .in("material_id", materialIds)
       .in("storage_location_id", locationIds)
@@ -599,6 +607,7 @@ async function computePackingAvailability(
   }
 
   for (const row of (reservationResult.data ?? []) as JsonRecord[]) {
+    if (excludeSourceId && String(row.source_type) === "PACKING_PO" && String(row.source_id) === excludeSourceId) continue;
     const qty = Number(row.balance_qty ?? 0);
     const genericKey = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
     pmAvailable.set(genericKey, (pmAvailable.get(genericKey) ?? 0) - qty);
@@ -1690,7 +1699,7 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
       }
     }
     if (pmNeeds.length > 0) {
-      const avail = await computePackingAvailability(String(po.company_id), null, pmNeeds);
+      const avail = await computePackingAvailability(String(po.company_id), null, pmNeeds, id);
       const short: string[] = [];
       for (const [mat, row] of avail.pm.entries()) if (row.short > 0) short.push(mat);
       if (short.length > 0) {
