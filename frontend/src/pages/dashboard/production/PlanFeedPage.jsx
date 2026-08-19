@@ -439,6 +439,7 @@ export default function PlanFeedPage() {
       toast("FO updated.");
       await loadEditFo(editData.id);
       qc.invalidateQueries({ queryKey: ["prod-plan-feed-list"] });
+      qc.invalidateQueries({ queryKey: ["prod-plan-feed-summary"] });
     } catch (err) { toast(friendlyErr(err.message), "error"); }
     finally { setSaving(false); }
   }
