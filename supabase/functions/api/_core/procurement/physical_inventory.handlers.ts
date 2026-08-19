@@ -264,19 +264,30 @@ async function assertPIDocumentCompanyScope(
 }
 
 // §119.2/Phase-2 write-ACL fix: membership (assertCompanyScope) is necessary but not sufficient —
-// this additionally proves an action-level grant on PROC_PI_LIST at the SPECIFIC target company,
-// not just the session's active one. `action` must match whatever the route registry already
-// gates that same path with (EDIT for create/add-item/cancel/remove-item; WRITE for
-// count/recount/submit; APPROVE for reopen/post). Reopen/Post then apply the separate
-// approver_map-driven maker-checker check inside resolvePidActionAuthority().
+// this additionally proves an action-level grant on the target resource at the SPECIFIC target
+// company, not just the session's active one. `action` must match whatever the route registry
+// already gates that same path with (EDIT for create/add-item/cancel/remove-item; WRITE for
+// recount/submit; APPROVE for reopen/post). Reopen/Post then apply the separate approver_map-
+// driven maker-checker check inside resolvePidActionAuthority().
+//
+// resourceCode defaults to PROC_PI_LIST (PID_RESOURCE), correct for every call site except
+// MI04/MI05: §MI04-MI05-split-2026-08-14 gave those their own registry resource_codes
+// (PROC_PI_COUNT_ENTRY / PROC_PI_RECOUNT) so a count-entry-only role (e.g. L2_MANAGER,
+// CAP_PI_COUNT_ENTRY) doesn't need Auditor-tier PROC_PI_LIST access just to count -- but this
+// function kept hardcoding PID_RESOURCE regardless, so the ROUTE-level check (registry) let a
+// count-entry user through while this SECOND, internal check silently re-demanded PROC_PI_LIST
+// and 403'd them. Found live 2026-08-19 (business owner, L2_MANAGER blocked entering MI04
+// counts on their own assigned PID). enterCountHandler/changeCountHandler now pass their real
+// resourceCode explicitly; every other caller is unaffected (still defaults to PID_RESOURCE).
 async function assertPIDCompanyActionAccess(
   ctx: ProcurementHandlerContext,
   companyId: string,
   action: "EDIT" | "WRITE" | "APPROVE",
+  resourceCode: string = PID_RESOURCE,
 ): Promise<void> {
   await assertPIDocumentCompanyScope(ctx, companyId);
   if (isCompanyScopeAdminBypass(ctx)) return;
-  const allowed = await canMaintainCompanyResource(ctx, companyId, PID_RESOURCE, action);
+  const allowed = await canMaintainCompanyResource(ctx, companyId, resourceCode, action);
   if (!allowed) throw new Error("PI_SCOPE_VIOLATION");
 }
 
@@ -1596,7 +1607,7 @@ export async function enterCountHandler(
     }
 
     const document = await fetchPID(documentId);
-    await assertPIDCompanyActionAccess(ctx, toTrimmedString(document.company_id), "WRITE");
+    await assertPIDCompanyActionAccess(ctx, toTrimmedString(document.company_id), "WRITE", "PROC_PI_COUNT_ENTRY");
     const status = toUpperTrimmedString(document.status);
     if (status !== "OPEN") {
       return piErrorResponse(req, ctx, "PI_COUNT_BLOCKED", 409, "MI04 count entry is only available while the document is OPEN — every item already has a decision, use MI05 (Change Count) instead.");
@@ -1662,7 +1673,7 @@ export async function changeCountHandler(
     }
 
     const document = await fetchPID(documentId);
-    await assertPIDCompanyActionAccess(ctx, toTrimmedString(document.company_id), "WRITE");
+    await assertPIDCompanyActionAccess(ctx, toTrimmedString(document.company_id), "WRITE", "PROC_PI_RECOUNT");
     const status = toUpperTrimmedString(document.status);
     if (status !== "COUNTED") {
       return piErrorResponse(req, ctx, "PI_CHANGE_COUNT_BLOCKED", 409, "MI05 Change Count is only available once the document is fully COUNTED (MI04 locked) — reopen it first if it is Pending Approval.");

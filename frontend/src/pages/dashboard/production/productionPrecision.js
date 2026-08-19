@@ -37,3 +37,21 @@ export function multiplyPreciseValues(left, right) {
   if (!Number.isFinite(a) || !Number.isFinite(b)) return "";
   return String(a * b);
 }
+
+// Found live 2026-08-19 (business owner, PR02 Stroke Approval): a dosage
+// total of exactly 100 displayed as "100.00000000001%" -- classic binary
+// floating-point summation noise (0.1 + 0.2-style residue from adding many
+// decimal dosage_pct values). formatPreciseNumber's artifact-detection regex
+// only strips noise shaped as a long run of trailing 0s/9s; it missed this
+// shape (ends in a single stray "1", not a run). A SUM is never a value the
+// user directly typed -- unlike a single field, there's no original
+// precision to preserve -- so round it to the same precision inputs are
+// entered at (PRODUCTION_DECIMAL_STEP, 6dp) before formatting. This only
+// ever removes floating-point noise below 1e-6; every validation check
+// (e.g. Math.abs(sum - 100) < 0.01) still runs against the raw, unrounded
+// sum, so the actual pass/fail tolerance is completely unaffected -- this
+// only changes what gets displayed, never what counts as valid.
+export function formatSum(sum, fallback = "--") {
+  if (!Number.isFinite(sum)) return fallback;
+  return formatPreciseNumber(Number(sum.toFixed(6)), fallback);
+}

@@ -31,7 +31,7 @@ import {
   PO_TYPE_OPTIONS_BY_MATERIAL_TYPE, friendlyStrokeErr, dosageSumOf, Field,
   StrokeLinesTable, GroupCreateModal, MemberAddModal,
 } from "./strokeShared.jsx";
-import { formatPreciseNumber } from "./productionPrecision.js";
+import { formatSum } from "./productionPrecision.js";
 
 const EMPTY_ARRAY = [];
 
@@ -214,7 +214,7 @@ export default function StrokeApprovalPage() {
       return;
     }
     const sum = dosageSumOf(editLines);
-    if (Math.abs(sum - 100) > 0.01) { toast(`Dosage must sum to 100. Current: ${formatPreciseNumber(sum, "0")}%`, "error"); return; }
+    if (Math.abs(sum - 100) > 0.01) { toast(`Dosage must sum to 100. Current: ${formatSum(sum, "0")}%`, "error"); return; }
     setSaving(true);
     try {
       await updateStrokeMaster(row.id, {
