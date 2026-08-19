@@ -11,6 +11,8 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
+import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 
 type DocFlowHandlerContext = {
   context: Extract<ContextResolution, { status: "RESOLVED" }>;
@@ -30,85 +32,129 @@ type FlowNode = {
 
 type RawRow = Record<string, unknown>;
 
-const DOC_META: Record<string, { table: string; select: string; numberCol: string; dateCol: string }> = {
+// Found live 2026-08-19 (business owner, P0010/L1_AUDITOR on a PID they have
+// full PROC_PI_LIST access to): this endpoint serves 13 different document
+// types via one generic handler, but the ACL gate was a single hardcoded
+// PROC_PO_LIST:VIEW in route-acl-registry.ts -- a user with zero PO access
+// (perfectly normal for a PID-only auditor) got 403'd on their OWN document's
+// flow tab. resourceCode now resolves dynamically per doc_type (see Gate-2.5
+// in _pipeline/runner.ts, which imports DOC_FLOW_RESOURCE_BY_TYPE below) --
+// same pattern already used for POST /api/workflow/decision's Gate-2. This
+// also surfaced a second, separate gap while fixing it: the handler never
+// verified the fetched document's own company against the caller's company
+// scope at all (11-bug-pattern #2) -- companyColumns + the check in
+// getDocumentFlowHandler below close that too.
+const DOC_META: Record<string, { table: string; select: string; numberCol: string; dateCol: string; companyColumns: string[] }> = {
   PO: {
     table: "purchase_order",
-    select: "id, po_number, status, po_date",
+    select: "id, po_number, status, po_date, company_id",
     numberCol: "po_number",
     dateCol: "po_date",
+    companyColumns: ["company_id"],
   },
   CSN: {
     table: "consignment_note",
-    select: "id, csn_number, status, gate_entry_date, po_id, grn_id, gate_entry_id, sto_id",
+    select: "id, csn_number, status, gate_entry_date, po_id, grn_id, gate_entry_id, sto_id, company_id",
     numberCol: "csn_number",
     dateCol: "gate_entry_date",
+    companyColumns: ["company_id"],
   },
   GATE_ENTRY: {
     table: "gate_entry",
-    select: "id, ge_number, status, ge_date",
+    select: "id, ge_number, status, ge_date, company_id",
     numberCol: "ge_number",
     dateCol: "ge_date",
+    companyColumns: ["company_id"],
   },
   GRN: {
     table: "goods_receipt",
-    select: "id, grn_number, status, posting_date, gate_entry_id, po_id, sto_id",
+    select: "id, grn_number, status, posting_date, gate_entry_id, po_id, sto_id, company_id",
     numberCol: "grn_number",
     dateCol: "posting_date",
+    companyColumns: ["company_id"],
   },
   QA: {
     table: "inward_qa_document",
-    select: "id, qa_number, status, qa_created_at, grn_id, po_id",
+    select: "id, qa_number, status, qa_created_at, grn_id, po_id, company_id",
     numberCol: "qa_number",
     dateCol: "qa_created_at",
+    companyColumns: ["company_id"],
   },
   IV: {
     table: "invoice_verification",
-    select: "id, iv_number, status, vendor_invoice_date, po_id",
+    select: "id, iv_number, status, vendor_invoice_date, po_id, company_id",
     numberCol: "iv_number",
     dateCol: "vendor_invoice_date",
+    companyColumns: ["company_id"],
   },
   LANDED_COST: {
     table: "landed_cost",
-    select: "id, lc_number, status, created_at, grn_id, csn_id, po_id",
+    select: "id, lc_number, status, created_at, grn_id, csn_id, po_id, company_id",
     numberCol: "lc_number",
     dateCol: "created_at",
+    companyColumns: ["company_id"],
   },
   RTV: {
     table: "return_to_vendor",
-    select: "id, rtv_number, status, created_at, grn_id, po_id",
+    select: "id, rtv_number, status, created_at, grn_id, po_id, company_id",
     numberCol: "rtv_number",
     dateCol: "created_at",
+    companyColumns: ["company_id"],
   },
   DEBIT_NOTE: {
     table: "debit_note",
-    select: "id, dn_number, status, created_at, rtv_id",
+    select: "id, dn_number, status, created_at, rtv_id, company_id",
     numberCol: "dn_number",
     dateCol: "created_at",
+    companyColumns: ["company_id"],
   },
   STO: {
+    // No single company_id column -- an STO spans a sending and a receiving
+    // company (same shape sto.handlers.ts's own scope check already uses).
     table: "stock_transfer_order",
-    select: "id, sto_number, status, created_at, related_csn_id",
+    select: "id, sto_number, status, created_at, related_csn_id, sending_company_id, receiving_company_id",
     numberCol: "sto_number",
     dateCol: "created_at",
+    companyColumns: ["sending_company_id", "receiving_company_id"],
   },
   SO: {
     table: "sales_order",
-    select: "id, so_number, status, so_date",
+    select: "id, so_number, status, so_date, company_id",
     numberCol: "so_number",
     dateCol: "so_date",
+    companyColumns: ["company_id"],
   },
   SALES_INVOICE: {
     table: "sales_invoice",
-    select: "id, invoice_number, status, invoice_date, so_id",
+    select: "id, invoice_number, status, invoice_date, so_id, company_id",
     numberCol: "invoice_number",
     dateCol: "invoice_date",
+    companyColumns: ["company_id"],
   },
   PID: {
     table: "physical_inventory_document",
-    select: "id, document_number, status, count_date",
+    select: "id, document_number, status, count_date, company_id",
     numberCol: "document_number",
     dateCol: "count_date",
+    companyColumns: ["company_id"],
   },
+};
+
+// Exported for _pipeline/runner.ts's Gate-2.5 dynamic ACL resolution.
+export const DOC_FLOW_RESOURCE_BY_TYPE: Record<string, string> = {
+  PO: "PROC_PO_LIST",
+  CSN: "PROC_CSN_TRACKER",
+  GATE_ENTRY: "PROC_GATE_ENTRY_LIST",
+  GRN: "PROC_GRN_LIST",
+  QA: "PROC_QA_QUEUE",
+  IV: "PROC_IV_LIST",
+  LANDED_COST: "PROC_LC_LIST",
+  RTV: "PROC_RTV_LIST",
+  DEBIT_NOTE: "PROC_DEBIT_NOTE_LIST",
+  STO: "PROC_STO_LIST",
+  SO: "PROC_SO_LIST",
+  SALES_INVOICE: "PROC_INV_LIST",
+  PID: "PROC_PI_LIST",
 };
 
 const NATURAL_ORDER = [
@@ -268,7 +314,8 @@ export async function getDocumentFlowHandler(
       );
     }
 
-    if (!DOC_META[docType]) {
+    const meta = DOC_META[docType];
+    if (!meta) {
       return errorResponse(
         "DOCUMENT_FLOW_UNKNOWN_TYPE",
         `Unknown doc_type: ${docType}`,
@@ -278,6 +325,50 @@ export async function getDocumentFlowHandler(
         {},
         req,
       );
+    }
+
+    const root = await fetchOne(docType, id);
+    if (!root) {
+      return errorResponse(
+        "DOCUMENT_FLOW_NOT_FOUND",
+        "Document not found.",
+        ctx.request_id,
+        "NONE",
+        404,
+        {},
+        req,
+      );
+    }
+
+    // Company scope: verify the fetched document actually belongs to one of
+    // the caller's own companies (route ACL already checked the resource+
+    // action is allowed for the caller's active company -- that alone
+    // doesn't verify THIS specific document's own company, since id is
+    // caller-supplied). Matches STO's own sending/receiving dual-company
+    // check for STO rows.
+    if (!isCompanyScopeAdminBypass(ctx)) {
+      const candidateCompanyIds = meta.companyColumns
+        .map((col) => String(root[col] ?? "").trim())
+        .filter(Boolean);
+      const resourceCode = DOC_FLOW_RESOURCE_BY_TYPE[docType];
+      let allowed = false;
+      for (const companyId of candidateCompanyIds) {
+        if (await canMaintainCompanyResource(ctx, companyId, resourceCode, "VIEW")) {
+          allowed = true;
+          break;
+        }
+      }
+      if (!allowed) {
+        return errorResponse(
+          "COMPANY_SCOPE_VIOLATION",
+          "You do not have access to this document.",
+          ctx.request_id,
+          "NONE",
+          403,
+          {},
+          req,
+        );
+      }
     }
 
     const nodes: FlowNode[] = [];

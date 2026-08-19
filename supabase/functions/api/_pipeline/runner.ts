@@ -32,6 +32,7 @@ import {
 
 import { log } from "../_lib/logger.ts";
 import { lookupRouteAcl } from "../_acl/route-acl-registry.ts";
+import { DOC_FLOW_RESOURCE_BY_TYPE } from "../_core/procurement/document_flow.handlers.ts";
 
 import type { SessionResolution } from "./session.ts";
 import type { ContextResolution } from "./context.ts";
@@ -202,6 +203,24 @@ async function resolveProtectedRouteAclMeta(
       resourceCode: data.resource_code ?? data.module_code ?? undefined,
       action: "APPROVE",
     };
+  }
+
+  // Gate-2.5: Document Flow (special dynamic ACL) — serves 13 different
+  // procurement document types from one generic handler; the correct
+  // resource_code depends on doc_type (a query param), so it can never have
+  // a single static registry entry. Found live 2026-08-19: this used to be
+  // hardcoded to PROC_PO_LIST, 403ing users (e.g. a PID-only auditor) who
+  // have full access to their own document type but no PO access at all.
+  // Company-scope on the fetched row itself is verified separately inside
+  // getDocumentFlowHandler (this gate only proves resource+action is ALLOWED
+  // for the caller's active company in general).
+  if (routeKey === "GET:/api/procurement/document-flow") {
+    const docType = new URL(req.url).searchParams.get("doc_type")?.toUpperCase().trim() ?? "";
+    const resourceCode = DOC_FLOW_RESOURCE_BY_TYPE[docType];
+    if (!resourceCode) {
+      return { skipAcl: false };
+    }
+    return { skipAcl: false, resourceCode, action: "VIEW" };
   }
 
   // Gate-3: Central Route ACL Registry (procurement, OM, and all future routes)
