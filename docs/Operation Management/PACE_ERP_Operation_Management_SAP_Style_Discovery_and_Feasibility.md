@@ -19766,6 +19766,13 @@ before approving, same as Stroke Approval's PR02) → **the Manager's save/appro
 actually posts P343** — the QA-created row itself never posts stock on its own. All 5 other
 transitions skip this entirely: QA's own Post click is the final action, no second party involved.
 
+**Self-approval block has the same blanket override as everywhere else in this codebase (caught by
+business owner, 2026-08-19, implemented same day):** the created-by-self check uses
+`hasBlanketApprovalOverride()` (`_shared/approval_override.ts`) — SA/GA/DIRECTOR/ACL-MASTER can
+approve their own proposed line, same exemption `assertCostingRateApproverRole` and every other
+maker-checker in this codebase already grants those roles. Everyone else is still hard-blocked from
+approving their own line.
+
 ### 126.4 — Movement-type scope: all 6 pairs kept (resolves open question 3)
 
 No pair dropped — QA↔Blocked (P323/P349) stays in scope alongside the more obviously-used

@@ -13,6 +13,7 @@ import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { errorResponse, okResponse } from "../response.ts";
@@ -415,7 +416,10 @@ export async function approveStockStatusChangePostingHandler(req: Request, ctx: 
     if (toUpperTrimmedString(row.status) !== "PENDING_APPROVAL") {
       return sscError(req, ctx, "SSC_APPROVE_NOT_PENDING", 409, "This posting is not pending approval.");
     }
-    if (toTrimmedString(row.created_by) === ctx.auth_user_id) {
+    // SA/GA/DIRECTOR/ACL-MASTER retain blanket approval authority regardless
+    // of who proposed the line — same override every other maker-checker in
+    // this codebase honours (_shared/approval_override.ts).
+    if (toTrimmedString(row.created_by) === ctx.auth_user_id && !hasBlanketApprovalOverride(ctx)) {
       return sscError(req, ctx, "SSC_APPROVE_SELF_FORBIDDEN", 403, "You cannot approve your own proposed status change.");
     }
 
