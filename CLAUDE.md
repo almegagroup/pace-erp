@@ -543,7 +543,15 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 > Inward QA-র existing RELEASE-এর মতোই) — শুধু Block→Unrestricted-এ Stroke Master-এর
 > maker-checker pattern (QA propose → Manager approve = post)। Access `CAP_QA_TIER_L3MGR` +
 > `CAP_QA_PLANTHEAD` (L1_USER থেকে L3_Manager পর্যন্ত broad range, PR17-এর মতো manager-only না)।
-> সব ৬টা movement pair-ই থাকছে, কোনোটা বাদ যায়নি। Task brief লেখাই পরের ধাপ।
+> সব ৬টা movement pair-ই থাকছে, কোনোটা বাদ যায়নি। **§126.7-126.8 (2026-08-19)-এ আরও ৩টা point লক
+> হলো:** Approve বোতাম সবাই দেখবে কিন্তু শুধু approval-tier user-দের জন্য enabled (আলাদা page না,
+> এক page-এই role-gated button-state) — posting rate = source stock-type-এর current
+> valuation_rate (value ১:১ preserve হবে, UI-তে কোথাও দেখানো হবে না, IN02-এই দেখা যাবে) —
+> **Inspection Lot (SAP QM-style formal mechanism) discuss করে reject করা হয়েছে** এই scope-এর
+> জন্য (কোনো নির্দিষ্ট origin transaction নেই বলে, real SAP-ও এখানে MB1B-ই বলবে; PID নিজেই কোনো
+> lot ছাড়া সরাসরি post করে বলে এটাই codebase-এর established pattern-ও) — ভবিষ্যতে structured
+> test-parameter evidence সত্যিই দরকার হলে revisit করা যাবে, কিন্তু এখনই না। Task brief লেখাই
+> পরের ধাপ।
 >
 > ### 📍 2026-08-13 session handoff (আগের brief, এখনো valid প্রেক্ষাপটের জন্য)
 >

@@ -19796,6 +19796,64 @@ postings** (history + per-row Reverse button, mirrors §121's Location Transfer 
 The postings-history table uses `ErpDenseGrid`, same as every other report/register in this app —
 never a hand-rolled `<table>`.
 
+**Approve is role-gated by button state, not by a separate page (LOCKED 2026-08-19):** unlike
+Stroke Master's PR01-create/PR02-approve split across two menu items, IN13's maker and checker
+share the same single page. The pending Blocked→Unrestricted row's **Approve** button is visible to
+every viewer (transparency — everyone can see what's awaiting approval and why), but only
+**enabled** for users holding the approval-tier capability (§126.5); for everyone else it renders
+disabled with a `title`/tooltip explaining why (e.g. "Manager approval required"). Clicking Approve
+(when enabled) is the action that actually posts P343 — the original QA-created row never posts on
+its own for this one transition.
+
+**Recent Postings columns — no Value/rate shown (LOCKED 2026-08-19, corrects an early mockup
+draft):** live-checked `LocationTransferWorkbenchPage.jsx`'s (IN11) actual "Posting history"/
+"Reverse" grid columns — `Movement Type | Qty | Material Doc | Year | Posted By | Posted At` — no
+value/rate column anywhere. IN13 follows the same convention exactly (plus a Status column for the
+one pending-approval case, §126.3). Value/rate is a **report-layer** concern (IN02 Stock Ledger
+already shows it for every posting, including these) — an action workbench never duplicates it.
+
+### 126.7 — Posting rate: preserves value, never shown in the UI (LOCKED 2026-08-19)
+
+Each line's `unit_value` for `post_document` is the **source stock-type's current
+`valuation_rate`** for that exact (material, storage location, batch) combination — read the same
+way §121's Location Transfer already resolves it (`getLiveStockBalance()`, last posted
+`valuation_rate` for that scope; `stock_snapshot` also carries this per `stock_type_code` directly,
+confirmed live — Unrestricted/QI/Blocked each keep their own row/rate for the same material+
+location+batch). Posting at this rate means **value transfers 1:1, no gain or loss is ever created**
+— consistent with these movement types all being `direction = TRANSFER` (§126, verified live).
+Resolved independently per line (§126.2's per-line scoping applies to rate too, not just qty) — no
+UI field for it; it's computed server-side and never entered or displayed on this page (§126.6).
+
+### 126.8 — Inspection Lot considered and rejected for this scope, not dropped — revisit only if a real need surfaces (LOCKED 2026-08-19)
+
+**Considered:** building a formal SAP QM-style Inspection Lot layer instead — a company-level lot
+header, QA adds material+location+batch+from-status+to-status lines to it, each line gets the exact
+`PO06` (Inward QA) treatment (existing `qa_test_method_master`/`qa_category_test_config` reading
+entry, then a Usage Decision), and Blocked→Unrestricted's approval becomes "approve that line inside
+the lot" instead of a button on this page.
+
+**Rejected, and specifically not because PACE lacks the infrastructure — even real SAP wouldn't use
+an Inspection Lot here.** Inspection Lots are always bound to a specific origin transaction (GR,
+production order, delivery) — the lot's quantity and existence come from that transaction. IN13's
+whole reason for existing is stock that has **no such single origin** (aged stock, stock blended
+from multiple receipts/batches, or flagged for a reason unrelated to any one transaction) — there is
+nothing to create a lot *against*. This is exactly the scenario real SAP itself routes to **MB1B**
+(Transfer Posting), not QA32/QA11 — confirmed as the correct call independent of PACE's own
+lighter-weight QI/Blocked implementation (§126's original MB1B-vs-QA32 comparison).
+
+**Second, independent argument that surfaced mid-discussion — PID already proves direct-posting is
+this codebase's actual convention, not just this design's choice.** Checked live:
+`erp_inventory.physical_inventory_block` (PID's own block/freeze mechanism during counting) posts
+directly against `pi_document_id`, no lot of any kind — same pattern as Inward QA (posts directly
+against its GRN line) and RTV (posts directly against its own document). Requiring an Inspection Lot
+only for IN13 would make it the one inconsistent mechanism in an otherwise uniform system.
+
+**Not dropped, deferred:** if a real future need emerges for *structured* test-parameter evidence
+behind a status change (not just free-text Reason), the right shape is almost certainly extending
+IN13's own Change-status grid to optionally attach `qa_test_method` readings per line — reusing the
+existing infrastructure IN13 already sits next to — not standing up a parallel Inspection Lot
+document type. Revisit this note before re-opening the question from scratch.
+
 ---
 
 ## Section 127 — IN12 implementation + prod rollout, and a live-app assumption corrected (2026-08-19)
