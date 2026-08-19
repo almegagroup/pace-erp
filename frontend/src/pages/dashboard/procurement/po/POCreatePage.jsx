@@ -346,7 +346,7 @@ export default function POCreatePage() {
     () => String(selectedVendor?.vendor_type || "").toUpperCase() === "IMPORT",
     [selectedVendor]
   );
-  const deliveryDateLabel = showIncoterm ? "ETA to Port" : "ETD";
+  const deliveryDateLabel = showIncoterm ? "ETA to Port" : "Delivery Date";
   const portQuery = usePortOptionsQuery(
     { company_id: form.company_id || undefined, is_active: true },
     { enabled: showIncoterm && Boolean(form.company_id) }
