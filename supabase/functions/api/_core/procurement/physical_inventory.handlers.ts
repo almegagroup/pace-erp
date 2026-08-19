@@ -2386,7 +2386,7 @@ export async function listPIDifferencesHandler(
     const [companyRows, locationRows, materialRows] = await Promise.all([
       companyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[] }),
-      matIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type").in("id", matIds) : Promise.resolve({ data: [] as JsonRecord[] }),
+      matIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type, external_code").in("id", matIds) : Promise.resolve({ data: [] as JsonRecord[] }),
     ]);
     const companyMap = new Map(((companyRows.data ?? []) as JsonRecord[]).map((c) => [String(c.id), c]));
     const locationMap = new Map(((locationRows.data ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
@@ -2409,6 +2409,7 @@ export async function listPIDifferencesHandler(
         storage_location_name: location?.name ?? null,
         material_pace_code: material?.pace_code ?? null,
         material_name: material?.material_name ?? null,
+        material_external_code: material?.external_code ?? null,
         batch_number: item.batch_number ?? null,
         stock_type: item.stock_type,
         book_qty: item.book_qty,
