@@ -182,7 +182,6 @@ export default function PIDifferenceReportPage() {
                 { key: "pi_status", label: "PID Status", width: "120px" },
                 { key: "company_code", label: "Company", width: "110px", render: (row) => row.company_code ?? "—" },
                 { key: "storage_location_name", label: "Location", width: "140px", render: (row) => row.storage_location_code ?? "—" },
-                { key: "material_pace_code", label: "Pace Code", width: "110px", render: (row) => row.material_pace_code ?? "—" },
                 { key: "material_name", label: "Material", width: "260px", render: (row) => row.material_name ?? "—" },
                 { key: "material_external_code", label: "External Code", width: "150px", render: (row) => row.material_external_code ?? "—" },
                 { key: "batch_number", label: "Batch", width: "100px", render: (row) => row.batch_number ?? "—" },
@@ -196,6 +195,22 @@ export default function PIDifferenceReportPage() {
                   render: (row) => <span className={`font-semibold ${toneForDifference(Number(row.difference_qty))}`}>{Number(row.difference_qty).toFixed(4)}</span>,
                 },
                 { key: "difference_pct", label: "Diff %", width: "80px", render: (row) => (row.difference_pct === null ? "—" : `${row.difference_pct}%`) },
+                {
+                  key: "difference_value",
+                  label: "Difference Value",
+                  width: "130px",
+                  align: "right",
+                  // Matches SAP MI20's own Difference Value column. Posted rows
+                  // show the rate actually used at posting (a fact); pending
+                  // rows show today's live WAR as a preview (may still move
+                  // before this actually posts).
+                  render: (row) => (
+                    <span className={`font-semibold ${toneForDifference(Number(row.difference_value))}`}>
+                      {Number(row.difference_value ?? 0).toFixed(2)}
+                      {row.status_label !== "POSTED" ? <span className="ml-1 font-normal text-slate-400">(est.)</span> : null}
+                    </span>
+                  ),
+                },
                 { key: "base_uom_code", label: "UoM", width: "70px" },
                 { key: "movement_type", label: "Movement", width: "90px", render: (row) => row.movement_type ?? "—" },
                 {
