@@ -39,9 +39,20 @@ function fmtDate(value) {
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function fmtNumber(value, digits = 3) {
+// Found live 2026-08-19 (business owner): an import PO entered at rate
+// 0.815 printed as "0.81" -- this used to force every number to a fixed
+// digit count (2 for rate/amount, 3 default for qty), silently truncating
+// real entered precision instead of just cleaning up float noise. The DB
+// itself was never wrong (unit_rate is numeric(20,4), stored the full
+// 0.8150) -- this was purely a print-template bug. Now shows exactly what
+// was entered/stored, trimming only trailing zero padding (so a whole
+// number still reads as "25", not "25.000000") -- toFixed(6) is just a
+// ceiling matching the widest DB column scale in use here (ordered_qty is
+// numeric(20,6)), not a forced precision.
+function fmtNumber(value) {
   const n = Number(value ?? 0);
-  return Number.isFinite(n) ? n.toFixed(digits) : "0.000";
+  if (!Number.isFinite(n)) return "0";
+  return n.toFixed(6).replace(/(\.\d*?[1-9])0+$/u, "$1").replace(/\.0+$/u, "");
 }
 
 function joinTruthy(parts, sep = " / ") {
@@ -210,8 +221,8 @@ function POCopy({ po, from, to, portsById }) {
             <td>{materialLabel}</td>
             <td className="num">{fmtNumber(line?.ordered_qty)}</td>
             <td>{line?.po_uom_code || "--"}</td>
-            <td className="num">{fmtNumber(line?.unit_rate, 2)}</td>
-            <td className="num">{fmtNumber(line?.total_value, 2)}</td>
+            <td className="num">{fmtNumber(line?.unit_rate)}</td>
+            <td className="num">{fmtNumber(line?.total_value)}</td>
           </tr>
         </tbody>
       </table>
@@ -228,7 +239,7 @@ function POCopy({ po, from, to, portsById }) {
           <div className="row"><span className="lbl">Freight</span><span>{po?.freight_term || "--"}</span></div>
           <div className="row"><span className="lbl">GST</span><span>{po?.gst_terms === "INCLUSIVE" ? "Inclusive" : po?.gst_terms === "EXCLUSIVE" ? "Exclusive" : "--"}</span></div>
           {po?.has_rebate ? (
-            <div className="row"><span className="lbl">Rebate</span><span>{fmtNumber(po?.rebate_rate, 2)} {po?.rebate_rate_uom_basis === "PO_UOM" ? "/ PO UOM" : "/ Base UOM"}{po?.rebate_remarks ? ` — ${po.rebate_remarks}` : ""}</span></div>
+            <div className="row"><span className="lbl">Rebate</span><span>{fmtNumber(po?.rebate_rate)} {po?.rebate_rate_uom_basis === "PO_UOM" ? "/ PO UOM" : "/ Base UOM"}{po?.rebate_remarks ? ` — ${po.rebate_remarks}` : ""}</span></div>
           ) : null}
           {po?.remarks ? <div className="row"><span className="lbl">Remarks</span><span>{po.remarks}</span></div> : null}
         </div>
