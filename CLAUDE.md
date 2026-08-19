@@ -521,9 +521,11 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 > এখন Dispatch-এর **আগে** চলে এসেছে। নতুন session ধাপ ২ (MTEST/ZTEST) দিয়ে শুরু করবে, একটা
 > পুরোপুরি শেষ (design locked + implement + verify) না করে পরেরটায় যাবে না।
 >
-> **✅ IN12 (Reservation List) + IN13 (Stock Status Change) — DESIGN LOCKED (2026-08-19,
-> feasibility §125/§126), IMPLEMENTATION NOT STARTED — orthogonal addition, does not change the
-> 4-step order above.** এসেছে "QA কোনো material-এর status change করবে"-এর discovery থেকে —
+> **✅ IN12 (Reservation List) — DESIGN LOCKED + IMPLEMENTATION COMPLETE + prod ACL live
+> (2026-08-19, feasibility §125/§127). IN13 (Stock Status Change) — DESIGN FULLY LOCKED (2026-08-19,
+> §126.1-126.6), সবগুলো open question resolved, IMPLEMENTATION NOT STARTED — পরের ধাপ task brief
+> লেখা।** Orthogonal addition, does not change the 4-step order above. এসেছে "QA কোনো
+> material-এর status change করবে"-এর discovery থেকে —
 > আসল gap হলো Inward QA/RTV/Opening Stock/Process PO Verify ছাড়া আর কোথাও QA↔Unrestricted↔Blocked
 > movement (P321-P349 family, সব ৬টাই engine-এ আগে থেকে ready) কেউ standalone action হিসেবে করতে
 > পারে না — RM/PM/INT/SFG/FG সব material-এই, শুধু FG না। **IN12** = SAP MB25-equivalent
@@ -535,9 +537,21 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 > (কোন reservation affected, নাম ধরে) — reservation নিজে থেকে cancel করবে না, সেটা owning
 > document-এর দায়িত্ব। tx_code prefix IN রাখা হয়েছে যদিও `GRP_ACL_QA` group-এ বসবে (PO06/PR01-19
 > ইতিমধ্যে একই group-এ mixed prefix নিয়ে আছে, prefix ≠ sidebar group, live verify করা)। **IN12
-> আগে implement হবে** (IN13-এর warning IN12-কেই link করে)। **IN13-এর ৩টা প্রশ্ন এখনো open**
-> (approval লাগবে কিনা, কে করতে পারবে, সবগুলো movement pair সত্যিই দরকার কিনা) — task brief
-> লেখার আগে business owner-এর উত্তর লাগবে।
+> আগে implement হবে** (IN13-এর warning IN12-কেই link করে, ✅ done)। **IN13-এর ৩টা প্রশ্ন resolved
+> (2026-08-19, §126.1-126.6):** multi-line Add-Row entry (single material না), Block→Unrestricted
+> (P343) ছাড়া বাকি ৫টা transition-ই single-action no-approval (QA→Unrestricted-ও no-approval,
+> Inward QA-র existing RELEASE-এর মতোই) — শুধু Block→Unrestricted-এ Stroke Master-এর
+> maker-checker pattern (QA propose → Manager approve = post)। Access `CAP_QA_TIER_L3MGR` +
+> `CAP_QA_PLANTHEAD` (L1_USER থেকে L3_Manager পর্যন্ত broad range, PR17-এর মতো manager-only না)।
+> সব ৬টা movement pair-ই থাকছে, কোনোটা বাদ যায়নি। **§126.7-126.8 (2026-08-19)-এ আরও ৩টা point লক
+> হলো:** Approve বোতাম সবাই দেখবে কিন্তু শুধু approval-tier user-দের জন্য enabled (আলাদা page না,
+> এক page-এই role-gated button-state) — posting rate = source stock-type-এর current
+> valuation_rate (value ১:১ preserve হবে, UI-তে কোথাও দেখানো হবে না, IN02-এই দেখা যাবে) —
+> **Inspection Lot (SAP QM-style formal mechanism) discuss করে reject করা হয়েছে** এই scope-এর
+> জন্য (কোনো নির্দিষ্ট origin transaction নেই বলে, real SAP-ও এখানে MB1B-ই বলবে; PID নিজেই কোনো
+> lot ছাড়া সরাসরি post করে বলে এটাই codebase-এর established pattern-ও) — ভবিষ্যতে structured
+> test-parameter evidence সত্যিই দরকার হলে revisit করা যাবে, কিন্তু এখনই না। Task brief লেখাই
+> পরের ধাপ।
 >
 > ### 📍 2026-08-13 session handoff (আগের brief, এখনো valid প্রেক্ষাপটের জন্য)
 >

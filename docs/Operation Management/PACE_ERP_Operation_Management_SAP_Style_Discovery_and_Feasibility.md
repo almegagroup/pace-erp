@@ -19718,8 +19718,182 @@ number + `location_transfer_posting` log + dedicated reverse action) rather than
 doc type's range — new doc_type in the §8 document-number-series table, added at implementation
 time (not yet assigned a number as of this lock).
 
-**⚠️ Still open, not yet answered — must be resolved before writing the task brief:**
-1. Does posting require approval (maker-checker), or is a single QA action sufficient?
-2. Is this QA-role-only, or does authority vary by material type (e.g. a different role for FG)?
-3. Are all 6 movement-type pairs genuinely needed in practice, or only a subset (e.g. is
-   QA↔Blocked, P323/P349, ever actually used, or does everything route through Unrestricted)?
+**✅ All 3 open questions resolved (2026-08-19 follow-up session) — full design below, ready for a
+task brief.**
+
+### 126.1 — Multi-line entry, not single-material (LOCKED 2026-08-19)
+
+The "Change status" section is a line-item grid, not a single-row form — **Add Row** lets the user
+stage multiple materials' status changes in one session and post them together, same UX shape as
+PO Create's item table. Each row carries its own Material, Storage Location, Batch (or Batch +
+Packing PO for FG), From, To, Qty, Reason — rows are fully independent of each other, not a shared
+header applying to all.
+
+### 126.2 — Per-line, SLoc-scoped stock check (LOCKED 2026-08-19)
+
+Each row's availability check runs against **that row's own** (material, storage location, batch)
+combination independently — never blended across storage locations or across the other rows in the
+same batch of edits. Two rows for the same material at different storage locations are two
+unrelated checks. This was implicit in the original Locate-stock design (§126 above) but is stated
+explicitly here now that entry is multi-line, since a naive implementation could accidentally sum
+balances across rows instead of checking each independently.
+
+### 126.3 — Transition-specific approval: only Block→Unrestricted needs a maker-checker (LOCKED 2026-08-19, resolves open question 1)
+
+**Not a blanket approval rule.** Business owner specified per-transition, and only one of the six
+pairs requires a second sign-off:
+
+| Transition | Movement | Approval? |
+|---|---|---|
+| Unrestricted → QA | P322 | ❌ No — single action, posts immediately |
+| Unrestricted → Blocked | P344 | ❌ No — single action, posts immediately |
+| QA → Blocked | P323 | ❌ No — single action, posts immediately |
+| Blocked → QA | P349 | ❌ No — single action, posts immediately |
+| QA → Unrestricted | P321 | ❌ No — single action, posts immediately |
+| **Blocked → Unrestricted** | **P343** | **✅ Yes — maker-checker required** |
+
+**Why only this one:** every other transition either restricts stock further (Unrestricted→QA,
+Unrestricted→Blocked, QA→Blocked) or moves between two already-restricted states (Blocked→QA,
+QA→Unrestricted is the sole "release" among the no-approval set, matching Inward QA's own existing
+RELEASE decision which has never required a second sign-off). Only Blocked→Unrestricted takes
+material that was flagged as unsafe/unusable and puts it back into fully sellable/consumable stock
+— the one action with real downside if wrong, so it gets the same rigor as a fresh material
+release.
+
+**Mechanism — reuses Stroke Master's exact maker-checker pattern (§83.3), not a new one:** QA
+creates/proposes the Blocked→Unrestricted line → a Manager-tier reviewer reviews (and can edit
+before approving, same as Stroke Approval's PR02) → **the Manager's save/approve action is what
+actually posts P343** — the QA-created row itself never posts stock on its own. All 5 other
+transitions skip this entirely: QA's own Post click is the final action, no second party involved.
+
+**Self-approval block has the same blanket override as everywhere else in this codebase (caught by
+business owner, 2026-08-19, implemented same day):** the created-by-self check uses
+`hasBlanketApprovalOverride()` (`_shared/approval_override.ts`) — SA/GA/DIRECTOR/ACL-MASTER can
+approve their own proposed line, same exemption `assertCostingRateApproverRole` and every other
+maker-checker in this codebase already grants those roles. Everyone else is still hard-blocked from
+approving their own line.
+
+### 126.4 — Movement-type scope: all 6 pairs kept (resolves open question 3)
+
+No pair dropped — QA↔Blocked (P323/P349) stays in scope alongside the more obviously-used
+Unrestricted↔QA/Unrestricted↔Blocked pairs, since business owner's transition table above
+explicitly names QA→Blocked and Blocked→QA as real, no-approval-needed actions — confirms they're
+genuinely used, not just theoretically available in the engine.
+
+### 126.5 — Access: role range, not manager-only (LOCKED 2026-08-19, resolves open question 2)
+
+**Not restricted to the same narrow capability as PR17 (Batch Number Release).** PR17 uses
+`CAP_QA_MGR_TIER` ("Manager tier only, no user tier" — its own DB description). IN13 instead uses
+the **broader** `CAP_QA_TIER_L3MGR` ("User tier through L3_Manager" — spans from base L1_USER all
+the way up through L3_Manager) **plus** `CAP_QA_PLANTHEAD` (fallback capability for companies with
+no dedicated QA Manager, L3_Manager role) — same pattern `PROC_QA_QUEUE` (Inward QA) already uses.
+Business owner's own framing: access should reach "from L1_USER up to whichever role also does
+batch number release" — i.e. the ceiling matches PR17's top tier, but the floor starts at the base
+QA user tier, not at management. Action-level split (who can just view vs. who can Post vs. who can
+Approve the one maker-checker transition) follows the same tiered pattern `PROC_QA_QUEUE` already
+uses (base tier VIEW, higher tiers WRITE/EDIT/APPROVE) — exact action-to-tier mapping to be finalized
+at task-brief time, not re-litigated here.
+
+### 126.6 — Page structure confirmed: one page, not report-style Page1/Page2 (LOCKED 2026-08-19)
+
+Single-page workbench (same shape as IN11 — see §121), not a search-then-report split like
+IN02/IN03/IN12. Three sections stacked on one screen: **Locate stock** (material/SLoc/batch picker
++ live 3-way balance) → **Change status** (the multi-line Add-Row grid from §126.1) → **Recent
+postings** (history + per-row Reverse button, mirrors §121's Location Transfer reverse pattern).
+The postings-history table uses `ErpDenseGrid`, same as every other report/register in this app —
+never a hand-rolled `<table>`.
+
+**Approve is role-gated by button state, not by a separate page (LOCKED 2026-08-19):** unlike
+Stroke Master's PR01-create/PR02-approve split across two menu items, IN13's maker and checker
+share the same single page. The pending Blocked→Unrestricted row's **Approve** button is visible to
+every viewer (transparency — everyone can see what's awaiting approval and why), but only
+**enabled** for users holding the approval-tier capability (§126.5); for everyone else it renders
+disabled with a `title`/tooltip explaining why (e.g. "Manager approval required"). Clicking Approve
+(when enabled) is the action that actually posts P343 — the original QA-created row never posts on
+its own for this one transition.
+
+**Recent Postings columns — no Value/rate shown (LOCKED 2026-08-19, corrects an early mockup
+draft):** live-checked `LocationTransferWorkbenchPage.jsx`'s (IN11) actual "Posting history"/
+"Reverse" grid columns — `Movement Type | Qty | Material Doc | Year | Posted By | Posted At` — no
+value/rate column anywhere. IN13 follows the same convention exactly (plus a Status column for the
+one pending-approval case, §126.3). Value/rate is a **report-layer** concern (IN02 Stock Ledger
+already shows it for every posting, including these) — an action workbench never duplicates it.
+
+### 126.7 — Posting rate: preserves value, never shown in the UI (LOCKED 2026-08-19)
+
+Each line's `unit_value` for `post_document` is the **source stock-type's current
+`valuation_rate`** for that exact (material, storage location, batch) combination — read the same
+way §121's Location Transfer already resolves it (`getLiveStockBalance()`, last posted
+`valuation_rate` for that scope; `stock_snapshot` also carries this per `stock_type_code` directly,
+confirmed live — Unrestricted/QI/Blocked each keep their own row/rate for the same material+
+location+batch). Posting at this rate means **value transfers 1:1, no gain or loss is ever created**
+— consistent with these movement types all being `direction = TRANSFER` (§126, verified live).
+Resolved independently per line (§126.2's per-line scoping applies to rate too, not just qty) — no
+UI field for it; it's computed server-side and never entered or displayed on this page (§126.6).
+
+### 126.8 — Inspection Lot considered and rejected for this scope, not dropped — revisit only if a real need surfaces (LOCKED 2026-08-19)
+
+**Considered:** building a formal SAP QM-style Inspection Lot layer instead — a company-level lot
+header, QA adds material+location+batch+from-status+to-status lines to it, each line gets the exact
+`PO06` (Inward QA) treatment (existing `qa_test_method_master`/`qa_category_test_config` reading
+entry, then a Usage Decision), and Blocked→Unrestricted's approval becomes "approve that line inside
+the lot" instead of a button on this page.
+
+**Rejected, and specifically not because PACE lacks the infrastructure — even real SAP wouldn't use
+an Inspection Lot here.** Inspection Lots are always bound to a specific origin transaction (GR,
+production order, delivery) — the lot's quantity and existence come from that transaction. IN13's
+whole reason for existing is stock that has **no such single origin** (aged stock, stock blended
+from multiple receipts/batches, or flagged for a reason unrelated to any one transaction) — there is
+nothing to create a lot *against*. This is exactly the scenario real SAP itself routes to **MB1B**
+(Transfer Posting), not QA32/QA11 — confirmed as the correct call independent of PACE's own
+lighter-weight QI/Blocked implementation (§126's original MB1B-vs-QA32 comparison).
+
+**Second, independent argument that surfaced mid-discussion — PID already proves direct-posting is
+this codebase's actual convention, not just this design's choice.** Checked live:
+`erp_inventory.physical_inventory_block` (PID's own block/freeze mechanism during counting) posts
+directly against `pi_document_id`, no lot of any kind — same pattern as Inward QA (posts directly
+against its GRN line) and RTV (posts directly against its own document). Requiring an Inspection Lot
+only for IN13 would make it the one inconsistent mechanism in an otherwise uniform system.
+
+**Not dropped, deferred:** if a real future need emerges for *structured* test-parameter evidence
+behind a status change (not just free-text Reason), the right shape is almost certainly extending
+IN13's own Change-status grid to optionally attach `qa_test_method` readings per line — reusing the
+existing infrastructure IN13 already sits next to — not standing up a parallel Inspection Lot
+document type. Revisit this note before re-opening the question from scratch.
+
+---
+
+## Section 127 — IN12 implementation + prod rollout, and a live-app assumption corrected (2026-08-19)
+
+**✅ IN12 IMPLEMENTATION COMPLETE** — `listReservationsHandler` (`stock_reports.handlers.ts`),
+route + ACL registry (`PROC_RESERVATION_LIST`), `ReservationListPage.jsx` (mirrors IN02's
+Page1/Page2 + `ErpDenseGrid` + Columns drawer + CSV export exactly). Same pass also fixed IN02's
+Material column (was combining pace_code+name, now name-only, matching IN03 — see §125).
+
+**⚠️ Correction found by business owner's own live screenshot, not by this session's own
+checking — worth stating plainly.** After registering IN12's ACL grant in dev and confirming it
+live in dev's `precomputed_acl_view`/`menu_snapshot`, business owner shared a screenshot of the
+**actual deployed app** (`erp.almegagroup.in`, P0004/CMP003) showing IN02/IN03/IN04 all present in
+the sidebar but IN12 missing. Comparing dev's `menu_snapshot` for that exact user+company (IN02
+`is_visible=false`) against the screenshot (IN02 visibly present) proved the deployed frontend is
+backed by **prod** (`bsjpvkigpllichlknmah`), not dev — the same "dev" naming trap flagged elsewhere
+in this doc for the Render API host. IN12 had only ever been registered in dev.
+
+**Second finding while fixing this — prod's IN02/IN03 carry a capability dev's don't mirror:**
+`acl.capability_menu_actions` in prod showed `PROC_STOCK_LEDGER`/`PROC_CURRENT_STOCK` each granted
+under **two** capabilities — `CAP_PROC_INVENTORY` **and** `CAP_EVERYONE_REPORTS` — while IN12 had
+only been given the first. That's exactly why P0004's Supply Chain work context could see IN02/IN03
+but not IN12: it holds `CAP_EVERYONE_REPORTS`, not `CAP_PROC_INVENTORY`. Added the missing
+`CAP_EVERYONE_REPORTS` grant to `PROC_RESERVATION_LIST` in both prod and dev, re-ran the 4-step
+sequence (new ACL version → `capture_acl_version_source` → `generate_acl_snapshot` →
+`rebuild_acl_menu_snapshot` for every user/work-context in the 4 active companies each place).
+Verified live: P0004/CMP003 now shows `PROC_RESERVATION_LIST` `is_visible=true` in **both** prod and
+dev, matching IN02/IN03 exactly.
+
+**Lesson, stated once so it isn't re-learned the hard way next time:** confirming a new ACL grant in
+`precomputed_acl_view`/`menu_snapshot` in dev is not the same claim as "this is live" — the deployed
+frontend's actual backing project must be confirmed (or the change applied to prod directly,
+matching CLAUDE.md's own MCP-vs-migration rule that ACL/menu data must be applied to both dev and
+prod separately). Also: when granting a new report the "same access as an existing one," diff the
+*actual* `capability_menu_actions` rows for that existing resource rather than assuming a single
+capability — a report can (and here, does) sit behind more than one.

@@ -129,6 +129,9 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/location-transfer-availability-preview": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REQ", action: "WRITE" },
   "GET:/api/procurement/location-transfer-workbench": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "VIEW"  },
   "POST:/api/procurement/location-transfer-postings": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "WRITE" },
+  "GET:/api/procurement/stock-status-change/balance":  { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "VIEW"  },
+  "POST:/api/procurement/stock-status-change/postings": { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "WRITE" },
+  "GET:/api/procurement/stock-status-change/postings":  { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "VIEW"  },
   // §119.15 — MI20 IN07, own resourceCode (not PROC_PI_LIST) matching the IN02/IN03/PR21
   // pattern: a separate cross-document report gets its own resource, "everyone" per §119.5,
   // never shared with the document-lifecycle resource (bug pattern #6, §117.6's own note).
@@ -1057,6 +1060,14 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/location-transfer-postings\/[^/]+\/reverse$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REVERSE", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/stock-status-change\/postings\/[^/]+\/approve$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/stock-status-change\/postings\/[^/]+\/reverse$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/procurement\/physical-inventory\/[^/]+$/,

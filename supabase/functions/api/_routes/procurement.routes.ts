@@ -194,6 +194,13 @@ import {
   updateLocationTransferRequestHandler,
 } from "../_core/procurement/location_transfer.handlers.ts";
 import {
+  approveStockStatusChangePostingHandler,
+  getStockStatusChangeBalanceHandler,
+  listStockStatusChangePostingsHandler,
+  postStockStatusChangeHandler,
+  reverseStockStatusChangePostingHandler,
+} from "../_core/procurement/stock_status_change.handlers.ts";
+import {
   createCHAHandler,
   deleteImportLeadTimeHandler,
   deleteDomesticLeadTimeHandler,
@@ -478,6 +485,12 @@ export async function dispatchProcurementRoutes(
       return await getLocationTransferWorkbenchHandler(req, ctx);
     case "POST:/api/procurement/location-transfer-postings":
       return await postLocationTransferHandler(req, ctx);
+    case "GET:/api/procurement/stock-status-change/balance":
+      return await getStockStatusChangeBalanceHandler(req, ctx);
+    case "POST:/api/procurement/stock-status-change/postings":
+      return await postStockStatusChangeHandler(req, ctx);
+    case "GET:/api/procurement/stock-status-change/postings":
+      return await listStockStatusChangePostingsHandler(req, ctx);
     // MI04/MI05 standalone entry — resolve a typed PID number to its id before either page's
     // own Page 2 loads. Hyphenated, non-slash-nested path, same reason as the two siblings above.
     case "GET:/api/procurement/physical-inventory-resolve":
@@ -881,6 +894,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/location-transfer-postings\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
     return await reverseLocationTransferPostingHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stock-status-change\/postings\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+    return await approveStockStatusChangePostingHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stock-status-change\/postings\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
+    return await reverseStockStatusChangePostingHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/port-transit\/[^/]+$/.test(pathname) && req.method === "DELETE") {
