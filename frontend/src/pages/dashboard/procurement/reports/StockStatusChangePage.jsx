@@ -9,6 +9,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, {
@@ -86,7 +87,7 @@ export default function StockStatusChangePage() {
   const materialOptions = useMemo(
     () => (materialsQuery.materials ?? []).map((material) => ({
       value: material.id,
-      label: material.document_name || material.material_name || material.pace_code || material.id,
+      label: `${material.pace_code ?? "—"} — ${material.material_name || material.document_name || "Material"}`,
       isFg: toTrimmedString(material.material_type).toUpperCase() === "FG",
     })),
     [materialsQuery.materials],
@@ -240,29 +241,25 @@ export default function StockStatusChangePage() {
             />
             <label className="grid gap-1 text-sm text-slate-700">
               <span className="font-medium text-slate-800">Material</span>
-              <select
-                className="min-h-9 border border-slate-300 bg-white px-3 py-2 text-sm"
+              <ErpComboboxField
                 value={lookupMaterialId}
-                onChange={(event) => setLookupMaterialId(event.target.value)}
-              >
-                <option value="">Select material</option>
-                {materialOptions.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
+                onChange={setLookupMaterialId}
+                options={materialOptions}
+                placeholder="Select material"
+                blankLabel="Select material"
+                inputClassName="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+              />
             </label>
             <label className="grid gap-1 text-sm text-slate-700">
               <span className="font-medium text-slate-800">Storage Location</span>
-              <select
-                className="min-h-9 border border-slate-300 bg-white px-3 py-2 text-sm"
+              <ErpComboboxField
                 value={lookupSlocId}
-                onChange={(event) => setLookupSlocId(event.target.value)}
-              >
-                <option value="">Select location</option>
-                {slocOptions.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
+                onChange={setLookupSlocId}
+                options={slocOptions}
+                placeholder="Select location"
+                blankLabel="Select location"
+                inputClassName="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+              />
             </label>
             <label className="grid gap-1 text-sm text-slate-700">
               <span className="font-medium text-slate-800">Batch</span>
@@ -318,35 +315,31 @@ export default function StockStatusChangePage() {
                   return (
                     <tr key={line.key} className="border-t border-slate-200 odd:bg-slate-50">
                       <td className="px-2 py-1">
-                        <select
-                          className="min-h-8 w-full border border-slate-300 px-2 py-1 text-xs"
+                        <ErpComboboxField
                           value={line.materialId}
-                          onChange={(event) => {
-                            const material = materialOptions.find((option) => option.value === event.target.value);
+                          onChange={(value) => {
+                            const material = materialOptions.find((option) => option.value === value);
                             updateLine(line.key, {
-                              materialId: event.target.value,
+                              materialId: value,
                               materialLabel: material?.label ?? "",
                               isFg: Boolean(material?.isFg),
                             });
                           }}
-                        >
-                          <option value="">Select</option>
-                          {materialOptions.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </select>
+                          options={materialOptions}
+                          placeholder="Select material"
+                          blankLabel="Select material"
+                          inputClassName="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+                        />
                       </td>
                       <td className="px-2 py-1">
-                        <select
-                          className="min-h-8 w-full border border-slate-300 px-2 py-1 text-xs"
+                        <ErpComboboxField
                           value={line.storageLocationId}
-                          onChange={(event) => updateLine(line.key, { storageLocationId: event.target.value })}
-                        >
-                          <option value="">Select</option>
-                          {slocOptions.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </select>
+                          onChange={(value) => updateLine(line.key, { storageLocationId: value })}
+                          options={slocOptions}
+                          placeholder="Select location"
+                          blankLabel="Select location"
+                          inputClassName="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+                        />
                       </td>
                       <td className="px-2 py-1">
                         <div className="flex flex-col gap-1">
@@ -367,29 +360,25 @@ export default function StockStatusChangePage() {
                         </div>
                       </td>
                       <td className="px-2 py-1">
-                        <select
-                          className="min-h-8 w-full border border-slate-300 px-2 py-1 text-xs"
+                        <ErpComboboxField
                           value={line.fromStockType}
-                          onChange={(event) => updateLine(line.key, { fromStockType: event.target.value, toStockType: "" })}
-                        >
-                          <option value="">Select</option>
-                          {Object.entries(STOCK_TYPE_LABELS).map(([key, label]) => (
-                            <option key={key} value={key}>{label}</option>
-                          ))}
-                        </select>
+                          onChange={(value) => updateLine(line.key, { fromStockType: value, toStockType: "" })}
+                          options={Object.entries(STOCK_TYPE_LABELS).map(([key, label]) => ({ value: key, label }))}
+                          placeholder="Select"
+                          blankLabel="Select"
+                          inputClassName="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+                        />
                       </td>
                       <td className="px-2 py-1">
-                        <select
-                          className="min-h-8 w-full border border-slate-300 px-2 py-1 text-xs"
+                        <ErpComboboxField
                           value={line.toStockType}
-                          onChange={(event) => updateLine(line.key, { toStockType: event.target.value })}
+                          onChange={(value) => updateLine(line.key, { toStockType: value })}
+                          options={toOptions.map((key) => ({ value: key, label: STOCK_TYPE_LABELS[key] }))}
+                          placeholder="Select"
+                          blankLabel="Select"
                           disabled={!line.fromStockType}
-                        >
-                          <option value="">Select</option>
-                          {toOptions.map((key) => (
-                            <option key={key} value={key}>{STOCK_TYPE_LABELS[key]}</option>
-                          ))}
-                        </select>
+                          inputClassName="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+                        />
                         {line.fromStockType === "BLOCKED" && line.toStockType === "UNRESTRICTED" ? (
                           <div className="mt-1 text-[10px] text-amber-700">Needs Manager approval</div>
                         ) : null}
