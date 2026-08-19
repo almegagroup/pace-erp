@@ -435,11 +435,22 @@ function buildCompanyScopeOrFilter(companyIds: string[]): string {
   return `company_id.in.(${joined}),consignee_company_id.in.(${joined})`;
 }
 
+// Found live 2026-08-19 (business owner, PO group approval throwing
+// PROCUREMENT_IMPORT_LEAD_TIME_LOOKUP_FAILED on every import PO confirm/
+// approve that reached this far): migration 20260623034143 deliberately
+// DROPPED material_category_id from erp_master.lead_time_master_import
+// (sail/clearance time tracked purely by Vendor + Port, not per material
+// category) but this query was never updated to match -- it kept filtering
+// on a column that no longer exists, so this call has been a guaranteed
+// 42703 error for every import PO since 2026-06-23, silently swallowing
+// the PO's own CSN creation while the PO status update itself (which runs
+// BEFORE this call, in a separate already-committed write) still went
+// through -- explaining "PO confirms but the request still 500s" and why
+// a bulk group approve needed one retry click per PO in the group.
 async function getImportLeadTime(csn: CsnRow): Promise<Record<string, unknown> | null> {
   const vendorId = toTrimmedString(csn.vendor_id);
-  const materialCategoryId = toTrimmedString(csn.material_category_id);
   const dischargePortId = toTrimmedString(csn.port_of_discharge_id);
-  if (!vendorId || !materialCategoryId || !dischargePortId) {
+  if (!vendorId || !dischargePortId) {
     return null;
   }
 
@@ -448,7 +459,6 @@ async function getImportLeadTime(csn: CsnRow): Promise<Record<string, unknown> |
     .from("lead_time_master_import")
     .select("*")
     .eq("vendor_id", vendorId)
-    .eq("material_category_id", materialCategoryId)
     .eq("port_of_discharge_id", dischargePortId)
     .eq("active", true)
     .order("effective_from", { ascending: false })
