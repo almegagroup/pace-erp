@@ -10,7 +10,7 @@
 
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import BlockingLayer from "../../../components/layer/BlockingLayer.jsx";
-import { formatPreciseNumber, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
+import { formatPreciseNumber, formatSum, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 
 export const MATERIAL_TYPE_OPTIONS = [
   { value: "SFG", label: "SFG — Semi-Finished Goods", desc: "Process PO bulk output (Prodshade + Batch), pre-packing." },
@@ -116,7 +116,7 @@ export function StrokeLinesTable({ lines, setLines, materialsByType, groups, sto
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">RM / INT Lines</p>
         <span className={`text-xs font-mono px-2 py-0.5 rounded ${Math.abs(sum - 100) < 0.01 ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-          Σ {formatPreciseNumber(sum, "0")}% / 100%
+          Σ {formatSum(sum, "0")}% / 100%
         </span>
       </div>
       <table className="w-full text-sm border-collapse">
