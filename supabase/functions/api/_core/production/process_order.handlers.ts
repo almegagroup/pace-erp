@@ -1141,9 +1141,18 @@ async function computeAvailabilityRows(
   });
 }
 
+// Found live 2026-08-19 (business owner, CMP006/PO 9300000092): this check subtracted
+// EVERY open reservation for the material+location, including the requesting PO's own
+// reservation — so a PO already holding its own Start-Batch-time reservation would block
+// ITSELF at Final/Verify, because its own already-reserved qty was counted twice (once as
+// "stock this PO owns", once as "stock unavailable because someone reserved it"). Fixed by
+// excluding source_type='PROCESS_PO' AND source_id=excludePoId (this PO's own row) from the
+// reservation subtraction — only OTHER documents' open reservations should compete for the
+// same physical stock.
 async function computePhysicalAvailabilityRows(
   companyId: string,
   needed: Map<string, AvailabilityNeed>,
+  excludePoId?: string,
 ): Promise<AvailabilityRow[]> {
   const needs = Array.from(needed.values()).filter((entry) => entry.materialId && entry.storageLocationId && entry.qty > 0);
   if (needs.length === 0) return [];
@@ -1174,7 +1183,7 @@ async function computePhysicalAvailabilityRows(
   const { data: reservationRows, error: reservationErr } = await serviceRoleClient
     .schema("erp_production")
     .from("reservation_document")
-    .select("material_id, storage_location_id, balance_qty")
+    .select("material_id, storage_location_id, balance_qty, source_type, source_id")
     .eq("company_id", companyId)
     .in("material_id", materialIds)
     .in("storage_location_id", locationIds)
@@ -1185,6 +1194,7 @@ async function computePhysicalAvailabilityRows(
   }
 
   for (const row of (reservationRows ?? []) as JsonRecord[]) {
+    if (excludePoId && String(row.source_type) === "PROCESS_PO" && String(row.source_id) === excludePoId) continue;
     const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
     const qty = Number(row.balance_qty ?? 0);
     available.set(key, (available.get(key) ?? 0) - qty);
@@ -2568,7 +2578,7 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
 
     const allLines = applyResult.lines ?? [];
     const stockNeeds = buildLineAvailabilityNeeds(allLines);
-    const physicalRows = await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds);
+    const physicalRows = await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds, id);
     const shortRows = physicalRows.filter((row) => row.short);
 
     if (shortRows.length > 0) {
@@ -2845,7 +2855,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
 
     const lines = applyResult.lines ?? await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
     const stockNeeds = buildLineAvailabilityNeeds(lines);
-    const shortRows = (await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds)).filter((row) => row.short);
+    const shortRows = (await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds, id)).filter((row) => row.short);
     if (shortRows.length > 0) {
       return poErr(
         req,
