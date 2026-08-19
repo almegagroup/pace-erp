@@ -168,6 +168,11 @@ function POCopy({ po, from, to, portsById }) {
   const portName = isImport ? portsById?.[po?.destination_port_id] : null;
   const materialLabel = stripLeadingCode(line?.material_display) || "--";
   const paymentTermLabel = stripLeadingCode(line?.payment_term_display) || "--";
+  // Found live 2026-08-19 (business owner): Rate/Amount had no currency
+  // indicator at all -- an Import PO's USD rate looked identical to a
+  // Domestic PO's INR rate. currency_code lives per-line (purchase_order_line),
+  // already present in the fetched PO data, just never displayed.
+  const currencyCode = String(line?.currency_code || "").trim().toUpperCase() || "INR";
   const qrPayload = buildQrPayload({
     docNumber: po?.po_number,
     date: fmtDate(po?.po_date),
@@ -211,8 +216,8 @@ function POCopy({ po, from, to, portsById }) {
             <th>Material</th>
             <th className="num" style={{ width: "12%" }}>Qty</th>
             <th style={{ width: "8%" }}>UOM</th>
-            <th className="num" style={{ width: "13%" }}>Rate</th>
-            <th className="num" style={{ width: "15%" }}>Amount</th>
+            <th className="num" style={{ width: "13%" }}>Rate ({currencyCode})</th>
+            <th className="num" style={{ width: "15%" }}>Amount ({currencyCode})</th>
           </tr>
         </thead>
         <tbody>
@@ -274,6 +279,13 @@ function STOCopy({ sto, from, to, materialMap }) {
   const lines = Array.isArray(sto?.lines) ? sto.lines : [];
   const revised = Array.isArray(sto?.amendment_log) && sto.amendment_log.length > 0;
   const cancelled = String(sto?.status || "").toUpperCase() === "CANCELLED";
+  // Found live 2026-08-19 (business owner): STO print showed no Rate, Amount,
+  // or currency at all -- transfer_price/currency_code are real, mandatory
+  // fields on every STO line (STODetailPage.jsx blocks confirm without them),
+  // just never surfaced on the printed copy. Currency shown once in the
+  // header (from the first line) matching PO's convention -- a single STO in
+  // practice never mixes currencies across its own lines.
+  const currencyCode = String(lines[0]?.currency_code || "").trim().toUpperCase() || "INR";
   const qrPayload = buildQrPayload({
     docNumber: sto?.sto_number,
     date: fmtDate(sto?.sto_date),
@@ -313,26 +325,32 @@ function STOCopy({ sto, from, to, materialMap }) {
       <table className="items">
         <thead>
           <tr>
-            <th style={{ width: "8%" }}>Sr.</th>
+            <th style={{ width: "6%" }}>Sr.</th>
             <th>Material</th>
-            <th className="num" style={{ width: "14%" }}>Qty</th>
-            <th style={{ width: "10%" }}>UOM</th>
+            <th className="num" style={{ width: "11%" }}>Qty</th>
+            <th style={{ width: "8%" }}>UOM</th>
+            <th className="num" style={{ width: "12%" }}>Rate ({currencyCode})</th>
+            <th className="num" style={{ width: "13%" }}>Amount ({currencyCode})</th>
           </tr>
         </thead>
         <tbody>
           {lines.length === 0 ? (
-            <tr><td colSpan={4}>--</td></tr>
+            <tr><td colSpan={6}>--</td></tr>
           ) : lines.map((line, index) => {
             const material = materialMap?.get(String(line.material_id));
             const materialLabel = material
               ? joinTruthy([material.material_code, material.material_name], " — ")
               : line.material_id || "--";
+            const qty = Number(line.quantity ?? 0);
+            const rate = Number(line.transfer_price ?? 0);
             return (
               <tr key={line.id || index}>
                 <td>{index + 1}</td>
                 <td>{materialLabel}</td>
                 <td className="num">{fmtNumber(line.quantity)}</td>
                 <td>{line.uom_code || "--"}</td>
+                <td className="num">{fmtNumber(line.transfer_price)}</td>
+                <td className="num">{fmtNumber(qty * rate)}</td>
               </tr>
             );
           })}
