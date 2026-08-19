@@ -110,6 +110,7 @@ export default function CustomerDetailPage() {
       delivery_address: customer.delivery_address ?? "",
       billing_address: customer.billing_address ?? "",
       billing_state: customer.billing_state ?? "",
+      town: customer.town ?? "",
       primary_contact_person: customer.primary_contact_person ?? "",
       phone: customer.phone ?? "",
       primary_email: customer.primary_email ?? "",
@@ -154,6 +155,7 @@ export default function CustomerDetailPage() {
         delivery_address: form.delivery_address,
         billing_address: form.billing_address,
         billing_state: form.billing_state,
+        town: form.town,
         primary_contact_person: form.primary_contact_person,
         phone: form.phone,
         primary_email: form.primary_email,
@@ -342,6 +344,13 @@ export default function CustomerDetailPage() {
                   />
                   <p className="mt-1 text-xs text-slate-500">Determines CGST+SGST vs IGST on sales invoices.</p>
                 </ErpDenseFormRow>
+                <ErpDenseFormRow label="Town">
+                  <input
+                    value={form.town}
+                    onChange={(event) => setField("town", event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  />
+                </ErpDenseFormRow>
                 <ErpDenseFormRow label="Primary Contact">
                   <input
                     value={form.primary_contact_person}
@@ -373,6 +382,7 @@ export default function CustomerDetailPage() {
                 <ErpFieldPreview label="Delivery Address" value={customer.delivery_address} multiline />
                 <ErpFieldPreview label="Billing Address" value={customer.billing_address} multiline />
                 <ErpFieldPreview label="Billing State" value={customer.billing_state} />
+                <ErpFieldPreview label="Town" value={customer.town} />
               </div>
             )}
           </ErpSectionCard>

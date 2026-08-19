@@ -513,6 +513,7 @@ export async function listMappedMaterialIdsForVendor(vendorId) {
  * @property {string} delivery_address
  * @property {string} [billing_address]
  * @property {string} billing_state Required for both DOMESTIC and EXPORT.
+ * @property {string} [town]
  * @property {string} company_id Required company scope for the initial map row.
  * @property {string} [gst_number]
  * @property {"REGISTERED"|"UNREGISTERED"|"COMPOSITION"|"EXPORT"} [gst_category]
@@ -579,6 +580,7 @@ export async function getCustomer(id) {
  * @property {string} [delivery_address]
  * @property {string} [billing_address]
  * @property {string} [billing_state]
+ * @property {string} [town]
  * @property {string} [pan_number]
  * @property {string} [primary_contact_person]
  * @property {string} [phone]

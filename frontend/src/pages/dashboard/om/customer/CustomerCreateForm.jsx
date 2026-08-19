@@ -80,6 +80,7 @@ export default function CustomerCreateForm({
     delivery_address: "",
     billing_address: "",
     billing_state: "",
+    town: "",
     gst_number: "",
     gst_category: "",
     primary_contact_person: "",
@@ -235,6 +236,7 @@ export default function CustomerCreateForm({
         delivery_address: form.delivery_address.trim(),
         billing_address: form.billing_address.trim() || undefined,
         billing_state: form.billing_state.trim(),
+        town: form.town.trim() || undefined,
         gst_number: isVendorLinked ? undefined : form.gst_number.trim() || undefined,
         gst_category: form.gst_category || undefined,
         primary_contact_person: form.primary_contact_person.trim() || undefined,
@@ -478,6 +480,13 @@ export default function CustomerCreateForm({
           />
         )}
         <p className="mt-1 text-xs text-slate-500">Determines CGST+SGST vs IGST on sales invoices — required for every customer, registered or not.</p>
+      </ErpDenseFormRow>
+      <ErpDenseFormRow label="Town">
+        <input
+          value={form.town}
+          onChange={(event) => updateField("town", event.target.value)}
+          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+        />
       </ErpDenseFormRow>
       <ErpDenseFormRow label="Primary Contact">
         <input
