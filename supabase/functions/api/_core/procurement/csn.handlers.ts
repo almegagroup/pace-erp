@@ -797,7 +797,19 @@ function calculateETACascade(
     const blDate = toTrimmedString(csn.bl_date);
     const etaAtPortManual = csn.eta_at_port_is_manual_override === true;
     const etdManual = csn.etd_is_manual_override === true;
-    const scheduledEtaToPort = toTrimmedString(csn.scheduled_eta_to_port);
+    // Business owner lock (2026-08-19): for Import, the PO's own delivery-date
+    // field IS the ETA-to-Port the buyer typed at PO creation (relabeled on
+    // the PO form/print accordingly) -- it must seed the CSN's own
+    // scheduled_eta_to_port the moment the CSN is created, exactly like the
+    // DOMESTIC branch below already seeds `etd` from the same PO field.
+    // Previously this branch never read poLineExpectedDeliveryDate at all, so
+    // the whole ETD/ETA-at-Port/ETA-to-Plant cascade stayed blank from PO
+    // confirm until someone manually typed BL/ETD later on the CSN itself.
+    const existingScheduledEtaToPort = toTrimmedString(csn.scheduled_eta_to_port);
+    const scheduledEtaToPort = existingScheduledEtaToPort || toTrimmedString(poLineExpectedDeliveryDate);
+    if (!existingScheduledEtaToPort && scheduledEtaToPort) {
+      updates.scheduled_eta_to_port = scheduledEtaToPort;
+    }
     const ataAtPort = toTrimmedString(csn.ata_at_port);
     const postClearanceLrDate = toTrimmedString(csn.post_clearance_lr_date);
     const gateEntryDate = toTrimmedString(csn.gate_entry_date);

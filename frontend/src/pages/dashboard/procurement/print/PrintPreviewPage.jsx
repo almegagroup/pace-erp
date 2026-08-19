@@ -10,7 +10,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import { openRoute, getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
-import { getPurchaseOrder, getSTO, createPrintLog, listPorts, listCSNs } from "../procurementApi.js";
+import { getPurchaseOrder, getSTO, createPrintLog, listPorts } from "../procurementApi.js";
 import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const SHIPMENT_MODE_LABELS = {
@@ -149,7 +149,7 @@ function CompanyPartyBlock({ label, company }) {
   );
 }
 
-function POCopy({ po, from, to, portsById, etaAtPort }) {
+function POCopy({ po, from, to, portsById }) {
   const line = po?.lines?.[0] ?? null;
   const revised = Array.isArray(po?.amendment_log) && po.amendment_log.length > 0;
   const cancelled = String(po?.status || "").toUpperCase() === "CANCELLED";
@@ -220,11 +220,11 @@ function POCopy({ po, from, to, portsById, etaAtPort }) {
         <div className="terms">
           <p className="h">Terms</p>
           <div className="row"><span className="lbl">Payment</span><span>{paymentTermLabel}</span></div>
-          {isImport ? (
-            <div className="row"><span className="lbl">ETA to Port</span><span>{etaAtPort ? fmtDate(etaAtPort) : DELIVERY_FALLBACK}</span></div>
-          ) : (
-            <div className="row"><span className="lbl">Delivery Date</span><span>{po?.expected_delivery_date ? fmtDate(po.expected_delivery_date) : DELIVERY_FALLBACK}</span></div>
-          )}
+          {/* §PO19 — expected_delivery_date IS the ETA-to-Port for Import (the
+             buyer types it directly at PO create, same field just relabeled
+             per vendor type -- same field POCreatePage/PODetailPage already
+             label this way); Domestic keeps calling it Delivery Date. */}
+          <div className="row"><span className="lbl">{isImport ? "ETA to Port" : "Delivery Date"}</span><span>{po?.expected_delivery_date ? fmtDate(po.expected_delivery_date) : DELIVERY_FALLBACK}</span></div>
           <div className="row"><span className="lbl">Freight</span><span>{po?.freight_term || "--"}</span></div>
           <div className="row"><span className="lbl">GST</span><span>{po?.gst_terms === "INCLUSIVE" ? "Inclusive" : po?.gst_terms === "EXCLUSIVE" ? "Exclusive" : "--"}</span></div>
           {po?.has_rebate ? (
@@ -364,7 +364,6 @@ export default function PrintPreviewPage() {
 
   const [documents, setDocuments] = useState([]);
   const [portsById, setPortsById] = useState({});
-  const [etaAtPortByPoId, setEtaAtPortByPoId] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [logged, setLogged] = useState(false);
@@ -392,32 +391,14 @@ export default function PrintPreviewPage() {
         // and Port always rendered "--" on the printed PO. Found live
         // 2026-08-19 (business owner, PO19 Import Detail print).
         const ports = effectiveKind === "PO_GROUP" ? await listPorts({ is_active: "all" }) : [];
-        const importPoIds = effectiveKind === "PO_GROUP"
-          ? results.filter((doc) => String(doc?.vendor_type || "").toUpperCase() === "IMPORT").map((doc) => doc.id)
-          : [];
-        // listCSNs() carries a `total` alongside `data` (paginated-list shape),
-        // so fetchProcurement's unwrap leaves the {data, total} envelope intact
-        // here -- unlike listPorts() above, this one is NOT a bare array.
-        const csnResults = importPoIds.length > 0
-          ? await Promise.all(importPoIds.map((poId) => listCSNs({ po_id: poId }).catch(() => ({ data: [] }))))
-          : [];
         if (cancelled) return;
         setDocuments(results);
         if (Array.isArray(ports)) {
+          // Port name only, no port_code prefix on the print (business owner,
+          // 2026-08-19).
           const map = {};
-          ports.forEach((p) => { map[p.id] = `${p.port_code || ""} ${p.port_name || ""}`.trim(); });
+          ports.forEach((p) => { map[p.id] = p.port_name || ""; });
           setPortsById(map);
-        }
-        if (importPoIds.length > 0) {
-          const etaMap = {};
-          importPoIds.forEach((poId, index) => {
-            const csnRows = Array.isArray(csnResults[index]?.data) ? csnResults[index].data : [];
-            const active = csnRows
-              .filter((row) => String(row?.status || "").toUpperCase() !== "CAN")
-              .sort((a, b) => new Date(a?.created_at || 0) - new Date(b?.created_at || 0));
-            if (active[0]?.eta_at_port) etaMap[poId] = active[0].eta_at_port;
-          });
-          setEtaAtPortByPoId(etaMap);
         }
       } catch (err) {
         if (!cancelled) setError(err?.message || "Failed to load documents.");
@@ -481,7 +462,6 @@ export default function PrintPreviewPage() {
             from={printContext?.from}
             to={printContext?.to}
             portsById={portsById}
-            etaAtPort={etaAtPortByPoId[doc?.id]}
           />
         ) : (
           <STOCopy key={doc.id || index} sto={doc} from={printContext?.from} to={printContext?.to} materialMap={materialMap} />

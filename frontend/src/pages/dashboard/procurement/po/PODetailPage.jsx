@@ -238,8 +238,8 @@ export default function PODetailPage() {
     () => String(editVendor?.vendor_type || editForm.vendor_type || "").toUpperCase() === "IMPORT",
     [editForm.vendor_type, editVendor]
   );
-  const deliveryDateLabel = isImportPo ? "ETA to Port" : "ETD";
-  const editDeliveryDateLabel = isImportEditPo ? "ETA to Port" : "ETD";
+  const deliveryDateLabel = isImportPo ? "ETA to Port" : "Delivery Date";
+  const editDeliveryDateLabel = isImportEditPo ? "ETA to Port" : "Delivery Date";
 
   // Detail/vendors/payment-terms don't depend on each other — fetch them in
   // parallel instead of three sequential round trips. CSNs and cost centers
@@ -1002,7 +1002,7 @@ export default function PODetailPage() {
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                  Delivery Date
+                  {deliveryDateLabel}
                   <input
                     type="date"
                     value={amendmentForm.delivery_date}
