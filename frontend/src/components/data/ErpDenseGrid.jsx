@@ -112,7 +112,16 @@ export default function ErpDenseGrid({
         {columns.map((column) => (
           <td
             key={column.key}
-            className={`px-2 py-1 align-middle ${normalizeCellAlign(column.align)}`}
+            // Found live 2026-08-19 (business owner): cells had no
+            // white-space rule, so any column narrower than its content
+            // silently wrapped -- rows becoming taller than the fixed
+            // ROW_HEIGHT_PX the virtualizer assumes for every row, which
+            // desyncs virtualized scroll position (overlaps/gaps), not
+            // just a readability problem. nowrap is now the default (the
+            // container already scrolls horizontally); a column that
+            // genuinely needs multi-line text (long remarks/notes) can
+            // opt back in with `wrap: true`.
+            className={`px-2 py-1 align-middle ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)}`}
           >
             {typeof column.render === "function"
               ? column.render(row, index)
