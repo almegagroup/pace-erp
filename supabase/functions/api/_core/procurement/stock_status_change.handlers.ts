@@ -586,7 +586,7 @@ export async function listStockStatusChangePostingsHandler(req: Request, ctx: Ss
       [materialRows, userDisplayMap] = await Promise.all([
         fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
           serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, material_name, document_name").in("id", idChunk)),
+            .select("id, pace_code, material_name, document_name").in("id", idChunk)),
         resolveUserDisplayNames(userIds),
       ]);
     } catch {
@@ -596,10 +596,11 @@ export async function listStockStatusChangePostingsHandler(req: Request, ctx: Ss
 
     const items = rows.map((row) => {
       const material = materialMap.get(toTrimmedString(row.material_id));
+      const materialLabel = toTrimmedString(material?.material_name) || toTrimmedString(material?.document_name) || "—";
       return {
         id: row.id,
         document_number: row.document_number,
-        material: toTrimmedString(material?.document_name) || toTrimmedString(material?.material_name) || "—",
+        material: materialLabel === "—" ? "—" : `${toTrimmedString(material?.pace_code) || "—"} — ${materialLabel}`,
         batch_number: row.batch_number || "—",
         packing_po_number: row.packing_po_number || "—",
         from_stock_type: row.from_stock_type,
