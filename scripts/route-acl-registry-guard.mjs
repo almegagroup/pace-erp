@@ -394,7 +394,15 @@ const legacyHrRoutes = extractLegacyHrRouteKeys(runnerSource);
 // request body — it can never have a static registry entry. Confirmed
 // 2026-08-06 by reading runner.ts directly (search "Gate-2: Workflow
 // decision").
-const dynamicAclRoutes = new Set(["POST:/api/workflow/decision"]);
+//
+// Gate-2.5 (added 2026-08-19): document-flow serves 13 different document
+// types from one generic handler; resourceCode depends on the doc_type
+// query param, same "can never be static" shape as Gate-2. See
+// DOC_FLOW_RESOURCE_BY_TYPE in document_flow.handlers.ts.
+const dynamicAclRoutes = new Set([
+  "POST:/api/workflow/decision",
+  "GET:/api/procurement/document-flow",
+]);
 // KNOWN_UNAUTHORIZED_ROUTES — deliberately NOT registered.
 //
 // 2026-08-06 update: the 7 Menu Admin Panel routes that used to live here

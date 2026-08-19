@@ -484,8 +484,27 @@ export async function updatePlanFeedHandler(req: Request, ctx: ProdHandlerContex
 
     const updates: JsonRecord = { last_updated_at: new Date().toISOString(), last_updated_by: ctx.auth_user_id };
 
-    if (body.party_id !== undefined) updates.party_id = toTrimmedString(body.party_id) || null;
-    if (body.party_name !== undefined) updates.party_name = toTrimmedString(body.party_name);
+    // Found live 2026-08-19 (business owner, Total Table still showing the
+    // OLD customer after Edit FO changed the party): party_name is a
+    // denormalized display column on plan_feed, and this handler only ever
+    // wrote it when the request body happened to include party_name
+    // explicitly -- PlanFeedPage.jsx's Edit-FO save never sent it (only
+    // party_id), so the column silently went stale the moment someone
+    // switched the party on an existing FO. Resolving party_name here from
+    // the real party_id whenever it changes makes this column impossible to
+    // desync from party_id, regardless of what any future caller sends.
+    if (body.party_id !== undefined) {
+      const newPartyId = toTrimmedString(body.party_id) || null;
+      updates.party_id = newPartyId;
+      if (newPartyId) {
+        const customerMap = await getCustomerMapByIds([newPartyId]);
+        const resolvedName = toTrimmedString(customerMap.get(newPartyId)?.customer_name);
+        if (resolvedName) updates.party_name = resolvedName;
+      }
+    }
+    if (body.party_name !== undefined && updates.party_name === undefined) {
+      updates.party_name = toTrimmedString(body.party_name);
+    }
     if (body.sku !== undefined) updates.sku = toTrimmedString(body.sku) || null;
     if (body.material_id !== undefined) updates.material_id = toTrimmedString(body.material_id) || null;
     if (body.description !== undefined) updates.description = toTrimmedString(body.description) || null;

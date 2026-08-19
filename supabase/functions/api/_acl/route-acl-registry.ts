@@ -164,7 +164,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/planning/item-groups":       { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "EDIT" },
   "POST:/api/procurement/planning/close":             { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "EDIT" },
   "GET:/api/procurement/planning/history":            { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
-  "GET:/api/procurement/document-flow":               { skipAcl: false, resourceCode: "PROC_PO_LIST",        action: "VIEW" },
+  // GET:/api/procurement/document-flow — deliberately NOT registered here.
+  // Its resourceCode depends on the doc_type query param (13 document
+  // types), so it resolves dynamically via Gate-2.5 in _pipeline/runner.ts
+  // (same pattern as POST /api/workflow/decision's Gate-2) — see
+  // dynamicAclRoutes in scripts/route-acl-registry-guard.mjs.
   "GET:/api/procurement/stock-ledger":                { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
   "GET:/api/procurement/stock-ledger/movement-types": { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
   "GET:/api/procurement/stock-ledger/batch-search":   { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
