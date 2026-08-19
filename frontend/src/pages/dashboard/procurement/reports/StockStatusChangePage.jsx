@@ -15,7 +15,7 @@ import { resolveDefaultTransactionCompanyId } from "../../../../components/input
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import {
   approveStockStatusChangePosting,
@@ -79,10 +79,10 @@ export default function StockStatusChangePage() {
   const [notice, setNotice] = useState("");
 
   const materialsQuery = useMaterialOptionsQuery(
-    { status: "ACTIVE", company_id: effectiveCompanyId },
+    { status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, company_id: effectiveCompanyId },
     { enabled: Boolean(effectiveCompanyId) },
   );
-  const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
+  const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: MASTER_PICKER_FETCH_LIMIT });
 
   const materialOptions = useMemo(
     () => (materialsQuery.materials ?? []).map((material) => ({
