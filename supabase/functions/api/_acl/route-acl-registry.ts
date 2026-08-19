@@ -1118,9 +1118,14 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     // §119.6 — Submit for Approval is still the count-entry actor's own action; the
-    // Auditor/Director escalation only starts at Reopen/Post below.
+    // Auditor/Director escalation only starts at Reopen/Post below. Found live
+    // 2026-08-19: this comment was the design intent all along, but resourceCode
+    // stayed PROC_PI_LIST (Auditor/Director/CAP_PROC_INVENTORY-only) instead of
+    // PROC_PI_COUNT_ENTRY -- a count-entry-only role (CAP_PI_COUNT_ENTRY, e.g.
+    // L1/L2_MANAGER per feasibility §119.18) could save MI04/MI05 counts but then
+    // 403'd trying to Submit the very document they just finished counting.
     pattern: /^\/api\/procurement\/physical-inventory\/[^/]+\/submit$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "WRITE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_PI_COUNT_ENTRY", action: "WRITE" } },
   },
   {
     // §119.5/§119.6 — base gate is APPROVE (Reopen authority = Post authority for that

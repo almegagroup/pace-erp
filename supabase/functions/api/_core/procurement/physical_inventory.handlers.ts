@@ -1774,7 +1774,10 @@ export async function submitPIDForApprovalHandler(
     assertProcurementReadRole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const document = await fetchPID(documentId);
-    await assertPIDCompanyActionAccess(ctx, toTrimmedString(document.company_id), "WRITE");
+    // §119.6 — Submit is the count-entry actor's own action (see the matching
+    // registry comment); PROC_PI_COUNT_ENTRY, not PROC_PI_LIST, is the resource
+    // that role actually holds. Found live 2026-08-19 alongside the MI04/MI05 fix.
+    await assertPIDCompanyActionAccess(ctx, toTrimmedString(document.company_id), "WRITE", "PROC_PI_COUNT_ENTRY");
 
     if (toUpperTrimmedString(document.status) !== "COUNTED") {
       return piErrorResponse(req, ctx, "PI_SUBMIT_BLOCKED", 409, "Only a fully COUNTED document (every item counted or zero-confirmed) can be submitted for approval.");
