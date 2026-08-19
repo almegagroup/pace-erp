@@ -1214,6 +1214,26 @@ export function listReservations(params) {
   return fetchProcurement("GET", "/api/procurement/reservations", undefined, params);
 }
 
+export function getStockStatusChangeBalance(params) {
+  return fetchProcurement("GET", "/api/procurement/stock-status-change/balance", undefined, params);
+}
+
+export function postStockStatusChange(payload) {
+  return fetchProcurement("POST", "/api/procurement/stock-status-change/postings", payload);
+}
+
+export function listStockStatusChangePostings(params) {
+  return fetchProcurement("GET", "/api/procurement/stock-status-change/postings", undefined, params);
+}
+
+export function approveStockStatusChangePosting(postingId) {
+  return fetchProcurement("POST", `/api/procurement/stock-status-change/postings/${encodeURIComponent(postingId)}/approve`);
+}
+
+export function reverseStockStatusChangePosting(postingId, reason) {
+  return fetchProcurement("POST", `/api/procurement/stock-status-change/postings/${encodeURIComponent(postingId)}/reverse`, { reason });
+}
+
 export function getDocumentFlow(params) {
   return fetchProcurement("GET", "/api/procurement/document-flow", undefined, params);
 }

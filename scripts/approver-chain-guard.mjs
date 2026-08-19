@@ -66,6 +66,15 @@ const BASELINE = new Set([
   "supabase/functions/api/_core/production/pack_config.handlers.ts",
   "supabase/functions/api/_core/production/process_order.handlers.ts",
   "supabase/functions/api/_core/production/stroke_change_request.handlers.ts",
+  // IN13 Stock Status Change (feasibility §126.3, locked 2026-08-19) —
+  // intentionally a single-step role-gate, not a configured approver_map
+  // routing: eligibility is the ACL capability grant itself (CAP_QA_TIER_L3MGR
+  // / CAP_QA_PLANTHEAD, APPROVE action, checked via canMaintainCompanyResource
+  // in assertScopedCompanyAccess), not a per-creator-role routing table —
+  // there is no "different approver for different creator" requirement here,
+  // unlike PO/STO. Self-approval is still explicitly blocked
+  // (created_by === ctx.auth_user_id -> SSC_APPROVE_SELF_FORBIDDEN).
+  "supabase/functions/api/_core/procurement/stock_status_change.handlers.ts",
 ]);
 
 function walk(dir, out = []) {
