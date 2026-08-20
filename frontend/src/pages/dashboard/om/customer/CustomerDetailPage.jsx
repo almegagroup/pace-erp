@@ -18,7 +18,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
-import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import {
@@ -32,6 +32,16 @@ import CustomerEditForm from "./CustomerEditForm.jsx";
 function normalizeFoCustomerType(value) {
   return String(value || "").toUpperCase() === "ZTEST" ? "MTEST" : String(value || "");
 }
+
+const FIELD_VALUE_COLUMNS = [
+  { key: "label", label: "Field", width: "220px" },
+  {
+    key: "value",
+    label: "Value",
+    wrap: true,
+    render: (row) => row.value || <span className="text-slate-400">Not available yet</span>,
+  },
+];
 
 function getAllowedStatusTargets(status) {
   const transitions = {
@@ -157,22 +167,27 @@ export default function CustomerDetailPage() {
       ) : (
         <div className="grid gap-4">
           <ErpSectionCard eyebrow="Header" title={`${customer.customer_code || "-"} | ${customer.customer_name || "-"}`}>
-            <div className="grid gap-3 md:grid-cols-4">
-              <ErpFieldPreview label="Status" value={customer.status} tone="sky" />
-              <ErpFieldPreview label="Type" value={customer.customer_type} />
-              <ErpFieldPreview label="FO Type" value={normalizeFoCustomerType(customer.fo_customer_type) || "Not an FO party"} />
-              <ErpFieldPreview label="Currency" value={customer.currency_code} />
-              <ErpFieldPreview label="GST Number" value={customer.gst_number} />
-              <ErpFieldPreview label="GST Category" value={customer.gst_category} />
-              <ErpFieldPreview
-                label="Linked Vendor"
-                value={isVendorLinked ? `${customer.vendor_code} (name/GST mirror this vendor)` : "Independent customer"}
-              />
-              <ErpFieldPreview
-                label="Parent Company"
-                value={customer.parent_customer_code ? `${customer.parent_customer_code} | ${customer.parent_customer_name}` : "-"}
-              />
-            </div>
+            <ErpDenseGrid
+              columns={FIELD_VALUE_COLUMNS}
+              rows={[
+                { label: "Status", value: customer.status },
+                { label: "Type", value: customer.customer_type },
+                { label: "FO Type", value: normalizeFoCustomerType(customer.fo_customer_type) || "Not an FO party" },
+                { label: "Currency", value: customer.currency_code },
+                { label: "GST Number", value: customer.gst_number },
+                { label: "GST Category", value: customer.gst_category },
+                {
+                  label: "Linked Vendor",
+                  value: isVendorLinked ? `${customer.vendor_code} (name/GST mirror this vendor)` : "Independent customer",
+                },
+                {
+                  label: "Parent Company",
+                  value: customer.parent_customer_code ? `${customer.parent_customer_code} | ${customer.parent_customer_name}` : "",
+                },
+              ]}
+              rowKey={(row) => row.label}
+              maxHeight="none"
+            />
           </ErpSectionCard>
 
           <ErpSectionCard eyebrow="View Or Edit" title="Customer fields">
@@ -184,16 +199,21 @@ export default function CustomerDetailPage() {
                 onSaved={() => void handleEditSaved()}
               />
             ) : (
-              <div className="grid gap-3 md:grid-cols-2">
-                <ErpFieldPreview label="Customer Name" value={customer.customer_name} />
-                <ErpFieldPreview label="Primary Contact" value={customer.primary_contact_person} />
-                <ErpFieldPreview label="Phone" value={customer.phone} />
-                <ErpFieldPreview label="Primary Email" value={customer.primary_email} />
-                <ErpFieldPreview label="Delivery Address" value={customer.delivery_address} multiline />
-                <ErpFieldPreview label="Billing Address" value={customer.billing_address} multiline />
-                <ErpFieldPreview label="Billing State" value={customer.billing_state} />
-                <ErpFieldPreview label="Town" value={customer.town} />
-              </div>
+              <ErpDenseGrid
+                columns={FIELD_VALUE_COLUMNS}
+                rows={[
+                  { label: "Customer Name", value: customer.customer_name },
+                  { label: "Primary Contact", value: customer.primary_contact_person },
+                  { label: "Phone", value: customer.phone },
+                  { label: "Primary Email", value: customer.primary_email },
+                  { label: "Delivery Address", value: customer.delivery_address },
+                  { label: "Billing Address", value: customer.billing_address },
+                  { label: "Billing State", value: customer.billing_state },
+                  { label: "Town", value: customer.town },
+                ]}
+                rowKey={(row) => row.label}
+                maxHeight="none"
+              />
             )}
           </ErpSectionCard>
 
