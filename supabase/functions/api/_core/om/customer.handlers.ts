@@ -128,13 +128,23 @@ async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Reco
 
   const vendorIds = [...new Set(rows.map((r) => r.vendor_id as string).filter(Boolean))];
   const parentIds = [...new Set(rows.map((r) => r.parent_customer_id as string).filter(Boolean))];
+  const customerIds = [...new Set(rows.map((r) => r.id as string).filter(Boolean))];
 
-  const [vendorResult, parentResult] = await Promise.all([
+  const [vendorResult, parentResult, companyMapResult] = await Promise.all([
     vendorIds.length
       ? serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_code, vendor_name, gst_number").in("id", vendorIds)
       : Promise.resolve({ data: [] as Record<string, unknown>[] }),
     parentIds.length
       ? serviceRoleClient.schema("erp_master").from("parent_customer_master").select("id, parent_customer_code, parent_customer_name").in("id", parentIds)
+      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+    // §MM04-list-redesign-2026-08-20 — list page shows which company(ies) each
+    // customer is mapped to; bounded by the caller's own page size (LIMIT 50),
+    // so a single .in() is safe here (see §8E — this is the small/bounded case).
+    customerIds.length
+      ? serviceRoleClient.schema("erp_master").from("customer_company_map")
+          .select("customer_id, companies:company_id(company_code)")
+          .in("customer_id", customerIds)
+          .eq("active", true)
       : Promise.resolve({ data: [] as Record<string, unknown>[] }),
   ]);
 
@@ -145,6 +155,15 @@ async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Reco
   const parentMap = new Map<string, Record<string, unknown>>();
   for (const p of (parentResult.data ?? []) as Record<string, unknown>[]) {
     parentMap.set(p.id as string, p);
+  }
+  const companyCodesByCustomer = new Map<string, string[]>();
+  for (const m of (companyMapResult.data ?? []) as Record<string, unknown>[]) {
+    const customerId = String(m.customer_id ?? "");
+    const code = (m.companies as Record<string, unknown> | null)?.company_code as string | undefined;
+    if (!customerId || !code) continue;
+    const list = companyCodesByCustomer.get(customerId) ?? [];
+    list.push(code);
+    companyCodesByCustomer.set(customerId, list);
   }
 
   return rows.map((row) => {
@@ -157,6 +176,7 @@ async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Reco
       vendor_code: vendor?.vendor_code ?? null,
       parent_customer_code: parent?.parent_customer_code ?? null,
       parent_customer_name: parent?.parent_customer_name ?? null,
+      company_codes: companyCodesByCustomer.get(row.id as string) ?? [],
     };
   });
 }

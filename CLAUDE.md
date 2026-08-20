@@ -460,6 +460,80 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 
 ## 6. Next Actions
 
+> ### 📍 2026-08-19 session handoff — নতুন session এটা সবার আগে পড়ো
+>
+> **এই session এ কী হয়েছে (সংক্ষেপে):** পুরো session টা ছিল live bug-triage sprint — deployed
+> (prod-backed) app টেস্ট করার সময় business owner একের পর এক real screenshot/error দিয়েছেন,
+> প্রতিটার root cause বের করে permanent fix করা হয়েছে, verify করে commit+push করা হয়েছে।
+> সব বাগ ঠিক হয়েছে, branch clean, PR business owner নিজে বানাবেন। বিস্তারিত bug list এখানে
+> repeat করা হলো না (git log/commit message-এই আছে) — এই note-এর আসল উদ্দেশ্য হলো **পরের
+> session যেন একই discipline follow করে, আর একই ভুল দুবার না করে**।
+>
+> **✅ correction — MTEST/ZTEST (§120) স্ট্যাটাস:** নিচে ধাপ ২-তে এখনো লেখা আছে
+> "IMPLEMENTATION শুরু হয়নি" — **এটা stale, ভুল প্রমাণিত।** Codex ইতিমধ্যে পুরোটা implement করে
+> ফেলেছে (commit `e089bfda`, 2026-08-15 + বাগ-ফিক্স `9022a9df`)। এই session-এ পুরো ৪-পয়েন্ট
+> design (batch series numbering_method, Pack BOM PM reuse, Packing PO non-batch-blind, MTEST
+> Verify-সহ full lifecycle) live code-এ ধরে ধরে verify করা হয়েছে — সব ঠিকঠাক implement হয়েছে,
+> `deno check`/`eslint`/সব CI guard clean। **তাই ধাপ ২ এখন IMPLEMENTATION COMPLETE ধরে
+> কাজ করো, re-implement করার দরকার নেই।** (নিচের ধাপ-২ ব্লকের নিজের টেক্সট এখনো আপডেট করা হয়নি —
+> এই নোটটাই এখন সেই correction-এর SSOT, যতক্ষণ না কেউ নিচের ব্লকটা নিজেই re-edit করে।)
+>
+> **নতুন session শুরুর আগে অবশ্যই পড়ো (এই ক্রমে):**
+> 1. এই CLAUDE.md পুরোটা — বিশেষ করে §8A-8E (mandatory dev rules), ১৩টা bug pattern checklist,
+>    আর Bug-Pattern Guard Playbook (§3-এর ভিতরে, "Every one of the 13 patterns...")।
+> 2. `docs/Operation Management/PROD-ACL-Access-Decisions.md` — যেকোনো ACL/permission কাজের
+>    আগে এটাই SSOT (Rules, Cross-Module Dependency Taxonomy, Post-Implementation Checklist)।
+> 3. যে specific feature/page নিয়ে কাজ করবে, সেটার feasibility doc section (যেমন MTEST/ZTEST
+>    হলে §120, PID হলে §119) — doc-first workflow, code দেখার আগে locked design পড়ো।
+> 4. এই session-এর git log (`git log --oneline -20`) — কোন file গুলো recently touched হয়েছে
+>    সেটার context পাওয়া যাবে।
+>
+> **Bug/dependency check করার সময় যে discipline এই session এ কাজ করেছে (পরের session-এও
+> একই ভাবে করো):**
+> - **কখনো ধরে নিও না, verify করো।** কোনো "এটা এভাবে কাজ করে" claim করার আগে আসল code পড়ো
+>   (handler + frontend দুটোই), আর dev/prod live DB-তে সরাসরি query করে data confirm করো —
+>   এই session-এ প্রায় প্রতিটা bug-ই hypothesis vs live-data mismatch ধরেই বের হয়েছে।
+> - **Route-level ACL check আর handler-এর ভেতরের secondary check দুটোই আলাদা করে verify করো।**
+>   এই session-এ MI04/MI05/Submit — তিনটাতেই registry ঠিক ছিল কিন্তু handler-এর নিজের ভেতরের
+>   `assertPIDCompanyActionAccess()` call ভুল resourceCode হার্ডকোড করা ছিল। শুধু route-registry
+>   দেখে "ঠিক আছে" ধরে নিলে এই class-এর বাগ miss হয়ে যায়।
+> - **Reservation/availability-check বসালে নিজের document-এর নিজের reservation exclude হচ্ছে
+>   কিনা চেক করো** — Process PO আর Packing PO দুটোতেই একই self-blocking bug পাওয়া গেছে এবার।
+>   নতুন কোনো reservation source বানালে (§83.5-এর ৫টা source, বা future IN13 ইত্যাদি) এই
+>   pattern টা প্রথমেই চেক করো।
+> - **Denormalized display field (যেমন `plan_feed.party_name`) কখনো client-এর payload-এর উপর
+>   trust করবে না** — source column বদলালে server নিজে থেকেই denormalized field resolve করবে,
+>   frontend যা পাঠাক না কেন।
+> - **Floating-point display বাগ দুই আলাদা রকমের হতে পারে** — (ক) summation noise
+>   (`formatSum()`-এর মতো fix, ৬dp round তারপর trim), (খ) hardcoded truncation
+>   (`.toFixed(2)` জোর করে বসানো আসল ৪dp data-র উপর — শুধু forced digit count সরিয়ে দাও)। কোনটা
+>   সেটা বোঝা জরুরি, দুটোর fix উল্টো — একটাকে অন্যটার মতো fix করলে নতুন বাগ ঢুকবে।
+> - **`ErpDenseGrid`/shared component-এ কোনো fix করলে মনে রেখো এটা অনেক page শেয়ার করে** —
+>   এবার `white-space: nowrap` default করা হয়েছিল, কারণ এই component-এর virtualizer
+>   `ROW_HEIGHT_PX=30` হার্ডকোড ধরে নেয়, আর wrap হওয়া row সেই ধারণা ভেঙে scroll desync করে।
+>   এক page-এ patch না করে shared component-এই root-cause fix করো।
+> - **প্রতিটা backend change-এর পর `deno check`।** আগে থেকেই কিছু pre-existing false-positive
+>   error আছে (`.range()`/`.or()`/`.gt()`/`.ilike()` ইত্যাদি Supabase-client typing noise) —
+>   `git stash` করে "আগে" আর "পরে" error count তুলনা করে zero-new-error প্রমাণ করো, শুধু
+>   "error আছে" দেখেই ভয় পেয়ো না বা ignore-ও কোরো না।
+> - **Schema change করলে migration integrity check বাদ দিও না** — `apply_migration`/
+>   `execute_sql` দিয়ে dev-এ করার সাথে সাথেই `schema_migrations` reconcile করো, তারপর
+>   `node scripts/migration-integrity-check.mjs` দিয়ে `in_sync=true` confirm করো — dev ও prod
+>   দুটোতেই।
+> - **`acl.approver_map` কাজ করছে কিনা শুধু code দেখে বোঝা যায় না** — এটা pure operational data,
+>   কোনো migration/code এটা guarantee করে না। কোনো maker-checker/approval feature নিয়ে কাজ
+>   করলে সরাসরি DB query করে approver_map-এর rows দেখো, আর business owner-এর বলা authority
+>   rule-এর সাথে সরাসরি মিলিয়ে দেখো — এই session-এ পুরো "base half" (Manager→Auditor approve)
+>   একদমই missing ছিল, শুধু escalation half (Auditor→Director) configured ছিল, কোনো code বাগ
+>   ছিল না, শুধু data gap।
+> - **Business owner যখন "এটা তো হওয়া উচিত না" বলে push back করে, থেমো না।** এই session-এ
+>   CMP010/PID case-এ প্রথমে আমি "not a bug, wrong company selected" বলে থেমে গিয়েছিলাম —
+>   push back-এর পরে আসল root cause (`is_primary` ভুল ডেটা) পাওয়া গেছে। "কাজ করার কথা এভাবেই"
+>   বলে থেমে যাওয়ার আগে একবার আরও গভীরে যাও।
+>
+> **Full detail (exact file/line/commit) আগের session-এর transcript-এ আছে** — এই note টা
+> summary নয়, শুধু পরের session-এর জন্য checklist।
+>
 > ### 🔒 নতুন locked sequence (2026-08-13, business owner directive — এই session-এর decision,
 > handoff brief-এর §7 "Dispatch first" order-কে supersede করে)
 >
