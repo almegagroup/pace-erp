@@ -16,13 +16,17 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { useMenu } from "../../../../context/useMenu.js";
 import { listCustomers } from "../omApi.js";
 
 const LIMIT = 50;
 
 export default function CustomerListPage() {
+  const { runtimeContext } = useMenu();
+  const companies = runtimeContext?.availableCompanies ?? [];
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [companyId, setCompanyId] = useState("");
   const [customerType, setCustomerType] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
@@ -38,13 +42,14 @@ export default function CustomerListPage() {
 
   const customerParams = useMemo(
     () => ({
+      company_id: companyId || undefined,
       customer_type: customerType || undefined,
       status: status || undefined,
       search: debouncedSearch || undefined,
       limit: LIMIT,
       offset: (page - 1) * LIMIT,
     }),
-    [customerType, debouncedSearch, page, status]
+    [companyId, customerType, debouncedSearch, page, status]
   );
   const customerQuery = useQuery({
     queryKey: ["om", "customer-list", customerParams],
@@ -80,7 +85,7 @@ export default function CustomerListPage() {
         eyebrow: "Search And Filter",
         title: "Customer lookup",
         children: (
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_180px_180px]">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_180px_180px_180px]">
             <QuickFilterInput
               label="Customer Search"
               value={search}
@@ -88,6 +93,24 @@ export default function CustomerListPage() {
               primaryFocus
               placeholder="Search customer code or customer name"
             />
+            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
+              Company
+              <select
+                value={companyId}
+                onChange={(event) => {
+                  setCompanyId(event.target.value);
+                  setPage(1);
+                }}
+                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+              >
+                <option value="">ALL</option>
+                {companies.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.company_code}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Customer Type
               <select
@@ -139,24 +162,21 @@ export default function CustomerListPage() {
             />
             <ErpDenseGrid
               columns={[
+                { key: "customer_code", label: "Customer Code", render: (row) => row.customer_code || "-" },
+                { key: "customer_name", label: "Customer Name", render: (row) => row.customer_name || "-" },
                 {
-                  key: "customer",
-                  label: "Customer",
-                  render: (row) => (
-                    <div>
-                      <div className="font-semibold text-slate-900">{row.customer_code || "-"}</div>
-                      <div className="text-[10px] text-slate-500">{row.customer_name || "-"}</div>
-                    </div>
-                  ),
+                  key: "company_codes",
+                  label: "Company",
+                  render: (row) => (Array.isArray(row.company_codes) && row.company_codes.length ? row.company_codes.join(", ") : "-"),
                 },
                 { key: "customer_type", label: "Type" },
+                { key: "status", label: "Status" },
                 { key: "vendor_code", label: "Linked Vendor", render: (row) => row.vendor_code || "-" },
                 {
                   key: "parent_customer_name",
                   label: "Parent Company",
                   render: (row) => (row.parent_customer_code ? `${row.parent_customer_code} | ${row.parent_customer_name}` : "-"),
                 },
-                { key: "status", label: "Status" },
               ]}
               rows={rows}
               rowKey={(row) => row.id}

@@ -16,14 +16,15 @@ import TransactionCompanySelector from "../../../components/inputs/TransactionCo
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
+import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import CustomerCreateForm from "../om/customer/CustomerCreateForm.jsx";
 import {
   listPlanFeed, getPlanFeed, createPlanFeed, updatePlanFeed,
   cancelPlanFeed, reactivatePlanFeed, getPlanFeedSummary, upsertFoAllocation,
   getUnmappedStock, checkOrderedStroke, listStrokeOptions, listPackingOrders,
   findPlanFeedByNumber,
 } from "./prodApi.js";
-import { listMaterials, listCustomers, createCustomer, updateCustomer } from "../om/omApi.js";
-import { INDIAN_STATES } from "../../../data/indianStates.js";
+import { listMaterials, listCustomers, updateCustomer } from "../om/omApi.js";
 
 const EMPTY_ARRAY = [];
 
@@ -216,8 +217,7 @@ export default function PlanFeedPage() {
   // ── Create tab state ──────────────────────────────────────────────────────
   const [form, setForm] = useState({ ...EMPTY_FO });
   const [newPartyOpen, setNewPartyOpen] = useState(false);
-  const [newPartyForm, setNewPartyForm] = useState({ customer_name: "", delivery_address: "", fo_customer_type: "", billing_state: "" });
-  const [newPartySaving, setNewPartySaving] = useState(false);
+  const [editPartyOpen, setEditPartyOpen] = useState(false);
 
   const selectedParty = customerMap.get(form.party_id) ?? null;
 
@@ -244,29 +244,21 @@ export default function PlanFeedPage() {
     select: (d) => d?.data ?? [],
   });
 
-  async function handleCreateNewParty() {
-    if (!newPartyForm.customer_name.trim() || !newPartyForm.delivery_address.trim() || !newPartyForm.billing_state.trim()) return;
-    setNewPartySaving(true);
-    try {
-      const created = await createCustomer({
-        customer_name: newPartyForm.customer_name.trim(),
-        delivery_address: newPartyForm.delivery_address.trim(),
-        billing_state: newPartyForm.billing_state.trim(),
-        customer_type: "DOMESTIC",
-        company_id: effectiveCompanyId,
-        fo_customer_type: newPartyForm.fo_customer_type || poTypeFilter || undefined,
-      });
-      const newId = created?.data?.id ?? created?.id;
-      await qc.invalidateQueries({ queryKey: ["plan-feed-customers"] });
-      if (newId) setForm((f) => ({ ...f, party_id: newId, party_name: newPartyForm.customer_name.trim() }));
-      setNewPartyOpen(false);
-      setNewPartyForm({ customer_name: "", delivery_address: "", fo_customer_type: "", billing_state: "" });
-      toast("Party created.");
-    } catch (err) {
-      toast(err.message || "Party create failed.", "error");
-    } finally {
-      setNewPartySaving(false);
-    }
+  async function handlePartyCreated(customer) {
+    const newId = customer?.id;
+    await qc.invalidateQueries({ queryKey: ["plan-feed-customers"] });
+    if (newId) setForm((f) => ({ ...f, party_id: newId, party_name: customer.customer_name || "" }));
+    setNewPartyOpen(false);
+    toast("Party created.");
+  }
+
+  // Edited here or from Customer Master (MM04) -- both write the same
+  // customer_master row, so either page always reflects the other's changes.
+  async function handlePartyUpdated() {
+    await qc.invalidateQueries({ queryKey: ["plan-feed-customers"] });
+    await qc.invalidateQueries({ queryKey: ["prod-plan-feed-summary"] });
+    setEditPartyOpen(false);
+    toast("Party updated.");
   }
 
   const [partyTypeEdit, setPartyTypeEdit] = useState(false);
@@ -569,7 +561,7 @@ export default function PlanFeedPage() {
     const needle = totalSearch.trim().toLowerCase();
     if (!needle) return summary;
     return summary.filter((row) => [
-      row.fo_number, row.party_name, row.sku, row.ordered_stroke_number,
+      row.fo_number, row.party_name, row.party_town, row.sku, row.ordered_stroke_number,
       row.ordered_qty_kg, row.pack_qty, row.allocated_qty_kg,
       ...(row.mapped_batch_numbers ?? []),
       row.production_status, row.dispatched_qty_kg, row.dispatch_status,
@@ -659,28 +651,26 @@ export default function PlanFeedPage() {
               </div>
             </div>
 
-            {newPartyOpen && (
-              <div className="col-span-2 border border-sky-200 bg-sky-50 rounded p-3 grid grid-cols-2 gap-3">
-                <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" placeholder="Party name" value={newPartyForm.customer_name} onChange={e => setNewPartyForm(f => ({ ...f, customer_name: e.target.value }))} />
-                <ErpComboboxField
-                  value={newPartyForm.fo_customer_type}
-                  onChange={(v) => setNewPartyForm(f => ({ ...f, fo_customer_type: v }))}
-                  options={FO_CUSTOMER_TYPES}
-                  placeholder="PO Type (optional)"
-                />
-                <input className="col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm" placeholder="Delivery address" value={newPartyForm.delivery_address} onChange={e => setNewPartyForm(f => ({ ...f, delivery_address: e.target.value }))} />
-                <select className="col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm" value={newPartyForm.billing_state} onChange={e => setNewPartyForm(f => ({ ...f, billing_state: e.target.value }))}>
-                  <option value="">Billing State *</option>
-                  {INDIAN_STATES.map((state) => (
-                    <option key={state.code} value={state.name}>{state.name}</option>
-                  ))}
-                </select>
-                <div className="col-span-2 flex gap-2">
-                  <button type="button" disabled={newPartySaving} onClick={handleCreateNewParty} className="px-3 py-1.5 bg-sky-600 text-white text-xs rounded hover:bg-sky-700 disabled:opacity-50">Save Party</button>
-                  <button type="button" onClick={() => setNewPartyOpen(false)} className="px-3 py-1.5 border border-slate-300 text-xs rounded">Cancel</button>
-                </div>
-              </div>
-            )}
+            <DrawerBase
+              visible={newPartyOpen}
+              title="New RM/PM Sales Customer"
+              onEscape={() => setNewPartyOpen(false)}
+              onClose={() => setNewPartyOpen(false)}
+              width="min(560px, calc(100vw - 24px))"
+            >
+              {/* Same shared form as MM04/SO01 -- so whatever the user fills in here
+                  (GST, Town, Contact, Phone, Email, Billing Address, Parent Company)
+                  actually shows up on the Customer Master detail page later, instead
+                  of this page's old 4-field mini-form leaving everything else blank. */}
+              <CustomerCreateForm
+                companyMode="LOCKED"
+                lockedCompanyId={effectiveCompanyId}
+                initialFoCustomerType={poTypeFilter}
+                onSaved={handlePartyCreated}
+                onCancel={() => setNewPartyOpen(false)}
+                submitLabel="Create Customer"
+              />
+            </DrawerBase>
 
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">SKU <span className="text-rose-500">*</span></label>
@@ -841,6 +831,11 @@ export default function PlanFeedPage() {
                       placeholder="-- Select party --"
                       disabled={editData.status === "CANCELLED"}
                     />
+                    {editDraft.party_id && (
+                      <button type="button" onClick={() => setEditPartyOpen(true)} className="text-[11px] text-sky-600 underline self-start mt-1">
+                        Edit Customer
+                      </button>
+                    )}
                     {editDraft.party_id && customerMap.get(editDraft.party_id) && (
                       partyTypeEdit ? (
                         <div className="flex items-center gap-2 mt-1">
@@ -860,6 +855,22 @@ export default function PlanFeedPage() {
                       )
                     )}
                   </div>
+
+                  <DrawerBase
+                    visible={editPartyOpen}
+                    title="Edit RM/PM Sales Customer"
+                    onEscape={() => setEditPartyOpen(false)}
+                    onClose={() => setEditPartyOpen(false)}
+                    width="min(560px, calc(100vw - 24px))"
+                  >
+                    <CustomerEditForm
+                      customerId={editDraft.party_id}
+                      submitLabel="Save"
+                      onCancel={() => setEditPartyOpen(false)}
+                      onSaved={() => void handlePartyUpdated()}
+                    />
+                  </DrawerBase>
+
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">
                       SKU {skuLockedForEdit ? <span className="text-amber-600">(locked — allocations exist)</span> : null}
@@ -1070,6 +1081,7 @@ export default function PlanFeedPage() {
                   <tr className="bg-slate-50 text-slate-500 text-xs uppercase">
                     <th className="text-left py-2 px-3 border-b">FO #</th>
                     <th className="text-left py-2 px-3 border-b">Party</th>
+                    <th className="text-left py-2 px-3 border-b">Town</th>
                     <th className="text-left py-2 px-3 border-b">SKU</th>
                     <th className="text-left py-2 px-3 border-b">Ordered Stroke</th>
                     <th className="text-right py-2 px-3 border-b">Ordered KG</th>
@@ -1088,6 +1100,7 @@ export default function PlanFeedPage() {
                     <tr key={row.id ?? row.fo_number} className="border-b border-slate-100 hover:bg-sky-50">
                       <td className="py-2 px-3 font-mono font-semibold text-sky-700">{row.fo_number}</td>
                       <td className="py-2 px-3">{row.party_name}</td>
+                      <td className="py-2 px-3 text-slate-500">{row.party_town || ""}</td>
                       <td className="py-2 px-3 font-mono text-slate-600">{row.sku}</td>
                       <td className="py-2 px-3 font-mono">
                         {row.ordered_stroke_number || "--"}

@@ -2392,12 +2392,63 @@ export async function listPIDifferencesHandler(
     const locationMap = new Map(((locationRows.data ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
     const materialMap = new Map(((materialRows.data ?? []) as JsonRecord[]).map((m) => [String(m.id), m]));
 
+    // §MI20 (2026-08-19) — SAP's own MI20 shows a Difference Value (money), not
+    // just qty/%; this report never carried one. POSTED items get the ACTUAL
+    // rate that was really used at posting time (stock_ledger.valuation_rate
+    // for that item's own posted_stock_document_id, a historical fact, never
+    // recomputed later). PENDING items get today's live rate via the same
+    // fetchCurrentValuationRates() the real Post handler itself uses to value
+    // the posting — an honest preview, not a promise, since WAR can still move
+    // before this actually posts. Batch is intentionally not part of the key
+    // for pending items (matches stock_snapshot's own known blended-not-per-
+    // batch limitation, §104.9's already-documented gap — not new here).
+    const postedItems = items.filter((i) => i.posted_stock_document_id);
+    const pendingItems = items.filter((i) => !i.posted_stock_document_id);
+    const postedDocIds = [...new Set(postedItems.map((i) => toTrimmedString(i.posted_stock_document_id)).filter(Boolean))];
+    // fetchCurrentValuationRates() takes one company at a time (stock_snapshot
+    // is queried per-company) -- this report can legitimately span several
+    // companies at once (no company_id filter = every scoped company), so
+    // resolve pending rates per-company and merge into one map keyed with the
+    // company id included, to avoid one company's rates silently overwriting
+    // or being read for another's rows.
+    const [postedLedgerRows, ...pendingRateMapsByCompany] = await Promise.all([
+      postedDocIds.length
+        ? serviceRoleClient.schema("erp_inventory").from("stock_ledger").select("stock_document_id, valuation_rate").in("stock_document_id", postedDocIds)
+        : Promise.resolve({ data: [] as JsonRecord[] }),
+      ...companyIds.map((cid) =>
+        fetchCurrentValuationRates(
+          cid,
+          pendingItems
+            .filter((i) => toTrimmedString(docMap.get(toTrimmedString(i.document_id))?.company_id) === cid)
+            .map((i) => ({
+              materialId: toTrimmedString(i.material_id),
+              slocId: toTrimmedString(i.storage_location_id),
+              stockType: toUpperTrimmedString(i.stock_type),
+            })),
+        ).then((rateMap) => ({ cid, rateMap })),
+      ),
+    ]);
+    const postedRateByDocId = new Map<string, number>();
+    for (const row of (postedLedgerRows.data ?? []) as JsonRecord[]) {
+      const docId = toTrimmedString(row.stock_document_id);
+      if (docId && !postedRateByDocId.has(docId)) postedRateByDocId.set(docId, Number(row.valuation_rate ?? 0));
+    }
+    const pendingRateByCompanyKey = new Map<string, number>();
+    for (const entry of pendingRateMapsByCompany) {
+      for (const [key, rate] of entry.rateMap.entries()) {
+        pendingRateByCompanyKey.set(`${entry.cid}|${key}`, rate);
+      }
+    }
+
     const result = items.map((item) => {
       const doc = docMap.get(toTrimmedString(item.document_id));
       const company = companyMap.get(toTrimmedString(doc?.company_id));
       const location = locationMap.get(toTrimmedString(item.storage_location_id));
       const material = materialMap.get(toTrimmedString(item.material_id));
       const differenceQty = parseNullableNumber(item.difference_qty) ?? 0;
+      const valuationRate = item.posted_stock_document_id
+        ? (postedRateByDocId.get(toTrimmedString(item.posted_stock_document_id)) ?? 0)
+        : (pendingRateByCompanyKey.get(`${toTrimmedString(doc?.company_id)}|${toTrimmedString(item.material_id)}|${toTrimmedString(item.storage_location_id)}|${toUpperTrimmedString(item.stock_type)}`) ?? 0);
       return {
         pi_document_id: doc?.id ?? null,
         pi_document_number: doc?.document_number ?? null,
@@ -2416,6 +2467,8 @@ export async function listPIDifferencesHandler(
         physical_qty: item.physical_qty,
         difference_qty: differenceQty,
         difference_pct: item.book_qty ? Number(((differenceQty / Number(item.book_qty)) * 100).toFixed(2)) : null,
+        valuation_rate: valuationRate,
+        difference_value: Number((differenceQty * valuationRate).toFixed(2)),
         base_uom_code: item.base_uom_code,
         movement_type: item.posted_stock_document_id
           ? derivePIMovementType(String(item.stock_type), differenceQty)

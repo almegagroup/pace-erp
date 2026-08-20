@@ -18,6 +18,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
@@ -998,7 +999,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     let foQuery = serviceRoleClient
       .schema("erp_production").from("plan_feed")
       .select(`
-        id, company_id, fo_number, party_name, sku, description, material_id,
+        id, company_id, fo_number, party_id, party_name, sku, description, material_id,
         ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date, status,
         ordered_stroke_number
       `)
@@ -1010,6 +1011,18 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     if (!fos || fos.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
     const foIds = (fos as JsonRecord[]).map(f => f.id as string);
+
+    // Town lives on the party's own customer_master row, never on plan_feed
+    // itself -- resolved live here (not denormalized) so editing a customer's
+    // Town from MM04 or Plan Feed's own "Edit Customer" button shows up in
+    // this table immediately, no extra sync step.
+    const partyIds = [...new Set((fos as JsonRecord[]).map((f) => toTrimmedString(f.party_id)).filter(Boolean))];
+    const townRows = await fetchInChunks<JsonRecord>(partyIds, (idChunk) =>
+      serviceRoleClient.schema("erp_master").from("customer_master").select("id, town").in("id", idChunk));
+    const townByPartyId = new Map<string, string | null>();
+    for (const row of townRows) {
+      townByPartyId.set(String(row.id), (row.town as string | null) ?? null);
+    }
 
     // §83.18-REVISED: flag rows whose Ordered Stroke isn't (yet) in Stroke Master --
     // live check, so the flag clears itself the moment someone creates that Stroke,
@@ -1104,6 +1117,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         id: foId,
         fo_number: fo.fo_number,
         party_name: fo.party_name,
+        party_town: fo.party_id ? (townByPartyId.get(toTrimmedString(fo.party_id)) ?? null) : null,
         sku: fo.sku,
         description: fo.description,
         ordered_qty_kg: orderedKg,
