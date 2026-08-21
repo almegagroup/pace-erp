@@ -63,14 +63,23 @@ const FINANCE_LINE_TYPES = [
   { value: "LC_CHARGES", label: "LC charges" },
   { value: "BANK_CHARGES", label: "Bank charges" },
 ];
-// Which of the three parties a cost/deduction line's amount is actually owed
-// to. Suggested payable per party is computed strictly from THIS GRN's own
-// lines (never aggregated across other GRNs — that's AC02's future Vendor
-// Ledger, a different layer). See ac01.handlers.ts's computeSuggestedPayables.
+// Cost types that go through the CHA -- auto-defaults party_type to CHA and
+// pre-fills cha_id from this GRN's own CSN when the user picks one of these.
+const CHA_COST_TYPES = new Set(["CLEARING_CHARGES_CHA", "CHA_CHARGES"]);
+// Which of the four parties (or "no party at all") a cost/deduction line's
+// amount is actually owed to. Suggested payable per party is computed
+// strictly from THIS GRN's own lines (never aggregated across other GRNs —
+// that's AC02's future Vendor Ledger, a different layer). See
+// ac01.handlers.ts's computeSuggestedPayables. NONE is for costs PACE pays
+// straight to a third party outside this GRN's four tracked parties (Duty,
+// paid to the government — business owner: "Duty amra di, seta amader hoye
+// CHA dayna") — still adds to Landed Cost, owed to nobody here.
 const PARTY_TYPE_OPTIONS = [
   { value: "VENDOR", label: "Vendor" },
   { value: "TRANSPORTER", label: "Transporter" },
   { value: "LAST_MILE_TRANSPORTER", label: "Last mile transporter" },
+  { value: "CHA", label: "CHA" },
+  { value: "NONE", label: "NA (paid directly, no party)" },
 ];
 
 function toDDMMYYYY(value) {
@@ -115,8 +124,22 @@ function nextEmptyCostLine() {
   return {
     key: `new-${Date.now()}-${Math.random()}`,
     cost_type: "FREIGHT", amount: "", entry_mode: "AD_HOC", has_gst: false, gst_treatment: "EXCLUSIVE", gst_rate: "",
-    bill_reference: "", bill_date: "", description: "", party_type: "VENDOR",
+    bill_reference: "", bill_date: "", description: "", party_type: "VENDOR", cha_id: "",
   };
+}
+
+// Auto-default party (and CHA pre-fill) when the user picks a cost type --
+// Duty-family types are always paid straight to the government (NONE);
+// CHA-family types default to CHA, pre-filled from this GRN's own CSN. Any
+// other type keeps whatever party the user already had selected.
+function deriveDefaultsForCostType(costType, currentPartyType, defaultChaId) {
+  if (DUTY_COST_TYPES.has(costType)) {
+    return { party_type: "NONE", cha_id: "" };
+  }
+  if (CHA_COST_TYPES.has(costType)) {
+    return { party_type: "CHA", cha_id: defaultChaId || "" };
+  }
+  return { party_type: currentPartyType, cha_id: "" };
 }
 
 function buildColumns() {
@@ -173,6 +196,10 @@ function buildColumns() {
     {
       key: "last_mile_suggested_payable", label: "Last Mile Payable", width: "140px", align: "right",
       render: (row) => formatNumberOrBlank(row.last_mile_payable_override ?? row.last_mile_suggested_payable),
+    },
+    {
+      key: "cha_suggested_payable", label: "CHA Payable", width: "120px", align: "right",
+      render: (row) => formatNumberOrBlank(row.cha_payable_override ?? row.cha_suggested_payable),
     },
     { key: "payment_days", label: "Payment Days", width: "90px", align: "right" },
     { key: "payment_type", label: "Payment Type", width: "140px" },
@@ -355,6 +382,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       vendor_payable_override: grn.vendor_payable_override ?? "",
       transporter_payable_override: grn.transporter_payable_override ?? "",
       last_mile_payable_override: grn.last_mile_payable_override ?? "",
+      cha_payable_override: grn.cha_payable_override ?? "",
     });
     setLastMileTransporterName(grn.last_mile_transporter_name ?? "");
     setLastMileTransporterSearch("");
@@ -372,6 +400,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         bill_date: toDDMMYYYY(line.bill_date),
         description: line.description ?? "",
         party_type: line.party_type ?? "VENDOR",
+        cha_id: line.cha_id ?? "",
       })),
     );
     setDeductionLines(
@@ -428,6 +457,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         clear_transporter_payable_override: draft.transporter_payable_override === "",
         last_mile_payable_override: draft.last_mile_payable_override === "" ? null : Number(draft.last_mile_payable_override),
         clear_last_mile_payable_override: draft.last_mile_payable_override === "",
+        cha_payable_override: draft.cha_payable_override === "" ? null : Number(draft.cha_payable_override),
+        clear_cha_payable_override: draft.cha_payable_override === "",
         cost_lines: costLines
           .filter((line) => line.amount !== "")
           .map((line) => ({
@@ -441,6 +472,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             bill_date: line.bill_date ? toISODate(line.bill_date) : null,
             description: line.description || null,
             party_type: line.party_type || "VENDOR",
+            cha_id: line.party_type === "CHA" && line.cha_id ? line.cha_id : null,
           })),
         deduction_lines: deductionLines
           .filter((line) => line.deduction_type_id)
@@ -515,6 +547,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   }, [drawerOpen, draft, costLines, deductionLines, readOnly]);
 
   const deductionTypeOptions = Array.isArray(deductionTypesQuery.data?.items) ? deductionTypesQuery.data.items : [];
+  const chaOptions = Array.isArray(grnDetailQuery.data?.cha_options) ? grnDetailQuery.data.cha_options : [];
+  const defaultChaId = grnDetailQuery.data?.default_cha_id ?? "";
   const selectedDateFieldLabel =
     dateFields.length === 0
       ? "Select date field(s)"
@@ -786,11 +820,15 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                 {costLines.map((line, index) => {
                   const isDuty = DUTY_COST_TYPES.has(line.cost_type);
                   return (
-                    <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: "1.4fr 0.7fr 0.6fr 0.6fr 0.6fr 0.5fr 0.9fr 0.5fr" }}>
+                    <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: "1.3fr 0.6fr 0.55fr 0.55fr 0.55fr 0.45fr 0.8fr 0.9fr 0.5fr" }}>
                       <select
                         disabled={readOnly}
                         value={line.cost_type}
-                        onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, cost_type: event.target.value } : entry)))}
+                        onChange={(event) => {
+                          const nextCostType = event.target.value;
+                          const defaults = deriveDefaultsForCostType(nextCostType, line.party_type, defaultChaId);
+                          setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, cost_type: nextCostType, ...defaults } : entry)));
+                        }}
                         className={inputCls}
                       >
                         <optgroup label="Duty (amount in, % derived)">
@@ -861,6 +899,18 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                       >
                         {PARTY_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                       </select>
+                      {line.party_type === "CHA" ? (
+                        <select
+                          disabled={readOnly}
+                          value={line.cha_id}
+                          onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, cha_id: event.target.value } : entry)))}
+                          className={inputCls}
+                          title="Which CHA this charge is owed to"
+                        >
+                          <option value="">Select CHA</option>
+                          {chaOptions.map((cha) => <option key={cha.id} value={cha.id}>{cha.cha_code} — {cha.cha_name}</option>)}
+                        </select>
+                      ) : <div />}
                       {!readOnly ? (
                         <button
                           type="button"
@@ -877,6 +927,11 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   <button type="button" onClick={() => setCostLines((current) => [...current, nextEmptyCostLine()])} className="mt-1 justify-self-start text-[11px] font-semibold text-sky-700">
                     + Add cost line
                   </button>
+                ) : null}
+                {chaOptions.length === 0 && !readOnly ? (
+                  <p className="text-[10px] text-slate-400">
+                    No CHA mapped to this company yet — create one from the CHA Master page first to select it here.
+                  </p>
                 ) : null}
               </div>
             </DrawerSection>
@@ -960,11 +1015,12 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               eyebrow="Payable"
               title="Per-party payable — suggested from this GRN's own lines only, overwrite to confirm the real amount"
             >
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-4 gap-2">
                 {[
                   { label: "Vendor payable", suggestedKey: "vendor_suggested_payable", draftKey: "vendor_payable_override" },
                   { label: "Transporter payable", suggestedKey: "transporter_suggested_payable", draftKey: "transporter_payable_override" },
                   { label: "Last mile transporter payable", suggestedKey: "last_mile_suggested_payable", draftKey: "last_mile_payable_override" },
+                  { label: "CHA payable", suggestedKey: "cha_suggested_payable", draftKey: "cha_payable_override" },
                 ].map(({ label, suggestedKey, draftKey }) => (
                   <div key={draftKey} className="grid gap-1 border border-slate-200 bg-white px-2 py-1.5">
                     <div className="text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</div>
@@ -998,6 +1054,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               <div className="grid grid-cols-4 gap-2">
                 {[
                   ["Landed cost total", grnDetailQuery.data?.landed_cost?.total_cost],
+                  ["Landed price / unit (Base UoM)", grnDetailQuery.data?.cost_per_unit],
                 ].map(([label, value]) => (
                   <div key={label} className="border border-slate-200 bg-white px-2 py-1.5">
                     <div className="text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</div>

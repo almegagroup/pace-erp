@@ -91,45 +91,90 @@ function computeActualPaymentDate(
   return anchor ? addDays(anchor, creditDays) : null;
 }
 
+// Mirrors save_ac01_grn_cost()'s own Base-UoM landed-cost-per-unit formula
+// exactly (migration 20260821090000's save_ac01_grn_cost RPC) -- "Landed
+// Cost is always computed on Base UoM, never Purchase/Pack UoM" (locked
+// 2026-08-21). The RPC computes this at save time but never persists it
+// (landed_cost has no such column), so both list and detail reads must
+// recompute it the same way. Found live 2026-08-22: buildListRow's own
+// cost_per_unit used a naive effectiveRate + landedCostTotal/receivedQty --
+// a latent bug (currently masked because every real GRN has per_pack_qty
+// NULL, so the Base-UoM conversion is a no-op today) -- and getAC01GRNHandler
+// never computed this field at all, so the drawer's Summary section had no
+// per-unit landed price to show, only the total.
+function computeLandedCostPerUnit(grn: JsonRecord, landedCostTotal: number): number {
+  const effectiveRate = grn.confirmed_rate != null
+    ? Number(grn.confirmed_rate)
+    : grn.grn_rate != null
+      ? Number(grn.grn_rate)
+      : 0;
+  const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : null;
+  const hasPackConversion = perPackQty != null && perPackQty > 0;
+  const baseUomRate = hasPackConversion ? effectiveRate / perPackQty : effectiveRate;
+  const receivedQtyBase = hasPackConversion
+    ? Number(grn.received_qty ?? 0) * perPackQty
+    : Number(grn.received_qty ?? 0);
+  return receivedQtyBase > 0 ? baseUomRate + landedCostTotal / receivedQtyBase : baseUomRate;
+}
+
 // Mirrors save_ac01_grn_cost()'s own per-party suggested-payable math exactly
-// (migration 20260821150000) -- the RPC only returns this on SAVE, so GET
+// (migration 20260822100000) -- the RPC only returns this on SAVE, so GET
 // (viewing an already-saved GRN without triggering a write) needs the same
 // computation done read-side, from the already-fetched cost/deduction lines.
+//
+// GROSS-of-GST, not net -- found live 2026-08-22 (business owner): the
+// amount actually owed to a party is GST-inclusive (GST is still paid to
+// the party, only later claimed back via ITC -- a separate ledger entry,
+// not a netting against what's owed). This is deliberately the OPPOSITE
+// basis from Landed Cost/WAR (net-of-GST, unchanged, computed elsewhere) --
+// EXCLUSIVE lines get GST added on top for Payable; INCLUSIVE lines already
+// carry it, no change; the vendor's own base material cost also gets
+// grn.gst_pct applied, which the original version never did at all.
+//
+// 'NONE' party (e.g. Duty, paid straight to the government) contributes to
+// Landed Cost but is deliberately excluded from every party bucket here --
+// nothing is owed to any of the four tracked parties for it.
 function computeSuggestedPayables(
   grn: JsonRecord,
   costLines: JsonRecord[],
   deductionLines: JsonRecord[],
-): { vendor: number; transporter: number; lastMile: number } {
+): { vendor: number; transporter: number; lastMile: number; cha: number } {
   const effectiveRate = grn.confirmed_rate != null
     ? Number(grn.confirmed_rate)
     : grn.grn_rate != null
       ? Number(grn.grn_rate)
       : 0;
   const purchaseCost = effectiveRate * Number(grn.received_qty ?? 0);
+  const materialGstPct = grn.gst_pct != null ? Number(grn.gst_pct) : 0;
+  const purchaseCostGross = purchaseCost * (1 + materialGstPct / 100);
 
-  const charges = { VENDOR: 0, TRANSPORTER: 0, LAST_MILE_TRANSPORTER: 0 } as Record<string, number>;
+  const charges = { VENDOR: 0, TRANSPORTER: 0, LAST_MILE_TRANSPORTER: 0, CHA: 0 } as Record<string, number>;
   for (const line of costLines) {
-    let net = Number(line.amount ?? 0);
+    let gross = Number(line.amount ?? 0);
     const gstRate = line.gst_rate != null ? Number(line.gst_rate) : 0;
-    if (line.has_gst === true && line.gst_treatment === "INCLUSIVE" && gstRate > 0) {
-      net = net / (1 + gstRate / 100);
+    if (line.has_gst === true && gstRate > 0) {
+      if (line.gst_treatment === "EXCLUSIVE") gross = gross * (1 + gstRate / 100);
+      // INCLUSIVE: already gross, no change.
     }
     const party = toTrimmedString(line.party_type) || "VENDOR";
-    charges[party] = (charges[party] ?? 0) + net;
+    if (party === "NONE") continue;
+    charges[party] = (charges[party] ?? 0) + gross;
   }
 
-  const deductions = { VENDOR: 0, TRANSPORTER: 0, LAST_MILE_TRANSPORTER: 0 } as Record<string, number>;
+  const deductions = { VENDOR: 0, TRANSPORTER: 0, LAST_MILE_TRANSPORTER: 0, CHA: 0 } as Record<string, number>;
   for (const line of deductionLines) {
     if (line.amount == null) continue;
     const amount = Number(line.amount) + Number(line.round_off ?? 0);
     const party = toTrimmedString(line.party_type) || "VENDOR";
+    if (party === "NONE") continue;
     deductions[party] = (deductions[party] ?? 0) + amount;
   }
 
   return {
-    vendor: Number((purchaseCost + charges.VENDOR - deductions.VENDOR).toFixed(4)),
+    vendor: Number((purchaseCostGross + charges.VENDOR - deductions.VENDOR).toFixed(4)),
     transporter: Number((charges.TRANSPORTER - deductions.TRANSPORTER).toFixed(4)),
     lastMile: Number((charges.LAST_MILE_TRANSPORTER - deductions.LAST_MILE_TRANSPORTER).toFixed(4)),
+    cha: Number((charges.CHA - deductions.CHA).toFixed(4)),
   };
 }
 
@@ -283,7 +328,7 @@ function buildListRow(
   const effectiveRate = confirmedRate ?? grnRate ?? 0;
   const landedCostTotal = landedCost ? Number(landedCost.total_cost ?? 0) : 0;
   const receivedQty = Number(grn.received_qty ?? 0);
-  const costPerUnit = receivedQty > 0 ? effectiveRate + landedCostTotal / receivedQty : effectiveRate;
+  const costPerUnit = computeLandedCostPerUnit(grn, landedCostTotal);
   const vendorPayable = effectiveRate * receivedQty;
   const referenceType = paymentTerms?.reference_date_type as JsonRecord | JsonRecord[] | undefined;
   const referenceTypeCode = Array.isArray(referenceType) ? referenceType[0]?.code : referenceType?.code;
@@ -321,9 +366,11 @@ function buildListRow(
     vendor_suggested_payable: suggestedPayables.vendor,
     transporter_suggested_payable: suggestedPayables.transporter,
     last_mile_suggested_payable: suggestedPayables.lastMile,
+    cha_suggested_payable: suggestedPayables.cha,
     vendor_payable_override: grn.vendor_payable_override != null ? Number(grn.vendor_payable_override) : null,
     transporter_payable_override: grn.transporter_payable_override != null ? Number(grn.transporter_payable_override) : null,
     last_mile_payable_override: grn.last_mile_payable_override != null ? Number(grn.last_mile_payable_override) : null,
+    cha_payable_override: grn.cha_payable_override != null ? Number(grn.cha_payable_override) : null,
     payment_days: paymentTerms?.credit_days ?? null,
     payment_type: paymentTerms?.name ?? null,
     // Revised Payment Date (manual override) always wins when set; otherwise
@@ -620,21 +667,62 @@ export async function getAC01GRNHandler(
       }
     }
 
+    // CHA support (business owner, 2026-08-22): "CSN Tracker-এ import-এর
+    // জন্য CHA দেওয়া থাকে, সেটা তো করা উচিত" -- pull the CSN's own cha_id as
+    // a default suggestion for this GRN's CHA-party cost lines, and give the
+    // frontend the full CHA list for this company so its picker doesn't need
+    // a separate round trip (CHA Master is a short list, unlike Transporter
+    // Master -- no debounced search needed, a plain dropdown is proportionate).
+    let defaultChaId: string | null = null;
+    if (grn.gate_entry_line_id) {
+      const { data: gateEntryLine } = await serviceRoleClient
+        .schema("erp_procurement").from("gate_entry_line")
+        .select("csn_id").eq("id", String(grn.gate_entry_line_id)).maybeSingle();
+      if (gateEntryLine?.csn_id) {
+        const { data: csn } = await serviceRoleClient
+          .schema("erp_procurement").from("consignment_note")
+          .select("cha_id").eq("id", String(gateEntryLine.csn_id)).maybeSingle();
+        defaultChaId = (csn?.cha_id as string | null) ?? null;
+      }
+    }
+    const { data: companyChaMaps } = await serviceRoleClient
+      .schema("erp_master").from("cha_company_map")
+      .select("cha_id").eq("company_id", String(grn.company_id)).eq("active", true);
+    const companyChaIds = [...new Set(((companyChaMaps ?? []) as JsonRecord[]).map((row) => String(row.cha_id)))];
+    let chaOptions: JsonRecord[] = [];
+    let chaNameMap = new Map<string, JsonRecord>();
+    if (companyChaIds.length > 0) {
+      const chas = await fetchInChunks<JsonRecord>(companyChaIds, (chunk) =>
+        serviceRoleClient.schema("erp_master").from("cha_master")
+          .select("id, cha_code, cha_name").eq("active", true).in("id", chunk));
+      chaOptions = chas;
+      chaNameMap = toMap(chas);
+    }
+    const costLinesWithChaName = costLines.map((line) => {
+      const cha = line.cha_id ? chaNameMap.get(String(line.cha_id)) : null;
+      return { ...line, cha_name: cha ? `${cha.cha_code} — ${cha.cha_name}` : null };
+    });
+
     // Mirrors save_ac01_grn_cost()'s own math — see computeSuggestedPayables's
     // own comment above. Recomputed read-side since the RPC only returns this
     // on SAVE, and viewing a GRN must not trigger a write.
     const suggestedPayables = computeSuggestedPayables(grn, costLines, deductionLines);
+    const landedCostTotalForView = landedCost ? Number(landedCost.total_cost ?? 0) : 0;
 
     return okResponse({
       ...grn,
       last_mile_transporter_name: lastMileTransporterName,
       freight_type: freightType,
       actual_payment_date: actualPaymentDate,
+      cost_per_unit: Number(computeLandedCostPerUnit(grn, landedCostTotalForView).toFixed(4)),
       vendor_suggested_payable: suggestedPayables.vendor,
       transporter_suggested_payable: suggestedPayables.transporter,
       last_mile_suggested_payable: suggestedPayables.lastMile,
+      cha_suggested_payable: suggestedPayables.cha,
+      default_cha_id: defaultChaId,
+      cha_options: chaOptions,
       landed_cost: landedCost ?? null,
-      cost_lines: costLines,
+      cost_lines: costLinesWithChaName,
       deduction_lines: deductionLines,
     }, ctx.request_id, req);
   } catch (error) {
@@ -689,10 +777,12 @@ export async function saveAC01GRNCostHandler(
         p_vendor_payable_override: body.vendor_payable_override != null ? Number(body.vendor_payable_override) : null,
         p_transporter_payable_override: body.transporter_payable_override != null ? Number(body.transporter_payable_override) : null,
         p_last_mile_payable_override: body.last_mile_payable_override != null ? Number(body.last_mile_payable_override) : null,
+        p_cha_payable_override: body.cha_payable_override != null ? Number(body.cha_payable_override) : null,
         p_clear_revised_payment_date: body.clear_revised_payment_date === true,
         p_clear_vendor_payable_override: body.clear_vendor_payable_override === true,
         p_clear_transporter_payable_override: body.clear_transporter_payable_override === true,
         p_clear_last_mile_payable_override: body.clear_last_mile_payable_override === true,
+        p_clear_cha_payable_override: body.clear_cha_payable_override === true,
       });
 
     if (error) {
