@@ -25,6 +25,8 @@ import {
   listDeductionTypes,
   createDeductionType,
   saveAC01GRNCost,
+  listTransporters,
+  createTransporter,
 } from "../procurementApi.js";
 
 const DATE_FIELD_OPTIONS = [
@@ -156,8 +158,8 @@ function buildColumns() {
     { key: "actual_payment_date", label: "Actual Payment Date", width: "120px", render: (row) => toDDMMYYYY(row.actual_payment_date) },
     { key: "revised_payment_date", label: "Revised Payment Date", width: "130px", render: (row) => toDDMMYYYY(row.revised_payment_date) },
     { key: "freight_type", label: "Freight Type", width: "100px" },
-    { key: "transporter_id", label: "Transporter", width: "120px" },
-    { key: "last_mile_transporter_id", label: "Last Mile Transporter", width: "130px" },
+    { key: "transporter_id", label: "Transporter", width: "160px", render: (row) => row.transporter_name || "—" },
+    { key: "last_mile_transporter_id", label: "Last Mile Transporter", width: "170px", render: (row) => row.last_mile_transporter_name || "—" },
     { key: "lr_number", label: "LR Number", width: "100px" },
     { key: "lr_date", label: "LR Date", width: "90px", render: (row) => toDDMMYYYY(row.lr_date) },
     { key: "bl_number", label: "BL Number", width: "100px" },
@@ -212,6 +214,68 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const dateFieldPickerRef = useRef(null);
+
+  // Last mile transporter -- search-and-select against Transporter Master,
+  // same mechanism GRN's own Transporter tab uses (GRNPostFlow.jsx), plus an
+  // inline "+ New transporter" quick-create so the flow never has to leave
+  // this drawer. Found live 2026-08-21: this used to be a bare text input
+  // bound directly to a raw transporter_id.
+  const [lastMileTransporterName, setLastMileTransporterName] = useState("");
+  const [lastMileTransporterSearch, setLastMileTransporterSearch] = useState("");
+  const [debouncedLmtSearch, setDebouncedLmtSearch] = useState("");
+  const [lmtCreateOpen, setLmtCreateOpen] = useState(false);
+  const [lmtCreateName, setLmtCreateName] = useState("");
+  const [lmtCreateGst, setLmtCreateGst] = useState("");
+  const [lmtCreating, setLmtCreating] = useState(false);
+  const lmtDebounceRef = useRef(null);
+
+  const [deductionTypeCreateOpen, setDeductionTypeCreateOpen] = useState(false);
+  const [deductionTypeCreateName, setDeductionTypeCreateName] = useState("");
+  const [deductionTypeCreating, setDeductionTypeCreating] = useState(false);
+
+  useEffect(() => {
+    if (lmtDebounceRef.current) clearTimeout(lmtDebounceRef.current);
+    lmtDebounceRef.current = setTimeout(() => setDebouncedLmtSearch(lastMileTransporterSearch.trim()), 300);
+    return () => clearTimeout(lmtDebounceRef.current);
+  }, [lastMileTransporterSearch]);
+
+  const lastMileTransporterQuery = useQuery({
+    queryKey: ["ac01", "transporters-search", debouncedLmtSearch, companyId],
+    queryFn: () => listTransporters({ search: debouncedLmtSearch, company_id: companyId, limit: 20 }),
+    enabled: debouncedLmtSearch.length >= 2,
+  });
+  const lastMileTransporterResults = Array.isArray(lastMileTransporterQuery.data)
+    ? lastMileTransporterQuery.data
+    : (lastMileTransporterQuery.data?.data ?? []);
+
+  async function handleCreateTransporter() {
+    if (!lmtCreateName.trim()) {
+      setError("Transporter name is required.");
+      return;
+    }
+    setLmtCreating(true);
+    setError("");
+    try {
+      const result = await createTransporter({
+        transporter_name: lmtCreateName.trim(),
+        usage_direction: "BOTH",
+        gst_number: lmtCreateGst.trim() || undefined,
+      });
+      const created = result?.data ?? result;
+      if (created?.id) {
+        setDraft((current) => ({ ...current, last_mile_transporter_id: created.id }));
+        setLastMileTransporterName(`${created.transporter_code} — ${created.transporter_name}`);
+      }
+      setLmtCreateOpen(false);
+      setLmtCreateName("");
+      setLmtCreateGst("");
+      setLastMileTransporterSearch("");
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "Transporter create failed.");
+    } finally {
+      setLmtCreating(false);
+    }
+  }
 
   useEffect(() => {
     if (!companyId && defaultCompanyId) setCompanyId(defaultCompanyId);
@@ -268,6 +332,9 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       gst_pct: grn.gst_pct ?? "",
       last_mile_transporter_id: grn.last_mile_transporter_id ?? "",
     });
+    setLastMileTransporterName(grn.last_mile_transporter_name ?? "");
+    setLastMileTransporterSearch("");
+    setLmtCreateOpen(false);
     setCostLines(
       (grn.cost_lines ?? []).map((line) => ({
         key: line.id,
@@ -309,6 +376,11 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     setCostLines([]);
     setDeductionLines([]);
     setError("");
+    setLastMileTransporterName("");
+    setLastMileTransporterSearch("");
+    setLmtCreateOpen(false);
+    setDeductionTypeCreateOpen(false);
+    setDeductionTypeCreateName("");
   }
 
   async function handleSave() {
@@ -364,8 +436,30 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       const created = await createDeductionType({ company_id: companyId, name: name.trim() });
       await queryClient.invalidateQueries({ queryKey: ["ac01", "deduction-types", companyId] });
       return created;
-    } catch {
+    } catch (createError) {
+      // Found live 2026-08-21: this used to be a bare `catch {}` -- a real
+      // failure (ACL, duplicate name, network) looked identical to success
+      // from the user's side, since the native prompt() gave no feedback
+      // either way and the row simply never appeared.
+      setError(createError instanceof Error ? createError.message : "Deduction type create failed.");
       return null;
+    }
+  }
+
+  async function handleSubmitNewDeductionType() {
+    if (!deductionTypeCreateName.trim()) {
+      setError("Deduction type name is required.");
+      return;
+    }
+    setDeductionTypeCreating(true);
+    try {
+      const created = await handleCreateDeductionType(deductionTypeCreateName);
+      if (created) {
+        setDeductionTypeCreateOpen(false);
+        setDeductionTypeCreateName("");
+      }
+    } finally {
+      setDeductionTypeCreating(false);
     }
   }
 
@@ -555,11 +649,87 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             </DrawerSection>
 
             <DrawerSection eyebrow="Freight and logistics" title="Last mile transporter">
-              <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
-                <DrawerField label="Last mile transporter ID">
-                  <input disabled={readOnly} value={draft.last_mile_transporter_id} onChange={(event) => setDraft((current) => ({ ...current, last_mile_transporter_id: event.target.value }))} className={inputCls} />
-                </DrawerField>
-              </div>
+              <DrawerField label="Last mile transporter">
+                {draft.last_mile_transporter_id && lastMileTransporterName ? (
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-8 flex-1 items-center border border-emerald-300 bg-emerald-50 px-2 text-sm text-emerald-900">
+                      {lastMileTransporterName}
+                    </span>
+                    {!readOnly ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDraft((current) => ({ ...current, last_mile_transporter_id: "" }));
+                          setLastMileTransporterName("");
+                        }}
+                        className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-600"
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                ) : readOnly ? (
+                  <span className="text-sm text-slate-400">—</span>
+                ) : (
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Type 2+ characters to search transporter master…"
+                      value={lastMileTransporterSearch}
+                      onChange={(event) => setLastMileTransporterSearch(event.target.value)}
+                      className={inputCls}
+                    />
+                    {debouncedLmtSearch.length >= 2 ? (
+                      <div className="absolute left-0 right-0 top-full z-20 mt-0.5 max-h-52 overflow-y-auto border border-slate-200 bg-white shadow-md">
+                        {lastMileTransporterQuery.isLoading ? (
+                          <div className="px-3 py-2 text-sm text-slate-400">Searching…</div>
+                        ) : null}
+                        {!lastMileTransporterQuery.isLoading && lastMileTransporterResults.length === 0 ? (
+                          <div className="px-3 py-2 text-sm text-slate-500">
+                            No match found.{" "}
+                            <button type="button" onClick={() => { setLmtCreateOpen(true); setLmtCreateName(lastMileTransporterSearch); }} className="text-sky-600 underline">
+                              + New transporter
+                            </button>
+                          </div>
+                        ) : null}
+                        {lastMileTransporterResults.map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => {
+                              setDraft((current) => ({ ...current, last_mile_transporter_id: t.id }));
+                              setLastMileTransporterName(`${t.transporter_code} — ${t.transporter_name}`);
+                              setLastMileTransporterSearch("");
+                            }}
+                            className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm last:border-0 hover:bg-sky-50"
+                          >
+                            <span className="font-mono text-xs text-slate-500">{t.transporter_code}</span>
+                            <span className="ml-2 font-medium">{t.transporter_name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </DrawerField>
+              {!readOnly && !draft.last_mile_transporter_id ? (
+                lmtCreateOpen ? (
+                  <div className="mt-2 grid gap-2 border border-sky-200 bg-sky-50 p-3" style={{ gridTemplateColumns: "1fr 1fr auto auto" }}>
+                    <input placeholder="Transporter name" value={lmtCreateName} onChange={(event) => setLmtCreateName(event.target.value)} className={inputCls} />
+                    <input placeholder="GST number (optional)" value={lmtCreateGst} onChange={(event) => setLmtCreateGst(event.target.value)} className={inputCls} />
+                    <button type="button" disabled={lmtCreating} onClick={() => void handleCreateTransporter()} className="h-8 bg-sky-600 px-3 text-xs font-semibold text-white disabled:opacity-50">
+                      {lmtCreating ? "Saving…" : "Save"}
+                    </button>
+                    <button type="button" onClick={() => setLmtCreateOpen(false)} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-600">
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => setLmtCreateOpen(true)} className="mt-1 text-[11px] font-semibold text-sky-600 underline">
+                    + New transporter
+                  </button>
+                )
+              ) : null}
             </DrawerSection>
 
             <DrawerSection eyebrow="Landed cost" title="Duty stack + ad-hoc/per-UoM charges, GST gated then treated, always Base UoM">
@@ -677,20 +847,34 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   </div>
                 ))}
                 {!readOnly ? (
-                  <div className="mt-1 flex flex-wrap items-center gap-2">
-                    <button type="button" onClick={() => setDeductionLines((current) => [...current, nextEmptyDeductionLine()])} className="text-[11px] font-semibold text-sky-700">
-                      + Add deduction
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const name = window.prompt("New deduction type name (e.g. TDS 194Q)");
-                        if (name) void handleCreateDeductionType(name);
-                      }}
-                      className="text-[11px] font-semibold text-slate-500"
-                    >
-                      + New deduction type
-                    </button>
+                  <div className="mt-1 grid gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button type="button" onClick={() => setDeductionLines((current) => [...current, nextEmptyDeductionLine()])} className="text-[11px] font-semibold text-sky-700">
+                        + Add deduction
+                      </button>
+                      {!deductionTypeCreateOpen ? (
+                        <button type="button" onClick={() => setDeductionTypeCreateOpen(true)} className="text-[11px] font-semibold text-slate-500">
+                          + New deduction type
+                        </button>
+                      ) : null}
+                    </div>
+                    {deductionTypeCreateOpen ? (
+                      <div className="grid gap-2 border border-sky-200 bg-sky-50 p-3" style={{ gridTemplateColumns: "1fr auto auto" }}>
+                        <input
+                          autoFocus
+                          placeholder="Deduction type name (e.g. TDS 194Q)"
+                          value={deductionTypeCreateName}
+                          onChange={(event) => setDeductionTypeCreateName(event.target.value)}
+                          className={inputCls}
+                        />
+                        <button type="button" disabled={deductionTypeCreating} onClick={() => void handleSubmitNewDeductionType()} className="h-8 bg-sky-600 px-3 text-xs font-semibold text-white disabled:opacity-50">
+                          {deductionTypeCreating ? "Saving…" : "Save"}
+                        </button>
+                        <button type="button" onClick={() => { setDeductionTypeCreateOpen(false); setDeductionTypeCreateName(""); }} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-600">
+                          Cancel
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

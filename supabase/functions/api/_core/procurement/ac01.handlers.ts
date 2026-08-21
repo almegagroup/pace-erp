@@ -163,6 +163,7 @@ function buildListRow(
   csnMap: Map<string, JsonRecord>,
   landedCostMap: Map<string, JsonRecord>,
   udStatusMap: Map<string, "GREEN" | "YELLOW" | "RED" | null>,
+  transporterMap: Map<string, JsonRecord>,
 ): JsonRecord {
   const material = materialMap.get(String(grn.material_id));
   const vendor = vendorMap.get(String(grn.vendor_id));
@@ -171,6 +172,12 @@ function buildListRow(
   const paymentTerms = po?.payment_term_id ? paymentTermsMap.get(String(po.payment_term_id)) : null;
   const csn = grn.gate_entry_line_id ? csnMap.get(String(grn.gate_entry_line_id)) : null;
   const landedCost = landedCostMap.get(String(grn.id));
+  // §8A Foundation Rule -- never show a raw UUID for business data. Found
+  // live 2026-08-21: the Transporter column showed the raw transporter_id.
+  const transporter = grn.transporter_id ? transporterMap.get(String(grn.transporter_id)) : null;
+  const lastMileTransporter = grn.last_mile_transporter_id
+    ? transporterMap.get(String(grn.last_mile_transporter_id))
+    : null;
 
   const confirmedRate = grn.confirmed_rate != null ? Number(grn.confirmed_rate) : null;
   const grnRate = grn.grn_rate != null ? Number(grn.grn_rate) : null;
@@ -213,7 +220,13 @@ function buildListRow(
     revised_payment_date: grn.revised_payment_date ?? null,
     freight_type: po?.freight_term ?? null,
     transporter_id: grn.transporter_id ?? null,
+    transporter_name: transporter
+      ? `${transporter.transporter_code} — ${transporter.transporter_name}`
+      : null,
     last_mile_transporter_id: grn.last_mile_transporter_id ?? null,
+    last_mile_transporter_name: lastMileTransporter
+      ? `${lastMileTransporter.transporter_code} — ${lastMileTransporter.transporter_name}`
+      : null,
     lr_number: grn.lr_number ?? null,
     lr_date: grn.lr_date ?? null,
     bl_number: grn.bl_number ?? null,
@@ -277,8 +290,13 @@ export async function listAC01GRNsHandler(
     const poIds = [...new Set(rows.map((row) => String(row.po_id)).filter(Boolean))];
     const grnIds = rows.map((row) => String(row.id));
     const gateEntryLineIds = [...new Set(rows.map((row) => String(row.gate_entry_line_id)).filter(Boolean))];
+    const transporterIds = [...new Set(
+      rows.flatMap((row) => [row.transporter_id, row.last_mile_transporter_id])
+        .filter((id): id is string => Boolean(id))
+        .map((id) => String(id)),
+    )];
 
-    const [materials, vendors, companies, purchaseOrders, landedCosts, qaDocuments, csnRows] = await Promise.all([
+    const [materials, vendors, companies, purchaseOrders, landedCosts, qaDocuments, csnRows, transporters] = await Promise.all([
       fetchInChunks<JsonRecord>(materialIds, (chunk) =>
         serviceRoleClient.schema("erp_master").from("material_master")
           .select("id, material_name, external_code, base_uom_code").in("id", chunk)),
@@ -300,6 +318,9 @@ export async function listAC01GRNsHandler(
       fetchInChunks<JsonRecord>(gateEntryLineIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
           .select("id, csn_id").in("id", chunk)),
+      fetchInChunks<JsonRecord>(transporterIds, (chunk) =>
+        serviceRoleClient.schema("erp_master").from("transporter_master")
+          .select("id, transporter_code, transporter_name").in("id", chunk)),
     ]);
 
     const paymentTermIds = [...new Set(purchaseOrders.map((po) => String(po.payment_term_id)).filter(Boolean))];
@@ -354,9 +375,10 @@ export async function listAC01GRNsHandler(
       udStatusMap.set(String(doc.grn_id), deriveUdStatus(lines, doc.qa_stock_qty != null ? Number(doc.qa_stock_qty) : null));
     }
     void qaDocByGrn;
+    const transporterMap = toMap(transporters);
 
     const items = rows.map((row) =>
-      buildListRow(row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap, udStatusMap),
+      buildListRow(row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap, udStatusMap, transporterMap),
     );
 
     return okResponse({ items, total: count ?? items.length }, ctx.request_id, req);
@@ -416,7 +438,28 @@ export async function getAC01GRNHandler(
       deductionLines = (deductionLinesResp.data ?? []) as JsonRecord[];
     }
 
-    return okResponse({ ...grn, landed_cost: landedCost ?? null, cost_lines: costLines, deduction_lines: deductionLines }, ctx.request_id, req);
+    // §8A Foundation Rule -- the last-mile-transporter picker needs the
+    // current selection's display name pre-filled when editing an existing
+    // GRN, not just its id (see buildListRow's own note above).
+    let lastMileTransporterName: string | null = null;
+    if (grn.last_mile_transporter_id) {
+      const { data: transporter } = await serviceRoleClient
+        .schema("erp_master").from("transporter_master")
+        .select("transporter_code, transporter_name")
+        .eq("id", String(grn.last_mile_transporter_id))
+        .maybeSingle();
+      if (transporter) {
+        lastMileTransporterName = `${transporter.transporter_code} — ${transporter.transporter_name}`;
+      }
+    }
+
+    return okResponse({
+      ...grn,
+      last_mile_transporter_name: lastMileTransporterName,
+      landed_cost: landedCost ?? null,
+      cost_lines: costLines,
+      deduction_lines: deductionLines,
+    }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "AC01_GET_FAILED";
     return ac01ErrorResponse(req, ctx, code, 500, code);
