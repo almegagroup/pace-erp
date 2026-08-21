@@ -18,6 +18,7 @@ import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import CustomerCreateForm from "../om/customer/CustomerCreateForm.jsx";
+import CustomerEditForm from "../om/customer/CustomerEditForm.jsx";
 import {
   listPlanFeed, getPlanFeed, createPlanFeed, updatePlanFeed,
   cancelPlanFeed, reactivatePlanFeed, getPlanFeedSummary, upsertFoAllocation,

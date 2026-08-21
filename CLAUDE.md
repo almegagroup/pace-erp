@@ -69,7 +69,7 @@ generate_menu_snapshot()  →  user_menu_snapshots
 Frontend Sidebar
 ```
 
-### Recurring 13 Bug Patterns — must check before writing code
+### Recurring 14 Bug Patterns — must check before writing code
 
 These 13 patterns are now a mandatory pre-code checklist for ERP business-page,
 ACL, workflow, and company-scope work. If an older note anywhere in this repo
@@ -223,6 +223,45 @@ older note.
       guards. (This note previously said "planned but not yet built" —
       corrected 2026-08-06, found stale while writing the playbook below.)
 
+14. **JSX component used but never imported (compiles clean, crashes at runtime)**
+    - A `<SomeComponent .../>` reference with no matching `import` (or local
+      `function`/`const` definition) is completely silent in this codebase —
+      it compiles fine (plain JS, no TypeScript to catch it), and core
+      ESLint's `no-undef` does **not** check JSX identifiers without
+      `eslint-plugin-react`, which this repo didn't have until this was found.
+      The bug only surfaces the moment that JSX actually renders, as
+      `ReferenceError: X is not defined` — and because JSX children are
+      evaluated eagerly regardless of a parent's `visible`/conditional prop,
+      it fires even if the component is meant to stay hidden (a `Drawer
+      visible={false}` still crashes on render, not on open).
+    - **Found live 2026-08-20:** `PlanFeedPage.jsx` used the new
+      `CustomerEditForm` (added for the Edit FO "Edit Customer" button) but
+      the import line was never added — every open of the Edit FO tab threw
+      this and blanked the whole page in **prod**, caught by the business
+      owner via DevTools console, not by any of my own pre-commit checks.
+      Same session, sweeping the rest of the codebase with the new guard
+      turned up a **second, pre-existing, unrelated instance** —
+      `HrWorkflowPages.jsx`'s Leave/Out-Work Request Detail page used
+      `ErpScreenScaffold` as its outermost wrapper with no import at all,
+      meaning that page has been crashing on every open for however long it
+      existed before this sweep — nobody had reported it yet, or it had been
+      silently attributed to something else.
+    - **✅ Built — `scripts/jsx-no-undef-guard.mjs`** (plain regex-based, no
+      npm dependency, matching every other guard here — CI runs no
+      `npm install` step at all, so an ESLint-API-based version would have
+      failed in CI with `Cannot find module 'eslint'`). Extracts every
+      capitalized `<Foo`/`<Foo.Bar` JSX reference per `.jsx` file and checks
+      it against that file's own imports + local declarations. **Baseline
+      was zero on first run** (both real instances above were fixed before
+      wiring it into CI) — this pattern started at zero-tolerance, no
+      temporary BASELINE entries needed.
+    - Also added `react/jsx-no-undef` to `frontend/eslint.config.js` itself
+      (via a newly-added `eslint-plugin-react` devDependency) — this is for
+      manual `npx eslint <file>` runs during development (the check this
+      whole session relied on and which missed both instances above); the
+      CI-level enforcement is the separate `jsx-no-undef-guard.mjs` script
+      since CI can't `npm install` to use the real ESLint plugin.
+
 ### Bug-Pattern Guard Playbook — the reusable process (added 2026-08-06)
 
 Every one of the 13 patterns above that has a `scripts/*-guard.mjs` file
@@ -269,6 +308,9 @@ permanent, CI-enforced fix, whether you're Claude or Codex:**
 `scripts/route-acl-registry-guard.mjs` (pattern #8),
 `scripts/wrong-company-source-guard.mjs` (pattern #11),
 `scripts/frontend-payload-guard.mjs` (pattern #13),
+`scripts/jsx-no-undef-guard.mjs` (pattern #14 — a rare case that started at
+a zero baseline; also the first guard in this repo whose fix touched
+`eslint.config.js` itself, not just a scan script),
 `scripts/stock-posting-guard.mjs` (§8D, not one of the 13 patterns but
 the same shape). For patterns that don't fit a mechanical script (e.g.
 #3 blanket-capability-leak, #7 maker-checker-illusion — these need

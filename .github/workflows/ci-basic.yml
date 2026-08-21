@@ -77,6 +77,14 @@ jobs:
       - name: Frontend payload guard
         run: node scripts/frontend-payload-guard.mjs
 
+      # Fails if a JSX component is used without a matching import or local
+      # definition -- compiles fine but throws a ReferenceError and blanks
+      # the page the moment that JSX renders (found live 2026-08-20: Plan
+      # Feed's Edit FO tab crashed in prod this way; a second pre-existing
+      # instance found the same day in HrWorkflowPages.jsx, both fixed).
+      - name: JSX undefined-component guard
+        run: node scripts/jsx-no-undef-guard.mjs
+
       - name: Block accidental deploy
         run: |
           echo "CI OK. No deploy steps allowed at Gate-0 / Gate-1."
