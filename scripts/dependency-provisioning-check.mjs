@@ -40,9 +40,13 @@ const fileDerivedRoot = path.resolve(__dirname, "..");
 const repoRoot = fs.existsSync(path.join(cwdRoot, "frontend", "package.json"))
   ? cwdRoot
   : fileDerivedRoot;
+// Vendored, not required from frontend/node_modules -- CI never runs `npm
+// install`, so a live node_modules path would MODULE_NOT_FOUND there (found
+// live 2026-08-21, on this guard's first real PR run). See
+// scripts/vendor/babel-parser/README.md for what/why.
 const requireModule = createRequire(import.meta.url);
 const { parse } = requireModule(
-  path.join(repoRoot, "frontend", "node_modules", "@babel", "parser", "lib", "index.js"),
+  path.join(__dirname, "vendor", "babel-parser", "index.js"),
 );
 
 const TARGET_COMPANIES = [

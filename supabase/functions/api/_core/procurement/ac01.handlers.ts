@@ -312,7 +312,10 @@ export async function listAC01GRNsHandler(
           .select("id, name, credit_days").in("id", chunk)),
       fetchInChunks<JsonRecord>(csnIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("consignment_note")
-          .select("id, csn_display_number, csn_number, lc_number, lc_opened_date").in("id", chunk)),
+          // csn_display_number is not a real column -- it's only ever computed at
+          // read time (csn.handlers.ts's enrichTrackerRows); buildListRow already
+          // falls back to the raw csn_number below when it's absent.
+          .select("id, csn_number, lc_number, lc_opened_date").in("id", chunk)),
       fetchInChunks<JsonRecord>(qaDocumentIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("inward_qa_decision_line")
           .select("qa_document_id, usage_decision, decision_qty").in("qa_document_id", chunk)),

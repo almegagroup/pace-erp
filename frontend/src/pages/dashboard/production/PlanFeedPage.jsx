@@ -387,7 +387,12 @@ export default function PlanFeedPage() {
     setFoNumberMatches(null);
     try {
       const res = await findPlanFeedByNumber({ fo_number: foNumber, company_ids: companyIds.join(",") });
-      const matches = res?.data ?? [];
+      // findPlanFeedByNumberHandler's response has no `pagination` key, so
+      // fetchProd already unwraps this down to the bare array -- `res.data`
+      // was reaching one level too deep (an array has no .data) and always
+      // silently produced []. Found live 2026-08-21: real match confirmed via
+      // direct API response, but the page still said "not found".
+      const matches = Array.isArray(res) ? res : (res?.data ?? []);
       if (matches.length === 0) {
         toast(`FO number "${foNumber}" not found.`, "error");
       } else if (matches.length === 1) {

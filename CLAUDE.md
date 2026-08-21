@@ -69,7 +69,7 @@ generate_menu_snapshot()  →  user_menu_snapshots
 Frontend Sidebar
 ```
 
-### Recurring 14 Bug Patterns — must check before writing code
+### Recurring 15 Bug Patterns — must check before writing code
 
 These 13 patterns are now a mandatory pre-code checklist for ERP business-page,
 ACL, workflow, and company-scope work. If an older note anywhere in this repo
@@ -261,6 +261,50 @@ older note.
       whole session relied on and which missed both instances above); the
       CI-level enforcement is the separate `jsx-no-undef-guard.mjs` script
       since CI can't `npm install` to use the real ESLint plugin.
+
+15. **API-client double-unwrap: a real match silently shows as "not found"**
+    - Every domain's fetch wrapper (`prodApi.js`'s `fetchProd`, and the
+      equivalent in `omApi.js`/`procurementApi.js`/`hrApi.js`) has a SHAPE-
+      DEPENDENT unwrap: `payload = json.data`; if `payload` has a
+      `pagination` key, the wrapper returns the **whole** `{data, pagination}`
+      object (caller must then read `res.data` for the rows); if it does
+      **not** have a `pagination` key, the wrapper unwraps one level further
+      and returns the **bare array** directly (caller must use `res` itself,
+      `res.data` is `undefined` on a plain array). Which shape a given
+      backend handler produces is invisible at the call site — nothing in
+      the frontend signals it, it's purely "did this specific handler happen
+      to include `pagination` in its `okResponse({...})` call."
+    - **Found live 2026-08-21:** Plan Feed's Edit FO "find by FO number" box
+      (`PlanFeedPage.jsx`'s `handleFindFoByNumber`) always showed `FO number
+      "X" not found` even when the FO genuinely existed and was in scope —
+      confirmed by pulling the actual API response, which correctly returned
+      the match. `findPlanFeedByNumberHandler` returns `okResponse({ data:
+      data ?? [] })` with **no** `pagination` key, so `fetchProd` already
+      unwraps to the bare array — but the caller did `res?.data ?? []` on
+      top of that, reading `.data` off an array (always `undefined`),
+      silently producing an empty result every single time. The sibling call
+      a few lines away (`handleFindAllocationCandidate` → `listPackingOrders`)
+      uses the exact same `res?.data ?? []` pattern and is **correct**,
+      because that handler's response *does* include `pagination` — same
+      variable name, opposite correctness, purely depending on one unrelated
+      file three hops away.
+    - This is a plain-JS codebase (no shared frontend/backend types), so
+      there is no compile-time signal here either — same root cause shape as
+      pattern #14, different mechanism (payload shape, not a missing import).
+      A grep for `res?.data ?? []` / `res.data ?? []` across `frontend/src/
+      pages` currently finds only 2 occurrences (this bug, now fixed, and the
+      one correct sibling) — low blast radius today, but the SAME risk exists
+      under any other variable name (`result?.data`, `response.data`, ...),
+      so a narrow grep can't be trusted as a complete sweep.
+    - **No guard script built yet** (unlike #14) — determining whether a
+      given handler's response includes `pagination` requires reading that
+      specific backend file, which a blind regex can't reliably do without a
+      real false-positive/false-negative rate. When writing or reviewing a
+      "search this array, unwrap the fetch result" call site: open the
+      actual handler its `fetchXxx()` call targets and check whether the
+      final `okResponse({...})` includes a `pagination` key — if yes, the
+      caller needs `res.data`; if no, the caller needs `res` directly. Never
+      assume from a sibling call site's shape.
 
 ### Bug-Pattern Guard Playbook — the reusable process (added 2026-08-06)
 
