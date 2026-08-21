@@ -1491,6 +1491,34 @@ MCP change শুধু যে DB তে run করা হয় সেখান
 (OPENING enum) history-তেই ছিল না। সব reconcile করা হয়েছে — Dev এখন local-এর সাথে
 byte-perfect (357 files, md5 `df8bb114…`)। Prod তখনো অক্ষত ছিল, তাই ওখানে কিছু করতে হয়নি।
 
+### 🔴 PostgREST Schema Cache — নতুন column/table apply করার পর reload notify করতে হবে (LOCKED 2026-08-21)
+
+**Live ঘটনা:** AC01-এ `landed_cost_line`/`landed_cost_deduction_line`-এ নতুন `party_type` column
+migration দিয়ে (MCP `apply_migration`) dev+prod দুটোতেই সফলভাবে যোগ হয়েছিল, `information_schema.
+columns` query দিয়ে column-এর existence-ও verify করা হয়েছিল — তারপরও deployed app-এ CMP006
+company select করলে `500 CHUNKED_IN_FETCH_FAILED` আসছিল, শুধু সেই handler-এই যেটা নতুন column
+select করছিল। Root cause: schema সত্যিই বদলেছে, কিন্তু PostgREST নিজের schema cache (যেটা দিয়ে
+`.select()`-এর column list valid কিনা check করে) reload করেনি — MCP `apply_migration`/
+`execute_sql` সরাসরি DB-তে DDL চালায়, এটা `supabase db push`-এর মতো PostgREST-কে auto-notify করে
+না। Fix: `NOTIFY pgrst, 'reload schema';` চালিয়ে instant reload।
+
+**নিয়ম — প্রতিটা schema migration apply করার পরেই (dev ও prod দুটোতেই), migration-integrity
+reconcile-এর ঠিক পাশাপাশি:**
+```sql
+NOTIFY pgrst, 'reload schema';
+```
+নতুন column/table যোগ, রিনেম, বা DROP — সব ক্ষেত্রেই প্রযোজ্য। `information_schema.columns` দিয়ে
+column exist করে confirm করাই যথেষ্ট না — সেটা raw Postgres connection-এ দেখায়, PostgREST-এর নিজের
+cached view-এ দেখায় না। এই command না চালালে column সত্যিই থাকা সত্ত্বেও deployed app-এর সেই
+নির্দিষ্ট query-টা তখনই fail করবে, আর error message (`CHUNKED_IN_FETCH_FAILED` বা generic 500)
+root cause বলবে না — §8E-র `fetchInChunks` wrapper-এর মতোই আসল DB error গিলে ফেলে।
+
+**ইতিহাস:** এর আগেও একই root cause-এর দুই ভিন্ন প্রকাশ পাওয়া গেছে — §8-এর "নতুন schema বানালে
+PostgREST-এ expose করতে হবে" (নতুন **schema**-র জন্য, Dashboard→Settings→API→Exposed schemas,
+platform-level, migration-এর সাথে travel করে না) আর এই note (নতুন **column/table**-এর জন্য, cache
+reload, `NOTIFY` দিয়ে ঠিক হয়)। দুটোই ভিন্ন mechanism, ভিন্ন fix — কিন্তু একই class-এর উপসর্গ:
+schema সত্যিই ঠিক আছে তবু PostgREST তা জানে না।
+
 ---
 
 ## 8B. Batch vs Sequential Loop Rule (Mandatory — LOCKED 2026-07-08)
