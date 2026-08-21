@@ -58,6 +58,12 @@ const DUTY_LINE_TYPES = [
   { value: "CUSTOMS_EDN_CESS", label: "Customs education cess" },
   { value: "ADDITIONAL_DUTY_IGST", label: "Additional duty / IGST" },
   { value: "DUTY_SETOFF", label: "Duty set-off" },
+  // Found live 2026-08-22: both already treated as Duty by isDuty/
+  // DUTY_COST_TYPES (GST toggle hidden, percentage derived) and already
+  // allowed by the DB's cost_type CHECK constraint, but never actually
+  // selectable here -- no dropdown option existed for either.
+  { value: "ENTRY_TAX", label: "Entry tax (import-only)" },
+  { value: "CUSTOMS_DUTY", label: "Customs duty" },
 ];
 const FINANCE_LINE_TYPES = [
   { value: "LC_CHARGES", label: "LC charges" },
@@ -140,6 +146,79 @@ function deriveDefaultsForCostType(costType, currentPartyType, defaultChaId) {
     return { party_type: "CHA", cha_id: defaultChaId || "" };
   }
   return { party_type: currentPartyType, cha_id: "" };
+}
+
+// Real gap found live 2026-08-22 (business owner): Landed Cost Total,
+// Landed Price/Unit, and the 4 Payable cards only ever showed the LAST
+// SAVED state (from grnDetailQuery.data) -- editing a cost line, changing a
+// party, or typing a new Confirmed Rate never recalculated anything until
+// the user actually clicked Save and the round-trip came back. That defeats
+// the entire point of a preview-before-save drawer. This mirrors
+// save_ac01_grn_cost()'s exact math (migrations 20260821150000 through
+// 20260822130000: gross-of-GST payable, PER_UOM qty multiplication,
+// ADDITIONAL_DUTY_IGST full exclusion, NONE-party exclusion, Base-UoM
+// per_pack_qty conversion) so the live preview and the real save always
+// agree -- computed fresh from the CURRENT in-memory costLines/
+// deductionLines/draft on every relevant change, not from the server.
+function computeLivePreview(grn, draft, costLines, deductionLines) {
+  if (!grn || !draft) return null;
+  const receivedQty = Number(grn.received_qty ?? 0);
+  const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : null;
+  const hasPackConversion = perPackQty != null && perPackQty > 0;
+  const effectiveRate = draft.confirmed_rate !== "" && draft.confirmed_rate != null
+    ? Number(draft.confirmed_rate)
+    : grn.confirmed_rate != null
+      ? Number(grn.confirmed_rate)
+      : grn.grn_rate != null
+        ? Number(grn.grn_rate)
+        : 0;
+  const materialGstPct = draft.gst_pct !== "" && draft.gst_pct != null ? Number(draft.gst_pct) : (grn.gst_pct != null ? Number(grn.gst_pct) : 0);
+  const purchaseCost = effectiveRate * receivedQty;
+  const purchaseCostGross = purchaseCost * (1 + materialGstPct / 100);
+  const baseUomRate = hasPackConversion ? effectiveRate / perPackQty : effectiveRate;
+  const receivedQtyBase = hasPackConversion ? receivedQty * perPackQty : receivedQty;
+
+  let totalCharges = 0;
+  const chargesGross = { VENDOR: 0, TRANSPORTER: 0, LAST_MILE_TRANSPORTER: 0, CHA: 0 };
+  for (const line of costLines) {
+    if (line.amount === "" || line.amount == null) continue;
+    let net = Number(line.amount);
+    let gross = Number(line.amount);
+    if (Number.isNaN(net)) continue;
+    if (line.entry_mode === "PER_UOM") { net *= receivedQtyBase; gross *= receivedQtyBase; }
+    if (line.cost_type === "ADDITIONAL_DUTY_IGST") net = 0;
+    const gstRate = line.gst_rate === "" || line.gst_rate == null ? 0 : Number(line.gst_rate);
+    if (line.has_gst && gstRate > 0) {
+      if (line.gst_treatment === "INCLUSIVE") net = net / (1 + gstRate / 100);
+      else if (line.gst_treatment === "EXCLUSIVE") gross = gross * (1 + gstRate / 100);
+    }
+    totalCharges += net;
+    const party = line.party_type || "VENDOR";
+    if (party !== "NONE") chargesGross[party] = (chargesGross[party] ?? 0) + gross;
+  }
+
+  let totalDeductions = 0;
+  const deductionsFlat = { VENDOR: 0, TRANSPORTER: 0, LAST_MILE_TRANSPORTER: 0, CHA: 0 };
+  for (const line of deductionLines) {
+    if (line.amount === "" || line.amount == null) continue;
+    const amount = Number(line.amount) + (line.round_off === "" || line.round_off == null ? 0 : Number(line.round_off));
+    if (Number.isNaN(amount)) continue;
+    if (line.in_landed) totalDeductions += amount;
+    const party = line.party_type || "VENDOR";
+    if (party !== "NONE") deductionsFlat[party] = (deductionsFlat[party] ?? 0) + amount;
+  }
+
+  const landedCostTotal = totalCharges + totalDeductions;
+  const landedCostPerUnit = receivedQtyBase > 0 ? baseUomRate + landedCostTotal / receivedQtyBase : baseUomRate;
+
+  return {
+    landedCostTotal,
+    landedCostPerUnit,
+    vendorSuggested: purchaseCostGross + chargesGross.VENDOR - deductionsFlat.VENDOR,
+    transporterSuggested: chargesGross.TRANSPORTER - deductionsFlat.TRANSPORTER,
+    lastMileSuggested: chargesGross.LAST_MILE_TRANSPORTER - deductionsFlat.LAST_MILE_TRANSPORTER,
+    chaSuggested: chargesGross.CHA - deductionsFlat.CHA,
+  };
 }
 
 function buildColumns() {
@@ -549,6 +628,13 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const deductionTypeOptions = Array.isArray(deductionTypesQuery.data?.items) ? deductionTypesQuery.data.items : [];
   const chaOptions = Array.isArray(grnDetailQuery.data?.cha_options) ? grnDetailQuery.data.cha_options : [];
   const defaultChaId = grnDetailQuery.data?.default_cha_id ?? "";
+  // Recomputed on every keystroke/selection change -- see computeLivePreview's
+  // own comment for why this exists (was previously showing stale save-time
+  // numbers, defeating the point of a preview-before-save drawer).
+  const livePreview = useMemo(
+    () => computeLivePreview(grnDetailQuery.data, draft, costLines, deductionLines),
+    [grnDetailQuery.data, draft, costLines, deductionLines],
+  );
   const selectedDateFieldLabel =
     dateFields.length === 0
       ? "Select date field(s)"
@@ -1025,15 +1111,15 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             >
               <div className="grid grid-cols-4 gap-2">
                 {[
-                  { label: "Vendor payable", suggestedKey: "vendor_suggested_payable", draftKey: "vendor_payable_override" },
-                  { label: "Transporter payable", suggestedKey: "transporter_suggested_payable", draftKey: "transporter_payable_override" },
-                  { label: "Last mile transporter payable", suggestedKey: "last_mile_suggested_payable", draftKey: "last_mile_payable_override" },
-                  { label: "CHA payable", suggestedKey: "cha_suggested_payable", draftKey: "cha_payable_override" },
-                ].map(({ label, suggestedKey, draftKey }) => (
+                  { label: "Vendor payable", liveKey: "vendorSuggested", draftKey: "vendor_payable_override" },
+                  { label: "Transporter payable", liveKey: "transporterSuggested", draftKey: "transporter_payable_override" },
+                  { label: "Last mile transporter payable", liveKey: "lastMileSuggested", draftKey: "last_mile_payable_override" },
+                  { label: "CHA payable", liveKey: "chaSuggested", draftKey: "cha_payable_override" },
+                ].map(({ label, liveKey, draftKey }) => (
                   <div key={draftKey} className="grid gap-1 border border-slate-200 bg-white px-2 py-1.5">
                     <div className="text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</div>
                     <div className="text-[11px] text-slate-500">
-                      Suggested: <span className="font-semibold text-slate-800">{formatNumberOrBlank(grnDetailQuery.data?.[suggestedKey]) || "0"}</span>
+                      Suggested (live): <span className="font-semibold text-slate-800">{formatNumberOrBlank(livePreview?.[liveKey]) || "0"}</span>
                     </div>
                     <div className="flex items-center gap-1">
                       <input
@@ -1058,11 +1144,11 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               </div>
             </DrawerSection>
 
-            <DrawerSection eyebrow="Summary" title="Computed on save — also mirrored on the row itself">
+            <DrawerSection eyebrow="Summary" title="Live — recalculates as you edit, matches what Save will persist">
               <div className="grid grid-cols-4 gap-2">
                 {[
-                  ["Landed cost total", grnDetailQuery.data?.landed_cost?.total_cost],
-                  ["Landed price / unit (Base UoM)", grnDetailQuery.data?.cost_per_unit],
+                  ["Landed cost total (live)", livePreview?.landedCostTotal],
+                  ["Landed price / unit, Base UoM (live)", livePreview?.landedCostPerUnit],
                 ].map(([label, value]) => (
                   <div key={label} className="border border-slate-200 bg-white px-2 py-1.5">
                     <div className="text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</div>
