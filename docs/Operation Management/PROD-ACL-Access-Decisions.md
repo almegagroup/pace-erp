@@ -1177,15 +1177,61 @@ existing shape instead of being the outlier of the three.
   L2_Manager, not just Manager-tier). Director (P0074) — VIEW only, no WRITE, rank ceiling holds.
   ACL-MASTER (P0076) — VIEW+WRITE. ACL-MASTER drift check — clean.
 
-AC01/AC02/AC03 — left exactly as-is (ACL-MASTER only), not decided this round; see the original
-Group 7 notes below for their current (undesigned) state and the earlier code-audit findings.
+AC02 — still left exactly as-is (ACL-MASTER only), not decided; see the original Group 7 notes
+below for the current (undesigned) state and the earlier code-audit findings.
 
 | tx_code | Page | Accounts (up to L3_Manager) | L1/L2 Auditor | Director |
 |---|---|---|---|---|
 | AC04 | Conversion Cost Config | V | V C E | V |
-| AC01 | Invoice Verification | ⛔ ACL MASTER only, not designed | | |
 | AC02 | Blocked Invoices | ⛔ ACL MASTER only, not designed | | |
-| AC03 | Landed Costs | ⛔ ACL MASTER only, not designed | | |
+
+**✅ AC01/AC03 REVISED + IMPLEMENTED 2026-08-21 (ACL v78 CMP003/CMP006, v39 CMP010, v10 CMP014)
+— part of the AC01 GRN Landed Cost Hub redesign, feasibility doc Section 128.** AC01 was
+redesigned from Invoice Verification (row=IV) into a GRN Landed Cost Hub (row=GRN); AC03 is
+now the exact same page/component in read-only mode. Business owner's locked decision,
+explicitly modeled on the Stroke Master (PR01 create / PR02 Manager-tier approve) pattern —
+"Accounts department creates, Plant Head (L3_Manager) reviews/edits like a Manager-tier
+approver, same as Quality's Stroke Master but Accounts instead of Quality":
+
+| tx_code | Page | Accounts (L1_USER-L2_MANAGER) | Plant Head (L3_MANAGER + DIRECTOR, Structural Fallback) | SCM | L1/L2 Auditor |
+|---|---|---|---|---|---|
+| AC01 | GRN Landed Cost Hub (edit) | V W (full data entry) | V W (full, same tier as Accounts -- not view-only, matches PR01/PR02's Manager-tier-edits shape, deliberately NOT reduced to view-only the way AC04's Plant Head grant was) | — | — |
+| AC03 | Landed Costs (view) | V (rides the same Accounts grant) | V | V | V |
+
+- **New capabilities** (all narrow, single-purpose, no reuse of `CAP_PROC_ACCOUNTS`'s legacy
+  broad action set for the new WRITE-tier grant): `CAP_ACC_GRN_COST_MAKER` (VIEW+WRITE on
+  `PROC_IV_LIST`, `role_capabilities` L1_USER through L2_MANAGER inclusive of every User-tier
+  rank below it, granted to the real ACCOUNTS work context), `CAP_ACC_GRN_COST_PLANTHEAD`
+  (VIEW+WRITE on `PROC_IV_LIST` + VIEW on `PROC_LC_LIST`, `role_capabilities` L3_MANAGER +
+  DIRECTOR, granted to MANAGEMENT -- mirrors `CAP_QA_PLANTHEAD`/`CAP_RECEIVING_PLANTHEAD`'s
+  exact shape), `CAP_ACC_GRN_COST_AUDITOR` (VIEW on `PROC_LC_LIST` only, `role_capabilities`
+  L1_AUDITOR + L2_AUDITOR, granted to AUDIT). SCM's AC03 view reuses the existing
+  `CAP_PROC_BUYER` capability with one new `capability_menu_actions` row (`PROC_LC_LIST:VIEW`)
+  -- no new capability needed there, `CAP_PROC_BUYER` was already correctly scoped to the real
+  SUPPLY CHAIN work context in every company. All three new capabilities also granted to
+  ACL-MASTER's own work context (CMP003/CMP006 only -- CMP010/CMP014 have no ACL-MASTER
+  department, matches the existing pattern elsewhere in this doc).
+- **Real gap closed in the same pass, not a new bug:** `CAP_PROC_ACCOUNTS`'s
+  `work_context_capabilities` link to the real ACCOUNTS department had been *fully deleted*
+  during the original blanket-capability-leak fix (see the "🔴 Same blanket-capability pattern"
+  note below) and never restored -- meaning AC01/AC03 had been **ACL-MASTER-only for every
+  real user since that fix**, not just "not yet designed." Re-added `CAP_PROC_ACCOUNTS` to the
+  real ACCOUNTS work context in every company that has one (CMP003, CMP006, CMP014 -- CMP010
+  has no ACCOUNTS department, flagged, not fixed).
+- **`CAP_PROC_ACCOUNTS`'s pre-existing broader actions on these two menus (APPROVE on
+  PROC_IV_LIST; APPROVE/DELETE/EDIT/WRITE on PROC_LC_LIST) are dead references, confirmed
+  inert** -- `route-acl-registry.ts` only ever checks `PROC_IV_LIST:VIEW`/`WRITE` for AC01's
+  actual routes and never checks `PROC_LC_LIST` at all (AC03 reuses AC01's own routes). Left in
+  place rather than cleaned up, same "dead reference, same convention as Groups 5 and 6"
+  pattern already established below -- not a live risk, just unused ACL rows.
+- **Verified live via `precomputed_acl_view`** against real users, not just design intent:
+  Accounts (P0007/P0008/P0025/P0060 CMP003, P0066/P0068 CMP006) -- VIEW+WRITE on AC01, VIEW on
+  AC03. Plant Head (P0003 CMP003, P0073 CMP006, both real L3_MANAGER) -- VIEW+WRITE on AC01,
+  VIEW on AC03, matching the Manager-tier-edits design exactly. SCM (P0004/P0005/P0006/P0077
+  across CMP003/CMP006/CMP014) -- VIEW on AC03 only, correctly zero access to AC01. Auditor
+  (P0010, CMP003+CMP006) -- VIEW on AC03 only. ACL-MASTER (P0076) -- full on both, no drift.
+- **CMP010 not provisioned** (no ACCOUNTS/MANAGEMENT/SUPPLY-CHAIN/ACL-MASTER department exists
+  there, only AUDIT) -- same accepted-gap pattern as other CMP010 notes elsewhere in this doc.
 
 **Code audit before deciding (no edits made, all findings logged for a
 future code-fix pass):**
