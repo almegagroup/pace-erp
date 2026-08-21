@@ -58,6 +58,12 @@ const DUTY_LINE_TYPES = [
   { value: "CUSTOMS_EDN_CESS", label: "Customs education cess" },
   { value: "ADDITIONAL_DUTY_IGST", label: "Additional duty / IGST" },
   { value: "DUTY_SETOFF", label: "Duty set-off" },
+  // Found live 2026-08-22: both already treated as Duty by isDuty/
+  // DUTY_COST_TYPES (GST toggle hidden, percentage derived) and already
+  // allowed by the DB's cost_type CHECK constraint, but never actually
+  // selectable here -- no dropdown option existed for either.
+  { value: "ENTRY_TAX", label: "Entry tax (import-only)" },
+  { value: "CUSTOMS_DUTY", label: "Customs duty" },
 ];
 const FINANCE_LINE_TYPES = [
   { value: "LC_CHARGES", label: "LC charges" },
