@@ -75,10 +75,16 @@ function computeActualPaymentDate(
         return toTrimmedString(grn.grn_date);
       case "INVOICE_DATE":
         return toTrimmedString(grn.invoice_date);
+      // ADVANCE has no anchor by definition -- paid upfront, before any of
+      // GRN/invoice/BL/LR dates exist to count credit days from. Confirmed
+      // live 2026-08-21: 2 of 30 real prod GRNs carry this reference_date_
+      // types code; falling through to null here is exactly the "-" display
+      // the business owner asked for (Q3), not an oversight.
+      case "ADVANCE":
       default:
-        // MANUAL / ATA_AT_PORT / POST_CLEARANCE_LR_DATE have no equivalent
-        // anchor date on goods_receipt -- not computable, user must set
-        // Revised Payment Date manually for these terms.
+        // MANUAL / ATA_AT_PORT / POST_CLEARANCE_LR_DATE also have no
+        // equivalent anchor date on goods_receipt -- not computable, user
+        // must set Revised Payment Date manually for these terms.
         return "";
     }
   })();
