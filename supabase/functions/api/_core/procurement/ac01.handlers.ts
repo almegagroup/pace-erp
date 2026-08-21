@@ -147,10 +147,21 @@ function computeSuggestedPayables(
   const purchaseCost = effectiveRate * Number(grn.received_qty ?? 0);
   const materialGstPct = grn.gst_pct != null ? Number(grn.gst_pct) : 0;
   const purchaseCostGross = purchaseCost * (1 + materialGstPct / 100);
+  // PER_UOM lines store a rate, not a total -- mirrors save_ac01_grn_cost()'s
+  // own v_received_qty_base multiplication (migration 20260822130000). Found
+  // live 2026-08-22: a real prod GRN (2000000030) saved a PER_UOM line whose
+  // amount was never multiplied by qty anywhere -- this read-side mirror
+  // must apply the same Base-UoM qty the RPC uses, or GET/LIST would show a
+  // different Suggested Payable than what SAVE just computed and returned.
+  const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : null;
+  const receivedQtyBase = perPackQty != null && perPackQty > 0
+    ? Number(grn.received_qty ?? 0) * perPackQty
+    : Number(grn.received_qty ?? 0);
 
   const charges = { VENDOR: 0, TRANSPORTER: 0, LAST_MILE_TRANSPORTER: 0, CHA: 0 } as Record<string, number>;
   for (const line of costLines) {
     let gross = Number(line.amount ?? 0);
+    if (line.entry_mode === "PER_UOM") gross = gross * receivedQtyBase;
     const gstRate = line.gst_rate != null ? Number(line.gst_rate) : 0;
     if (line.has_gst === true && gstRate > 0) {
       if (line.gst_treatment === "EXCLUSIVE") gross = gross * (1 + gstRate / 100);

@@ -841,13 +841,21 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                           {FINANCE_LINE_TYPES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                         </optgroup>
                       </select>
-                      <input
-                        disabled={readOnly}
-                        value={line.amount}
-                        onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, amount: event.target.value } : entry)))}
-                        placeholder="Amount"
-                        className={inputCls}
-                      />
+                      <div className="grid gap-0.5">
+                        <input
+                          disabled={readOnly}
+                          value={line.amount}
+                          onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, amount: event.target.value } : entry)))}
+                          placeholder={line.entry_mode === "PER_UOM" ? "Rate / unit" : "Amount"}
+                          title={line.entry_mode === "PER_UOM" ? "Rate per Base UoM unit — multiplied by received qty automatically" : "Total amount"}
+                          className={inputCls}
+                        />
+                        {line.entry_mode === "PER_UOM" && line.amount !== "" && !Number.isNaN(Number(line.amount)) && grnDetailQuery.data?.received_qty ? (
+                          <span className="text-[9px] text-slate-400">
+                            = {formatNumberOrBlank(Number(line.amount) * Number(grnDetailQuery.data.received_qty))} total ({formatNumberOrBlank(grnDetailQuery.data.received_qty)} {grnDetailQuery.data.base_uom_code || "units"})
+                          </span>
+                        ) : null}
+                      </div>
                       {!isDuty ? (
                         <select
                           disabled={readOnly}
