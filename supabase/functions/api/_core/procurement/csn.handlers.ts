@@ -161,8 +161,24 @@ const MANUAL_EDITABLE_FIELDS = [
   "cha_docket_number",
   "consignee_company_id",
   "transit_days_snapshot",
+  "last_mile_transporter_id",
+  "last_mile_transporter_freetext",
 ];
 const HISTORY_TRACKED_FIELDS = new Set(MANUAL_EDITABLE_FIELDS);
+// Whitelist for the tracker list's date-field filter (AC01-style single
+// date-field picker) -- only real DATE/TIMESTAMPTZ columns on
+// consignment_note, never an arbitrary caller-supplied column name.
+const TRACKER_DATE_FILTER_FIELDS = new Set([
+  "created_at",
+  "etd",
+  "eta_at_port",
+  "ata_at_port",
+  "invoice_date",
+  "gate_entry_date",
+  "grn_date",
+  "lr_date",
+  "bl_date",
+]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -962,6 +978,7 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   const transporterIds = [...new Set([
     ...rows.map((row) => toTrimmedString(row.transporter_id)),
     ...rows.map((row) => toTrimmedString(row.domestic_transporter_id)),
+    ...rows.map((row) => toTrimmedString(row.last_mile_transporter_id)),
   ].filter(Boolean))];
   const chaIds = [...new Set(rows.map((row) => toTrimmedString(row.cha_id)).filter(Boolean))];
   const companyIds = [...new Set([
@@ -1092,6 +1109,7 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     const transporter = transporterMap.get(
       toTrimmedString(row.transporter_id) || toTrimmedString(row.domestic_transporter_id),
     ) as Record<string, unknown> | undefined;
+    const lastMileTransporter = transporterMap.get(toTrimmedString(row.last_mile_transporter_id)) as Record<string, unknown> | undefined;
     const cha = chaMap.get(toTrimmedString(row.cha_id)) as Record<string, unknown> | undefined;
     const paymentTerm = paymentTermMap.get(toTrimmedString(row.payment_term_id)) as Record<string, unknown> | undefined;
     const referenceType = paymentTerm?.reference_date_type as Record<string, unknown> | undefined;
@@ -1166,6 +1184,7 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       balance_qty: balanceQty,
       transporter_name: transporter?.transporter_name ?? row.transporter_name_freetext ?? row.domestic_transporter_freetext ?? null,
       transporter_code: transporter?.transporter_code ?? null,
+      last_mile_transporter_name: lastMileTransporter?.transporter_name ?? row.last_mile_transporter_freetext ?? null,
       cha_name: cha?.cha_name ?? row.cha_name_freetext ?? null,
       payment_term_name: paymentTerm?.name ?? null,
       payment_term_reference_type_code: referenceType?.code ?? null,
@@ -1929,6 +1948,12 @@ export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerCon
     const materialCategoryId = toTrimmedString(url.searchParams.get("material_category_id"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+    // AC01-style single date-field picker -- whitelisted so the caller can
+    // only ever filter on a real date/timestamptz column, never an arbitrary
+    // one. Defaults to created_at, matching the previous hardcoded behavior.
+    const requestedDateField = toTrimmedString(url.searchParams.get("date_field"));
+    const dateField = TRACKER_DATE_FILTER_FIELDS.has(requestedDateField) ? requestedDateField : "created_at";
+    const isTimestampField = dateField === "created_at";
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
     const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
     const sortBy = toTrimmedString(url.searchParams.get("sort_by")) || "created_at";
@@ -1950,8 +1975,8 @@ export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerCon
     if (csnType) query = query.eq("csn_type", csnType);
     if (vendorId) query = query.eq("vendor_id", vendorId);
     if (materialCategoryId) query = query.eq("material_category_id", materialCategoryId);
-    if (dateFrom) query = query.gte("created_at", `${dateFrom}T00:00:00.000Z`);
-    if (dateTo) query = query.lte("created_at", `${dateTo}T23:59:59.999Z`);
+    if (dateFrom) query = query.gte(dateField, isTimestampField ? `${dateFrom}T00:00:00.000Z` : dateFrom);
+    if (dateTo) query = query.lte(dateField, isTimestampField ? `${dateTo}T23:59:59.999Z` : dateTo);
 
     const { data, error, count } = await query;
     if (error) {

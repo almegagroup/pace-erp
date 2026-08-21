@@ -86,6 +86,27 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/landed-costs":                { skipAcl: false, resourceCode: "PROC_LC_LIST", action: "VIEW"  },
   "POST:/api/procurement/landed-costs":               { skipAcl: false, resourceCode: "PROC_LC_LIST", action: "WRITE" },
 
+  // ── Procurement/Accounts: AC01 GRN Landed Cost Hub (redesigned Invoice
+  // Verifications — row = one GRN). ⚠️ 2026-08-21 correction: originally
+  // gated on a new resourceCode `ACC_GRN_LANDED_COST` that was never actually
+  // provisioned in acl.menu_master/capability_menu_actions -- menu_code is
+  // UNIQUE, so AC01's and AC03's separate tx_code rows can never literally
+  // share one menu_code; that design was schema-impossible, not just
+  // unfinished. Reusing the pre-existing, already-granted PROC_IV_LIST
+  // resource instead -- AC01 and AC03 both hit these exact same routes, and
+  // PROC_IV_LIST/PROC_LC_LIST currently carry identical grants in dev anyway,
+  // so this doesn't regress anything. AC01's own sidebar entry already uses
+  // PROC_IV_LIST as its menu_code (unchanged), and AC03's sidebar entry keeps
+  // its own PROC_LC_LIST menu_code independently for visibility -- only the
+  // shared *data* routes below are gated by PROC_IV_LIST. Giving AC03 a truly
+  // wider audience than AC01 (per the locked access matrix) requires real ACL
+  // differentiation between PROC_IV_LIST/PROC_LC_LIST at rollout time; until
+  // then a PROC_LC_LIST-only user cannot yet reach these routes -- flagged as
+  // a known follow-up, not a regression from before this redesign.
+  "GET:/api/procurement/ac01/grns":                   { skipAcl: false, resourceCode: "PROC_IV_LIST", action: "VIEW"  },
+  "GET:/api/procurement/ac01/deduction-types":        { skipAcl: false, resourceCode: "PROC_IV_LIST", action: "VIEW"  },
+  "POST:/api/procurement/ac01/deduction-types":       { skipAcl: false, resourceCode: "PROC_IV_LIST", action: "WRITE" },
+
   // ── Procurement: Plant Transfer (PTO) ────────────────────────────────────
   "GET:/api/procurement/ptos":                        { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
   "POST:/api/procurement/ptos":                       { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
@@ -816,6 +837,17 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/invoice-verifications\/[^/]+\/post$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_IV_CREATE", action: "APPROVE" } },
+  },
+
+  // ── AC01 GRN Landed Cost Hub (AC03 shares the same VIEW action, no
+  // separate resourceCode — see the exact-match block above for why) ────────
+  {
+    pattern: /^\/api\/procurement\/ac01\/grns\/[^/]+\/save$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_IV_LIST", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/ac01\/grns\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_IV_LIST", action: "VIEW" } },
   },
 
   // ── Landed Cost ───────────────────────────────────────────────────────────

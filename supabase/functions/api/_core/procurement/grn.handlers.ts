@@ -401,7 +401,7 @@ export async function getGELinesForGRNHandler(
     const [matResp, poLineResp, existingGrnResp] = await Promise.all([
       matIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled")
+            .select("id, pace_code, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled, hsn_code")
             .in("id", matIds)
         : { data: [], error: null },
       poLineIds.length > 0
@@ -504,6 +504,7 @@ export async function getGELinesForGRNHandler(
         qa_required_on_inward: mat?.qa_required_on_inward ?? false,
         batch_tracking_required: mat?.batch_tracking_required ?? false,
         expiry_tracking_enabled: mat?.expiry_tracking_enabled ?? false,
+        hsn_code: mat?.hsn_code ?? null,
         po_number: po?.po_number ?? null,
         po_rate: poLine?.unit_rate ?? null,
         vendor_id: po?.vendor_id ?? null,
@@ -783,10 +784,12 @@ export async function createAndPostGRNFromLineHandler(
         boe_date: toTrimmedString(body.boe_date) || null,
         // Transporter
         transporter_id: toTrimmedString(body.transporter_id) || null,
+        last_mile_transporter_id: toTrimmedString(body.last_mile_transporter_id) || null,
         lr_number: toTrimmedString(body.lr_number) || null,
         lr_date: toTrimmedString(body.lr_date) || null,
         // Material
         invoice_name: toTrimmedString(body.invoice_name) || null,
+        hsn_code: toTrimmedString(body.hsn_code) || null,
         // Accounts
         po_rate: poRate,
         invoice_rate: invoiceRate,
@@ -996,6 +999,27 @@ export async function createAndPostGRNFromLineHandler(
           error: docNameUpsert.error,
         }));
         throw new Error("GRN_DOC_NAME_UPSERT_FAILED");
+      }
+    }
+
+    // Write HSN Code through to Material Master -- GRN's "Material" tab is often the first
+    // point HSN gets captured, so entering/correcting it here should populate the master
+    // record too, and the next GRN for the same material auto-pre-fills it.
+    const hsnCode = toTrimmedString(grn.hsn_code);
+    if (hsnCode && grn.material_id) {
+      debugStep = "UPDATE_MATERIAL_HSN_CODE";
+      const hsnUpdate = await serviceRoleClient.schema("erp_master").from("material_master")
+        .update({ hsn_code: hsnCode })
+        .eq("id", String(grn.material_id));
+      if (hsnUpdate.error) {
+        console.error("[GRN_FROM_LINE] MATERIAL_HSN_UPDATE_FAILED", JSON.stringify({
+          request_id: ctx.request_id,
+          grn_number: grnNumber,
+          material_id: String(grn.material_id),
+          hsn_code: hsnCode,
+          error: hsnUpdate.error,
+        }));
+        throw new Error("GRN_MATERIAL_HSN_UPDATE_FAILED");
       }
     }
 

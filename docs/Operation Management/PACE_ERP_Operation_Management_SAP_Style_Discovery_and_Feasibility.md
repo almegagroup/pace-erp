@@ -19897,3 +19897,226 @@ matching CLAUDE.md's own MCP-vs-migration rule that ACL/menu data must be applie
 prod separately). Also: when granting a new report the "same access as an existing one," diff the
 *actual* `capability_menu_actions` rows for that existing resource rather than assuming a single
 capability — a report can (and here, does) sit behind more than one.
+
+---
+
+## Section 128 — AC01 GRN Landed Cost Hub, CSN Tracker retrofit, GRN Last Mile Transporter + HSN Code (2026-08-21, DESIGN LOCKED + IMPLEMENTATION COMPLETE)
+
+Business owner opened a new, separate initiative (not part of the Dispatch/L5 sequence — that stays
+paused per §114 until this batch closes) to redesign every page under three ACL menu groups
+(Accounts, Returns & Claims, Sales), one page at a time, starting with **Accounts**. This section
+covers the first completed slice: **AC01 (Invoice Verifications → GRN Cost Hub) + AC03 (its
+view-only twin) + CSN Tracker's UI-pattern retrofit + two small GRN additions.** Returns & Claims
+(PO08-10 + new PO20) and the remaining Accounts pages (AC02/AC04-06) are the next slice, not yet
+started as of this writing.
+
+**⚠️ Build-ownership departure from the project's usual convention:** business owner's explicit
+words — "R tumi implement korbe, codex na" (you [Claude] will implement, not Codex). For this entire
+scope, Claude designed *and* built the code directly; the usual Claude-designs/Codex-implements split
+did not apply here (mirrors the precedent already set for IN01/PID, §119).
+
+### 128.1 — AC01 redesign: row = one GRN, not one IV
+
+The legacy page (`PROC_IV_LIST` / `IVListPage.jsx`) matched one Invoice Verification record — a
+narrow slice that never surfaced the real operational problem: GRNs post to stock at `rate=0`
+whenever `rate_confirmed=false` on the GRN, and nothing in the old flow ever closed that loop (the
+optional "Invoice rate (if different)" field was a plain note, never fed to stock/WAR; IV posting
+itself never touches stock at all). **New shape:** AC01's row is now **one GRN**, carrying every
+field Accounts actually needs to work a GRN to closure — Payment Terms, Rate/Currency/GST, Actual
+Payment Date, Freight/Transporter, BL/LC/BOE for imports — sourced by bulk-resolving
+material/vendor/company/PO/payment-terms/CSN/landed-cost/QA-decision data in one handler
+(`listAC01GRNsHandler`, `fetchInChunks`-safe per §8E).
+
+**Two status dots per row** (not yet both fully wired — payment depends on AC02, not yet built):
+**UD (Usage Decision/QA)** — Green/Yellow/Red derived from `inward_qa_document`/
+`inward_qa_decision_line`, working today. **Payment** — deliberately left `null` for now; genuinely
+depends on AC02's future Vendor Ledger + FIFO payment-allocation engine (concept locked, not yet
+built — see 128.7 below), not a bug.
+
+### 128.2 — The core mechanism: Confirmed Rate → repeatable WAR recalculation
+
+AC01's center drawer exposes PO Rate (read-only) + Invoice Rate (the old note value, read-only) +
+an editable **Confirmed Rate**. Saving calls one new atomic RPC,
+`erp_procurement.save_ac01_grn_cost(...)`, which in a single transaction: updates the GRN's header
+fields → gets-or-creates the `landed_cost` header for that GRN → replaces its `landed_cost_line`/
+`landed_cost_deduction_line` rows → computes a Base-UoM landed-cost-per-unit → and, if the GRN was
+actually posted (`stock_ledger_id IS NOT NULL`), calls
+`erp_inventory.recalculate_valuation_at_row(stock_ledger_id, landed_cost_per_unit, actor, reason)`.
+
+**Made repeatable, not one-time-use.** `recalculate_valuation_at_row()` (built in §109 for the
+Opening Rate correction workflow) originally hard-blocked a second call against the same
+`target_ledger_id`. Business owner's real workflow — landed-cost bills for one GRN (freight
+invoice, customs duty assessment, last-mile transport bill) arrive incrementally over days/weeks,
+not all at once — needs to call this repeatedly as each new bill lands. The one-time guard was
+removed (migration `20260821090000`, the *only* change to that function; the replay math, the
+`stock_snapshot`-only write, and the `valuation_correction_log` audit insert are byte-identical to
+the §109 original). **No separate "Recalculate" button** — Save does the write + recalculation in
+one action, matching §8D's `post_document` atomicity philosophy.
+
+### 128.3 — GST must never enter Landed Cost/WAR — the `has_gst` gate
+
+Every ad-hoc/per-UoM cost line (Freight, Clearing Charges, Last Mile Transport, and a new "Invoice
+has transporter charge other than basic?" field representing a vendor bundling their own transport
+charge into the material invoice) can independently be GST-relevant or not. Locked rule, applied
+uniformly: GST is creditable ITC, never a real landed cost (matches §111's existing note). A
+3-state model, not 2: `has_gst` (boolean, gates the next two — a charge can have **no** GST
+relevance at all, distinct from "has GST but billed Exclusive") → `gst_treatment`
+(INCLUSIVE/EXCLUSIVE, only meaningful when `has_gst=true`) → `gst_rate`. For an Inclusive line:
+`net_amount = amount / (1 + gst_rate/100)`; only `net_amount` ever feeds Landed Cost/WAR. The
+first cut of this shipped with only 2 states and was corrected same-day after business owner caught
+a wrong test assumption (Last Mile Transport hardcoded as GST-Inclusive in a verification run,
+when in reality some charges carry no GST at all) — see migrations `20260821110000`/`20260821120000`.
+
+### 128.4 — Landed Cost line taxonomy + reusable Deduction Master
+
+`landed_cost_line.cost_type` extended (migration `20260821090000`) with the real Duty-stack
+buildup verified by hand against the business owner's own Excel landed-cost workbook — Import
+Duty/Excise Duty/CST/Customs Edn Cess/Additional Duty (IGST)/Duty Set-off (amount-entered,
+percentage-derived as `amount/purchase_cost*100`) plus LC Charges/Bank Charges (finance) and
+Last Mile Transport/"transporter charge other than basic" (the two new transporter-related
+charges). Every line also carries `entry_mode` (PER_UOM vs AD_HOC — Ad-hoc derives its own
+per-UoM automatically) alongside the `has_gst` gate above.
+
+**Deduction Type Master** (new `erp_procurement.deduction_type_master` + per-GRN
+`landed_cost_deduction_line`) — company-scoped, reusable, but created **inline from within AC01**
+itself (a `window.prompt`-based "+ New deduction type" link in the drawer), not a separate admin
+page — same spirit as AC06's Costing Group "create on the fly" pattern. Each deduction line has its
+own **"In Landed?"** toggle, default unchecked (most deductions, e.g. TDS, are tax-type and don't
+reduce landed cost) — the toggle is per-GRN-row, not fixed on the type globally, so the same
+deduction type can be ticked on one GRN and left unticked on another.
+
+**Landed Cost basis:** always Base UoM, never Purchase/Pack UoM — reuses `goods_receipt.per_pack_qty`'s
+existing conversion math (the same factor `createGRNFromLineHandler` already uses for stock
+posting), no new conversion logic needed.
+
+### 128.5 — AC01 and AC03 are one component, not two
+
+AC03 (formerly `PROC_LC_LIST`/`LandedCostListPage.jsx`) was confirmed to need **zero** field/UI
+differences from AC01 — same grid, same columns, same center drawer, same sections and navigation;
+the only difference is mode: every input renders read-only/disabled, no Save button. Built as one
+`AC01Page.jsx` component with a `readOnly` prop (default false) rather than two separate
+implementations. `tx_code` stays **AC01** for the edit route (same menu slot as before) — the AC03
+route now also renders `AC01Page`, just with `readOnly`.
+
+**⚠️ ACL correction, 2026-08-21 (found via a post-completion sanity re-check, not caught by any
+guard script):** the shared backend routes (list/detail/save/deduction-types, used by both AC01 and
+AC03) were originally gated on a brand-new resource_code `ACC_GRN_LANDED_COST` — but that resource
+was never actually provisioned in live `acl.menu_master`/`capability_menu_actions`, meaning every
+real (non-SA/GA) user would have 403'd on both pages the moment they tried to load data. Worse, the
+original design premise ("one resource_code, no separate AC03 code needed") turned out to be
+**schema-impossible**, not just unfinished — `menu_code` carries a `UNIQUE` constraint in both
+`erp_menu.menu_master` and `acl.menu_master`, so AC01's and AC03's separate `tx_code` rows can never
+literally share one `menu_code`/resource_code. Corrected to **reuse the pre-existing, already-granted
+`PROC_IV_LIST`** resource for these shared routes instead — AC01's own sidebar entry already used
+`PROC_IV_LIST` as its menu_code before this redesign (unchanged), and since `PROC_IV_LIST`/
+`PROC_LC_LIST` currently carry identical grants in dev (same capability, same users), this doesn't
+regress anything today. **Known follow-up, not a regression:** AC03's sidebar entry keeps its own
+`PROC_LC_LIST` menu_code for *visibility* purposes, independent of the `PROC_IV_LIST` gate on the
+actual data routes — so giving AC03 the wider audience the locked access matrix calls for (all
+Accounts roles + L3 Manager + Director + SCM + L1/L2 Auditor) requires a real, deliberate ACL
+differentiation pass between these two resources at rollout time; until then, a user who only holds
+`PROC_LC_LIST` (not `PROC_IV_LIST`) would see the AC03 link but 403 on load — no worse than before
+this redesign (that user couldn't have used the old `LandedCostListPage.jsx` either, for the same
+underlying reason), but worth fixing properly rather than carrying forward silently.
+Re-verified against live dev data after the fix: `acl.precomputed_acl_view` now shows real ALLOW
+rows for `PROC_IV_LIST:VIEW`/`WRITE` for real users (previously zero rows existed anywhere for
+`ACC_GRN_LANDED_COST`). Separately, a pre-existing (not caused by this redesign) ACL-MASTER drift
+was also found while checking this: `acl-master-drift-check.mjs`'s SQL shows CMP003's de-facto
+highest-access non-SA/GA user (P0002, not P0076 — the script identifies the actual maintenance-full-
+access user per company, not a hardcoded user_code) is missing `PROC_IV_LIST:VIEW`/`PROC_LC_LIST:
+VIEW` even though other users in the same company have it — flagged for a future ACL-maintenance
+pass, not fixed as part of this redesign since it predates this session's work entirely.
+
+### 128.6 — New UI pattern locked for this whole redesign family: `ErpDenseGrid` cell-nav + center `DrawerBase`
+
+Studied CSN Tracker's own pre-existing inline-table-row-expansion pattern, then business owner
+pointed at Stroke Master's actual popup (`StrokeMasterPage.jsx`) as the real target: a **center**
+`DrawerBase` (`side="center"`, already supported, not built new), not an inline expanding row.
+`ErpDenseGrid` (already used by IN02/IN03) gained a new opt-in `cellNavigate` prop (mirrors the
+existing `virtualize` prop's opt-in shape) — when true, every `<td>` becomes the focusable unit
+(ArrowUp/Down/Left/Right move cell-to-cell, Enter opens the row's drawer via `onRowActivate`);
+every pre-existing caller (IN02, IN03, Customer Detail, etc.) keeps its old row-only behavior
+unchanged since the prop defaults to false. Both AC01/AC03 and the retrofitted CSN Tracker opt into
+`cellNavigate` + `virtualize` together. Drawer close is always a pure client-side `setState` toggle,
+never a screen-stack pop or route navigation, so Esc/Close can never strand the user on Dashboard
+Home instead of back on the list.
+
+### 128.7 — CSN Tracker retrofit (presentation-layer only, all business logic preserved verbatim)
+
+`CSNTrackerPage.jsx`'s hand-rolled `<table>` + inline colSpan-row expansion was swapped for the
+same `ErpDenseGrid`(cellNavigate+virtualize) + `DrawerBase(side="center")` pattern — every existing
+business-logic function (dispatch-qty-conflict-dialog save flow, sub-CSN create/delete, saved
+layouts, field-history buttons, red-flag highlighting via `evaluateRedFields`, the GED/GRD
+guard-rail confirm, IMPORT/DOMESTIC conditional field sets) carried over unchanged, only the render
+target changed. Row-open trigger changed from single-click (old) to Enter/double-click (new,
+matching the Excel-style cell-nav convention `ErpDenseGrid` now establishes across this family) —
+single click now only focuses a cell. Also added: a **Last Mile Transporter** field (new
+`consignment_note.last_mile_transporter_id`/`_freetext` columns, migration `20260821090000`) next
+to the existing Transporter combobox, and an AC01-style **date-field picker** (button+popover
+multi-checkbox over 9 real date columns — CSN Created/ETD/ETA Port/ATA Port/Invoice/GE/GRN/LR/BL
+Date — only the first checked field is actually sent to the backend, same "multi-select UI,
+single-field-sent" convention AC01 established) replacing the old fixed-to-`created_at` Date
+From/To filter. Backend (`csn.handlers.ts`): `getTrackerHandler` gained a whitelisted `date_field`
+query param (`TRACKER_DATE_FILTER_FIELDS`, defaults to `created_at` for anything outside the
+whitelist); `enrichTrackerRows` resolves `last_mile_transporter_id` → name via the same
+`transporterMap` already built for the primary Transporter field.
+
+### 128.8 — GRN additions: Last Mile Transporter + HSN Code, and a real dependency-mismatch bug caught first
+
+Two small, locked-design additions to `GRNPostFlow.jsx`/`grn.handlers.ts`: a second, fully parallel
+**Last Mile Transporter** type-ahead block on the Transporter tab (own search state/query, same UI
+shape as the existing primary Transporter field, shares one extracted
+`goToTransporterMasterPreservingForm()` helper for the "Add to Transporter Master" round trip so the
+two "no match, create new" links don't duplicate that logic), and an **HSN Code** field on the
+Material tab that pre-fills from `material_master.hsn_code` and writes back through to Material
+Master on save (mirrors the existing `invoice_name` → `material_vendor_doc_name` upsert pattern
+directly above it in the same handler) — since FG/RM/PM materials that never had HSN captured
+before now get it seeded from whichever GRN enters it first.
+
+**Real gap found before this could be built, fixed as its own dependency-first step:** the earlier
+migration (`20260821090000`) had put `hsn_code` on `erp_procurement.goods_receipt_line` — but a
+live-DB check showed that table has **zero rows**. The actual GRN posting flow
+(`createAndPostGRNFromLineHandler`, the only handler `GRNPostFlow.jsx` calls) writes one flattened
+row per gate-entry line directly into `goods_receipt` itself and never touches
+`goods_receipt_line` at all (that child table belongs only to the older, unused
+`createGRNDraftHandler`/`postGRNHandler` multi-line path). Fixed with a new migration,
+`20260821130000_grn_hsn_code_column.sql` — `ALTER TABLE erp_procurement.goods_receipt ADD COLUMN
+hsn_code text` — leaving the earlier, now-effectively-dead `goods_receipt_line.hsn_code` column in
+place rather than dropping it, in case a future multi-line GRN redesign revives that table.
+
+**Deliberately not added:** GRN→CSN sync-back of `last_mile_transporter_id` (unlike the primary
+Transporter, which does sync back via `csnPatch.transporter_id = grn.transporter_id` on post) —
+the locked design only required GRN to gain "a second parallel field," never that it must
+propagate to CSN, and CSN Tracker (128.7) already lets Last Mile Transporter be set independently.
+Flagged here as a judgment call in case it needs revisiting later.
+
+### 128.9 — Verification discipline applied throughout (no step skipped)
+
+Every step (ErpDenseGrid extension → 4 migrations → AC01 backend → AC01 frontend → AC03 → CSN
+Tracker → GRN) was built and independently verified before the next began, per business owner's
+explicit "one step at a time, fully complete and verified" instruction: `deno check`/`eslint` via
+`git stash` before/after comparison on every touched file (zero new errors beyond documented
+pre-existing typing noise in every case), the full CI guard suite re-run after every backend/
+frontend change (`stock-posting-guard`, `company-scope-guard`, `company-scope-write-acl-guard`,
+`hardcoded-role-check-guard`, `wrong-company-source-guard`, `route-acl-registry-guard`,
+`approver-chain-guard`, `resource-code-domain-guard`, `frontend-payload-guard`,
+`jsx-no-undef-guard`, and the SU24-style `dependency-provisioning-check.mjs --strict-manifest`
+manifest guard), and every RPC/query verified against real dev data via rolled-back MCP
+transactions (`BEGIN ... ROLLBACK`) rather than assumed correct from reading the code alone.
+Two real bugs were caught and fixed mid-build via this discipline: `createDeductionTypeHandler`
+missing a company-specific WRITE-level ACL check (Bug Pattern #2, caught live by
+`company-scope-write-acl-guard.mjs`, then proactively also fixed in `saveAC01GRNCostHandler` since
+it shared the same root cause), and `getAC01GRNHandler` comparing the session's pinned
+`companyId` directly against the GRN's `company_id` instead of validating against all of the
+caller's allowed companies (also Bug Pattern #2, found via this session's own explicit 13-pattern
+sweep, not a guard script). The SU24 dependency-manifest check was also promoted from an
+optional/manual script to a mandatory 11th CI guard step during this session (business owner's own
+question: "why isn't this mandatory like the other checks?") — see `ci-basic.yml`'s own comment for
+the still-manual DB-level half that CI cannot cover.
+
+**Not yet done as of this writing:** live click-through in the deployed app (no dev login
+available in this environment — verified via `deno check`/`eslint`/guards/MCP-rolled-back
+transactions instead, consistent with [[feedback_no_localhost_preview]]). Next slice: Returns &
+Claims (PO08's new RTV-vs-Exchange tab, PO09's `rtv_id` relaxation, PO10's missing freight fields,
+new PO20 "Credit Notes (Vendor)"), then AC02 (Vendor Ledger + FIFO payment allocation), then the
+remaining Accounts pages, then back to Dispatch (L5) per §114's paused sequence.

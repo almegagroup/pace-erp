@@ -719,6 +719,27 @@ export function listBlockedIVs(params) {
   return fetchProcurement("GET", "/api/procurement/invoice-verifications/blocked", undefined, params);
 }
 
+// ── AC01 GRN Landed Cost Hub ─────────────────────────────────────────────
+export function listAC01GRNs(params) {
+  return fetchProcurement("GET", "/api/procurement/ac01/grns", undefined, params);
+}
+
+export function getAC01GRN(grnId) {
+  return fetchProcurement("GET", `/api/procurement/ac01/grns/${encodeURIComponent(grnId)}`);
+}
+
+export function saveAC01GRNCost(grnId, data) {
+  return fetchProcurement("POST", `/api/procurement/ac01/grns/${encodeURIComponent(grnId)}/save`, data);
+}
+
+export function listDeductionTypes(params) {
+  return fetchProcurement("GET", "/api/procurement/ac01/deduction-types", undefined, params);
+}
+
+export function createDeductionType(data) {
+  return fetchProcurement("POST", "/api/procurement/ac01/deduction-types", data);
+}
+
 export function getProcurementPlanning(params) {
   return fetchProcurement("GET", "/api/procurement/planning", undefined, params);
 }
