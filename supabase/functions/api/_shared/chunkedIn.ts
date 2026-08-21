@@ -33,7 +33,23 @@ export async function fetchInChunks<TRow>(
   const results = await Promise.all(chunks.map((chunk) => queryFn(chunk)));
   const rows: TRow[] = [];
   for (const result of results) {
-    if (result.error) throw new Error("CHUNKED_IN_FETCH_FAILED");
+    if (result.error) {
+      // Found live 2026-08-21: this used to throw a bare "CHUNKED_IN_FETCH_
+      // FAILED" with the real PostgREST/Postgres error swallowed -- neither
+      // the browser console nor Render server logs showed anything past that
+      // generic wrapper, turning every real failure into a guessing game.
+      // console.error here so Render logs at least carry it even before the
+      // response reaches the client; the thrown message also carries it
+      // since this file's caller pattern is `code = error.message` (see
+      // ac01.handlers.ts and friends), so the real reason now reaches the
+      // browser console directly.
+      const err = result.error as { message?: string; code?: string; details?: string; hint?: string } | null;
+      const detail = err
+        ? [err.code, err.message, err.details, err.hint].filter(Boolean).join(" | ")
+        : String(result.error);
+      console.error("CHUNKED_IN_FETCH_FAILED", detail);
+      throw new Error(`CHUNKED_IN_FETCH_FAILED: ${detail}`);
+    }
     if (result.data) rows.push(...result.data);
   }
   return rows;
