@@ -206,8 +206,12 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const [transporterId, setTransporterId] = useState(_saved.transporterId ?? (geLine.csn_transporter_id ?? ""));
   const [transporterSearch, setTransporterSearch] = useState("");
   const [transporterName, setTransporterName] = useState(_saved.transporterName ?? (geLine.csn_transporter_name ?? ""));
+  const [lastMileTransporterId, setLastMileTransporterId] = useState(_saved.lastMileTransporterId ?? "");
+  const [lastMileTransporterSearch, setLastMileTransporterSearch] = useState("");
+  const [lastMileTransporterName, setLastMileTransporterName] = useState(_saved.lastMileTransporterName ?? "");
   const [lrNumber, setLrNumber] = useState(_saved.lrNumber ?? (geLine.csn_lr_number ?? ""));
   const [lrDate, setLrDate] = useState(_saved.lrDate ?? (geLine.csn_lr_date ?? ""));
+  const [hsnCode, setHsnCode] = useState(_saved.hsnCode ?? (geLine.hsn_code ?? ""));
   const [batchLotNumber, setBatchLotNumber] = useState(_saved.batchLotNumber ?? "");
   const [perPackQty, setPerPackQty] = useState(_saved.perPackQty ?? (conversionFactor != null ? String(conversionFactor) : ""));
   const [expiryType, setExpiryType] = useState(_saved.expiryType ?? "N_A");
@@ -246,6 +250,23 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   });
   const transporterResults = Array.isArray(transporterQuery.data) ? transporterQuery.data : (transporterQuery.data?.data ?? []);
 
+  const [debouncedLastMileTransporterSearch, setDebouncedLastMileTransporterSearch] = useState("");
+  const lastMileDebounceRef = useRef(null);
+  useEffect(() => {
+    clearTimeout(lastMileDebounceRef.current);
+    lastMileDebounceRef.current = setTimeout(() => setDebouncedLastMileTransporterSearch(lastMileTransporterSearch.trim()), 300);
+    return () => clearTimeout(lastMileDebounceRef.current);
+  }, [lastMileTransporterSearch]);
+
+  const lastMileTransporterSearchTrimmed = debouncedLastMileTransporterSearch;
+  const lastMileTransporterQuery = useQuery({
+    queryKey: ["transporters-search", "last-mile", lastMileTransporterSearchTrimmed, geHeader.company_id],
+    enabled: lastMileTransporterSearchTrimmed.length >= 2,
+    staleTime: 30_000,
+    queryFn: () => listTransporters({ search: lastMileTransporterSearchTrimmed, company_id: geHeader.company_id, limit: 20 }),
+  });
+  const lastMileTransporterResults = Array.isArray(lastMileTransporterQuery.data) ? lastMileTransporterQuery.data : (lastMileTransporterQuery.data?.data ?? []);
+
   // Expiry calculation preview
   const expiryCalculated = (() => {
     if (expiryType !== "SPAN" || !shelfLifeMonths || !geHeader.ge_date) return null;
@@ -253,6 +274,29 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
     d.setMonth(d.getMonth() + Number(shelfLifeMonths));
     return d.toISOString().slice(0, 10);
   })();
+
+  // Shared by both the primary and Last Mile Transporter "Add to Transporter Master" links --
+  // saves the whole form's current values so nothing is lost during the round trip to that screen.
+  function goToTransporterMasterPreservingForm() {
+    updateActiveScreenContext({
+      grnScreen: "grn-form",
+      grnGeData: geData,
+      grnSelectedLine: geLine,
+      grnFormValues: {
+        activeTab,
+        receivedQty, discrepancyRemarks, storageLocationId,
+        invoiceNumber, invoiceDate, blNumber, blDate,
+        boeNumber, boeDate, invoiceName, hsnCode,
+        rateConfirmed, invoiceRate, gstPct,
+        transporterId, transporterName,
+        lastMileTransporterId, lastMileTransporterName,
+        lrNumber, lrDate,
+        batchLotNumber, perPackQty,
+        expiryType, expiryDate, shelfLifeMonths,
+      },
+    });
+    openScreen("PROC_TRANSPORTER_MASTER");
+  }
 
   async function handleSave() {
     setError("");
@@ -274,11 +318,13 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         boe_number: boeNumber || null,
         boe_date: boeDate || null,
         invoice_name: invoiceName || null,
+        hsn_code: hsnCode || null,
         po_rate: geLine.po_rate ?? null,
         rate_confirmed: rateConfirmed,
         invoice_rate: invoiceRate ? Number(invoiceRate) : null,
         gst_pct: gstPct ? Number(gstPct) : null,
         transporter_id: transporterId || null,
+        last_mile_transporter_id: lastMileTransporterId || null,
         lr_number: lrNumber || null,
         lr_date: lrDate || null,
         batch_lot_number: batchLotNumber || null,
@@ -496,20 +542,35 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                 </div>
               ))}
             </div>
-            <ErpDenseFormRow label="Invoice name (as on vendor's document)">
-              <input
-                type="text"
-                list="doc-name-suggestions"
-                placeholder="Type or select known name…"
-                value={invoiceName}
-                onChange={(e) => setInvoiceName(e.target.value)}
-                className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
-              />
-              <datalist id="doc-name-suggestions">
-                {docNameSuggestions.map((name) => <option key={name} value={name} />)}
-              </datalist>
-            </ErpDenseFormRow>
-            <p className="mt-2 text-xs text-slate-500">Saved to material–vendor name mapping. Shown as suggestion next time.</p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <ErpDenseFormRow label="Invoice name (as on vendor's document)">
+                <input
+                  type="text"
+                  list="doc-name-suggestions"
+                  placeholder="Type or select known name…"
+                  value={invoiceName}
+                  onChange={(e) => setInvoiceName(e.target.value)}
+                  className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
+                />
+                <datalist id="doc-name-suggestions">
+                  {docNameSuggestions.map((name) => <option key={name} value={name} />)}
+                </datalist>
+              </ErpDenseFormRow>
+              <ErpDenseFormRow label="HSN code">
+                <input
+                  type="text"
+                  placeholder="Enter HSN code"
+                  value={hsnCode}
+                  onChange={(e) => setHsnCode(e.target.value)}
+                  className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
+                />
+              </ErpDenseFormRow>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              Invoice name is saved to material–vendor name mapping (shown as suggestion next time). HSN
+              code writes through to Material Master (pre-fills automatically on the next GRN for this
+              material).
+            </p>
           </ErpSectionCard>
         )}
 
@@ -597,25 +658,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                               No match found.
                               {canManageTransporters ? (
                                 <button
-                                  onClick={() => {
-                    updateActiveScreenContext({
-                      grnScreen: "grn-form",
-                      grnGeData: geData,
-                      grnSelectedLine: geLine,
-                      grnFormValues: {
-                        activeTab,
-                        receivedQty, discrepancyRemarks, storageLocationId,
-                        invoiceNumber, invoiceDate, blNumber, blDate,
-                        boeNumber, boeDate, invoiceName,
-                        rateConfirmed, invoiceRate, gstPct,
-                        transporterId, transporterName,
-                        lrNumber, lrDate,
-                        batchLotNumber, perPackQty,
-                        expiryType, expiryDate, shelfLifeMonths,
-                      },
-                    });
-                    openScreen("PROC_TRANSPORTER_MASTER");
-                  }}
+                                  onClick={goToTransporterMasterPreservingForm}
                                   className="ml-2 text-sky-600 underline text-sm"
                                 >
                                   Add to Transporter Master →
@@ -629,6 +672,65 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                             <button
                               key={t.id}
                               onClick={() => { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); setTransporterSearch(""); }}
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-sky-50 border-b border-slate-100 last:border-0"
+                            >
+                              <span className="font-mono text-xs text-slate-500">{t.transporter_code}</span>
+                              <span className="ml-2 font-medium">{t.transporter_name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </ErpDenseFormRow>
+              </div>
+              <div className="md:col-span-3">
+                <ErpDenseFormRow label="Last mile transporter">
+                  {lastMileTransporterId && lastMileTransporterName ? (
+                    <div className="flex items-center gap-2">
+                      <span className="flex-1 h-9 flex items-center px-3 border border-emerald-300 bg-emerald-50 text-sm text-emerald-900 rounded">
+                        {lastMileTransporterName}
+                      </span>
+                      <button
+                        onClick={() => { setLastMileTransporterId(""); setLastMileTransporterName(""); setLastMileTransporterSearch(""); }}
+                        className="h-9 px-3 text-sm border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 rounded"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Type 2+ characters to search transporter master…"
+                        value={lastMileTransporterSearch}
+                        onChange={(e) => setLastMileTransporterSearch(e.target.value)}
+                        className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
+                      />
+                      {lastMileTransporterSearchTrimmed.length >= 2 && (
+                        <div className="absolute z-20 left-0 right-0 top-full mt-0.5 border border-slate-200 bg-white shadow-md max-h-52 overflow-y-auto">
+                          {lastMileTransporterQuery.isLoading && (
+                            <div className="px-3 py-2 text-sm text-slate-400">Searching…</div>
+                          )}
+                          {!lastMileTransporterQuery.isLoading && lastMileTransporterResults.length === 0 && (
+                            <div className="px-3 py-2 text-sm text-slate-500">
+                              No match found.
+                              {canManageTransporters ? (
+                                <button
+                                  onClick={goToTransporterMasterPreservingForm}
+                                  className="ml-2 text-sky-600 underline text-sm"
+                                >
+                                  Add to Transporter Master →
+                                </button>
+                              ) : (
+                                <span className="ml-2 text-slate-400 text-xs">(Contact manager to add)</span>
+                              )}
+                            </div>
+                          )}
+                          {lastMileTransporterResults.map((t) => (
+                            <button
+                              key={t.id}
+                              onClick={() => { setLastMileTransporterId(t.id); setLastMileTransporterName(`${t.transporter_code} — ${t.transporter_name}`); setLastMileTransporterSearch(""); }}
                               className="w-full text-left px-3 py-2 text-sm hover:bg-sky-50 border-b border-slate-100 last:border-0"
                             >
                               <span className="font-mono text-xs text-slate-500">{t.transporter_code}</span>

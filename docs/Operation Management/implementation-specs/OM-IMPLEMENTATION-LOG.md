@@ -4223,3 +4223,110 @@ it provides no enforcement value as a CI step in its current form.
   `company-scope-guard.mjs` (0 unguarded), `frontend-payload-guard.mjs` (0 missing fields),
   `npm run build` (clean production build).
 - Not yet done: live click-through in the deployed app (no dev login in this environment).
+
+### 2026-08-21 - AC01 GRN Landed Cost Hub + AC03 + CSN Tracker retrofit + GRN Last Mile Transporter/HSN (Claude direct-implemented, not a Codex brief)
+
+- Origin: business owner opened a new redesign initiative across three ACL menu groups
+  (Accounts, Returns & Claims, Sales), starting with Accounts. This entry covers the first
+  completed slice -- AC01 (`PROC_IV_LIST` -> `ACC_GRN_LANDED_COST`), AC03 (its view-only twin),
+  CSN Tracker's UI-pattern retrofit, and two small GRN additions. Explicit build-ownership
+  departure from the usual Claude-designs/Codex-implements split ("R tumi implement korbe,
+  codex na") -- Claude designed and built this directly, mirroring the IN01/PID precedent.
+  Full design lock + implementation detail: feasibility doc Section 128.
+- New migrations (dev, integrity-reconciled + `migration-integrity-check.mjs` confirmed
+  `in_sync: true` after each): `20260821090000_ac01_grn_landed_cost_hub.sql` (landed_cost_line
+  cost_type enum extended + entry_mode/percentage/gst_treatment/gst_rate columns;
+  goods_receipt gains confirmed_rate/last_mile_transporter_id; new
+  deduction_type_master/landed_cost_deduction_line tables; consignment_note gains
+  last_mile_transporter_id/_freetext; recalculate_valuation_at_row's one-time-use guard
+  removed), `20260821100000_ac01_save_grn_cost_rpc.sql` (new atomic
+  `erp_procurement.save_ac01_grn_cost()` RPC), `20260821110000_ac01_landed_cost_has_gst_flag.sql`
+  + `20260821120000_ac01_save_grn_cost_has_gst.sql` (added the `has_gst` 3-state gate after a
+  same-day correction), `20260821130000_grn_hsn_code_column.sql` (moved HSN Code from the
+  effectively-dead `goods_receipt_line` to the real `goods_receipt` table -- see bug note below).
+- New files: `supabase/functions/api/_core/procurement/ac01.handlers.ts`
+  (`listAC01GRNsHandler`/`getAC01GRNHandler`/`saveAC01GRNCostHandler`/
+  `listDeductionTypesHandler`/`createDeductionTypeHandler`),
+  `frontend/src/pages/dashboard/procurement/accounts/AC01Page.jsx` (single component serving
+  both AC01-edit and AC03-view via a `readOnly` prop).
+- Rewritten in place: `frontend/src/pages/dashboard/procurement/csn/CSNTrackerPage.jsx`
+  (presentation layer only -- `<table>`+inline-expand -> `ErpDenseGrid`(cellNavigate+
+  virtualize)+`DrawerBase(side="center")`; every business-logic function preserved verbatim),
+  `frontend/src/pages/dashboard/procurement/grn/GRNPostFlow.jsx` (added Last Mile Transporter
+  type-ahead + HSN Code field), `supabase/functions/api/_core/procurement/csn.handlers.ts` +
+  `grn.handlers.ts` (backend support for the above).
+- Deleted (superseded, zero remaining references confirmed via grep before deleting):
+  `IVListPage.jsx`, `LandedCostListPage.jsx`. Deliberately left untouched:
+  `IVDetailPage.jsx`/`IVCreatePage.jsx`/`LandedCostDetailPage.jsx` (still referenced by
+  `BlockedIVListPage.jsx`/`DocumentFlowSection.jsx` -- retire together with the rest of the old
+  Accounts family when AC02 lands, not piecemeal).
+- Component library change: `frontend/src/components/data/ErpDenseGrid.jsx` gained an opt-in
+  `cellNavigate` prop (mirrors the existing `virtualize` prop's opt-in shape) -- Excel-style
+  per-cell ArrowUp/Down/Left/Right navigation, Enter opens via `onRowActivate`. Every
+  pre-existing caller (IN02, IN03, etc.) is unaffected since the prop defaults to false.
+- ACL: shared backend routes (list/detail/save/deduction-types) gated on `PROC_IV_LIST`
+  (VIEW for reads, WRITE for save/deduction-type-create). `tx_code` stays AC01 for the edit
+  route; AC03's route now also renders `AC01Page`, just with `readOnly`, keeping its own
+  `PROC_LC_LIST` menu_code for sidebar visibility.
+  **Correction (found in a post-completion sanity re-check, not a guard):** this originally
+  used a new resource_code `ACC_GRN_LANDED_COST`, planned as a single shared resource for both
+  AC01 and AC03 -- but that resource was never actually provisioned in `acl.menu_master`/
+  `capability_menu_actions` (verified via `precomputed_acl_view`: zero rows, meaning every real
+  non-SA/GA user would 403 on load), and the "one shared resource_code" premise itself turned
+  out to be schema-impossible (`menu_code` is `UNIQUE` in both menu_master tables, so AC01's and
+  AC03's separate tx_code rows can never share one). Fixed by reusing the pre-existing,
+  already-granted `PROC_IV_LIST` for the shared data routes -- confirmed real ALLOW decisions
+  for real dev users afterward. AC03 getting a genuinely wider audience than AC01 (per the
+  locked access matrix) still needs a real ACL-differentiation pass between `PROC_IV_LIST`/
+  `PROC_LC_LIST` at rollout time -- flagged, not solved here, but no worse than before this
+  redesign. Separately (pre-existing, unrelated to this redesign): `acl-master-drift-check.mjs`
+  shows CMP003's de-facto highest-access user (P0002) missing `PROC_IV_LIST:VIEW`/
+  `PROC_LC_LIST:VIEW` -- flagged for a future ACL-maintenance pass.
+- Two real bugs found and fixed mid-build:
+  1. **Bug Pattern #2 (company-scope write ACL gap):** `company-scope-write-acl-guard.mjs`
+     caught `createDeductionTypeHandler` resolving a caller-supplied `company_id` and mutating
+     without a company-specific WRITE-level ACL check. Fixed by adding `canWriteAC01`/
+     `requireAC01WriteAccess` (direct copy of `planning.handlers.ts`'s established
+     `canMaintainPlanning`/`requirePlanningEditAccess` pattern) and applying it to both the
+     caught handler and `saveAC01GRNCostHandler` (same root-cause class, not caught by the
+     guard's static pattern since it resolves `company_id` from a DB lookup rather than the
+     request body).
+  2. **Bug Pattern #2 (over-restrictive company-scope check):** `getAC01GRNHandler` compared
+     the session's pinned `companyId` directly against the GRN's `company_id`, wrongly blocking
+     multi-company users from viewing GRNs outside their session's currently-active company.
+     Found via this session's own explicit 13-bug-pattern sweep (not a guard script). Fixed by
+     using `assertCompanyScope(ctx, String(grn.company_id))` instead.
+  3. **Dependency mismatch (not an ACL bug):** the earlier `hsn_code` migration targeted
+     `erp_procurement.goods_receipt_line`, which has zero rows in dev -- the real GRN posting
+     flow (`createAndPostGRNFromLineHandler`) writes one flattened row per gate-entry line
+     directly into `goods_receipt` and never touches `goods_receipt_line`. Fixed with a
+     follow-up migration moving the column to the table the live flow actually reaches, before
+     building the GRN frontend/backend HSN feature on top of it (fix-the-dependency-first,
+     re-verify, per the business owner's explicit step-order instruction).
+- Verification (every step, not just the final one): `deno check`/`eslint` via `git stash`
+  before/after comparison on every touched file (zero new errors beyond documented pre-existing
+  typing noise -- e.g. `grn.handlers.ts`'s new `hsn_code` field errors identically to 7 sibling
+  fields already erroring the same way in the same object literal, confirmed via diff, not a new
+  bug class); full CI guard suite re-run after every backend/frontend change (`stock-posting-
+  guard`, `company-scope-guard`, `company-scope-write-acl-guard`, `hardcoded-role-check-guard`,
+  `wrong-company-source-guard`, `route-acl-registry-guard`, `approver-chain-guard`,
+  `resource-code-domain-guard`, `frontend-payload-guard`, `jsx-no-undef-guard`); every RPC/query
+  verified against real dev data via rolled-back MCP transactions (`BEGIN...ROLLBACK`), including
+  the WAR-recalculation math (hand-computed landed-cost totals matched exactly across two
+  scenarios), the GST-inclusive/exclusive/has_gst backing-out formula, the CSN date-field filter
+  + Last Mile Transporter name resolution, and the GRN HSN write-through + pre-fill read path.
+- Process improvement: the SU24-style dependency-manifest check
+  (`scripts/dependency-provisioning-check.mjs --strict-manifest`) was promoted from an optional/
+  manual script to a mandatory 11th `ci-basic.yml` guard step during this session (business
+  owner's own question: "why isn't this mandatory like the other checks?"). Fixed the 3
+  pre-existing gaps this surfaced (`ReservationListPage.jsx`, `StockStatusChangePage.jsx`,
+  `OrderInformationSystemPage.jsx` -- unrelated, from earlier 2026-08-19 work) to reach a genuine
+  0-gap baseline first. Still only the static "manifest entry exists" half -- the live "is this
+  page's dependency actually ACL-granted in the DB" half remains manual per
+  `PROD-ACL-Access-Decisions.md`'s Post-Implementation Checklist, since CI has no DB credentials.
+- Not yet done: live click-through in the deployed app (no dev login in this environment); the
+  real AC01-vs-AC03 ACL audience differentiation (both currently ride `PROC_IV_LIST`, see the
+  correction above); the pre-existing P0002/ACL-MASTER drift on `PROC_IV_LIST`/`PROC_LC_LIST`.
+  Next: Returns & Claims (PO08/09/10 + new PO20), then AC02 (Vendor Ledger + FIFO payment
+  allocation), then the remaining Accounts pages, then back to Dispatch (L5) per the project's
+  paused Section 114 sequence.

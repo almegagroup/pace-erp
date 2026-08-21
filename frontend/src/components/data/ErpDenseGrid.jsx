@@ -47,8 +47,24 @@ export default function ErpDenseGrid({
   // reports that can load a large, unpaginated row set (e.g. IN02) so the
   // browser only ever mounts the rows currently in/near the viewport.
   virtualize = false,
+  // Opt-in only, same shape as `virtualize` — default false keeps every
+  // existing caller's exact current row-to-row-only ArrowUp/ArrowDown
+  // behavior. Pass true for dense entry grids (CSN Tracker, AC01/AC03) that
+  // need Excel-style cell-to-cell arrow navigation (all four arrow keys move
+  // one cell, not one row) instead of row-level-only nav. When true, the
+  // focusable unit becomes each <td> rather than each <tr> — `getRowProps`'s
+  // onKeyDown/onClick/className still apply to the <tr> itself (unaffected),
+  // but ArrowUp/ArrowDown/ArrowLeft/ArrowRight/Enter are handled per-cell.
+  cellNavigate = false,
 }) {
   const rowRefs = useRef([]);
+  // cellRefs.current[rowIndex][colIndex] — only populated when cellNavigate.
+  const cellRefs = useRef([]);
+  // Tracks which single cell currently carries tabIndex=0 so Tab from
+  // outside the grid lands on the right spot next time, without triggering
+  // a re-render on every arrow press (mirrors focusRow's ref-only approach
+  // below, just one level deeper).
+  const activeCellRef = useRef({ row: 0, col: 0 });
   const scrollElementRef = useRef(null);
   const hasRows = Array.isArray(rows) && rows.length > 0;
   const viewportClassName =
@@ -80,8 +96,98 @@ export default function ErpDenseGrid({
     [virtualize, virtualizer],
   );
 
+  const focusCell = useCallback(
+    (rowIndex, colIndex) => {
+      const clampedRow = Math.max(0, Math.min(rows.length - 1, rowIndex));
+      const clampedCol = Math.max(0, Math.min(columns.length - 1, colIndex));
+      const previous = activeCellRef.current;
+      const previousCell = cellRefs.current[previous.row]?.[previous.col];
+      if (previousCell) previousCell.tabIndex = -1;
+      activeCellRef.current = { row: clampedRow, col: clampedCol };
+
+      const doFocus = () => {
+        const target = cellRefs.current[clampedRow]?.[clampedCol];
+        if (!target) return;
+        target.tabIndex = 0;
+        target.focus();
+      };
+      if (virtualize) {
+        virtualizer.scrollToIndex(clampedRow, { align: "auto" });
+        // Off-screen rows aren't mounted yet — scrollToIndex schedules the
+        // mount, so focus has to happen on the next frame, not synchronously.
+        requestAnimationFrame(doFocus);
+        return;
+      }
+      doFocus();
+    },
+    [virtualize, virtualizer, rows.length, columns.length],
+  );
+
   function renderRow(row, index) {
     const externalRowProps = getRowProps?.(row, index) ?? {};
+
+    if (cellNavigate) {
+      if (!cellRefs.current[index]) cellRefs.current[index] = [];
+      const { className: externalClassName, onKeyDown: externalOnKeyDown, ...restRowProps } = externalRowProps;
+
+      return (
+        <tr
+          key={rowKey ? rowKey(row, index) : `${index}`}
+          ref={(el) => { rowRefs.current[index] = el; }}
+          {...restRowProps}
+          className={`h-[var(--erp-row-height)] border-b border-slate-200 bg-white text-[12px] text-slate-800 ${externalClassName ?? ""}`.trim()}
+        >
+          {columns.map((column, colIndex) => {
+            const cellKeyboardHandler = (event) => {
+              if (event.key === "ArrowRight") {
+                event.preventDefault();
+                focusCell(index, colIndex + 1);
+              } else if (event.key === "ArrowLeft") {
+                event.preventDefault();
+                focusCell(index, colIndex - 1);
+              } else if (event.key === "ArrowDown") {
+                event.preventDefault();
+                focusCell(index + 1, colIndex);
+              } else if (event.key === "ArrowUp") {
+                event.preventDefault();
+                focusCell(index - 1, colIndex);
+              } else if (event.key === "Enter" && typeof onRowActivate === "function") {
+                event.preventDefault();
+                onRowActivate(row, index);
+              }
+            };
+            const isInitialActiveCell = index === activeCellRef.current.row && colIndex === activeCellRef.current.col;
+
+            return (
+              <td
+                key={column.key}
+                ref={(el) => { cellRefs.current[index][colIndex] = el; }}
+                tabIndex={isInitialActiveCell ? 0 : -1}
+                onKeyDown={mergeHandlers(externalOnKeyDown, cellKeyboardHandler)}
+                onClick={(event) => {
+                  focusCell(index, colIndex);
+                  externalRowProps.onClick?.(event);
+                }}
+                // Found live 2026-08-19 (business owner): cells had no
+                // white-space rule, so any column narrower than its content
+                // silently wrapped -- rows becoming taller than the fixed
+                // ROW_HEIGHT_PX the virtualizer assumes for every row, which
+                // desyncs virtualized scroll position (overlaps/gaps), not
+                // just a readability problem. nowrap is now the default (the
+                // container already scrolls horizontally); a column that
+                // genuinely needs multi-line text (long remarks/notes) can
+                // opt back in with `wrap: true`.
+                className={`px-2 py-1 align-middle outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)}`}
+              >
+                {typeof column.render === "function"
+                  ? column.render(row, index)
+                  : (row?.[column.key] ?? "")}
+              </td>
+            );
+          })}
+        </tr>
+      );
+    }
 
     const keyboardHandler = (event) => {
       if (event.key === "ArrowDown") {
@@ -112,15 +218,6 @@ export default function ErpDenseGrid({
         {columns.map((column) => (
           <td
             key={column.key}
-            // Found live 2026-08-19 (business owner): cells had no
-            // white-space rule, so any column narrower than its content
-            // silently wrapped -- rows becoming taller than the fixed
-            // ROW_HEIGHT_PX the virtualizer assumes for every row, which
-            // desyncs virtualized scroll position (overlaps/gaps), not
-            // just a readability problem. nowrap is now the default (the
-            // container already scrolls horizontally); a column that
-            // genuinely needs multi-line text (long remarks/notes) can
-            // opt back in with `wrap: true`.
             className={`px-2 py-1 align-middle ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)}`}
           >
             {typeof column.render === "function"

@@ -85,6 +85,21 @@ jobs:
       - name: JSX undefined-component guard
         run: node scripts/jsx-no-undef-guard.mjs
 
+      # Fails if a routed page (real menu_visible=true screen) has no entry in
+      # PAGE-DEPENDENCY-MANIFEST.json at all -- this is the static, DB-free
+      # half of the SU24-style dependency check (scripts/dependency-
+      # provisioning-check.mjs); the live-DB half (are a page's own
+      # dependencies actually granted) still runs manually via MCP per
+      # PROD-ACL-Access-Decisions.md's Post-Implementation Checklist step 3,
+      # since CI has no DB credentials. Baseline was 0 as of 2026-08-21 (the
+      # 3 pre-existing gaps this caught -- ReservationListPage.jsx,
+      # StockStatusChangePage.jsx, OrderInformationSystemPage.jsx -- were
+      # fixed in the same pass that added this gate) -- keep it that way, add
+      # a manifest entry for every new routed page instead of letting this
+      # go red.
+      - name: Page dependency manifest guard (SU24-style)
+        run: node scripts/dependency-provisioning-check.mjs --strict-manifest
+
       - name: Block accidental deploy
         run: |
           echo "CI OK. No deploy steps allowed at Gate-0 / Gate-1."

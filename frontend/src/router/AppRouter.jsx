@@ -143,7 +143,7 @@ import RTVDetailPage from "../pages/dashboard/procurement/rtv/RTVDetailPage.jsx"
 import DebitNoteListPage from "../pages/dashboard/procurement/rtv/DebitNoteListPage.jsx";
 import DebitNoteDetailPage from "../pages/dashboard/procurement/rtv/DebitNoteDetailPage.jsx";
 import ExchangeRefListPage from "../pages/dashboard/procurement/rtv/ExchangeRefListPage.jsx";
-import IVListPage from "../pages/dashboard/procurement/accounts/IVListPage.jsx";
+import AC01Page from "../pages/dashboard/procurement/accounts/AC01Page.jsx";
 import IVCreatePage from "../pages/dashboard/procurement/accounts/IVCreatePage.jsx";
 import IVDetailPage from "../pages/dashboard/procurement/accounts/IVDetailPage.jsx";
 import BlockedIVListPage from "../pages/dashboard/procurement/accounts/BlockedIVListPage.jsx";
@@ -162,7 +162,6 @@ import CurrentStockPage from "../pages/dashboard/procurement/reports/CurrentStoc
 import ReservationListPage from "../pages/dashboard/procurement/reports/ReservationListPage.jsx";
 import StockStatusChangePage from "../pages/dashboard/procurement/reports/StockStatusChangePage.jsx";
 import StockValuationPage from "../pages/dashboard/procurement/reports/StockValuationPage.jsx";
-import LandedCostListPage from "../pages/dashboard/procurement/accounts/LandedCostListPage.jsx";
 import LandedCostDetailPage from "../pages/dashboard/procurement/accounts/LandedCostDetailPage.jsx";
 import SOListPage from "../pages/dashboard/procurement/sales/SOListPage.jsx";
 import SOCreatePage from "../pages/dashboard/procurement/sales/SOCreatePage.jsx";
@@ -666,7 +665,7 @@ export default function AppRouter() {
                   />
                   <Route
                     path="procurement/accounts/invoice-verifications"
-                    element={<IVListPage />}
+                    element={<AC01Page />}
                   />
                   <Route
                     path="procurement/accounts/invoice-verifications/create"
@@ -746,7 +745,7 @@ export default function AppRouter() {
                   />
                   <Route
                     path="procurement/accounts/landed-costs"
-                    element={<LandedCostListPage />}
+                    element={<AC01Page readOnly />}
                   />
                   <Route
                     path="procurement/accounts/landed-costs/:id"

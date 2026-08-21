@@ -32,6 +32,13 @@ import {
   updateCSNHandler,
 } from "../_core/procurement/csn.handlers.ts";
 import {
+  createDeductionTypeHandler,
+  getAC01GRNHandler,
+  listAC01GRNsHandler,
+  listDeductionTypesHandler,
+  saveAC01GRNCostHandler,
+} from "../_core/procurement/ac01.handlers.ts";
+import {
   createGateEntryHandler,
   createGateExitInboundHandler,
   gateReportHandler,
@@ -541,6 +548,12 @@ export async function dispatchProcurementRoutes(
       return await listIVsHandler(req, ctx);
     case "GET:/api/procurement/invoice-verifications/blocked":
       return await listBlockedIVsHandler(req, ctx);
+    case "GET:/api/procurement/ac01/grns":
+      return await listAC01GRNsHandler(req, ctx);
+    case "GET:/api/procurement/ac01/deduction-types":
+      return await listDeductionTypesHandler(req, ctx);
+    case "POST:/api/procurement/ac01/deduction-types":
+      return await createDeductionTypeHandler(req, ctx);
     case "GET:/api/procurement/planning":
       return await getProcurementPlanningHandler(req, ctx);
     case "POST:/api/procurement/planning/lines/bulk-upsert":
@@ -1000,6 +1013,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/invoice-verifications\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
     return await postIVHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/ac01\/grns\/[^/]+\/save$/.test(pathname) && req.method === "POST") {
+    return await saveAC01GRNCostHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/ac01\/grns\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getAC01GRNHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/landed-costs\/by-grn\/[^/]+$/.test(pathname) && req.method === "GET") {

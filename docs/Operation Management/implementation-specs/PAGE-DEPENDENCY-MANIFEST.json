@@ -2614,31 +2614,47 @@
     ]
   },
   {
-    "page": "frontend/src/pages/dashboard/procurement/accounts/IVListPage.jsx",
-    "dependencyCount": 3,
+    "page": "frontend/src/pages/dashboard/procurement/accounts/AC01Page.jsx",
+    "dependencyCount": 5,
     "deps": [
       {
-        "fn": "listIVs",
+        "fn": "listAC01GRNs",
         "method": "GET",
-        "path": "/api/procurement/invoice-verifications",
-        "resourceCode": "PROC_IV_LIST",
+        "path": "/api/procurement/ac01/grns",
+        "resourceCode": "ACC_GRN_LANDED_COST",
         "action": "VIEW",
         "skipAcl": false
       },
       {
-        "fn": "listBlockedIVs",
+        "fn": "getAC01GRN",
         "method": "GET",
-        "path": "/api/procurement/invoice-verifications/blocked",
-        "resourceCode": "PROC_BLOCKED_IV_LIST",
+        "path": "/api/procurement/ac01/grns/${encodeURIComponent(grnId)}",
+        "resourceCode": "ACC_GRN_LANDED_COST",
         "action": "VIEW",
         "skipAcl": false
       },
       {
-        "fn": "listVendors",
+        "fn": "saveAC01GRNCost",
+        "method": "POST",
+        "path": "/api/procurement/ac01/grns/${encodeURIComponent(grnId)}/save",
+        "resourceCode": "ACC_GRN_LANDED_COST",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "listDeductionTypes",
         "method": "GET",
-        "path": "/api/om/vendors?${params.toString()}",
-        "resourceCode": "OM_VENDOR_LIST",
+        "path": "/api/procurement/ac01/deduction-types",
+        "resourceCode": "ACC_GRN_LANDED_COST",
         "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createDeductionType",
+        "method": "POST",
+        "path": "/api/procurement/ac01/deduction-types",
+        "resourceCode": "ACC_GRN_LANDED_COST",
+        "action": "WRITE",
         "skipAcl": false
       }
     ]
@@ -8142,6 +8158,128 @@
         "resourceCode": "UNRESOLVED",
         "action": "?",
         "skipAcl": null
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/reports/ReservationListPage.jsx",
+    "dependencyCount": 5,
+    "deps": [
+      {
+        "fn": "listReservations",
+        "method": "GET",
+        "path": "/api/procurement/reservations",
+        "resourceCode": "PROC_RESERVATION_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listReportLayouts",
+        "method": "GET",
+        "path": "/api/procurement/report-layouts",
+        "resourceCode": "PROC_STOCK_LEDGER",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createReportLayout",
+        "method": "POST",
+        "path": "/api/procurement/report-layouts",
+        "resourceCode": "PROC_STOCK_LEDGER",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "deleteReportLayout",
+        "method": "DELETE",
+        "path": "/api/procurement/report-layouts/${encodeURIComponent(id)}",
+        "resourceCode": "PROC_STOCK_LEDGER",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "setDefaultReportLayout",
+        "method": "POST",
+        "path": "/api/procurement/report-layouts/${encodeURIComponent(id)}/set-default",
+        "resourceCode": "PROC_STOCK_LEDGER",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/reports/StockStatusChangePage.jsx",
+    "dependencyCount": 5,
+    "deps": [
+      {
+        "fn": "getStockStatusChangeBalance",
+        "method": "GET",
+        "path": "/api/procurement/stock-status-change/balance",
+        "resourceCode": "PROD_STOCK_STATUS_CHANGE",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listStockStatusChangePostings",
+        "method": "GET",
+        "path": "/api/procurement/stock-status-change/postings",
+        "resourceCode": "PROD_STOCK_STATUS_CHANGE",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "postStockStatusChange",
+        "method": "POST",
+        "path": "/api/procurement/stock-status-change/postings",
+        "resourceCode": "PROD_STOCK_STATUS_CHANGE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "approveStockStatusChangePosting",
+        "method": "POST",
+        "path": "/api/procurement/stock-status-change/postings/${encodeURIComponent(postingId)}/approve",
+        "resourceCode": "PROD_STOCK_STATUS_CHANGE",
+        "action": "APPROVE",
+        "skipAcl": false
+      },
+      {
+        "fn": "reverseStockStatusChangePosting",
+        "method": "POST",
+        "path": "/api/procurement/stock-status-change/postings/${encodeURIComponent(postingId)}/reverse",
+        "resourceCode": "PROD_STOCK_STATUS_CHANGE",
+        "action": "WRITE",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/OrderInformationSystemPage.jsx",
+    "dependencyCount": 3,
+    "deps": [
+      {
+        "fn": "getOrderInformationReport",
+        "method": "GET",
+        "path": "/api/production/order-information-system",
+        "resourceCode": "PROD_ORDER_INFO_SYSTEM",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listStrokeMasters",
+        "method": "GET",
+        "path": "/api/production/stroke-masters",
+        "resourceCode": "PROD_STROKE_MASTER",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listMachines",
+        "method": "GET",
+        "path": "/api/om/machines",
+        "resourceCode": null,
+        "action": null,
+        "skipAcl": true
       }
     ]
   }
