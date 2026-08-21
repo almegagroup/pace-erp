@@ -25,6 +25,8 @@ import {
   listDeductionTypes,
   createDeductionType,
   saveAC01GRNCost,
+  listTransporters,
+  createTransporter,
 } from "../procurementApi.js";
 
 const DATE_FIELD_OPTIONS = [
@@ -60,6 +62,15 @@ const DUTY_LINE_TYPES = [
 const FINANCE_LINE_TYPES = [
   { value: "LC_CHARGES", label: "LC charges" },
   { value: "BANK_CHARGES", label: "Bank charges" },
+];
+// Which of the three parties a cost/deduction line's amount is actually owed
+// to. Suggested payable per party is computed strictly from THIS GRN's own
+// lines (never aggregated across other GRNs — that's AC02's future Vendor
+// Ledger, a different layer). See ac01.handlers.ts's computeSuggestedPayables.
+const PARTY_TYPE_OPTIONS = [
+  { value: "VENDOR", label: "Vendor" },
+  { value: "TRANSPORTER", label: "Transporter" },
+  { value: "LAST_MILE_TRANSPORTER", label: "Last mile transporter" },
 ];
 
 function toDDMMYYYY(value) {
@@ -97,14 +108,14 @@ function paymentDotStatus(row) {
 }
 
 function nextEmptyDeductionLine() {
-  return { key: `new-${Date.now()}-${Math.random()}`, deduction_type_id: "", amount: "", percentage: "", round_off: "", in_landed: false };
+  return { key: `new-${Date.now()}-${Math.random()}`, deduction_type_id: "", amount: "", percentage: "", round_off: "", in_landed: false, party_type: "VENDOR" };
 }
 
 function nextEmptyCostLine() {
   return {
     key: `new-${Date.now()}-${Math.random()}`,
     cost_type: "FREIGHT", amount: "", entry_mode: "AD_HOC", has_gst: false, gst_treatment: "EXCLUSIVE", gst_rate: "",
-    bill_reference: "", bill_date: "", description: "",
+    bill_reference: "", bill_date: "", description: "", party_type: "VENDOR",
   };
 }
 
@@ -150,14 +161,26 @@ function buildColumns() {
     { key: "taxable_value", label: "Taxable Value", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.taxable_value) },
     { key: "landed_cost_total", label: "Landed Cost", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.landed_cost_total) },
     { key: "cost_per_unit", label: "Cost / Unit", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.cost_per_unit) },
-    { key: "vendor_payable", label: "Vendor Payable", width: "120px", align: "right", render: (row) => formatNumberOrBlank(row.vendor_payable) },
+    { key: "vendor_payable", label: "Vendor Payable (material)", width: "150px", align: "right", render: (row) => formatNumberOrBlank(row.vendor_payable) },
+    {
+      key: "vendor_suggested_payable", label: "Vendor Payable (total)", width: "140px", align: "right",
+      render: (row) => formatNumberOrBlank(row.vendor_payable_override ?? row.vendor_suggested_payable),
+    },
+    {
+      key: "transporter_suggested_payable", label: "Transporter Payable", width: "140px", align: "right",
+      render: (row) => formatNumberOrBlank(row.transporter_payable_override ?? row.transporter_suggested_payable),
+    },
+    {
+      key: "last_mile_suggested_payable", label: "Last Mile Payable", width: "140px", align: "right",
+      render: (row) => formatNumberOrBlank(row.last_mile_payable_override ?? row.last_mile_suggested_payable),
+    },
     { key: "payment_days", label: "Payment Days", width: "90px", align: "right" },
     { key: "payment_type", label: "Payment Type", width: "140px" },
     { key: "actual_payment_date", label: "Actual Payment Date", width: "120px", render: (row) => toDDMMYYYY(row.actual_payment_date) },
     { key: "revised_payment_date", label: "Revised Payment Date", width: "130px", render: (row) => toDDMMYYYY(row.revised_payment_date) },
     { key: "freight_type", label: "Freight Type", width: "100px" },
-    { key: "transporter_id", label: "Transporter", width: "120px" },
-    { key: "last_mile_transporter_id", label: "Last Mile Transporter", width: "130px" },
+    { key: "transporter_id", label: "Transporter", width: "160px", render: (row) => row.transporter_name || "—" },
+    { key: "last_mile_transporter_id", label: "Last Mile Transporter", width: "170px", render: (row) => row.last_mile_transporter_name || "—" },
     { key: "lr_number", label: "LR Number", width: "100px" },
     { key: "lr_date", label: "LR Date", width: "90px", render: (row) => toDDMMYYYY(row.lr_date) },
     { key: "bl_number", label: "BL Number", width: "100px" },
@@ -213,6 +236,68 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const [error, setError] = useState("");
   const dateFieldPickerRef = useRef(null);
 
+  // Last mile transporter -- search-and-select against Transporter Master,
+  // same mechanism GRN's own Transporter tab uses (GRNPostFlow.jsx), plus an
+  // inline "+ New transporter" quick-create so the flow never has to leave
+  // this drawer. Found live 2026-08-21: this used to be a bare text input
+  // bound directly to a raw transporter_id.
+  const [lastMileTransporterName, setLastMileTransporterName] = useState("");
+  const [lastMileTransporterSearch, setLastMileTransporterSearch] = useState("");
+  const [debouncedLmtSearch, setDebouncedLmtSearch] = useState("");
+  const [lmtCreateOpen, setLmtCreateOpen] = useState(false);
+  const [lmtCreateName, setLmtCreateName] = useState("");
+  const [lmtCreateGst, setLmtCreateGst] = useState("");
+  const [lmtCreating, setLmtCreating] = useState(false);
+  const lmtDebounceRef = useRef(null);
+
+  const [deductionTypeCreateOpen, setDeductionTypeCreateOpen] = useState(false);
+  const [deductionTypeCreateName, setDeductionTypeCreateName] = useState("");
+  const [deductionTypeCreating, setDeductionTypeCreating] = useState(false);
+
+  useEffect(() => {
+    if (lmtDebounceRef.current) clearTimeout(lmtDebounceRef.current);
+    lmtDebounceRef.current = setTimeout(() => setDebouncedLmtSearch(lastMileTransporterSearch.trim()), 300);
+    return () => clearTimeout(lmtDebounceRef.current);
+  }, [lastMileTransporterSearch]);
+
+  const lastMileTransporterQuery = useQuery({
+    queryKey: ["ac01", "transporters-search", debouncedLmtSearch, companyId],
+    queryFn: () => listTransporters({ search: debouncedLmtSearch, company_id: companyId, limit: 20 }),
+    enabled: debouncedLmtSearch.length >= 2,
+  });
+  const lastMileTransporterResults = Array.isArray(lastMileTransporterQuery.data)
+    ? lastMileTransporterQuery.data
+    : (lastMileTransporterQuery.data?.data ?? []);
+
+  async function handleCreateTransporter() {
+    if (!lmtCreateName.trim()) {
+      setError("Transporter name is required.");
+      return;
+    }
+    setLmtCreating(true);
+    setError("");
+    try {
+      const result = await createTransporter({
+        transporter_name: lmtCreateName.trim(),
+        usage_direction: "BOTH",
+        gst_number: lmtCreateGst.trim() || undefined,
+      });
+      const created = result?.data ?? result;
+      if (created?.id) {
+        setDraft((current) => ({ ...current, last_mile_transporter_id: created.id }));
+        setLastMileTransporterName(`${created.transporter_code} — ${created.transporter_name}`);
+      }
+      setLmtCreateOpen(false);
+      setLmtCreateName("");
+      setLmtCreateGst("");
+      setLastMileTransporterSearch("");
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "Transporter create failed.");
+    } finally {
+      setLmtCreating(false);
+    }
+  }
+
   useEffect(() => {
     if (!companyId && defaultCompanyId) setCompanyId(defaultCompanyId);
   }, [companyId, defaultCompanyId]);
@@ -267,7 +352,13 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       revised_payment_date: toDDMMYYYY(grn.revised_payment_date),
       gst_pct: grn.gst_pct ?? "",
       last_mile_transporter_id: grn.last_mile_transporter_id ?? "",
+      vendor_payable_override: grn.vendor_payable_override ?? "",
+      transporter_payable_override: grn.transporter_payable_override ?? "",
+      last_mile_payable_override: grn.last_mile_payable_override ?? "",
     });
+    setLastMileTransporterName(grn.last_mile_transporter_name ?? "");
+    setLastMileTransporterSearch("");
+    setLmtCreateOpen(false);
     setCostLines(
       (grn.cost_lines ?? []).map((line) => ({
         key: line.id,
@@ -280,6 +371,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         bill_reference: line.bill_reference ?? "",
         bill_date: toDDMMYYYY(line.bill_date),
         description: line.description ?? "",
+        party_type: line.party_type ?? "VENDOR",
       })),
     );
     setDeductionLines(
@@ -290,6 +382,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         percentage: line.percentage ?? "",
         round_off: line.round_off ?? "",
         in_landed: Boolean(line.in_landed),
+        party_type: line.party_type ?? "VENDOR",
       })),
     );
   }, [grnDetailQuery.data]);
@@ -309,6 +402,11 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     setCostLines([]);
     setDeductionLines([]);
     setError("");
+    setLastMileTransporterName("");
+    setLastMileTransporterSearch("");
+    setLmtCreateOpen(false);
+    setDeductionTypeCreateOpen(false);
+    setDeductionTypeCreateName("");
   }
 
   async function handleSave() {
@@ -323,6 +421,13 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         invoice_date: draft.invoice_date ? toISODate(draft.invoice_date) : null,
         gst_pct: draft.gst_pct === "" ? null : Number(draft.gst_pct),
         revised_payment_date: draft.revised_payment_date ? toISODate(draft.revised_payment_date) : null,
+        clear_revised_payment_date: !draft.revised_payment_date,
+        vendor_payable_override: draft.vendor_payable_override === "" ? null : Number(draft.vendor_payable_override),
+        clear_vendor_payable_override: draft.vendor_payable_override === "",
+        transporter_payable_override: draft.transporter_payable_override === "" ? null : Number(draft.transporter_payable_override),
+        clear_transporter_payable_override: draft.transporter_payable_override === "",
+        last_mile_payable_override: draft.last_mile_payable_override === "" ? null : Number(draft.last_mile_payable_override),
+        clear_last_mile_payable_override: draft.last_mile_payable_override === "",
         cost_lines: costLines
           .filter((line) => line.amount !== "")
           .map((line) => ({
@@ -335,6 +440,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             bill_reference: line.bill_reference || null,
             bill_date: line.bill_date ? toISODate(line.bill_date) : null,
             description: line.description || null,
+            party_type: line.party_type || "VENDOR",
           })),
         deduction_lines: deductionLines
           .filter((line) => line.deduction_type_id)
@@ -344,6 +450,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             percentage: line.percentage === "" ? null : Number(line.percentage),
             round_off: line.round_off === "" ? null : Number(line.round_off),
             in_landed: line.in_landed,
+            party_type: line.party_type || "VENDOR",
           })),
       });
       await Promise.all([
@@ -364,8 +471,30 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       const created = await createDeductionType({ company_id: companyId, name: name.trim() });
       await queryClient.invalidateQueries({ queryKey: ["ac01", "deduction-types", companyId] });
       return created;
-    } catch {
+    } catch (createError) {
+      // Found live 2026-08-21: this used to be a bare `catch {}` -- a real
+      // failure (ACL, duplicate name, network) looked identical to success
+      // from the user's side, since the native prompt() gave no feedback
+      // either way and the row simply never appeared.
+      setError(createError instanceof Error ? createError.message : "Deduction type create failed.");
       return null;
+    }
+  }
+
+  async function handleSubmitNewDeductionType() {
+    if (!deductionTypeCreateName.trim()) {
+      setError("Deduction type name is required.");
+      return;
+    }
+    setDeductionTypeCreating(true);
+    try {
+      const created = await handleCreateDeductionType(deductionTypeCreateName);
+      if (created) {
+        setDeductionTypeCreateOpen(false);
+        setDeductionTypeCreateName("");
+      }
+    } finally {
+      setDeductionTypeCreating(false);
     }
   }
 
@@ -545,8 +674,12 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
 
             <DrawerSection eyebrow="Payment" title="Terms and payment dates">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
-                <DrawerField label="Actual payment date (derived)">
-                  <input disabled value="Pending AC02 Vendor Ledger" className={inputCls} />
+                <DrawerField label="Actual payment date (calculated from PO payment terms)">
+                  <input
+                    disabled
+                    value={grnDetailQuery.data?.actual_payment_date ? toDDMMYYYY(grnDetailQuery.data.actual_payment_date) : "-"}
+                    className={inputCls}
+                  />
                 </DrawerField>
                 <DrawerField label="Revised payment date">
                   <input disabled={readOnly} value={draft.revised_payment_date} onChange={(event) => setDraft((current) => ({ ...current, revised_payment_date: event.target.value }))} placeholder="DD-MM-YYYY, optional" className={inputCls} />
@@ -555,11 +688,97 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             </DrawerSection>
 
             <DrawerSection eyebrow="Freight and logistics" title="Last mile transporter">
-              <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
-                <DrawerField label="Last mile transporter ID">
-                  <input disabled={readOnly} value={draft.last_mile_transporter_id} onChange={(event) => setDraft((current) => ({ ...current, last_mile_transporter_id: event.target.value }))} className={inputCls} />
-                </DrawerField>
-              </div>
+              {grnDetailQuery.data?.freight_type ? (
+                <div className="border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-600">
+                  <span className="font-semibold text-slate-800">Freight term (from PO): {grnDetailQuery.data.freight_type}</span>
+                  {grnDetailQuery.data.freight_type === "FOR" && costLines.some((line) => line.cost_type === "FREIGHT") ? (
+                    <div className="mt-0.5 text-amber-700">
+                      ⚠ FOR means the vendor delivers to destination — a "Freight" line here is unusual; verify it, or use Last Mile Transport for PACE's own onward leg.
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              <DrawerField label="Last mile transporter">
+                {draft.last_mile_transporter_id && lastMileTransporterName ? (
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-8 flex-1 items-center border border-emerald-300 bg-emerald-50 px-2 text-sm text-emerald-900">
+                      {lastMileTransporterName}
+                    </span>
+                    {!readOnly ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDraft((current) => ({ ...current, last_mile_transporter_id: "" }));
+                          setLastMileTransporterName("");
+                        }}
+                        className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-600"
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                ) : readOnly ? (
+                  <span className="text-sm text-slate-400">—</span>
+                ) : (
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Type 2+ characters to search transporter master…"
+                      value={lastMileTransporterSearch}
+                      onChange={(event) => setLastMileTransporterSearch(event.target.value)}
+                      className={inputCls}
+                    />
+                    {debouncedLmtSearch.length >= 2 ? (
+                      <div className="absolute left-0 right-0 top-full z-20 mt-0.5 max-h-52 overflow-y-auto border border-slate-200 bg-white shadow-md">
+                        {lastMileTransporterQuery.isLoading ? (
+                          <div className="px-3 py-2 text-sm text-slate-400">Searching…</div>
+                        ) : null}
+                        {!lastMileTransporterQuery.isLoading && lastMileTransporterResults.length === 0 ? (
+                          <div className="px-3 py-2 text-sm text-slate-500">
+                            No match found.{" "}
+                            <button type="button" onClick={() => { setLmtCreateOpen(true); setLmtCreateName(lastMileTransporterSearch); }} className="text-sky-600 underline">
+                              + New transporter
+                            </button>
+                          </div>
+                        ) : null}
+                        {lastMileTransporterResults.map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => {
+                              setDraft((current) => ({ ...current, last_mile_transporter_id: t.id }));
+                              setLastMileTransporterName(`${t.transporter_code} — ${t.transporter_name}`);
+                              setLastMileTransporterSearch("");
+                            }}
+                            className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm last:border-0 hover:bg-sky-50"
+                          >
+                            <span className="font-mono text-xs text-slate-500">{t.transporter_code}</span>
+                            <span className="ml-2 font-medium">{t.transporter_name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </DrawerField>
+              {!readOnly && !draft.last_mile_transporter_id ? (
+                lmtCreateOpen ? (
+                  <div className="mt-2 grid gap-2 border border-sky-200 bg-sky-50 p-3" style={{ gridTemplateColumns: "1fr 1fr auto auto" }}>
+                    <input placeholder="Transporter name" value={lmtCreateName} onChange={(event) => setLmtCreateName(event.target.value)} className={inputCls} />
+                    <input placeholder="GST number (optional)" value={lmtCreateGst} onChange={(event) => setLmtCreateGst(event.target.value)} className={inputCls} />
+                    <button type="button" disabled={lmtCreating} onClick={() => void handleCreateTransporter()} className="h-8 bg-sky-600 px-3 text-xs font-semibold text-white disabled:opacity-50">
+                      {lmtCreating ? "Saving…" : "Save"}
+                    </button>
+                    <button type="button" onClick={() => setLmtCreateOpen(false)} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-600">
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => setLmtCreateOpen(true)} className="mt-1 text-[11px] font-semibold text-sky-600 underline">
+                    + New transporter
+                  </button>
+                )
+              ) : null}
             </DrawerSection>
 
             <DrawerSection eyebrow="Landed cost" title="Duty stack + ad-hoc/per-UoM charges, GST gated then treated, always Base UoM">
@@ -567,7 +786,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                 {costLines.map((line, index) => {
                   const isDuty = DUTY_COST_TYPES.has(line.cost_type);
                   return (
-                    <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: "1.6fr 0.9fr 0.7fr 0.7fr 0.7fr 0.5fr" }}>
+                    <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: "1.4fr 0.7fr 0.6fr 0.6fr 0.6fr 0.5fr 0.9fr 0.5fr" }}>
                       <select
                         disabled={readOnly}
                         value={line.cost_type}
@@ -624,6 +843,24 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                           <option value="INCLUSIVE">Inclusive</option>
                         </select>
                       ) : <div />}
+                      {!isDuty && line.has_gst ? (
+                        <input
+                          disabled={readOnly}
+                          value={line.gst_rate}
+                          onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, gst_rate: event.target.value } : entry)))}
+                          placeholder="GST %"
+                          className={inputCls}
+                        />
+                      ) : <div />}
+                      <select
+                        disabled={readOnly}
+                        value={line.party_type}
+                        onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, party_type: event.target.value } : entry)))}
+                        className={inputCls}
+                        title="Which party this charge is owed to"
+                      >
+                        {PARTY_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </select>
                       {!readOnly ? (
                         <button
                           type="button"
@@ -647,7 +884,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             <DrawerSection eyebrow="Deductions" title='Reusable deduction types — tick "In landed?" to affect landed cost'>
               <div className="grid gap-1">
                 {deductionLines.map((line, index) => (
-                  <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: "1.4fr 0.8fr 0.6fr 0.6fr 0.5fr 0.5fr" }}>
+                  <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: "1.2fr 0.6fr 0.5fr 0.6fr 0.9fr 0.5fr 0.5fr" }}>
                     <select
                       disabled={readOnly}
                       value={line.deduction_type_id}
@@ -660,6 +897,15 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                     <input disabled={readOnly} value={line.amount} onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, amount: event.target.value } : entry)))} placeholder="Amount" className={inputCls} />
                     <input disabled={readOnly} value={line.percentage} onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, percentage: event.target.value } : entry)))} placeholder="%" className={inputCls} />
                     <input disabled={readOnly} value={line.round_off} onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, round_off: event.target.value } : entry)))} placeholder="Round off" className={inputCls} />
+                    <select
+                      disabled={readOnly}
+                      value={line.party_type}
+                      onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, party_type: event.target.value } : entry)))}
+                      className={inputCls}
+                      title="Which party this deduction is against"
+                    >
+                      {PARTY_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
                     <label className="flex h-[26px] items-center gap-1 text-[10px] text-slate-600">
                       <input
                         type="checkbox"
@@ -677,22 +923,74 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   </div>
                 ))}
                 {!readOnly ? (
-                  <div className="mt-1 flex flex-wrap items-center gap-2">
-                    <button type="button" onClick={() => setDeductionLines((current) => [...current, nextEmptyDeductionLine()])} className="text-[11px] font-semibold text-sky-700">
-                      + Add deduction
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const name = window.prompt("New deduction type name (e.g. TDS 194Q)");
-                        if (name) void handleCreateDeductionType(name);
-                      }}
-                      className="text-[11px] font-semibold text-slate-500"
-                    >
-                      + New deduction type
-                    </button>
+                  <div className="mt-1 grid gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button type="button" onClick={() => setDeductionLines((current) => [...current, nextEmptyDeductionLine()])} className="text-[11px] font-semibold text-sky-700">
+                        + Add deduction
+                      </button>
+                      {!deductionTypeCreateOpen ? (
+                        <button type="button" onClick={() => setDeductionTypeCreateOpen(true)} className="text-[11px] font-semibold text-slate-500">
+                          + New deduction type
+                        </button>
+                      ) : null}
+                    </div>
+                    {deductionTypeCreateOpen ? (
+                      <div className="grid gap-2 border border-sky-200 bg-sky-50 p-3" style={{ gridTemplateColumns: "1fr auto auto" }}>
+                        <input
+                          autoFocus
+                          placeholder="Deduction type name (e.g. TDS 194Q)"
+                          value={deductionTypeCreateName}
+                          onChange={(event) => setDeductionTypeCreateName(event.target.value)}
+                          className={inputCls}
+                        />
+                        <button type="button" disabled={deductionTypeCreating} onClick={() => void handleSubmitNewDeductionType()} className="h-8 bg-sky-600 px-3 text-xs font-semibold text-white disabled:opacity-50">
+                          {deductionTypeCreating ? "Saving…" : "Save"}
+                        </button>
+                        <button type="button" onClick={() => { setDeductionTypeCreateOpen(false); setDeductionTypeCreateName(""); }} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-600">
+                          Cancel
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
+              </div>
+            </DrawerSection>
+
+            <DrawerSection
+              eyebrow="Payable"
+              title="Per-party payable — suggested from this GRN's own lines only, overwrite to confirm the real amount"
+            >
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { label: "Vendor payable", suggestedKey: "vendor_suggested_payable", draftKey: "vendor_payable_override" },
+                  { label: "Transporter payable", suggestedKey: "transporter_suggested_payable", draftKey: "transporter_payable_override" },
+                  { label: "Last mile transporter payable", suggestedKey: "last_mile_suggested_payable", draftKey: "last_mile_payable_override" },
+                ].map(({ label, suggestedKey, draftKey }) => (
+                  <div key={draftKey} className="grid gap-1 border border-slate-200 bg-white px-2 py-1.5">
+                    <div className="text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</div>
+                    <div className="text-[11px] text-slate-500">
+                      Suggested: <span className="font-semibold text-slate-800">{formatNumberOrBlank(grnDetailQuery.data?.[suggestedKey]) || "0"}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <input
+                        disabled={readOnly}
+                        value={draft[draftKey]}
+                        onChange={(event) => setDraft((current) => ({ ...current, [draftKey]: event.target.value }))}
+                        placeholder="Confirmed / overwrite"
+                        className={inputCls}
+                      />
+                      {!readOnly && draft[draftKey] !== "" ? (
+                        <button
+                          type="button"
+                          onClick={() => setDraft((current) => ({ ...current, [draftKey]: "" }))}
+                          className="h-[26px] shrink-0 border border-slate-300 bg-white px-2 text-[10px] text-slate-600"
+                        >
+                          Use suggested
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
               </div>
             </DrawerSection>
 
