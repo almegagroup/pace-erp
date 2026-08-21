@@ -19,7 +19,7 @@ import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationO
 import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { availabilityPreviewProcessOrder, correctProcessOrder, getProcessOrder, listProcessOrders, verifyProcessOrder } from "./prodApi.js";
-import { formatPreciseNumber, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
+import { formatPreciseNumber, formatSum, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 
 const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }));
 const RM_CORRECTION_MOVEMENT_OPTIONS = [
@@ -809,9 +809,9 @@ export default function ProductionPOVerifyPage() {
                       <tr>
                         <td className="border-b border-slate-100 px-3 py-2">{materialLabel(po.material) || "--"}</td>
                         <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(po.planned_qty, "0")}</td>
-                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(outputActualQty, "0")}</td>
-                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(outputApprovedQty, "0")}</td>
-                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(outputVariance, "0")}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatSum(outputActualQty, "0")}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatSum(outputApprovedQty, "0")}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatSum(outputVariance, "0")}</td>
                         <td className="border-b border-slate-100 px-3 py-2">P101</td>
                       </tr>
                     </tbody>

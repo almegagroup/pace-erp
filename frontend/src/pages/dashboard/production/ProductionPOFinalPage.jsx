@@ -26,7 +26,7 @@ import {
   listPackingOrders,
   listPackingSfgBatches,
 } from "./prodApi.js";
-import { formatPreciseNumber, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
+import { formatPreciseNumber, formatSum, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 
 const FINAL_TABS = ["Process PO", "Packing PO"];
 const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }));
@@ -1494,11 +1494,11 @@ function ProcessPoFinalTab() {
                               onChange={(event) => setManualOutputQty(event.target.value)}
                             />
                           ) : (
-                            <span className="font-mono">{formatPreciseNumber(outputActualQty, "0")}</span>
+                            <span className="font-mono">{formatSum(outputActualQty, "0")}</span>
                           )}
                         </td>
-                        {!hideRmApproval && <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(outputApprovedQty, "0")}</td>}
-                        {!isDirectPostType && <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(outputVariance, "0")}</td>}
+                        {!hideRmApproval && <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatSum(outputApprovedQty, "0")}</td>}
+                        {!isDirectPostType && <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatSum(outputVariance, "0")}</td>}
                         <td className="border-b border-slate-100 px-3 py-2">P101</td>
                       </tr>
                     </tbody>
