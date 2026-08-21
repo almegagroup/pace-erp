@@ -85,6 +85,17 @@ const BASELINE = new Set([
   "supabase/functions/api/_core/om/cost_center.handlers.ts::createCostCenterHandler",
   "supabase/functions/api/_core/om/customer.handlers.ts::createCustomerHandler",
   "supabase/functions/api/_core/om/customer.handlers.ts::mapCustomerToCompanyHandler",
+  // Genuinely exempt (2026-08-21), not an unfixed gap: both call the local
+  // assertCustomerCompanyScope(ctx, id, resourceCode, actionCode) helper,
+  // which internally calls canMaintainCompanyResource() for each of the
+  // customer's mapped companies the caller also belongs to -- the real
+  // EDIT-level check this guard wants, just one call-frame away from the
+  // handler body, which this function-local regex heuristic can't see
+  // through. Flagged only because the helper's own name ends in
+  // "CompanyScope" (matches SCOPE_RESOLVER_CALL_RE) while its EDIT check
+  // lives inside the helper, not inline in the handler.
+  "supabase/functions/api/_core/om/customer.handlers.ts::updateCustomerHandler",
+  "supabase/functions/api/_core/om/customer.handlers.ts::changeCustomerStatusHandler",
   "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::createParentCompanyHandler",
   "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::createOrGetDepotCodeHandler",
   "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::upgradeDispatchCustomerToRegisteredHandler",

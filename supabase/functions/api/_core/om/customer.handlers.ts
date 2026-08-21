@@ -11,7 +11,8 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
+import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { resolveGstProfileWithSource } from "../../_shared/gst_resolver.ts";
 import { deriveCompanyFieldsFromGstProfile } from "../../_shared/gst_company_fields.ts";
 import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
@@ -179,6 +180,55 @@ async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Reco
       company_codes: companyCodesByCustomer.get(row.id as string) ?? [],
     };
   });
+}
+
+// §MM04-company-scope-2026-08-21 -- customer_master has no single company_id
+// column (many-to-many via customer_company_map), so the generic
+// assertCompanyScope() (single company_id) doesn't directly apply to
+// read/edit-an-existing-customer paths. These two helpers are the
+// customer_company_map-aware equivalent, used the same way: list/get/update/
+// status-change must all validate scope, not just create (11-bug #2).
+async function getCallerCompanyIds(ctx: OmHandlerContext): Promise<string[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id);
+  if (error) throw new Error("OM_CUSTOMER_LIST_FAILED");
+  return (data ?? []).map((row: Record<string, unknown>) => String(row.company_id));
+}
+
+// Membership alone (company scope guard #2) isn't enough for a WRITE --
+// route-level stepAcl only checked the caller's SESSION company, not
+// necessarily one of this specific customer's mapped companies (11-bug: the
+// write-ACL-gap sibling check, company-scope-write-acl-guard.mjs). For each
+// of the customer's companies the caller also belongs to, verify the
+// caller's actual ACL decision (canMaintainCompanyResource) for the
+// resource:action this route requires, not just that they're a member.
+async function assertCustomerCompanyScope(
+  ctx: OmHandlerContext,
+  customerId: string,
+  resourceCode: string,
+  actionCode: string,
+): Promise<void> {
+  if (isCompanyScopeAdminBypass(ctx)) return;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("customer_company_map")
+    .select("company_id")
+    .eq("customer_id", customerId)
+    .eq("active", true);
+  if (error) throw new Error("COMPANY_SCOPE_VIOLATION");
+  const rawCompanyIds: string[] = (data ?? []).map((row: Record<string, unknown>) => String(row.company_id));
+  const customerCompanyIds = [...new Set(rawCompanyIds)];
+  if (customerCompanyIds.length === 0) throw new Error("COMPANY_SCOPE_VIOLATION");
+  const callerCompanyIds = await getCallerCompanyIds(ctx);
+  const candidateCompanyIds = customerCompanyIds.filter((id) => callerCompanyIds.includes(id));
+  if (candidateCompanyIds.length === 0) throw new Error("COMPANY_SCOPE_VIOLATION");
+  const decisions = await Promise.all(
+    candidateCompanyIds.map((companyId) => canMaintainCompanyResource(ctx, companyId, resourceCode, actionCode)),
+  );
+  if (!decisions.some(Boolean)) throw new Error("COMPANY_SCOPE_VIOLATION");
 }
 
 export async function createCustomerHandler(
@@ -355,19 +405,44 @@ export async function listCustomersHandler(
 
     // §113.6 — without this, a Customer dropdown scoped to one company
     // showed every customer in the system, mapped or not.
+    // §MM04-company-scope-2026-08-21 — this alone wasn't enough: a request
+    // with NO company_id (the page's own default state) fell through with
+    // zero scoping at all, showing every customer from every company to
+    // any VIEW-holder (Stores/Logistics/Production/Accounts alike). Now:
+    // SA/GA/ACL-MASTER always see everything (unchanged); everyone else is
+    // scoped to their own companies whether or not they picked one in the
+    // filter — an explicit company_id must additionally be one of their own.
     let scopedCustomerIds: string[] | null = null;
+    const adminBypass = isCompanyScopeAdminBypass(ctx);
+    let scopeCompanyIds: string[] | null = null;
     if (companyId) {
+      if (!adminBypass) {
+        try {
+          await assertCompanyScope(ctx, companyId);
+        } catch {
+          return customerErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+        }
+      }
+      scopeCompanyIds = [companyId];
+    } else if (!adminBypass) {
+      scopeCompanyIds = await getCallerCompanyIds(ctx);
+      if (scopeCompanyIds.length === 0) {
+        return okResponse({ data: [], total: 0 }, ctx.request_id, req);
+      }
+    }
+    if (scopeCompanyIds) {
       const { data: mapRows, error: mapError } = await serviceRoleClient
         .schema("erp_master")
         .from("customer_company_map")
         .select("customer_id")
-        .eq("company_id", companyId)
+        .in("company_id", scopeCompanyIds)
         .eq("active", true);
       if (mapError) {
         throw new Error("OM_CUSTOMER_LIST_FAILED");
       }
-      scopedCustomerIds = (mapRows ?? []).map((row: Record<string, unknown>) => String(row.customer_id));
-      if (scopedCustomerIds!.length === 0) {
+      const mappedIds: string[] = (mapRows ?? []).map((row: Record<string, unknown>) => String(row.customer_id));
+      scopedCustomerIds = [...new Set(mappedIds)];
+      if (scopedCustomerIds.length === 0) {
         return okResponse({ data: [], total: 0 }, ctx.request_id, req);
       }
     }
@@ -426,6 +501,11 @@ export async function getCustomerHandler(
     if (!customer) {
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 404, "Customer not found");
     }
+    try {
+      await assertCustomerCompanyScope(ctx, id, "OM_CUSTOMER_LIST", "VIEW");
+    } catch {
+      return customerErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this customer.");
+    }
 
     const [enriched] = await enrichCustomerRows([customer]);
     return okResponse({ data: enriched }, ctx.request_id, req);
@@ -451,6 +531,11 @@ export async function updateCustomerHandler(
     const existing = await getCustomerById(id);
     if (!existing) {
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 404, "Customer not found");
+    }
+    try {
+      await assertCustomerCompanyScope(ctx, id, "OM_CUSTOMER_CREATE", "EDIT");
+    } catch {
+      return customerErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this customer.");
     }
 
     const isVendorLinked = Boolean(existing.vendor_id);
@@ -556,6 +641,11 @@ export async function changeCustomerStatusHandler(
     if (!existing) {
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 404, "Customer not found");
     }
+    try {
+      await assertCustomerCompanyScope(ctx, id, "OM_CUSTOMER_CREATE", "EDIT");
+    } catch {
+      return customerErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this customer.");
+    }
 
     const currentStatus = String(existing.status ?? "");
     const allowed = CUSTOMER_TRANSITIONS.get(currentStatus);
@@ -642,6 +732,11 @@ export async function listCustomerCompanyMapsHandler(
     const customerId = toTrimmedString(new URL(req.url).searchParams.get("customer_id"));
     if (!customerId) {
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 400, "customer_id required");
+    }
+    try {
+      await assertCustomerCompanyScope(ctx, customerId, "OM_CUSTOMER_LIST", "VIEW");
+    } catch {
+      return customerErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this customer.");
     }
 
     const { data, error } = await serviceRoleClient
