@@ -676,13 +676,13 @@ function PackingPoFinalTab() {
                                       onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
                                     />
                                   ) : isPm ? (
-                                    <span className="font-mono">{formatPreciseNumber(finalValues.apApproved, "0")}</span>
+                                    <span className="font-mono">{formatSum(finalValues.apApproved, "0")}</span>
                                   ) : (
                                     <span className="text-slate-400">—</span>
                                   )}
                                 </td>
                               )}
-                              <td className="px-3 py-2 text-right font-mono">{isPm ? formatPreciseNumber(finalValues.variance, "0") : "—"}</td>
+                              <td className="px-3 py-2 text-right font-mono">{isPm ? formatSum(finalValues.variance, "0") : "—"}</td>
                             </>
                           ) : (
                             <>
@@ -711,13 +711,13 @@ function PackingPoFinalTab() {
                                       onChange={(event) => setPmApApproved((current) => ({ ...current, [line.id]: event.target.value }))}
                                     />
                                   ) : correctionValues ? (
-                                    <span className="font-mono">{formatPreciseNumber(correctionValues.apApproved, "0")}</span>
+                                    <span className="font-mono">{formatSum(correctionValues.apApproved, "0")}</span>
                                   ) : (
                                     <span className="text-slate-400">—</span>
                                   )}
                                 </td>
                               )}
-                              <td className="px-3 py-2 text-right font-mono">{correctionValues ? formatPreciseNumber(correctionValues.variance, "0") : "—"}</td>
+                              <td className="px-3 py-2 text-right font-mono">{correctionValues ? formatSum(correctionValues.variance, "0") : "—"}</td>
                             </>
                           )}
 
@@ -1402,7 +1402,7 @@ function ProcessPoFinalTab() {
                                 emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
                               />
                             </td>
-                            <td className="px-3 py-2 text-right font-mono">{formatPreciseNumber(values.planned, "0")}</td>
+                            <td className="px-3 py-2 text-right font-mono">{formatSum(values.planned, "0")}</td>
                             <td className="px-3 py-2 text-right">
                               <input
                                 type="number"
@@ -1439,11 +1439,11 @@ function ProcessPoFinalTab() {
                                     onChange={(event) => updateRow(row.key, { ap_approved_qty: event.target.value })}
                                   />
                                 ) : (
-                                  <span className="font-mono">{formatPreciseNumber(values.apApproved, "0")}</span>
+                                  <span className="font-mono">{formatSum(values.apApproved, "0")}</span>
                                 )}
                               </td>
                             )}
-                            <td className="px-3 py-2 text-right font-mono">{formatPreciseNumber(values.variance, "0")}</td>
+                            <td className="px-3 py-2 text-right font-mono">{formatSum(values.variance, "0")}</td>
                             <td className="px-3 py-2">P261</td>
                             <td className="px-3 py-2 text-center">
                               {!row.is_formulation_line && (

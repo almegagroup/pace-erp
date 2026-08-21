@@ -623,10 +623,10 @@ export default function ProductionPOVerifyPage() {
                                 />
                               )}
                             </td>
-                            <td className="px-3 py-2 text-right font-mono">{formatPreciseNumber(values.planned, "0")}</td>
+                            <td className="px-3 py-2 text-right font-mono">{formatSum(values.planned, "0")}</td>
                             <td className="px-3 py-2 text-right">
                               {isCorrectionMode ? (
-                                <span className="font-mono">{formatPreciseNumber(values.actual, "0")}</span>
+                                <span className="font-mono">{formatSum(values.actual, "0")}</span>
                               ) : (
                                 <input
                                   type="number"
@@ -672,7 +672,7 @@ export default function ProductionPOVerifyPage() {
                                     onChange={(event) => setCorrectionApApproved((current) => ({ ...current, [row.id]: event.target.value }))}
                                   />
                                 ) : hasCorrectionQty ? (
-                                  <span className="font-mono">{formatPreciseNumber(correctionValues.apApproved, "0")}</span>
+                                  <span className="font-mono">{formatSum(correctionValues.apApproved, "0")}</span>
                                 ) : (
                                   <span className="text-slate-400">—</span>
                                 )
@@ -686,11 +686,11 @@ export default function ProductionPOVerifyPage() {
                                   onChange={(event) => updateRow(row.key, { ap_approved_qty: event.target.value })}
                                 />
                               ) : (
-                                <span className="font-mono">{formatPreciseNumber(values.apApproved, "0")}</span>
+                                <span className="font-mono">{formatSum(values.apApproved, "0")}</span>
                               )}
                             </td>
                             <td className="px-3 py-2 text-right font-mono">
-                              {isCorrectionMode ? (hasCorrectionQty ? formatPreciseNumber(correctionValues.variance, "0") : "—") : formatPreciseNumber(values.variance, "0")}
+                              {isCorrectionMode ? (hasCorrectionQty ? formatSum(correctionValues.variance, "0") : "—") : formatSum(values.variance, "0")}
                             </td>
                             {isCorrectionMode ? (
                               <td className="px-3 py-2 text-right">
