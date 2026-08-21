@@ -4324,9 +4324,90 @@ it provides no enforcement value as a CI step in its current form.
   0-gap baseline first. Still only the static "manifest entry exists" half -- the live "is this
   page's dependency actually ACL-granted in the DB" half remains manual per
   `PROD-ACL-Access-Decisions.md`'s Post-Implementation Checklist, since CI has no DB credentials.
-- Not yet done: live click-through in the deployed app (no dev login in this environment); the
-  real AC01-vs-AC03 ACL audience differentiation (both currently ride `PROC_IV_LIST`, see the
-  correction above); the pre-existing P0002/ACL-MASTER drift on `PROC_IV_LIST`/`PROC_LC_LIST`.
+- Not yet done (at the time this entry was originally written): live click-through in the
+  deployed app (no dev login in this environment); the pre-existing P0002/ACL-MASTER drift on
+  `PROC_IV_LIST`/`PROC_LC_LIST`. **Correction, see the 2026-08-21 (continued) entry below: the
+  real AC01-vs-AC03 ACL audience differentiation was completed the same day** (Accounts
+  department L1_USER-L2_MANAGER own capability + Plant Head/L3_MANAGER Structural Fallback,
+  modeled on Stroke Master's own Quality-department pattern) -- this note is stale, kept only for
+  the session-history record.
+
+### 2026-08-21 (continued) - AC01/AC03 real ACL role wiring + AC01 per-party payable + actual payment date + GST rate UI
+
+- **ACL role wiring (dev + prod).** Business owner's explicit rule: "Accounts department's
+  L1_USER through L2_MANAGER get access; Plant Head (L3_MANAGER) also gets full access" --
+  directed to model this on Stroke Master's own Quality-department pattern (PR01 create /
+  PR02 manager-tier edit+approve), substituting Accounts for Quality. Live-audited
+  `acl.generate_acl_snapshot()`'s actual SQL first (not assumed) -- found it unions two paths
+  (capability-based, scoped by work context; and a separate department-blind
+  `role_menu_permissions` path) with the department-blind path taking higher precedence when
+  both exist. Two real, independent gaps found and fixed:
+  1. **PROD:** `CAP_PROC_ACCOUNTS` had been fully stripped from every real Accounts work context
+     (an earlier, unrelated blanket-capability-leak cleanup over-corrected) -- AC01/AC03 had
+     been ACL-MASTER-only for every real prod user this whole time, not "not yet designed" as
+     an earlier doc pass wrongly assumed. Re-granted to the real ACCOUNTS work context in every
+     company that has one, plus the Structural Fallback grant (`CAP_ACC_PLANTHEAD`-equivalent,
+     same shape as `CAP_QA_PLANTHEAD`/`CAP_RECEIVING_PLANTHEAD`) to L3_MANAGER/DIRECTOR per
+     company.
+  2. **DEV:** a pre-existing, department-blind `acl.role_menu_permissions` grant on
+     `PROC_IV_LIST`/`PROC_LC_LIST` gave every L1_USER/L2_USER/L1_MANAGER/L1_AUDITOR full write
+     access regardless of department -- deleted from both the live and version-scoped tables
+     (dev-only; confirmed via a clean, unambiguous prod-only query that prod had zero such rows
+     before touching anything there, after an initial self-caught mix-up in scratch reasoning --
+     see `feedback_verify_premise_before_acting` memory).
+  Version-bumped ACL for all 4 dev companies (CMP003/CMP006 -> v78, CMP010 -> v39, CMP014 -> v10)
+  and the equivalent prod companies, following the mandatory capture-then-snapshot-then-rebuild
+  sequence (CLAUDE.md's "new ACL menu page" rule). Verified live against real users in both
+  environments (Accounts, Plant Head, SCM, Auditor, ACL-MASTER roles each checked for the
+  expected ALLOW/DENY). Documented in full in
+  `docs/Operation Management/PROD-ACL-Access-Decisions.md`'s AC01/AC03 section.
+- **AC01 per-party payable (business owner's 6-question live audit).** Business owner listed 6
+  concrete gaps after reviewing a concurrent session's UUID/last-mile-transporter/prompt() fixes.
+  Answered by building the actual missing mechanism rather than a workaround:
+  - Schema: `goods_receipt.revised_payment_date`/`vendor_payable_override`/
+    `transporter_payable_override`/`last_mile_payable_override`; `landed_cost_line.party_type`
+    and `landed_cost_deduction_line.party_type` (VENDOR/TRANSPORTER/LAST_MILE_TRANSPORTER,
+    default VENDOR) -- migrations `20260821140000`/`20260821150000`, applied + reconciled in
+    both dev and prod (`migration-integrity-check.mjs` confirms `in_sync: true` in both).
+  - `save_ac01_grn_cost()` extended (not replaced) to accept the override/clear params, tag
+    each line with its party at insert time, and return per-party suggested payable computed
+    strictly from that GRN's own lines: `vendor = (confirmed/GRN rate x qty) + vendor charges -
+    vendor deductions`, `transporter/last_mile = their own charges - their own deductions`
+    (GST-inclusive lines net-of-GST first, same rule the landed-cost total already used;
+    deduction reduces payable regardless of `in_landed`, since that flag only gates the
+    WAR-facing landed-cost total, not what's actually owed to a party). Hand-verified against a
+    real dev GRN in a rolled-back transaction (5 cost/deduction lines across all 3 parties,
+    output matched hand calculation exactly).
+  - `ac01.handlers.ts`: `computeSuggestedPayables()` mirrors the RPC's math read-side (the RPC
+    only returns this on SAVE; GET must never trigger a write) -- used by both
+    `listAC01GRNsHandler` (bulk-fetches every listed GRN's cost/deduction lines via
+    `fetchInChunks`, §8E-compliant) and `getAC01GRNHandler`. `computeActualPaymentDate()` ported
+    from `csn.handlers.ts`'s already-working `enrichTrackerRows()` due-date-by-payment-terms
+    calculation (reference_date_type code -> anchor date on the GRN -> `+ credit_days`) --
+    corrects an earlier wrong assumption in this file that the calculated due date needed
+    AC02's Vendor Ledger; only the TRUE "date actually paid" fact needs that, not the
+    calculated due date. Hand-verified the anchor+credit-days math against a real dev GRN
+    (GRN_DATE reference, 45 credit days, `2026-07-30 + 45d = 2026-09-13`, cross-checked with a
+    raw SQL `DATE + INTERVAL` query).
+  - `AC01Page.jsx`: added the missing GST rate `<input>` on cost lines (state/save payload
+    already had `gst_rate`, only the UI element was missing -- confirmed bug, not a design
+    gap); a Party dropdown on both cost and deduction lines; a new "Payable" section with 3
+    cards (Vendor/Transporter/Last Mile Transporter), each showing the suggested value plus an
+    editable overwrite input and a "Use suggested" clear button; the previously-hardcoded
+    `disabled value="Pending AC02 Vendor Ledger"` Actual Payment Date field replaced with the
+    real calculated value (Revised Payment Date still takes precedence when set); a contextual
+    warning in the Freight & Logistics section when the PO's freight term is FOR and a
+    cost line is still typed as plain Freight (vendor bears freight to destination under FOR --
+    Last Mile Transport is usually what applies instead; a warning, not a hard block, since
+    exceptions exist).
+- Verification: `deno check` via `git stash` before/after on `ac01.handlers.ts` (0 new errors,
+  same single pre-existing `.range()` typing-noise baseline); `eslint` on `AC01Page.jsx` (0
+  errors); full CI guard suite re-run (`jsx-no-undef-guard`, `frontend-payload-guard`,
+  `company-scope-guard`, `company-scope-write-acl-guard`, `hardcoded-role-check-guard`,
+  `wrong-company-source-guard`, `route-acl-registry-guard`, `stock-posting-guard`,
+  `resource-code-domain-guard` -- all pass, 0 new violations); RPC math + date math both
+  hand-verified against real dev data via rolled-back MCP transactions.
+- Not yet done: live click-through in the deployed app (no dev login in this environment).
   Next: Returns & Claims (PO08/09/10 + new PO20), then AC02 (Vendor Ledger + FIFO payment
   allocation), then the remaining Accounts pages, then back to Dispatch (L5) per the project's
   paused Section 114 sequence.

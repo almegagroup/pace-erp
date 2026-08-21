@@ -41,6 +41,92 @@ function parsePositiveInt(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
+function toUpperTrimmedString(value: unknown): string {
+  return toTrimmedString(value).toUpperCase();
+}
+
+function addDays(input: string, days: number): string {
+  const date = new Date(`${input}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+// Ported from csn.handlers.ts's enrichTrackerRows() -- same calculation, same
+// reference_date_type codes. Found live 2026-08-21: this was wrongly marked
+// "deferred until AC02's Vendor Ledger exists" -- that deferral only applies
+// to the TRUE fact of when payment was actually recorded as paid; the DUE
+// DATE calculated from the PO's payment terms needs no such ledger and this
+// exact logic already exists and works elsewhere in the codebase. A payment
+// term with no reference_date_type_id (Advance-type terms) correctly returns
+// null here, same as CSN Tracker's own blank/"-" display for Advance.
+function computeActualPaymentDate(
+  grn: JsonRecord,
+  referenceCode: string,
+  creditDays: number,
+): string | null {
+  if (!referenceCode) return null;
+  const anchor = (() => {
+    switch (referenceCode) {
+      case "BL_DATE":
+        return toTrimmedString(grn.bl_date) || toTrimmedString(grn.lr_date);
+      case "LR_DATE":
+        return toTrimmedString(grn.lr_date);
+      case "GRN_DATE":
+        return toTrimmedString(grn.grn_date);
+      case "INVOICE_DATE":
+        return toTrimmedString(grn.invoice_date);
+      default:
+        // MANUAL / ATA_AT_PORT / POST_CLEARANCE_LR_DATE have no equivalent
+        // anchor date on goods_receipt -- not computable, user must set
+        // Revised Payment Date manually for these terms.
+        return "";
+    }
+  })();
+  return anchor ? addDays(anchor, creditDays) : null;
+}
+
+// Mirrors save_ac01_grn_cost()'s own per-party suggested-payable math exactly
+// (migration 20260821150000) -- the RPC only returns this on SAVE, so GET
+// (viewing an already-saved GRN without triggering a write) needs the same
+// computation done read-side, from the already-fetched cost/deduction lines.
+function computeSuggestedPayables(
+  grn: JsonRecord,
+  costLines: JsonRecord[],
+  deductionLines: JsonRecord[],
+): { vendor: number; transporter: number; lastMile: number } {
+  const effectiveRate = grn.confirmed_rate != null
+    ? Number(grn.confirmed_rate)
+    : grn.grn_rate != null
+      ? Number(grn.grn_rate)
+      : 0;
+  const purchaseCost = effectiveRate * Number(grn.received_qty ?? 0);
+
+  const charges = { VENDOR: 0, TRANSPORTER: 0, LAST_MILE_TRANSPORTER: 0 } as Record<string, number>;
+  for (const line of costLines) {
+    let net = Number(line.amount ?? 0);
+    const gstRate = line.gst_rate != null ? Number(line.gst_rate) : 0;
+    if (line.has_gst === true && line.gst_treatment === "INCLUSIVE" && gstRate > 0) {
+      net = net / (1 + gstRate / 100);
+    }
+    const party = toTrimmedString(line.party_type) || "VENDOR";
+    charges[party] = (charges[party] ?? 0) + net;
+  }
+
+  const deductions = { VENDOR: 0, TRANSPORTER: 0, LAST_MILE_TRANSPORTER: 0 } as Record<string, number>;
+  for (const line of deductionLines) {
+    if (line.amount == null) continue;
+    const amount = Number(line.amount) + Number(line.round_off ?? 0);
+    const party = toTrimmedString(line.party_type) || "VENDOR";
+    deductions[party] = (deductions[party] ?? 0) + amount;
+  }
+
+  return {
+    vendor: Number((purchaseCost + charges.VENDOR - deductions.VENDOR).toFixed(4)),
+    transporter: Number((charges.TRANSPORTER - deductions.TRANSPORTER).toFixed(4)),
+    lastMile: Number((charges.LAST_MILE_TRANSPORTER - deductions.LAST_MILE_TRANSPORTER).toFixed(4)),
+  };
+}
+
 function ac01ErrorResponse(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -164,6 +250,8 @@ function buildListRow(
   landedCostMap: Map<string, JsonRecord>,
   udStatusMap: Map<string, "GREEN" | "YELLOW" | "RED" | null>,
   transporterMap: Map<string, JsonRecord>,
+  costLinesByLc: Map<string, JsonRecord[]>,
+  deductionLinesByLc: Map<string, JsonRecord[]>,
 ): JsonRecord {
   const material = materialMap.get(String(grn.material_id));
   const vendor = vendorMap.get(String(grn.vendor_id));
@@ -172,6 +260,11 @@ function buildListRow(
   const paymentTerms = po?.payment_term_id ? paymentTermsMap.get(String(po.payment_term_id)) : null;
   const csn = grn.gate_entry_line_id ? csnMap.get(String(grn.gate_entry_line_id)) : null;
   const landedCost = landedCostMap.get(String(grn.id));
+  const suggestedPayables = computeSuggestedPayables(
+    grn,
+    landedCost ? (costLinesByLc.get(String(landedCost.id)) ?? []) : [],
+    landedCost ? (deductionLinesByLc.get(String(landedCost.id)) ?? []) : [],
+  );
   // §8A Foundation Rule -- never show a raw UUID for business data. Found
   // live 2026-08-21: the Transporter column showed the raw transporter_id.
   const transporter = grn.transporter_id ? transporterMap.get(String(grn.transporter_id)) : null;
@@ -186,6 +279,8 @@ function buildListRow(
   const receivedQty = Number(grn.received_qty ?? 0);
   const costPerUnit = receivedQty > 0 ? effectiveRate + landedCostTotal / receivedQty : effectiveRate;
   const vendorPayable = effectiveRate * receivedQty;
+  const referenceType = paymentTerms?.reference_date_type as JsonRecord | JsonRecord[] | undefined;
+  const referenceTypeCode = Array.isArray(referenceType) ? referenceType[0]?.code : referenceType?.code;
 
   return {
     grn_id: grn.id,
@@ -214,9 +309,25 @@ function buildListRow(
     landed_cost_total: landedCostTotal,
     cost_per_unit: Number(costPerUnit.toFixed(4)),
     vendor_payable: Number(vendorPayable.toFixed(4)),
+    // Per-party suggested payable, strictly from this GRN's own cost/deduction
+    // lines (never aggregated across other GRNs — that's AC02's Vendor
+    // Ledger, a different layer). Confirmed/overwrite value wins when set.
+    vendor_suggested_payable: suggestedPayables.vendor,
+    transporter_suggested_payable: suggestedPayables.transporter,
+    last_mile_suggested_payable: suggestedPayables.lastMile,
+    vendor_payable_override: grn.vendor_payable_override != null ? Number(grn.vendor_payable_override) : null,
+    transporter_payable_override: grn.transporter_payable_override != null ? Number(grn.transporter_payable_override) : null,
+    last_mile_payable_override: grn.last_mile_payable_override != null ? Number(grn.last_mile_payable_override) : null,
     payment_days: paymentTerms?.credit_days ?? null,
     payment_type: paymentTerms?.name ?? null,
-    actual_payment_date: null, // Derived once AC02's Vendor Ledger exists — deliberately deferred.
+    // Revised Payment Date (manual override) always wins when set; otherwise
+    // the calculated due-date from payment terms. TRUE "date actually paid"
+    // still needs AC02's Vendor Ledger — that's payment_status below, not this.
+    actual_payment_date: grn.revised_payment_date ?? computeActualPaymentDate(
+      grn,
+      toUpperTrimmedString(referenceTypeCode),
+      Number(paymentTerms?.credit_days ?? 0),
+    ),
     revised_payment_date: grn.revised_payment_date ?? null,
     freight_type: po?.freight_term ?? null,
     transporter_id: grn.transporter_id ?? null,
@@ -327,10 +438,12 @@ export async function listAC01GRNsHandler(
     const csnIds = [...new Set(csnRows.map((row) => String(row.csn_id)).filter(Boolean))];
     const qaDocumentIds = qaDocuments.map((doc) => String(doc.id));
 
-    const [paymentTerms, consignmentNotes, decisionLines] = await Promise.all([
+    const lcIds = [...new Set(landedCosts.map((lc) => String(lc.id)).filter(Boolean))];
+
+    const [paymentTerms, consignmentNotes, decisionLines, costLineRows, deductionLineRows] = await Promise.all([
       fetchInChunks<JsonRecord>(paymentTermIds, (chunk) =>
         serviceRoleClient.schema("erp_master").from("payment_terms_master")
-          .select("id, name, credit_days").in("id", chunk)),
+          .select("id, name, credit_days, reference_date_type:reference_date_type_id(code)").in("id", chunk)),
       fetchInChunks<JsonRecord>(csnIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("consignment_note")
           // csn_display_number is not a real column -- it's only ever computed at
@@ -340,6 +453,12 @@ export async function listAC01GRNsHandler(
       fetchInChunks<JsonRecord>(qaDocumentIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("inward_qa_decision_line")
           .select("qa_document_id, usage_decision, decision_qty").in("qa_document_id", chunk)),
+      fetchInChunks<JsonRecord>(lcIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("landed_cost_line")
+          .select("lc_id, amount, has_gst, gst_treatment, gst_rate, party_type").in("lc_id", chunk)),
+      fetchInChunks<JsonRecord>(lcIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("landed_cost_deduction_line")
+          .select("lc_id, amount, round_off, party_type").in("lc_id", chunk)),
     ]);
 
     const materialMap = toMap(materials);
@@ -376,9 +495,24 @@ export async function listAC01GRNsHandler(
     }
     void qaDocByGrn;
     const transporterMap = toMap(transporters);
+    const costLinesByLc = new Map<string, JsonRecord[]>();
+    for (const line of costLineRows) {
+      const key = String(line.lc_id);
+      if (!costLinesByLc.has(key)) costLinesByLc.set(key, []);
+      costLinesByLc.get(key)!.push(line);
+    }
+    const deductionLinesByLc = new Map<string, JsonRecord[]>();
+    for (const line of deductionLineRows) {
+      const key = String(line.lc_id);
+      if (!deductionLinesByLc.has(key)) deductionLinesByLc.set(key, []);
+      deductionLinesByLc.get(key)!.push(line);
+    }
 
     const items = rows.map((row) =>
-      buildListRow(row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap, udStatusMap, transporterMap),
+      buildListRow(
+        row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap,
+        udStatusMap, transporterMap, costLinesByLc, deductionLinesByLc,
+      ),
     );
 
     return okResponse({ items, total: count ?? items.length }, ctx.request_id, req);
@@ -453,9 +587,46 @@ export async function getAC01GRNHandler(
       }
     }
 
+    // freight_type (for the FOR-aware party UI hint) + the payment-terms
+    // reference date, same source buildListRow's list-row version uses.
+    let freightType: string | null = null;
+    let actualPaymentDate: string | null = grn.revised_payment_date ? String(grn.revised_payment_date) : null;
+    if (grn.po_id) {
+      const { data: po } = await serviceRoleClient
+        .schema("erp_procurement").from("purchase_order")
+        .select("freight_term, payment_term_id")
+        .eq("id", String(grn.po_id))
+        .maybeSingle();
+      freightType = (po?.freight_term as string | null) ?? null;
+      if (!actualPaymentDate && po?.payment_term_id) {
+        const { data: paymentTerm } = await serviceRoleClient
+          .schema("erp_master").from("payment_terms_master")
+          .select("credit_days, reference_date_type:reference_date_type_id(code)")
+          .eq("id", String(po.payment_term_id))
+          .maybeSingle();
+        const referenceType = paymentTerm?.reference_date_type as JsonRecord | JsonRecord[] | undefined;
+        const referenceTypeCode = Array.isArray(referenceType) ? referenceType[0]?.code : referenceType?.code;
+        actualPaymentDate = computeActualPaymentDate(
+          grn,
+          toUpperTrimmedString(referenceTypeCode),
+          Number(paymentTerm?.credit_days ?? 0),
+        );
+      }
+    }
+
+    // Mirrors save_ac01_grn_cost()'s own math — see computeSuggestedPayables's
+    // own comment above. Recomputed read-side since the RPC only returns this
+    // on SAVE, and viewing a GRN must not trigger a write.
+    const suggestedPayables = computeSuggestedPayables(grn, costLines, deductionLines);
+
     return okResponse({
       ...grn,
       last_mile_transporter_name: lastMileTransporterName,
+      freight_type: freightType,
+      actual_payment_date: actualPaymentDate,
+      vendor_suggested_payable: suggestedPayables.vendor,
+      transporter_suggested_payable: suggestedPayables.transporter,
+      last_mile_suggested_payable: suggestedPayables.lastMile,
       landed_cost: landedCost ?? null,
       cost_lines: costLines,
       deduction_lines: deductionLines,
@@ -508,6 +679,14 @@ export async function saveAC01GRNCostHandler(
         p_cost_lines: costLines,
         p_deduction_lines: deductionLines,
         p_reason: toTrimmedString(body.reason) || "AC01 landed cost save",
+        p_revised_payment_date: toTrimmedString(body.revised_payment_date) || null,
+        p_vendor_payable_override: body.vendor_payable_override != null ? Number(body.vendor_payable_override) : null,
+        p_transporter_payable_override: body.transporter_payable_override != null ? Number(body.transporter_payable_override) : null,
+        p_last_mile_payable_override: body.last_mile_payable_override != null ? Number(body.last_mile_payable_override) : null,
+        p_clear_revised_payment_date: body.clear_revised_payment_date === true,
+        p_clear_vendor_payable_override: body.clear_vendor_payable_override === true,
+        p_clear_transporter_payable_override: body.clear_transporter_payable_override === true,
+        p_clear_last_mile_payable_override: body.clear_last_mile_payable_override === true,
       });
 
     if (error) {
