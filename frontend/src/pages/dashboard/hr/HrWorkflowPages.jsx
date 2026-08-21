@@ -35,6 +35,7 @@ import {
   resolveDefaultTransactionCompanyId,
 } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
