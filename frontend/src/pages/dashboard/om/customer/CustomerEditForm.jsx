@@ -184,6 +184,14 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
   const [savingAddress, setSavingAddress] = useState(false);
   const [addressError, setAddressError] = useState("");
   const [mappingAddressId, setMappingAddressId] = useState("");
+  // §129.3 (2026-08-22 fix) — editing an EXISTING address's own fields
+  // (Site Name especially -- backfilled/old addresses often have it blank)
+  // had no UI at all, only "+ Add another address" (create) and VDC mapping
+  // existed. This closes that gap.
+  const [editingAddressId, setEditingAddressId] = useState("");
+  const [editAddressForm, setEditAddressForm] = useState({ site_name: "", address_line: "", town: "" });
+  const [savingEditAddress, setSavingEditAddress] = useState(false);
+  const [editAddressError, setEditAddressError] = useState("");
 
   const queryClient = useQueryClient();
 
@@ -315,6 +323,39 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
       setAddressError(createError instanceof Error ? createError.message : "OM_ADDRESS_CREATE_FAILED");
     } finally {
       setSavingAddress(false);
+    }
+  }
+
+  function openEditAddress(address) {
+    setEditingAddressId(address.id);
+    setEditAddressForm({
+      site_name: address.site_name ?? "",
+      address_line: address.address_line ?? "",
+      town: address.town ?? "",
+    });
+    setEditAddressError("");
+  }
+
+  async function handleSaveEditAddress() {
+    if (!editAddressForm.site_name.trim() || !editAddressForm.address_line.trim() || !editAddressForm.town.trim()) {
+      setEditAddressError("Site Name, Address, and Town are required.");
+      return;
+    }
+    setSavingEditAddress(true);
+    setEditAddressError("");
+    try {
+      await updateCustomerAddress({
+        id: editingAddressId,
+        site_name: editAddressForm.site_name.trim(),
+        address_line: editAddressForm.address_line.trim(),
+        town: editAddressForm.town.trim(),
+      });
+      queryClient.invalidateQueries({ queryKey: ["om", "customer-addresses", customerId] });
+      setEditingAddressId("");
+    } catch (saveError) {
+      setEditAddressError(saveError instanceof Error ? saveError.message : "OM_ADDRESS_UPDATE_FAILED");
+    } finally {
+      setSavingEditAddress(false);
     }
   }
 
@@ -491,9 +532,20 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
               <li key={address.id} className="border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
                 <div className="flex items-center justify-between">
                   <span>
-                    <span className="font-semibold text-slate-900">{address.site_name || "—"}</span>
+                    {address.site_name ? (
+                      <span className="font-semibold text-slate-900">{address.site_name}</span>
+                    ) : (
+                      <span className="font-semibold text-amber-700">Site Name not set</span>
+                    )}
                     {" — "}
                     {address.address_line}, {address.town}, {address.state}
+                    <button
+                      type="button"
+                      onClick={() => (editingAddressId === address.id ? setEditingAddressId("") : openEditAddress(address))}
+                      className="ml-2 text-[10px] font-semibold text-sky-700 underline"
+                    >
+                      Edit
+                    </button>
                   </span>
                   {address.depot_code ? (
                     <button
@@ -526,6 +578,44 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
                       queryClient.invalidateQueries({ queryKey: ["om", "customer-addresses", customerId] });
                     }}
                   />
+                ) : null}
+                {editingAddressId === address.id ? (
+                  <div className="mt-1 grid gap-2 border border-dashed border-sky-300 bg-sky-50/40 p-3">
+                    {editAddressError ? <div className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs text-rose-800">{editAddressError}</div> : null}
+                    <ErpDenseFormRow label="Site Name" required>
+                      <input
+                        value={editAddressForm.site_name}
+                        onChange={(event) => setEditAddressForm((c) => ({ ...c, site_name: event.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Address" required>
+                      <input
+                        value={editAddressForm.address_line}
+                        onChange={(event) => setEditAddressForm((c) => ({ ...c, address_line: event.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Town" required>
+                      <input
+                        value={editAddressForm.town}
+                        onChange={(event) => setEditAddressForm((c) => ({ ...c, town: event.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      />
+                    </ErpDenseFormRow>
+                    <p className="text-[11px] text-slate-500">State ({address.state}) always matches the customer's own state — not editable per-address.</p>
+                    <div className="flex justify-end gap-2">
+                      <button type="button" onClick={() => setEditingAddressId("")} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveEditAddress()}
+                        disabled={savingEditAddress}
+                        className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50"
+                      >
+                        {savingEditAddress ? "Saving..." : "Save"}
+                      </button>
+                    </div>
+                  </div>
                 ) : null}
               </li>
             ))}

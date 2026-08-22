@@ -87,6 +87,12 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/om/customers",              "/dashboard/om/customer/detail"],
     ["/dashboard/om/customers",              "/dashboard/om/customer/create"],
     ["/dashboard/om/customer/create",        "/dashboard/om/customer/detail"],
+    // §129.8 — Parent Company / VDC master, reached via a button on the
+    // Customer List page (no new tx_code/menu row -- see feasibility doc
+    // Section 129). Without this companion pairing, isRouteAllowed() always
+    // returns false for this route and every navigation attempt bounces
+    // back to the dashboard (found live 2026-08-22, business owner).
+    ["/dashboard/om/customers",              "/dashboard/om/customer/vdc-parent-company"],
 
     // ── Procurement — :id detail routes ───────────────────────────────────────
     ["/dashboard/procurement/purchase-orders",         "/dashboard/procurement/purchase-orders/:id"],
