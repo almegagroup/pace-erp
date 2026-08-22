@@ -659,7 +659,7 @@ export default function PlanFeedPage() {
 
             <DrawerBase
               visible={newPartyOpen}
-              title="New RM/PM Sales Customer"
+              title="New FG Sales Customer"
               onEscape={() => setNewPartyOpen(false)}
               onClose={() => setNewPartyOpen(false)}
               width="min(560px, calc(100vw - 24px))"
@@ -864,7 +864,7 @@ export default function PlanFeedPage() {
 
                   <DrawerBase
                     visible={editPartyOpen}
-                    title="Edit RM/PM Sales Customer"
+                    title="Edit FG Sales Customer"
                     onEscape={() => setEditPartyOpen(false)}
                     onClose={() => setEditPartyOpen(false)}
                     width="min(560px, calc(100vw - 24px))"

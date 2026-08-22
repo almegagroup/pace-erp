@@ -101,6 +101,22 @@ const BASELINE = new Set([
   "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::upgradeDispatchCustomerToRegisteredHandler",
   "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::addDispatchCustomerAddressHandler",
   "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::updateDispatchCustomerAddressHandler",
+  // Genuinely exempt (2026-08-22, feasibility doc §129) -- same shape as the
+  // customer.handlers.ts exemption above: createCustomerAddressHandler/
+  // updateCustomerAddressHandler both call the local
+  // assertCustomerCompanyScope(ctx, customerId, resourceCode, actionCode)
+  // helper (imported from customer.handlers.ts), which does the real
+  // canMaintainCompanyResource() check one call-frame away. updateParentCompanyHandler/
+  // updateDepotCodeHandler both call the newly-strengthened local
+  // assertParentCompanyScope(ctx, parentCompanyId, resourceCode, actionCode)
+  // (upgraded 2026-08-22 from a membership-only check to the same real
+  // canMaintainCompanyResource() pattern, precisely to close this class of
+  // gap -- see the function's own header comment) -- same one-call-frame-away
+  // shape this regex heuristic can't see through.
+  "supabase/functions/api/_core/om/customer_address.handlers.ts::createCustomerAddressHandler",
+  "supabase/functions/api/_core/om/customer_address.handlers.ts::updateCustomerAddressHandler",
+  "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::updateParentCompanyHandler",
+  "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::updateDepotCodeHandler",
   "supabase/functions/api/_core/om/location.handlers.ts::unmapStorageLocationFromPlantHandler",
   "supabase/functions/api/_core/om/location.handlers.ts::mapStorageLocationToPlantHandler",
   "supabase/functions/api/_core/om/machine.handlers.ts::createMachineHandler",

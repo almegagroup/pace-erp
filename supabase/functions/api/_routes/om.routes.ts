@@ -90,9 +90,16 @@ import {
   listDepotCodesHandler,
   listDispatchCustomerAddressesHandler,
   listParentCompaniesHandler,
+  updateDepotCodeHandler,
   updateDispatchCustomerAddressHandler,
+  updateParentCompanyHandler,
   upgradeDispatchCustomerToRegisteredHandler,
 } from "../_core/om/fg_dispatch_customer.handlers.ts";
+import {
+  createCustomerAddressHandler,
+  listCustomerAddressesHandler,
+  updateCustomerAddressHandler,
+} from "../_core/om/customer_address.handlers.ts";
 import {
   createUomHandler,
   listUomHandler,
@@ -277,12 +284,26 @@ export async function dispatchOmRoutes(
       return await createParentCompanyHandler(req, ctx);
     case "GET:/api/om/fg-parent-companies":
       return await listParentCompaniesHandler(req, ctx);
+    case "PATCH:/api/om/fg-parent-company":
+      return await updateParentCompanyHandler(req, ctx);
     case "POST:/api/om/fg-depot-code":
       return await createOrGetDepotCodeHandler(req, ctx);
     case "GET:/api/om/fg-depot-codes":
       return await listDepotCodesHandler(req, ctx);
+    case "PATCH:/api/om/fg-depot-code":
+      return await updateDepotCodeHandler(req, ctx);
     case "POST:/api/om/fg-dispatch-customer":
       return await createDispatchCustomerHandler(req, ctx);
+
+    // §129.3/§129.8 — MM04 customer_address (Stage-1 Address list, Stage-2
+    // VDC mapping). Deliberately under the "customer" family, not a new
+    // resource — same MM04 ACL grant covers it (route-acl-registry.ts).
+    case "GET:/api/om/customer-addresses":
+      return await listCustomerAddressesHandler(req, ctx);
+    case "POST:/api/om/customer-address":
+      return await createCustomerAddressHandler(req, ctx);
+    case "PATCH:/api/om/customer-address":
+      return await updateCustomerAddressHandler(req, ctx);
 
     case "GET:/api/om/uoms":
       return await listUomHandler(req, ctx);

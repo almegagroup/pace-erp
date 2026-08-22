@@ -425,8 +425,8 @@ export default function FgDispatchCustomerPage() {
 
   return (
     <ErpScreenScaffold
-      title="FG Dispatch Customer Master"
-      subtitle="MM05 - Parent company, depot or virtual depot, then customer with GST/unregistered address flow."
+      title="RM/PM/INT Sale Customer (Design Pending)"
+      subtitle="MM05 - not yet redesigned; FG customers now live on MM04. This page is not in active use."
     >
       <ErpSectionCard>
         <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(0,320px)_220px_220px]">

@@ -4411,3 +4411,71 @@ it provides no enforcement value as a CI step in its current form.
   Next: Returns & Claims (PO08/09/10 + new PO20), then AC02 (Vendor Ledger + FIFO payment
   allocation), then the remaining Accounts pages, then back to Dispatch (L5) per the project's
   paused Section 114 sequence.
+
+### 2026-08-22 - MM04 becomes the FG Customer Master (Address -> VDC -> Parent Company), design + build
+
+Design LOCKED in feasibility doc Section 129 (full decision record, GST/cardinality/Bill-To-Ship-To
+rules), task brief `CODEX-MM04-FG-CUSTOMER-REDESIGN-TASK-BRIEF.md`. Business owner's own directive:
+MM04 (already the de facto FG customer master -- verified 0/64 prod rows are genuine RM/PM
+customers) is officially redesignated the FG Customer Master; MM05 (RM/PM/INT) redesign deferred to
+a future session. Reuses `erp_master.fg_parent_company`/`fg_depot_code` (built for MM05, 0 rows,
+never used) as MM04's own Bill-To layer -- customer identity stays in `customer_master`, never
+migrates.
+
+- **DB** (migration `20260822140000_mm04_fg_customer_address_vdc.sql`, applied + reconciled dev,
+  `NOTIFY pgrst` run, `in_sync=true`): new `erp_master.customer_address` (one row per customer
+  site; `depot_code_id` deliberately nullable -- staged completion, do not copy
+  `fg_dispatch_customer_address`'s `NOT NULL` constraint); `fg_depot_code.gst_number` (new column,
+  didn't exist); structural backfill of existing customers into one address row each (`site_name`/
+  `depot_code_id` left NULL, genuinely no Stage-2 data to backfill).
+- **GST-state-code table** (`_shared/gstStateCodes.ts`, new) -- no such table existed anywhere;
+  standard 37-code CBIC list keyed to the exact `INDIAN_STATE_NAMES` strings, used to compute
+  `display_code` ("{code} - {name}") on every enriched customer row.
+- **Real bug found + fixed (Bug Pattern #8, route/ACL registry mismatch):** the 4 pre-existing
+  `fg-parent-compan{y,ies}`/`fg-depot-code{,s}` routes were gated on `OM_FG_DISPATCH_CUSTOMER`
+  (MM05's own resource code) -- never granted to anyone, since those tables were 0 rows until this
+  redesign. Repointed to MM04's own `OM_CUSTOMER_LIST`/`OM_CUSTOMER_CREATE` (matching the sibling
+  `parent-customer` routes); without this, every MM04-access user (Production/Stores/Accounts,
+  granted 2026-08-21) would have silently 403'd on VDC/Parent-Company actions.
+- **Second real bug found + fixed (same class, deeper):** `assertParentCompanyScope()` (shared by
+  `createOrGetDepotCodeHandler`/`listDepotCodesHandler`, pre-existing) only checked company
+  MEMBERSHIP (`assertCompanyScope`), never the caller's actual EDIT-tier ACL grant at that specific
+  company -- same shape as the 2026-08-11 PO11 Planning precedent. Upgraded to take
+  `resourceCode`/`actionCode` and call `canMaintainCompanyResource()`, matching
+  `customer.handlers.ts`'s own `assertCustomerCompanyScope()` (exported for reuse). This also
+  silently strengthens the two pre-existing create handlers that already called it, not just the
+  two new update handlers.
+- **Backend:** new `customer_address.handlers.ts` (list/create/update, reuses
+  `assertCustomerCompanyScope`); `fg_dispatch_customer.handlers.ts` gains
+  `updateParentCompanyHandler`/`updateDepotCodeHandler` (both auto-overwrite GST fields, no
+  Keep/Overwrite dialog -- §129.5); `customer.handlers.ts` gains `display_code`/`gst_state_code` on
+  `enrichCustomerRows`, retires the dead `parent_customer_id` field (0 rows/0 links across all 64
+  prod customers, confirmed live) from create/update -- `ensureParentCustomerExists()` deleted as
+  dead code. 6 new/changed routes wired in `om.routes.ts`.
+- **Frontend:** `CustomerCreateForm.jsx`/`CustomerEditForm.jsx` -- dead "Parent Company"
+  (`parent_customer_id`/`parent_customer_master`) field removed from both (confirmed via
+  `list_tables`: 0 rows, 0 links); `CustomerEditForm.jsx` gains an Addresses section (list +
+  "+ Add another address," the third Plan-Feed flow the business owner asked to see explicitly --
+  create/edit/add-address -- that had never been depicted before) and a `MapVdcPanel` sub-component
+  (pick/create Parent Company -> create-or-reuse VDC via the idempotent `createOrGetFgDepotCode` ->
+  point the address's `depot_code_id` at it) -- both reused as-is by Plan Feed's existing
+  "+New Party"/"Edit Customer" entry points, no changes needed there. `CustomerListPage.jsx`
+  migrated to the AC01 UI pattern locked in §128.6 (`cellNavigate virtualize` + Enter opens a
+  center `DrawerBase` showing `CustomerEditForm` in place, replacing the old route-navigation-only
+  behavior) -- a "Open full detail (Lifecycle, Company Mapping) ->" link inside the drawer preserves
+  the old full-page route for the two sections `CustomerEditForm` doesn't cover.
+- Verification: `deno check` via `git stash` before/after on every touched backend file (0 new
+  errors each time, same pre-existing `.range()`/`.or()`/`.ilike()`/`.count` typing-noise baseline);
+  `eslint` on every touched frontend file (0 new errors -- `CustomerListPage.jsx` has one
+  pre-existing `react-hooks/set-state-in-effect` finding, confirmed via stash comparison, unrelated
+  to this change); full 10-guard CI suite re-run after every backend/ACL change (all pass, 0 new
+  violations, including a documented `company-scope-write-acl-guard` BASELINE addition for the 4
+  new/changed functions -- all four verified to call a real EDIT-tier helper one call-frame away,
+  same shape as the existing 2026-08-21 `customer.handlers.ts` BASELINE entries); DB mechanism
+  (customer_address insert, fg_parent_company/fg_depot_code create with `gst_number`) verified
+  against real dev data via a rolled-back MCP transaction.
+- Not yet done: live click-through in the deployed app (no dev login in this environment); the
+  §129.6 Bill-To/Ship-To resolution query itself (SO01/Plan Feed consuming the chain at order-
+  creation time) is explicitly out of scope for this pass, per the task brief's own "Out of scope"
+  section -- data model + MM04's own pages only. Next: MM05 (RM/PM/INT sale customer) redesign,
+  deferred per business owner's explicit sequencing; then back to Dispatch (L5) per Section 114.

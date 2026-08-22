@@ -1,7 +1,7 @@
 /*
  * File-Path: frontend/src/pages/dashboard/om/customer/CustomerEditForm.jsx
  * Domain: OPERATION_MANAGEMENT
- * Purpose: Reusable RM/PM Sales Customer edit form body -- embedded both by
+ * Purpose: Reusable FG Sales Customer edit form body -- embedded both by
  *          the standalone MM04 detail page (CustomerDetailPage.jsx) and by
  *          Plan Feed's "Edit Customer" button (PlanFeedPage.jsx). Both call
  *          sites write the exact same customer_master row through the exact
@@ -14,12 +14,178 @@
  */
 
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { INDIAN_STATES } from "../../../../data/indianStates.js";
-import { getCustomer, lookupCustomerGstProfile, updateCustomer } from "../omApi.js";
-import { useParentCustomersQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import {
+  createCustomerAddress,
+  createFgParentCompany,
+  createOrGetFgDepotCode,
+  getCustomer,
+  listCustomerAddresses,
+  listFgParentCompanies,
+  lookupCustomerGstProfile,
+  updateCustomer,
+  updateCustomerAddress,
+} from "../omApi.js";
+
+// §129.3/§129.8 Step 5 — "Map this address to a VDC": pick an existing
+// Parent Company or create one, then create-or-reuse a VDC under it
+// (createOrGetFgDepotCode is idempotent on (parent_company_id, code)), then
+// point the address's depot_code_id at it.
+function MapVdcPanel({ addressId, onDone, onCancel }) {
+  const [parentCompanies, setParentCompanies] = useState([]);
+  const [loadingParents, setLoadingParents] = useState(true);
+  const [parentCompanyId, setParentCompanyId] = useState("");
+  const [newParentName, setNewParentName] = useState("");
+  const [newParentState, setNewParentState] = useState("");
+  const [newParentGst, setNewParentGst] = useState("");
+  const [vdcCode, setVdcCode] = useState("");
+  const [dispatchType, setDispatchType] = useState("DIRECT");
+  const [vdcGst, setVdcGst] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await listFgParentCompanies();
+        if (!cancelled) setParentCompanies(Array.isArray(result?.data) ? result.data : []);
+      } catch {
+        if (!cancelled) setParentCompanies([]);
+      } finally {
+        if (!cancelled) setLoadingParents(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleMap() {
+    if (!vdcCode.trim()) {
+      setError("VDC Code is required.");
+      return;
+    }
+    let resolvedParentId = parentCompanyId;
+    setSaving(true);
+    setError("");
+    try {
+      if (!resolvedParentId) {
+        if (!newParentName.trim() || !newParentState) {
+          setError("Pick an existing Parent Company, or enter a name + state to create one.");
+          setSaving(false);
+          return;
+        }
+        const parentResult = await createFgParentCompany({
+          company_name: newParentName.trim(),
+          state: newParentState,
+          gst_number: newParentGst.trim() || undefined,
+        });
+        resolvedParentId = parentResult?.data?.id;
+      }
+      const depotResult = await createOrGetFgDepotCode({
+        parent_company_id: resolvedParentId,
+        dispatch_type: dispatchType,
+        code: vdcCode.trim(),
+        gst_number: vdcGst.trim() || undefined,
+      });
+      const depotId = depotResult?.data?.id;
+      await updateCustomerAddress({ id: addressId, depot_code_id: depotId });
+      onDone();
+    } catch (mapError) {
+      setError(mapError instanceof Error ? mapError.message : "OM_ADDRESS_VDC_MAP_FAILED");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-1 grid gap-2 border border-dashed border-sky-300 bg-sky-50/40 p-3">
+      {error ? <div className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs text-rose-800">{error}</div> : null}
+      <ErpDenseFormRow label="Parent Company">
+        <select
+          value={parentCompanyId}
+          onChange={(event) => setParentCompanyId(event.target.value)}
+          disabled={loadingParents}
+          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+        >
+          <option value="">— select or create new below —</option>
+          {parentCompanies.map((entry) => (
+            <option key={entry.id} value={entry.id}>{entry.company_name} ({entry.state})</option>
+          ))}
+        </select>
+      </ErpDenseFormRow>
+      {!parentCompanyId ? (
+        <div className="grid gap-2 border border-dashed border-slate-300 bg-white p-2">
+          <ErpDenseFormRow label="New Parent Company Name">
+            <input
+              value={newParentName}
+              onChange={(event) => setNewParentName(event.target.value)}
+              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+            />
+          </ErpDenseFormRow>
+          <ErpDenseFormRow label="State">
+            <select
+              value={newParentState}
+              onChange={(event) => setNewParentState(event.target.value)}
+              className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+            >
+              <option value="">Select state</option>
+              {INDIAN_STATES.map((state) => (
+                <option key={state.code} value={state.name}>{state.name}</option>
+              ))}
+            </select>
+          </ErpDenseFormRow>
+          <ErpDenseFormRow label="GST (optional)">
+            <input
+              value={newParentGst}
+              onChange={(event) => setNewParentGst(event.target.value.toUpperCase())}
+              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+            />
+          </ErpDenseFormRow>
+        </div>
+      ) : null}
+      <ErpDenseFormRow label="External VDC Code" required>
+        <input
+          value={vdcCode}
+          onChange={(event) => setVdcCode(event.target.value)}
+          placeholder="e.g. VDC-KOLH-002"
+          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+        />
+        <p className="mt-1 text-xs text-slate-500">If this code already exists under the selected Parent Company, it's reused — no duplicate created.</p>
+      </ErpDenseFormRow>
+      <ErpDenseFormRow label="Dispatch Type">
+        <select
+          value={dispatchType}
+          onChange={(event) => setDispatchType(event.target.value)}
+          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+        >
+          <option value="DIRECT">Direct</option>
+          <option value="DEPOT">Depot</option>
+        </select>
+      </ErpDenseFormRow>
+      <ErpDenseFormRow label="VDC GST (optional)">
+        <input
+          value={vdcGst}
+          onChange={(event) => setVdcGst(event.target.value.toUpperCase())}
+          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+        />
+      </ErpDenseFormRow>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onCancel} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
+        <button
+          type="button"
+          onClick={() => void handleMap()}
+          disabled={saving}
+          className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50"
+        >
+          {saving ? "Mapping..." : "Map to VDC"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 const FO_CUSTOMER_TYPE_OPTIONS = [
   { value: "", label: "-- Not an FO party --" },
@@ -47,12 +213,15 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const parentCustomerQuery = useParentCustomersQuery();
-  const parentCustomers = Array.isArray(parentCustomerQuery.data?.data)
-    ? parentCustomerQuery.data.data
-    : Array.isArray(parentCustomerQuery.data)
-    ? parentCustomerQuery.data
-    : [];
+  // §129.3/§129.7 — the third Plan-Feed flow: add a NEW address to this
+  // EXISTING customer, distinct from editing the customer's own fields above.
+  const [addingAddress, setAddingAddress] = useState(false);
+  const [newAddress, setNewAddress] = useState({ site_name: "", address_line: "", town: "", state: "" });
+  const [savingAddress, setSavingAddress] = useState(false);
+  const [addressError, setAddressError] = useState("");
+  const [mappingAddressId, setMappingAddressId] = useState("");
+
+  const queryClient = useQueryClient();
 
   const customerQuery = useQuery({
     queryKey: ["om", "customer-edit-form", customerId],
@@ -63,6 +232,14 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
   const customer = customerQuery.data ?? null;
   const isVendorLinked = Boolean(customer?.vendor_id);
 
+  const addressesQuery = useQuery({
+    queryKey: ["om", "customer-addresses", customerId],
+    queryFn: () => listCustomerAddresses(customerId),
+    enabled: Boolean(customerId),
+    select: (data) => data?.data ?? [],
+  });
+  const addresses = addressesQuery.data ?? [];
+
   useEffect(() => {
     if (!customer) return;
     setForm({
@@ -70,7 +247,6 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
       gst_number: customer.gst_number ?? "",
       gst_category: customer.gst_category ?? "",
       currency_code: customer.currency_code ?? "BDT",
-      parent_customer_id: customer.parent_customer_id ?? "",
       delivery_address: customer.delivery_address ?? "",
       billing_address: customer.billing_address ?? "",
       billing_state: customer.billing_state ?? "",
@@ -80,6 +256,7 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
       primary_email: customer.primary_email ?? "",
       fo_customer_type: normalizeFoCustomerType(customer.fo_customer_type),
     });
+    setNewAddress((current) => (current.state ? current : { ...current, state: customer.billing_state ?? "" }));
   }, [customer]);
 
   function updateField(key, value) {
@@ -130,7 +307,6 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
         id: customerId,
         ...(isVendorLinked ? {} : { customer_name: form.customer_name, gst_number: form.gst_number }),
         gst_category: form.gst_category,
-        parent_customer_id: form.parent_customer_id || "",
         currency_code: form.currency_code,
         delivery_address: form.delivery_address,
         billing_address: form.billing_address,
@@ -146,6 +322,31 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
       setError(saveError instanceof Error ? saveError.message : "OM_CUSTOMER_UPDATE_FAILED");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleAddAddress() {
+    if (!newAddress.site_name.trim() || !newAddress.address_line.trim() || !newAddress.town.trim()) {
+      setAddressError("Site Name, Address, and Town are required.");
+      return;
+    }
+    setSavingAddress(true);
+    setAddressError("");
+    try {
+      await createCustomerAddress({
+        customer_id: customerId,
+        site_name: newAddress.site_name.trim(),
+        address_line: newAddress.address_line.trim(),
+        town: newAddress.town.trim(),
+        state: newAddress.state || customer?.billing_state || "",
+      });
+      queryClient.invalidateQueries({ queryKey: ["om", "customer-addresses", customerId] });
+      setNewAddress({ site_name: "", address_line: "", town: "", state: customer?.billing_state ?? "" });
+      setAddingAddress(false);
+    } catch (createError) {
+      setAddressError(createError instanceof Error ? createError.message : "OM_ADDRESS_CREATE_FAILED");
+    } finally {
+      setSavingAddress(false);
     }
   }
 
@@ -204,21 +405,6 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
           </ErpDenseFormRow>
         </>
       )}
-
-      <ErpDenseFormRow label="Parent Company">
-        <select
-          value={form.parent_customer_id}
-          onChange={(event) => updateField("parent_customer_id", event.target.value)}
-          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        >
-          <option value="">No parent company</option>
-          {parentCustomers.map((entry) => (
-            <option key={entry.id} value={entry.id}>
-              {entry.parent_customer_code} | {entry.parent_customer_name}
-            </option>
-          ))}
-        </select>
-      </ErpDenseFormRow>
 
       <ErpDenseFormRow label="Currency">
         <select
@@ -312,6 +498,113 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
         />
       </ErpDenseFormRow>
+
+      {/* §129.3/§129.7 — Addresses (Stage 1: Site/Address/Town/State here;
+          Stage 2 VDC mapping happens in MM04's own Customer Detail page). */}
+      <div className="grid gap-2 border border-slate-200 bg-slate-50 p-3">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">Addresses</p>
+          <button
+            type="button"
+            onClick={() => setAddingAddress((current) => !current)}
+            className="border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
+          >
+            {addingAddress ? "Cancel" : "+ Add another address"}
+          </button>
+        </div>
+
+        {addressesQuery.isLoading ? (
+          <p className="text-xs text-slate-500">Loading addresses...</p>
+        ) : addresses.length === 0 ? (
+          <p className="text-xs text-slate-500">No addresses yet.</p>
+        ) : (
+          <ul className="grid gap-1">
+            {addresses.map((address) => (
+              <li key={address.id} className="border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
+                <div className="flex items-center justify-between">
+                  <span>
+                    <span className="font-semibold text-slate-900">{address.site_name || "—"}</span>
+                    {" — "}
+                    {address.address_line}, {address.town}, {address.state}
+                  </span>
+                  {address.depot_code ? (
+                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                      {address.depot_code}
+                      {address.parent_company_name ? ` — ${address.parent_company_name}` : ""}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setMappingAddressId((current) => (current === address.id ? "" : address.id))}
+                      className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
+                    >
+                      Not mapped — Map VDC →
+                    </button>
+                  )}
+                </div>
+                {mappingAddressId === address.id ? (
+                  <MapVdcPanel
+                    addressId={address.id}
+                    onCancel={() => setMappingAddressId("")}
+                    onDone={() => {
+                      setMappingAddressId("");
+                      queryClient.invalidateQueries({ queryKey: ["om", "customer-addresses", customerId] });
+                    }}
+                  />
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {addingAddress ? (
+          <div className="grid gap-2 border border-dashed border-slate-300 bg-white p-3">
+            {addressError ? <div className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs text-rose-800">{addressError}</div> : null}
+            <ErpDenseFormRow label="Site Name" required>
+              <input
+                value={newAddress.site_name}
+                onChange={(event) => setNewAddress((current) => ({ ...current, site_name: event.target.value }))}
+                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+              />
+            </ErpDenseFormRow>
+            <ErpDenseFormRow label="Address" required>
+              <input
+                value={newAddress.address_line}
+                onChange={(event) => setNewAddress((current) => ({ ...current, address_line: event.target.value }))}
+                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+              />
+            </ErpDenseFormRow>
+            <ErpDenseFormRow label="Town" required>
+              <input
+                value={newAddress.town}
+                onChange={(event) => setNewAddress((current) => ({ ...current, town: event.target.value }))}
+                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+              />
+            </ErpDenseFormRow>
+            <ErpDenseFormRow label="State">
+              <select
+                value={newAddress.state}
+                onChange={(event) => setNewAddress((current) => ({ ...current, state: event.target.value }))}
+                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+              >
+                <option value="">Select state</option>
+                {INDIAN_STATES.map((state) => (
+                  <option key={state.code} value={state.name}>{state.name}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-slate-500">Always matches this customer's own state — GST/state is a customer-level fact, not per-address.</p>
+            </ErpDenseFormRow>
+            <button
+              type="button"
+              onClick={() => void handleAddAddress()}
+              disabled={savingAddress}
+              className="w-fit border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900"
+            >
+              {savingAddress ? "Saving..." : "Save Address"}
+            </button>
+          </div>
+        ) : null}
+      </div>
 
       <div className="flex justify-end gap-2 border-t border-slate-200 pt-3">
         {onCancel ? (

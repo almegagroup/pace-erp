@@ -9,7 +9,8 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
-import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
+import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
@@ -72,6 +73,7 @@ function getAddressIdFromPath(req: Request): string {
   const addressIndex = parts.indexOf("fg-dispatch-addresses");
   return addressIndex >= 0 ? toTrimmedString(parts[addressIndex + 1]) : "";
 }
+
 
 function requireIndianState(req: Request, ctx: OmHandlerContext, rawState: unknown): string | Response {
   const state = toTrimmedString(rawState);
@@ -158,10 +160,25 @@ async function getCompanyIdForAddress(addressId: string): Promise<string> {
   return toTrimmedString((depotCode.parent_company as JsonRecord)?.company_id);
 }
 
-async function assertParentCompanyScope(ctx: OmHandlerContext, parentCompanyId: string): Promise<void> {
+// company-scope-write-acl-guard.mjs (2026-08-11 PO11 Planning precedent) --
+// assertCompanyScope() alone only proves company MEMBERSHIP, not that the
+// caller's ACL grant at this specific company is actually the tier this
+// write needs. Same real-ACL-tier pattern as customer.handlers.ts's own
+// assertCustomerCompanyScope() (2026-08-21) -- reused here rather than
+// re-derived, since both ultimately check the same MM04 resource family.
+async function assertParentCompanyScope(
+  ctx: OmHandlerContext,
+  parentCompanyId: string,
+  resourceCode: string,
+  actionCode: string,
+): Promise<void> {
   const parent = await getParentCompanyById(parentCompanyId);
   if (!parent) throw new Error("MM05_PARENT_COMPANY_NOT_FOUND");
-  await assertCompanyScope(ctx, toTrimmedString(parent.company_id));
+  const companyId = toTrimmedString(parent.company_id);
+  if (isCompanyScopeAdminBypass(ctx)) return;
+  await assertCompanyScope(ctx, companyId);
+  const allowed = await canMaintainCompanyResource(ctx, companyId, resourceCode, actionCode);
+  if (!allowed) throw new Error("COMPANY_SCOPE_VIOLATION");
 }
 
 function mapMutationError(req: Request, ctx: OmHandlerContext, code: string, fallbackMessage: string): Response {
@@ -268,7 +285,7 @@ export async function createOrGetDepotCodeHandler(req: Request, ctx: OmHandlerCo
     if (!parentCompanyId || !DISPATCH_TYPES.has(dispatchType) || !code) {
       return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "parent_company_id, dispatch_type, and code are required.");
     }
-    await assertParentCompanyScope(ctx, parentCompanyId);
+    await assertParentCompanyScope(ctx, parentCompanyId, "OM_CUSTOMER_CREATE", "WRITE");
     const stateValue = toTrimmedString(body.state);
     if (stateValue && !INDIAN_STATE_NAMES.has(stateValue)) {
       return mm05Error(req, ctx, "MM05_INVALID_STATE", 400, "State must be a valid Indian state.");
@@ -298,6 +315,11 @@ export async function createOrGetDepotCodeHandler(req: Request, ctx: OmHandlerCo
         address_line: dispatchType === "DEPOT" ? (toTrimmedString(body.address_line) || null) : null,
         state: dispatchType === "DEPOT" ? (stateValue || null) : null,
         pin_code: dispatchType === "DEPOT" ? (toTrimmedString(body.pin_code) || null) : null,
+        // §129.5 — VDC's own optional GST, checked via the same generic
+        // lookupCustomerGstProfileHandler endpoint the frontend already uses
+        // for Customer/Parent Company; this handler just stores whatever the
+        // caller sends (auto-overwrite happens client-side, no server choice).
+        gst_number: toTrimmedString(body.gst_number) || null,
         status: "ACTIVE",
         created_by: ctx.auth_user_id,
       })
@@ -331,11 +353,11 @@ export async function listDepotCodesHandler(req: Request, ctx: OmHandlerContext)
     const url = new URL(req.url);
     const parentCompanyId = toTrimmedString(url.searchParams.get("parent_company_id"));
     const dispatchType = toUpperTrimmedString(url.searchParams.get("dispatch_type"));
-    if (parentCompanyId) await assertParentCompanyScope(ctx, parentCompanyId);
+    if (parentCompanyId) await assertParentCompanyScope(ctx, parentCompanyId, "OM_CUSTOMER_LIST", "VIEW");
     let query = serviceRoleClient
       .schema("erp_master")
       .from("fg_depot_code")
-      .select("id, parent_company_id, dispatch_type, code, description, address_line, state, pin_code, status, created_at")
+      .select("id, parent_company_id, dispatch_type, code, description, address_line, state, pin_code, gst_number, status, created_at")
       .eq("status", "ACTIVE")
       .order("code", { ascending: true });
     if (parentCompanyId) query = query.eq("parent_company_id", parentCompanyId);
@@ -345,6 +367,122 @@ export async function listDepotCodesHandler(req: Request, ctx: OmHandlerContext)
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     return mapMutationError(req, ctx, error instanceof Error ? error.message : "MM05_DEPOT_CODE_LIST_FAILED", "Depot code list failed.");
+  }
+}
+
+// §129.5 — GST-overwrite semantics: this handler stores exactly what the
+// caller sends for name/state/gst_number/full_address/pin_code, no
+// Keep-vs-Overwrite choice server-side — the frontend already auto-fills
+// these fields from Check GST before Save is ever pressed.
+export async function updateParentCompanyHandler(req: Request, ctx: OmHandlerContext): Promise<Response> {
+  try {
+    assertOmReadContext(ctx);
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    if (!id) return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "Parent company id is required.");
+    await assertParentCompanyScope(ctx, id, "OM_CUSTOMER_CREATE", "EDIT");
+
+    const updates: JsonRecord = {};
+    if (body.company_name !== undefined) {
+      const companyName = toTrimmedString(body.company_name);
+      if (!companyName) return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "company_name cannot be empty.");
+      updates.company_name = companyName;
+    }
+    if (body.state !== undefined) {
+      const state = requireIndianState(req, ctx, body.state);
+      if (state instanceof Response) return state;
+      updates.state = state;
+    }
+    if (body.gst_number !== undefined) updates.gst_number = toTrimmedString(body.gst_number) || null;
+    if (body.full_address !== undefined) updates.full_address = toTrimmedString(body.full_address) || null;
+    if (body.pin_code !== undefined) updates.pin_code = toTrimmedString(body.pin_code) || null;
+    if (Object.keys(updates).length === 0) {
+      return mm05Error(req, ctx, "MM05_NO_CHANGES", 400, "No changes provided.");
+    }
+    updates.last_updated_by = ctx.auth_user_id;
+    updates.last_updated_at = new Date().toISOString();
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("fg_parent_company")
+      .update(updates)
+      .eq("id", id)
+      .select("*")
+      .single();
+    if (error || !data) {
+      if (isConstraint(error, "fg_parent_company_company_id_company_name_state_key")) {
+        return mm05Error(req, ctx, "MM05_DUPLICATE_PARENT_COMPANY", 409, "A parent company row for this company, name, and state already exists.");
+      }
+      console.error("[mm05.updateParentCompany] update failed:", JSON.stringify(error));
+      throw new Error("MM05_PARENT_COMPANY_UPDATE_FAILED");
+    }
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (error) {
+    return mapMutationError(req, ctx, error instanceof Error ? error.message : "MM05_PARENT_COMPANY_UPDATE_FAILED", "Parent company update failed.");
+  }
+}
+
+// §129.8 Step 7 — this is the "Change" action on a VDC's Parent Company link
+// (re-pointing parent_company_id), plus the same editable field set as create.
+export async function updateDepotCodeHandler(req: Request, ctx: OmHandlerContext): Promise<Response> {
+  try {
+    assertOmReadContext(ctx);
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    if (!id) return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "Depot code id is required.");
+
+    const existing = await getDepotCodeById(id);
+    if (!existing) return mm05Error(req, ctx, "MM05_DEPOT_CODE_NOT_FOUND", 404, "Depot code not found.");
+    // Caller must have access to BOTH the depot code's current parent company
+    // and (if re-pointing) the new one — check current first.
+    await assertParentCompanyScope(ctx, toTrimmedString(existing.parent_company_id), "OM_CUSTOMER_CREATE", "EDIT");
+
+    const updates: JsonRecord = {};
+    if (body.parent_company_id !== undefined) {
+      const newParentCompanyId = toTrimmedString(body.parent_company_id);
+      if (!newParentCompanyId) return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "parent_company_id cannot be empty.");
+      await assertParentCompanyScope(ctx, newParentCompanyId, "OM_CUSTOMER_CREATE", "EDIT");
+      updates.parent_company_id = newParentCompanyId;
+    }
+    if (body.code !== undefined) {
+      const code = toTrimmedString(body.code);
+      if (!code) return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "code cannot be empty.");
+      updates.code = code;
+    }
+    if (body.description !== undefined) updates.description = toTrimmedString(body.description) || null;
+    if (body.address_line !== undefined) updates.address_line = toTrimmedString(body.address_line) || null;
+    if (body.state !== undefined) {
+      const stateValue = toTrimmedString(body.state);
+      if (stateValue && !INDIAN_STATE_NAMES.has(stateValue)) {
+        return mm05Error(req, ctx, "MM05_INVALID_STATE", 400, "State must be a valid Indian state.");
+      }
+      updates.state = stateValue || null;
+    }
+    if (body.pin_code !== undefined) updates.pin_code = toTrimmedString(body.pin_code) || null;
+    if (body.gst_number !== undefined) updates.gst_number = toTrimmedString(body.gst_number) || null;
+    if (Object.keys(updates).length === 0) {
+      return mm05Error(req, ctx, "MM05_NO_CHANGES", 400, "No changes provided.");
+    }
+    updates.last_updated_by = ctx.auth_user_id;
+    updates.last_updated_at = new Date().toISOString();
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("fg_depot_code")
+      .update(updates)
+      .eq("id", id)
+      .select("*")
+      .single();
+    if (error || !data) {
+      if (isConstraint(error, "fg_depot_code_parent_company_id_code_key")) {
+        return mm05Error(req, ctx, "MM05_DUPLICATE_DEPOT_CODE", 409, "This depot code already exists under the selected parent company.");
+      }
+      console.error("[mm05.updateDepotCode] update failed:", JSON.stringify(error));
+      throw new Error("MM05_DEPOT_CODE_UPDATE_FAILED");
+    }
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (error) {
+    return mapMutationError(req, ctx, error instanceof Error ? error.message : "MM05_DEPOT_CODE_UPDATE_FAILED", "Depot code update failed.");
   }
 }
 

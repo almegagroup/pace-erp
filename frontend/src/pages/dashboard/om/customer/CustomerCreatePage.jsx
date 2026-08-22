@@ -36,7 +36,7 @@ export default function CustomerCreatePage() {
   return (
     <ErpEntryFormTemplate
       eyebrow="Operation Management"
-      title="Create RM/PM Sales Customer"
+      title="Create FG Sales Customer"
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
       ]}

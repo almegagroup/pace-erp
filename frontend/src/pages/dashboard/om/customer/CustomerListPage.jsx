@@ -14,10 +14,12 @@ import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { listCustomers } from "../omApi.js";
+import CustomerEditForm from "./CustomerEditForm.jsx";
 
 const LIMIT = 50;
 
@@ -31,6 +33,20 @@ export default function CustomerListPage() {
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
   const [error, setError] = useState("");
+  // §129.8 — cellNavigate + virtualize + Enter->center DrawerBase, matching
+  // AC01Page.jsx's own pattern (feasibility doc Section 129.8).
+  const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  function openDrawer(row) {
+    setSelectedCustomerId(row.id);
+    setDrawerOpen(true);
+  }
+
+  function closeDrawer() {
+    setDrawerOpen(false);
+    setSelectedCustomerId("");
+  }
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -68,9 +84,10 @@ export default function CustomerListPage() {
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
 
   return (
+    <>
     <ErpMasterListTemplate
       eyebrow="Operation Management"
-      title="RM/PM Sales Customer"
+      title="FG Sales Customer"
       actions={[
         {
           key: "refresh",
@@ -164,6 +181,9 @@ export default function CustomerListPage() {
               columns={[
                 { key: "customer_code", label: "Customer Code", render: (row) => row.customer_code || "-" },
                 { key: "customer_name", label: "Customer Name", render: (row) => row.customer_name || "-" },
+                // §129.4 — "{gst_state_code} - {name}" display label, computed
+                // server-side (enrichCustomerRows), never recomputed here.
+                { key: "display_code", label: "Display Code", render: (row) => row.display_code || "-" },
                 {
                   key: "company_codes",
                   label: "Company",
@@ -172,23 +192,14 @@ export default function CustomerListPage() {
                 { key: "customer_type", label: "Type" },
                 { key: "status", label: "Status" },
                 { key: "vendor_code", label: "Linked Vendor", render: (row) => row.vendor_code || "-" },
-                {
-                  key: "parent_customer_name",
-                  label: "Parent Company",
-                  render: (row) => (row.parent_customer_code ? `${row.parent_customer_code} | ${row.parent_customer_name}` : "-"),
-                },
               ]}
               rows={rows}
               rowKey={(row) => row.id}
-              onRowActivate={(row) =>
-                openScreen(OPERATION_SCREENS.OM_CUSTOMER_DETAIL.screen_code, {
-                  context: { id: row.id },
-                })}
+              onRowActivate={openDrawer}
+              cellNavigate
+              virtualize
               getRowProps={(row) => ({
-                onDoubleClick: () =>
-                  openScreen(OPERATION_SCREENS.OM_CUSTOMER_DETAIL.screen_code, {
-                    context: { id: row.id },
-                  }),
+                onDoubleClick: () => openDrawer(row),
                 className: "cursor-pointer hover:bg-sky-50",
               })}
               emptyMessage={loading ? "Loading customers..." : "No customer matched the current filter."}
@@ -197,5 +208,35 @@ export default function CustomerListPage() {
         ),
       }}
     />
+      <DrawerBase
+        visible={drawerOpen}
+        title="Edit FG Sales Customer"
+        onClose={closeDrawer}
+        side="center"
+        width="min(720px, calc(100vw - 24px))"
+      >
+        {selectedCustomerId ? (
+          <div className="grid gap-3">
+            <CustomerEditForm
+              customerId={selectedCustomerId}
+              submitLabel="Save"
+              onCancel={closeDrawer}
+              onSaved={closeDrawer}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const id = selectedCustomerId;
+                closeDrawer();
+                openScreen(OPERATION_SCREENS.OM_CUSTOMER_DETAIL.screen_code, { context: { id } });
+              }}
+              className="w-fit text-xs font-semibold text-sky-700 underline"
+            >
+              Open full detail (Lifecycle, Company Mapping) →
+            </button>
+          </div>
+        ) : null}
+      </DrawerBase>
+    </>
   );
 }
