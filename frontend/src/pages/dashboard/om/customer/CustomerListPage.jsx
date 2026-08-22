@@ -96,6 +96,12 @@ export default function CustomerListPage() {
           onClick: () => void customerQuery.refetch(),
         },
         { key: "create", label: "Create Customer", tone: "primary", onClick: () => openScreen(OPERATION_SCREENS.OM_CUSTOMER_CREATE.screen_code) },
+        {
+          key: "vdc-master",
+          label: "Parent Company / VDC",
+          tone: "neutral",
+          onClick: () => openScreen(OPERATION_SCREENS.OM_VDC_PARENT_COMPANY_MASTER.screen_code),
+        },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
       filterSection={{

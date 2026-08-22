@@ -5,7 +5,10 @@
  * Phase: 15
  * Domain: OPERATION_MANAGEMENT
  * Purpose: Render FG Sales Customer detail, edit, status, and company
- *          mapping workflows, including Parent Company and Vendor link.
+ *          mapping workflows, plus the Vendor link. Parent Company/VDC
+ *          mapping lives per-address inside CustomerEditForm's Addresses
+ *          section, not at the customer level (feasibility doc Section 129) --
+ *          the old customer-level parent_customer_id field is dead.
  *          Edit mode delegates its field body to the shared CustomerEditForm
  *          (also embedded by Plan Feed's "Edit Customer" button) so both
  *          entry points write the same customer_master row through the same
@@ -179,10 +182,6 @@ export default function CustomerDetailPage() {
                 {
                   label: "Linked Vendor",
                   value: isVendorLinked ? `${customer.vendor_code} (name/GST mirror this vendor)` : "Independent customer",
-                },
-                {
-                  label: "Parent Company",
-                  value: customer.parent_customer_code ? `${customer.parent_customer_code} | ${customer.parent_customer_name}` : "",
                 },
               ]}
               rowKey={(row) => row.label}

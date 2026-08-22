@@ -2144,6 +2144,68 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/om/customer/VdcParentCompanyMasterPage.jsx",
+    "dependencyCount": 7,
+    "deps": [
+      {
+        "fn": "listFgParentCompanies",
+        "method": "GET",
+        "path": "/api/om/fg-parent-companies?${query.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createFgParentCompany",
+        "method": "POST",
+        "path": "/api/om/fg-parent-company",
+        "resourceCode": "OM_CUSTOMER_CREATE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "updateFgParentCompany",
+        "method": "PATCH",
+        "path": "/api/om/fg-parent-company",
+        "resourceCode": "OM_CUSTOMER_CREATE",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "listFgDepotCodes",
+        "method": "GET",
+        "path": "/api/om/fg-depot-codes?${query.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createOrGetFgDepotCode",
+        "method": "POST",
+        "path": "/api/om/fg-depot-code",
+        "resourceCode": "OM_CUSTOMER_CREATE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "updateFgDepotCode",
+        "method": "PATCH",
+        "path": "/api/om/fg-depot-code",
+        "resourceCode": "OM_CUSTOMER_CREATE",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "lookupCustomerGstProfile",
+        "method": "GET",
+        "path": "/api/om/customer/gst-profile?${params.toString()}",
+        "resourceCode": "OM_CUSTOMER_CREATE",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx",
     "dependencyCount": 9,
     "deps": [
@@ -2159,7 +2221,7 @@
         "fn": "createFgParentCompany",
         "method": "POST",
         "path": "/api/om/fg-parent-company",
-        "resourceCode": "OM_FG_DISPATCH_CUSTOMER",
+        "resourceCode": "OM_CUSTOMER_CREATE",
         "action": "WRITE",
         "skipAcl": false
       },
@@ -2167,7 +2229,7 @@
         "fn": "listFgParentCompanies",
         "method": "GET",
         "path": "/api/om/fg-parent-companies?${query.toString()}",
-        "resourceCode": "OM_FG_DISPATCH_CUSTOMER",
+        "resourceCode": "OM_CUSTOMER_LIST",
         "action": "VIEW",
         "skipAcl": false
       },
@@ -2175,7 +2237,7 @@
         "fn": "createOrGetFgDepotCode",
         "method": "POST",
         "path": "/api/om/fg-depot-code",
-        "resourceCode": "OM_FG_DISPATCH_CUSTOMER",
+        "resourceCode": "OM_CUSTOMER_CREATE",
         "action": "WRITE",
         "skipAcl": false
       },
@@ -2183,7 +2245,7 @@
         "fn": "listFgDepotCodes",
         "method": "GET",
         "path": "/api/om/fg-depot-codes?${query.toString()}",
-        "resourceCode": "OM_FG_DISPATCH_CUSTOMER",
+        "resourceCode": "OM_CUSTOMER_LIST",
         "action": "VIEW",
         "skipAcl": false
       },

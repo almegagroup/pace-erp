@@ -664,14 +664,17 @@ export default function PlanFeedPage() {
               onClose={() => setNewPartyOpen(false)}
               width="min(560px, calc(100vw - 24px))"
             >
-              {/* Same shared form as MM04/SO01 -- so whatever the user fills in here
-                  (GST, Town, Contact, Phone, Email, Billing Address, Parent Company)
-                  actually shows up on the Customer Master detail page later, instead
-                  of this page's old 4-field mini-form leaving everything else blank. */}
+              {/* Same shared form as MM04/SO01 -- but fieldMode="MINIMAL" (§129.7,
+                  Stage 1) shows Production only Customer Name/Address/State/Town/
+                  Site Name. GST/Currency/Contact/etc. are Stage 2, added later by
+                  anyone with MM04 access via the Customer Detail drawer, not asked
+                  here -- Production may not even check GST, nothing should block on
+                  that. */}
               <CustomerCreateForm
                 companyMode="LOCKED"
                 lockedCompanyId={effectiveCompanyId}
                 initialFoCustomerType={poTypeFilter}
+                fieldMode="MINIMAL"
                 onSaved={handlePartyCreated}
                 onCancel={() => setNewPartyOpen(false)}
                 submitLabel="Create Customer"

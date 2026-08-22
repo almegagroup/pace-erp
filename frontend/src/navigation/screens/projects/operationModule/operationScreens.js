@@ -81,6 +81,16 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // §129.6/129.8 — Parent Company (Bill-To) + VDC master. No new tx_code/menu
+  // row — reused MM04's own ACL, reached via an in-app link, not the sidebar.
+  OM_VDC_PARENT_COMPANY_MASTER: {
+    screen_code: "OM_VDC_PARENT_COMPANY_MASTER",
+    route: "/dashboard/om/customer/vdc-parent-company",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   OM_FG_DISPATCH_CUSTOMER: {
     screen_code: "OM_FG_DISPATCH_CUSTOMER",
     route: "/dashboard/om/fg-dispatch-customers",
