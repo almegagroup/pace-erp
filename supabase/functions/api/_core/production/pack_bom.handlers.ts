@@ -163,14 +163,14 @@ async function getPackCodeMapByCodes(packCodes: string[]): Promise<Map<string, J
 }
 
 async function resolveProdshadeForSku(sku: JsonRecord): Promise<JsonRecord | null> {
-  const shadeCode = toTrimmedString(sku.shade_code);
+  const skuIdentity = toUpperTrimmedString(sku.external_code ?? sku.material_name);
   const packCode = toTrimmedString(sku.pack_code);
-  if (!shadeCode || !packCode) return null;
+  if (!skuIdentity || !packCode) return null;
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("prodshade_pack_config")
     .select(`
-      id, material_id, pack_code_id, fill_qty, active,
+      id, material_id, pack_code_id, fill_qty, variant, active,
       pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, bom_required, outer_uom_code)
     `)
     .eq("active", true);
@@ -185,12 +185,18 @@ async function resolveProdshadeForSku(sku: JsonRecord): Promise<JsonRecord | nul
     "PROD_BOM_PRODSHADE_LOOKUP_FAILED",
     "id, pace_code, external_code, material_name, document_name, shade_code, base_uom_code",
   );
-  const match = rows.find((row) => {
+  const matches = rows.filter((row) => {
     const pack = (row.pack_code ?? {}) as JsonRecord;
     const prod = prodshadeMap.get(String(row.material_id ?? "")) ?? {};
-    return toTrimmedString(pack.pack_code) === packCode && toTrimmedString(prod.shade_code) === shadeCode;
-  }) ?? null;
-  if (!match) return null;
+    return toTrimmedString(pack.pack_code) === packCode
+      && buildSkuProdshadeKey(
+        toTrimmedString(prod.external_code),
+        toTrimmedString(pack.pack_code),
+        toTrimmedString(row.variant),
+      ) === skuIdentity;
+  });
+  if (matches.length !== 1) return null;
+  const match = matches[0];
   return { ...match, prodshade: prodshadeMap.get(String(match.material_id ?? "")) ?? null };
 }
 
@@ -251,8 +257,8 @@ async function resolveApprovedStroke(prodshadeMaterialId: string, companyId: str
   };
 }
 
-function buildSkuProdshadeKey(shadeCode: string, packCode: string): string {
-  return `${toTrimmedString(shadeCode).toUpperCase()}::${toTrimmedString(packCode).toUpperCase()}`;
+function buildSkuProdshadeKey(prodshadeCode: string, packCode: string, variant = ""): string {
+  return toUpperTrimmedString(`${toTrimmedString(prodshadeCode)}${toTrimmedString(packCode)}${toTrimmedString(variant)}`);
 }
 
 function normalizeLine(line: JsonRecord, idx: number): JsonRecord {
@@ -412,7 +418,7 @@ export async function listPackBomEligibleSkusHandler(
       .schema("erp_production")
       .from("prodshade_pack_config")
       .select(`
-        id, material_id, pack_code_id, fill_qty, active,
+        id, material_id, pack_code_id, fill_qty, variant, active,
         pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, bom_required, outer_uom_code)
       `)
       .eq("active", true)
@@ -432,26 +438,26 @@ export async function listPackBomEligibleSkusHandler(
       "id, pace_code, external_code, material_name, document_name, shade_code, base_uom_code",
     );
 
-    const prodshadeBySkuKey = new Map<string, JsonRecord>();
+    const prodshadeBySkuKey = new Map<string, JsonRecord | null>();
     for (const row of configRows) {
       const pack = (row.pack_code ?? {}) as JsonRecord;
       const prodshade = prodshadeMap.get(String(row.material_id ?? ""));
       const packCode = toTrimmedString(pack.pack_code);
-      const shadeCode = toTrimmedString(prodshade?.shade_code);
-      if (!packCode || !shadeCode) continue;
-      const key = buildSkuProdshadeKey(shadeCode, packCode);
-      if (!prodshadeBySkuKey.has(key)) {
-        prodshadeBySkuKey.set(key, { ...row, prodshade });
-      }
+      const prodshadeCode = toTrimmedString(prodshade?.external_code);
+      if (!packCode || !prodshadeCode) continue;
+      const key = buildSkuProdshadeKey(prodshadeCode, packCode, toTrimmedString(row.variant));
+      // An exact SKU must resolve to one Prodshade config only. A duplicate is
+      // deliberately treated as unusable instead of silently choosing first.
+      prodshadeBySkuKey.set(
+        key,
+        prodshadeBySkuKey.has(key) ? null : { ...row, prodshade },
+      );
     }
 
     const matchedProdshadeIds = [...new Set(
       skuList
         .map((sku) => {
-          const key = buildSkuProdshadeKey(
-            toTrimmedString(sku.shade_code),
-            toTrimmedString(sku.pack_code),
-          );
+          const key = toUpperTrimmedString(sku.external_code ?? sku.material_name);
           const match = prodshadeBySkuKey.get(key);
           return toTrimmedString(match?.prodshade?.id);
         })
@@ -488,10 +494,7 @@ export async function listPackBomEligibleSkusHandler(
     for (const sku of skuList) {
       const packCode = packCodeMap.get(toTrimmedString(sku.pack_code));
       if (!packCode) continue;
-      const key = buildSkuProdshadeKey(
-        toTrimmedString(sku.shade_code),
-        toTrimmedString(sku.pack_code),
-      );
+      const key = toUpperTrimmedString(sku.external_code ?? sku.material_name);
       const prodshadeConfig = prodshadeBySkuKey.get(key);
       const prodshade = (prodshadeConfig?.prodshade ?? null) as JsonRecord | null;
       if (!prodshade) continue;
