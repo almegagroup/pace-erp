@@ -13,89 +13,77 @@
  * Authority: Frontend
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { INDIAN_STATES } from "../../../../data/indianStates.js";
+import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   createCustomerAddress,
-  createFgParentCompany,
-  createOrGetFgDepotCode,
   getCustomer,
   listCustomerAddresses,
-  listFgParentCompanies,
+  listFgDepotCodes,
   lookupCustomerGstProfile,
   updateCustomer,
   updateCustomerAddress,
 } from "../omApi.js";
 
-// §129.3/§129.8 Step 5 — "Map this address to a VDC": pick an existing
-// Parent Company or create one, then create-or-reuse a VDC under it
-// (createOrGetFgDepotCode is idempotent on (parent_company_id, code)), then
-// point the address's depot_code_id at it.
-function MapVdcPanel({ addressId, onDone, onCancel }) {
-  const [parentCompanies, setParentCompanies] = useState([]);
-  const [loadingParents, setLoadingParents] = useState(true);
-  const [parentCompanyId, setParentCompanyId] = useState("");
-  const [newParentName, setNewParentName] = useState("");
-  const [newParentState, setNewParentState] = useState("");
-  const [newParentGst, setNewParentGst] = useState("");
-  const [vdcCode, setVdcCode] = useState("");
-  const [dispatchType, setDispatchType] = useState("DIRECT");
-  const [vdcGst, setVdcGst] = useState("");
+// §129.6 correction (2026-08-22, business owner) — VDC and DC (Depot Code)
+// are two DIFFERENT things, not one "VDC" bucket with a type flag: Direct
+// dispatch_type = VDC, Depot dispatch_type = DC. Both live in the same
+// fg_depot_code table (no schema change needed -- dispatch_type already
+// distinguishes them), but every UI label must say the right one, never a
+// blanket "VDC" for a Depot-type row.
+function depotLabel(dispatchType) {
+  return dispatchType === "DEPOT" ? "DC" : "VDC";
+}
+
+// §129.3/§129.6/§129.8 (corrected 2026-08-22) — an Address maps DIRECTLY to
+// an already-existing VDC/DC, picked from the master (VdcParentCompanyMasterPage.jsx)
+// -- Parent Company is never chosen here, it's implied (a VDC/DC belongs to
+// exactly one Parent Company). If the needed one doesn't exist yet, the user
+// is sent to the Master page to create it there, not inline here.
+function VdcPickerPanel({ addressId, currentDepotId, currentLabel, onDone, onCancel }) {
+  const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const result = await listFgParentCompanies();
-        if (!cancelled) setParentCompanies(Array.isArray(result?.data) ? result.data : []);
-      } catch {
-        if (!cancelled) setParentCompanies([]);
-      } finally {
-        if (!cancelled) setLoadingParents(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+  const vdcQuery = useQuery({
+    queryKey: ["om", "fg-depot-codes", "all"],
+    queryFn: () => listFgDepotCodes(),
+    select: (data) => data?.data ?? [],
+  });
+  const filtered = useMemo(() => {
+    const vdcs = vdcQuery.data ?? [];
+    const term = search.trim().toLowerCase();
+    if (!term) return vdcs;
+    return vdcs.filter((v) => (v.code || "").toLowerCase().includes(term));
+  }, [vdcQuery.data, search]);
 
-  async function handleMap() {
-    if (!vdcCode.trim()) {
-      setError("VDC Code is required.");
-      return;
-    }
-    let resolvedParentId = parentCompanyId;
+  async function handlePick(depotId) {
     setSaving(true);
     setError("");
     try {
-      if (!resolvedParentId) {
-        if (!newParentName.trim() || !newParentState) {
-          setError("Pick an existing Parent Company, or enter a name + state to create one.");
-          setSaving(false);
-          return;
-        }
-        const parentResult = await createFgParentCompany({
-          company_name: newParentName.trim(),
-          state: newParentState,
-          gst_number: newParentGst.trim() || undefined,
-        });
-        resolvedParentId = parentResult?.data?.id;
-      }
-      const depotResult = await createOrGetFgDepotCode({
-        parent_company_id: resolvedParentId,
-        dispatch_type: dispatchType,
-        code: vdcCode.trim(),
-        gst_number: vdcGst.trim() || undefined,
-      });
-      const depotId = depotResult?.data?.id;
       await updateCustomerAddress({ id: addressId, depot_code_id: depotId });
       onDone();
     } catch (mapError) {
       setError(mapError instanceof Error ? mapError.message : "OM_ADDRESS_VDC_MAP_FAILED");
-    } finally {
+      setSaving(false);
+    }
+  }
+
+  // A wrong mapping isn't a dead end — pick a different VDC/DC (below) to
+  // correct it directly, or explicitly clear via "Unmap" first.
+  async function handleUnmap() {
+    setSaving(true);
+    setError("");
+    try {
+      await updateCustomerAddress({ id: addressId, depot_code_id: null });
+      onDone();
+    } catch (mapError) {
+      setError(mapError instanceof Error ? mapError.message : "OM_ADDRESS_VDC_UNMAP_FAILED");
       setSaving(false);
     }
   }
@@ -103,85 +91,61 @@ function MapVdcPanel({ addressId, onDone, onCancel }) {
   return (
     <div className="mt-1 grid gap-2 border border-dashed border-sky-300 bg-sky-50/40 p-3">
       {error ? <div className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs text-rose-800">{error}</div> : null}
-      <ErpDenseFormRow label="Parent Company">
-        <select
-          value={parentCompanyId}
-          onChange={(event) => setParentCompanyId(event.target.value)}
-          disabled={loadingParents}
-          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        >
-          <option value="">— select or create new below —</option>
-          {parentCompanies.map((entry) => (
-            <option key={entry.id} value={entry.id}>{entry.company_name} ({entry.state})</option>
-          ))}
-        </select>
-      </ErpDenseFormRow>
-      {!parentCompanyId ? (
-        <div className="grid gap-2 border border-dashed border-slate-300 bg-white p-2">
-          <ErpDenseFormRow label="New Parent Company Name">
-            <input
-              value={newParentName}
-              onChange={(event) => setNewParentName(event.target.value)}
-              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-            />
-          </ErpDenseFormRow>
-          <ErpDenseFormRow label="State">
-            <select
-              value={newParentState}
-              onChange={(event) => setNewParentState(event.target.value)}
-              className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-            >
-              <option value="">Select state</option>
-              {INDIAN_STATES.map((state) => (
-                <option key={state.code} value={state.name}>{state.name}</option>
-              ))}
-            </select>
-          </ErpDenseFormRow>
-          <ErpDenseFormRow label="GST (optional)">
-            <input
-              value={newParentGst}
-              onChange={(event) => setNewParentGst(event.target.value.toUpperCase())}
-              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-            />
-          </ErpDenseFormRow>
+      {currentDepotId ? (
+        <div className="flex items-center justify-between rounded bg-white border border-slate-200 px-2 py-1 text-xs">
+          <span>Currently mapped: <span className="font-semibold text-slate-900">{currentLabel}</span></span>
+          <button
+            type="button"
+            onClick={() => void handleUnmap()}
+            disabled={saving}
+            className="border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 disabled:opacity-50"
+          >
+            Unmap
+          </button>
         </div>
       ) : null}
-      <ErpDenseFormRow label="External VDC Code" required>
+      <div className="flex items-center justify-between">
         <input
-          value={vdcCode}
-          onChange={(event) => setVdcCode(event.target.value)}
-          placeholder="e.g. VDC-KOLH-002"
-          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search VDC/DC code..."
+          className="h-8 flex-1 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
         />
-        <p className="mt-1 text-xs text-slate-500">If this code already exists under the selected Parent Company, it's reused — no duplicate created.</p>
-      </ErpDenseFormRow>
-      <ErpDenseFormRow label="Dispatch Type">
-        <select
-          value={dispatchType}
-          onChange={(event) => setDispatchType(event.target.value)}
-          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        >
-          <option value="DIRECT">Direct</option>
-          <option value="DEPOT">Depot</option>
-        </select>
-      </ErpDenseFormRow>
-      <ErpDenseFormRow label="VDC GST (optional)">
-        <input
-          value={vdcGst}
-          onChange={(event) => setVdcGst(event.target.value.toUpperCase())}
-          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        />
-      </ErpDenseFormRow>
-      <div className="flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
         <button
           type="button"
-          onClick={() => void handleMap()}
-          disabled={saving}
-          className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50"
+          onClick={() => openScreen(OPERATION_SCREENS.OM_VDC_PARENT_COMPANY_MASTER.screen_code)}
+          className="ml-2 whitespace-nowrap border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700"
         >
-          {saving ? "Mapping..." : "Map to VDC"}
+          + New VDC/DC (Master) →
         </button>
+      </div>
+      {vdcQuery.isLoading ? (
+        <p className="text-xs text-slate-500">Loading...</p>
+      ) : filtered.length === 0 ? (
+        <p className="text-xs text-slate-500">No VDC/DC found. Create one on the Parent Company / VDC master page.</p>
+      ) : (
+        <ul className="grid gap-1 max-h-48 overflow-y-auto">
+          {filtered.map((v) => (
+            <li key={v.id} className="flex items-center justify-between border border-slate-200 bg-white px-2 py-1 text-xs">
+              <span>
+                <span className="mr-1 rounded bg-slate-100 px-1 text-[10px] font-bold text-slate-600">{depotLabel(v.dispatch_type)}</span>
+                <span className="font-semibold text-slate-900">{v.code}</span>
+                {v.state ? ` — ${v.state}` : ""}
+              </span>
+              <button
+                type="button"
+                onClick={() => void handlePick(v.id)}
+                disabled={saving || v.id === currentDepotId}
+                className="border border-sky-700 bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-950 disabled:opacity-50"
+              >
+                {v.id === currentDepotId ? "Current" : "Pick"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex justify-end">
+        <button type="button" onClick={onCancel} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
       </div>
     </div>
   );
@@ -246,7 +210,7 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
       customer_name: customer.customer_name ?? "",
       gst_number: customer.gst_number ?? "",
       gst_category: customer.gst_category ?? "",
-      currency_code: customer.currency_code ?? "BDT",
+      currency_code: customer.currency_code ?? "INR",
       delivery_address: customer.delivery_address ?? "",
       billing_address: customer.billing_address ?? "",
       billing_state: customer.billing_state ?? "",
@@ -281,8 +245,12 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
         gst_number: gst,
         customer_name: isVendorLinked ? current.customer_name : (profile.legal_name || current.customer_name),
         delivery_address: profile.full_address || current.delivery_address,
+        // State was previously never auto-filled here (real gap, business
+        // owner caught it 2026-08-22) -- Parent Company's own Check GST
+        // already did this correctly, Customer's own didn't.
+        billing_state: profile.state_name || current.billing_state,
       }));
-      setGstNotice(`GST found: ${profile.legal_name ?? "—"}`);
+      setGstNotice(`GST found: ${profile.legal_name ?? "—"} — address/state below updated from GST registration.`);
     } catch {
       setError("GST lookup failed. Check the GST number.");
     } finally {
@@ -528,23 +496,30 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
                     {address.address_line}, {address.town}, {address.state}
                   </span>
                   {address.depot_code ? (
-                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
-                      {address.depot_code}
+                    <button
+                      type="button"
+                      onClick={() => setMappingAddressId((current) => (current === address.id ? "" : address.id))}
+                      className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                    >
+                      {depotLabel(address.depot_dispatch_type)}: {address.depot_code}
                       {address.parent_company_name ? ` — ${address.parent_company_name}` : ""}
-                    </span>
+                      {" (change →)"}
+                    </button>
                   ) : (
                     <button
                       type="button"
                       onClick={() => setMappingAddressId((current) => (current === address.id ? "" : address.id))}
                       className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
                     >
-                      Not mapped — Map VDC →
+                      Not mapped — Map VDC/DC →
                     </button>
                   )}
                 </div>
                 {mappingAddressId === address.id ? (
-                  <MapVdcPanel
+                  <VdcPickerPanel
                     addressId={address.id}
+                    currentDepotId={address.depot_code_id}
+                    currentLabel={address.depot_code ? `${depotLabel(address.depot_dispatch_type)}: ${address.depot_code}` : ""}
                     onCancel={() => setMappingAddressId("")}
                     onDone={() => {
                       setMappingAddressId("");

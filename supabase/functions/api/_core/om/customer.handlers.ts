@@ -245,6 +245,10 @@ export async function createCustomerHandler(
     const customerType = toTrimmedString(body.customer_type).toUpperCase();
     const deliveryAddress = toTrimmedString(body.delivery_address);
     const billingState = toTrimmedString(body.billing_state);
+    // §129.3/§129.7 — every customer needs at least one customer_address row
+    // from day one (Stage 1 mandatory: Site Name, Address, Town, State) or
+    // the whole Address -> VDC -> Bill-To/Ship-To chain never applies to it.
+    const siteName = toTrimmedString(body.site_name);
     const foCustomerTypeRaw = normalizeFoCustomerType(body.fo_customer_type);
     const gstCategory = toTrimmedString(body.gst_category).toUpperCase();
     // §113.6 — a customer created with no company mapping produces an
@@ -259,6 +263,9 @@ export async function createCustomerHandler(
     // have none). Mandatory regardless of gst_category.
     if (!billingState) {
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_BILLING_STATE_REQUIRED", 400, "Billing state is required");
+    }
+    if (!siteName) {
+      return customerErrorResponse(req, ctx, "OM_CUSTOMER_SITE_NAME_REQUIRED", 400, "Site name is required");
     }
     // DOMESTIC-only: the frontend dropdown only offers Indian states (EXPORT
     // customers keep free text for their own country's state/province).
@@ -310,7 +317,9 @@ export async function createCustomerHandler(
       primary_contact_person: toTrimmedString(body.primary_contact_person) || null,
       phone: toTrimmedString(body.phone) || null,
       primary_email: toTrimmedString(body.primary_email) || null,
-      currency_code: toTrimmedString(body.currency_code).toUpperCase() || "BDT",
+      // PACE ERP is an India-based FG/RM/PM dispatch business (GST/state
+      // driven throughout) -- INR is the correct default, not BDT.
+      currency_code: toTrimmedString(body.currency_code).toUpperCase() || "INR",
       status: "ACTIVE",
       approved_by: ctx.auth_user_id,
       approved_at: new Date().toISOString(),
@@ -341,6 +350,29 @@ export async function createCustomerHandler(
       // Roll back the orphaned customer row rather than leaving an unmapped one behind.
       await serviceRoleClient.schema("erp_master").from("customer_master").delete().eq("id", data.id);
       throw new Error("OM_CUSTOMER_COMPANY_MAP_FAILED");
+    }
+
+    // §129.3 — the customer's first address, seeded from the same fields
+    // just captured (delivery_address/billing_state/town) + site_name.
+    // Without this, a newly-created customer has zero customer_address rows
+    // and the whole Address -> VDC -> Bill-To/Ship-To chain never applies.
+    const { error: addressError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("customer_address")
+      .insert({
+        customer_id: data.id,
+        site_name: siteName,
+        address_line: deliveryAddress,
+        town: toTrimmedString(body.town) || null,
+        state: billingState,
+        status: "ACTIVE",
+        created_by: ctx.auth_user_id,
+      });
+    if (addressError) {
+      console.error("[createCustomerHandler] first address insert failed:", JSON.stringify(addressError));
+      await serviceRoleClient.schema("erp_master").from("customer_company_map").delete().eq("customer_id", data.id);
+      await serviceRoleClient.schema("erp_master").from("customer_master").delete().eq("id", data.id);
+      throw new Error("OM_CUSTOMER_ADDRESS_CREATE_FAILED");
     }
 
     const [enriched] = await enrichCustomerRows([data as Record<string, unknown>]);

@@ -51,16 +51,25 @@ function formatVendorAddress(vendor) {
 /**
  * companyMode="LOCKED"  -> lockedCompanyId is used, no dropdown shown
  * companyMode="SELECT"  -> companyOptions rendered as a required dropdown
+ * fieldMode="FULL"      -> every field shown (MM04's own Create page, SO01)
+ * fieldMode="MINIMAL"   -> Section 129.7 Stage 1: only Customer Name, Address,
+ *                          State, Town, Site Name. Used by Plan Feed's
+ *                          "+ New Party" so Production isn't shown GST/
+ *                          Currency/Contact/etc. -- those stay Stage 2, added
+ *                          later by anyone with MM04 access via the Customer
+ *                          Detail drawer, not asked here.
  */
 export default function CustomerCreateForm({
   companyMode = "SELECT",
   lockedCompanyId = "",
   companyOptions = [],
   initialFoCustomerType = "",
+  fieldMode = "FULL",
   onSaved,
   onCancel,
   submitLabel = "Save Customer",
 }) {
+  const isMinimal = fieldMode === "MINIMAL";
   const [source, setSource] = useState("INDEPENDENT");
   const [loadingVendorProfile, setLoadingVendorProfile] = useState(false);
   const [gstLooking, setGstLooking] = useState(false);
@@ -72,11 +81,12 @@ export default function CustomerCreateForm({
     customer_name: "",
     customer_type: "DOMESTIC",
     fo_customer_type: initialFoCustomerType,
-    currency_code: "BDT",
+    currency_code: "INR",
     delivery_address: "",
     billing_address: "",
     billing_state: "",
     town: "",
+    site_name: "",
     gst_number: "",
     gst_category: "",
     primary_contact_person: "",
@@ -149,8 +159,9 @@ export default function CustomerCreateForm({
         gst_number: gst,
         customer_name: profile.legal_name || current.customer_name,
         delivery_address: profile.full_address || current.delivery_address,
+        billing_state: profile.state_name || current.billing_state,
       }));
-      setGstNotice(`GST found: ${profile.legal_name ?? "—"}`);
+      setGstNotice(`GST found: ${profile.legal_name ?? "—"} — address/state below updated from GST registration.`);
     } catch {
       setError("GST lookup failed. Check the GST number.");
     } finally {
@@ -180,6 +191,10 @@ export default function CustomerCreateForm({
       setError("Billing state is required (needed for CGST/SGST vs IGST on invoices).");
       return;
     }
+    if (!form.site_name.trim()) {
+      setError("Site Name is required (§129.3 -- every customer needs at least one named address/site).");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -194,6 +209,7 @@ export default function CustomerCreateForm({
         billing_address: form.billing_address.trim() || undefined,
         billing_state: form.billing_state.trim(),
         town: form.town.trim() || undefined,
+        site_name: form.site_name.trim(),
         gst_number: isVendorLinked ? undefined : form.gst_number.trim() || undefined,
         gst_category: form.gst_category || undefined,
         primary_contact_person: form.primary_contact_person.trim() || undefined,
@@ -229,16 +245,18 @@ export default function CustomerCreateForm({
         </ErpDenseFormRow>
       ) : null}
 
-      <ErpDenseFormRow label="Source" required>
-        <select
-          value={source}
-          onChange={(event) => setSource(event.target.value)}
-          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        >
-          <option value="INDEPENDENT">Independent — enter customer details</option>
-          <option value="VENDOR_LINKED">Link to existing Vendor — reuse vendor's name/GST live</option>
-        </select>
-      </ErpDenseFormRow>
+      {!isMinimal ? (
+        <ErpDenseFormRow label="Source" required>
+          <select
+            value={source}
+            onChange={(event) => setSource(event.target.value)}
+            className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+          >
+            <option value="INDEPENDENT">Independent — enter customer details</option>
+            <option value="VENDOR_LINKED">Link to existing Vendor — reuse vendor's name/GST live</option>
+          </select>
+        </ErpDenseFormRow>
+      ) : null}
 
       {source === "VENDOR_LINKED" ? (
         <ErpDenseFormRow label="Vendor" required>
@@ -273,75 +291,84 @@ export default function CustomerCreateForm({
 
           {/* §113.7 — Vendor Master's GST pattern: optional gst_number + "Check GST"
               lookup, plus a separate gst_category classification that is the real
-              GST-holder signal (not whether gst_number happens to be filled in). */}
-          <ErpDenseFormRow label="GST Number">
-            <div className="flex gap-2">
-              <input
-                value={form.gst_number}
-                onChange={(event) => { updateField("gst_number", event.target.value.toUpperCase()); setGstNotice(""); }}
-                className="h-8 flex-1 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                placeholder="e.g. 19AAAAA0000A1Z5"
-              />
-              <button
-                type="button"
-                onClick={() => void handleCheckGst()}
-                disabled={gstLooking}
-                className="h-8 border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 disabled:opacity-50 whitespace-nowrap"
-              >
-                {gstLooking ? "Checking..." : "Check GST"}
-              </button>
-            </div>
-            {gstNotice ? <p className="mt-1 text-xs text-emerald-600">{gstNotice}</p> : null}
-          </ErpDenseFormRow>
-          <ErpDenseFormRow label="GST Category">
+              GST-holder signal (not whether gst_number happens to be filled in).
+              §129.7 — GST is Stage 2, not shown to Production's minimal create. */}
+          {!isMinimal ? (
+            <>
+              <ErpDenseFormRow label="GST Number">
+                <div className="flex gap-2">
+                  <input
+                    value={form.gst_number}
+                    onChange={(event) => { updateField("gst_number", event.target.value.toUpperCase()); setGstNotice(""); }}
+                    className="h-8 flex-1 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    placeholder="e.g. 19AAAAA0000A1Z5"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleCheckGst()}
+                    disabled={gstLooking}
+                    className="h-8 border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {gstLooking ? "Checking..." : "Check GST"}
+                  </button>
+                </div>
+                {gstNotice ? <p className="mt-1 text-xs text-emerald-600">{gstNotice}</p> : null}
+              </ErpDenseFormRow>
+              <ErpDenseFormRow label="GST Category">
+                <select
+                  value={form.gst_category}
+                  onChange={(event) => updateField("gst_category", event.target.value)}
+                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                >
+                  {GST_CATEGORY_OPTIONS.map((entry) => (
+                    <option key={entry.value} value={entry.value}>{entry.label}</option>
+                  ))}
+                </select>
+              </ErpDenseFormRow>
+            </>
+          ) : null}
+        </>
+      )}
+
+      {!isMinimal ? (
+        <>
+          <ErpDenseFormRow label="Customer Type" required>
             <select
-              value={form.gst_category}
-              onChange={(event) => updateField("gst_category", event.target.value)}
+              value={form.customer_type}
+              onChange={(event) => updateField("customer_type", event.target.value)}
               className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
             >
-              {GST_CATEGORY_OPTIONS.map((entry) => (
+              <option value="DOMESTIC">DOMESTIC</option>
+              <option value="EXPORT">EXPORT</option>
+            </select>
+          </ErpDenseFormRow>
+          <ErpDenseFormRow label="FO Type (Plan Feed party filter)">
+            <select
+              value={form.fo_customer_type}
+              onChange={(event) => updateField("fo_customer_type", event.target.value)}
+              className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+            >
+              {FO_CUSTOMER_TYPE_OPTIONS.map((entry) => (
                 <option key={entry.value} value={entry.value}>{entry.label}</option>
               ))}
             </select>
           </ErpDenseFormRow>
+          <ErpDenseFormRow label="Currency" required>
+            <select
+              value={form.currency_code}
+              onChange={(event) => updateField("currency_code", event.target.value)}
+              className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+            >
+              {CURRENCY_OPTIONS.map((entry) => (
+                <option key={entry.code} value={entry.code}>
+                  {entry.code} | {entry.country}
+                </option>
+              ))}
+            </select>
+          </ErpDenseFormRow>
         </>
-      )}
-
-      <ErpDenseFormRow label="Customer Type" required>
-        <select
-          value={form.customer_type}
-          onChange={(event) => updateField("customer_type", event.target.value)}
-          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        >
-          <option value="DOMESTIC">DOMESTIC</option>
-          <option value="EXPORT">EXPORT</option>
-        </select>
-      </ErpDenseFormRow>
-      <ErpDenseFormRow label="FO Type (Plan Feed party filter)">
-        <select
-          value={form.fo_customer_type}
-          onChange={(event) => updateField("fo_customer_type", event.target.value)}
-          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        >
-          {FO_CUSTOMER_TYPE_OPTIONS.map((entry) => (
-            <option key={entry.value} value={entry.value}>{entry.label}</option>
-          ))}
-        </select>
-      </ErpDenseFormRow>
-      <ErpDenseFormRow label="Currency" required>
-        <select
-          value={form.currency_code}
-          onChange={(event) => updateField("currency_code", event.target.value)}
-          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        >
-          {CURRENCY_OPTIONS.map((entry) => (
-            <option key={entry.code} value={entry.code}>
-              {entry.code} | {entry.country}
-            </option>
-          ))}
-        </select>
-      </ErpDenseFormRow>
-      <ErpDenseFormRow label="Delivery Address" required>
+      ) : null}
+      <ErpDenseFormRow label={isMinimal ? "Address" : "Delivery Address"} required>
         <textarea
           rows={3}
           value={form.delivery_address}
@@ -349,15 +376,17 @@ export default function CustomerCreateForm({
           className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
         />
       </ErpDenseFormRow>
-      <ErpDenseFormRow label="Billing Address">
-        <textarea
-          rows={3}
-          value={form.billing_address}
-          onChange={(event) => updateField("billing_address", event.target.value)}
-          className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        />
-      </ErpDenseFormRow>
-      <ErpDenseFormRow label="Billing State" required>
+      {!isMinimal ? (
+        <ErpDenseFormRow label="Billing Address">
+          <textarea
+            rows={3}
+            value={form.billing_address}
+            onChange={(event) => updateField("billing_address", event.target.value)}
+            className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+          />
+        </ErpDenseFormRow>
+      ) : null}
+      <ErpDenseFormRow label={isMinimal ? "State" : "Billing State"} required>
         {form.customer_type === "DOMESTIC" ? (
           <select
             value={form.billing_state}
@@ -386,27 +415,42 @@ export default function CustomerCreateForm({
           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
         />
       </ErpDenseFormRow>
-      <ErpDenseFormRow label="Primary Contact">
+      {/* §129.3 — Stage 1 mandatory, both modes: seeds this customer's first
+          customer_address row (site_name/address/town/state), created
+          alongside the customer itself in createCustomerHandler. */}
+      <ErpDenseFormRow label="Site Name" required>
         <input
-          value={form.primary_contact_person}
-          onChange={(event) => updateField("primary_contact_person", event.target.value)}
+          value={form.site_name}
+          onChange={(event) => updateField("site_name", event.target.value)}
+          placeholder="e.g. Kolhapur Batching Plant"
           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
         />
       </ErpDenseFormRow>
-      <ErpDenseFormRow label="Phone">
-        <input
-          value={form.phone}
-          onChange={(event) => updateField("phone", event.target.value)}
-          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        />
-      </ErpDenseFormRow>
-      <ErpDenseFormRow label="Primary Email">
-        <input
-          value={form.primary_email}
-          onChange={(event) => updateField("primary_email", event.target.value)}
-          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        />
-      </ErpDenseFormRow>
+      {!isMinimal ? (
+        <>
+          <ErpDenseFormRow label="Primary Contact">
+            <input
+              value={form.primary_contact_person}
+              onChange={(event) => updateField("primary_contact_person", event.target.value)}
+              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+            />
+          </ErpDenseFormRow>
+          <ErpDenseFormRow label="Phone">
+            <input
+              value={form.phone}
+              onChange={(event) => updateField("phone", event.target.value)}
+              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+            />
+          </ErpDenseFormRow>
+          <ErpDenseFormRow label="Primary Email">
+            <input
+              value={form.primary_email}
+              onChange={(event) => updateField("primary_email", event.target.value)}
+              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+            />
+          </ErpDenseFormRow>
+        </>
+      ) : null}
 
       <div className="flex justify-end gap-2 border-t border-slate-200 pt-3">
         {onCancel ? (

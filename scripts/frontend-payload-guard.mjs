@@ -65,6 +65,18 @@ const CALL_SITE_SCAN_ROOTS = ["frontend/src/pages", "frontend/src/admin", "front
  */
 const BASELINE = new Set([
   // format: "callerFile::apiFunctionName::missingField"
+  // Genuinely exempt (2026-08-22, feasibility doc §129.8) -- not an unfixed
+  // gap. updateDepotCodeHandler treats parent_company_id/code as OPTIONAL
+  // per-field updates (`if (body.field !== undefined)` gates, confirmed by
+  // reading the handler directly), not unconditionally required -- this
+  // guard's static heuristic can't tell "required only if this call intends
+  // to change that field" from "always required". VdcParentCompanyMasterPage's
+  // two call sites are each deliberately partial: the "Save" button edits a
+  // VDC's own fields without touching parent_company_id, and the separate
+  // "Map" button (the two-step unmap-then-map flow, §129's explicit design
+  // correction) changes ONLY parent_company_id without touching code.
+  "frontend/src/pages/dashboard/om/customer/VdcParentCompanyMasterPage.jsx::updateFgDepotCode::parent_company_id",
+  "frontend/src/pages/dashboard/om/customer/VdcParentCompanyMasterPage.jsx::updateFgDepotCode::code",
 ]);
 
 function readText(path) {
