@@ -4,7 +4,7 @@
  * Gate: 15
  * Phase: 15
  * Domain: OPERATION_MANAGEMENT
- * Purpose: Render RM/PM Sales Customer detail, edit, status, and company
+ * Purpose: Render FG Sales Customer detail, edit, status, and company
  *          mapping workflows, including Parent Company and Vendor link.
  *          Edit mode delegates its field body to the shared CustomerEditForm
  *          (also embedded by Plan Feed's "Edit Customer" button) so both
@@ -150,7 +150,7 @@ export default function CustomerDetailPage() {
   return (
     <ErpScreenScaffold
       eyebrow="Operation Management"
-      title="RM/PM Sales Customer Detail"
+      title="FG Sales Customer Detail"
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         { key: "edit", label: editMode ? "Cancel Edit" : "Edit", tone: "neutral", onClick: () => setEditMode((current) => !current), disabled: loading || !customer },

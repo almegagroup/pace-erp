@@ -651,6 +651,63 @@ export async function listFgDepotCodes(params = {}) {
   return fetchJson(`/api/om/fg-depot-codes?${query.toString()}`, {}, "MM05_DEPOT_CODE_LIST_FAILED");
 }
 
+// §129.5/§129.8 Step 6 — Parent Company GST/name/address edit (auto-overwrite
+// on Check GST, no Keep/Overwrite choice, same pattern as Customer's own GST).
+export async function updateFgParentCompany(payload) {
+  return fetchJson(
+    "/api/om/fg-parent-company",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "MM05_PARENT_COMPANY_UPDATE_FAILED"
+  );
+}
+
+// §129.8 Step 7 — "Change" a VDC's Parent Company link, plus its own editable fields.
+export async function updateFgDepotCode(payload) {
+  return fetchJson(
+    "/api/om/fg-depot-code",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "MM05_DEPOT_CODE_UPDATE_FAILED"
+  );
+}
+
+// §129.3 — customer_address: Stage-1 Address list + Stage-2 "Map to VDC".
+export async function listCustomerAddresses(customerId) {
+  const query = buildParams({ customer_id: customerId });
+  return fetchJson(`/api/om/customer-addresses?${query.toString()}`, {}, "OM_ADDRESS_LIST_FAILED");
+}
+
+export async function createCustomerAddress(payload) {
+  return fetchJson(
+    "/api/om/customer-address",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_ADDRESS_CREATE_FAILED"
+  );
+}
+
+export async function updateCustomerAddress(payload) {
+  return fetchJson(
+    "/api/om/customer-address",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_ADDRESS_UPDATE_FAILED"
+  );
+}
+
 export async function createFgDispatchCustomer(payload) {
   return fetchJson(
     "/api/om/fg-dispatch-customer",

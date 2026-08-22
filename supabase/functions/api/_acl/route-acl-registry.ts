@@ -336,11 +336,28 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/om/parent-customers":                     { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
   "POST:/api/om/parent-customer":                     { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
   "PATCH:/api/om/parent-customer":                    { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
-  "GET:/api/om/fg-parent-companies":                  { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "VIEW" },
-  "POST:/api/om/fg-parent-company":                   { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
-  "GET:/api/om/fg-depot-codes":                       { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "VIEW" },
-  "POST:/api/om/fg-depot-code":                       { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
+  // §129.2/§129.3 — fg_parent_company/fg_depot_code are reused as MM04's own
+  // VDC/Parent-Company layer (feasibility doc Section 129). Repointed from
+  // OM_FG_DISPATCH_CUSTOMER (MM05's resource code, never granted to anyone --
+  // 0 rows in these tables until this redesign) to MM04's own resource codes,
+  // matching the parent-customer routes two lines above. Concrete Bug-
+  // Pattern-#8 fix: without this, MM04-access users (Production/Stores/
+  // Accounts, granted 2026-08-21) would silently 403 on VDC/Parent-Company
+  // actions despite having full-looking MM04 access.
+  "GET:/api/om/fg-parent-companies":                  { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
+  "POST:/api/om/fg-parent-company":                   { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
+  "PATCH:/api/om/fg-parent-company":                  { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
+  "GET:/api/om/fg-depot-codes":                       { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
+  "POST:/api/om/fg-depot-code":                       { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
+  "PATCH:/api/om/fg-depot-code":                      { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
+  // MM05's own dispatch-customer create route -- left on OM_FG_DISPATCH_CUSTOMER
+  // deliberately (dead, §129.9, not part of this redesign).
   "POST:/api/om/fg-dispatch-customer":                { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
+
+  // §129.3 — customer_address (Stage-1 address list + Stage-2 VDC mapping).
+  "GET:/api/om/customer-addresses":                   { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
+  "POST:/api/om/customer-address":                    { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
+  "PATCH:/api/om/customer-address":                   { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
 
   // ── OM: Utility (used by forms — skipAcl) ────────────────────────────────
   "GET:/api/om/uoms":                                 { skipAcl: true },

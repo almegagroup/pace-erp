@@ -2,7 +2,7 @@
  * File-ID: 113.B
  * File-Path: frontend/src/pages/dashboard/om/customer/CustomerCreateForm.jsx
  * Domain: OPERATION_MANAGEMENT
- * Purpose: Reusable RM/PM Sales Customer create form body — embedded both by
+ * Purpose: Reusable FG Sales Customer create form body — embedded both by
  *          the standalone MM04 page (CustomerCreatePage.jsx, company = a
  *          dropdown) and SO01's inline "+New Customer" modal
  *          (company = locked to the SO's own selected company). Only the
@@ -16,10 +16,9 @@ import { useEffect, useState } from "react";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { INDIAN_STATES } from "../../../../data/indianStates.js";
-import { createCustomer, createParentCustomer, getVendor, lookupCustomerGstProfile } from "../omApi.js";
+import { createCustomer, getVendor, lookupCustomerGstProfile } from "../omApi.js";
 import {
   MASTER_PICKER_FETCH_LIMIT,
-  useParentCustomersQuery,
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 
@@ -64,16 +63,12 @@ export default function CustomerCreateForm({
 }) {
   const [source, setSource] = useState("INDEPENDENT");
   const [loadingVendorProfile, setLoadingVendorProfile] = useState(false);
-  const [showNewParent, setShowNewParent] = useState(false);
-  const [newParent, setNewParent] = useState({ parent_customer_name: "", gst_number: "", address: "" });
-  const [creatingParent, setCreatingParent] = useState(false);
   const [gstLooking, setGstLooking] = useState(false);
   const [gstNotice, setGstNotice] = useState("");
 
   const [form, setForm] = useState({
     company_id: companyMode === "LOCKED" ? lockedCompanyId : "",
     vendor_id: "",
-    parent_customer_id: "",
     customer_name: "",
     customer_type: "DOMESTIC",
     fo_customer_type: initialFoCustomerType,
@@ -92,14 +87,8 @@ export default function CustomerCreateForm({
   const [error, setError] = useState("");
 
   const vendorQuery = useVendorOptionsQuery({ status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
-  const parentCustomerQuery = useParentCustomersQuery();
   const vendors = vendorQuery.vendors;
-  const parentCustomers = Array.isArray(parentCustomerQuery.data?.data)
-    ? parentCustomerQuery.data.data
-    : Array.isArray(parentCustomerQuery.data)
-    ? parentCustomerQuery.data
-    : [];
-  const loadingDeps = vendorQuery.isLoading || parentCustomerQuery.isLoading;
+  const loadingDeps = vendorQuery.isLoading;
 
   useEffect(() => {
     if (companyMode === "LOCKED") {
@@ -134,14 +123,9 @@ export default function CustomerCreateForm({
   }
 
   useEffect(() => {
-    setError(
-      error ||
-      vendorQuery.error?.message ||
-      parentCustomerQuery.error?.message ||
-      ""
-    );
+    setError(error || vendorQuery.error?.message || "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parentCustomerQuery.error, vendorQuery.error]);
+  }, [vendorQuery.error]);
 
   function updateField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -174,33 +158,6 @@ export default function CustomerCreateForm({
     }
   }
 
-  async function handleCreateParent() {
-    if (!newParent.parent_customer_name.trim()) {
-      setError("OM_INVALID_PARENT_CUSTOMER");
-      return;
-    }
-    setCreatingParent(true);
-    setError("");
-    try {
-      const result = await createParentCustomer({
-        parent_customer_name: newParent.parent_customer_name.trim(),
-        gst_number: newParent.gst_number.trim() || undefined,
-        address: newParent.address.trim() || undefined,
-      });
-      const created = result?.data;
-      if (created) {
-        await parentCustomerQuery.refetch();
-        updateField("parent_customer_id", created.id);
-      }
-      setNewParent({ parent_customer_name: "", gst_number: "", address: "" });
-      setShowNewParent(false);
-    } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "OM_PARENT_CUSTOMER_CREATE_FAILED");
-    } finally {
-      setCreatingParent(false);
-    }
-  }
-
   async function handleSubmit() {
     const isVendorLinked = source === "VENDOR_LINKED";
     if (!form.company_id) {
@@ -229,7 +186,6 @@ export default function CustomerCreateForm({
       const result = await createCustomer({
         company_id: form.company_id,
         vendor_id: isVendorLinked ? form.vendor_id : undefined,
-        parent_customer_id: form.parent_customer_id || undefined,
         customer_name: isVendorLinked ? undefined : form.customer_name.trim(),
         customer_type: form.customer_type,
         fo_customer_type: form.fo_customer_type || undefined,
@@ -350,65 +306,6 @@ export default function CustomerCreateForm({
           </ErpDenseFormRow>
         </>
       )}
-
-      <div className="grid gap-2 border border-slate-200 bg-slate-50 p-3">
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">Parent Company (optional)</p>
-          <button
-            type="button"
-            onClick={() => setShowNewParent((current) => !current)}
-            className="border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
-          >
-            {showNewParent ? "Cancel" : "+ New Parent Company"}
-          </button>
-        </div>
-        <select
-          value={form.parent_customer_id}
-          onChange={(event) => updateField("parent_customer_id", event.target.value)}
-          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-        >
-          <option value="">No parent company</option>
-          {parentCustomers.map((entry) => (
-            <option key={entry.id} value={entry.id}>
-              {entry.parent_customer_code} | {entry.parent_customer_name}
-            </option>
-          ))}
-        </select>
-        {showNewParent ? (
-          <div className="grid gap-2 border border-dashed border-slate-300 bg-white p-3">
-            <ErpDenseFormRow label="Parent Company Name" required>
-              <input
-                value={newParent.parent_customer_name}
-                onChange={(event) => setNewParent((current) => ({ ...current, parent_customer_name: event.target.value }))}
-                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-              />
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="GST Number">
-              <input
-                value={newParent.gst_number}
-                onChange={(event) => setNewParent((current) => ({ ...current, gst_number: event.target.value }))}
-                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-              />
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="Address">
-              <textarea
-                rows={2}
-                value={newParent.address}
-                onChange={(event) => setNewParent((current) => ({ ...current, address: event.target.value }))}
-                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-              />
-            </ErpDenseFormRow>
-            <button
-              type="button"
-              onClick={() => void handleCreateParent()}
-              disabled={creatingParent}
-              className="w-fit border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900"
-            >
-              {creatingParent ? "Creating..." : "Create Parent Company"}
-            </button>
-          </div>
-        ) : null}
-      </div>
 
       <ErpDenseFormRow label="Customer Type" required>
         <select

@@ -20120,3 +20120,286 @@ transactions instead, consistent with [[feedback_no_localhost_preview]]). Next s
 Claims (PO08's new RTV-vs-Exchange tab, PO09's `rtv_id` relaxation, PO10's missing freight fields,
 new PO20 "Credit Notes (Vendor)"), then AC02 (Vendor Ledger + FIFO payment allocation), then the
 remaining Accounts pages, then back to Dispatch (L5) per §114's paused sequence.
+
+---
+
+## Section 129 — MM04/MM05 role swap: MM04 becomes the FG Customer Master (Address → VDC → Parent Company), MM05 deferred (DESIGN LOCKED 2026-08-22)
+
+### 129.1 — Why this swap (business reality overtook the original MM05 design)
+
+MM05 (tx_code MM05, `OM_FG_DISPATCH_CUSTOMER`, built 2026-07-31 per §114.12-114.16, migration
+`20260731183000`) was designed as a dedicated FG Dispatch Customer master with its own 4 tables
+(`erp_production.fg_parent_company`, `fg_depot_code`, `fg_dispatch_customer`,
+`fg_dispatch_customer_address`). Live-verified 2026-08-22: **all 4 tables are still 0 rows in
+prod**, never used — Plan Feed's real FG-ordering flow only ever grew on top of `customer_master`
+(MM04's own table) + its `fo_customer_type` column, added ad hoc while MM05 sat unused. Also
+live-verified: `customer_master.parent_customer_id` → `erp_master.parent_customer_master` (an
+older, generic "Parent Company" grouping field already present on `CustomerCreateForm`/
+`CustomerEditForm`) is **also 0 rows / 0 links** across all 64 prod customers — a second dead
+field from an even earlier design, unrelated to MM05's `fg_parent_company`. All 64 prod
+`customer_master` rows have `fo_customer_type` set; zero are genuine RM/PM customers.
+
+**Business owner's decision (verbatim reasoning, 2026-08-22 session):** *"amader kaj holo aki
+customer er jonno alada alada data na baniiye ekta uniform cycle e jate ante pari"* — don't create
+separate/duplicate data for the same customer, bring everything into one uniform cycle. Given that,
+MM04 (already the de facto FG master) is **officially redesignated the FG Customer Master**;
+**MM05 is repurposed to become the RM/PM/INT sale customer page** — but MM05's own redesign is
+explicitly deferred: *"MM05 amra pore... design korbo, age amra MM04 ta kori"* (MM05 later, MM04
+first). Nothing in this section touches MM05/`fg_dispatch_customer`/`fg_dispatch_customer_address`
+— those stay dormant until that future session.
+
+### 129.2 — Architecture: reuse `fg_parent_company` + `fg_depot_code` as-is, do NOT migrate customer identity
+
+**Option chosen (business owner: "jeta easy r fast hobe, setai koro"):** customer identity stays
+in `customer_master` — it does **not** move to `fg_dispatch_customer`. Only two of MM05's four
+tables are reused, unchanged:
+- `erp_production.fg_parent_company` — the Bill-To entity (§129.6).
+- `erp_production.fg_depot_code` — the Virtual Depot Code (VDC); its existing `code` column is
+  exactly the "External VDC Code" the business owner described (already user-facing, no new
+  column needed). `dispatch_type` (Direct/Depot) and `parent_company_id` (NOT NULL — one VDC
+  belongs to exactly one Parent Company, confirmed not-flexible) are unchanged.
+
+`fg_dispatch_customer` and `fg_dispatch_customer_address` are **not reused and stay permanently
+unused** — Plan Feed's `party_id` FK and everything built in the 2026-08-21 session (Edit Customer
+button, company-scope enforcement) already depends on `customer_master.id`; moving identity would
+be pure risk with no benefit. `customer_master.parent_customer_id`/`parent_customer_master` (the
+other dead field, §129.1) is likewise retired from the UI going forward — `CustomerCreateForm`/
+`CustomerEditForm` stop rendering that field; the column itself is left in place (0 rows, no data
+loss, no migration needed to drop it).
+
+### 129.3 — New table: `erp_master.customer_address`
+
+A customer can have multiple addresses/sites. One row per address:
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `customer_id` | uuid FK → `customer_master.id` | NOT NULL |
+| `site_name` | text | **New field, doesn't exist anywhere in the codebase today** (not on `customer_master`, not on either MM05 table) — mandatory at Stage 1. |
+| `address_line` | text | mandatory at Stage 1 |
+| `town` | text | mandatory at Stage 1 |
+| `state` | text | mandatory at Stage 1 — copied from the parent customer's own `state` at creation (§129.4) and displayed per-row (business owner: "Address eo thak" — keep it on Address too), but never independently edited away from the customer's state, since GST/state is a customer-level fact (§129.4). |
+| `pin_code` | text, nullable | new, added because GST-check (§129.5) returns a pin code and nothing existed to hold it. |
+| `depot_code_id` | uuid FK → `fg_depot_code.id`, **nullable** | Stage 2, filled later by anyone with MM04 access. **Deliberately NOT NOT-NULL** — MM05's original `fg_dispatch_customer_address.depot_code_id` was `NOT NULL` (mandatory at creation); that is the wrong constraint for our staged-completion model and must not be copied verbatim. |
+| `status` | text | `ACTIVE`/`INACTIVE`, standard master pattern |
+| `created_by`, `created_at`, `last_updated_by`, `last_updated_at` | standard audit columns | |
+
+**Cardinality (business owner, verbatim-confirmed 2026-08-22):**
+- One `(customer_id, address)` row maps to **at most one** `depot_code_id` — not many.
+- One `depot_code_id` (VDC) can have **many** `customer_address` rows pointing to it (multiple
+  addresses, same or different customers, share one VDC) — many-to-one, address→VDC.
+- One `fg_depot_code` maps to **exactly one** `fg_parent_company` (`parent_company_id NOT NULL`,
+  unchanged from MM05's original schema, already correct) — not flexible, confirmed twice in this
+  session.
+
+**Migration note:** existing 64 prod customers' flat `delivery_address`+`billing_state`+`town`
+(added 2026-07-24) become the STRUCTURAL seed for one `customer_address` row per existing customer
+(`site_name` and `depot_code_id` left blank — Stage 2 data genuinely does not exist for any of
+them, cannot be auto-derived, must be entered by humans later). This is the only part of this
+migration that can run unattended; Stage 2 (VDC/Parent Company assignment) is not backfillable.
+
+### 129.4 — GST moves to Customer level, NOT Address level (corrects this session's own earlier draft)
+
+**Locked rule (business owner, 2026-08-22, walking back an earlier same-session proposal):** GST
+is state-wise in India — one GST number implies one state. Therefore **one `customer_master` row
+= one GST = one state**. A business with GST registrations in two different states (business
+owner's own example: "Ankan Enterprise" registered separately in West Bengal and in
+Maharashtra/Mumbai) is **two separate `customer_master` rows**, each with its own full set of
+`customer_address` children — never one customer with two differently-stated addresses. All
+addresses under one customer therefore share that customer's single state; **`customer_address`
+does NOT get its own GST field** (an earlier draft in this same session proposed per-address GST
+and was explicitly corrected: *"ebar tader under je address gulo add hobe tate GST field deoar
+dorkar nei"*).
+
+`customer_master.gst_number` (already exists, already optional, already unused in practice — 0 of
+64 prod rows have it set, verified live 2026-08-22, so there is no migration/backfill question
+here) stays exactly where it is and becomes the operative GST field. **Nothing changes about which
+column holds it** — only the business meaning tightens (implies-one-state) and the Check-GST UX
+changes (§129.5).
+
+**Customer Code display format (business owner correction — the underlying stored code does NOT
+change):** `customer_master.customer_code` keeps being generated exactly as it is today
+(`generate_customer_code()` RPC, plain sequential) — **the generation mechanism is untouched.**
+Only the **display label**, wherever a customer is shown in a list/dropdown/header, changes to
+`"{gst_state_code} — {customer_name}"` (e.g. `"27 — Reliance Infra Ltd"`), where `gst_state_code`
+is the first 2 digits of the customer's own GST number when set. This is a pure presentation
+computation, matching the existing [[feedback_user_identity_display_format]] convention (display
+composed labels without touching the underlying stored identifier) — backend computes and returns
+`display_code` on every enriched customer row (`enrichCustomerRows`), frontend never recomputes it
+locally, so there is exactly one source of truth.
+
+**State-code prefix when GST isn't set yet (Production creates without GST — approved, business
+owner: "Etao korte paro"):** derive the 2-digit prefix from the customer's own `state` field (the
+Stage-1 mandatory dropdown) via a new static India GST-state-code lookup table (no such table
+exists anywhere in the codebase today, confirmed by search — must be built new, ~37 entries,
+standard published GST state-code list). When a GST number is later added and checked, if its own
+first-2-digit state code disagrees with the state-derived one, surface this as a soft warning (not
+a hard block) — real-world data entry can still be wrong even after Check GST; do not silently
+prefer one source over the other without telling the user.
+
+### 129.5 — Check GST flow: reuse the existing endpoint, auto-overwrite (not a Keep/Overwrite choice)
+
+**No new backend GST-lookup endpoint is needed.** `GET /api/om/customer/gst-profile`
+(`lookupCustomerGstProfileHandler`, `supabase/functions/api/_core/om/customer.handlers.ts:358`)
+already exists, is already generic (takes only `gst_number`, doesn't care which entity/screen is
+calling it — already shared with Company/Vendor/Transporter/CHA per the established
+`resolveGstProfileWithSource`/`deriveCompanyFieldsFromGstProfile` shared helpers), and returns
+`{gst_number, legal_name, source, state_name, full_address, pin_code}`. Reused as-is for: Customer
+GST (this section), VDC GST (fg_depot_code's own optional GST — unchanged from the earlier draft,
+was never proposed to be removed, only Address-level GST was), and Parent Company GST
+(`fg_parent_company.gst_number`, already exists).
+
+**Overwrite behavior (business owner correction, 2026-08-22 — supersedes this session's own
+earlier "Keep current / Overwrite" dual-button draft):** entering a GST number and clicking Check
+GST makes the fetched data **overwrite the current field values directly** — no confirmation
+dialog, no Keep-vs-Overwrite choice. The overwritten fields remain ordinary editable inputs
+afterward, so the user can still hand-correct them post-fetch. Net UX: `type GST → Check GST →
+fields auto-fill → user may still edit`. This same corrected flow applies at all three GST
+touchpoints (Customer, VDC, Parent Company) — the earlier two-button mock built during this
+session (Customer Detail, Parent Company) is wrong and has already been corrected in the working
+mock artifact.
+
+**What GST-check can and cannot fill:** only what the GST registry actually returns — Legal Name,
+State, Full Address, Pin Code. It never fills Customer Code, Contact Person, Phone, Email,
+Customer Type, Site Name, or anything else — those always stay manual entry, GST-check or not.
+
+### 129.6 — Bill-To / Ship-To resolution (the actual payoff of this whole chain)
+
+**Locked (business owner, verbatim):** *"Asole Parent company hobe Bill to, r oi Customer er
+address hobe Ship to."* Selecting a specific `customer_address` at SO/FO time resolves, in order:
+`customer_address` (Ship-To) → its parent `customer_master` (+ that customer's own GST, §129.4) →
+`customer_address.depot_code_id` → `fg_depot_code` (VDC) → `fg_depot_code.parent_company_id` →
+`fg_parent_company` (Bill-To, + that Parent Company's own GST). The user never separately picks a
+VDC or Parent Company at SO/FO time — picking the Address resolves the whole chain automatically.
+This exact resolution order and role assignment (Bill-To=Parent Company, Ship-To=Address) is the
+business reason the whole VDC/Parent-Company layer exists at all — see §129.1's Plan-Feed-stays-
+simple / SO-gets-the-full-chain rationale, restated here as the locked mechanism.
+
+### 129.7 — Staged completion workflow (who fills what, when)
+
+**Stage 1 — mandatory, anyone with MM04 WRITE access (explicitly including Production, from
+inside Plan Feed):** Customer Name, Address, State, Town, Site Name. Exactly this 5-field list,
+verbatim from the business owner's own spec — no GST, no Contact, no Email shown to Production at
+this stage (*"Production kintu GST check nao korte pare, setar jonno kichu atkiona"* — Production
+may skip GST entirely, nothing should block on that). This is the same MM04 write access already
+uniformly granted to Stores/Logistics/Production/Accounts in the 2026-08-21 session — no new ACL
+work needed for staging itself, access isn't gated per-stage.
+
+**Stage 2 — optional, done later by anyone with MM04 access (no department restriction):** GST
+(customer-level, §129.4/§129.5), Depot Code assignment per address (create new VDC or pick an
+existing one, §129.3's cardinality), VDC's own GST + Direct/Depot type, Parent Company
+create/select + GST. All nullable-until-filled; no draft/pending status field anywhere in this
+chain — a blank Depot Code simply means "not yet mapped," shown as a plain badge, not a workflow
+state.
+
+**New address on an existing customer (a third, previously-undepicted flow, added 2026-08-22):**
+from the same Edit-Customer surface (Plan Feed's Edit Customer button, or MM04's own Customer
+Detail page), a "+ Add another address" action creates one more `customer_address` row under the
+same `customer_id` — never a new customer, never touches the customer's own Name/GST/State. The
+new address starts with `depot_code_id = NULL` (Stage 2, same as any other address) until someone
+maps it.
+
+### 129.8 — UI pattern: ErpDenseGrid `cellNavigate` + `virtualize` + center `DrawerBase` (matches AC01, per §128.6's already-locked convention)
+
+**§128.6 already locked this exact pattern as the standard for grid redesigns going forward** and
+explicitly flagged Customer Detail as one of the callers still on the old row-only behavior
+("keeps its old row-only behavior unchanged since the prop defaults to false"). This section is
+that migration, for MM04 specifically.
+
+**Current state (verified live 2026-08-22, not assumed):**
+- `CustomerListPage.jsx` — already uses `ErpDenseGrid`, but without `cellNavigate`/`virtualize`;
+  `onRowActivate` navigates to a **separate route** (`CustomerDetailPage`), not a drawer.
+- `CustomerDetailPage.jsx` — uses `ErpDenseGrid` only as a static two-column field/value table (no
+  `onRowActivate`, no data-register usage); inline `editMode` swaps in `CustomerEditForm` on the
+  same page; no `DrawerBase` anywhere in the file.
+- `CustomerCreateForm.jsx`/`CustomerEditForm.jsx` — already shared between MM04's own
+  create/detail pages and Plan Feed's quick-create/Edit-Customer button (per each file's own
+  header comment) — this reuse is preserved, both forms are extended in place (Site Name +
+  address-list + VDC assignment fields added), not replaced.
+
+**Target state, mirroring AC01Page.jsx exactly:**
+- `CustomerListPage.jsx`'s grid gains `cellNavigate virtualize`, keeps `onRowActivate`, but that
+  callback now opens a **center `DrawerBase`** (`side="center"`, same width pattern as AC01's
+  `min(1480px, calc(100vw - 24px))`) showing the Customer Detail content **in place**, instead of
+  navigating to a separate route. `Escape` closes the drawer via `DrawerBase`'s own `onEscape`
+  (already built-in, no new keydown listener needed — confirmed from `ErpDenseGrid.jsx`: Enter is
+  handled inside the grid itself via `onRowActivate`, never a page-level `keydown`).
+- Inside that drawer: the Customer header (Name/State/GST/Check-GST, §129.4/§129.5) + an
+  **`ErpDenseGrid` for the Address list** (`cellNavigate virtualize` again, nested), each address
+  row's own Enter/activate opens a **second, address-scoped action** — not a nested drawer-in-
+  drawer, but an inline expand or a second `DrawerBase` layered on top (`BlockingLayer.jsx` already
+  supports stacking — confirm at build time rather than assume, since AC01 never needed 2 stacked
+  drawers). Address rows carry Site Name/Address/Town/State/VDC-status columns (§129.3), no GST
+  column (§129.4).
+- `CustomerCreateForm.jsx`'s existing dead "Parent Company" field (§129.1/§129.2,
+  `parent_customer_id`) is removed from the form entirely — not repointed to `fg_parent_company`,
+  since Parent Company is now resolved via Address→VDC (§129.6), never picked directly on the
+  Customer form.
+
+### 129.9 — Retired / dead, explicitly not touched by this section
+
+- `erp_production.fg_dispatch_customer`, `fg_dispatch_customer_address` — 0 rows, permanently
+  unused, no code references them going forward. Not dropped (no harm leaving them; a future
+  session could theoretically still repurpose them for MM05, though §129.1/§129.2's reasoning
+  argues against ever needing a second identity table).
+- `erp_master.parent_customer_master`, `customer_master.parent_customer_id` — 0 rows / 0 links,
+  UI reference removed (§129.8), column left in place (no migration to drop, zero data loss).
+
+### 129.10 — Explicit 15-bug-pattern pass (business owner's own requirement before implementation starts)
+
+Run once against this section's concrete technical choices, per the standing rule from the 2026-08-04
+IN03 session ("re-run the pattern checklist explicitly against every concrete technical choice
+named in a brief... as a dedicated last step before handing it to Codex"):
+
+1. **Hardcoded rank-check bypass** — N/A, no role-array gating proposed anywhere in this design;
+   MM04 write access stays the uniform ACL grant from 2026-08-21 (no department/stage-specific
+   hardcoded role list).
+2. **Company-scope gap** — `customer_address` inherits scope through `customer_id` →
+   `customer_company_map` (already enforced by `assertCustomerCompanyScope`, 2026-08-21 session);
+   every new address/VDC/parent-company handler MUST call through that same helper, not re-derive
+   scope locally. Explicit reminder for the task brief.
+3. **Blanket capability leak** — no new capability proposed; reuses the existing MM04
+   VIEW/WRITE/EDIT grants already audited 2026-08-21.
+4. **`capture_acl_version_source()` one-time trap** — N/A, no new ACL menu/capability rows in this
+   section (VDC/Parent-Company pages live under the existing MM04 resource, not a new tx_code) —
+   confirm this assumption explicitly in the task brief rather than silently assuming it.
+5. **ACL-MASTER (P0076) drift** — N/A per #4 (no new resource code to miss).
+6. **One resource code, two actions** — Address-create and VDC-map are different actions on the
+   same underlying resource; must NOT collapse into one ACL action code just because they're on
+   the same drawer — confirm the task brief keeps them distinguishable if/when a stricter
+   per-action ACL is ever wanted (today both ride the same MM04 WRITE grant, which is fine, but
+   the *code path* must stay separable).
+7. **Maker-checker illusion** — N/A, nothing in this design has an approval/maker-checker step;
+   all Stage 1/Stage 2 writes are single-action, no approver chain claimed anywhere.
+8. **Route/ACL registry mismatch** — every new route (`customer_address` CRUD, VDC list/create/
+   edit, `fg_parent_company` list/create/edit) must get its own `route-acl-registry.ts` entry;
+   explicit checklist item for the task brief's own verification section.
+9. **`approver_map` scope shape** — N/A, no approval chain in this design.
+10. **Small config/data traps** — the new India GST-state-code table (§129.4) must not silently
+    ship with a wrong/incomplete code list; verify against the real published 37-code list, not
+    memory, at build time.
+11. **Wrong company source / single-company bypass** — VDC/Parent-Company pages must resolve
+    company via the same `TransactionCompanySelector`/`runtimeContext.availableCompanies` pattern
+    already fixed for IN03 (2026-08-04), never an admin/global company source.
+12. **Local hardcoded role array (per-file)** — none proposed; explicit reminder for whoever
+    implements to grep the new handler files for any local `_ROLES` array before merging.
+13. **Frontend payload missing a backend-required field** — `customer_address` creation from
+    Plan Feed's quick-create and from MM04's own Address-add action are two different call sites
+    hitting the same handler; both must send every field the handler requires (Site Name, Address,
+    Town, State at minimum) — run `frontend-payload-guard.mjs` after wiring both.
+14. **JSX component used but not imported** — run `jsx-no-undef-guard.mjs` after every new
+    component (`CustomerAddressDrawer` or equivalent) is wired into `CustomerListPage.jsx`/
+    `PlanFeedPage.jsx` — this exact bug class hit Plan Feed once already in this session (§the
+    `CustomerEditForm` import miss, 2026-08-21).
+15. **API-client double-unwrap** — every new `fetchXxx()` call site added for VDC/Parent-Company/
+    Address list endpoints must be checked against its specific handler's own response shape
+    (does it include `pagination`?) before assuming `res.data` vs `res` — do not copy a sibling
+    call site's unwrap pattern without checking, per the Plan-Feed find-by-number bug already hit
+    once in this exact session (2026-08-21).
+
+### 129.11 — Explicitly out of scope / deferred
+
+MM05 (RM/PM/INT sale customer redesign) — deferred to a future session, business owner's own
+explicit sequencing. The Depot Code Direct/Depot `dispatch_type` field's own downstream usage
+(how Dispatch/L5 actually branches on Direct vs Depot) is not designed here — out of scope,
+belongs to the still-paused Dispatch/L5 formal session (§114).

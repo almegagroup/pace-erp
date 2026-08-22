@@ -16,6 +16,7 @@ import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.
 import { resolveGstProfileWithSource } from "../../_shared/gst_resolver.ts";
 import { deriveCompanyFieldsFromGstProfile } from "../../_shared/gst_company_fields.ts";
 import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
+import { gstStateCodeFromGstNumber, gstStateCodeFromState } from "../../_shared/gstStateCodes.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -108,17 +109,6 @@ async function ensureVendorExists(vendorId: string): Promise<boolean> {
   return !error && Boolean(data?.id);
 }
 
-async function ensureParentCustomerExists(parentCustomerId: string): Promise<boolean> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_master")
-    .from("parent_customer_master")
-    .select("id")
-    .eq("id", parentCustomerId)
-    .maybeSingle();
-
-  return !error && Boolean(data?.id);
-}
-
 // Vendor-linked customer rows derive display name + GST live from
 // vendor_master at read time (no copy stored), so editing the vendor record
 // keeps the customer view in sync automatically. Contact/phone/email stay
@@ -170,14 +160,22 @@ async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Reco
   return rows.map((row) => {
     const vendor = row.vendor_id ? vendorMap.get(row.vendor_id as string) : null;
     const parent = row.parent_customer_id ? parentMap.get(row.parent_customer_id as string) : null;
+    const resolvedName = vendor ? (vendor.vendor_name as string) : (row.customer_name as string | null);
+    const resolvedGst = vendor ? (vendor.gst_number as string | null) : (row.gst_number as string | null);
+    // §129.4 — display label is "{gst_state_code} - {name}"; GST's own first 2
+    // digits win when set, else fall back to the customer's own state. This is
+    // the only place this label is computed — frontend must never recompute it.
+    const gstStateCode = gstStateCodeFromGstNumber(resolvedGst) ?? gstStateCodeFromState(row.billing_state as string | null);
     return {
       ...row,
-      customer_name: vendor ? vendor.vendor_name : row.customer_name,
-      gst_number: vendor ? vendor.gst_number : row.gst_number,
+      customer_name: resolvedName,
+      gst_number: resolvedGst,
       vendor_code: vendor?.vendor_code ?? null,
       parent_customer_code: parent?.parent_customer_code ?? null,
       parent_customer_name: parent?.parent_customer_name ?? null,
       company_codes: companyCodesByCustomer.get(row.id as string) ?? [],
+      gst_state_code: gstStateCode,
+      display_code: gstStateCode && resolvedName ? `${gstStateCode} - ${resolvedName}` : resolvedName,
     };
   });
 }
@@ -205,7 +203,7 @@ async function getCallerCompanyIds(ctx: OmHandlerContext): Promise<string[]> {
 // of the customer's companies the caller also belongs to, verify the
 // caller's actual ACL decision (canMaintainCompanyResource) for the
 // resource:action this route requires, not just that they're a member.
-async function assertCustomerCompanyScope(
+export async function assertCustomerCompanyScope(
   ctx: OmHandlerContext,
   customerId: string,
   resourceCode: string,
@@ -239,7 +237,10 @@ export async function createCustomerHandler(
 
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
-    const parentCustomerId = toTrimmedString(body.parent_customer_id);
+    // §129.1/§129.9 — parent_customer_id (parent_customer_master) is a dead
+    // field: 0 rows, 0 links across all 64 prod customers, retired from the
+    // UI in favor of the Address -> VDC -> fg_parent_company chain (§129.6).
+    // No longer read from the request body.
     const customerName = toTrimmedString(body.customer_name);
     const customerType = toTrimmedString(body.customer_type).toUpperCase();
     const deliveryAddress = toTrimmedString(body.delivery_address);
@@ -276,9 +277,6 @@ export async function createCustomerHandler(
     if (vendorId && !(await ensureVendorExists(vendorId))) {
       return customerErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
     }
-    if (parentCustomerId && !(await ensureParentCustomerExists(parentCustomerId))) {
-      return customerErrorResponse(req, ctx, "OM_PARENT_CUSTOMER_NOT_FOUND", 404, "Parent customer not found");
-    }
     if (!(await ensureCompanyExists(companyId))) {
       return customerErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found");
     }
@@ -297,7 +295,7 @@ export async function createCustomerHandler(
     const insertPayload = {
       customer_code: String(customerCode),
       vendor_id: vendorId || null,
-      parent_customer_id: parentCustomerId || null,
+      // parent_customer_id intentionally omitted — dead field, §129.9.
       // Vendor-linked: name/GST resolve live from vendor_master (see enrichCustomerRows) — not stored here.
       customer_name: vendorId ? null : customerName,
       customer_type: customerType,
@@ -587,13 +585,7 @@ export async function updateCustomerHandler(
       updates.fo_customer_type = foCustomerType || null;
     }
 
-    if (body.parent_customer_id !== undefined) {
-      const parentCustomerId = toTrimmedString(body.parent_customer_id);
-      if (parentCustomerId && !(await ensureParentCustomerExists(parentCustomerId))) {
-        return customerErrorResponse(req, ctx, "OM_PARENT_CUSTOMER_NOT_FOUND", 404, "Parent customer not found");
-      }
-      updates.parent_customer_id = parentCustomerId || null;
-    }
+    // parent_customer_id no longer accepted here — dead field, §129.9.
 
     if (Object.keys(updates).length === 0) {
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_NO_CHANGES", 400, "No changes provided");
