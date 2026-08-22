@@ -25,6 +25,7 @@ import {
   getCustomer,
   listCustomerAddresses,
   listFgDepotCodes,
+  listFgParentCompanies,
   lookupCustomerGstProfile,
   updateCustomer,
   updateCustomerAddress,
@@ -55,6 +56,18 @@ function VdcPickerPanel({ addressId, currentDepotId, currentLabel, onDone, onCan
     queryFn: () => listFgDepotCodes(),
     select: (data) => data?.data ?? [],
   });
+  // Parent Company name per VDC/DC -- Bill-To identity matters while picking,
+  // not just after (business owner, 2026-08-22).
+  const parentQuery = useQuery({
+    queryKey: ["om", "fg-parent-companies", "picker"],
+    queryFn: () => listFgParentCompanies(),
+    select: (data) => data?.data ?? [],
+  });
+  const parentNameById = useMemo(() => {
+    const map = new Map();
+    for (const p of parentQuery.data ?? []) map.set(p.id, p.company_name);
+    return map;
+  }, [parentQuery.data]);
   const filtered = useMemo(() => {
     const vdcs = vdcQuery.data ?? [];
     const term = search.trim().toLowerCase();
@@ -131,6 +144,8 @@ function VdcPickerPanel({ addressId, currentDepotId, currentLabel, onDone, onCan
                 <span className="mr-1 rounded bg-slate-100 px-1 text-[10px] font-bold text-slate-600">{depotLabel(v.dispatch_type)}</span>
                 <span className="font-semibold text-slate-900">{v.code}</span>
                 {v.state ? ` — ${v.state}` : ""}
+                {" — "}
+                <span className="text-slate-500">{parentNameById.get(v.parent_company_id) || "—"}</span>
               </span>
               <button
                 type="button"
@@ -354,6 +369,26 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
       setEditingAddressId("");
     } catch (saveError) {
       setEditAddressError(saveError instanceof Error ? saveError.message : "OM_ADDRESS_UPDATE_FAILED");
+    } finally {
+      setSavingEditAddress(false);
+    }
+  }
+
+  // Wrongly-created address correction (2026-08-22, business owner) --
+  // never "move" to a different customer (risk once SO/Invoice eventually
+  // reference a specific address row), always unmap + deactivate together
+  // so no dangling VDC/DC reference survives on a retired row, then the
+  // user re-creates the correct one via "+ Add another address".
+  async function handleRemoveAddress(address) {
+    setSavingEditAddress(true);
+    setEditAddressError("");
+    try {
+      await updateCustomerAddress({ id: address.id, depot_code_id: null, status: "INACTIVE" });
+      queryClient.invalidateQueries({ queryKey: ["om", "customer-addresses", customerId] });
+      setEditingAddressId("");
+      setMappingAddressId("");
+    } catch (removeError) {
+      setEditAddressError(removeError instanceof Error ? removeError.message : "OM_ADDRESS_REMOVE_FAILED");
     } finally {
       setSavingEditAddress(false);
     }
@@ -604,16 +639,30 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
                       />
                     </ErpDenseFormRow>
                     <p className="text-[11px] text-slate-500">State ({address.state}) always matches the customer's own state — not editable per-address.</p>
-                    <div className="flex justify-end gap-2">
-                      <button type="button" onClick={() => setEditingAddressId("")} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
+                    <div className="flex items-center justify-between gap-2">
                       <button
                         type="button"
-                        onClick={() => void handleSaveEditAddress()}
+                        onClick={() => {
+                          if (window.confirm("Remove this address? It will be unmapped from any VDC/DC and hidden — this can't be undone from here, you'd need to add a fresh address instead.")) {
+                            void handleRemoveAddress(address);
+                          }
+                        }}
                         disabled={savingEditAddress}
-                        className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50"
+                        className="h-8 border border-rose-300 bg-rose-50 px-3 text-xs font-semibold text-rose-800 disabled:opacity-50"
                       >
-                        {savingEditAddress ? "Saving..." : "Save"}
+                        Remove this address
                       </button>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => setEditingAddressId("")} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveEditAddress()}
+                          disabled={savingEditAddress}
+                          className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50"
+                        >
+                          {savingEditAddress ? "Saving..." : "Save"}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ) : null}
