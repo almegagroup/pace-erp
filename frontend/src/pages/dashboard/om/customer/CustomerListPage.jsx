@@ -102,6 +102,12 @@ export default function CustomerListPage() {
           tone: "neutral",
           onClick: () => openScreen(OPERATION_SCREENS.OM_VDC_PARENT_COMPANY_MASTER.screen_code),
         },
+        {
+          key: "vdc-mapping",
+          label: "Map Address → VDC",
+          tone: "neutral",
+          onClick: () => openScreen(OPERATION_SCREENS.OM_CUSTOMER_ADDRESS_VDC_MAPPING.screen_code),
+        },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
       filterSection={{

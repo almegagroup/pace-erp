@@ -115,6 +115,13 @@ const BASELINE = new Set([
   // shape this regex heuristic can't see through.
   "supabase/functions/api/_core/om/customer_address.handlers.ts::createCustomerAddressHandler",
   "supabase/functions/api/_core/om/customer_address.handlers.ts::updateCustomerAddressHandler",
+  // Same shape, added 2026-08-22 (dedicated bulk Address<->VDC mapping page):
+  // bulkMapCustomerAddressesHandler resolves customerIds[0] from a bulk row
+  // lookup (not a single existing.customer_id like its siblings above), then
+  // calls the same assertCustomerCompanyScope(ctx, customerIds[0], ...)
+  // helper -- the real EDIT-level check is one call-frame away, this regex
+  // heuristic only recognizes the single-lookup shape, not the array one.
+  "supabase/functions/api/_core/om/customer_address.handlers.ts::bulkMapCustomerAddressesHandler",
   "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::updateParentCompanyHandler",
   "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::updateDepotCodeHandler",
   "supabase/functions/api/_core/om/location.handlers.ts::unmapStorageLocationFromPlantHandler",

@@ -728,6 +728,20 @@ export async function updateCustomerAddress(payload) {
   );
 }
 
+// Dedicated Address<->VDC mapping page -- map (or unmap, depot_code_id: null)
+// several addresses under one customer to one VDC/DC in a single action.
+export async function bulkMapCustomerAddresses(payload) {
+  return fetchJson(
+    "/api/om/customer-addresses/bulk-map",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_ADDRESS_BULK_MAP_FAILED"
+  );
+}
+
 export async function createFgDispatchCustomer(payload) {
   return fetchJson(
     "/api/om/fg-dispatch-customer",

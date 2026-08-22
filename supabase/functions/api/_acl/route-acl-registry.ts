@@ -363,6 +363,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/om/customer-addresses":                   { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
   "POST:/api/om/customer-address":                    { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
   "PATCH:/api/om/customer-address":                   { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
+  "PATCH:/api/om/customer-addresses/bulk-map":        { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
 
   // ── OM: Utility (used by forms — skipAcl) ────────────────────────────────
   "GET:/api/om/uoms":                                 { skipAcl: true },

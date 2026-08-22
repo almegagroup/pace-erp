@@ -246,3 +246,80 @@ export async function updateCustomerAddressHandler(
     return addressErrorResponse(req, ctx, code, status, "Address update failed");
   }
 }
+
+// 2026-08-22 — dedicated Address<->VDC mapping page: business owner's
+// explicit ask is multi-select (several addresses under one customer, all
+// belonging to the same VDC, mapped in one action) instead of the existing
+// per-address picker inside CustomerEditForm.jsx. §8B: these are INDEPENDENT
+// row writes (each address row doesn't depend on another's result), so this
+// is one batch UPDATE, not a per-address loop. address_ids is bounded to one
+// customer's own address list (small, no §8E chunking need).
+export async function bulkMapCustomerAddressesHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const addressIds = Array.isArray(body.address_ids)
+      ? [...new Set((body.address_ids as unknown[]).map((v) => toTrimmedString(v)).filter(Boolean))]
+      : [];
+    const depotCodeId = Object.prototype.hasOwnProperty.call(body, "depot_code_id")
+      ? toTrimmedString(body.depot_code_id)
+      : "";
+    if (addressIds.length === 0) {
+      return addressErrorResponse(req, ctx, "OM_ADDRESS_IDS_REQUIRED", 400, "address_ids is required");
+    }
+
+    const { data: rows, error: rowsError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("customer_address")
+      .select("id, customer_id")
+      .in("id", addressIds);
+    if (rowsError) throw new Error("OM_ADDRESS_LOOKUP_FAILED");
+    if (!rows || rows.length !== addressIds.length) {
+      return addressErrorResponse(req, ctx, "OM_ADDRESS_NOT_FOUND", 404, "One or more addresses were not found");
+    }
+    const customerIds = [...new Set((rows as JsonRecord[]).map((r) => String(r.customer_id)))];
+    if (customerIds.length !== 1) {
+      return addressErrorResponse(req, ctx, "OM_ADDRESS_MIXED_CUSTOMERS", 400, "All selected addresses must belong to the same customer");
+    }
+    await assertCustomerCompanyScope(ctx, customerIds[0], "OM_CUSTOMER_CREATE", "EDIT");
+
+    if (depotCodeId) {
+      const { data: depot, error: depotError } = await serviceRoleClient
+        .schema("erp_master")
+        .from("fg_depot_code")
+        .select("id")
+        .eq("id", depotCodeId)
+        .maybeSingle();
+      if (depotError || !depot) {
+        return addressErrorResponse(req, ctx, "OM_ADDRESS_DEPOT_CODE_NOT_FOUND", 404, "Depot code not found");
+      }
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("customer_address")
+      .update({
+        depot_code_id: depotCodeId || null,
+        last_updated_by: ctx.auth_user_id,
+        last_updated_at: new Date().toISOString(),
+      })
+      .in("id", addressIds)
+      .select("*");
+    if (error) {
+      console.error("[bulkMapCustomerAddressesHandler] update failed:", JSON.stringify(error));
+      throw new Error("OM_ADDRESS_BULK_MAP_FAILED");
+    }
+
+    const enriched = await enrichAddressRows((data ?? []) as JsonRecord[]);
+    return okResponse({ data: enriched }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_ADDRESS_BULK_MAP_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403
+      : code.includes("NOT_FOUND") ? 404
+      : code.includes("REQUIRED") || code.includes("MIXED_CUSTOMERS") ? 400
+      : 500;
+    return addressErrorResponse(req, ctx, code, status, "Address bulk mapping failed");
+  }
+}

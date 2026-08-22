@@ -2222,6 +2222,52 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/om/customer/CustomerAddressVdcMappingPage.jsx",
+    "dependencyCount": 5,
+    "deps": [
+      {
+        "fn": "listCustomers",
+        "method": "GET",
+        "path": "/api/om/customers?${params.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listCustomerAddresses",
+        "method": "GET",
+        "path": "/api/om/customer-addresses?${query.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listFgDepotCodes",
+        "method": "GET",
+        "path": "/api/om/fg-depot-codes?${query.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listFgParentCompanies",
+        "method": "GET",
+        "path": "/api/om/fg-parent-companies?${query.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "bulkMapCustomerAddresses",
+        "method": "PATCH",
+        "path": "/api/om/customer-addresses/bulk-map",
+        "resourceCode": "OM_CUSTOMER_CREATE",
+        "action": "EDIT",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/om/FgDispatchCustomerPage.jsx",
     "dependencyCount": 9,
     "deps": [

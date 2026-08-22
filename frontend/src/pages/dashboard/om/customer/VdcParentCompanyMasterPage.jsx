@@ -225,11 +225,24 @@ export default function VdcParentCompanyMasterPage() {
     queryFn: () => listFgDepotCodes(),
     select: (data) => data?.data ?? [],
   });
-  const parentNameById = useMemo(() => {
+  // 2026-08-22 fix — the Parent tab's own parentCompanies is scoped to
+  // whichever ONE company is selected there; a VDC on this tab can belong to
+  // a Parent Company under a DIFFERENT company than that selection, which
+  // would make parentById miss it entirely (showing a blank Parent state for
+  // a row that genuinely has one). Unscoped lookup instead -- every Parent
+  // Company across every company this caller belongs to, same pattern
+  // CustomerEditForm.jsx's own VdcPickerPanel already uses.
+  const parentAllQuery = useQuery({
+    queryKey: ["om", "fg-parent-companies", "all-for-vdc-tab"],
+    queryFn: () => listFgParentCompanies(),
+    select: (data) => data?.data ?? [],
+  });
+  const parentAllList = useMemo(() => parentAllQuery.data ?? [], [parentAllQuery.data]);
+  const parentById = useMemo(() => {
     const map = new Map();
-    for (const p of parentCompanies) map.set(p.id, p.company_name);
+    for (const p of parentAllList) map.set(p.id, p);
     return map;
-  }, [parentCompanies]);
+  }, [parentAllList]);
   const vdcs = useMemo(() => vdcQuery.data ?? [], [vdcQuery.data]);
 
   const [selectedVdcId, setSelectedVdcId] = useState("");
@@ -240,6 +253,7 @@ export default function VdcParentCompanyMasterPage() {
   const [newVdcParentId, setNewVdcParentId] = useState("");
   const [savingVdc, setSavingVdc] = useState(false);
   const [vdcError, setVdcError] = useState("");
+  const activeParentState = parentById.get(vdcParentId)?.state || "";
 
   // §129 (2026-08-22) -- the DB only prevents a duplicate code WITHIN the
   // same Parent Company; warn (don't silently allow) when the same code
@@ -521,9 +535,15 @@ export default function VdcParentCompanyMasterPage() {
                   columns={[
                     { key: "type", label: "VDC / DC", render: (row) => (row.dispatch_type === "DEPOT" ? "DC" : "VDC") },
                     { key: "code", label: "External Code", render: (row) => row.code || "-" },
-                    { key: "state", label: "State", render: (row) => row.state || "-" },
+                    {
+                      key: "state",
+                      label: "State",
+                      render: (row) => (row.dispatch_type === "DEPOT"
+                        ? (row.state || "-")
+                        : (parentById.get(row.parent_company_id)?.state || "-")),
+                    },
                     { key: "gst_number", label: "GST", render: (row) => row.gst_number || "-" },
-                    { key: "parent", label: "Parent Company", render: (row) => parentNameById.get(row.parent_company_id) || "-" },
+                    { key: "parent", label: "Parent Company", render: (row) => parentById.get(row.parent_company_id)?.company_name || "-" },
                   ]}
                   rows={vdcs}
                   rowKey={(row) => row.id}
@@ -547,7 +567,7 @@ export default function VdcParentCompanyMasterPage() {
                         className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                       >
                         <option value="">Select Parent Company</option>
-                        {parentCompanies.map((p) => (
+                        {parentAllList.map((p) => (
                           <option key={p.id} value={p.id}>{p.company_name} ({p.state})</option>
                         ))}
                       </select>
@@ -558,21 +578,21 @@ export default function VdcParentCompanyMasterPage() {
                       <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Parent Company</div>
                       {!changingVdcParent ? (
                         <div className="flex items-center justify-between">
-                          <span className="text-sm text-slate-900">{parentNameById.get(vdcParentId) || "—"}</span>
+                          <span className="text-sm text-slate-900">{parentById.get(vdcParentId)?.company_name || "—"}</span>
                           <button type="button" onClick={() => setChangingVdcParent(true)} className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700">
                             Unmap →
                           </button>
                         </div>
                       ) : (
                         <div className="grid gap-2">
-                          <p className="text-xs text-amber-700">Unmapped from {parentNameById.get(vdcParentId) || "current parent"}. Pick a new Parent Company and click Map to commit.</p>
+                          <p className="text-xs text-amber-700">Unmapped from {parentById.get(vdcParentId)?.company_name || "current parent"}. Pick a new Parent Company and click Map to commit.</p>
                           <select
                             value={newVdcParentId}
                             onChange={(event) => setNewVdcParentId(event.target.value)}
                             className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                           >
                             <option value="">Select new Parent Company</option>
-                            {parentCompanies.filter((p) => p.id !== vdcParentId).map((p) => (
+                            {parentAllList.filter((p) => p.id !== vdcParentId).map((p) => (
                               <option key={p.id} value={p.id}>{p.company_name} ({p.state})</option>
                             ))}
                           </select>
@@ -598,7 +618,7 @@ export default function VdcParentCompanyMasterPage() {
                   {duplicateVdcCode ? (
                     <div className="border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
                       This code already exists as {depotLabel(duplicateVdcCode.dispatch_type)}: {duplicateVdcCode.code} under{" "}
-                      <b>{parentNameById.get(duplicateVdcCode.parent_company_id) || "another Parent Company"}</b>. You can still
+                      <b>{parentById.get(duplicateVdcCode.parent_company_id)?.company_name || "another Parent Company"}</b>. You can still
                       create it here (a code can legitimately repeat across different Parent Companies), but double-check this
                       isn't a mistake first.
                     </div>
@@ -606,49 +626,82 @@ export default function VdcParentCompanyMasterPage() {
                   <ErpDenseFormRow label="Dispatch Type">
                     <select
                       value={vdcForm.dispatch_type}
-                      onChange={(event) => setVdcForm((c) => ({ ...c, dispatch_type: event.target.value }))}
+                      onChange={(event) => setVdcForm((c) => ({
+                        ...c,
+                        dispatch_type: event.target.value,
+                        // 2026-08-22 fix -- DB trigger forbids a DIRECT (VDC)
+                        // row from carrying any of these; clear them the
+                        // moment the user switches type so a stale value from
+                        // DEPOT mode can never sneak into a DIRECT save.
+                        state: "",
+                        address_line: "",
+                        pin_code: "",
+                      }))}
                       className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                     >
-                      <option value="DIRECT">Direct</option>
-                      <option value="DEPOT">Depot</option>
+                      <option value="DIRECT">Direct (VDC)</option>
+                      <option value="DEPOT">Depot (DC)</option>
                     </select>
                   </ErpDenseFormRow>
-                  <ErpDenseFormRow label="State">
-                    <select
-                      value={vdcForm.state}
-                      onChange={(event) => setVdcForm((c) => ({ ...c, state: event.target.value }))}
-                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    >
-                      <option value="">Select state</option>
-                      {INDIAN_STATES.map((state) => (
-                        <option key={state.code} value={state.name}>{state.name}</option>
-                      ))}
-                    </select>
-                  </ErpDenseFormRow>
-                  <ErpDenseFormRow label="Address">
-                    <textarea
-                      rows={2}
-                      value={vdcForm.address_line}
-                      onChange={(event) => setVdcForm((c) => ({ ...c, address_line: event.target.value }))}
-                      className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    />
-                  </ErpDenseFormRow>
-                  <ErpDenseFormRow label="Pin Code">
-                    <input
-                      value={vdcForm.pin_code}
-                      onChange={(event) => setVdcForm((c) => ({ ...c, pin_code: event.target.value }))}
-                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    />
-                  </ErpDenseFormRow>
-                  <GstCheckRow
-                    value={vdcForm.gst_number}
-                    onChange={(value) => setVdcForm((c) => ({ ...c, gst_number: value }))}
-                    onResolved={(profile) => setVdcForm((c) => ({
-                      ...c,
-                      state: profile.state_name || c.state,
-                      address_line: profile.full_address || c.address_line,
-                    }))}
-                  />
+                  {vdcForm.dispatch_type === "DEPOT" ? (
+                    <>
+                      <ErpDenseFormRow label="State" required>
+                        <select
+                          value={vdcForm.state}
+                          onChange={(event) => setVdcForm((c) => ({ ...c, state: event.target.value }))}
+                          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                        >
+                          <option value="">Select state</option>
+                          {INDIAN_STATES.map((state) => (
+                            <option key={state.code} value={state.name}>{state.name}</option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Must match the Parent Company's own state{activeParentState ? ` (${activeParentState})` : ""}.
+                        </p>
+                      </ErpDenseFormRow>
+                      <ErpDenseFormRow label="Address" required>
+                        <textarea
+                          rows={2}
+                          value={vdcForm.address_line}
+                          onChange={(event) => setVdcForm((c) => ({ ...c, address_line: event.target.value }))}
+                          className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                        />
+                      </ErpDenseFormRow>
+                      <ErpDenseFormRow label="Pin Code">
+                        <input
+                          value={vdcForm.pin_code}
+                          onChange={(event) => setVdcForm((c) => ({ ...c, pin_code: event.target.value }))}
+                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                        />
+                      </ErpDenseFormRow>
+                      <GstCheckRow
+                        value={vdcForm.gst_number}
+                        onChange={(value) => setVdcForm((c) => ({ ...c, gst_number: value }))}
+                        onResolved={(profile) => setVdcForm((c) => ({
+                          ...c,
+                          state: profile.state_name || c.state,
+                          address_line: profile.full_address || c.address_line,
+                        }))}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <ErpDenseFormRow label="State">
+                        <div className="flex h-8 w-full items-center border border-slate-200 bg-slate-100 px-2 text-sm text-slate-600">
+                          {activeParentState || "— pick a Parent Company —"}
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">
+                          From the Parent Company — a VDC (Direct dispatch) has no separate address of its own.
+                        </p>
+                      </ErpDenseFormRow>
+                      <GstCheckRow
+                        value={vdcForm.gst_number}
+                        onChange={(value) => setVdcForm((c) => ({ ...c, gst_number: value }))}
+                        onResolved={() => {}}
+                      />
+                    </>
+                  )}
                   <div className="flex justify-end gap-2">
                     <button type="button" onClick={() => { setSelectedVdcId(""); setCreatingVdcNew(false); }} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
                     <button type="button" onClick={() => void handleSaveVdc()} disabled={savingVdc} className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50">
