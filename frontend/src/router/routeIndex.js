@@ -93,6 +93,9 @@ export function buildRouteIndex(menuSnapshot) {
     // returns false for this route and every navigation attempt bounces
     // back to the dashboard (found live 2026-08-22, business owner).
     ["/dashboard/om/customers",              "/dashboard/om/customer/vdc-parent-company"],
+    // 2026-08-22 — dedicated Address<->VDC mapping page, same companion-pair
+    // requirement as the line above (no new tx_code/menu row either).
+    ["/dashboard/om/customers",              "/dashboard/om/customer/address-vdc-mapping"],
 
     // ── Procurement — :id detail routes ───────────────────────────────────────
     ["/dashboard/procurement/purchase-orders",         "/dashboard/procurement/purchase-orders/:id"],

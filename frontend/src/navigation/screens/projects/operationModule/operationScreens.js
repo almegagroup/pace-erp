@@ -91,6 +91,18 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // 2026-08-22 — dedicated bulk Address<->VDC/DC mapping workspace (business
+  // owner's explicit ask; the only mapping UI before this was the per-address
+  // picker buried inside CustomerEditForm.jsx, no multi-select). Same reused
+  // MM04 ACL, no new tx_code/menu row.
+  OM_CUSTOMER_ADDRESS_VDC_MAPPING: {
+    screen_code: "OM_CUSTOMER_ADDRESS_VDC_MAPPING",
+    route: "/dashboard/om/customer/address-vdc-mapping",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   OM_FG_DISPATCH_CUSTOMER: {
     screen_code: "OM_FG_DISPATCH_CUSTOMER",
     route: "/dashboard/om/fg-dispatch-customers",

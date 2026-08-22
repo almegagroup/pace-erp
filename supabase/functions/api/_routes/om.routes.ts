@@ -98,6 +98,7 @@ import {
   upgradeDispatchCustomerToRegisteredHandler,
 } from "../_core/om/fg_dispatch_customer.handlers.ts";
 import {
+  bulkMapCustomerAddressesHandler,
   createCustomerAddressHandler,
   listCustomerAddressesHandler,
   updateCustomerAddressHandler,
@@ -310,6 +311,8 @@ export async function dispatchOmRoutes(
       return await createCustomerAddressHandler(req, ctx);
     case "PATCH:/api/om/customer-address":
       return await updateCustomerAddressHandler(req, ctx);
+    case "PATCH:/api/om/customer-addresses/bulk-map":
+      return await bulkMapCustomerAddressesHandler(req, ctx);
 
     case "GET:/api/om/uoms":
       return await listUomHandler(req, ctx);

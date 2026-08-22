@@ -111,6 +111,7 @@ import CustomerListPage from "../pages/dashboard/om/customer/CustomerListPage.js
 import CustomerCreatePage from "../pages/dashboard/om/customer/CustomerCreatePage.jsx";
 import CustomerDetailPage from "../pages/dashboard/om/customer/CustomerDetailPage.jsx";
 import VdcParentCompanyMasterPage from "../pages/dashboard/om/customer/VdcParentCompanyMasterPage.jsx";
+import CustomerAddressVdcMappingPage from "../pages/dashboard/om/customer/CustomerAddressVdcMappingPage.jsx";
 import FgDispatchCustomerPage from "../pages/dashboard/om/FgDispatchCustomerPage.jsx";
 import POListPage from "../pages/dashboard/procurement/po/POListPage.jsx";
 import POCreatePage from "../pages/dashboard/procurement/po/POCreatePage.jsx";
@@ -535,6 +536,10 @@ export default function AppRouter() {
                   <Route
                     path="om/customer/vdc-parent-company"
                     element={<VdcParentCompanyMasterPage />}
+                  />
+                  <Route
+                    path="om/customer/address-vdc-mapping"
+                    element={<CustomerAddressVdcMappingPage />}
                   />
                   <Route
                     path="om/fg-dispatch-customers"
