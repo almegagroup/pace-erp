@@ -27,9 +27,11 @@ import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   createFgParentCompany,
   createOrGetFgDepotCode,
+  findFgParentCompanyByGst,
   listFgDepotCodes,
   listFgParentCompanies,
   lookupCustomerGstProfile,
+  mapFgParentCompanyToCompany,
   updateFgDepotCode,
   updateFgParentCompany,
 } from "../omApi.js";
@@ -111,10 +113,17 @@ export default function VdcParentCompanyMasterPage() {
   const [creatingParentNew, setCreatingParentNew] = useState(false);
   const [savingParent, setSavingParent] = useState(false);
   const [parentError, setParentError] = useState("");
+  // §129 multi-company mapping (2026-08-22) -- before creating a new Parent
+  // Company, check by GST whether it already exists under a different
+  // company; if so, offer "map to my company" instead of duplicating.
+  const [gstMatches, setGstMatches] = useState([]);
+  const [checkingGstMatches, setCheckingGstMatches] = useState(false);
+  const [mappingExistingId, setMappingExistingId] = useState("");
 
   function openParentRow(row) {
     setSelectedParentId(row.id);
     setCreatingParentNew(false);
+    setGstMatches([]);
     setParentForm({
       company_name: row.company_name ?? "",
       state: row.state ?? "",
@@ -127,7 +136,45 @@ export default function VdcParentCompanyMasterPage() {
   function openParentCreate() {
     setSelectedParentId("");
     setCreatingParentNew(true);
+    setGstMatches([]);
     setParentForm({ ...EMPTY_PARENT_FORM, company_name: "" });
+  }
+
+  async function checkForExistingParentCompany(gstNumber) {
+    if (!gstNumber) {
+      setGstMatches([]);
+      return;
+    }
+    setCheckingGstMatches(true);
+    try {
+      const result = await findFgParentCompanyByGst(gstNumber);
+      setGstMatches(Array.isArray(result?.data) ? result.data : []);
+    } catch {
+      setGstMatches([]);
+    } finally {
+      setCheckingGstMatches(false);
+    }
+  }
+
+  async function handleMapExistingParent(parentCompanyId) {
+    if (!companyId) {
+      setParentError("Select a company first.");
+      return;
+    }
+    setMappingExistingId(parentCompanyId);
+    setParentError("");
+    try {
+      await mapFgParentCompanyToCompany({ parent_company_id: parentCompanyId, company_id: companyId });
+      await queryClient.invalidateQueries({ queryKey: ["om", "fg-parent-companies"] });
+      setSelectedParentId("");
+      setCreatingParentNew(false);
+      setGstMatches([]);
+      setParentForm(EMPTY_PARENT_FORM);
+    } catch (mapError) {
+      setParentError(mapError instanceof Error ? mapError.message : "MM05_PARENT_COMPANY_COMPANY_MAP_FAILED");
+    } finally {
+      setMappingExistingId("");
+    }
   }
 
   async function handleSaveParent() {
@@ -183,7 +230,7 @@ export default function VdcParentCompanyMasterPage() {
     for (const p of parentCompanies) map.set(p.id, p.company_name);
     return map;
   }, [parentCompanies]);
-  const vdcs = vdcQuery.data ?? [];
+  const vdcs = useMemo(() => vdcQuery.data ?? [], [vdcQuery.data]);
 
   const [selectedVdcId, setSelectedVdcId] = useState("");
   const [vdcForm, setVdcForm] = useState(EMPTY_VDC_FORM);
@@ -193,6 +240,18 @@ export default function VdcParentCompanyMasterPage() {
   const [newVdcParentId, setNewVdcParentId] = useState("");
   const [savingVdc, setSavingVdc] = useState(false);
   const [vdcError, setVdcError] = useState("");
+
+  // §129 (2026-08-22) -- the DB only prevents a duplicate code WITHIN the
+  // same Parent Company; warn (don't silently allow) when the same code
+  // already exists under a DIFFERENT Parent Company, so a duplicate never
+  // happens by accident. Client-side check against the already-loaded full
+  // VDC list -- no extra request needed.
+  const duplicateVdcCode = useMemo(() => {
+    if (!creatingVdcNew) return null;
+    const code = vdcForm.code.trim().toLowerCase();
+    if (!code) return null;
+    return vdcs.find((v) => (v.code || "").trim().toLowerCase() === code && v.parent_company_id !== vdcParentId) ?? null;
+  }, [vdcs, vdcForm.code, vdcParentId, creatingVdcNew]);
 
   function openVdcRow(row) {
     setSelectedVdcId(row.id);
@@ -375,13 +434,43 @@ export default function VdcParentCompanyMasterPage() {
                   <GstCheckRow
                     value={parentForm.gst_number}
                     onChange={(value) => setParentForm((c) => ({ ...c, gst_number: value }))}
-                    onResolved={(profile) => setParentForm((c) => ({
-                      ...c,
-                      company_name: profile.legal_name || c.company_name,
-                      state: profile.state_name || c.state,
-                      full_address: profile.full_address || c.full_address,
-                    }))}
+                    onResolved={(profile) => {
+                      setParentForm((c) => ({
+                        ...c,
+                        company_name: profile.legal_name || c.company_name,
+                        state: profile.state_name || c.state,
+                        full_address: profile.full_address || c.full_address,
+                      }));
+                      if (creatingParentNew) void checkForExistingParentCompany(profile.gst_number || parentForm.gst_number);
+                    }}
                   />
+                  {creatingParentNew && checkingGstMatches ? (
+                    <p className="text-xs text-slate-500">Checking if this GST already exists under another company...</p>
+                  ) : null}
+                  {creatingParentNew && gstMatches.length > 0 ? (
+                    <div className="grid gap-2 border border-amber-300 bg-amber-50 p-2">
+                      <p className="text-xs font-semibold text-amber-800">
+                        This GST already exists — map to your company instead of creating a duplicate:
+                      </p>
+                      {gstMatches.map((match) => (
+                        <div key={match.id} className="flex items-center justify-between border border-amber-200 bg-white px-2 py-1 text-xs">
+                          <span>
+                            <span className="font-semibold text-slate-900">{match.company_name}</span> ({match.state})
+                            {" — mapped to: "}
+                            {(match.mapped_companies ?? []).map((c) => c.company_code).join(", ") || "—"}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void handleMapExistingParent(match.id)}
+                            disabled={mappingExistingId === match.id}
+                            className="border border-sky-700 bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-950 disabled:opacity-50"
+                          >
+                            {mappingExistingId === match.id ? "Mapping..." : "Map to my company"}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   <ErpDenseFormRow label="Address">
                     <textarea
                       rows={2}
@@ -506,6 +595,14 @@ export default function VdcParentCompanyMasterPage() {
                       className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                     />
                   </ErpDenseFormRow>
+                  {duplicateVdcCode ? (
+                    <div className="border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                      This code already exists as {depotLabel(duplicateVdcCode.dispatch_type)}: {duplicateVdcCode.code} under{" "}
+                      <b>{parentNameById.get(duplicateVdcCode.parent_company_id) || "another Parent Company"}</b>. You can still
+                      create it here (a code can legitimately repeat across different Parent Companies), but double-check this
+                      isn't a mistake first.
+                    </div>
+                  ) : null}
                   <ErpDenseFormRow label="Dispatch Type">
                     <select
                       value={vdcForm.dispatch_type}
@@ -555,7 +652,7 @@ export default function VdcParentCompanyMasterPage() {
                   <div className="flex justify-end gap-2">
                     <button type="button" onClick={() => { setSelectedVdcId(""); setCreatingVdcNew(false); }} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
                     <button type="button" onClick={() => void handleSaveVdc()} disabled={savingVdc} className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50">
-                      {savingVdc ? "Saving..." : "Save"}
+                      {savingVdc ? "Saving..." : duplicateVdcCode ? "Create Anyway" : "Save"}
                     </button>
                   </div>
                 </div>

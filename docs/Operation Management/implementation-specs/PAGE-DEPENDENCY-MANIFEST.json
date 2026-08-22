@@ -2145,8 +2145,24 @@
   },
   {
     "page": "frontend/src/pages/dashboard/om/customer/VdcParentCompanyMasterPage.jsx",
-    "dependencyCount": 7,
+    "dependencyCount": 9,
     "deps": [
+      {
+        "fn": "findFgParentCompanyByGst",
+        "method": "GET",
+        "path": "/api/om/fg-parent-company/by-gst?${params.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "mapFgParentCompanyToCompany",
+        "method": "POST",
+        "path": "/api/om/fg-parent-company/company-map",
+        "resourceCode": "OM_CUSTOMER_CREATE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
       {
         "fn": "listFgParentCompanies",
         "method": "GET",

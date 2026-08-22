@@ -347,6 +347,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/om/fg-parent-companies":                  { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
   "POST:/api/om/fg-parent-company":                   { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
   "PATCH:/api/om/fg-parent-company":                  { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
+  // §129 multi-company mapping (2026-08-22) -- cross-company GST lookup is
+  // deliberately VIEW-tier only (finds an existing Parent Company to reuse,
+  // never mutates); the actual map-write is a separate WRITE-tier route.
+  "GET:/api/om/fg-parent-company/by-gst":              { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
+  "POST:/api/om/fg-parent-company/company-map":        { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
   "GET:/api/om/fg-depot-codes":                       { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
   "POST:/api/om/fg-depot-code":                       { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
   "PATCH:/api/om/fg-depot-code":                      { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },

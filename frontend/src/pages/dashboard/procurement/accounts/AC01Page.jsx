@@ -212,6 +212,14 @@ function computeLivePreview(grn, draft, costLines, deductionLines) {
   const landedCostPerUnit = receivedQtyBase > 0 ? baseUomRate + landedCostTotal / receivedQtyBase : baseUomRate;
 
   return {
+    // Item Value -- business owner, 2026-08-22: "amader business e amra landed
+    // cost e item er basic rate o add kori" -- shown as its own card so the
+    // material cost feeding into Landed Price/Unit is visible directly,
+    // instead of requiring the user to mentally back-calculate it. Always
+    // the Confirmed Rate when set (else GRN rate), net of GST -- the same
+    // effectiveRate/purchaseCost this function already used internally for
+    // vendorSuggested's gross-up, just exposed here too.
+    itemValue: purchaseCost,
     landedCostTotal,
     landedCostPerUnit,
     vendorSuggested: purchaseCostGross + chargesGross.VENDOR - deductionsFlat.VENDOR,
@@ -1147,6 +1155,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             <DrawerSection eyebrow="Summary" title="Live — recalculates as you edit, matches what Save will persist">
               <div className="grid grid-cols-4 gap-2">
                 {[
+                  ["Item value, excl. GST (live)", livePreview?.itemValue],
                   ["Landed cost total (live)", livePreview?.landedCostTotal],
                   ["Landed price / unit, Base UoM (live)", livePreview?.landedCostPerUnit],
                 ].map(([label, value]) => (

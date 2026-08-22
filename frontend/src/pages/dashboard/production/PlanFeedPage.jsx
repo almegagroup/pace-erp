@@ -70,7 +70,11 @@ function materialLabel(m) {
 }
 function customerLabel(c) {
   if (!c) return "--";
-  return [c.customer_code, c.customer_name].filter(Boolean).join(" - ");
+  // §129.4 — display_code already IS "{gst_state_code} - {name}" (computed
+  // server-side only, enrichCustomerRows) -- do not re-append customer_name,
+  // that would duplicate it. Fall back to the old pairing only when
+  // display_code isn't resolved yet (no GST/state on this customer).
+  return c.display_code || [c.customer_code, c.customer_name].filter(Boolean).join(" - ");
 }
 function fmt(n) {
   const v = Number(n ?? 0);

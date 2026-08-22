@@ -186,7 +186,7 @@ async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Reco
 // read/edit-an-existing-customer paths. These two helpers are the
 // customer_company_map-aware equivalent, used the same way: list/get/update/
 // status-change must all validate scope, not just create (11-bug #2).
-async function getCallerCompanyIds(ctx: OmHandlerContext): Promise<string[]> {
+export async function getCallerCompanyIds(ctx: OmHandlerContext): Promise<string[]> {
   const { data, error } = await serviceRoleClient
     .schema("erp_map")
     .from("user_companies")

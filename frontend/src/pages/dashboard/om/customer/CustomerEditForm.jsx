@@ -25,6 +25,7 @@ import {
   getCustomer,
   listCustomerAddresses,
   listFgDepotCodes,
+  listFgParentCompanies,
   lookupCustomerGstProfile,
   updateCustomer,
   updateCustomerAddress,
@@ -55,6 +56,18 @@ function VdcPickerPanel({ addressId, currentDepotId, currentLabel, onDone, onCan
     queryFn: () => listFgDepotCodes(),
     select: (data) => data?.data ?? [],
   });
+  // Parent Company name per VDC/DC -- Bill-To identity matters while picking,
+  // not just after (business owner, 2026-08-22).
+  const parentQuery = useQuery({
+    queryKey: ["om", "fg-parent-companies", "picker"],
+    queryFn: () => listFgParentCompanies(),
+    select: (data) => data?.data ?? [],
+  });
+  const parentNameById = useMemo(() => {
+    const map = new Map();
+    for (const p of parentQuery.data ?? []) map.set(p.id, p.company_name);
+    return map;
+  }, [parentQuery.data]);
   const filtered = useMemo(() => {
     const vdcs = vdcQuery.data ?? [];
     const term = search.trim().toLowerCase();
@@ -131,6 +144,8 @@ function VdcPickerPanel({ addressId, currentDepotId, currentLabel, onDone, onCan
                 <span className="mr-1 rounded bg-slate-100 px-1 text-[10px] font-bold text-slate-600">{depotLabel(v.dispatch_type)}</span>
                 <span className="font-semibold text-slate-900">{v.code}</span>
                 {v.state ? ` — ${v.state}` : ""}
+                {" — "}
+                <span className="text-slate-500">{parentNameById.get(v.parent_company_id) || "—"}</span>
               </span>
               <button
                 type="button"
@@ -184,6 +199,14 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
   const [savingAddress, setSavingAddress] = useState(false);
   const [addressError, setAddressError] = useState("");
   const [mappingAddressId, setMappingAddressId] = useState("");
+  // §129.3 (2026-08-22 fix) — editing an EXISTING address's own fields
+  // (Site Name especially -- backfilled/old addresses often have it blank)
+  // had no UI at all, only "+ Add another address" (create) and VDC mapping
+  // existed. This closes that gap.
+  const [editingAddressId, setEditingAddressId] = useState("");
+  const [editAddressForm, setEditAddressForm] = useState({ site_name: "", address_line: "", town: "" });
+  const [savingEditAddress, setSavingEditAddress] = useState(false);
+  const [editAddressError, setEditAddressError] = useState("");
 
   const queryClient = useQueryClient();
 
@@ -315,6 +338,59 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
       setAddressError(createError instanceof Error ? createError.message : "OM_ADDRESS_CREATE_FAILED");
     } finally {
       setSavingAddress(false);
+    }
+  }
+
+  function openEditAddress(address) {
+    setEditingAddressId(address.id);
+    setEditAddressForm({
+      site_name: address.site_name ?? "",
+      address_line: address.address_line ?? "",
+      town: address.town ?? "",
+    });
+    setEditAddressError("");
+  }
+
+  async function handleSaveEditAddress() {
+    if (!editAddressForm.site_name.trim() || !editAddressForm.address_line.trim() || !editAddressForm.town.trim()) {
+      setEditAddressError("Site Name, Address, and Town are required.");
+      return;
+    }
+    setSavingEditAddress(true);
+    setEditAddressError("");
+    try {
+      await updateCustomerAddress({
+        id: editingAddressId,
+        site_name: editAddressForm.site_name.trim(),
+        address_line: editAddressForm.address_line.trim(),
+        town: editAddressForm.town.trim(),
+      });
+      queryClient.invalidateQueries({ queryKey: ["om", "customer-addresses", customerId] });
+      setEditingAddressId("");
+    } catch (saveError) {
+      setEditAddressError(saveError instanceof Error ? saveError.message : "OM_ADDRESS_UPDATE_FAILED");
+    } finally {
+      setSavingEditAddress(false);
+    }
+  }
+
+  // Wrongly-created address correction (2026-08-22, business owner) --
+  // never "move" to a different customer (risk once SO/Invoice eventually
+  // reference a specific address row), always unmap + deactivate together
+  // so no dangling VDC/DC reference survives on a retired row, then the
+  // user re-creates the correct one via "+ Add another address".
+  async function handleRemoveAddress(address) {
+    setSavingEditAddress(true);
+    setEditAddressError("");
+    try {
+      await updateCustomerAddress({ id: address.id, depot_code_id: null, status: "INACTIVE" });
+      queryClient.invalidateQueries({ queryKey: ["om", "customer-addresses", customerId] });
+      setEditingAddressId("");
+      setMappingAddressId("");
+    } catch (removeError) {
+      setEditAddressError(removeError instanceof Error ? removeError.message : "OM_ADDRESS_REMOVE_FAILED");
+    } finally {
+      setSavingEditAddress(false);
     }
   }
 
@@ -491,9 +567,20 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
               <li key={address.id} className="border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
                 <div className="flex items-center justify-between">
                   <span>
-                    <span className="font-semibold text-slate-900">{address.site_name || "—"}</span>
+                    {address.site_name ? (
+                      <span className="font-semibold text-slate-900">{address.site_name}</span>
+                    ) : (
+                      <span className="font-semibold text-amber-700">Site Name not set</span>
+                    )}
                     {" — "}
                     {address.address_line}, {address.town}, {address.state}
+                    <button
+                      type="button"
+                      onClick={() => (editingAddressId === address.id ? setEditingAddressId("") : openEditAddress(address))}
+                      className="ml-2 text-[10px] font-semibold text-sky-700 underline"
+                    >
+                      Edit
+                    </button>
                   </span>
                   {address.depot_code ? (
                     <button
@@ -526,6 +613,58 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
                       queryClient.invalidateQueries({ queryKey: ["om", "customer-addresses", customerId] });
                     }}
                   />
+                ) : null}
+                {editingAddressId === address.id ? (
+                  <div className="mt-1 grid gap-2 border border-dashed border-sky-300 bg-sky-50/40 p-3">
+                    {editAddressError ? <div className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs text-rose-800">{editAddressError}</div> : null}
+                    <ErpDenseFormRow label="Site Name" required>
+                      <input
+                        value={editAddressForm.site_name}
+                        onChange={(event) => setEditAddressForm((c) => ({ ...c, site_name: event.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Address" required>
+                      <input
+                        value={editAddressForm.address_line}
+                        onChange={(event) => setEditAddressForm((c) => ({ ...c, address_line: event.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Town" required>
+                      <input
+                        value={editAddressForm.town}
+                        onChange={(event) => setEditAddressForm((c) => ({ ...c, town: event.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      />
+                    </ErpDenseFormRow>
+                    <p className="text-[11px] text-slate-500">State ({address.state}) always matches the customer's own state — not editable per-address.</p>
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm("Remove this address? It will be unmapped from any VDC/DC and hidden — this can't be undone from here, you'd need to add a fresh address instead.")) {
+                            void handleRemoveAddress(address);
+                          }
+                        }}
+                        disabled={savingEditAddress}
+                        className="h-8 border border-rose-300 bg-rose-50 px-3 text-xs font-semibold text-rose-800 disabled:opacity-50"
+                      >
+                        Remove this address
+                      </button>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => setEditingAddressId("")} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveEditAddress()}
+                          disabled={savingEditAddress}
+                          className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50"
+                        >
+                          {savingEditAddress ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 ) : null}
               </li>
             ))}
