@@ -4521,3 +4521,96 @@ migrates.
 - **Verification:** `deno check ac06_workspace.handlers.ts`, targeted frontend ESLint, and Vite
   production build pass. `company-scope-guard`, `company-scope-write-acl-guard`, and
   `route-acl-registry-guard` pass with no AC06 findings. No migration is required.
+
+### 2026-08-24 (later same day) — AC06 UI/UX PO11-parity pass + Auditor rate-entry authority
+
+**UI/UX parity fixes (Claude direct-implemented, business owner review found real drift from
+PO11's own established conventions):** `SlocCostingGroupPage.jsx` moved from `ErpScreenScaffold` to
+`ErpMasterListTemplate` (PO11's own shell); Pace Code removed everywhere, Material Name + External
+Code split into two real columns (§35.18); row display order now follows §35.12's merged-
+alphabetical-by-Material-Name rule (Costing Group's position = its alphabetically-first member);
+Source SLOC Group column added to the Rate Input grid so an "All SLOC Groups" view stays
+unambiguous; the full report stopped being a `window.open` page with a raw-UUID static preview
+(company_id was not even being passed) and became an in-place `showFullReport` state + a real
+`/report` sub-route (`production/sloc-costing-group/report`, added to `AppRouter.jsx`), matching
+PO11's `navigate(..., {replace:true})` pattern exactly — Company/SLOC Group now resolve to real
+names and stay live-editable in report mode. `ErpSummaryChips.jsx` extracted as a genuine shared
+component (`components/data/`) — both this page and `ProcurementPlanningPage.jsx` now import the
+same one; neither has its own local copy anymore (the earlier build had literally copied PO11's
+page-local `SummaryChips` function into AC06 under the same name, which was flagged as backwards
+during review — it wasn't reused, it was duplicated). Backend `materialMap()`/`rowsForDisplay()`
+now also resolve `material_external_code`, and a new additive migration
+`20260824180000_ac06_external_code_snapshot.sql` adds `material_external_code_snapshot` to
+`ac06_month_archive_line` + updates `close_ac06_month()` to populate it, so History/Archive and the
+report keep showing External Code after a month closes.
+
+**ACL decision correction (business owner, 2026-08-24):** Auditor may now directly enter/correct an
+AC06 rate, not just Verify an Accounts-entered value as-is — implemented as ONE rule in
+`saveAc06RatesHandler`, not a second ACL resource: whoever actually saves a rate, if that actor
+also holds `ACC_SLOC_COSTING_VERIFY:WRITE` (Auditor or ACL-MASTER), the save writes `VERIFIED`
+directly in that same action (`verified_by`/`verified_at` = that save); a plain Accounts actor
+(no verify authority) still lands `PENDING` as before. `CAP_AC06_VERIFY_AUDITOR` (the capability
+that already carried VERIFY) gained a second `capability_menu_actions` row for
+`ACC_SLOC_COSTING_RATE:WRITE` — additive, no new capability code. See
+`PROD-ACL-Access-Decisions.md`'s AC06 v3 section for the full matrix and correction note.
+
+**R-04 process gap, caught and actually corrected (business owner asked directly "did you check
+R-04 before writing a migration", then "these migrations aren't needed" once the first pass only
+acknowledged the violation instead of fixing it).** The capability/version-bump portion of this ACL
+correction was first written as a migration file (`20260824190000_ac06_auditor_rate_entry_
+authority.sql`), copying the precedent already set by this same feature's own `20260824133000_
+ac06_v3_acl_operation_split.sql` — but that precedent is itself an R-04 violation, the same class
+already documented once before (`20260708130000_gate_security_capability_split.sql`, see that
+entry above). First response was to just log it as "violation acknowledged" and leave the file in
+place — business owner correctly rejected that as insufficient. **Actually fixed:** the migration
+file was deleted and its `schema_migrations` row deleted from Dev in the same pass (not left
+half-reconciled), confirmed `in_sync=true` (469/469, local and remote) both immediately before and
+after. The ACL data the migration had inserted was not rolled back — only the migration-file
+wrapper was removed, since granting `CAP_AC06_VERIFY_AUDITOR` a second `capability_menu_actions`
+row for `ACC_SLOC_COSTING_RATE:WRITE` is itself correct and needed; it now exists purely as MCP-
+applied Dev data, same as how it was separately applied to Prod, with nothing in migration history
+misrepresenting it as schema DDL. `20260824180000_ac06_external_code_snapshot.sql` (the other
+migration from this same pass) was deliberately left as a migration file, unlike this one — it adds
+a real column (`ac06_month_archive_line.material_external_code_snapshot`) and updates
+`close_ac06_month()`, genuine DDL/function-definition, exactly what R-04 says belongs in a
+migration. Going forward for this feature: ACL data changes (capability/role/work-context grants,
+version bumps) are MCP direct SQL only, run separately per environment, per R-04 — not folded into
+a migration file even when touching tables a nearby schema migration also touches.
+
+**Real, pre-existing bug found while verifying (not introduced this session) — Dev-only, Prod was
+already correct.** Checking `precomputed_acl_view` properly (filtered to the active `acl_version_id`
+— the exact discipline R-04/the Post-Implementation Checklist's step 7 requires, skipped on the
+first pass) showed **zero rows for `ACC_SLOC_COSTING_RATE`/`SETUP`/`VERIFY`/`CLOSE` for any user, in
+Dev**, even after the capability grant was correctly captured. Root cause: `20260824133000`'s
+`work_context_capabilities` insert targeted `work_context_name IN ('ACCOUNTS','AUDIT','DIRECTOR',
+'ACL-MASTER')` — Dev's CMP003/CMP006 test companies only have a department literally named
+`ACCOUNTS`; there is no `AUDIT`/`DIRECTOR`/`ACL-MASTER` department in Dev, so those three CROSS JOIN
+branches silently matched zero rows (classic §8's "সিলভার bump-এ silent zero rows" pattern — role_
+capabilities was present, work_context_capabilities was not, no error). Confirmed the correct
+Dev-only target: Auditor/Director-role Dev users (P0004 DIRECTOR, P0007 L1_AUDITOR) both actually
+sit on the real `MANAGEMENT` work context — the same one `CAP_PI_AUDITOR` already correctly targets.
+**Prod independently checked and found already correct** — Prod's CMP003/CMP006 really do have
+distinct `AUDIT`/`DIRECTOR`/`ACL-MASTER` departments (matching this doc's 2026-07-29 "Identity note"
+on P0076's dedicated ACL-MASTER context), so the original migration worked there with zero fix
+needed. Fixed Dev via MCP direct SQL (`work_context_capabilities` grant to the real `MANAGEMENT`
+context for all 6 Auditor/Director/ACL-Master AC06 capabilities, version bump, capture, snapshot) —
+no migration file, per R-04, since this was Dev-environment-specific data, not a schema/shared
+design change.
+
+**Full verification (both Dev and Prod, both companies):**
+- `deno check` on `ac06_workspace.handlers.ts` — clean, before and after the auto-verify change.
+- `eslint` on `SlocCostingGroupPage.jsx`, `ProcurementPlanningPage.jsx`, `ErpSummaryChips.jsx`,
+  `AppRouter.jsx` — 0 errors (PO11's file carries 8 pre-existing `react-hooks/exhaustive-deps`
+  warnings, confirmed unrelated to this change).
+- `jsx-no-undef-guard.mjs` / `route-acl-registry-guard.mjs` — pass, 0 new findings.
+- `precomputed_acl_view`, filtered to the newly-active version in both projects — confirmed
+  `ACC_SLOC_COSTING_RATE:WRITE = ALLOW` for both `ACCOUNTS` and the Auditor/Director/ACL-Master
+  context, in Dev and Prod, both companies.
+- `acl.user_overrides` — zero rows on any `ACC_SLOC_COSTING_*` resource, Dev and Prod.
+- ACL-MASTER drift check (`scripts/acl-master-drift-check.mjs`'s SQL) — zero drift in Prod. Dev
+  flagged `P0002` against all AC06 resources; investigated and confirmed **not a real gap** — Dev's
+  script picks "whoever has the most ALLOW rows company-wide" as its ACL-Master proxy, and in
+  CMP003 that happens to be `P0002` (`L1_MANAGER`, Quality/Production only — no legitimate AC06
+  need), not the real Director/Auditor test identities (`P0004`/`P0007`), which do correctly have
+  every AC06 resource after the fix.
+- Not yet done: live click-through in the deployed app (no dev login in this environment).

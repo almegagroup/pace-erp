@@ -153,7 +153,7 @@ async function materialMap(materialIds: string[]): Promise<Map<string, Row>> {
   const result = new Map<string, Row>();
   if (!materialIds.length) return result;
   const rows = await fetchInChunks<Row>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
-    .select("id, pace_code, material_name, base_uom_code").in("id", chunk));
+    .select("id, pace_code, external_code, material_name, base_uom_code").in("id", chunk));
   for (const row of rows) result.set(toTrimmedString(row.id), row);
   return result;
 }
@@ -186,24 +186,43 @@ async function ensureScopeRows(ctx: ProdHandlerContext, month: Row, slocGroup: R
   if (configError) throw new Error("AC06_SCOPE_SYNC_FAILED");
 }
 
+// PO11-parity display order (feasibility §35.12/§35.18, carried into AC06 by
+// §114.23's "follows PO11's ... workspace pattern"): standalone rows and
+// Costing Groups sort together as ONE merged alphabetical list by Material
+// Name, never "all groups first, then standalone". A group's position is
+// decided by its alphabetically-first member's name. This is purely a
+// *display* order -- it must not affect which member is the editable
+// "group lead" (that identity stays keyed on display_order/insertion order,
+// unrelated to name sorting, since saveAc06RatesHandler/verify_ac06_rate_scopes
+// already resolve the leader that way).
 function rowsForDisplay(lines: Row[], materials: Map<string, Row>, groups: Map<string, Row>): Row[] {
   const byGroup = new Map<string, Row[]>();
   for (const line of lines) {
     const key = toTrimmedString(line.costing_group_id);
     const list = byGroup.get(key) ?? []; list.push(line); byGroup.set(key, list);
   }
-  return lines.map((line) => {
+  const decorated: Row[] = lines.map((line): Row => {
     const groupId = toTrimmedString(line.costing_group_id);
     const siblings = (byGroup.get(groupId) ?? []).sort((a, b) => Number(a.display_order ?? 0) - Number(b.display_order ?? 0));
     const material = materials.get(toTrimmedString(line.material_id));
     return {
-      ...line, pace_code: material?.pace_code ?? null, material_name: material?.material_name ?? null,
+      ...line, pace_code: material?.pace_code ?? null, material_external_code: material?.external_code ?? null,
+      material_name: material?.material_name ?? null,
       base_uom_code: material?.base_uom_code ?? null, costing_group_name: groupId ? groups.get(groupId)?.group_name ?? line.costing_group_name_snapshot ?? null : null,
       is_group_lead: Boolean(groupId) && toTrimmedString(siblings[0]?.id) === toTrimmedString(line.id),
       is_standalone: !groupId,
       is_excluded: Boolean(line.excluded_from_rate_input),
     };
-  }).sort((a, b) => String(a.costing_group_name ?? "").localeCompare(String(b.costing_group_name ?? "")) || String(a.pace_code ?? "").localeCompare(String(b.pace_code ?? "")));
+  });
+  const units = new Map<string, Row[]>();
+  for (const row of decorated) {
+    const key = toTrimmedString(row.costing_group_id) || `standalone-${toTrimmedString(row.id)}`;
+    units.set(key, [...(units.get(key) ?? []), row]);
+  }
+  return [...units.values()]
+    .map((members) => [...members].sort((a, b) => String(a.material_name ?? "").localeCompare(String(b.material_name ?? ""))))
+    .sort((a, b) => String(a[0]?.material_name ?? "").localeCompare(String(b[0]?.material_name ?? "")))
+    .flat();
 }
 
 export async function getAc06WorkspaceHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -243,11 +262,23 @@ export async function saveAc06RatesHandler(req: Request, ctx: ProdHandlerContext
     const lineIds = ids(updates.map((row) => row.line_id)); const { data: lines, error } = await serviceRoleClient.schema("erp_production").from("ac06_month_line").select("*").eq("month_id", month.id).in("id", lineIds);
     if (error || (lines ?? []).length !== lineIds.length) return ac06Error(req, ctx, "AC06_RATE_LINE_INVALID", 409, "One or more rate rows are invalid for this month.");
     if ((lines ?? []).some((line: Row) => line.excluded_from_rate_input)) return ac06Error(req, ctx, "AC06_RATE_EXCLUDED", 409, "Excluded items must be included before their rate can be changed.");
+    // Business owner correction (2026-08-24): who saves a rate decides whether
+    // it lands PENDING or auto-verifies -- not a separate step. An actor who
+    // also holds ACC_SLOC_COSTING_VERIFY:WRITE (Auditor, or ACL-MASTER) has
+    // their save write VERIFIED directly, same as if they had entered the
+    // rate and then immediately used the bulk Verify action themselves. A
+    // plain Accounts actor (no verify authority) still lands PENDING,
+    // unchanged, and needs a later Auditor Verify pass.
+    const canVerifyOwnSave = await canMaintainCompanyResource(ctx, companyId, "ACC_SLOC_COSTING_VERIFY", "WRITE");
     const byId = new Map((lines as Row[]).map((line) => [toTrimmedString(line.id), line])); const db = serviceRoleClient.schema("erp_production"); const now = new Date().toISOString();
     for (const update of updates) {
       const line = byId.get(toTrimmedString(update.line_id)); const rate = rateValue(update.rate);
       if (!line || rate === null) return ac06Error(req, ctx, "AC06_RATE_VALUE_INVALID", 400, "Rate must be a non-negative decimal.");
-      const groupId = toTrimmedString(line.costing_group_id); const targetQuery = db.from("ac06_month_line").update({ rate, verification_status: "PENDING", rate_changed_at: now, rate_changed_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id }).eq("month_id", month.id);
+      const groupId = toTrimmedString(line.costing_group_id);
+      const statusFields = canVerifyOwnSave
+        ? { verification_status: "VERIFIED", verified_at: now, verified_by: ctx.auth_user_id }
+        : { verification_status: "PENDING", verified_at: null, verified_by: null };
+      const targetQuery = db.from("ac06_month_line").update({ rate, ...statusFields, rate_changed_at: now, rate_changed_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id }).eq("month_id", month.id);
       const { error: updateError } = groupId ? await targetQuery.eq("costing_group_id", groupId) : await targetQuery.eq("id", line.id);
       if (updateError) throw new Error("AC06_RATE_SAVE_FAILED");
     }
@@ -393,14 +424,29 @@ export async function getAc06ReportHandler(req: Request, ctx: ProdHandlerContext
     const materials = await materialMap(ids((liveLines ?? []).map((row: Row) => row.material_id)));
     const liveRows = (liveLines ?? []).map((line: Row) => {
       const reportMonth = byId.get(toTrimmedString(line.month_id)) as Row | undefined;
-      return { ...line, rate_month: reportMonth?.rate_month ?? null, month_status: reportMonth?.status ?? null, pace_code: materials.get(toTrimmedString(line.material_id))?.pace_code ?? null, material_name: materials.get(toTrimmedString(line.material_id))?.material_name ?? null };
+      const material = materials.get(toTrimmedString(line.material_id));
+      return { ...line, rate_month: reportMonth?.rate_month ?? null, month_status: reportMonth?.status ?? null, pace_code: material?.pace_code ?? null, material_external_code: material?.external_code ?? null, material_name: material?.material_name ?? null };
     });
     const archiveRows = (archiveLines ?? []).map((line: Row) => {
       const archive = archiveById.get(toTrimmedString(line.archive_id)) as Row | undefined;
       const reportMonth = archive ? byId.get(toTrimmedString(archive.source_month_id)) as Row | undefined : undefined;
-      return { ...line, id: `archive-${line.id}`, rate_month: reportMonth?.rate_month ?? null, month_status: "CLOSED", source_sloc_group_id: line.source_sloc_group_id_snapshot, costing_group_name_snapshot: line.costing_group_name_snapshot, pace_code: line.material_code_snapshot, material_name: line.material_name_snapshot };
+      return { ...line, id: `archive-${line.id}`, rate_month: reportMonth?.rate_month ?? null, month_status: "CLOSED", source_sloc_group_id: line.source_sloc_group_id_snapshot, costing_group_name_snapshot: line.costing_group_name_snapshot, pace_code: line.material_code_snapshot, material_external_code: line.material_external_code_snapshot ?? null, material_name: line.material_name_snapshot };
     });
-    const rows = [...liveRows, ...archiveRows];
+    // PO11-parity merged-alphabetical order (§35.12/§35.18, same rule as the
+    // live workspace's rowsForDisplay): group by (costing group, else the
+    // material itself) so the same Costing Group's rows across every month
+    // stay adjacent, sorted by that unit's own material name, then by month.
+    const units = new Map<string, Row[]>();
+    for (const row of [...liveRows, ...archiveRows]) {
+      const key = toTrimmedString(row.costing_group_id) || toTrimmedString(row.costing_group_id_snapshot) || `standalone-${toTrimmedString(row.material_id)}`;
+      units.set(key, [...(units.get(key) ?? []), row]);
+    }
+    const rows = [...units.values()]
+      .map((members) => [...members].sort((a, b) =>
+        String(a.material_name ?? "").localeCompare(String(b.material_name ?? "")) ||
+        String(a.rate_month ?? "").localeCompare(String(b.rate_month ?? ""))))
+      .sort((a, b) => String(a[0]?.material_name ?? "").localeCompare(String(b[0]?.material_name ?? "")))
+      .flat();
     return okResponse({ data: { rows, months: monthRows ?? [] } }, ctx.request_id, req);
   } catch (error) { const code = error instanceof Error ? error.message : "AC06_REPORT_FAILED"; return ac06Error(req, ctx, code, 500, "Unable to load AC06 rate report."); }
 }
