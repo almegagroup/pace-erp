@@ -65,6 +65,7 @@ import {
   getAc06ReportHandler,
   getAc06WorkspaceHandler,
   saveAc06RatesHandler,
+  setAc06MaterialInclusionHandler,
   unassignAc06CostingGroupHandler,
   updateAc06CostingGroupHandler,
   updateAc06SlocGroupHandler,
@@ -238,6 +239,8 @@ export async function dispatchProductionRoutes(
       return await assignAc06CostingGroupHandler(req, ctx);
     case "POST:/api/production/ac06/costing-groups/unassign":
       return await unassignAc06CostingGroupHandler(req, ctx);
+    case "POST:/api/production/ac06/material-inclusion":
+      return await setAc06MaterialInclusionHandler(req, ctx);
     case "POST:/api/production/ac06/rates":
       return await saveAc06RatesHandler(req, ctx);
     case "POST:/api/production/ac06/verify":
