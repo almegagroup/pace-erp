@@ -245,6 +245,7 @@ function buildColumns() {
     },
     { key: "csn_number", label: "CSN Number", width: "120px" },
     { key: "grn_number", label: "GRN Number", width: "120px" },
+    { key: "grn_date", label: "GRN Date", width: "100px", render: (row) => toDDMMYYYY(row.grn_date) },
     { key: "company_code", label: "Company", width: "90px" },
     { key: "supplier_name", label: "Supplier", width: "160px" },
     { key: "invoice_number", label: "Invoice No.", width: "120px" },
@@ -336,8 +337,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
 
   const [companyId, setCompanyId] = useState(defaultCompanyId || "");
   const [search, setSearch] = useState("");
-  const [dateFields, setDateFields] = useState(["invoice_date"]);
-  const [dateFieldPickerOpen, setDateFieldPickerOpen] = useState(false);
+  const [dateField, setDateField] = useState("invoice_date");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [rateStatus, setRateStatus] = useState("");
@@ -348,7 +348,6 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const [deductionLines, setDeductionLines] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const dateFieldPickerRef = useRef(null);
 
   // Last mile transporter -- search-and-select against Transporter Master,
   // same mechanism GRN's own Transporter tab uses (GRNPostFlow.jsx), plus an
@@ -416,25 +415,15 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     if (!companyId && defaultCompanyId) setCompanyId(defaultCompanyId);
   }, [companyId, defaultCompanyId]);
 
-  useEffect(() => {
-    function handleOutsideClick(event) {
-      if (dateFieldPickerRef.current && !dateFieldPickerRef.current.contains(event.target)) {
-        setDateFieldPickerOpen(false);
-      }
-    }
-    document.addEventListener("click", handleOutsideClick);
-    return () => document.removeEventListener("click", handleOutsideClick);
-  }, []);
-
   const listQuery = useQuery({
-    queryKey: ["ac01", "grns", { companyId, search, dateFields, dateFrom, dateTo, rateStatus }],
+    queryKey: ["ac01", "grns", { companyId, search, dateField, dateFrom, dateTo, rateStatus }],
     queryFn: () =>
       listAC01GRNs({
         company_id: companyId || undefined,
         search: search || undefined,
-        date_field: dateFields[0] || "invoice_date",
-        date_from: dateFrom ? toISODate(dateFrom) : undefined,
-        date_to: dateTo ? toISODate(dateTo) : undefined,
+        date_field: dateField,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
         rate_status: rateStatus || undefined,
         limit: 200,
       }),
@@ -643,13 +632,6 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     () => computeLivePreview(grnDetailQuery.data, draft, costLines, deductionLines),
     [grnDetailQuery.data, draft, costLines, deductionLines],
   );
-  const selectedDateFieldLabel =
-    dateFields.length === 0
-      ? "Select date field(s)"
-      : dateFields.length === 1
-        ? DATE_FIELD_OPTIONS.find((option) => option.value === dateFields[0])?.label
-        : `${DATE_FIELD_OPTIONS.find((option) => option.value === dateFields[0])?.label} +${dateFields.length - 1} more`;
-
   return (
     <>
       <ErpMasterListTemplate
@@ -660,7 +642,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
           eyebrow: "",
           title: "",
           children: (
-            <div className="grid gap-2 xl:grid-cols-[200px_220px_170px_130px_130px_140px] items-end">
+            <div className="grid gap-2 xl:grid-cols-[200px_220px_170px_150px_150px_140px] items-end">
               <TransactionCompanySelector
                 runtimeContext={runtimeContext}
                 value={companyId}
@@ -676,44 +658,19 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500"
                 />
               </label>
-              <div className="relative grid gap-1 text-[11px] font-medium text-slate-600" ref={dateFieldPickerRef}>
-                Date field(s)
-                <button
-                  type="button"
-                  onClick={() => setDateFieldPickerOpen((open) => !open)}
-                  className="flex h-[26px] items-center justify-between border border-slate-300 bg-white px-2 text-left text-[11px] text-slate-900"
-                >
-                  <span className="truncate">{selectedDateFieldLabel}</span>
-                  <span className="text-slate-400">▾</span>
-                </button>
-                {dateFieldPickerOpen ? (
-                  <div className="absolute top-[46px] left-0 z-20 w-52 border border-slate-300 bg-white p-1 shadow-lg">
-                    {DATE_FIELD_OPTIONS.map((option) => (
-                      <label key={option.value} className="flex items-center gap-2 px-1.5 py-1 text-[11px] text-slate-700 hover:bg-slate-50">
-                        <input
-                          type="checkbox"
-                          checked={dateFields.includes(option.value)}
-                          onChange={(event) => {
-                            setDateFields((current) =>
-                              event.target.checked
-                                ? [...current, option.value]
-                                : current.filter((value) => value !== option.value),
-                            );
-                          }}
-                        />
-                        {option.label}
-                      </label>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
+              <label className="grid gap-1 text-[11px] font-medium text-slate-600">
+                Date field
+                <select value={dateField} onChange={(event) => setDateField(event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
+                  {DATE_FIELD_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
               <label className="grid gap-1 text-[11px] font-medium text-slate-600">
                 From date
-                <input value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} placeholder="DD-MM-YYYY" className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
               </label>
               <label className="grid gap-1 text-[11px] font-medium text-slate-600">
                 To date
-                <input value={dateTo} onChange={(event) => setDateTo(event.target.value)} placeholder="DD-MM-YYYY" className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
               </label>
               <label className="grid gap-1 text-[11px] font-medium text-slate-600">
                 Status

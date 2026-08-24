@@ -353,10 +353,12 @@ function buildListRow(
     supplier_name: vendor?.vendor_name ?? null,
     invoice_number: grn.invoice_number ?? null,
     invoice_date: grn.invoice_date ?? null,
+    grn_date: grn.grn_date ?? null,
     item_name: material?.material_name ?? null,
     external_code: material?.external_code ?? null,
     grn_qty: grn.received_qty,
-    invoice_qty: grn.received_qty,
+    // Invoice quantity is captured at Gate Entry; GRN quantity is what was actually received.
+    invoice_qty: grn.ge_qty ?? grn.received_qty,
     base_uom_code: material?.base_uom_code ?? null,
     pack_uom_code: grn.uom_code ?? null,
     purchase_rate: grn.po_rate,
