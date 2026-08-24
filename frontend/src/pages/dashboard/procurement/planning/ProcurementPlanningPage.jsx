@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import ErpSummaryChips from "../../../../components/data/ErpSummaryChips.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
@@ -412,21 +413,6 @@ function normalizeHistoryGroupConfigs(groupConfigs) {
   }));
 }
 
-function SummaryChips({ items }) {
-  return (
-    <div className="flex flex-wrap gap-2 text-xs">
-      {items.map((item) => (
-        <span
-          key={item.label}
-          className={`rounded-full border px-3 py-1 font-semibold ${item.className || "border-slate-300 bg-white text-slate-700"}`}
-        >
-          {item.label}: {item.value}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 // computeDashboardBlocks() returns {type, groupName, row, requirementIsDerivedFromMembers?}
 // entries -- ErpDenseGrid needs one flat row object per entry (its rowKey/render
 // functions read straight off the row, no nesting). Group-total/member-vs-standalone
@@ -666,7 +652,7 @@ function DashboardTable({
           />
         </label>
       </div>
-      <SummaryChips
+      <ErpSummaryChips
         items={[
           { label: "Visible Decisions", value: summary.total },
           { label: "Grouped Pools", value: summary.grouped },
@@ -832,7 +818,7 @@ function MonthlyInputTable({
         </div>
       </div>
 
-      <SummaryChips
+      <ErpSummaryChips
         items={[
           { label: "Visible Decisions", value: decisionBlocks.length },
           { label: "Grouped Pools", value: groupedDecisionCount },
@@ -1935,7 +1921,7 @@ export default function ProcurementPlanningPage() {
                     </div>
                   </div>
 
-                  <SummaryChips
+                  <ErpSummaryChips
                     items={[
                       { label: "Plan Month", value: planMonthValue },
                       { label: "Status", value: workspace.plan?.status || "OPEN" },
@@ -2393,7 +2379,7 @@ export default function ProcurementPlanningPage() {
                       />
                     </label>
                   </div>
-                  <SummaryChips
+                  <ErpSummaryChips
                     items={[
                       { label: "Scope Items", value: itemTabRows.length },
                       { label: "Scope Groups", value: scopedItemGroups.length },
@@ -2566,7 +2552,7 @@ export default function ProcurementPlanningPage() {
                     <span>No archive exists yet for {planMonthValue}.</span>
                   )}
                 </div>
-                <SummaryChips
+                <ErpSummaryChips
                   items={[
                     { label: "Archived Decisions", value: historySummary.total },
                     { label: "Grouped Pools", value: historySummary.grouped },

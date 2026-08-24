@@ -891,6 +891,7 @@ export default function AppRouter() {
                   <Route path="production/conversion-cost" element={<ConversionCostPage />} />
                   <Route path="production/mts-sku-monthly-rate" element={<MtsSkuMonthlyRatePage />} />
                   <Route path="production/sloc-costing-group" element={<SlocCostingGroupPage />} />
+                  <Route path="production/sloc-costing-group/report" element={<SlocCostingGroupPage />} />
                   <Route path="production/old-process-po" element={<OldProcessPoPage />} />
                   <Route path="production/old-packing-po" element={<OldPackingPoPage />} />
                 </Route>

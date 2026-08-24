@@ -2373,7 +2373,7 @@ another:
 |---|---|---|---|---|---|
 | `ACC_SLOC_COSTING_GROUP` | AC06 page/view, report/history | VIEW | VIEW | VIEW | all actions |
 | `ACC_SLOC_COSTING_SETUP` | hidden SLOC Group/Costing Group/item mapping maintenance | WRITE, DELETE | WRITE, DELETE | no access | all actions |
-| `ACC_SLOC_COSTING_RATE` | hidden rate-entry operation | WRITE | no access | no access | all actions |
+| `ACC_SLOC_COSTING_RATE` | hidden rate-entry operation | WRITE | WRITE | no access | all actions |
 | `ACC_SLOC_COSTING_VERIFY` | hidden pending-rate verification operation | no access | WRITE | no access | all actions |
 | `ACC_SLOC_COSTING_CLOSE` | hidden month-close operation | no access | WRITE | no access | all actions |
 
@@ -2384,3 +2384,63 @@ frontend-only gate is permitted. `ACC_SLOC_COSTING_SETUP`, `ACC_SLOC_COSTING_RAT
 `ACC_SLOC_COSTING_VERIFY`, and `ACC_SLOC_COSTING_CLOSE` are operational ACL
 resources, not menu entries; their companion AC06 menu visibility remains on
 `ACC_SLOC_COSTING_GROUP`.
+
+**Corrected same day (2026-08-24, business owner) — Auditor also gets
+`ACC_SLOC_COSTING_RATE:WRITE`.** Originally only Accounts could enter/correct
+a rate and Auditor could only Verify an existing value as-is. Business owner
+wanted Auditor able to directly correct an Accounts-entered rate, not just
+approve or reject it wholesale, and wanted a fresh rate entered by an Auditor
+to not require a redundant second verify step. Implemented as one rule in
+`saveAc06RatesHandler`, not two ACL resources: whoever actually saves a rate,
+if that actor also holds `ACC_SLOC_COSTING_VERIFY:WRITE` (Auditor or
+ACL-MASTER), the save writes `VERIFIED` directly (`verified_by`/`verified_at`
+= that same save); if the actor does not hold verify authority (plain
+Accounts), the save still lands `PENDING`, unchanged, and needs a later
+Auditor Verify action. Granted via `CAP_AC06_VERIFY_AUDITOR` gaining a second
+`capability_menu_actions` row for `ACC_SLOC_COSTING_RATE:WRITE` (additive,
+same capability that already carries VERIFY — not a new capability code).
+
+**✅ VERIFIED 2026-08-24, both Dev and Prod, both companies (ACL versions: Dev
+CMP003 v25→v26, CMP006 v25→v26; Prod CMP003/CMP006 v82).** Prod granted via
+MCP direct SQL per R-04 (not the migration file below — R-04 classifies
+capability/version-bump changes as MCP-only business data, run separately per
+environment). `precomputed_acl_view`, filtered to each project's newly-active
+version, confirms `ACC_SLOC_COSTING_RATE:WRITE = ALLOW` for both the
+`ACCOUNTS` and the Auditor/Director/ACL-Master work context in every
+environment. `acl.user_overrides` empty on all `ACC_SLOC_COSTING_*`
+resources; ACL-MASTER drift check clean in Prod (Dev's one flagged row,
+`P0002` against every AC06 resource, investigated and is not a real gap — see
+`OM-IMPLEMENTATION-LOG.md`'s 2026-08-24 "AC06 UI/UX PO11-parity pass" entry
+for the full explanation).
+
+**R-04 slip caught and corrected same day:** the initial Dev grant for this
+correction was first written as a migration (`20260824190000_ac06_auditor_
+rate_entry_authority.sql`) — R-04 (`OM-IMPLEMENTATION-LOG.md`) classifies
+capability/role/work-context grants and ACL version bumps as MCP-only
+business data, not migration DDL. Business owner caught this before it was
+left as a second "violation acknowledged" note. Corrected properly (not just
+left in place): the migration file was deleted, and its `schema_migrations`
+tracking row was deleted from Dev in the same pass, so local file count and
+remote history count/checksum stay in sync (`node scripts/migration-
+integrity-check.mjs` confirmed `in_sync=true`, 469/469, both before and after
+matching). The underlying data the migration had inserted (the
+`capability_menu_actions` row, the version bump) was not rolled back — only
+the migration-file wrapper was removed, since that data itself is correct
+and needed. Dev's grant is therefore now accurately MCP-only, matching Prod,
+with nothing left in migration history claiming otherwise.
+
+**⚠️ Separate, pre-existing Dev-only bug found while verifying (not part of
+this correction, not present in Prod):** the *original* AC06 v3 split
+(`20260824133000`) granted Auditor/Director/ACL-Master's `ACC_SLOC_COSTING_
+SETUP/RATE/VERIFY/CLOSE` capabilities to `work_context_name IN ('AUDIT',
+'DIRECTOR','ACL-MASTER')` — Dev's CMP003/CMP006 test companies have no
+department by those literal names (only `ACCOUNTS` matched), so those three
+capabilities silently resolved to zero `precomputed_acl_view` rows for
+anyone, since the split migration first ran this morning — Setup/Rate/Verify/
+Close never actually worked for Auditor/Director/ACL-Master in Dev until this
+fix. Prod has real, distinctly-named `AUDIT`/`DIRECTOR`/`ACL-MASTER`
+departments (matching this doc's 2026-07-29 Identity note) and was never
+affected. Fixed in Dev via MCP direct SQL: granted the same 6 capabilities to
+the real `MANAGEMENT` work context instead, where Dev's actual DIRECTOR
+(`P0004`) and L1_AUDITOR (`P0007`) test users sit — the same work context
+`CAP_PI_AUDITOR` already correctly uses.

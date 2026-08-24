@@ -16967,19 +16967,34 @@ AC06 uses the PO11 workspace language and layout, with these fixed labels:
 
 #### Per-rate verification, not whole-month approval
 
-- Accounts enters and changes rates. Accounts and Auditors may create, edit, move, or remove SLOC
-  Groups, Costing Groups, and item mappings.
-- Verification is row-scope, not a blanket month approval. Each changed standalone item and each
-  changed Costing Group lead item exposes a pending `Verify` action to an authorized Auditor.
+- **Corrected same day (2026-08-24, business owner) — rate entry is not Accounts-only.** Both
+  Accounts and L1/L2 Auditor may enter and correct rates (`ACC_SLOC_COSTING_RATE:WRITE` is granted
+  to both, not Accounts-only as first locked). Accounts and Auditors may also both create, edit,
+  move, or remove SLOC Groups, Costing Groups, and item mappings (`ACC_SLOC_COSTING_SETUP`,
+  unchanged).
+- **Who saves a rate decides whether it lands pending or auto-verified**, not a separate step: a
+  rate saved by an actor who does **not** hold `ACC_SLOC_COSTING_VERIFY` (a plain Accounts user)
+  lands `PENDING` as before, and needs a later, separate Auditor Verify action. A rate saved by an
+  actor who **does** hold `ACC_SLOC_COSTING_VERIFY` (Auditor, or ACL-MASTER) is written straight to
+  `VERIFIED` in that same save — `verified_by`/`verified_at` set to that same action. This means an
+  Auditor correcting an Accounts-entered pending rate does not need a second click to also verify
+  it; editing and approving collapse into one action for anyone who already carries verify
+  authority. An Auditor may still use the existing bulk `Verify` action to approve an
+  Accounts-entered rate without changing its value.
+- Verification is otherwise row-scope, not a blanket month approval. Each changed standalone item
+  and each changed Costing Group lead item exposes a pending `Verify` action to an authorized
+  Auditor.
 - A verified grouped lead verifies the propagated rate of all current members in that group scope.
 - Auditors may select pending rows through checkboxes and use a bulk Verify action. The bulk action
   stays disabled if any selected row is already verified, is no longer pending, belongs to another
   company/month/SLOC scope, or otherwise fails eligibility. Removing that invalid selection restores
   availability.
-- A verified rate changed later is pending again; downstream consumers must not fall back to its
-  earlier verified value.
-- Director is view-only. ACL-MASTER retains full access. Existing ACL resource/action semantics are
-  retained, but the AC06 ACL decision and approver workflow must be updated to match this ownership.
+- A verified rate changed later is pending again (unless the actor making that later change also
+  holds verify authority, per the auto-verify rule above); downstream consumers must not fall back
+  to its earlier verified value.
+- Director is view-only. ACL-MASTER retains full access (and therefore always auto-verifies its own
+  saves, same as Auditor). Existing ACL resource/action semantics are retained; see
+  `PROD-ACL-Access-Decisions.md`'s AC06 v3 section for the authoritative matrix.
 
 #### Close, archive, report, and Dispatch contract
 
