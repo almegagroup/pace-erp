@@ -95,6 +95,18 @@ export default function SlocCostingGroupPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const primaryFocusRef = useRef(null);
+  // Report display is driven by local state, not location.pathname (same
+  // reasoning as PO11/ProcurementPlanningPage.jsx). Seed from the URL once
+  // (so a direct deep link to /report, e.g. via Shift+F8 in a new window,
+  // still opens straight into the report), then let openReport()/
+  // backToWorkspace() flip this in-place. Do NOT add an effect that
+  // re-derives showFullReport from isReportRoute on every render -- this
+  // app's screen-stack sync can correct the URL back to the base screen's
+  // registered route a moment after navigate() (the /report path is a
+  // route-only companion, not a registered screen), and an effect watching
+  // isReportRoute would then flip showFullReport back to false right after
+  // the user clicks Execute Full Report, bouncing them back to the
+  // workspace. PO11 hit this exact bug first; state-only display is the fix.
   const isReportRoute = location.pathname.endsWith("/report");
   const [showFullReport, setShowFullReport] = useState(isReportRoute);
   const [companyId, setCompanyId] = useState("");
@@ -120,10 +132,6 @@ export default function SlocCostingGroupPage() {
   const [onlyStandalone, setOnlyStandalone] = useState(false);
   const [reportMonths, setReportMonths] = useState(AC06_FIRST_MONTH);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    setShowFullReport(isReportRoute);
-  }, [isReportRoute]);
 
   useEffect(() => {
     if (!companyId && runtimeContext?.selectedCompanyId)
