@@ -6,6 +6,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import { assertProdReadRole, parseBody, toTrimmedString } from "./production.shared.ts";
@@ -36,6 +37,36 @@ async function companyScope(ctx: ProdHandlerContext, requested?: string): Promis
   const companyId = toTrimmedString(requested) || toTrimmedString(ctx.context.companyId);
   if (companyId) await assertCompanyScope(ctx, companyId);
   return companyId;
+}
+
+type Ac06Permissions = {
+  can_view: boolean;
+  can_setup: boolean;
+  can_rate: boolean;
+  can_verify: boolean;
+  can_close: boolean;
+};
+
+async function getAc06Permissions(ctx: ProdHandlerContext, companyId: string): Promise<Ac06Permissions> {
+  const [can_view, can_setup, can_rate, can_verify, can_close] = await Promise.all([
+    canMaintainCompanyResource(ctx, companyId, "ACC_SLOC_COSTING_GROUP", "VIEW"),
+    canMaintainCompanyResource(ctx, companyId, "ACC_SLOC_COSTING_SETUP", "WRITE"),
+    canMaintainCompanyResource(ctx, companyId, "ACC_SLOC_COSTING_RATE", "WRITE"),
+    canMaintainCompanyResource(ctx, companyId, "ACC_SLOC_COSTING_VERIFY", "WRITE"),
+    canMaintainCompanyResource(ctx, companyId, "ACC_SLOC_COSTING_CLOSE", "WRITE"),
+  ]);
+  return { can_view, can_setup, can_rate, can_verify, can_close };
+}
+
+async function requireAc06Action(
+  req: Request,
+  ctx: ProdHandlerContext,
+  companyId: string,
+  resourceCode: string,
+  actionCode: string,
+): Promise<Response | null> {
+  const allowed = await canMaintainCompanyResource(ctx, companyId, resourceCode, actionCode);
+  return allowed ? null : ac06Error(req, ctx, "AC06_COMPANY_ACTION_FORBIDDEN", 403, "You do not have this AC06 action for the selected company.");
 }
 
 async function validateAc06Locations(companyId: string, locationIds: string[]): Promise<boolean> {
@@ -180,6 +211,8 @@ export async function getAc06WorkspaceHandler(req: Request, ctx: ProdHandlerCont
     const url = new URL(req.url); const companyId = await companyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const rateMonth = monthStart(url.searchParams.get("rate_month"));
     if (!companyId || !rateMonth) return ac06Error(req, ctx, "AC06_FILTER_INVALID", 400, "company_id and rate_month are required.");
+    const permissions = await getAc06Permissions(ctx, companyId);
+    if (!permissions.can_view) return ac06Error(req, ctx, "AC06_COMPANY_ACTION_FORBIDDEN", 403, "You do not have AC06 access for the selected company.");
     // Historical entry months remain open until an authorized user explicitly closes them.
     // The retained auto-close RPC is for an explicit scheduled job, never a workspace read.
     const month = await getMonth(ctx, companyId, rateMonth); const { slocGroups, costingGroups } = await getGroups(companyId);
@@ -191,7 +224,7 @@ export async function getAc06WorkspaceHandler(req: Request, ctx: ProdHandlerCont
     const rows = rowsForDisplay(allLines, materials, groupMap);
     const selectedSlocGroupId = toTrimmedString(url.searchParams.get("sloc_group_id"));
     const scopedRows = selectedSlocGroupId ? rows.filter((row) => toTrimmedString(row.source_sloc_group_id) === selectedSlocGroupId) : rows;
-    return okResponse({ data: { month, rows: scopedRows, sloc_groups: slocGroups, costing_groups: costingGroups,
+    return okResponse({ data: { month, rows: scopedRows, sloc_groups: slocGroups, costing_groups: costingGroups, permissions,
       summary: { rows: scopedRows.length, verified: scopedRows.filter((row) => row.verification_status === "VERIFIED").length,
         pending: scopedRows.filter((row) => row.verification_status === "PENDING").length,
         standalone: scopedRows.filter((row) => row.is_standalone).length } } }, ctx.request_id, req);
@@ -203,6 +236,7 @@ export async function saveAc06RatesHandler(req: Request, ctx: ProdHandlerContext
     const body = await parseBody(req); const companyId = await companyScope(ctx, toTrimmedString(body.company_id));
     const rateMonth = monthStart(body.rate_month); const updates = Array.isArray(body.updates) ? body.updates as Row[] : [];
     if (!companyId || !rateMonth || !updates.length) return ac06Error(req, ctx, "AC06_RATE_SAVE_INVALID", 400, "company_id, rate_month, and updates are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_RATE", "WRITE"); if (accessError) return accessError;
     const month = await getMonth(ctx, companyId, rateMonth); if (month.status === "CLOSED") return ac06Error(req, ctx, "AC06_MONTH_CLOSED", 409, "Closed month cannot be changed.");
     const lineIds = ids(updates.map((row) => row.line_id)); const { data: lines, error } = await serviceRoleClient.schema("erp_production").from("ac06_month_line").select("*").eq("month_id", month.id).in("id", lineIds);
     if (error || (lines ?? []).length !== lineIds.length) return ac06Error(req, ctx, "AC06_RATE_LINE_INVALID", 409, "One or more rate rows are invalid for this month.");
@@ -222,6 +256,7 @@ export async function verifyAc06RatesHandler(req: Request, ctx: ProdHandlerConte
   try {
     const body = await parseBody(req); const companyId = await companyScope(ctx, toTrimmedString(body.company_id)); const rateMonth = monthStart(body.rate_month); const lineIds = ids(body.line_ids);
     if (!companyId || !rateMonth || !lineIds.length) return ac06Error(req, ctx, "AC06_VERIFY_INVALID", 400, "company_id, rate_month, and selected line_ids are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_VERIFY", "WRITE"); if (accessError) return accessError;
     const month = await getMonth(ctx, companyId, rateMonth); if (month.status === "CLOSED") return ac06Error(req, ctx, "AC06_MONTH_CLOSED", 409, "Closed month cannot be verified.");
     const { data: verified, error } = await serviceRoleClient.schema("erp_production").rpc("verify_ac06_rate_scopes", {
       p_month_id: month.id, p_line_ids: lineIds, p_verified_by: ctx.auth_user_id,
@@ -235,6 +270,7 @@ export async function createAc06SlocGroupHandler(req: Request, ctx: ProdHandlerC
   try {
     const body = await parseBody(req); const companyId = await companyScope(ctx, toTrimmedString(body.company_id)); const groupName = toTrimmedString(body.group_name); const locationIds = ids(body.storage_location_ids);
     if (!companyId || !groupName || !locationIds.length) return ac06Error(req, ctx, "AC06_SLOC_GROUP_INVALID", 400, "company_id, group_name, and storage locations are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_SETUP", "WRITE"); if (accessError) return accessError;
     if (!await validateAc06Locations(companyId, locationIds)) return ac06Error(req, ctx, "AC06_SLOC_LOCATION_INVALID", 422, "Each selected storage location must be active in the selected company.");
     const db = serviceRoleClient.schema("erp_production"); const { data: group, error } = await db.from("ac06_sloc_group").insert({ company_id: companyId, group_name: groupName, created_by: ctx.auth_user_id }).select("*").single();
     if (error || !group) return ac06Error(req, ctx, error?.code === "23505" ? "AC06_SLOC_GROUP_EXISTS" : "AC06_SLOC_GROUP_CREATE_FAILED", 409, "Unable to create SLOC Group.");
@@ -247,6 +283,7 @@ export async function createAc06CostingGroupHandler(req: Request, ctx: ProdHandl
   try {
     const body = await parseBody(req); const companyId = await companyScope(ctx, toTrimmedString(body.company_id)); const slocGroupId = toTrimmedString(body.sloc_group_id); const groupName = toTrimmedString(body.group_name);
     if (!companyId || !slocGroupId || !groupName) return ac06Error(req, ctx, "AC06_COSTING_GROUP_INVALID", 400, "company_id, parent SLOC Group, and Costing Group name are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_SETUP", "WRITE"); if (accessError) return accessError;
     const db = serviceRoleClient.schema("erp_production"); const { data: parent } = await db.from("ac06_sloc_group").select("id").eq("id", slocGroupId).eq("company_id", companyId).eq("active", true).maybeSingle();
     if (!parent) return ac06Error(req, ctx, "AC06_COSTING_GROUP_SCOPE_INVALID", 409, "Parent SLOC Group is not in the selected company.");
     const { data, error } = await db.from("ac06_costing_group").insert({ company_id: companyId, sloc_group_id: slocGroupId, group_name: groupName, created_by: ctx.auth_user_id }).select("*").single();
@@ -259,13 +296,24 @@ export async function assignAc06CostingGroupHandler(req: Request, ctx: ProdHandl
   try {
     const body = await parseBody(req); const companyId = await companyScope(ctx, toTrimmedString(body.company_id)); const rateMonth = monthStart(body.rate_month); const groupId = toTrimmedString(body.costing_group_id); const materialIds = ids(body.material_ids);
     if (!companyId || !rateMonth || !groupId || !materialIds.length) return ac06Error(req, ctx, "AC06_ASSIGN_INVALID", 400, "company_id, rate_month, costing_group_id, and material_ids are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_SETUP", "WRITE"); if (accessError) return accessError;
     const month = await getMonth(ctx, companyId, rateMonth); if (month.status === "CLOSED") return ac06Error(req, ctx, "AC06_MONTH_CLOSED", 409, "Closed month cannot be changed.");
     const db = serviceRoleClient.schema("erp_production"); const { data: group } = await db.from("ac06_costing_group").select("*").eq("id", groupId).eq("company_id", companyId).eq("active", true).maybeSingle();
     if (!group) return ac06Error(req, ctx, "AC06_ASSIGN_SCOPE_INVALID", 409, "Costing Group is not active in the selected company.");
     await ensureScopeRows(ctx, month, { id: group.sloc_group_id, company_id: companyId, group_name: "" });
-    const { data: scopeRows, error } = await db.from("ac06_month_line").select("id, material_id").eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).in("material_id", materialIds);
+    const { data: scopeRows, error } = await db.from("ac06_month_line").select("id, material_id, rate, display_order").eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).in("material_id", materialIds);
     if (error || (scopeRows ?? []).length !== materialIds.length) return ac06Error(req, ctx, "AC06_ASSIGN_SCOPE_INVALID", 409, "Every item must be eligible in the parent SLOC Group.");
-    const now = new Date().toISOString(); const { error: updateError } = await db.from("ac06_month_line").update({ costing_group_id: group.id, costing_group_name_snapshot: group.group_name, verification_status: "PENDING", rate_changed_at: now, rate_changed_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id }).eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).in("material_id", materialIds);
+    const { data: existingGroupRows, error: existingGroupError } = await db.from("ac06_month_line").select("id, rate, display_order").eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).eq("costing_group_id", group.id);
+    if (existingGroupError) throw new Error("AC06_ASSIGN_FAILED");
+    const linesById = new Map<string, Row>();
+    for (const line of [...(existingGroupRows ?? []), ...(scopeRows ?? [])] as Row[]) linesById.set(toTrimmedString(line.id), line);
+    const groupLeader = [...linesById.values()].sort((left, right) => Number(left.display_order ?? 0) - Number(right.display_order ?? 0) || toTrimmedString(left.id).localeCompare(toTrimmedString(right.id)))[0];
+    const groupRate = rateValue(groupLeader?.rate) ?? "0";
+    const now = new Date().toISOString();
+    const commonUpdate = { rate: groupRate, verification_status: "PENDING", rate_changed_at: now, rate_changed_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id };
+    const { error: existingUpdateError } = await db.from("ac06_month_line").update(commonUpdate).eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).eq("costing_group_id", group.id);
+    if (existingUpdateError) throw new Error("AC06_ASSIGN_FAILED");
+    const { error: updateError } = await db.from("ac06_month_line").update({ ...commonUpdate, costing_group_id: group.id, costing_group_name_snapshot: group.group_name }).eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).in("material_id", materialIds);
     if (updateError) throw new Error("AC06_ASSIGN_FAILED");
     const { data: parent } = await db.from("ac06_sloc_group").select("group_name").eq("id", group.sloc_group_id).single();
     await db.from("ac06_month_group_config").upsert(materialIds.map((material_id) => ({ month_id: month.id, company_id: companyId, source_sloc_group_id: group.sloc_group_id, costing_group_id: group.id, material_id, source_sloc_group_name_snapshot: parent?.group_name ?? "", costing_group_name_snapshot: group.group_name, last_updated_at: now, last_updated_by: ctx.auth_user_id })), { onConflict: "month_id,source_sloc_group_id,material_id" });
@@ -278,14 +326,34 @@ export async function getAc06ReportHandler(req: Request, ctx: ProdHandlerContext
     const url = new URL(req.url); const companyId = await companyScope(ctx, url.searchParams.get("company_id") ?? undefined); const slocGroupId = toTrimmedString(url.searchParams.get("sloc_group_id"));
     const months = ids(url.searchParams.get("months")?.split(",")).map(monthStart).filter((value): value is string => Boolean(value));
     if (!companyId || !slocGroupId || !months.length) return ac06Error(req, ctx, "AC06_REPORT_FILTER_INVALID", 400, "company_id, SLOC Group, and at least one month are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_GROUP", "VIEW"); if (accessError) return accessError;
     const db = serviceRoleClient.schema("erp_production"); const { data: monthRows, error } = await db.from("ac06_month").select("id, rate_month, status").eq("company_id", companyId).in("rate_month", months);
-    if (error) throw new Error("AC06_REPORT_FAILED"); const byId = new Map((monthRows ?? []).map((row: Row) => [toTrimmedString(row.id), row]));
-    const monthIds = [...byId.keys()]; const { data: lines, error: lineError } = monthIds.length ? await db.from("ac06_month_line").select("*").in("month_id", monthIds).eq("source_sloc_group_id", slocGroupId) : { data: [], error: null };
-    if (lineError) throw new Error("AC06_REPORT_FAILED"); const materials = await materialMap(ids((lines ?? []).map((row: Row) => row.material_id)));
-    const rows = (lines ?? []).map((line: Row) => {
+    if (error) throw new Error("AC06_REPORT_FAILED");
+    const byId = new Map((monthRows ?? []).map((row: Row) => [toTrimmedString(row.id), row]));
+    const openMonthIds = (monthRows ?? []).filter((row: Row) => row.status !== "CLOSED").map((row: Row) => row.id);
+    const closedMonthIds = (monthRows ?? []).filter((row: Row) => row.status === "CLOSED").map((row: Row) => row.id);
+    const [{ data: liveLines, error: liveLineError }, { data: archives, error: archiveError }] = await Promise.all([
+      openMonthIds.length ? db.from("ac06_month_line").select("*").in("month_id", openMonthIds).eq("source_sloc_group_id", slocGroupId) : Promise.resolve({ data: [], error: null }),
+      closedMonthIds.length ? db.from("ac06_month_archive").select("id, source_month_id").in("source_month_id", closedMonthIds) : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (liveLineError || archiveError) throw new Error("AC06_REPORT_FAILED");
+    const archiveById = new Map((archives ?? []).map((archive: Row) => [toTrimmedString(archive.id), archive]));
+    const archiveIds = ids((archives ?? []).map((archive: Row) => archive.id));
+    const { data: archiveLines, error: archiveLineError } = archiveIds.length
+      ? await db.from("ac06_month_archive_line").select("*").in("archive_id", archiveIds).eq("source_sloc_group_id_snapshot", slocGroupId)
+      : { data: [], error: null };
+    if (archiveLineError) throw new Error("AC06_REPORT_FAILED");
+    const materials = await materialMap(ids((liveLines ?? []).map((row: Row) => row.material_id)));
+    const liveRows = (liveLines ?? []).map((line: Row) => {
       const reportMonth = byId.get(toTrimmedString(line.month_id)) as Row | undefined;
       return { ...line, rate_month: reportMonth?.rate_month ?? null, month_status: reportMonth?.status ?? null, pace_code: materials.get(toTrimmedString(line.material_id))?.pace_code ?? null, material_name: materials.get(toTrimmedString(line.material_id))?.material_name ?? null };
     });
+    const archiveRows = (archiveLines ?? []).map((line: Row) => {
+      const archive = archiveById.get(toTrimmedString(line.archive_id)) as Row | undefined;
+      const reportMonth = archive ? byId.get(toTrimmedString(archive.source_month_id)) as Row | undefined : undefined;
+      return { ...line, id: `archive-${line.id}`, rate_month: reportMonth?.rate_month ?? null, month_status: "CLOSED", source_sloc_group_id: line.source_sloc_group_id_snapshot, costing_group_name_snapshot: line.costing_group_name_snapshot, pace_code: line.material_code_snapshot, material_name: line.material_name_snapshot };
+    });
+    const rows = [...liveRows, ...archiveRows];
     return okResponse({ data: { rows, months: monthRows ?? [] } }, ctx.request_id, req);
   } catch (error) { const code = error instanceof Error ? error.message : "AC06_REPORT_FAILED"; return ac06Error(req, ctx, code, 500, "Unable to load AC06 rate report."); }
 }
@@ -301,6 +369,7 @@ export async function updateAc06SlocGroupHandler(req: Request, ctx: ProdHandlerC
     const groupId = pathId(req, "sloc-groups"); const body = await parseBody(req);
     const companyId = await companyScope(ctx, toTrimmedString(body.company_id)); const groupName = toTrimmedString(body.group_name); const locationIds = Array.isArray(body.storage_location_ids) ? ids(body.storage_location_ids) : null;
     if (!companyId || !groupId || !groupName) return ac06Error(req, ctx, "AC06_SLOC_GROUP_INVALID", 400, "company_id, group, and group_name are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_SETUP", "WRITE"); if (accessError) return accessError;
     if (locationIds !== null && !locationIds.length) return ac06Error(req, ctx, "AC06_SLOC_GROUP_INVALID", 400, "At least one storage location must remain in a SLOC Group.");
     if (locationIds !== null && !await validateAc06Locations(companyId, locationIds)) return ac06Error(req, ctx, "AC06_SLOC_LOCATION_INVALID", 422, "Each selected storage location must be active in the selected company.");
     const db = serviceRoleClient.schema("erp_production"); const now = new Date().toISOString();
@@ -347,6 +416,7 @@ export async function updateAc06CostingGroupHandler(req: Request, ctx: ProdHandl
     const groupId = pathId(req, "costing-groups"); const body = await parseBody(req);
     const companyId = await companyScope(ctx, toTrimmedString(body.company_id)); const groupName = toTrimmedString(body.group_name);
     if (!companyId || !groupId || !groupName) return ac06Error(req, ctx, "AC06_COSTING_GROUP_INVALID", 400, "company_id, group, and group_name are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_SETUP", "WRITE"); if (accessError) return accessError;
     const { data, error } = await serviceRoleClient.schema("erp_production").from("ac06_costing_group")
       .update({ group_name: groupName, last_updated_by: ctx.auth_user_id, last_updated_at: new Date().toISOString() })
       .eq("id", groupId).eq("company_id", companyId).eq("active", true).select("*").maybeSingle();
@@ -360,6 +430,7 @@ export async function deleteAc06SlocGroupHandler(req: Request, ctx: ProdHandlerC
     const groupId = pathId(req, "sloc-groups"); const body = await parseBody(req);
     const companyId = await companyScope(ctx, toTrimmedString(body.company_id));
     if (!companyId || !groupId) return ac06Error(req, ctx, "AC06_SLOC_GROUP_INVALID", 400, "company_id and group are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_SETUP", "DELETE"); if (accessError) return accessError;
     const db = serviceRoleClient.schema("erp_production");
     const childResult = await db.from("ac06_costing_group").select("id", { count: "exact", head: true }).eq("company_id", companyId).eq("sloc_group_id", groupId).eq("active", true);
     if (childResult.error) throw new Error("AC06_SLOC_GROUP_DELETE_FAILED");
@@ -378,6 +449,7 @@ export async function deleteAc06CostingGroupHandler(req: Request, ctx: ProdHandl
     const groupId = pathId(req, "costing-groups"); const body = await parseBody(req);
     const companyId = await companyScope(ctx, toTrimmedString(body.company_id));
     if (!companyId || !groupId) return ac06Error(req, ctx, "AC06_COSTING_GROUP_INVALID", 400, "company_id and group are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_SETUP", "DELETE"); if (accessError) return accessError;
     const db = serviceRoleClient.schema("erp_production"); const { data: group, error: lookupError } = await db.from("ac06_costing_group").select("id").eq("id", groupId).eq("company_id", companyId).eq("active", true).maybeSingle();
     if (lookupError || !group) return ac06Error(req, ctx, "AC06_COSTING_GROUP_NOT_FOUND", 404, "Costing Group was not found in the selected company.");
     const now = new Date().toISOString();
@@ -401,6 +473,7 @@ export async function unassignAc06CostingGroupHandler(req: Request, ctx: ProdHan
     const body = await parseBody(req); const companyId = await companyScope(ctx, toTrimmedString(body.company_id));
     const rateMonth = monthStart(body.rate_month); const lineIds = ids(body.line_ids);
     if (!companyId || !rateMonth || !lineIds.length) return ac06Error(req, ctx, "AC06_UNASSIGN_INVALID", 400, "company_id, rate_month, and line_ids are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_SETUP", "WRITE"); if (accessError) return accessError;
     const month = await getMonth(ctx, companyId, rateMonth); if (month.status === "CLOSED") return ac06Error(req, ctx, "AC06_MONTH_CLOSED", 409, "Closed month cannot be changed.");
     const db = serviceRoleClient.schema("erp_production"); const { data: rows, error } = await db.from("ac06_month_line").select("id, source_sloc_group_id, material_id").eq("month_id", month.id).in("id", lineIds);
     if (error || (rows ?? []).length !== lineIds.length) return ac06Error(req, ctx, "AC06_UNASSIGN_INVALID", 409, "Selected row is outside this monthly scope.");
@@ -415,6 +488,7 @@ export async function closeAc06MonthHandler(req: Request, ctx: ProdHandlerContex
   try {
     const body = await parseBody(req); const companyId = await companyScope(ctx, toTrimmedString(body.company_id)); const rateMonth = monthStart(body.rate_month);
     if (!companyId || !rateMonth) return ac06Error(req, ctx, "AC06_CLOSE_INVALID", 400, "company_id and rate_month are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_CLOSE", "WRITE"); if (accessError) return accessError;
     const month = await getMonth(ctx, companyId, rateMonth); if (month.status === "CLOSED") return ac06Error(req, ctx, "AC06_MONTH_CLOSED", 409, "Month is already closed.");
     const { data: archiveId, error } = await serviceRoleClient.schema("erp_production").rpc("close_ac06_month", { p_month_id: month.id, p_closed_by: ctx.auth_user_id });
     if (error || !archiveId) throw new Error("AC06_CLOSE_FAILED");
@@ -426,6 +500,7 @@ export async function getAc06HistoryHandler(req: Request, ctx: ProdHandlerContex
   try {
     const url = new URL(req.url); const companyId = await companyScope(ctx, url.searchParams.get("company_id") ?? undefined); const rateMonth = monthStart(url.searchParams.get("rate_month"));
     if (!companyId || !rateMonth) return ac06Error(req, ctx, "AC06_HISTORY_FILTER_INVALID", 400, "company_id and rate_month are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_GROUP", "VIEW"); if (accessError) return accessError;
     const db = serviceRoleClient.schema("erp_production"); const { data: archive, error } = await db.from("ac06_month_archive").select("*").eq("company_id", companyId).eq("rate_month", rateMonth).maybeSingle();
     if (error) throw new Error("AC06_HISTORY_FAILED"); if (!archive) return okResponse({ data: { archive: null, rows: [] } }, ctx.request_id, req);
     const { data: rows, error: rowError } = await db.from("ac06_month_archive_line").select("*").eq("archive_id", archive.id).order("display_order");

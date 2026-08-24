@@ -4505,3 +4505,19 @@ migrates.
   `pack_bom.handlers.ts`, `pack_config.handlers.ts`, and `_pipeline/session.ts`. Dev migration
   checksum confirmed `count=463`, `md5=eb8dd91de0687d6a5cf78bbd7f3111cb`, matching local; Dev
   has nine AC06 tables and four AC06 RPCs. Dependency scan was run after manifest update.
+
+### 2026-08-24 - AC06 PO11-parity corrective audit
+
+- **Real gaps fixed:** AC06 now re-checks the requested company against the precise AC06
+  resource/action on every read and write, rather than relying only on the session-company route
+  gate. The workspace returns backend-derived `can_view/can_setup/can_rate/can_verify/can_close`
+  decisions, so the UI no longer exposes unauthorized setup, rate, verification, or close actions.
+- **Rate/report consistency:** mapping an item into a Costing Group now applies the deterministic
+  group-lead rate to every member and resets the whole scope to pending. Multi-month reports read
+  immutable archive rows for closed months, retaining the material/group snapshots rather than
+  current master values.
+- **UI repair:** SLOC setup now consumes the shared storage-location API's real `code`/`name`
+  fields and uses the established PO11 multi-select layout; blank location rows are removed.
+- **Verification:** `deno check ac06_workspace.handlers.ts`, targeted frontend ESLint, and Vite
+  production build pass. `company-scope-guard`, `company-scope-write-acl-guard`, and
+  `route-acl-registry-guard` pass with no AC06 findings. No migration is required.
