@@ -16901,6 +16901,113 @@ UNIQUE(sloc_group_id, storage_location_id))। `costing_group`/`costing_group_me
 
 ---
 
+### 114.23 — AC06 FINAL LOCK: PO11-parity Monthly Costing Rate Workspace for Dispatch (LOCKED — 2026-08-24)
+
+**This section supersedes the AC06-specific structure, scope, approval, and downstream-use
+statements in §§114.9, 114.10, 114.21, and 114.22.** Those sections remain historical context only.
+
+AC06 remains an Accounts transaction and keeps its existing code/resource (`AC06` /
+`ACC_SLOC_COSTING_GROUP`), but its business purpose is now a **company-scoped monthly costing-rate
+workspace used by Dispatch**. It is not a Procurement Planning page and it must not reuse PO11's
+procurement tables. It follows PO11's hierarchy, lifecycle, workspace pattern, and history rules.
+
+#### Final hierarchy and company boundary
+
+```
+Company
+  -> SLOC Group
+       -> eligible item pool from that group's storage locations
+       -> zero or more Costing Groups
+       -> remaining standalone items
+       -> month-wise rate + verification state per item scope
+```
+
+- Every AC06 record is company-scoped. A user may only read or act within an allowed runtime company.
+  A material, SLOC Group, Costing Group, rate, verification, close snapshot, and report row from one
+  company are never visible or usable in another company.
+- A company may have multiple SLOC Groups. A storage location may belong to **only one active AC06
+  SLOC Group in that company**. The same location may be used independently by another company.
+- A Costing Group is mandatory-child data of exactly one parent SLOC Group. Its name is unique within
+  that parent SLOC Group, not globally.
+- An item is eligible only when it exists in the selected parent SLOC Group's company stock scope.
+  A Costing Group can contain multiple eligible items.
+- Within one `(company, month, SLOC Group)` scope, an item can be in at most one Costing Group.
+  Removing it makes it standalone immediately; it may then remain standalone or move to another
+  Costing Group. No item may silently disappear from the eligible list.
+
+#### Workspace and monthly-rate rules
+
+AC06 uses the PO11 workspace language and layout, with these fixed labels:
+
+| PO11 | AC06 |
+|---|---|
+| Procurement Planning Workspace | Monthly Costing Rate Workspace |
+| Item Group | Costing Group |
+| Monthly Plan Input | Monthly Costing Rate Input |
+| Planning Dashboard | Costing Dashboard |
+| Planning History / Archive | Costing History / Archive |
+
+- Company, Month, and SLOC Group selection work exactly like PO11. Single-company users see a locked
+  company; multi-company users can select only their allowed companies.
+- Monthly Costing Rate Input displays every eligible item as either a Costing Group member or a
+  standalone item. There is no group-total calculation.
+- Rates are free-decimal numeric values: the system preserves the entered precision and must not
+  round a manual rate at save, verification, close, report, or Dispatch resolution.
+- For a Costing Group, only its deterministic first item is editable. Entering/changing that rate
+  immediately propagates the value to every current member of that Costing Group. Each standalone
+  item is edited independently.
+- A rate may be absent. Absence is treated as `0`; it is not auto-filled or assumed from another
+  month unless carry-forward has explicitly produced a draft value.
+- Before auto-close, Accounts may update a rate any number of times. A changed verified rate becomes
+  **pending verification immediately**: the old rate is no longer usable and the new rate is not
+  usable until verified.
+- Opening a new month copies the most recent prior month's SLOC/Costing configuration and rate values
+  as an editable draft, exactly to reduce re-entry. The copied values are not usable until their
+  required verification state is satisfied in the new month.
+
+#### Per-rate verification, not whole-month approval
+
+- Accounts enters and changes rates. Accounts and Auditors may create, edit, move, or remove SLOC
+  Groups, Costing Groups, and item mappings.
+- Verification is row-scope, not a blanket month approval. Each changed standalone item and each
+  changed Costing Group lead item exposes a pending `Verify` action to an authorized Auditor.
+- A verified grouped lead verifies the propagated rate of all current members in that group scope.
+- Auditors may select pending rows through checkboxes and use a bulk Verify action. The bulk action
+  stays disabled if any selected row is already verified, is no longer pending, belongs to another
+  company/month/SLOC scope, or otherwise fails eligibility. Removing that invalid selection restores
+  availability.
+- A verified rate changed later is pending again; downstream consumers must not fall back to its
+  earlier verified value.
+- Director is view-only. ACL-MASTER retains full access. Existing ACL resource/action semantics are
+  retained, but the AC06 ACL decision and approver workflow must be updated to match this ownership.
+
+#### Close, archive, report, and Dispatch contract
+
+- AC06 follows PO11's explicit close and automatic month-close pattern. A closed month is immutable
+  and records a frozen snapshot of SLOC Group membership, Costing Group membership, standalone
+  classification, rates, precision, and verification state.
+- A pending, unverified, or zero/missing rate remains unusable after close. Closing never converts a
+  pending value into a verified value.
+- The full-page report uses PO11's report/open-new-window pattern. It filters by Company and SLOC
+  Group and accepts one or many months, showing rate/verification data side-by-side for month
+  comparison. It must be openable in a separate ERP window with Shift+F8.
+- Dispatch must resolve an AC06 rate by **company + dispatch month + source SLOC Group + material**.
+  It may consume only a verified, non-zero rate from the open/closed monthly snapshot. Any missing,
+  zero, or pending rate hard-blocks that item's dependent Dispatch use; no prior rate fallback is
+  permitted.
+
+#### Implementation boundary
+
+- Use a new additive migration only; never edit the shipped AC06 migrations. The old AC06 v1/v2
+  tables and endpoints are retired in that migration because both Dev and Prod were verified empty
+  at this lock date.
+- Reuse PO11's structural and UX pattern, not its `erp_procurement` tables or procurement authority.
+- The old AC06 whole-month `DRAFT`/`APPROVED` model, tables, endpoint family, and page are replaced
+  by scoped rate verification and close/archive behavior. Historical AC06 rows are absent in Dev and
+  production at this lock date, so no data conversion/backfill is required.
+
+---
+
 ## Section 115 — Opening Stock: SFG/FG Discovery Session (LOCKED — 2026-08-01)
 
 ### 115.1 — Real gap আবিষ্কার (code-verified, business owner-এর প্রশ্নের উত্তরে)

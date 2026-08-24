@@ -1506,46 +1506,35 @@
     "pageModule": "PROD",
     "foreign": [
       [
-        "ACC_SLOC_COSTING_GROUP:WRITE",
+        "ACC_SLOC_COSTING_RATE:WRITE",
         {
-          "fn": "saveCostingRateDraft",
+          "fn": "saveAc06Rates",
           "method": "POST",
-          "path": "/api/production/costing-rate/draft",
-          "resourceCode": "ACC_SLOC_COSTING_GROUP",
+          "path": "/api/production/ac06/rates",
+          "resourceCode": "ACC_SLOC_COSTING_RATE",
           "action": "WRITE",
           "skipAcl": false
         }
       ],
       [
-        "ACC_SLOC_COSTING_GROUP:VIEW",
+        "ACC_SLOC_COSTING_VERIFY:WRITE",
         {
-          "fn": "listDraftCostingRateDetail",
-          "method": "GET",
-          "path": "/api/production/costing-rate/draft-detail",
-          "resourceCode": "ACC_SLOC_COSTING_GROUP",
-          "action": "VIEW",
-          "skipAcl": false
-        }
-      ],
-      [
-        "ACC_SLOC_COSTING_GROUP:DELETE",
-        {
-          "fn": "removeCostingGroupMember",
-          "method": "DELETE",
-          "path": "/api/production/costing-groups/${groupId}/members/${memberId}",
-          "resourceCode": "ACC_SLOC_COSTING_GROUP",
-          "action": "DELETE",
-          "skipAcl": false
-        }
-      ],
-      [
-        "ACC_SLOC_COSTING_GROUP:APPROVE",
-        {
-          "fn": "approveCostingRate",
+          "fn": "verifyAc06Rates",
           "method": "POST",
-          "path": "/api/production/costing-rate/approve",
-          "resourceCode": "ACC_SLOC_COSTING_GROUP",
-          "action": "APPROVE",
+          "path": "/api/production/ac06/verify",
+          "resourceCode": "ACC_SLOC_COSTING_VERIFY",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_SLOC_COSTING_CLOSE:WRITE",
+        {
+          "fn": "closeAc06Month",
+          "method": "POST",
+          "path": "/api/production/ac06/close",
+          "resourceCode": "ACC_SLOC_COSTING_CLOSE",
+          "action": "WRITE",
           "skipAcl": false
         }
       ]

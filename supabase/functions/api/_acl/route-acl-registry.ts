@@ -243,15 +243,16 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/mts-sku-rates/pending-drafts": { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "VIEW" },
   "POST:/api/production/mts-sku-rates/approve":      { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "APPROVE" },
   "GET:/api/production/mts-sku-rates/available-months": { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "VIEW" },
-  "POST:/api/production/costing-groups":             { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "WRITE" },
-  "GET:/api/production/costing-groups":              { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
-  "POST:/api/production/sloc-groups":                { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "WRITE" },
-  "GET:/api/production/sloc-groups":                 { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
-  "GET:/api/production/costing-rate/materials":      { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
-  "POST:/api/production/costing-rate/draft":         { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "WRITE" },
-  "GET:/api/production/costing-rate/pending-drafts": { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
-  "GET:/api/production/costing-rate/draft-detail":   { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
-  "POST:/api/production/costing-rate/approve":       { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "APPROVE" },
+  "GET:/api/production/ac06/workspace":              { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
+  "POST:/api/production/ac06/sloc-groups":           { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
+  "POST:/api/production/ac06/costing-groups":        { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
+  "POST:/api/production/ac06/costing-groups/assign": { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
+  "POST:/api/production/ac06/costing-groups/unassign": { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
+  "POST:/api/production/ac06/rates":                 { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_RATE", action: "WRITE" },
+  "POST:/api/production/ac06/verify":                { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_VERIFY", action: "WRITE" },
+  "POST:/api/production/ac06/close":                 { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_CLOSE", action: "WRITE" },
+  "GET:/api/production/ac06/report":                 { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
+  "GET:/api/production/ac06/history":                { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
   "GET:/api/procurement/chas":                        { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "VIEW"  },
   "POST:/api/procurement/chas":                       { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "WRITE" },
   "POST:/api/procurement/chas/toggle":                { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "EDIT"  },
@@ -574,6 +575,16 @@ type PatternAclEntry = {
 
 const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
 
+  // ── AC06 monthly costing workspace ──────────────────────────────────────
+  {
+    pattern: /^\/api\/production\/ac06\/sloc-groups\/[^/]+$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" }, DELETE: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "DELETE" } },
+  },
+  {
+    pattern: /^\/api\/production\/ac06\/costing-groups\/[^/]+$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" }, DELETE: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "DELETE" } },
+  },
+
   // ── PO ───────────────────────────────────────────────────────────────────
   {
     pattern: /^\/api\/procurement\/purchase-orders\/[^/]+$/,
@@ -599,30 +610,6 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     pattern: /^\/api\/om\/fg-dispatch-addresses\/[^/]+$/,
     methods: {
       PATCH: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "EDIT" },
-    },
-  },
-  {
-    pattern: /^\/api\/production\/costing-groups\/[^/]+\/members$/,
-    methods: {
-      POST: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "WRITE" },
-    },
-  },
-  {
-    pattern: /^\/api\/production\/costing-groups\/[^/]+\/members\/[^/]+$/,
-    methods: {
-      DELETE: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "DELETE" },
-    },
-  },
-  {
-    pattern: /^\/api\/production\/sloc-groups\/[^/]+\/members$/,
-    methods: {
-      POST: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "WRITE" },
-    },
-  },
-  {
-    pattern: /^\/api\/production\/sloc-groups\/[^/]+\/members\/[^/]+$/,
-    methods: {
-      DELETE: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "DELETE" },
     },
   },
   {

@@ -55,20 +55,21 @@ import {
   listApprovedMonthsForSkuHandler,
 } from "../_core/production/mts_sku_rate.handlers.ts";
 import {
-  addSlocGroupMemberHandler,
-  addCostingGroupMemberHandler,
-  approveCostingRateHandler,
-  createCostingGroupHandler,
-  createSlocGroupHandler,
-  listDraftCostingRateDetailHandler,
-  listCostingGroupsHandler,
-  listCostingRateMaterialsHandler,
-  listPendingCostingDraftsHandler,
-  listSlocGroupsHandler,
-  removeCostingGroupMemberHandler,
-  removeSlocGroupMemberHandler,
-  saveCostingRateDraftHandler,
-} from "../_core/production/costing_group.handlers.ts";
+  assignAc06CostingGroupHandler,
+  closeAc06MonthHandler,
+  createAc06CostingGroupHandler,
+  createAc06SlocGroupHandler,
+  deleteAc06CostingGroupHandler,
+  deleteAc06SlocGroupHandler,
+  getAc06HistoryHandler,
+  getAc06ReportHandler,
+  getAc06WorkspaceHandler,
+  saveAc06RatesHandler,
+  unassignAc06CostingGroupHandler,
+  updateAc06CostingGroupHandler,
+  updateAc06SlocGroupHandler,
+  verifyAc06RatesHandler,
+} from "../_core/production/ac06_workspace.handlers.ts";
 import {
   createOldProcessPoHandler,
   listOldProcessPoBatchesHandler,
@@ -227,24 +228,26 @@ export async function dispatchProductionRoutes(
       return await approveMtsSkuRateHandler(req, ctx);
     case "GET:/api/production/mts-sku-rates/available-months":
       return await listApprovedMonthsForSkuHandler(req, ctx);
-    case "POST:/api/production/costing-groups":
-      return await createCostingGroupHandler(req, ctx);
-    case "GET:/api/production/costing-groups":
-      return await listCostingGroupsHandler(req, ctx);
-    case "POST:/api/production/sloc-groups":
-      return await createSlocGroupHandler(req, ctx);
-    case "GET:/api/production/sloc-groups":
-      return await listSlocGroupsHandler(req, ctx);
-    case "GET:/api/production/costing-rate/materials":
-      return await listCostingRateMaterialsHandler(req, ctx);
-    case "POST:/api/production/costing-rate/draft":
-      return await saveCostingRateDraftHandler(req, ctx);
-    case "GET:/api/production/costing-rate/pending-drafts":
-      return await listPendingCostingDraftsHandler(req, ctx);
-    case "GET:/api/production/costing-rate/draft-detail":
-      return await listDraftCostingRateDetailHandler(req, ctx);
-    case "POST:/api/production/costing-rate/approve":
-      return await approveCostingRateHandler(req, ctx);
+    case "GET:/api/production/ac06/workspace":
+      return await getAc06WorkspaceHandler(req, ctx);
+    case "POST:/api/production/ac06/sloc-groups":
+      return await createAc06SlocGroupHandler(req, ctx);
+    case "POST:/api/production/ac06/costing-groups":
+      return await createAc06CostingGroupHandler(req, ctx);
+    case "POST:/api/production/ac06/costing-groups/assign":
+      return await assignAc06CostingGroupHandler(req, ctx);
+    case "POST:/api/production/ac06/costing-groups/unassign":
+      return await unassignAc06CostingGroupHandler(req, ctx);
+    case "POST:/api/production/ac06/rates":
+      return await saveAc06RatesHandler(req, ctx);
+    case "POST:/api/production/ac06/verify":
+      return await verifyAc06RatesHandler(req, ctx);
+    case "POST:/api/production/ac06/close":
+      return await closeAc06MonthHandler(req, ctx);
+    case "GET:/api/production/ac06/report":
+      return await getAc06ReportHandler(req, ctx);
+    case "GET:/api/production/ac06/history":
+      return await getAc06HistoryHandler(req, ctx);
 
     // Opening Genealogy (§104.9) — PR22 Old Process PO + PR23 Old Packing PO (no stock movement)
     case "POST:/api/production/old-process-po":
@@ -350,6 +353,20 @@ export async function dispatchProductionRoutes(
   // Pack Configs /:id
   if (/^\/api\/production\/pack-configs\/[^/]+$/.test(pathname) && req.method === "DELETE") {
     return await deletePackConfigHandler(req, ctx);
+  }
+
+  // AC06 SLOC/Costing Group /:id maintenance
+  if (/^\/api\/production\/ac06\/sloc-groups\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateAc06SlocGroupHandler(req, ctx);
+  }
+  if (/^\/api\/production\/ac06\/sloc-groups\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteAc06SlocGroupHandler(req, ctx);
+  }
+  if (/^\/api\/production\/ac06\/costing-groups\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateAc06CostingGroupHandler(req, ctx);
+  }
+  if (/^\/api\/production\/ac06\/costing-groups\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteAc06CostingGroupHandler(req, ctx);
   }
 
   // Pack Codes /:id
@@ -519,18 +536,5 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/pack-bom-change-requests\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
     return await rejectPackBomChangeRequestHandler(req, ctx);
   }
-  if (/^\/api\/production\/costing-groups\/[^/]+\/members$/.test(pathname) && req.method === "POST") {
-    return await addCostingGroupMemberHandler(req, ctx);
-  }
-  if (/^\/api\/production\/costing-groups\/[^/]+\/members\/[^/]+$/.test(pathname) && req.method === "DELETE") {
-    return await removeCostingGroupMemberHandler(req, ctx);
-  }
-  if (/^\/api\/production\/sloc-groups\/[^/]+\/members$/.test(pathname) && req.method === "POST") {
-    return await addSlocGroupMemberHandler(req, ctx);
-  }
-  if (/^\/api\/production\/sloc-groups\/[^/]+\/members\/[^/]+$/.test(pathname) && req.method === "DELETE") {
-    return await removeSlocGroupMemberHandler(req, ctx);
-  }
-
   return null;
 }

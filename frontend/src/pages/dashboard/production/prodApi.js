@@ -74,19 +74,21 @@ export const saveMtsSkuRateDraft = (body) => fetchProd("POST", "/api/production/
 export const listPendingMtsSkuRateDrafts = (p) => fetchProd("GET", "/api/production/mts-sku-rates/pending-drafts", undefined, p);
 export const approveMtsSkuRate = (body) => fetchProd("POST", "/api/production/mts-sku-rates/approve", body);
 export const listApprovedMtsSkuMonths = (p) => fetchProd("GET", "/api/production/mts-sku-rates/available-months", undefined, p);
-export const createSlocGroup = (body) => fetchProd("POST", "/api/production/sloc-groups", body);
-export const listSlocGroups = (p) => fetchProd("GET", "/api/production/sloc-groups", undefined, p);
-export const addSlocGroupMember = (groupId, body) => fetchProd("POST", `/api/production/sloc-groups/${groupId}/members`, body);
-export const removeSlocGroupMember = (groupId, memberId) => fetchProd("DELETE", `/api/production/sloc-groups/${groupId}/members/${memberId}`);
-export const createCostingGroup = (body) => fetchProd("POST", "/api/production/costing-groups", body);
-export const listCostingGroups = (p) => fetchProd("GET", "/api/production/costing-groups", undefined, p);
-export const addCostingGroupMembers = (groupId, body) => fetchProd("POST", `/api/production/costing-groups/${groupId}/members`, body);
-export const removeCostingGroupMember = (groupId, memberId) => fetchProd("DELETE", `/api/production/costing-groups/${groupId}/members/${memberId}`);
-export const listCostingRateMaterials = (p) => fetchProd("GET", "/api/production/costing-rate/materials", undefined, p);
-export const saveCostingRateDraft = (body) => fetchProd("POST", "/api/production/costing-rate/draft", body);
-export const listPendingCostingDrafts = (p) => fetchProd("GET", "/api/production/costing-rate/pending-drafts", undefined, p);
-export const listDraftCostingRateDetail = (p) => fetchProd("GET", "/api/production/costing-rate/draft-detail", undefined, p);
-export const approveCostingRate = (body) => fetchProd("POST", "/api/production/costing-rate/approve", body);
+// ── AC06 Monthly Costing Rate Workspace (PO11-parity, Dispatch rate source) ───
+export const getAc06Workspace = (p) => fetchProd("GET", "/api/production/ac06/workspace", undefined, p);
+export const createAc06SlocGroup = (body) => fetchProd("POST", "/api/production/ac06/sloc-groups", body);
+export const updateAc06SlocGroup = (id, body) => fetchProd("PATCH", `/api/production/ac06/sloc-groups/${id}`, body);
+export const deleteAc06SlocGroup = (id, body) => fetchProd("DELETE", `/api/production/ac06/sloc-groups/${id}`, body);
+export const createAc06CostingGroup = (body) => fetchProd("POST", "/api/production/ac06/costing-groups", body);
+export const updateAc06CostingGroup = (id, body) => fetchProd("PATCH", `/api/production/ac06/costing-groups/${id}`, body);
+export const deleteAc06CostingGroup = (id, body) => fetchProd("DELETE", `/api/production/ac06/costing-groups/${id}`, body);
+export const assignAc06CostingGroup = (body) => fetchProd("POST", "/api/production/ac06/costing-groups/assign", body);
+export const unassignAc06CostingGroup = (body) => fetchProd("POST", "/api/production/ac06/costing-groups/unassign", body);
+export const saveAc06Rates = (body) => fetchProd("POST", "/api/production/ac06/rates", body);
+export const verifyAc06Rates = (body) => fetchProd("POST", "/api/production/ac06/verify", body);
+export const closeAc06Month = (body) => fetchProd("POST", "/api/production/ac06/close", body);
+export const getAc06Report = (p) => fetchProd("GET", "/api/production/ac06/report", undefined, p);
+export const getAc06History = (p) => fetchProd("GET", "/api/production/ac06/history", undefined, p);
 
 // ── Opening Genealogy (§104.9) — PR22 Old Process PO / PR23 Old Packing PO ────
 export const createOldProcessPo = (body) => fetchProd("POST", "/api/production/old-process-po", body);
