@@ -84,6 +84,7 @@ export const updateAc06CostingGroup = (id, body) => fetchProd("PATCH", `/api/pro
 export const deleteAc06CostingGroup = (id, body) => fetchProd("DELETE", `/api/production/ac06/costing-groups/${id}`, body);
 export const assignAc06CostingGroup = (body) => fetchProd("POST", "/api/production/ac06/costing-groups/assign", body);
 export const unassignAc06CostingGroup = (body) => fetchProd("POST", "/api/production/ac06/costing-groups/unassign", body);
+export const setAc06MaterialInclusion = (body) => fetchProd("POST", "/api/production/ac06/material-inclusion", body);
 export const saveAc06Rates = (body) => fetchProd("POST", "/api/production/ac06/rates", body);
 export const verifyAc06Rates = (body) => fetchProd("POST", "/api/production/ac06/verify", body);
 export const closeAc06Month = (body) => fetchProd("POST", "/api/production/ac06/close", body);
