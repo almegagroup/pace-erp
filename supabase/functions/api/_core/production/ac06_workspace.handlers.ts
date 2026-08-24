@@ -153,7 +153,7 @@ async function materialMap(materialIds: string[]): Promise<Map<string, Row>> {
   const result = new Map<string, Row>();
   if (!materialIds.length) return result;
   const rows = await fetchInChunks<Row>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
-    .select("id, pace_code, external_code, material_name, base_uom_code").in("id", chunk));
+    .select("id, pace_code, external_code, material_name, base_uom_code, material_type").in("id", chunk));
   for (const row of rows) result.set(toTrimmedString(row.id), row);
   return result;
 }
@@ -207,7 +207,7 @@ function rowsForDisplay(lines: Row[], materials: Map<string, Row>, groups: Map<s
     const material = materials.get(toTrimmedString(line.material_id));
     return {
       ...line, pace_code: material?.pace_code ?? null, material_external_code: material?.external_code ?? null,
-      material_name: material?.material_name ?? null,
+      material_name: material?.material_name ?? null, material_type: material?.material_type ?? null,
       base_uom_code: material?.base_uom_code ?? null, costing_group_name: groupId ? groups.get(groupId)?.group_name ?? line.costing_group_name_snapshot ?? null : null,
       is_group_lead: Boolean(groupId) && toTrimmedString(siblings[0]?.id) === toTrimmedString(line.id),
       is_standalone: !groupId,
