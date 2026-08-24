@@ -11,6 +11,7 @@ import type { ProdHandlerContext } from "./production.shared.ts";
 import { assertProdReadRole, parseBody, toTrimmedString } from "./production.shared.ts";
 
 type Row = Record<string, unknown>;
+const AC06_FIRST_MONTH = "2026-05-01";
 
 const ac06Error = (req: Request, ctx: ProdHandlerContext, code: string, status: number, message: string) =>
   errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
@@ -19,7 +20,7 @@ function monthStart(raw: unknown): string | null {
   const value = toTrimmedString(raw);
   if (!/^\d{4}-\d{2}(-\d{2})?$/.test(value)) return null;
   const normalized = value.length === 7 ? `${value}-01` : value;
-  return /^\d{4}-\d{2}-01$/.test(normalized) ? normalized : null;
+  return /^\d{4}-\d{2}-01$/.test(normalized) && normalized >= AC06_FIRST_MONTH ? normalized : null;
 }
 
 function ids(input: unknown): string[] {
@@ -179,9 +180,8 @@ export async function getAc06WorkspaceHandler(req: Request, ctx: ProdHandlerCont
     const url = new URL(req.url); const companyId = await companyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const rateMonth = monthStart(url.searchParams.get("rate_month"));
     if (!companyId || !rateMonth) return ac06Error(req, ctx, "AC06_FILTER_INVALID", 400, "company_id and rate_month are required.");
-    // A workspace visit is also the safe fallback for the scheduled month-close job.
-    const { error: autoCloseError } = await serviceRoleClient.schema("erp_production").rpc("auto_close_expired_ac06_months", { p_reference_date: new Date().toISOString().slice(0, 10) });
-    if (autoCloseError) throw new Error("AC06_AUTO_CLOSE_FAILED");
+    // Historical entry months remain open until an authorized user explicitly closes them.
+    // The retained auto-close RPC is for an explicit scheduled job, never a workspace read.
     const month = await getMonth(ctx, companyId, rateMonth); const { slocGroups, costingGroups } = await getGroups(companyId);
     await Promise.all(slocGroups.map((group) => ensureScopeRows(ctx, month, group)));
     const { data: lines, error } = await serviceRoleClient.schema("erp_production").from("ac06_month_line").select("*").eq("month_id", month.id);

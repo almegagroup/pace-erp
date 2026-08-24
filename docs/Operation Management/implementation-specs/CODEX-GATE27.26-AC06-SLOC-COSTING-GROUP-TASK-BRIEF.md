@@ -37,6 +37,8 @@ Use ACL resource actions and approver/workflow data; no local role arrays or dir
 
 ## Database redesign -- additive migration
 
+AC06 data-entry month starts at `2026-05-01`. Historical May onward months stay open until an authorized Auditor/ACL Master explicitly uses **Close Month**; opening a workspace must never close a month as a side effect. The retained auto-close RPC is reserved for a separately authorized scheduled job.
+
 Create a clean AC06 monthly workspace in `erp_production`. Dev and Prod were verified with zero
 legacy AC06 rows, so retire/drop the old AC06 v1/v2 tables and endpoints in this migration. Do not
 retain old behavior or compatibility code.
