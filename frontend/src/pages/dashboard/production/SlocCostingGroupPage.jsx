@@ -704,8 +704,17 @@ export default function SlocCostingGroupPage() {
                           type="button"
                           onClick={() => {
                             setManagedSlocGroupId(row.id);
+                            setSlocGroupId(row.id);
                             setMaterialSearch("");
                             setSelectedMaterialIds([]);
+                            window.setTimeout(() => {
+                              document
+                                .getElementById("ac06-manage-materials")
+                                ?.scrollIntoView({
+                                  behavior: "smooth",
+                                  block: "start",
+                                });
+                            }, 0);
                           }}
                           className="text-xs font-semibold text-sky-800"
                         >
@@ -761,105 +770,107 @@ export default function SlocCostingGroupPage() {
             </div>
           </ErpSectionCard>
           {managedSlocGroupId ? (
-            <ErpSectionCard title="Manage SLOC Group Materials">
-              <div className="mb-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
-                <input
-                  value={materialSearch}
-                  onChange={(event) => setMaterialSearch(event.target.value)}
-                  placeholder="Search material code or name..."
-                  className="h-10 border border-slate-300 px-3"
+            <div id="ac06-manage-materials">
+              <ErpSectionCard title="Manage SLOC Group Materials">
+                <div className="mb-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+                  <input
+                    value={materialSearch}
+                    onChange={(event) => setMaterialSearch(event.target.value)}
+                    placeholder="Search material code or name..."
+                    className="h-10 border border-slate-300 px-3"
+                  />
+                  <button
+                    type="button"
+                    disabled={
+                      busy ||
+                      !selectedMaterialIds.length ||
+                      workspace.month?.status === "CLOSED"
+                    }
+                    onClick={() =>
+                      void withBusy(() =>
+                        setAc06MaterialInclusion({
+                          company_id: companyId,
+                          rate_month: month,
+                          line_ids: selectedMaterialIds,
+                          included: true,
+                        }).then(() => setSelectedMaterialIds([])),
+                      )
+                    }
+                    className="border border-sky-700 bg-sky-100 px-3 text-sm font-semibold"
+                  >
+                    Include Selected
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      busy ||
+                      !selectedMaterialIds.length ||
+                      workspace.month?.status === "CLOSED"
+                    }
+                    onClick={() =>
+                      void withBusy(() =>
+                        setAc06MaterialInclusion({
+                          company_id: companyId,
+                          rate_month: month,
+                          line_ids: selectedMaterialIds,
+                          included: false,
+                        }).then(() => setSelectedMaterialIds([])),
+                      )
+                    }
+                    className="border border-rose-700 bg-rose-50 px-3 text-sm font-semibold"
+                  >
+                    Exclude Selected
+                  </button>
+                </div>
+                <ErpDenseGrid
+                  columns={[
+                    {
+                      key: "selected",
+                      label: "Select",
+                      render: (row) => (
+                        <input
+                          type="checkbox"
+                          checked={selectedMaterialIds.includes(row.id)}
+                          onChange={() =>
+                            toggle(
+                              selectedMaterialIds,
+                              row.id,
+                              setSelectedMaterialIds,
+                            )
+                          }
+                        />
+                      ),
+                    },
+                    {
+                      key: "pace_code",
+                      label: "Eligible Material",
+                      render: (row) =>
+                        `${row.pace_code || "-"} | ${row.material_name || "-"}`,
+                    },
+                    {
+                      key: "costing_group_name",
+                      label: "Current Costing Group",
+                      render: (row) => row.costing_group_name || "Standalone",
+                    },
+                    {
+                      key: "scope",
+                      label: "Scope",
+                      render: (row) =>
+                        row.is_excluded ? "Excluded" : "Included",
+                    },
+                    {
+                      key: "status",
+                      label: "Rate Status",
+                      render: (row) =>
+                        row.is_excluded ? "Excluded" : row.verification_status,
+                    },
+                  ]}
+                  rows={managedSlocRows}
+                  rowKey={(row) => row.id}
+                  emptyMessage="This SLOC Group has no eligible materials yet."
                 />
-                <button
-                  type="button"
-                  disabled={
-                    busy ||
-                    !selectedMaterialIds.length ||
-                    workspace.month?.status === "CLOSED"
-                  }
-                  onClick={() =>
-                    void withBusy(() =>
-                      setAc06MaterialInclusion({
-                        company_id: companyId,
-                        rate_month: month,
-                        line_ids: selectedMaterialIds,
-                        included: true,
-                      }).then(() => setSelectedMaterialIds([])),
-                    )
-                  }
-                  className="border border-sky-700 bg-sky-100 px-3 text-sm font-semibold"
-                >
-                  Include Selected
-                </button>
-                <button
-                  type="button"
-                  disabled={
-                    busy ||
-                    !selectedMaterialIds.length ||
-                    workspace.month?.status === "CLOSED"
-                  }
-                  onClick={() =>
-                    void withBusy(() =>
-                      setAc06MaterialInclusion({
-                        company_id: companyId,
-                        rate_month: month,
-                        line_ids: selectedMaterialIds,
-                        included: false,
-                      }).then(() => setSelectedMaterialIds([])),
-                    )
-                  }
-                  className="border border-rose-700 bg-rose-50 px-3 text-sm font-semibold"
-                >
-                  Exclude Selected
-                </button>
-              </div>
-              <ErpDenseGrid
-                columns={[
-                  {
-                    key: "selected",
-                    label: "Select",
-                    render: (row) => (
-                      <input
-                        type="checkbox"
-                        checked={selectedMaterialIds.includes(row.id)}
-                        onChange={() =>
-                          toggle(
-                            selectedMaterialIds,
-                            row.id,
-                            setSelectedMaterialIds,
-                          )
-                        }
-                      />
-                    ),
-                  },
-                  {
-                    key: "pace_code",
-                    label: "Eligible Material",
-                    render: (row) =>
-                      `${row.pace_code || "-"} | ${row.material_name || "-"}`,
-                  },
-                  {
-                    key: "costing_group_name",
-                    label: "Current Costing Group",
-                    render: (row) => row.costing_group_name || "Standalone",
-                  },
-                  {
-                    key: "scope",
-                    label: "Scope",
-                    render: (row) =>
-                      row.is_excluded ? "Excluded" : "Included",
-                  },
-                  {
-                    key: "status",
-                    label: "Rate Status",
-                    render: (row) =>
-                      row.is_excluded ? "Excluded" : row.verification_status,
-                  },
-                ]}
-                rows={managedSlocRows}
-                rowKey={(row) => row.id}
-                emptyMessage="This SLOC Group has no eligible materials yet."
-              />
-            </ErpSectionCard>
+              </ErpSectionCard>
+            </div>
           ) : null}
         </>
       ) : null}
