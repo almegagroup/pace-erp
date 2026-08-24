@@ -1094,13 +1094,25 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                         placeholder="Confirmed / overwrite"
                         className={inputCls}
                       />
+                      {!readOnly ? (
+                        <button
+                          type="button"
+                          onClick={() => setDraft((current) => ({
+                            ...current,
+                            [draftKey]: String(livePreview?.[liveKey] ?? 0),
+                          }))}
+                          className="h-[26px] shrink-0 border border-slate-300 bg-white px-2 text-[10px] text-slate-600"
+                        >
+                          Use suggested
+                        </button>
+                      ) : null}
                       {!readOnly && draft[draftKey] !== "" ? (
                         <button
                           type="button"
                           onClick={() => setDraft((current) => ({ ...current, [draftKey]: "" }))}
                           className="h-[26px] shrink-0 border border-slate-300 bg-white px-2 text-[10px] text-slate-600"
                         >
-                          Use suggested
+                          Clear
                         </button>
                       ) : null}
                     </div>
