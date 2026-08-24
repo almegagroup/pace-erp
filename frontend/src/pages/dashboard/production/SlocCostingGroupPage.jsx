@@ -52,6 +52,32 @@ function materialIdentityColumns() {
   ];
 }
 
+// Shared by SLOC Group Setup's Manage Materials Included/Excluded lists and
+// Costing Group Setup's Available Item Pool/Current Members/Standalone
+// Materials -- same Name/External Code/Type/Status(+optional Action) shape
+// everywhere, mirroring PO11's own buildMaterialListColumns() (§35.18/§114.23
+// "follows PO11's ... workspace pattern").
+function buildAc06MaterialListColumns({ statusLabel, actionLabel, actionClassName, onAction } = {}) {
+  const columns = [
+    ...materialIdentityColumns(),
+    { key: "material_type", label: "Type", width: "70px", render: (row) => row.material_type || "-" },
+    { key: "status", label: "Status", width: "110px", render: () => statusLabel },
+  ];
+  if (onAction) {
+    columns.push({
+      key: "action",
+      label: "",
+      width: "90px",
+      render: (row) => (
+        <button type="button" onClick={() => onAction(row)} className={actionClassName}>
+          {actionLabel}
+        </button>
+      ),
+    });
+  }
+  return columns;
+}
+
 // Group-lead rows get a visibly distinct background -- the AC06 analogue of
 // PO11's "Group Total row gets a distinct background" rule (§35.18). AC06
 // has no group-total/sum row (§114.23: rates propagate, they never sum), so
@@ -83,12 +109,12 @@ export default function SlocCostingGroupPage() {
   const [costingName, setCostingName] = useState("");
   const [editingCostingId, setEditingCostingId] = useState("");
   const [costingParentId, setCostingParentId] = useState("");
+  const [costingManagerSlocGroupId, setCostingManagerSlocGroupId] = useState("");
   const [targetCostingGroupId, setTargetCostingGroupId] = useState("");
-  const [costingMemberIds, setCostingMemberIds] = useState([]);
+  const [itemPoolMaterialTypeFilter, setItemPoolMaterialTypeFilter] = useState("ALL");
   const [costingSearch, setCostingSearch] = useState("");
   const [managedSlocGroupId, setManagedSlocGroupId] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
-  const [selectedMaterialIds, setSelectedMaterialIds] = useState([]);
   const [rateSearch, setRateSearch] = useState("");
   const [rateCostingGroupId, setRateCostingGroupId] = useState("");
   const [onlyStandalone, setOnlyStandalone] = useState(false);
@@ -198,21 +224,59 @@ export default function SlocCostingGroupPage() {
   const selectionValid =
     selectedForVerify.length > 0 &&
     selectedForVerify.every((id) => pendingIds.has(id));
-  const groupSetupRows = rows.filter(
+
+  // SLOC Group Setup card list -- same per-group summary line PO11 shows
+  // ("X storage locations selected | Y eligible materials (Z grouped, W
+  // excluded)"), derived from the workspace rows instead of a plain table.
+  const slocGroupInsights = slocGroups.map((group) => {
+    const linkedRows = rows.filter((row) => row.source_sloc_group_id === group.id);
+    return {
+      ...group,
+      linkedMaterialCount: linkedRows.length,
+      groupedMaterialCount: linkedRows.filter((row) => row.costing_group_id).length,
+      excludedMaterialCount: linkedRows.filter((row) => row.is_excluded).length,
+    };
+  });
+
+  // SLOC Group Setup's "Manage Materials" Included/Excluded split (PO11
+  // pattern) -- ignores costing_group_id entirely, exclude/include applies
+  // regardless of whether the material is grouped or standalone.
+  const slocMaterialRows = rows.filter(
     (row) =>
-      !row.is_excluded &&
-      String(row.source_sloc_group_id || "") === costingParentId &&
-      `${row.material_name || ""} ${row.material_external_code || ""}`
-        .toLowerCase()
-        .includes(costingSearch.toLowerCase()),
-  );
-  const managedSlocRows = rows.filter(
-    (row) =>
-      String(row.source_sloc_group_id || "") === managedSlocGroupId &&
+      row.source_sloc_group_id === managedSlocGroupId &&
       `${row.material_name || ""} ${row.material_external_code || ""}`
         .toLowerCase()
         .includes(materialSearch.toLowerCase()),
   );
+  const includedSlocMaterialRows = slocMaterialRows.filter((row) => !row.is_excluded);
+  const excludedSlocMaterialRows = slocMaterialRows.filter((row) => row.is_excluded);
+
+  // Costing Group Setup work area -- mirrors PO11's Item Group Setup tab:
+  // one SLOC-scoped row set, search-filtered, then split into the Available
+  // Item Pool (no costing group yet) and the selected Costing Group's
+  // Current Members.
+  const selectedSlocGroupIdForItems = costingManagerSlocGroupId || slocGroups[0]?.id || "";
+  const itemTabRows = rows
+    .filter(
+      (row) =>
+        !row.is_excluded &&
+        row.source_sloc_group_id === selectedSlocGroupIdForItems &&
+        `${row.material_name || ""} ${row.material_external_code || ""}`
+          .toLowerCase()
+          .includes(costingSearch.toLowerCase()),
+    )
+    .sort((left, right) => String(left.material_name || "").localeCompare(String(right.material_name || "")));
+  const selectedCostingGroupMembers = itemTabRows.filter(
+    (row) => row.costing_group_id === targetCostingGroupId,
+  );
+  const availableCostingItemPool = itemTabRows.filter((row) => !row.costing_group_id);
+  const filteredAvailableCostingItemPool = availableCostingItemPool.filter(
+    (row) => itemPoolMaterialTypeFilter === "ALL" || row.material_type === itemPoolMaterialTypeFilter,
+  );
+  const scopedCostingGroups = costingGroups.filter(
+    (group) => group.sloc_group_id === selectedSlocGroupIdForItems,
+  );
+
   const visibleRateRows = selectedSlocRows.filter(
     (row) =>
       (!rateCostingGroupId || row.costing_group_id === rateCostingGroupId) &&
@@ -555,18 +619,53 @@ export default function SlocCostingGroupPage() {
           <div className="grid gap-4">
             {tab === "dashboard" ? (
               <div className="grid gap-4">
-                <p className="text-sm text-slate-600">
+                <div className="rounded border border-slate-200 bg-white p-4">
+                  <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)_auto]">
+                    <label className="grid gap-1 text-sm text-slate-700">
+                      <span className="font-medium text-slate-800">SLOC Group</span>
+                      <select
+                        value={slocGroupId}
+                        onChange={(event) => setSlocGroupId(event.target.value)}
+                        className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+                      >
+                        <option value="">Select SLOC Group</option>
+                        {slocGroups.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.group_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="grid gap-1 text-sm text-slate-700">
+                      <span className="font-medium text-slate-800">
+                        Months (comma-separated, YYYY-MM)
+                      </span>
+                      <input
+                        value={reportMonths}
+                        onChange={(event) => setReportMonths(event.target.value)}
+                        placeholder="2026-05,2026-06"
+                        className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+                      />
+                    </label>
+                    <div className="flex items-end">
+                      <button
+                        type="button"
+                        disabled={!companyId || !slocGroupId || !reportMonths}
+                        onClick={openReport}
+                        className="h-10 border border-sky-700 bg-sky-100 px-4 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Execute Full Report
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
                   Choose Company, SLOC Group, and one or more months, then
-                  Execute Full Report for a side-by-side month comparison. The
-                  report can be opened in a separate ERP window through
-                  Shift+F8.
-                </p>
-                <input
-                  value={reportMonths}
-                  onChange={(event) => setReportMonths(event.target.value)}
-                  placeholder="2026-05,2026-06"
-                  className="h-10 w-full max-w-md border border-slate-300 px-3"
-                />
+                  execute the full-page report. The report opens on its own
+                  route so the current report view can also be opened in a new
+                  ERP window with{" "}
+                  <span className="font-semibold text-slate-700">Shift+F8</span>.
+                </div>
               </div>
             ) : null}
             {tab === "rate" ? (
@@ -738,493 +837,511 @@ export default function SlocCostingGroupPage() {
               </div>
             ) : null}
             {tab === "sloc" ? (
-              <div className="grid gap-4">
-                <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-                  <div className="grid gap-3 border border-slate-200 bg-white p-4">
-                    <h3 className="text-sm font-semibold text-slate-900">
-                      {editingSlocId ? "Edit SLOC Group" : "New SLOC Group"}
-                    </h3>
-                    <p className="text-xs leading-5 text-slate-500">
-                      Choose the company storage locations that belong to this
-                      AC06 costing scope.
-                    </p>
-                    <label className="grid gap-1 text-sm text-slate-700">
-                      <span className="font-medium text-slate-800">Group Name</span>
-                      <input
-                        value={slocName}
-                        onChange={(event) => setSlocName(event.target.value)}
-                        className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
-                      />
-                    </label>
-                    <label className="grid gap-1 text-sm text-slate-700">
-                      <span className="font-medium text-slate-800">
-                        Storage Locations
-                      </span>
-                      <select
-                        multiple
-                        value={slocLocations}
-                        onChange={(event) =>
-                          setSlocLocations(
-                            Array.from(event.target.selectedOptions).map(
-                              (option) => option.value,
-                            ),
-                          )
-                        }
-                        className="min-h-48 border border-slate-300 px-2 py-2 outline-none focus:border-sky-500"
-                      >
-                        {(locationsQuery.data ?? EMPTY).map((location) => (
-                          <option
-                            key={location.id}
-                            value={location.id}
-                          >{`${location.code || location.storage_location_code || "-"} - ${location.name || location.storage_location_name || "Unnamed"}`}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        disabled={busy || !slocName || !slocLocations.length}
-                        onClick={() =>
-                          void withBusy(async () => {
-                            if (editingSlocId)
-                              await updateAc06SlocGroup(editingSlocId, {
-                                company_id: companyId,
-                                group_name: slocName,
-                                storage_location_ids: slocLocations,
-                              });
-                            else
-                              await createAc06SlocGroup({
-                                company_id: companyId,
-                                group_name: slocName,
-                                storage_location_ids: slocLocations,
-                              });
-                            setSlocName("");
-                            setSlocLocations([]);
-                            setEditingSlocId("");
-                          })
-                        }
-                        className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        Save Group
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingSlocId("");
-                          setSlocName("");
-                          setSlocLocations([]);
-                        }}
-                        className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
-                      >
-                        {editingSlocId ? "Cancel" : "Clear"}
-                      </button>
-                    </div>
-                  </div>
-                  <ErpDenseGrid
-                    columns={[
-                      { key: "group_name", label: "Existing SLOC Group" },
-                      {
-                        key: "member_count",
-                        label: "SLOCs",
-                        render: (row) => (row.storage_location_ids || []).length,
-                      },
-                      { key: "active", label: "Status", render: () => "Active" },
-                      {
-                        key: "actions",
-                        label: "Action",
-                        render: (row) => (
-                          <div className="flex gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setManagedSlocGroupId(row.id);
-                                setSlocGroupId(row.id);
-                                setMaterialSearch("");
-                                setSelectedMaterialIds([]);
-                                window.setTimeout(() => {
-                                  document
-                                    .getElementById("ac06-manage-materials")
-                                    ?.scrollIntoView({
-                                      behavior: "smooth",
-                                      block: "start",
-                                    });
-                                }, 0);
-                              }}
-                              className="text-xs font-semibold text-sky-800"
-                            >
-                              Manage Materials
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCostingParentId(row.id);
-                                setTargetCostingGroupId("");
-                                setCostingMemberIds([]);
-                                setTab("group");
-                              }}
-                              className="text-xs font-semibold text-sky-800"
-                            >
-                              Manage
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingSlocId(row.id);
-                                setSlocName(row.group_name);
-                                setSlocLocations(
-                                  (row.storage_location_ids || []).map(String),
-                                );
-                              }}
-                              className="text-xs font-semibold text-sky-800"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (window.confirm(`Delete ${row.group_name}?`))
-                                  void withBusy(() =>
-                                    deleteAc06SlocGroup(row.id, {
-                                      company_id: companyId,
-                                    }),
-                                  );
-                              }}
-                              className="text-xs font-semibold text-rose-800"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        ),
-                      },
-                    ]}
-                    rows={slocGroups}
-                    rowKey={(row) => row.id}
-                    emptyMessage="No AC06 SLOC Group exists for this company yet."
-                  />
-                </div>
-                {managedSlocGroupId ? (
-                  <div id="ac06-manage-materials" className="grid gap-3">
-                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
-                      <input
-                        value={materialSearch}
-                        onChange={(event) => setMaterialSearch(event.target.value)}
-                        placeholder="Search material name or external code..."
-                        className="h-10 border border-slate-300 px-3"
-                      />
-                      <button
-                        type="button"
-                        disabled={
-                          busy ||
-                          !selectedMaterialIds.length ||
-                          workspace.month?.status === "CLOSED"
-                        }
-                        onClick={() =>
-                          void withBusy(() =>
-                            setAc06MaterialInclusion({
-                              company_id: companyId,
-                              rate_month: month,
-                              line_ids: selectedMaterialIds,
-                              included: true,
-                            }).then(() => setSelectedMaterialIds([])),
-                          )
-                        }
-                        className="border border-sky-700 bg-sky-100 px-3 text-sm font-semibold"
-                      >
-                        Include Selected
-                      </button>
-                      <button
-                        type="button"
-                        disabled={
-                          busy ||
-                          !selectedMaterialIds.length ||
-                          workspace.month?.status === "CLOSED"
-                        }
-                        onClick={() =>
-                          void withBusy(() =>
-                            setAc06MaterialInclusion({
-                              company_id: companyId,
-                              rate_month: month,
-                              line_ids: selectedMaterialIds,
-                              included: false,
-                            }).then(() => setSelectedMaterialIds([])),
-                          )
-                        }
-                        className="border border-rose-700 bg-rose-50 px-3 text-sm font-semibold"
-                      >
-                        Exclude Selected
-                      </button>
-                    </div>
-                    <ErpDenseGrid
-                      columns={[
-                        {
-                          key: "selected",
-                          label: "Select",
-                          width: "70px",
-                          render: (row) => (
-                            <input
-                              type="checkbox"
-                              checked={selectedMaterialIds.includes(row.id)}
-                              onChange={() =>
-                                toggle(
-                                  selectedMaterialIds,
-                                  row.id,
-                                  setSelectedMaterialIds,
-                                )
-                              }
-                            />
-                          ),
-                        },
-                        ...materialIdentityColumns(),
-                        {
-                          key: "costing_group_name",
-                          label: "Current Costing Group",
-                          width: "160px",
-                          render: (row) => row.costing_group_name || "Standalone",
-                        },
-                        {
-                          key: "scope",
-                          label: "Scope",
-                          width: "100px",
-                          render: (row) =>
-                            row.is_excluded ? "Excluded" : "Included",
-                        },
-                        {
-                          key: "status",
-                          label: "Rate Status",
-                          width: "110px",
-                          render: (row) =>
-                            row.is_excluded ? "Excluded" : row.verification_status,
-                        },
-                      ]}
-                      rows={managedSlocRows}
-                      rowKey={(row) => row.id}
-                      emptyMessage="This SLOC Group has no eligible materials yet."
+              <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+                <div className="grid gap-3 border border-slate-200 bg-white p-4">
+                  <h3 className="text-sm font-semibold text-slate-900">
+                    {editingSlocId ? "Edit SLOC Group" : "New SLOC Group"}
+                  </h3>
+                  <p className="text-xs leading-5 text-slate-500">
+                    Each SLOC group decides which materials enter AC06 costing
+                    scope for the selected company.
+                  </p>
+                  <label className="grid gap-1 text-sm text-slate-700">
+                    <span className="font-medium text-slate-800">Group Name</span>
+                    <input
+                      value={slocName}
+                      onChange={(event) => setSlocName(event.target.value)}
+                      className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
                     />
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-            {tab === "group" ? (
-              <div className="grid gap-4 border border-slate-200 p-4">
-                <div className="grid gap-3 md:grid-cols-3">
-                  <label className="grid gap-1 text-xs font-semibold">
-                    Parent SLOC Group
+                  </label>
+                  <label className="grid gap-1 text-sm text-slate-700">
+                    <span className="font-medium text-slate-800">
+                      Storage Locations
+                    </span>
                     <select
-                      value={costingParentId}
-                      onChange={(event) => {
-                        setCostingParentId(event.target.value);
-                        setTargetCostingGroupId("");
-                        setCostingMemberIds([]);
-                      }}
-                      className="h-10 border border-slate-300 bg-white px-3"
+                      multiple
+                      value={slocLocations}
+                      onChange={(event) =>
+                        setSlocLocations(
+                          Array.from(event.target.selectedOptions).map(
+                            (option) => option.value,
+                          ),
+                        )
+                      }
+                      className="min-h-48 border border-slate-300 px-2 py-2 outline-none focus:border-sky-500"
                     >
-                      <option value="">Select SLOC Group</option>
-                      {slocGroups.map((group) => (
-                        <option key={group.id} value={group.id}>
-                          {group.group_name}
-                        </option>
+                      {(locationsQuery.data ?? EMPTY).map((location) => (
+                        <option
+                          key={location.id}
+                          value={location.id}
+                        >{`${location.code || location.storage_location_code || "-"} - ${location.name || location.storage_location_name || "Unnamed"}`}</option>
                       ))}
                     </select>
                   </label>
-                  <label className="grid gap-1 text-xs font-semibold">
-                    Costing Group Name
-                    <input
-                      value={costingName}
-                      onChange={(event) => setCostingName(event.target.value)}
-                      className="h-10 border border-slate-300 px-3"
-                    />
-                  </label>
-                  <div className="mt-5 flex gap-2">
+                  <div className="flex gap-2">
                     <button
                       type="button"
-                      disabled={busy || !costingParentId || !costingName}
+                      disabled={busy || !slocName || !slocLocations.length}
                       onClick={() =>
                         void withBusy(async () => {
-                          if (editingCostingId)
-                            await updateAc06CostingGroup(editingCostingId, {
+                          if (editingSlocId)
+                            await updateAc06SlocGroup(editingSlocId, {
                               company_id: companyId,
-                              group_name: costingName,
+                              group_name: slocName,
+                              storage_location_ids: slocLocations,
                             });
-                          else {
-                            const created = await createAc06CostingGroup({
+                          else
+                            await createAc06SlocGroup({
                               company_id: companyId,
-                              sloc_group_id: costingParentId,
-                              group_name: costingName,
+                              group_name: slocName,
+                              storage_location_ids: slocLocations,
                             });
-                            setTargetCostingGroupId(created?.id || "");
-                          }
-                          setCostingName("");
-                          setEditingCostingId("");
+                          setSlocName("");
+                          setSlocLocations([]);
+                          setEditingSlocId("");
                         })
                       }
-                      className="h-10 border border-sky-700 bg-sky-100 px-3 text-sm font-semibold"
+                      className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      {editingCostingId
-                        ? "Save Costing Group"
-                        : "Create Costing Group"}
+                      Save Group
                     </button>
-                    {editingCostingId ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingSlocId("");
+                        setSlocName("");
+                        setSlocLocations([]);
+                      }}
+                      className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                    >
+                      {editingSlocId ? "Cancel" : "Clear"}
+                    </button>
+                  </div>
+                </div>
+                <div className="grid gap-3">
+                  {slocGroupInsights.map((group) => (
+                    <div key={group.id} className="grid gap-1 border border-slate-200 bg-white p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="grid gap-1">
+                          <h3 className="text-sm font-semibold text-slate-900">{group.group_name}</h3>
+                          <p className="text-xs text-slate-500">
+                            {(group.storage_location_ids || []).length} storage location
+                            {(group.storage_location_ids || []).length === 1 ? "" : "s"} selected
+                            {" | "}
+                            {group.linkedMaterialCount} eligible material{group.linkedMaterialCount === 1 ? "" : "s"}
+                            {" ("}
+                            {group.groupedMaterialCount} grouped, {group.excludedMaterialCount} excluded
+                            {")"}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCostingManagerSlocGroupId(group.id);
+                              setTargetCostingGroupId("");
+                              setTab("group");
+                            }}
+                            className="border border-sky-700 bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-950"
+                          >
+                            Manage
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setManagedSlocGroupId(group.id);
+                              setMaterialSearch("");
+                            }}
+                            className="border border-sky-300 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800"
+                          >
+                            Manage Materials
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSlocGroupId(group.id);
+                              setTab("rate");
+                            }}
+                            className="border border-sky-300 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800"
+                          >
+                            Open in Rate Input
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingSlocId(group.id);
+                              setSlocName(group.group_name);
+                              setSlocLocations((group.storage_location_ids || []).map(String));
+                            }}
+                            className="border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm(`Delete ${group.group_name}?`))
+                                void withBusy(() =>
+                                  deleteAc06SlocGroup(group.id, { company_id: companyId }),
+                                );
+                            }}
+                            className="border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+
+                      {managedSlocGroupId === group.id ? (
+                        <div className="mt-3 grid gap-3 border-t border-slate-200 pt-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="grid gap-1">
+                              <h4 className="text-sm font-semibold text-slate-900">
+                                Manage Materials -- {group.group_name}
+                              </h4>
+                              <p className="text-xs text-slate-500">
+                                New materials that land in this group&apos;s storage
+                                locations auto-include here. Exclude a material to
+                                drop it from this month&apos;s rate scope -- it can
+                                be included again anytime. Grouped or standalone
+                                doesn&apos;t matter here.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setManagedSlocGroupId("")}
+                              className="border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700"
+                            >
+                              Close
+                            </button>
+                          </div>
+                          <label className="grid gap-1 text-sm text-slate-700">
+                            <span className="font-medium text-slate-800">Search Material</span>
+                            <input
+                              value={materialSearch}
+                              onChange={(event) => setMaterialSearch(event.target.value)}
+                              placeholder="Type material name or external code..."
+                              className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+                            />
+                          </label>
+                          <div className="grid gap-4 lg:grid-cols-2">
+                            <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
+                              <div className="flex items-center justify-between gap-3">
+                                <h4 className="text-sm font-semibold text-slate-900">Included</h4>
+                                <span className="text-xs text-slate-500">
+                                  {includedSlocMaterialRows.length} item(s)
+                                </span>
+                              </div>
+                              <ErpDenseGrid
+                                columns={buildAc06MaterialListColumns({
+                                  actionLabel: "Exclude",
+                                  actionClassName: canSetup
+                                    ? "border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
+                                    : "border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-400 cursor-not-allowed",
+                                  onAction: canSetup
+                                    ? (row) =>
+                                        void withBusy(() =>
+                                          setAc06MaterialInclusion({
+                                            company_id: companyId,
+                                            rate_month: month,
+                                            line_ids: [row.id],
+                                            included: false,
+                                          }),
+                                        )
+                                    : () => {},
+                                }).filter((column) => column.key !== "status")}
+                                rows={includedSlocMaterialRows}
+                                rowKey={(row) => row.id}
+                                maxHeight="320px"
+                                emptyMessage="No included material matches the current search."
+                              />
+                            </div>
+                            <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
+                              <div className="flex items-center justify-between gap-3">
+                                <h4 className="text-sm font-semibold text-slate-900">Excluded</h4>
+                                <span className="text-xs text-slate-500">
+                                  {excludedSlocMaterialRows.length} item(s)
+                                </span>
+                              </div>
+                              <ErpDenseGrid
+                                columns={buildAc06MaterialListColumns({
+                                  actionLabel: "Include",
+                                  actionClassName: canSetup
+                                    ? "border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800"
+                                    : "border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-400 cursor-not-allowed",
+                                  onAction: canSetup
+                                    ? (row) =>
+                                        void withBusy(() =>
+                                          setAc06MaterialInclusion({
+                                            company_id: companyId,
+                                            rate_month: month,
+                                            line_ids: [row.id],
+                                            included: true,
+                                          }),
+                                        )
+                                    : () => {},
+                                }).filter((column) => column.key !== "status")}
+                                rows={excludedSlocMaterialRows}
+                                rowKey={(row) => row.id}
+                                maxHeight="320px"
+                                emptyMessage="No material is excluded from this SLOC group yet."
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                  {slocGroupInsights.length === 0 ? (
+                    <div className="rounded border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
+                      No AC06 SLOC Group exists yet. Create one first, then open
+                      Rate Input to review the auto-included item list.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+            {tab === "group" ? (
+              <div className="grid gap-4">
+                <div className="grid gap-3 border border-slate-200 bg-white p-4">
+                  <div className="grid gap-3 lg:grid-cols-[220px_220px_minmax(0,1fr)_auto]">
+                    <label className="grid gap-1 text-sm text-slate-700">
+                      <span className="font-medium text-slate-800">Parent SLOC Group</span>
+                      <select
+                        value={costingParentId}
+                        onChange={(event) => setCostingParentId(event.target.value)}
+                        className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+                      >
+                        <option value="">Select SLOC group</option>
+                        {slocGroups.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.group_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="grid gap-1 text-sm text-slate-700">
+                      <span className="font-medium text-slate-800">Costing Group Name</span>
+                      <input
+                        value={costingName}
+                        onChange={(event) => setCostingName(event.target.value)}
+                        className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+                      />
+                    </label>
+                    <div className="flex items-end gap-2">
+                      <button
+                        type="button"
+                        disabled={busy || !costingParentId || !costingName}
+                        onClick={() =>
+                          void withBusy(async () => {
+                            if (editingCostingId)
+                              await updateAc06CostingGroup(editingCostingId, {
+                                company_id: companyId,
+                                group_name: costingName,
+                              });
+                            else {
+                              const created = await createAc06CostingGroup({
+                                company_id: companyId,
+                                sloc_group_id: costingParentId,
+                                group_name: costingName,
+                              });
+                              setCostingManagerSlocGroupId(costingParentId);
+                              setTargetCostingGroupId(created?.id || "");
+                            }
+                            setCostingName("");
+                            setEditingCostingId("");
+                          })
+                        }
+                        className="h-10 border border-sky-700 bg-sky-100 px-4 text-sm font-semibold text-sky-950"
+                      >
+                        {editingCostingId ? "Update Costing Group" : "Create Costing Group"}
+                      </button>
                       <button
                         type="button"
                         onClick={() => {
                           setEditingCostingId("");
                           setCostingName("");
+                          setCostingParentId("");
                         }}
-                        className="h-10 border border-slate-300 px-3 text-sm"
+                        className="h-10 border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700"
                       >
-                        Cancel
+                        Clear
                       </button>
-                    ) : null}
+                    </div>
                   </div>
+                  <p className="text-xs text-slate-500">
+                    Create or update the Costing Group directly where the parent
+                    SLOC Group scope is selected, then manage member mapping below.
+                  </p>
                 </div>
-                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_260px]">
-                  <label className="grid gap-1 text-xs font-semibold">
-                    Search Eligible / Standalone Material
-                    <input
-                      value={costingSearch}
-                      onChange={(event) => setCostingSearch(event.target.value)}
-                      placeholder="Material name or external code..."
-                      className="h-10 border border-slate-300 px-3"
-                    />
-                  </label>
-                  <label className="grid gap-1 text-xs font-semibold">
-                    Costing Group To Manage
-                    <select
-                      value={targetCostingGroupId}
-                      onChange={(event) =>
-                        setTargetCostingGroupId(event.target.value)
-                      }
-                      className="h-10 border border-slate-300 bg-white px-3"
-                    >
-                      <option value="">Select Costing Group</option>
-                      {costingGroups
-                        .filter((group) => group.sloc_group_id === costingParentId)
-                        .map((group) => (
+
+                <div className="grid gap-3 border border-slate-200 bg-white p-4">
+                  <div className="grid gap-3 lg:grid-cols-[220px_220px_minmax(0,1fr)]">
+                    <label className="grid gap-1 text-sm text-slate-700">
+                      <span className="font-medium text-slate-800">SLOC Group Scope</span>
+                      <select
+                        value={selectedSlocGroupIdForItems}
+                        onChange={(event) => {
+                          setCostingManagerSlocGroupId(event.target.value);
+                          setTargetCostingGroupId("");
+                        }}
+                        className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+                      >
+                        <option value="">Select SLOC group</option>
+                        {slocGroups.map((group) => (
                           <option key={group.id} value={group.id}>
                             {group.group_name}
                           </option>
                         ))}
-                    </select>
-                  </label>
-                </div>
-                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
-                  <label className="grid gap-1 text-xs font-semibold">
-                    Move selected eligible items to
-                    <select
-                      value={targetCostingGroupId}
-                      onChange={(event) =>
-                        setTargetCostingGroupId(event.target.value)
-                      }
-                      className="h-10 border border-slate-300 bg-white px-3"
-                    >
-                      <option value="">Select Costing Group</option>
-                      {costingGroups
-                        .filter((group) => group.sloc_group_id === costingParentId)
-                        .map((group) => (
+                      </select>
+                    </label>
+                    <label className="grid gap-1 text-sm text-slate-700">
+                      <span className="font-medium text-slate-800">Costing Group To Manage</span>
+                      <select
+                        value={targetCostingGroupId}
+                        onChange={(event) => setTargetCostingGroupId(event.target.value)}
+                        className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+                      >
+                        <option value="">Select Costing Group</option>
+                        {scopedCostingGroups.map((group) => (
                           <option key={group.id} value={group.id}>
                             {group.group_name}
                           </option>
                         ))}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    disabled={
-                      busy ||
-                      !targetCostingGroupId ||
-                      !costingMemberIds.length ||
-                      workspace.month?.status === "CLOSED"
-                    }
-                    onClick={() =>
-                      void withBusy(async () => {
-                        await assignAc06CostingGroup({
-                          company_id: companyId,
-                          rate_month: month,
-                          costing_group_id: targetCostingGroupId,
-                          material_ids: groupSetupRows
-                            .filter((row) => costingMemberIds.includes(row.id))
-                            .map((row) => row.material_id),
-                        });
-                        setCostingMemberIds([]);
-                      })
-                    }
-                    className="mt-5 h-10 border border-sky-700 bg-sky-100 px-3 text-sm font-semibold"
-                  >
-                    Map To Group
-                  </button>
-                  <button
-                    type="button"
-                    disabled={
-                      busy ||
-                      !costingMemberIds.length ||
-                      workspace.month?.status === "CLOSED"
-                    }
-                    onClick={() =>
-                      void withBusy(async () => {
-                        await unassignAc06CostingGroup({
-                          company_id: companyId,
-                          rate_month: month,
-                          line_ids: costingMemberIds,
-                        });
-                        setCostingMemberIds([]);
-                      })
-                    }
-                    className="mt-5 h-10 border border-rose-700 bg-rose-50 px-3 text-sm font-semibold"
-                  >
-                    Make Standalone
-                  </button>
-                </div>
-                <ErpDenseGrid
-                  columns={[
-                    {
-                      key: "selected",
-                      label: "Select",
-                      width: "70px",
-                      render: (row) => (
-                        <input
-                          type="checkbox"
-                          checked={costingMemberIds.includes(row.id)}
-                          onChange={() =>
-                            toggle(costingMemberIds, row.id, setCostingMemberIds)
+                      </select>
+                    </label>
+                    <label className="grid gap-1 text-sm text-slate-700">
+                      <span className="font-medium text-slate-800">Search Material</span>
+                      <input
+                        value={costingSearch}
+                        onChange={(event) => setCostingSearch(event.target.value)}
+                        placeholder="Type material name or external code..."
+                        className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
+                      />
+                    </label>
+                  </div>
+                  <ErpSummaryChips
+                    items={[
+                      { label: "Scope Items", value: itemTabRows.length },
+                      { label: "Scope Groups", value: scopedCostingGroups.length },
+                      { label: "Current Members", value: selectedCostingGroupMembers.length },
+                      { label: "Available Standalone", value: availableCostingItemPool.length },
+                    ]}
+                  />
+                  {targetCostingGroupId ? (
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <h3 className="text-sm font-semibold text-slate-900">Available Item Pool</h3>
+                          <div className="flex items-center gap-2">
+                            <label className="flex items-center gap-1 text-xs text-slate-600">
+                              Material Type
+                              <select
+                                value={itemPoolMaterialTypeFilter}
+                                onChange={(event) => setItemPoolMaterialTypeFilter(event.target.value)}
+                                className="h-7 border border-slate-300 bg-white px-1.5 text-xs outline-none focus:border-sky-500"
+                              >
+                                <option value="ALL">All</option>
+                                <option value="RM">RM</option>
+                                <option value="PM">PM</option>
+                              </select>
+                            </label>
+                            <span className="text-xs text-slate-500">
+                              {filteredAvailableCostingItemPool.length} item(s)
+                            </span>
+                          </div>
+                        </div>
+                        <ErpDenseGrid
+                          columns={buildAc06MaterialListColumns({
+                            statusLabel: "Standalone",
+                            actionLabel: "Add",
+                            actionClassName:
+                              "border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800",
+                            onAction: (row) =>
+                              void withBusy(() =>
+                                assignAc06CostingGroup({
+                                  company_id: companyId,
+                                  rate_month: month,
+                                  costing_group_id: targetCostingGroupId,
+                                  material_ids: [row.material_id],
+                                }),
+                              ),
+                          })}
+                          rows={filteredAvailableCostingItemPool}
+                          rowKey={(row) => row.id}
+                          maxHeight="320px"
+                          emptyMessage={
+                            availableCostingItemPool.length === 0
+                              ? "No standalone item is available in this SLOC group scope."
+                              : "No item matches the current filter."
                           }
                         />
-                      ),
-                    },
-                    ...materialIdentityColumns(),
-                    {
-                      key: "costing_group_name",
-                      label: "Current Costing Group",
-                      width: "160px",
-                      render: (row) => row.costing_group_name || "Standalone",
-                    },
-                    { key: "verification_status", label: "Rate Status", width: "110px" },
-                  ]}
-                  rows={groupSetupRows}
-                  rowKey={(row) => row.id}
-                  emptyMessage="Select a parent SLOC Group to manage its eligible items."
-                />
+                      </div>
+                      <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="text-sm font-semibold text-slate-900">Current Members</h3>
+                          <span className="text-xs text-slate-500">{selectedCostingGroupMembers.length} item(s)</span>
+                        </div>
+                        <ErpDenseGrid
+                          columns={buildAc06MaterialListColumns({
+                            statusLabel: "Group Member",
+                            actionLabel: "Remove",
+                            actionClassName:
+                              "border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700",
+                            onAction: (row) =>
+                              void withBusy(() =>
+                                unassignAc06CostingGroup({
+                                  company_id: companyId,
+                                  rate_month: month,
+                                  line_ids: [row.id],
+                                }),
+                              ),
+                          })}
+                          rows={selectedCostingGroupMembers}
+                          rowKey={(row) => row.id}
+                          maxHeight="320px"
+                          emptyMessage="No member is mapped to this Costing Group yet."
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="grid gap-1">
+                    <h3 className="text-sm font-semibold text-slate-900">Standalone Materials</h3>
+                    <p className="text-xs text-slate-500">
+                      These materials are eligible in this SLOC Group but are not assigned to any Costing Group.
+                    </p>
+                  </div>
+                  <ErpDenseGrid
+                    columns={buildAc06MaterialListColumns({ statusLabel: "Standalone" })}
+                    rows={availableCostingItemPool}
+                    rowKey={(row) => row.id}
+                    maxHeight="360px"
+                    emptyMessage="Every eligible material in this SLOC scope is already assigned to a Costing Group."
+                  />
+                </div>
+
                 <ErpDenseGrid
                   columns={[
-                    { key: "group_name", label: "Costing Group" },
+                    { key: "group_name", label: "Costing Group", width: "220px" },
                     {
                       key: "sloc_group_id",
                       label: "Parent SLOC Group",
-                      render: (row) =>
-                        slocGroupNameById.get(String(row.sloc_group_id)) || "-",
+                      width: "160px",
+                      render: (row) => slocGroupNameById.get(String(row.sloc_group_id)) || "-",
                     },
                     {
                       key: "actions",
-                      label: "Action",
+                      label: "",
+                      width: "220px",
                       render: (row) => (
                         <div className="flex gap-2">
                           <button
                             type="button"
                             onClick={() => {
-                              setCostingParentId(row.sloc_group_id);
+                              setCostingManagerSlocGroupId(row.sloc_group_id || "");
                               setTargetCostingGroupId(row.id);
-                              setCostingMemberIds([]);
                             }}
-                            className="text-xs font-semibold text-sky-800"
+                            className="border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800"
                           >
                             Manage
                           </button>
@@ -1232,10 +1349,10 @@ export default function SlocCostingGroupPage() {
                             type="button"
                             onClick={() => {
                               setEditingCostingId(row.id);
-                              setCostingParentId(row.sloc_group_id);
+                              setCostingParentId(row.sloc_group_id || "");
                               setCostingName(row.group_name);
                             }}
-                            className="text-xs font-semibold text-sky-800"
+                            className="border border-slate-300 bg-white px-2 py-0.5 text-xs font-semibold text-slate-700"
                           >
                             Edit
                           </button>
@@ -1248,12 +1365,10 @@ export default function SlocCostingGroupPage() {
                                 )
                               )
                                 void withBusy(() =>
-                                  deleteAc06CostingGroup(row.id, {
-                                    company_id: companyId,
-                                  }),
+                                  deleteAc06CostingGroup(row.id, { company_id: companyId }),
                                 );
                             }}
-                            className="text-xs font-semibold text-rose-800"
+                            className="border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
                           >
                             Delete
                           </button>
@@ -1261,12 +1376,10 @@ export default function SlocCostingGroupPage() {
                       ),
                     },
                   ]}
-                  rows={costingGroups.filter(
-                    (group) =>
-                      !costingParentId || group.sloc_group_id === costingParentId,
-                  )}
+                  rows={costingGroups}
                   rowKey={(row) => row.id}
-                  emptyMessage="No Costing Group exists yet."
+                  maxHeight="none"
+                  emptyMessage="No Costing Group exists yet for this company."
                 />
               </div>
             ) : null}
