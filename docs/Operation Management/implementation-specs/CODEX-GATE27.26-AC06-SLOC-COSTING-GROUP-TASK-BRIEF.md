@@ -1,195 +1,97 @@
-# CODEX-GATE27.26-AC06-SLOC-COSTING-GROUP-TASK-BRIEF (v2 — corrects the shipped v1)
+# CODEX-GATE27.26-AC06-SLOC-COSTING-GROUP-TASK-BRIEF (v3 -- FINAL PO11-parity redesign)
 
 **Gate:** 27.26
-**Domain:** PRODUCTION / COSTING (Accounts ACL)
+**Domain:** ACCOUNTS / DISPATCH RATE
 **TX Code:** AC06
-**Title:** Storage-Location-based Costing Group master for MTO/HPS RM/PM/INT costing rate — **v2 adds a new "SLoc Group" prerequisite layer and a real Approval Detail page**, replacing the single-storage-location browse and blunt bulk-approve v1 shipped.
-**Reference doc:** feasibility doc `docs/Operation Management/PACE_ERP_Operation_Management_SAP_Style_Discovery_and_Feasibility.md`, **§114.22** (this correction, read in full — explains exactly what was wrong and why), plus the still-valid **§114.9/§114.10/§114.21** underneath it (material-level group/rate uniqueness is UNCHANGED, only the browsing layer and Approval flow change).
+**Resource:** `ACC_SLOC_COSTING_GROUP`
+**Title:** Monthly Costing Rate Workspace
+**Design SSOT:** feasibility §114.23 (2026-08-24). It supersedes AC06-specific statements in §§114.9, 114.10, 114.21, and 114.22.
 
----
+## Outcome
 
-## ⚠️ Read this first: this is a v1→v2 correction, not a fresh build
+Build AC06 as the company-scoped PO11 workspace pattern:
 
-Business owner clicked through the deployed v1 page and said it's **not usable as-is**. The core
-`costing_group`/`costing_group_member`/`costing_rate_line` schema and the material-level
-uniqueness rule (§114.21) are **correct and stay unchanged**. What's wrong is:
+`Company -> SLOC Group -> eligible item pool -> Costing Group / Standalone -> monthly rate -> Auditor verification -> close/archive -> Dispatch resolution`
 
-1. There is no way to browse/act on **multiple** storage locations at once — every flow
-   (group-member picking, rate-chart entry) is hard-wired to exactly one `storage_location_id` at
-   a time. The real requirement needs a **new, separate, reusable "SLoc Group" master** (a named
-   group of storage locations) as a prerequisite step before both group-creation and rate entry.
-2. Approval is a single blunt "approve everything drafted this month" button with **no way to
-   review, edit a rate, or fix group membership before approving** — the real requirement needs a
-   proper Detail page reachable from the draft list.
+It is **not** procurement planning. Do not reuse `erp_procurement` tables, procurement routes, or PO11 authority. Reuse PO11's proven data-scoping, carry-forward, close/archive, full-page report, and ERP DenseGrid UX patterns.
 
-Read `supabase/functions/api/_core/production/costing_group.handlers.ts` and
-`frontend/src/pages/dashboard/production/SlocCostingGroupPage.jsx` **in full** before starting —
-both already exist and most of what's in them is correct and reusable. This brief tells you
-precisely what to add/change, not to rewrite from scratch.
+## Mandatory reading and process
 
----
+1. Read `CLAUDE.md`, especially §8, §8A, §8B and all mandatory bug-pattern rules.
+2. Read `docs/Operation Management/implementation-specs/OM-IMPLEMENTATION-LOG.md` AC06 entries; they document the obsolete v1/v2 model and must not be treated as the current business model.
+3. Read feasibility §114.23 in full, this brief, `PROD-ACL-Access-Decisions.md`, PO11's task brief, migrations, backend handler, frontend page, and dependency-provisioning report process.
+4. Verify actual Dev schema before migration. Use a new additive migration; never edit the two existing AC06 migrations.
+5. Before completion run all applicable static guards, dependency provisioning check, migration integrity check, focused backend type checks, frontend lint/build, and add exact results to both implementation logs.
 
-## Before you write any code
+## Locked authority
 
-1. Read CLAUDE.md §8, §8A, §8B.
-2. Read feasibility doc §114.22 in full (this correction), then §114.9/§114.10/§114.21 underneath it for what's still valid.
-3. Read the existing `costing_group.handlers.ts` and `SlocCostingGroupPage.jsx` in full (they're short).
-4. You have Supabase MCP access to Dev (`ytapuwiqicmvpanmzelb`). Re-verify every table/column live before using it.
-5. Do NOT touch ACL/menu registration in the DB — Claude does that via MCP. This brief needs **no new ACL resource** — everything stays under the existing `ACC_SLOC_COSTING_GROUP` resource code (VIEW/WRITE/APPROVE/DELETE actions already registered), you only add new `route-acl-registry.ts` entries for the new routes using those same actions (SLoc Group CRUD = VIEW/WRITE, same as Costing Group CRUD already is).
-6. Migration integrity discipline unchanged (§8A) — apply, reconcile version, `migration-integrity-check.mjs` → `in_sync = true`, Dev only.
+| Area | Accounts | L1/L2 Auditor | Director | ACL Master |
+|---|---|---|---|---|
+| View/report/history | Yes | Yes | Yes | Yes |
+| SLOC Group / Costing Group / item mapping maintenance | Yes | Yes | No | Yes |
+| Rate entry/change | Yes | No | No | Yes |
+| Verify pending rate | No | Yes | No | Yes |
+| Close month | No | Yes | No | Yes |
 
----
+Use ACL resource actions and approver/workflow data; no local role arrays or direct role-code gates. `ACC_SLOC_COSTING_GROUP` is view-only; `ACC_SLOC_COSTING_SETUP`, `ACC_SLOC_COSTING_RATE`, `ACC_SLOC_COSTING_VERIFY`, and `ACC_SLOC_COSTING_CLOSE` independently gate the four operational responsibilities.
 
-## Change 1 — Migration: two new tables
+## Database redesign -- additive migration
 
-```sql
--- A named, reusable, company-scoped group OF storage locations. Pure browse/filter
--- convenience — a storage location can belong to multiple SLoc Groups (no exclusivity;
--- this does NOT touch the material-level Costing Group exclusivity rule, §114.21).
-CREATE TABLE erp_production.sloc_group (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id uuid NOT NULL REFERENCES erp_master.companies(id),
-  name text NOT NULL,
-  created_by uuid NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (company_id, name)
-);
+Create a clean AC06 monthly workspace in `erp_production`. Dev and Prod were verified with zero
+legacy AC06 rows, so retire/drop the old AC06 v1/v2 tables and endpoints in this migration. Do not
+retain old behavior or compatibility code.
 
-CREATE TABLE erp_production.sloc_group_member (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  sloc_group_id uuid NOT NULL REFERENCES erp_production.sloc_group(id),
-  storage_location_id uuid NOT NULL REFERENCES erp_inventory.storage_location_master(id),
-  added_by uuid NOT NULL,
-  added_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (sloc_group_id, storage_location_id)
-);
-```
+1. `costing_rate_sloc_group`: company, name, audit fields, active state; unique `(company_id, name)`.
+2. `costing_rate_sloc_group_member`: parent group + storage location; enforce that a location has one active parent group per company. Validate company ownership in DB/handler.
+3. `costing_rate_item_group`: parent SLOC group, name, audit fields, active state; unique `(sloc_group_id, name)`.
+4. `costing_rate_month`: company + first-day month, status `OPEN/CLOSED`, carry-forward source, closed audit; unique `(company_id, rate_month)`.
+5. `costing_rate_month_line`: `(month_id, source_sloc_group_id, material_id)` identity; current item-group snapshot/null for standalone; free-precision numeric rate; verification status/audit; rate revision audit fields. Enforce one material in at most one Costing Group in one monthly SLOC scope.
+6. `costing_rate_month_group_config`: snapshot/configuration of parent SLOC Group, Costing Group, and member material for the month, sufficient for carry-forward and immutable history.
+7. Archive header/line/group-config tables mirroring PO11 snapshot requirements, including group names and verification/rate precision snapshots.
+8. A security-definer Dispatch resolver RPC/function that accepts company, dispatch month, source SLOC group, and material; returns only verified non-zero rate or an explicit blocked result. It must never fallback to a prior rate.
+9. Auto-close function/schedule path matching PO11's safe month-expiry pattern. Do not silently verify pending rows on close.
 
-`costing_group` / `costing_group_member` / `costing_rate_line` — **no schema change**, still
-material-level, no location column.
+## Backend
 
-## Change 2 — Backend: new `sloc_group.handlers.ts` (or add to `costing_group.handlers.ts`, your call — keep them in the same file since they share the `getCompanyScope`/`getMaterialMap` helpers)
+Implement an AC06 workspace handler family under Production routes, with all reads/writes company-scope checked:
 
-1. `createSlocGroupHandler` (`POST /api/production/sloc-groups`) — `{company_id, name, storage_location_ids: [...]}`. Creates the group + inserts every member row in one call (this is a create-with-members flow, not create-then-add-separately — the UI always collects the multi-select before saving).
-2. `listSlocGroupsHandler` (`GET /api/production/sloc-groups?company_id=`) — returns each group with its member storage locations (code + name, join `storage_location_master`) and a `member_count`.
-3. `addSlocGroupMemberHandler` (`POST /api/production/sloc-groups/:id/members`) — `{storage_location_ids: [...]}`, for adding more locations to an existing SLoc Group later. Skip (no-op) any id already a member — no exclusivity conflict is possible here (unlike Costing Group), so there's no 409 case to handle.
-4. `removeSlocGroupMemberHandler` (`DELETE /api/production/sloc-groups/:id/members/:memberId`).
+1. Workspace GET: resolve/create current month, carry forward prior month config/rates as pending draft, calculate eligible material pool from the parent SLOC Group, return grouped/standalone rows, summary, SLOC groups, Costing Groups, and permissions.
+2. Bulk rate/config save: preserve arbitrary numeric decimal precision; group-lead rate propagates only within its current Costing Group; any rate/membership revision invalidates required verification deterministically.
+3. SLOC Group CRUD and membership validation: reject duplicate active company membership; block deletion/move when dependent Costing Groups require action.
+4. Costing Group CRUD and membership validation: parent must match selected company/SLOC Group; a material may exist in only one current Item/Costing Group within its monthly scope; removing makes it standalone.
+5. Verify endpoint: only pending eligible standalone/group-lead scopes; accept bulk selected scopes atomically; reject a mixed selection containing verified/stale/other-scope rows. Verification cascades to group members through the same saved group rate snapshot.
+6. Close, history, auto-close, and multi-month report endpoints. Archive must preserve names, mapping, rate value, precision, and verification state.
+7. Dispatch resolver/integration endpoint. Consumers get an explicit `usable=false`/block response for zero, missing, or pending rates.
+8. Add every route to `route-acl-registry.ts`; validate actual method/path patterns. Do not use frontend permission checks as authority.
 
-## Change 3 — Backend: `listCostingRateMaterialsHandler` — switch from single location to SLoc Group union
+## Frontend
 
-Change the query param from `storage_location_id` to `sloc_group_id`. Resolve every
-`storage_location_id` that's a member of that `sloc_group_id` (join `sloc_group_member`), then run
-the existing `stock_snapshot` query with `.in("storage_location_id", memberLocationIds)` instead of
-`.eq("storage_location_id", storageLocationId)` — the rest of the function (material dedup, group
-name join, rate join) is unchanged, it already operates on a `materialIds` array regardless of how
-many locations fed it. This ONE function is reused as-is by both the group-member-picker browse
-list (drawer) and the Rate Chart Entry list (main table) — both already call it, they'll both just
-pass `sloc_group_id` now instead of `storage_location_id`.
+Rebuild `SlocCostingGroupPage.jsx` as the PO11 workspace visual pattern, retaining AC06 labels:
 
-## Change 4 — Backend: `addCostingGroupMemberHandler` — no schema change, just param rename
+1. Header: company, month, SLOC Group, status/count chips, Refresh, Close Month.
+2. Tabs: Costing Dashboard, Monthly Costing Rate Input, SLOC Group Setup, Costing Group Setup, History / Archive.
+3. SLOC Group Setup: create/edit/delete and add/remove locations; immediate refresh after save; company-only location choices.
+4. Costing Group Setup: selected parent SLOC Group is mandatory; group create/edit/delete and eligible-item map/unmap; clear standalone list.
+5. Monthly Costing Rate Input: ERP DenseGrid; group lead editable plus read-only auto-filled members; standalone editable; free decimal input; pending/verified/zero status; checkbox selection only for valid pending scopes; bulk Verify action follows locked inactive rule.
+6. Costing Dashboard/report selection: Company + SLOC Group + multi-month picker; Execute opens a full-page report route, compatible with Shift+F8 new-window flow.
+7. History: immutable closed-month snapshot; no edit controls.
+8. Use shared transaction-company, screen scaffold, DenseGrid, hotkey, loading, action-overlay, and page/report patterns. No custom role arrays.
 
-`storage_location_id` in the body (currently stored as `added_from_storage_location_id`, audit-only)
-no longer makes sense as a single value once browsing is SLoc-Group-driven — change it to accept
-`sloc_group_id` instead and store... actually, simplest: **drop this field from the request
-entirely** and leave `added_from_storage_location_id` NULL going forward (it was always
-audit-only/non-identity per §114.21, never load-bearing) — don't invent a new "added from which
-SLoc Group" audit column unless you find a real use for it; this brief doesn't ask for one.
+## Acceptance checklist
 
-## Change 5 — Backend: Approval Detail page endpoint
+1. CMP003 and CMP006 can have independent SLOC Groups, Costing Groups, items, monthly rates, verification, and reports.
+2. One company SLOC cannot be saved into two active AC06 SLOC Groups.
+3. A Costing Group cannot exist without its parent SLOC Group; an item cannot join two Costing Groups in one same-month SLOC scope.
+4. Removed item immediately appears standalone; new/changed SLOC Group is immediately available in setup and input.
+5. Group lead rate auto-fills all members without rounding; standalone rate remains independent.
+6. Changed rate invalidates prior verification; missing/zero/pending rate is Dispatch-blocked.
+7. Bulk Verify accepts only a clean pending selection and is atomic.
+8. Carry-forward is editable and not Dispatch-usable until verified.
+9. Explicit/automatic close produces immutable snapshot without converting pending values to verified.
+10. Multi-month full-page report compares selected months correctly.
+11. ACL follows the locked matrix and company scope; ACL Master retains full access.
+12. Dependency scan, migration integrity, focused checks, lint, and build pass; logs record actual results.
 
-New: `listDraftCostingRateDetailHandler` (`GET /api/production/costing-rate/draft-detail?company_id=&rate_month=`)
-— returns every `costing_rate_line` row for that `(company_id, rate_month)` regardless of status
-(so the approver sees the full drafted set, not filtered by any single SLoc Group — a month's
-drafts may have been entered across several different SLoc-Group browsing sessions). Same shape as
-`listCostingRateMaterialsHandler`'s response rows (material label, group name, rate, status) plus
-the row's own `id` so the frontend can distinguish rows. Reuse `getMaterialMap` for labels.
+## Logs and commit
 
-`saveCostingRateDraftHandler` and `removeCostingGroupMemberHandler`/`addCostingGroupMemberHandler`
-are reused as-is from the Detail page for editing — no new write endpoints needed. Read §114.22's
-"nuance" paragraph on why a membership change doesn't retroactively touch an already-drafted row's
-`group_id` — don't try to "fix" that, it's the intended snapshot behavior.
-
-## Change 6 — Frontend: `SlocCostingGroupPage.jsx` rework
-
-1. **Header**: replace the single "Storage Location" `<select>` with an "SLoc Group" `<select>`
-   (sourced from `listSlocGroups`). Keep Company + Month as-is.
-2. **New "Manage SLoc Groups" entry point** (a button next to "New Group", or a small inline
-   drawer) — multi-select checkboxes over `listStorageLocations` (already imported), Name input,
-   Save → `createSlocGroup`. Simple, one screen, no need for a separate route/page.
-3. **"New Group" drawer** (Costing Category Group creation) — the "Browse Storage Location"
-   `<select>` inside the drawer becomes an "SLoc Group" `<select>` instead, feeding
-   `listCostingRateMaterials({ sloc_group_id })` (Change 3) for the picker grid. Everything else in
-   the drawer (mode toggle, group name, material checkboxes, save) is unchanged.
-4. **Rate Chart Entry table** — driven by the header's SLoc Group selection now, same
-   `listCostingRateMaterials({ sloc_group_id, rate_month })` call. **Rate input behavior change**:
-   only the row that is the **first member of its group** (by material sort order, or simplest:
-   first occurrence when iterating `rateMaterials` in the order the API returns them) gets an
-   editable `<input>`; every other row sharing that `group_id` renders the rate as **read-only
-   text**, updated live from the first row's `onChange` (the existing `updateRate(materialId,
-   value, groupId)` propagation logic already does the "update every row sharing groupId" part —
-   you're only changing which rows render an `<input>` vs plain text). Standalone rows
-   (`group_id == null`) stay editable exactly as today.
-5. **Approve tab → Detail page, not a bare Approve button.** The pending-drafts list stays as the
-   entry point, but clicking/Entering a row now opens a Detail view (can be an inline expand,
-   a drawer, or route to a sub-view — your call on the exact UI shape, but it must show every
-   drafted row for that month per Change 5, not just a count) with:
-   - Editable rate per row (reuses the same input pattern as Change 6.4 — first-of-group editable,
-     rest read-only-and-propagated).
-   - An "Unmap from group" action per grouped row (reuses `removeCostingGroupMember`, same as the
-     existing `SectionMembers` unmap button — copy that pattern here).
-   - A "Save Changes" action that calls `saveCostingRateDraftHandler` with whatever the approver
-     edited (same endpoint the Rate Chart Entry tab already uses).
-   - An "Approve" action (calls the existing `approveCostingRateHandler`) that only becomes
-     available from within this Detail view — remove the old bare "Approve" button from the list
-     view entirely, the list view now only navigates into the Detail view.
-
-## Change 7 — `frontend/src/pages/dashboard/production/prodApi.js`
-
-Add: `createSlocGroup`, `listSlocGroups`, `addSlocGroupMember`, `removeSlocGroupMember`,
-`listDraftCostingRateDetail` — same `fetchProd` wrapper pattern as every other function in this
-file, next to the existing `createCostingGroup`/`listCostingGroups`/etc.
-
-## Change 8 — `route-acl-registry.ts`
-
-All new routes gated under the existing `ACC_SLOC_COSTING_GROUP` resource:
-- `POST /api/production/sloc-groups` → `WRITE`
-- `GET /api/production/sloc-groups` → `VIEW`
-- `POST /api/production/sloc-groups/:id/members` → `WRITE`
-- `DELETE /api/production/sloc-groups/:id/members/:memberId` → `DELETE`
-- `GET /api/production/costing-rate/draft-detail` → `VIEW`
-
----
-
-## Hard rules
-
-1. Material-level Costing Group exclusivity (§114.21) is **unchanged** — do not let SLoc Group
-   membership introduce any material-exclusivity concept. A storage location can sit in many SLoc
-   Groups; that's fine and expected.
-2. `costing_rate_line.group_id` stays a snapshot, never live-joined for history — same as v1,
-   restated in §114.22's nuance paragraph. Don't "fix" this into a live join while building the
-   Approval Detail page.
-3. Company scope on every new/changed handler.
-4. Draft-save vs Approve stay structurally separate handlers/actions (unchanged from v1).
-5. Don't regress anything in v1 that's already correct — Change 1-8 above is additive/substitutive
-   on specific pieces, not a rewrite of the whole file.
-
-## Explicitly out of scope
-
-- How the approved rate is consumed by SO/§104 RMC calc — still deliberately deferred (§114.9).
-- A "reopen after approve" mechanism — not asked for.
-- Any change to `sloc_group`'s own storage locations affecting existing `costing_rate_line` history — out of scope, no such coupling exists.
-
-## Verification
-
-1. Create an SLoc Group with 2+ storage locations in Dev.
-2. Open "New Group", pick that SLoc Group, confirm the material picker shows the **union** of items across both locations (not just one).
-3. Create a Costing Category Group with 2 members from that union list.
-4. Switch the header to that SLoc Group + a test month, confirm the Rate Chart Entry table shows the same union, confirm only the first grouped row has an editable rate input and typing into it updates the second row's (read-only) display.
-5. Save Draft, then go to Approve tab, click into that month's row, confirm the Detail view shows all drafted rows (including any entered via a **different** SLoc Group session that same month, if you test that), edit one rate there, unmap one member, confirm both persist, then Approve from inside the Detail view.
-6. Confirm the list view no longer has a bare Approve button — only navigation into Detail.
-7. `deno check` / `eslint` clean. `node scripts/migration-integrity-check.mjs` → `in_sync = true`.
-
-## Log + commit
-
-- Append entries to `docs/Codex-Log.md` and `OM-IMPLEMENTATION-LOG.md` (Gate-27.26, mark as v2 correction with a reference back to the original entry).
-- Commit with `Co-Authored-By: Codex`. **Do not push.**
+Append a Gate-27.26 v3 entry to `docs/Codex-Log.md` and `OM-IMPLEMENTATION-LOG.md`, including migration name/version, Dev migration result, validations, limitations, ACL changes, and dependency scan result. Commit only after verification; push only when the user asks.

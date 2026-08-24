@@ -7929,7 +7929,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/production/SlocCostingGroupPage.jsx",
-    "dependencyCount": 14,
+    "dependencyCount": 15,
     "deps": [
       {
         "fn": "listStorageLocations",
@@ -7940,107 +7940,115 @@
         "skipAcl": true
       },
       {
-        "fn": "createSlocGroup",
-        "method": "POST",
-        "path": "/api/production/sloc-groups",
-        "resourceCode": "ACC_SLOC_COSTING_GROUP",
-        "action": "WRITE",
-        "skipAcl": false
-      },
-      {
-        "fn": "listSlocGroups",
+        "fn": "getAc06Workspace",
         "method": "GET",
-        "path": "/api/production/sloc-groups",
+        "path": "/api/production/ac06/workspace",
         "resourceCode": "ACC_SLOC_COSTING_GROUP",
         "action": "VIEW",
         "skipAcl": false
       },
       {
-        "fn": "addSlocGroupMember",
+        "fn": "createAc06SlocGroup",
         "method": "POST",
-        "path": "/api/production/sloc-groups/${groupId}/members",
-        "resourceCode": "ACC_SLOC_COSTING_GROUP",
+        "path": "/api/production/ac06/sloc-groups",
+          "resourceCode": "ACC_SLOC_COSTING_SETUP",
         "action": "WRITE",
         "skipAcl": false
       },
       {
-        "fn": "removeSlocGroupMember",
-        "method": "DELETE",
-        "path": "/api/production/sloc-groups/${groupId}/members/${memberId}",
-        "resourceCode": "ACC_SLOC_COSTING_GROUP",
-        "action": "DELETE",
-        "skipAcl": false
-      },
-      {
-        "fn": "createCostingGroup",
+        "fn": "createAc06CostingGroup",
         "method": "POST",
-        "path": "/api/production/costing-groups",
-        "resourceCode": "ACC_SLOC_COSTING_GROUP",
+        "path": "/api/production/ac06/costing-groups",
+          "resourceCode": "ACC_SLOC_COSTING_SETUP",
         "action": "WRITE",
         "skipAcl": false
       },
       {
-        "fn": "listCostingGroups",
+        "fn": "assignAc06CostingGroup",
+        "method": "POST",
+        "path": "/api/production/ac06/costing-groups/assign",
+          "resourceCode": "ACC_SLOC_COSTING_SETUP",
+        "action": "WRITE",
+          "skipAcl": false
+        },
+        {
+          "fn": "updateAc06SlocGroup",
+          "method": "PATCH",
+          "path": "/api/production/ac06/sloc-groups/:id",
+          "resourceCode": "ACC_SLOC_COSTING_SETUP",
+          "action": "WRITE",
+          "skipAcl": false
+        },
+        {
+          "fn": "deleteAc06SlocGroup",
+          "method": "DELETE",
+          "path": "/api/production/ac06/sloc-groups/:id",
+          "resourceCode": "ACC_SLOC_COSTING_SETUP",
+          "action": "DELETE",
+          "skipAcl": false
+        },
+        {
+          "fn": "updateAc06CostingGroup",
+          "method": "PATCH",
+          "path": "/api/production/ac06/costing-groups/:id",
+          "resourceCode": "ACC_SLOC_COSTING_SETUP",
+          "action": "WRITE",
+          "skipAcl": false
+        },
+        {
+          "fn": "deleteAc06CostingGroup",
+          "method": "DELETE",
+          "path": "/api/production/ac06/costing-groups/:id",
+          "resourceCode": "ACC_SLOC_COSTING_SETUP",
+          "action": "DELETE",
+          "skipAcl": false
+        },
+      {
+        "fn": "unassignAc06CostingGroup",
+        "method": "POST",
+        "path": "/api/production/ac06/costing-groups/unassign",
+        "resourceCode": "ACC_SLOC_COSTING_SETUP",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "saveAc06Rates",
+        "method": "POST",
+        "path": "/api/production/ac06/rates",
+        "resourceCode": "ACC_SLOC_COSTING_RATE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "verifyAc06Rates",
+        "method": "POST",
+        "path": "/api/production/ac06/verify",
+        "resourceCode": "ACC_SLOC_COSTING_VERIFY",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "closeAc06Month",
+        "method": "POST",
+        "path": "/api/production/ac06/close",
+        "resourceCode": "ACC_SLOC_COSTING_CLOSE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "getAc06History",
         "method": "GET",
-        "path": "/api/production/costing-groups",
+        "path": "/api/production/ac06/history",
         "resourceCode": "ACC_SLOC_COSTING_GROUP",
         "action": "VIEW",
         "skipAcl": false
       },
       {
-        "fn": "addCostingGroupMembers",
-        "method": "POST",
-        "path": "/api/production/costing-groups/${groupId}/members",
-        "resourceCode": "ACC_SLOC_COSTING_GROUP",
-        "action": "WRITE",
-        "skipAcl": false
-      },
-      {
-        "fn": "removeCostingGroupMember",
-        "method": "DELETE",
-        "path": "/api/production/costing-groups/${groupId}/members/${memberId}",
-        "resourceCode": "ACC_SLOC_COSTING_GROUP",
-        "action": "DELETE",
-        "skipAcl": false
-      },
-      {
-        "fn": "listCostingRateMaterials",
+        "fn": "getAc06Report",
         "method": "GET",
-        "path": "/api/production/costing-rate/materials",
+        "path": "/api/production/ac06/report",
         "resourceCode": "ACC_SLOC_COSTING_GROUP",
         "action": "VIEW",
-        "skipAcl": false
-      },
-      {
-        "fn": "saveCostingRateDraft",
-        "method": "POST",
-        "path": "/api/production/costing-rate/draft",
-        "resourceCode": "ACC_SLOC_COSTING_GROUP",
-        "action": "WRITE",
-        "skipAcl": false
-      },
-      {
-        "fn": "listPendingCostingDrafts",
-        "method": "GET",
-        "path": "/api/production/costing-rate/pending-drafts",
-        "resourceCode": "ACC_SLOC_COSTING_GROUP",
-        "action": "VIEW",
-        "skipAcl": false
-      },
-      {
-        "fn": "listDraftCostingRateDetail",
-        "method": "GET",
-        "path": "/api/production/costing-rate/draft-detail",
-        "resourceCode": "ACC_SLOC_COSTING_GROUP",
-        "action": "VIEW",
-        "skipAcl": false
-      },
-      {
-        "fn": "approveCostingRate",
-        "method": "POST",
-        "path": "/api/production/costing-rate/approve",
-        "resourceCode": "ACC_SLOC_COSTING_GROUP",
-        "action": "APPROVE",
         "skipAcl": false
       }
     ]

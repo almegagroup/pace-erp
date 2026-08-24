@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import { useSearchParams } from "react-router-dom";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
@@ -9,872 +9,143 @@ import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { listStorageLocations } from "../om/omApi.js";
 import {
-  addCostingGroupMembers,
-  addSlocGroupMember,
-  approveCostingRate,
-  createCostingGroup,
-  createSlocGroup,
-  listCostingGroups,
-  listCostingRateMaterials,
-  listDraftCostingRateDetail,
-  listPendingCostingDrafts,
-  listSlocGroups,
-  removeCostingGroupMember,
-  removeSlocGroupMember,
-  saveCostingRateDraft,
+  assignAc06CostingGroup,
+  closeAc06Month,
+  createAc06CostingGroup,
+  createAc06SlocGroup,
+  deleteAc06CostingGroup,
+  deleteAc06SlocGroup,
+  getAc06History,
+  getAc06Report,
+  getAc06Workspace,
+  saveAc06Rates,
+  unassignAc06CostingGroup,
+  updateAc06CostingGroup,
+  updateAc06SlocGroup,
+  verifyAc06Rates,
 } from "./prodApi.js";
 
-const EMPTY_ROWS = [];
+const EMPTY = [];
+const monthNow = () => new Date().toISOString().slice(0, 7);
+const unwrap = (payload) => payload?.data ?? payload ?? {};
 
-function currentMonth() {
-  return new Date().toISOString().slice(0, 7);
-}
-
-function noticeFor(error) {
-  return error?.message || "Request failed.";
-}
-
-function buildEditableMaterialSet(rows) {
-  const seenGroups = new Set();
-  const editable = new Set();
-  for (const row of rows) {
-    if (!row.group_id) {
-      editable.add(row.material_id);
-      continue;
-    }
-    if (!seenGroups.has(row.group_id)) {
-      editable.add(row.material_id);
-      seenGroups.add(row.group_id);
-    }
-  }
-  return editable;
-}
-
-function toggleInList(current, value) {
-  return current.includes(value)
-    ? current.filter((entry) => entry !== value)
-    : [...current, value];
-}
-
-function seedRates(current, rows) {
-  const next = { ...current };
-  let changed = false;
-  for (const row of rows) {
-    if (!(row.material_id in next) && row.rate != null) {
-      next[row.material_id] = String(row.rate);
-      changed = true;
-    }
-  }
-  return changed ? next : current;
-}
-
-function updateGroupedRate(setter, rows, materialId, nextValue, groupId) {
-  setter((current) => {
-    const next = { ...current, [materialId]: nextValue };
-    if (groupId) {
-      for (const row of rows) {
-        if (row.group_id === groupId) next[row.material_id] = nextValue;
-      }
-    }
-    return next;
-  });
+function Chip({ label, value, tone = "plain" }) {
+  const colors = { plain: "border-slate-300 bg-white", ok: "border-emerald-300 bg-emerald-50", warn: "border-amber-300 bg-amber-50" };
+  return <span className={`rounded-full border px-3 py-1 text-xs font-semibold text-slate-700 ${colors[tone]}`}>{label}: {value}</span>;
 }
 
 export default function SlocCostingGroupPage() {
   const { runtimeContext } = useMenu();
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
   const primaryFocusRef = useRef(null);
-
   const [companyId, setCompanyId] = useState("");
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth());
+  const [month, setMonth] = useState(monthNow());
   const [slocGroupId, setSlocGroupId] = useState("");
-  const [tab, setTab] = useState("entry");
-  const [submitting, setSubmitting] = useState(false);
-
-  const [costingDrawerOpen, setCostingDrawerOpen] = useState(false);
-  const [costingDrawerMode, setCostingDrawerMode] = useState("create");
-  const [selectedCostingGroupId, setSelectedCostingGroupId] = useState("");
-  const [newCostingGroupName, setNewCostingGroupName] = useState("");
-  const [drawerSlocGroupId, setDrawerSlocGroupId] = useState("");
-  const [selectedMaterialIds, setSelectedMaterialIds] = useState([]);
-
-  const [slocManageOpen, setSlocManageOpen] = useState(false);
-  const [newSlocGroupName, setNewSlocGroupName] = useState("");
-  const [newSlocGroupLocationIds, setNewSlocGroupLocationIds] = useState([]);
-  const [managedSlocGroupId, setManagedSlocGroupId] = useState("");
-  const [managedAddLocationIds, setManagedAddLocationIds] = useState([]);
-
-  const [entryRates, setEntryRates] = useState({});
-  const [approveMonth, setApproveMonth] = useState("");
-  const [approvalDrawerOpen, setApprovalDrawerOpen] = useState(false);
-  const [approvalRates, setApprovalRates] = useState({});
+  const [tab, setTab] = useState("dashboard");
+  const [rateDraft, setRateDraft] = useState({});
+  const [selectedForVerify, setSelectedForVerify] = useState([]);
+  const [slocName, setSlocName] = useState("");
+  const [slocLocations, setSlocLocations] = useState([]);
+  const [editingSlocId, setEditingSlocId] = useState("");
+  const [costingName, setCostingName] = useState("");
+  const [editingCostingId, setEditingCostingId] = useState("");
+  const [costingParentId, setCostingParentId] = useState("");
+  const [targetCostingGroupId, setTargetCostingGroupId] = useState("");
+  const [costingMemberIds, setCostingMemberIds] = useState([]);
+  const [reportMonths, setReportMonths] = useState(monthNow());
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!companyId) {
-      const defaultCompany = String(runtimeContext?.selectedCompanyId ?? "").trim();
-      if (defaultCompany) setCompanyId(defaultCompany);
-    }
+    if (!companyId && runtimeContext?.selectedCompanyId) setCompanyId(String(runtimeContext.selectedCompanyId));
   }, [companyId, runtimeContext]);
 
-  useEffect(() => {
-    setSlocGroupId("");
-    setDrawerSlocGroupId("");
-    setSelectedCostingGroupId("");
-    setManagedSlocGroupId("");
-    setApproveMonth("");
-    setApprovalDrawerOpen(false);
-    setSelectedMaterialIds([]);
-    setEntryRates({});
-    setApprovalRates({});
-  }, [companyId]);
-
-  function pushNotice(message, tone = "success") {
-    pushToast({ message, tone });
-  }
-
-  const storageLocationsQuery = useQuery({
-    queryKey: ["ac06", "storage-locations", companyId],
+  const reportMode = searchParams.get("report") === "1";
+  const reportSlocId = searchParams.get("sloc_group_id") || slocGroupId;
+  const reportMonthList = (searchParams.get("months") || reportMonths).split(",").map((value) => value.trim()).filter(Boolean);
+  const workspaceQuery = useQuery({
+    queryKey: ["ac06-v3", "workspace", companyId, month, slocGroupId],
+    queryFn: () => getAc06Workspace({ company_id: companyId, rate_month: month, sloc_group_id: slocGroupId }),
+    enabled: Boolean(companyId && month),
+    select: unwrap,
+  });
+  const locationsQuery = useQuery({
+    queryKey: ["ac06-v3", "locations", companyId],
     queryFn: () => listStorageLocations({ company_id: companyId, is_active: true }),
     enabled: Boolean(companyId),
-    select: (payload) => (Array.isArray(payload) ? payload : payload?.data ?? []),
+    select: (payload) => Array.isArray(payload) ? payload : payload?.data ?? EMPTY,
+  });
+  const reportQuery = useQuery({
+    queryKey: ["ac06-v3", "report", companyId, reportSlocId, reportMonthList.join(",")],
+    queryFn: () => getAc06Report({ company_id: companyId, sloc_group_id: reportSlocId, months: reportMonthList.join(",") }),
+    enabled: reportMode && Boolean(companyId && reportSlocId && reportMonthList.length),
+    select: unwrap,
+  });
+  const historyQuery = useQuery({
+    queryKey: ["ac06-v3", "history", companyId, month],
+    queryFn: () => getAc06History({ company_id: companyId, rate_month: month }),
+    enabled: tab === "history" && Boolean(companyId && month),
+    select: unwrap,
   });
 
-  const slocGroupsQuery = useQuery({
-    queryKey: ["ac06", "sloc-groups", companyId],
-    queryFn: () => listSlocGroups({ company_id: companyId }),
-    enabled: Boolean(companyId),
-    select: (payload) => (Array.isArray(payload) ? payload : payload?.data ?? []),
-  });
-
-  const costingGroupsQuery = useQuery({
-    queryKey: ["ac06", "costing-groups", companyId],
-    queryFn: () => listCostingGroups({ company_id: companyId }),
-    enabled: Boolean(companyId),
-    select: (payload) => (Array.isArray(payload) ? payload : payload?.data ?? []),
-  });
-
-  const browseMaterialsQuery = useQuery({
-    queryKey: ["ac06", "browse-materials", companyId, drawerSlocGroupId, selectedMonth],
-    queryFn: () => listCostingRateMaterials({ company_id: companyId, sloc_group_id: drawerSlocGroupId, rate_month: selectedMonth }),
-    enabled: Boolean(companyId && drawerSlocGroupId),
-    select: (payload) => (Array.isArray(payload) ? payload : payload?.data ?? []),
-  });
-
-  const rateMaterialsQuery = useQuery({
-    queryKey: ["ac06", "rate-materials", companyId, slocGroupId, selectedMonth],
-    queryFn: () => listCostingRateMaterials({ company_id: companyId, sloc_group_id: slocGroupId, rate_month: selectedMonth }),
-    enabled: Boolean(companyId && slocGroupId),
-    select: (payload) => (Array.isArray(payload) ? payload : payload?.data ?? []),
-  });
-
-  const pendingDraftsQuery = useQuery({
-    queryKey: ["ac06", "pending-drafts", companyId],
-    queryFn: () => listPendingCostingDrafts({ company_id: companyId }),
-    enabled: Boolean(companyId),
-    select: (payload) => (Array.isArray(payload) ? payload : payload?.data ?? []),
-  });
-
-  const draftDetailQuery = useQuery({
-    queryKey: ["ac06", "draft-detail", companyId, approveMonth],
-    queryFn: () => listDraftCostingRateDetail({ company_id: companyId, rate_month: approveMonth }),
-    enabled: Boolean(companyId && approveMonth && approvalDrawerOpen),
-    select: (payload) => (Array.isArray(payload) ? payload : payload?.data ?? []),
-  });
-
-  const storageLocations = storageLocationsQuery.data ?? EMPTY_ROWS;
-  const slocGroups = slocGroupsQuery.data ?? EMPTY_ROWS;
-  const costingGroups = costingGroupsQuery.data ?? EMPTY_ROWS;
-  const browseMaterials = browseMaterialsQuery.data ?? EMPTY_ROWS;
-  const rateMaterials = rateMaterialsQuery.data ?? EMPTY_ROWS;
-  const pendingDrafts = pendingDraftsQuery.data ?? EMPTY_ROWS;
-  const draftDetailRows = draftDetailQuery.data ?? EMPTY_ROWS;
-
-  const selectedCostingGroup = costingGroups.find((entry) => entry.id === selectedCostingGroupId) ?? null;
-  const managedSlocGroup = slocGroups.find((entry) => entry.id === managedSlocGroupId) ?? null;
-  const entryEditableMaterials = buildEditableMaterialSet(rateMaterials);
-  const approvalEditableMaterials = buildEditableMaterialSet(draftDetailRows);
+  const workspace = workspaceQuery.data ?? {};
+  const rows = workspace.rows ?? EMPTY;
+  const slocGroups = workspace.sloc_groups ?? EMPTY;
+  const costingGroups = workspace.costing_groups ?? EMPTY;
+  const summary = workspace.summary ?? {};
+  const selectedSlocRows = rows.filter((row) => !slocGroupId || row.source_sloc_group_id === slocGroupId);
+  const pendingIds = new Set(selectedSlocRows.filter((row) => row.verification_status === "PENDING" && (row.is_standalone || row.is_group_lead)).map((row) => row.id));
+  const selectionValid = selectedForVerify.length > 0 && selectedForVerify.every((id) => pendingIds.has(id));
+  const groupSetupRows = rows.filter((row) => String(row.source_sloc_group_id || "") === costingParentId);
 
   useEffect(() => {
-    setEntryRates((current) => seedRates(current, rateMaterials));
-  }, [rateMaterials]);
+    setRateDraft((current) => {
+      const next = { ...current };
+      rows.forEach((row) => { if (!(row.id in next)) next[row.id] = String(row.rate ?? "0"); });
+      return next;
+    });
+  }, [rows]);
 
-  useEffect(() => {
-    setApprovalRates((current) => seedRates(current, draftDetailRows));
-  }, [draftDetailRows]);
+  async function refresh() { await queryClient.invalidateQueries({ queryKey: ["ac06-v3"] }); }
+  function notice(message, tone = "success") { pushToast({ message, tone }); }
+  function toggle(list, value, setter) { setter(list.includes(value) ? list.filter((entry) => entry !== value) : [...list, value]); }
 
-  async function refreshAc06() {
-    await qc.invalidateQueries({ queryKey: ["ac06"] });
+  async function withBusy(action) {
+    setBusy(true);
+    try { await action(); await refresh(); } catch (error) { notice(error?.message || "Request failed.", "error"); } finally { setBusy(false); }
   }
 
-  async function submitSlocGroupCreate() {
-    if (!companyId) return pushNotice("Select a company first.", "error");
-    if (!newSlocGroupName.trim() || newSlocGroupLocationIds.length === 0) {
-      return pushNotice("SLoc Group name and at least one storage location are required.", "error");
-    }
-    setSubmitting(true);
-    try {
-      const created = await createSlocGroup({
-        company_id: companyId,
-        name: newSlocGroupName,
-        storage_location_ids: newSlocGroupLocationIds,
-      });
-      setNewSlocGroupName("");
-      setNewSlocGroupLocationIds([]);
-      setManagedSlocGroupId(created.id);
-      pushNotice("SLoc Group created.");
-      await refreshAc06();
-    } catch (error) {
-      pushNotice(noticeFor(error), "error");
-    } finally {
-      setSubmitting(false);
-    }
+  function setGroupRate(row, value) {
+    setRateDraft((current) => {
+      const next = { ...current, [row.id]: value };
+      if (row.costing_group_id) rows.filter((candidate) => candidate.costing_group_id === row.costing_group_id).forEach((candidate) => { next[candidate.id] = value; });
+      return next;
+    });
   }
 
-  async function submitSlocGroupMembers() {
-    if (!managedSlocGroupId || managedAddLocationIds.length === 0) {
-      return pushNotice("Pick an SLoc Group and at least one storage location.", "error");
-    }
-    setSubmitting(true);
-    try {
-      await addSlocGroupMember(managedSlocGroupId, { storage_location_ids: managedAddLocationIds });
-      setManagedAddLocationIds([]);
-      pushNotice("SLoc Group members saved.");
-      await refreshAc06();
-    } catch (error) {
-      pushNotice(noticeFor(error), "error");
-    } finally {
-      setSubmitting(false);
-    }
+  const tabs = [
+    ["dashboard", "Costing Dashboard"], ["rate", "Monthly Costing Rate Input"], ["sloc", "SLOC Group Setup"],
+    ["group", "Costing Group Setup"], ["history", "History / Archive"],
+  ];
+
+  useErpScreenHotkeys({ refresh: { disabled: !companyId, perform: () => { void refresh(); } }, focusPrimary: { disabled: false, perform: () => primaryFocusRef.current?.focus?.() } });
+
+  if (reportMode) {
+    const reportRows = reportQuery.data?.rows ?? EMPTY;
+    return <ErpScreenScaffold title="Monthly Costing Rate Report" subtitle="AC06 full-page, multi-month comparison">
+      <ErpSectionCard title="Report Scope"><div className="grid gap-3 md:grid-cols-3"><ErpFieldPreview label="Company" value={companyId || "-"} /><ErpFieldPreview label="SLOC Group" value={reportSlocId || "-"} /><ErpFieldPreview label="Months" value={reportMonthList.join(", ")} /></div></ErpSectionCard>
+      <ErpDenseGrid columns={[{ key: "rate_month", label: "Month" }, { key: "pace_code", label: "Material", render: (row) => `${row.pace_code || "-"} | ${row.material_name || "-"}` }, { key: "costing_group_name_snapshot", label: "Costing Group", render: (row) => row.costing_group_name_snapshot || "Standalone" }, { key: "rate", label: "Rate" }, { key: "verification_status", label: "Verification" }, { key: "month_status", label: "Month Status" }]} rows={reportRows} rowKey={(row) => row.id} emptyMessage="No rate rows match this report scope." />
+    </ErpScreenScaffold>;
   }
 
-  async function deleteSlocGroupMember(groupId, memberId) {
-    setSubmitting(true);
-    try {
-      await removeSlocGroupMember(groupId, memberId);
-      pushNotice("SLoc Group member removed.");
-      await refreshAc06();
-    } catch (error) {
-      pushNotice(noticeFor(error), "error");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function submitCostingGroupFlow() {
-    if (!companyId) return pushNotice("Select a company first.", "error");
-    if (!drawerSlocGroupId) return pushNotice("Pick an SLoc Group first.", "error");
-    if (selectedMaterialIds.length === 0) return pushNotice("Select at least one material.", "error");
-    setSubmitting(true);
-    try {
-      let groupId = selectedCostingGroupId;
-      if (costingDrawerMode === "create") {
-        if (!newCostingGroupName.trim()) {
-          pushNotice("Costing group name is required.", "error");
-          setSubmitting(false);
-          return;
-        }
-        const created = await createCostingGroup({ company_id: companyId, name: newCostingGroupName });
-        groupId = created.id;
-      }
-      await addCostingGroupMembers(groupId, { material_ids: selectedMaterialIds });
-      setCostingDrawerOpen(false);
-      setSelectedMaterialIds([]);
-      setNewCostingGroupName("");
-      setSelectedCostingGroupId(groupId);
-      pushNotice("Costing group members saved.");
-      await refreshAc06();
-    } catch (error) {
-      pushNotice(noticeFor(error), "error");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function deleteCostingGroupMember(groupId, memberId) {
-    setSubmitting(true);
-    try {
-      await removeCostingGroupMember(groupId, memberId);
-      pushNotice("Costing group member unmapped.");
-      await refreshAc06();
-    } catch (error) {
-      pushNotice(noticeFor(error), "error");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function saveEntryDraft() {
-    const lines = rateMaterials
-      .map((row) => ({
-        material_id: row.material_id,
-        rate: Number(entryRates[row.material_id] ?? row.rate ?? 0),
-      }))
-      .filter((row) => Number.isFinite(row.rate));
-    if (!companyId || !selectedMonth || lines.length === 0) {
-      return pushNotice("Company, month, and at least one row are required.", "error");
-    }
-    setSubmitting(true);
-    try {
-      await saveCostingRateDraft({ company_id: companyId, rate_month: selectedMonth, lines });
-      pushNotice("Costing draft saved.");
-      await refreshAc06();
-    } catch (error) {
-      pushNotice(noticeFor(error), "error");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function saveApprovalDraft() {
-    const lines = draftDetailRows
-      .map((row) => ({
-        material_id: row.material_id,
-        rate: Number(approvalRates[row.material_id] ?? row.rate ?? 0),
-      }))
-      .filter((row) => Number.isFinite(row.rate));
-    if (!companyId || !approveMonth || lines.length === 0) {
-      return pushNotice("Draft month detail is empty.", "error");
-    }
-    setSubmitting(true);
-    try {
-      await saveCostingRateDraft({ company_id: companyId, rate_month: approveMonth, lines });
-      pushNotice("Draft detail saved.");
-      await refreshAc06();
-    } catch (error) {
-      pushNotice(noticeFor(error), "error");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function unmapDraftDetailRow(row) {
-    if (!row.current_group_id || !row.current_group_member_id) {
-      return pushNotice("This material is not currently mapped to a costing group.", "error");
-    }
-    setSubmitting(true);
-    try {
-      await removeCostingGroupMember(row.current_group_id, row.current_group_member_id);
-      pushNotice("Material unmapped. Save draft to refresh the month snapshot.");
-      await refreshAc06();
-    } catch (error) {
-      pushNotice(noticeFor(error), "error");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function approveDraftMonth() {
-    if (!companyId || !approveMonth) return pushNotice("Select a draft month first.", "error");
-    setSubmitting(true);
-    try {
-      await approveCostingRate({ company_id: companyId, rate_month: approveMonth });
-      setApprovalDrawerOpen(false);
-      pushNotice("Costing month approved.");
-      await refreshAc06();
-    } catch (error) {
-      pushNotice(noticeFor(error), "error");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  useErpScreenHotkeys({
-    refresh: {
-      disabled: !companyId,
-      perform: () => { void refreshAc06(); },
-    },
-    focusPrimary: {
-      disabled: false,
-      perform: () => primaryFocusRef.current?.focus?.(),
-    },
-  });
-
-  const managedAvailableLocations = storageLocations.filter((location) => !managedSlocGroup?.members?.some((member) => member.storage_location_id === location.id));
-
-  return (
-    <ErpScreenScaffold
-      title="SLoc Costing Group"
-      subtitle="AC06 v2 - material-level costing groups and month-wise rate drafting, browsed by SLoc Group."
-      actions={[
-        {
-          label: "Manage SLoc Groups",
-          tone: "secondary",
-          onClick: () => setSlocManageOpen(true),
-        },
-        {
-          label: "New Costing Group",
-          tone: "primary",
-          onClick: () => {
-            setCostingDrawerOpen(true);
-            setCostingDrawerMode("create");
-            setSelectedMaterialIds([]);
-            setNewCostingGroupName("");
-            setDrawerSlocGroupId(slocGroupId);
-          },
-        },
-      ]}
-    >
-      <ErpSectionCard title="Header">
-        <div className="grid gap-4 md:grid-cols-[minmax(0,320px)_minmax(0,320px)_180px]">
-          <TransactionCompanySelector
-            runtimeContext={runtimeContext}
-            value={companyId}
-            onChange={setCompanyId}
-            label="Company"
-            selectRef={primaryFocusRef}
-          />
-          <label className="grid gap-1 text-xs font-semibold text-slate-700">
-            SLoc Group
-            <select
-              value={slocGroupId}
-              onChange={(event) => setSlocGroupId(event.target.value)}
-              className="h-9 border border-slate-300 bg-white px-3 text-sm"
-            >
-              <option value="">Select SLoc Group</option>
-              {slocGroups.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.name} | {entry.member_count}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="grid gap-1 text-xs font-semibold text-slate-700">
-            Month
-            <input
-              type="month"
-              value={selectedMonth}
-              onChange={(event) => setSelectedMonth(event.target.value)}
-              className="h-9 border border-slate-300 bg-white px-3 text-sm"
-            />
-          </label>
-        </div>
-      </ErpSectionCard>
-
-      <div className="flex gap-2">
-        <button type="button" onClick={() => setTab("entry")} className={`px-3 py-2 text-sm ${tab === "entry" ? "bg-sky-100 border-sky-700" : "bg-white border-slate-300"} border`}>
-          Rate Entry
-        </button>
-        <button type="button" onClick={() => setTab("approve")} className={`px-3 py-2 text-sm ${tab === "approve" ? "bg-sky-100 border-sky-700" : "bg-white border-slate-300"} border`}>
-          Draft Approval
-        </button>
-      </div>
-
-      {tab === "entry" ? (
-        <>
-          <ErpSectionCard title="Current Costing Groups">
-            <ErpDenseGrid
-              columns={[
-                { key: "name", label: "Group", render: (row) => row.name },
-                { key: "member_count", label: "Members", render: (row) => row.member_count },
-                {
-                  key: "member_preview",
-                  label: "Member Preview",
-                  render: (row) => (row.members ?? []).slice(0, 3).map((member) => member.pace_code).join(", ") || "-",
-                },
-                {
-                  key: "action",
-                  label: "Action",
-                  render: (row) => (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedCostingGroupId(row.id);
-                        setCostingDrawerOpen(true);
-                        setCostingDrawerMode("existing");
-                        setSelectedMaterialIds([]);
-                        setDrawerSlocGroupId(slocGroupId);
-                      }}
-                      className="border border-slate-300 bg-white px-2 py-1 text-xs"
-                    >
-                      Add Members
-                    </button>
-                  ),
-                },
-              ]}
-              rows={costingGroups}
-              rowKey={(row) => row.id}
-              emptyMessage="No costing groups yet."
-            />
-            {selectedCostingGroup ? (
-              <div className="mt-4">
-                <SectionMembers group={selectedCostingGroup} onRemove={deleteCostingGroupMember} busy={submitting} />
-              </div>
-            ) : null}
-          </ErpSectionCard>
-
-          <ErpSectionCard title="Rate Chart Entry">
-            <div className="mb-4 flex justify-between gap-3">
-              <div className="grid gap-3 md:grid-cols-3">
-                <ErpFieldPreview label="Visible Materials" value={String(rateMaterials.length)} />
-                <ErpFieldPreview label="Grouped Materials" value={String(rateMaterials.filter((row) => row.group_id).length)} />
-                <ErpFieldPreview label="Ungrouped Materials" value={String(rateMaterials.filter((row) => !row.group_id).length)} />
-              </div>
-              <button
-                type="button"
-                onClick={() => void saveEntryDraft()}
-                disabled={submitting || rateMaterials.length === 0}
-                className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950"
-              >
-                {submitting ? "Saving..." : "Save Draft"}
-              </button>
-            </div>
-            <ErpDenseGrid
-              columns={[
-                { key: "pace_code", label: "Material", render: (row) => `${row.pace_code} | ${row.material_name}` },
-                { key: "group_name", label: "Costing Group", render: (row) => row.group_name || "-" },
-                {
-                  key: "rate",
-                  label: "Rate",
-                  render: (row) => (
-                    entryEditableMaterials.has(row.material_id) ? (
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.0001"
-                        value={entryRates[row.material_id] ?? row.rate ?? ""}
-                        onChange={(event) => updateGroupedRate(setEntryRates, rateMaterials, row.material_id, event.target.value, row.group_id)}
-                        className="h-8 w-28 border border-slate-300 px-2 text-sm"
-                      />
-                    ) : (
-                      <span className="text-sm text-slate-700">{entryRates[row.material_id] ?? row.rate ?? "-"}</span>
-                    )
-                  ),
-                },
-                {
-                  key: "edit_rule",
-                  label: "Edit Rule",
-                  render: (row) => (row.group_id ? (entryEditableMaterials.has(row.material_id) ? "Lead Row" : "Auto") : "Direct"),
-                },
-                { key: "status", label: "Status", render: (row) => row.status || "NEW" },
-              ]}
-              rows={rateMaterials}
-              rowKey={(row) => row.material_id}
-              emptyMessage="Select company, SLoc Group, and month to load materials."
-            />
-          </ErpSectionCard>
-        </>
-      ) : (
-        <ErpSectionCard title="Pending Draft Months">
-          <ErpDenseGrid
-            columns={[
-              { key: "rate_month", label: "Month" },
-              { key: "line_count", label: "Drafted Rows" },
-              { key: "filled_count", label: "Rate > 0" },
-              {
-                key: "action",
-                label: "Action",
-                render: (row) => (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setApproveMonth(row.rate_month);
-                      setApprovalDrawerOpen(true);
-                    }}
-                    className="border border-slate-300 bg-white px-2 py-1 text-xs"
-                  >
-                    Open Detail
-                  </button>
-                ),
-              },
-            ]}
-            rows={pendingDrafts}
-            rowKey={(row) => row.rate_month}
-            emptyMessage="No pending draft months."
-          />
-        </ErpSectionCard>
-      )}
-
-      <DrawerBase
-        visible={costingDrawerOpen}
-        title={costingDrawerMode === "create" ? "Create Costing Group" : "Add To Existing Costing Group"}
-        onClose={() => setCostingDrawerOpen(false)}
-        width="min(920px, calc(100vw - 24px))"
-      >
-        <div className="grid gap-4 p-4">
-          <div className="grid gap-4 md:grid-cols-3">
-            <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Mode
-              <select value={costingDrawerMode} onChange={(event) => setCostingDrawerMode(event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm">
-                <option value="create">Create New Group</option>
-                <option value="existing">Select Existing Group</option>
-              </select>
-            </label>
-            {costingDrawerMode === "create" ? (
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Costing Group Name
-                <input value={newCostingGroupName} onChange={(event) => setNewCostingGroupName(event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm" />
-              </label>
-            ) : (
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Costing Group
-                <select value={selectedCostingGroupId} onChange={(event) => setSelectedCostingGroupId(event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm">
-                  <option value="">Select costing group</option>
-                  {costingGroups.map((entry) => (
-                    <option key={entry.id} value={entry.id}>
-                      {entry.name} | {entry.member_count}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Browse SLoc Group
-              <select value={drawerSlocGroupId} onChange={(event) => setDrawerSlocGroupId(event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm">
-                <option value="">Select SLoc Group</option>
-                {slocGroups.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.name} | {entry.member_count}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <ErpDenseGrid
-            columns={[
-              {
-                key: "pick",
-                label: "Pick",
-                render: (row) => (
-                  <input
-                    type="checkbox"
-                    checked={selectedMaterialIds.includes(row.material_id)}
-                    onChange={() => setSelectedMaterialIds((current) => toggleInList(current, row.material_id))}
-                  />
-                ),
-              },
-              { key: "pace_code", label: "Material", render: (row) => `${row.pace_code} | ${row.material_name}` },
-              { key: "group_name", label: "Current Group", render: (row) => row.group_name || "-" },
-              { key: "rate", label: "Current Rate", render: (row) => row.rate ?? "-" },
-            ]}
-            rows={browseMaterials}
-            rowKey={(row) => row.material_id}
-            emptyMessage="Pick a browse SLoc Group to load materials."
-          />
-
-          <div className="flex justify-end gap-3">
-            <button type="button" onClick={() => setCostingDrawerOpen(false)} className="border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700">
-              Cancel
-            </button>
-            <button type="button" onClick={() => void submitCostingGroupFlow()} disabled={submitting} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950">
-              {submitting ? "Saving..." : "Save Members"}
-            </button>
-          </div>
-        </div>
-      </DrawerBase>
-
-      <DrawerBase
-        visible={slocManageOpen}
-        title="Manage SLoc Groups"
-        onClose={() => setSlocManageOpen(false)}
-        width="min(1120px, calc(100vw - 24px))"
-      >
-        <div className="grid gap-6 p-4 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
-          <div className="grid gap-4">
-            <ErpSectionCard title="Create SLoc Group">
-              <div className="grid gap-3">
-                <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                  SLoc Group Name
-                  <input value={newSlocGroupName} onChange={(event) => setNewSlocGroupName(event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm" />
-                </label>
-                <div className="grid gap-2">
-                  <div className="text-xs font-semibold text-slate-700">Storage Locations</div>
-                  <div className="max-h-64 overflow-auto border border-slate-200 p-2">
-                    {storageLocations.map((entry) => (
-                      <label key={entry.id} className="flex items-center gap-2 py-1 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={newSlocGroupLocationIds.includes(entry.id)}
-                          onChange={() => setNewSlocGroupLocationIds((current) => toggleInList(current, entry.id))}
-                        />
-                        <span>{entry.storage_location_code} | {entry.storage_location_name}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-                <button type="button" onClick={() => void submitSlocGroupCreate()} disabled={submitting} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950">
-                  {submitting ? "Saving..." : "Create SLoc Group"}
-                </button>
-              </div>
-            </ErpSectionCard>
-
-            <ErpSectionCard title="Existing SLoc Groups">
-              <ErpDenseGrid
-                columns={[
-                  { key: "name", label: "Group", render: (row) => row.name },
-                  { key: "member_count", label: "Members", render: (row) => row.member_count },
-                  {
-                    key: "action",
-                    label: "Action",
-                    render: (row) => (
-                      <button type="button" onClick={() => setManagedSlocGroupId(row.id)} className="border border-slate-300 bg-white px-2 py-1 text-xs">
-                        Manage
-                      </button>
-                    ),
-                  },
-                ]}
-                rows={slocGroups}
-                rowKey={(row) => row.id}
-                emptyMessage="No SLoc Groups yet."
-              />
-            </ErpSectionCard>
-          </div>
-
-          <ErpSectionCard title={managedSlocGroup ? `Members - ${managedSlocGroup.name}` : "Members"}>
-            {managedSlocGroup ? (
-              <div className="grid gap-4">
-                <ErpDenseGrid
-                  columns={[
-                    {
-                      key: "storage_location",
-                      label: "Storage Location",
-                      render: (row) => `${row.storage_location_code} | ${row.storage_location_name}`,
-                    },
-                    {
-                      key: "action",
-                      label: "Action",
-                      render: (row) => (
-                        <button
-                          type="button"
-                          onClick={() => void deleteSlocGroupMember(managedSlocGroup.id, row.id)}
-                          disabled={submitting}
-                          className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs text-rose-700"
-                        >
-                          Remove
-                        </button>
-                      ),
-                    },
-                  ]}
-                  rows={managedSlocGroup.members ?? []}
-                  rowKey={(row) => row.id}
-                  emptyMessage="No members yet."
-                />
-
-                <div className="grid gap-2">
-                  <div className="text-xs font-semibold text-slate-700">Add More Storage Locations</div>
-                  <div className="max-h-64 overflow-auto border border-slate-200 p-2">
-                    {managedAvailableLocations.map((entry) => (
-                      <label key={entry.id} className="flex items-center gap-2 py-1 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={managedAddLocationIds.includes(entry.id)}
-                          onChange={() => setManagedAddLocationIds((current) => toggleInList(current, entry.id))}
-                        />
-                        <span>{entry.storage_location_code} | {entry.storage_location_name}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="flex justify-end">
-                    <button type="button" onClick={() => void submitSlocGroupMembers()} disabled={submitting} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950">
-                      {submitting ? "Saving..." : "Add Locations"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="text-sm text-slate-600">Select an SLoc Group to manage its members.</div>
-            )}
-          </ErpSectionCard>
-        </div>
-      </DrawerBase>
-
-      <DrawerBase
-        visible={approvalDrawerOpen}
-        title={approveMonth ? `Draft Detail - ${approveMonth}` : "Draft Detail"}
-        onClose={() => setApprovalDrawerOpen(false)}
-        width="min(1080px, calc(100vw - 24px))"
-      >
-        <div className="grid gap-4 p-4">
-          <div className="flex flex-wrap justify-between gap-3">
-            <div className="grid gap-3 md:grid-cols-3">
-              <ErpFieldPreview label="Month" value={approveMonth || "-"} />
-              <ErpFieldPreview label="Draft Rows" value={String(draftDetailRows.length)} />
-              <ErpFieldPreview label="Lead Editable Rows" value={String(approvalEditableMaterials.size)} />
-            </div>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => void saveApprovalDraft()} disabled={submitting || draftDetailRows.length === 0} className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700">
-                {submitting ? "Saving..." : "Save Draft"}
-              </button>
-              <button type="button" onClick={() => void approveDraftMonth()} disabled={submitting || draftDetailRows.length === 0} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950">
-                {submitting ? "Approving..." : "Approve Month"}
-              </button>
-            </div>
-          </div>
-
-          <ErpDenseGrid
-            columns={[
-              { key: "pace_code", label: "Material", render: (row) => `${row.pace_code} | ${row.material_name}` },
-              { key: "group_name", label: "Snapshot Group", render: (row) => row.group_name || "-" },
-              {
-                key: "rate",
-                label: "Rate",
-                render: (row) => (
-                  approvalEditableMaterials.has(row.material_id) ? (
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.0001"
-                      value={approvalRates[row.material_id] ?? row.rate ?? ""}
-                      onChange={(event) => updateGroupedRate(setApprovalRates, draftDetailRows, row.material_id, event.target.value, row.group_id)}
-                      className="h-8 w-28 border border-slate-300 px-2 text-sm"
-                    />
-                  ) : (
-                    <span className="text-sm text-slate-700">{approvalRates[row.material_id] ?? row.rate ?? "-"}</span>
-                  )
-                ),
-              },
-              {
-                key: "current_group_name",
-                label: "Current Group",
-                render: (row) => row.current_group_name || "-",
-              },
-              {
-                key: "action",
-                label: "Unmap",
-                render: (row) => (
-                  row.current_group_member_id ? (
-                    <button
-                      type="button"
-                      onClick={() => void unmapDraftDetailRow(row)}
-                      disabled={submitting}
-                      className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs text-rose-700"
-                    >
-                      Unmap
-                    </button>
-                  ) : "-"
-                ),
-              },
-            ]}
-            rows={draftDetailRows}
-            rowKey={(row) => row.id}
-            emptyMessage="No drafted rows found for this month."
-          />
-        </div>
-      </DrawerBase>
-    </ErpScreenScaffold>
-  );
-}
-
-function SectionMembers({ group, onRemove, busy }) {
-  return (
-    <ErpSectionCard title={`Members - ${group.name}`}>
-      <ErpDenseGrid
-        columns={[
-          { key: "pace_code", label: "Material", render: (row) => `${row.pace_code} | ${row.material_name}` },
-          {
-            key: "action",
-            label: "Action",
-            render: (row) => (
-              <button type="button" onClick={() => void onRemove(group.id, row.id)} disabled={busy} className="border border-rose-300 bg-rose-50 px-2 py-1 text-xs text-rose-700">
-                Unmap
-              </button>
-            ),
-          },
-        ]}
-        rows={group.members ?? []}
-        rowKey={(row) => row.id}
-        emptyMessage="No members in this group."
-      />
-    </ErpSectionCard>
-  );
+  return <ErpScreenScaffold title="Monthly Costing Rate Workspace" subtitle="AC06 | company-scoped Dispatch rate control" actions={[{ label: "Refresh", tone: "secondary", onClick: () => { void refresh(); } }, { label: "Close Month", tone: "danger", disabled: busy || workspace.month?.status === "CLOSED" || !companyId, onClick: () => { if (window.confirm(`Close ${month}? This creates an immutable archive.`)) void withBusy(() => closeAc06Month({ company_id: companyId, rate_month: month })); } }]}>
+    <ErpSectionCard title="Header"><div className="grid gap-3 lg:grid-cols-[minmax(0,330px)_180px_minmax(0,280px)]"><TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={setCompanyId} label="Company" selectRef={primaryFocusRef} /><label className="grid gap-1 text-xs font-semibold text-slate-700">Month<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="h-10 border border-slate-300 px-3" /></label><label className="grid gap-1 text-xs font-semibold text-slate-700">SLOC Group<select value={slocGroupId} onChange={(event) => setSlocGroupId(event.target.value)} className="h-10 border border-slate-300 bg-white px-3"><option value="">All SLOC Groups</option>{slocGroups.map((group) => <option key={group.id} value={group.id}>{group.group_name}</option>)}</select></label></div></ErpSectionCard>
+    <div className="flex flex-wrap gap-2"><Chip label="Month" value={workspace.month?.status || "OPEN"} tone={workspace.month?.status === "CLOSED" ? "plain" : "ok"} /><Chip label="Rows" value={summary.rows || 0} /><Chip label="Verified" value={summary.verified || 0} tone="ok" /><Chip label="Pending" value={summary.pending || 0} tone="warn" /><Chip label="Standalone" value={summary.standalone || 0} /></div>
+    <div className="flex flex-wrap gap-1 border-b border-slate-200">{tabs.map(([id, label]) => <button key={id} type="button" onClick={() => setTab(id)} className={`border px-3 py-2 text-sm font-semibold ${tab === id ? "border-sky-700 bg-sky-100 text-sky-950" : "border-slate-200 bg-white text-slate-600"}`}>{label}</button>)}</div>
+    {tab === "dashboard" ? <ErpSectionCard title="Costing Dashboard"><div className="grid gap-4"><p className="text-sm text-slate-600">Choose Company, SLOC Group, and one or more months to open the full-page rate comparison. The report can be opened in a separate ERP window through Shift+F8.</p><div className="grid gap-3 md:grid-cols-[1fr_auto]"><input value={reportMonths} onChange={(event) => setReportMonths(event.target.value)} placeholder="2026-08,2026-09" className="h-10 border border-slate-300 px-3" /><button type="button" disabled={!companyId || !slocGroupId || !reportMonths} onClick={() => window.open(`/dashboard/production/sloc-costing-group?report=1&sloc_group_id=${encodeURIComponent(slocGroupId)}&months=${encodeURIComponent(reportMonths)}`, "_blank", "noopener,noreferrer")} className="border border-sky-700 bg-sky-100 px-4 text-sm font-semibold">Execute Full Report</button></div></div></ErpSectionCard> : null}
+    {tab === "rate" ? <ErpSectionCard title="Monthly Costing Rate Input"><div className="mb-3 flex flex-wrap justify-between gap-2"><p className="text-xs text-slate-600">Changing a rate immediately makes its scope pending again. Only pending standalone rows and Costing Group lead rows can be verified.</p><div className="flex gap-2"><button type="button" disabled={busy || !selectionValid} onClick={() => void withBusy(() => verifyAc06Rates({ company_id: companyId, rate_month: month, line_ids: selectedForVerify }))} className="border border-emerald-700 bg-emerald-50 px-3 py-1 text-xs font-semibold disabled:opacity-40">Verify Selected</button><button type="button" disabled={busy || !selectedSlocRows.length} onClick={() => void withBusy(() => saveAc06Rates({ company_id: companyId, rate_month: month, updates: selectedSlocRows.filter((row) => row.is_standalone || row.is_group_lead).map((row) => ({ line_id: row.id, rate: rateDraft[row.id] ?? row.rate })) }))} className="border border-sky-700 bg-sky-100 px-3 py-1 text-xs font-semibold">Save Rates</button></div></div><ErpDenseGrid columns={[{ key: "verify", label: "Verify", render: (row) => <input type="checkbox" disabled={!pendingIds.has(row.id)} checked={selectedForVerify.includes(row.id)} onChange={() => toggle(selectedForVerify, row.id, setSelectedForVerify)} /> }, { key: "pace_code", label: "Material", render: (row) => `${row.pace_code || "-"} | ${row.material_name || "-"}` }, { key: "costing_group_name", label: "Costing Group", render: (row) => row.costing_group_name || "Standalone" }, { key: "rate", label: "Rate", render: (row) => row.is_standalone || row.is_group_lead ? <input value={rateDraft[row.id] ?? row.rate ?? "0"} onChange={(event) => setGroupRate(row, event.target.value)} inputMode="decimal" className="h-8 w-32 border border-slate-300 px-2 font-mono" /> : <span className="font-mono">{rateDraft[row.id] ?? row.rate ?? "0"}</span> }, { key: "verification_status", label: "Status" }, { key: "lead", label: "Entry", render: (row) => row.is_standalone ? "Standalone" : row.is_group_lead ? "Group Lead" : "Auto-filled" }]} rows={selectedSlocRows} rowKey={(row) => row.id} emptyMessage="Create a SLOC Group first, then select it to load eligible items." /></ErpSectionCard> : null}
+    {tab === "sloc" ? <ErpSectionCard title="SLOC Group Setup"><div className="grid gap-4 lg:grid-cols-[360px_1fr]"><div className="grid gap-3 border border-slate-200 p-4"><label className="grid gap-1 text-xs font-semibold">Group Name<input value={slocName} onChange={(event) => setSlocName(event.target.value)} className="h-10 border border-slate-300 px-3" /></label><div className="max-h-72 overflow-auto border border-slate-200 p-2">{(locationsQuery.data ?? EMPTY).map((location) => <label key={location.id} className="flex gap-2 py-1 text-sm"><input type="checkbox" checked={slocLocations.includes(location.id)} onChange={() => toggle(slocLocations, location.id, setSlocLocations)} />{location.storage_location_code} | {location.storage_location_name}</label>)}</div><div className="flex gap-2"><button type="button" disabled={busy || !slocName || !slocLocations.length} onClick={() => void withBusy(async () => { if (editingSlocId) await updateAc06SlocGroup(editingSlocId, { company_id: companyId, group_name: slocName, storage_location_ids: slocLocations }); else await createAc06SlocGroup({ company_id: companyId, group_name: slocName, storage_location_ids: slocLocations }); setSlocName(""); setSlocLocations([]); setEditingSlocId(""); })} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold">{editingSlocId ? "Save SLOC Group" : "Create SLOC Group"}</button>{editingSlocId ? <button type="button" onClick={() => { setEditingSlocId(""); setSlocName(""); setSlocLocations([]); }} className="border border-slate-300 px-3 py-2 text-sm">Cancel</button> : null}</div></div><ErpDenseGrid columns={[{ key: "group_name", label: "Existing SLOC Group" }, { key: "active", label: "Status", render: () => "Active" }, { key: "actions", label: "Action", render: (row) => <div className="flex gap-2"><button type="button" onClick={() => { setEditingSlocId(row.id); setSlocName(row.group_name); setSlocLocations((row.storage_location_ids || []).map(String)); }} className="text-xs font-semibold text-sky-800">Edit</button><button type="button" onClick={() => { if (window.confirm(`Delete ${row.group_name}?`)) void withBusy(() => deleteAc06SlocGroup(row.id, { company_id: companyId })); }} className="text-xs font-semibold text-rose-800">Delete</button></div> }]} rows={slocGroups} rowKey={(row) => row.id} emptyMessage="No SLOC Group exists for this company." /></div></ErpSectionCard> : null}
+    {tab === "group" ? <ErpSectionCard title="Costing Group Setup"><div className="grid gap-4 border border-slate-200 p-4"><div className="grid gap-3 md:grid-cols-3"><label className="grid gap-1 text-xs font-semibold">Parent SLOC Group<select value={costingParentId} onChange={(event) => { setCostingParentId(event.target.value); setTargetCostingGroupId(""); setCostingMemberIds([]); }} className="h-10 border border-slate-300 bg-white px-3"><option value="">Select SLOC Group</option>{slocGroups.map((group) => <option key={group.id} value={group.id}>{group.group_name}</option>)}</select></label><label className="grid gap-1 text-xs font-semibold">Costing Group Name<input value={costingName} onChange={(event) => setCostingName(event.target.value)} className="h-10 border border-slate-300 px-3" /></label><div className="mt-5 flex gap-2"><button type="button" disabled={busy || !costingParentId || !costingName} onClick={() => void withBusy(async () => { if (editingCostingId) await updateAc06CostingGroup(editingCostingId, { company_id: companyId, group_name: costingName }); else { const created = await createAc06CostingGroup({ company_id: companyId, sloc_group_id: costingParentId, group_name: costingName }); setTargetCostingGroupId(created?.id || ""); } setCostingName(""); setEditingCostingId(""); })} className="h-10 border border-sky-700 bg-sky-100 px-3 text-sm font-semibold">{editingCostingId ? "Save Costing Group" : "Create Costing Group"}</button>{editingCostingId ? <button type="button" onClick={() => { setEditingCostingId(""); setCostingName(""); }} className="h-10 border border-slate-300 px-3 text-sm">Cancel</button> : null}</div></div><div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]"><label className="grid gap-1 text-xs font-semibold">Move selected eligible items to<select value={targetCostingGroupId} onChange={(event) => setTargetCostingGroupId(event.target.value)} className="h-10 border border-slate-300 bg-white px-3"><option value="">Select Costing Group</option>{costingGroups.filter((group) => group.sloc_group_id === costingParentId).map((group) => <option key={group.id} value={group.id}>{group.group_name}</option>)}</select></label><button type="button" disabled={busy || !targetCostingGroupId || !costingMemberIds.length || workspace.month?.status === "CLOSED"} onClick={() => void withBusy(async () => { await assignAc06CostingGroup({ company_id: companyId, rate_month: month, costing_group_id: targetCostingGroupId, material_ids: groupSetupRows.filter((row) => costingMemberIds.includes(row.id)).map((row) => row.material_id) }); setCostingMemberIds([]); })} className="mt-5 h-10 border border-sky-700 bg-sky-100 px-3 text-sm font-semibold">Map To Group</button><button type="button" disabled={busy || !costingMemberIds.length || workspace.month?.status === "CLOSED"} onClick={() => void withBusy(async () => { await unassignAc06CostingGroup({ company_id: companyId, rate_month: month, line_ids: costingMemberIds }); setCostingMemberIds([]); })} className="mt-5 h-10 border border-rose-700 bg-rose-50 px-3 text-sm font-semibold">Make Standalone</button></div><ErpDenseGrid columns={[{ key: "selected", label: "Select", render: (row) => <input type="checkbox" checked={costingMemberIds.includes(row.id)} onChange={() => toggle(costingMemberIds, row.id, setCostingMemberIds)} /> }, { key: "pace_code", label: "Eligible Item", render: (row) => `${row.pace_code || "-"} | ${row.material_name || "-"}` }, { key: "costing_group_name", label: "Current Costing Group", render: (row) => row.costing_group_name || "Standalone" }, { key: "verification_status", label: "Rate Status" }]} rows={groupSetupRows} rowKey={(row) => row.id} emptyMessage="Select a parent SLOC Group to manage its eligible items." /><ErpDenseGrid columns={[{ key: "group_name", label: "Costing Group" }, { key: "sloc_group_id", label: "Parent SLOC Group", render: (row) => slocGroups.find((group) => group.id === row.sloc_group_id)?.group_name || "-" }, { key: "actions", label: "Action", render: (row) => <div className="flex gap-2"><button type="button" onClick={() => { setEditingCostingId(row.id); setCostingParentId(row.sloc_group_id); setCostingName(row.group_name); }} className="text-xs font-semibold text-sky-800">Edit</button><button type="button" onClick={() => { if (window.confirm(`Delete ${row.group_name}? Its open-month items become standalone.`)) void withBusy(() => deleteAc06CostingGroup(row.id, { company_id: companyId })); }} className="text-xs font-semibold text-rose-800">Delete</button></div> }]} rows={costingGroups.filter((group) => !costingParentId || group.sloc_group_id === costingParentId)} rowKey={(row) => row.id} emptyMessage="No Costing Group exists yet." /></div></ErpSectionCard> : null}
+    {tab === "history" ? <ErpSectionCard title="History / Archive"><p className="mb-3 text-sm text-slate-600">Closed snapshots are immutable. The selected month is shown below; open the full-page report to compare multiple months.</p><ErpDenseGrid columns={[{ key: "material_code_snapshot", label: "Material" }, { key: "costing_group_name_snapshot", label: "Costing Group", render: (row) => row.costing_group_name_snapshot || "Standalone" }, { key: "rate", label: "Rate" }, { key: "verification_status", label: "Verification" }]} rows={historyQuery.data?.rows ?? EMPTY} rowKey={(row) => row.id} emptyMessage={historyQuery.data?.archive ? "No archived rows." : "The selected month is still open or has no archive."} /></ErpSectionCard> : null}
+  </ErpScreenScaffold>;
 }

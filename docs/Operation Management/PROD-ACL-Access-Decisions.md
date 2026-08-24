@@ -2358,3 +2358,29 @@ this list (step 2) — this appendix is the *what*, that section is the
 *when/how*. Use both together with OM-IMPLEMENTATION-LOG.md's Bug #n
 tracking convention. When a new issue fits one of these patterns, log it
 explicitly instead of treating it as a one-off anomaly.
+
+---
+
+## AC06 v3 — Monthly Costing Rate Workspace authority (2026-08-24, locked)
+
+AC06 is rebuilt as a company-scoped PO11-parity costing workspace. Legacy AC06
+maker-checker semantics are retired with its zero-row v1/v2 data model. Authority
+is capability-backed, company-scoped, and intentionally split into separate
+resources so a future ACL decision can change one responsibility without opening
+another:
+
+| Resource | Purpose | Accounts | L1/L2 Auditor | Director | ACL Master |
+|---|---|---|---|---|---|
+| `ACC_SLOC_COSTING_GROUP` | AC06 page/view, report/history | VIEW | VIEW | VIEW | all actions |
+| `ACC_SLOC_COSTING_SETUP` | hidden SLOC Group/Costing Group/item mapping maintenance | WRITE, DELETE | WRITE, DELETE | no access | all actions |
+| `ACC_SLOC_COSTING_RATE` | hidden rate-entry operation | WRITE | no access | no access | all actions |
+| `ACC_SLOC_COSTING_VERIFY` | hidden pending-rate verification operation | no access | WRITE | no access | all actions |
+| `ACC_SLOC_COSTING_CLOSE` | hidden month-close operation | no access | WRITE | no access | all actions |
+
+The same matrix applies independently to CMP003 and CMP006. Company scope is
+enforced by the route context and backend `assertCompanyScope`; multi-company
+users receive only the companies in their work context. No role-code array or
+frontend-only gate is permitted. `ACC_SLOC_COSTING_SETUP`, `ACC_SLOC_COSTING_RATE`,
+`ACC_SLOC_COSTING_VERIFY`, and `ACC_SLOC_COSTING_CLOSE` are operational ACL
+resources, not menu entries; their companion AC06 menu visibility remains on
+`ACC_SLOC_COSTING_GROUP`.

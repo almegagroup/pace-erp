@@ -4479,3 +4479,29 @@ migrates.
   creation time) is explicitly out of scope for this pass, per the task brief's own "Out of scope"
   section -- data model + MM04's own pages only. Next: MM05 (RM/PM/INT sale customer) redesign,
   deferred per business owner's explicit sequencing; then back to Dispatch (L5) per Section 114.
+
+---
+
+## 2026-08-24 — Gate 27.26 AC06 v3 fresh PO11-parity workspace
+
+- **Design lock:** AC06 v1/v2 is retired, not preserved. Dev and Prod legacy AC06 tables were
+  checked zero-row before implementation. The current SSOT is feasibility §114.23 and
+  `CODEX-GATE27.26-AC06-SLOC-COSTING-GROUP-TASK-BRIEF.md` v3.
+- **Database:** added and applied `20260824120000_ac06_po11_parity_monthly_costing_workspace.sql`
+  to linked Dev. It protects against accidental deletion of subsequently-populated legacy tables,
+  creates the company/SLOC/Costing Group/month/rate/archive model, and installs Dispatch resolve,
+  atomic verify, atomic close/archive, and expired-month auto-close functions.
+- **Backend/FE:** retired legacy AC06 routes and handler use; added company-scoped workspace,
+  setup, mapping, rate, verification, close, history, and report routes. Rebuilt AC06 with the
+  PO11-style workspace tabs, DenseGrid rate entry, grouped propagation, standalone handling,
+  immutable history, and separate full-page multi-month report.
+- **ACL:** decision is documented in `PROD-ACL-Access-Decisions.md`. AC06 setup/page uses
+  `ACC_SLOC_COSTING_GROUP`; hidden operational resources split rate entry, verify, and close so
+  Accounts and Auditors cannot gain each other's authority through one overloaded action. Route
+  registry and dependency manifests are updated; snapshot provisioning is required with the next
+  Dev/Prod ACL release before the deployed routes are enabled.
+- **Verification:** AC06 handler and route registry `deno check` passed; frontend lint and build
+  passed. `production.routes.ts` still has four pre-existing unrelated type errors in
+  `pack_bom.handlers.ts`, `pack_config.handlers.ts`, and `_pipeline/session.ts`. Dev migration
+  checksum confirmed `count=463`, `md5=eb8dd91de0687d6a5cf78bbd7f3111cb`, matching local; Dev
+  has nine AC06 tables and four AC06 RPCs. Dependency scan was run after manifest update.
