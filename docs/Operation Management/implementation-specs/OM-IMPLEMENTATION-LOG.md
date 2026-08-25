@@ -4844,3 +4844,47 @@ only change, no backend/ACL/schema touched.
 
 **Not yet done:** the live click-through in the deployed app (no dev login in this environment) —
 business owner is doing this directly now, per the screenshots above.
+
+### 2026-08-25 (still later) - §130.2 correction: Opening Stock postings must ALWAYS fold into Opening
+
+Business owner's own live click-through in Prod caught a real design bug in §130.2's original
+locked rule (see feasibility §130.2's inline correction for the full worked example). Original
+rule: an Opening Stock posting (`P561`–`P566`) that falls *inside* the selected date range is
+treated like any other in-range transaction and lands in the Inward bucket. Live symptom: a
+material's only history before the report was its own Opening Stock entry (`P561`, 48,097 KG dated
+1 Aug 2026, real Prod data — Aluminium Sulphate Oxyhydrate, CMP003) — picking From=1 Aug (the exact
+same date as the posting) showed Opening=0, Inward=48,097, when the entire point of an Opening
+Stock entry is that it *is* the starting balance.
+
+**Corrected rule (business-owner-specified, confirmed with a worked example before implementing):**
+`P561`–`P566` are now ALWAYS excluded from every bucket column / in-range total and always fold
+into Opening — unconditionally, regardless of where the posting's own date falls relative to the
+selected range (before, exactly on, or even after From-date, as long as still `<= To-date`). Not
+date-conditional the way the original rule was.
+
+**Migration `20260825120000`:** added `stock_history_bucket_map.is_opening_source boolean`
+(`true` for `P561`–`P566`, `false` for everything else — including `P101`/`P102`, which share
+Inward's bucket_code but are real GRN receipts and are unaffected). `get_stock_history()`'s
+`in_range_by_bucket` CTE now excludes `is_opening_source = true` rows entirely, regardless of date.
+`after_range_real` (backs Closing out to the report's own To-date) is deliberately untouched — it
+still counts every movement type, so Closing stays chronologically correct even for a hypothetical
+Opening Stock entry dated after To-date.
+
+**Verified with real data in both Dev and Prod before/after applying:**
+- Dev (BIOTREAT-V8) — From=exactly its own P561 date (2026-06-30, the exact boundary case the old
+  rule got wrong): now `opening=2076.000000, closing=1902.320000, buckets={"CONS":-173.68}` — no
+  Inward bucket at all, matches hand calculation exactly.
+- Prod (Aluminium Sulphate Oxyhydrate, CMP003) — ran both From=1 Aug (same date as its P561) and
+  From=5 Aug (business owner's own second worked example, "P561-566 + 1st-4th Aug all fold into
+  5th Aug's Opening") — both now return **identical** `opening=48097.000000,
+  closing=39697.000000, buckets={"CONS":-8400}`, exactly as specified.
+
+Both projects: `apply_migration`, `schema_migrations` version reconciled to the local filename
+timestamp, `NOTIFY pgrst, 'reload schema'`, `migration-integrity-check.mjs` confirmed
+`in_sync=true` (Dev: 471/471; Prod: 471/471) before and after. `migration-column-scan.mjs`/
+`migration-order-scan.mjs` — clean on the new file. Feasibility doc §130.2 and §130.5's bucket
+table updated in place with correction annotations (not silently rewritten) per this repo's
+doc-history convention.
+
+**Not yet done:** live click-through re-confirmation in the deployed app (business owner will do
+this directly, same as before).
