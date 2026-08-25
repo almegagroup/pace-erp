@@ -93,16 +93,21 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // UNIQUE, so AC01's and AC03's separate tx_code rows can never literally
   // share one menu_code; that design was schema-impossible, not just
   // unfinished. Reusing the pre-existing, already-granted PROC_IV_LIST
-  // resource instead -- AC01 and AC03 both hit these exact same routes, and
-  // PROC_IV_LIST/PROC_LC_LIST currently carry identical grants in dev anyway,
-  // so this doesn't regress anything. AC01's own sidebar entry already uses
-  // PROC_IV_LIST as its menu_code (unchanged), and AC03's sidebar entry keeps
-  // its own PROC_LC_LIST menu_code independently for visibility -- only the
-  // shared *data* routes below are gated by PROC_IV_LIST. Giving AC03 a truly
-  // wider audience than AC01 (per the locked access matrix) requires real ACL
-  // differentiation between PROC_IV_LIST/PROC_LC_LIST at rollout time; until
-  // then a PROC_LC_LIST-only user cannot yet reach these routes -- flagged as
-  // a known follow-up, not a regression from before this redesign.
+  // resource instead -- AC01 and AC03 both hit these exact same routes.
+  // AC01's own sidebar entry already uses PROC_IV_LIST as its menu_code
+  // (unchanged), and AC03's sidebar entry keeps its own PROC_LC_LIST
+  // menu_code independently for visibility -- only the shared *data* routes
+  // below are gated by PROC_IV_LIST.
+  // ⚠️ 2026-08-25 follow-up closed (found live via a real P0010/CMP006 403
+  // ACL_DEFAULT_DENY_NO_MATCH on this exact route): the "known follow-up"
+  // this comment used to flag -- a PROC_LC_LIST-only viewer (Auditor,
+  // CAP_ACC_GRN_COST_AUDITOR; SCM, CAP_PROC_BUYER) could never actually reach
+  // these routes, since neither capability ever held PROC_IV_LIST at all --
+  // is fixed. Both capabilities now also carry a hidden (menu_visible=false)
+  // PROC_IV_LIST:VIEW grant (VIEW only, never WRITE, so AC01 stays
+  // uneditable for them, matching the locked "AC03 is read-only" design) in
+  // both Dev and Prod. See OM-IMPLEMENTATION-LOG.md's 2026-08-25 entry for
+  // the live-verification detail.
   "GET:/api/procurement/ac01/grns":                   { skipAcl: false, resourceCode: "PROC_IV_LIST", action: "VIEW"  },
   "GET:/api/procurement/ac01/deduction-types":        { skipAcl: false, resourceCode: "PROC_IV_LIST", action: "VIEW"  },
   "POST:/api/procurement/ac01/deduction-types":       { skipAcl: false, resourceCode: "PROC_IV_LIST", action: "WRITE" },

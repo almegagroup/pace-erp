@@ -1096,6 +1096,7 @@ export default function SlocCostingGroupPage() {
                                 rows={includedSlocMaterialRows}
                                 rowKey={(row) => row.id}
                                 maxHeight="320px"
+                                stickyFirstColumn
                                 emptyMessage="No included material matches the current search."
                               />
                             </div>
@@ -1127,6 +1128,7 @@ export default function SlocCostingGroupPage() {
                                 rows={excludedSlocMaterialRows}
                                 rowKey={(row) => row.id}
                                 maxHeight="320px"
+                                stickyFirstColumn
                                 emptyMessage="No material is excluded from this SLOC group yet."
                               />
                             </div>
@@ -1313,6 +1315,7 @@ export default function SlocCostingGroupPage() {
                           rows={filteredAvailableCostingItemPool}
                           rowKey={(row) => row.id}
                           maxHeight="320px"
+                          stickyFirstColumn
                           emptyMessage={
                             availableCostingItemPool.length === 0
                               ? "No standalone item is available in this SLOC group scope."
@@ -1343,6 +1346,7 @@ export default function SlocCostingGroupPage() {
                           rows={selectedCostingGroupMembers}
                           rowKey={(row) => row.id}
                           maxHeight="320px"
+                          stickyFirstColumn
                           emptyMessage="No member is mapped to this Costing Group yet."
                         />
                       </div>

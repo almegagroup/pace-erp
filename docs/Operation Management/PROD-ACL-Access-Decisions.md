@@ -1232,6 +1232,22 @@ approver, same as Quality's Stroke Master but Accounts instead of Quality":
   (P0010, CMP003+CMP006) -- VIEW on AC03 only. ACL-MASTER (P0076) -- full on both, no drift.
 - **CMP010 not provisioned** (no ACCOUNTS/MANAGEMENT/SUPPLY-CHAIN/ACL-MASTER department exists
   there, only AUDIT) -- same accepted-gap pattern as other CMP010 notes elsewhere in this doc.
+  **Deeper root cause found 2026-08-25: CMP010 has ZERO rows in `acl.company_module_map` at
+  all** (confirmed live -- CMP003/CMP006 have 15 module rows each, CMP014 has 11, CMP010 has 0),
+  so every module-gated resource company-wide DENYs there via `MODULE_DISABLED`, not just
+  Accounts -- this "not provisioned" note undersold the scope. Not fixed (which modules CMP010
+  should get is a business decision, not something to assume -- CMP014's own 11-vs-15 split
+  proves module scope genuinely varies per company) -- flagged for the business owner to decide.
+- **Real gap found live 2026-08-25 (P0010/CMP006, business owner's own browser console) and
+  fixed:** the *design* above correctly grants Auditor/SCM `PROC_LC_LIST:VIEW` for AC03, but the
+  actual backend route (`GET /api/procurement/ac01/grns`, shared by AC01 and AC03 -- same
+  component/routes) was gated on `PROC_IV_LIST:VIEW` only, in `route-acl-registry.ts`. Its own
+  2026-08-21 comment had already flagged this exact mismatch as a known follow-up, never closed --
+  a `PROC_LC_LIST`-only viewer got a live `403 ACL_DEFAULT_DENY_NO_MATCH` on AC03's data, not just
+  a design gap. Fixed by granting `CAP_ACC_GRN_COST_AUDITOR` and `CAP_PROC_BUYER` a second, hidden
+  (`menu_visible=false`) `PROC_IV_LIST:VIEW` row each -- VIEW only, never WRITE, so AC01 stays
+  uneditable for them. See `OM-IMPLEMENTATION-LOG.md`'s 2026-08-25 "Two real bugs found via
+  P0010's live click-through" entry for full verification detail.
 
 **Code audit before deciding (no edits made, all findings logged for a
 future code-fix pass):**

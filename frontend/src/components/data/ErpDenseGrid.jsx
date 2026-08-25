@@ -123,6 +123,17 @@ export default function ErpDenseGrid({
   // a custom `render` (e.g. colored/formatted JSX) should also define
   // `copyValue` to copy sensible plain text instead of "[object Object]".
   rangeSelect = false,
+  // Opt-in only — default false, every existing caller unaffected. Pass true
+  // when the table is wide enough (many columns, or a narrow container like
+  // a half-width modal panel) that reaching a trailing action column
+  // requires horizontal scroll — without this, the row's own identity
+  // (usually the first column, e.g. a name) scrolls out of view exactly
+  // when the user needs it most, right as they're about to click that row's
+  // action. Found live 2026-08-25 (business owner): AC06's SLOC Group
+  // "Manage Materials" Included/Excluded lists — the Exclude/Include button
+  // sits past a horizontal scroll, and the material name (the only way to
+  // tell which row you're about to act on) scrolls away with it.
+  stickyFirstColumn = false,
 }) {
   const effectiveCellNavigate = cellNavigate || rangeSelect;
   const rowRefs = useRef([]);
@@ -331,7 +342,7 @@ export default function ErpDenseGrid({
                 // container already scrolls horizontally); a column that
                 // genuinely needs multi-line text (long remarks/notes) can
                 // opt back in with `wrap: true`.
-                className={`px-2 py-1 align-middle outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${selected ? "bg-sky-100" : ""}`}
+                className={`px-2 py-1 align-middle outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${selected ? "bg-sky-100" : stickyFirstColumn && colIndex === 0 ? "sticky left-0 z-[1] bg-white border-r border-slate-200" : ""}`}
               >
                 {typeof column.render === "function"
                   ? column.render(row, index)
@@ -369,10 +380,10 @@ export default function ErpDenseGrid({
         {...mergedRowProps}
         className={`h-[var(--erp-row-height)] cursor-pointer border-b border-slate-200 ${hasBackgroundUtility(externalRowProps.className) ? "" : "bg-white"} text-[12px] text-slate-800 outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${externalRowProps.className ?? ""}`.trim()}
       >
-        {columns.map((column) => (
+        {columns.map((column, colIndex) => (
           <td
             key={column.key}
-            className={`px-2 py-1 align-middle ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)}`}
+            className={`px-2 py-1 align-middle ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${stickyFirstColumn && colIndex === 0 ? "sticky left-0 z-[1] bg-white border-r border-slate-200" : ""}`}
           >
             {typeof column.render === "function"
               ? column.render(row, index)
@@ -396,15 +407,18 @@ export default function ErpDenseGrid({
         <table className="erp-grid-table min-w-full text-xs">
           <thead className="bg-slate-800 text-white">
             <tr>
-              {columns.map((column) => (
-                <th
-                  key={column.key}
-                  className={`${stickyHeader ? "sticky top-0 z-10" : ""} border-b border-slate-700 bg-slate-800 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white ${normalizeCellAlign(column.align)}`.trim()}
-                  style={column.width ? { width: column.width } : undefined}
-                >
-                  {column.label}
-                </th>
-              ))}
+              {columns.map((column, colIndex) => {
+                const isStickyFirst = stickyFirstColumn && colIndex === 0;
+                return (
+                  <th
+                    key={column.key}
+                    className={`${stickyHeader ? "sticky top-0" : ""} ${isStickyFirst ? "sticky left-0 z-20" : stickyHeader ? "z-10" : ""} border-b border-slate-700 bg-slate-800 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white ${isStickyFirst ? "border-r border-slate-600" : ""} ${normalizeCellAlign(column.align)}`.trim()}
+                    style={column.width ? { width: column.width } : undefined}
+                  >
+                    {column.label}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>

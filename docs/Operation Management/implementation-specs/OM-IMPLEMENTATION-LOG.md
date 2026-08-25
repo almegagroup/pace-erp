@@ -4949,3 +4949,61 @@ real Plant Transfer is actually in flight.
 **Not yet done:** live click-through re-confirmation in the deployed app (also can't be end-to-end
 visually verified with real nonzero data until a real Plant Transfer happens to be in transit at
 verification time).
+
+### 2026-08-25 (still later) - Two real bugs found via P0010's live click-through, both fixed
+
+Business owner tested P0010 (real Prod user, L1_AUDITOR, SONI MANOHAR DHING) directly against
+CMP006 and caught two genuinely separate bugs — an ACL route-registry gap (security/functionality)
+and a UI layout bug (`ErpDenseGrid` reused across pages). Neither was found by static review; both
+surfaced from an actual browser console + screenshot the business owner supplied.
+
+**Bug 1 — `GET /api/procurement/ac01/grns` 403 `ACL_DEFAULT_DENY_NO_MATCH` for a `PROC_LC_LIST`-only
+viewer (Auditor/SCM on AC03).** Root-caused via `precomputed_acl_view` cross-checked against
+`route-acl-registry.ts` line-by-line, not guessed. AC01 (edit) and AC03 (read-only) are the same
+frontend component/routes; the shared data route `GET:/api/procurement/ac01/grns` is gated on
+`PROC_IV_LIST:VIEW` only. The 2026-08-21 AC01/AC03 redesign correctly granted Auditor
+(`CAP_ACC_GRN_COST_AUDITOR`) and SCM (`CAP_PROC_BUYER`) `PROC_LC_LIST:VIEW` for AC03's sidebar
+visibility, but **neither capability was ever also granted `PROC_IV_LIST:VIEW`** — the resource the
+actual data route checks. The route-registry file's own 2026-08-21 comment already flagged this
+exact gap ("a PROC_LC_LIST-only user cannot yet reach these routes -- flagged as a known
+follow-up") but it was never closed. This matches this doc's own Pattern #8 (route/ACL registry
+mismatch) exactly.
+
+**Fix:** granted both capabilities a second, hidden (`menu_visible=false`) `capability_menu_actions`
+row for `PROC_IV_LIST:VIEW` — VIEW only, deliberately never WRITE, so AC01 stays uneditable for
+Auditor/SCM, preserving the locked "AC03 is read-only" design. Applied via MCP direct SQL (business/
+operational ACL data, per R-04) in both Dev and Prod, each on a freshly bumped `acl_versions` row
+per company (capture + `generate_acl_snapshot`). Verified: P0010 now shows `PROC_IV_LIST:VIEW =
+ALLOW` in CMP003/CMP006 (CMP010 still correctly `DENY/MODULE_DISABLED` — that's the separate,
+already-known CMP010 module-provisioning gap, unrelated to this fix and not touched here) and
+`PROC_IV_LIST:WRITE` still absent entirely (functionally DENY) — confirms no accidental edit
+access leaked through. Updated the route-registry's own stale comment in place (it explicitly said
+"flagged as a known follow-up" — that follow-up is now done) rather than deleting the history.
+`route-acl-registry-guard.mjs` — clean, 0 new findings (this was a grant gap, not a registry-shape
+violation the guard would have caught).
+
+**Bug 2 — AC06 SLOC Group "Manage Materials" Include/Exclude button unreachable without losing the
+material's own name.** Screenshot showed the Included/Excluded tables' Material Name column
+scrolled out of view by the time horizontal scroll reaches the Exclude/Include button — the two
+half-width (`lg:grid-cols-2`) panels are narrower than their own columns' combined fixed width
+(220px name + 120px code + 70px type (+110px status on the Costing Group Setup variant) + 90px
+action). A user has no way to confirm which material they're about to exclude/include at the
+moment they click.
+
+**Fix, in the shared component (not per-page), matching this session's own established discipline
+for `ErpDenseGrid` bugs:** added a new opt-in `stickyFirstColumn` prop (default `false`, every
+existing caller unaffected) — pins the first column (`position: sticky; left: 0`, solid white
+background, right border) in both the header and every row, in both the `cellNavigate`/`rangeSelect`
+render branch and the plain branch. Wired it into all four of `SlocCostingGroupPage.jsx`'s
+Included/Excluded and Available-Item-Pool/Current-Members `ErpDenseGrid` instances (SLOC Group
+Setup's Manage Materials modal, and the wider Costing Group Setup panels which have the exact same
+shape of problem, found by grepping every `ErpDenseGrid` call in the file rather than fixing only
+the one instance in the screenshot). Known simplification, not fixed here: a colored row (e.g. a
+`getRowProps` background like the AC06 group-lead row or Stock History's Total row) would show a
+visible white seam at the sticky cell when scrolled, since the sticky cell's background is
+hardcoded white rather than inheriting the row's own resolved color — none of the four instances
+this was wired into use row coloring, so not a live issue today, but worth remembering if
+`stickyFirstColumn` is ever combined with a colored `getRowProps` elsewhere. `eslint` — 0 errors on
+both files. `jsx-no-undef-guard.mjs` — 0 violations.
+
+**Not yet done:** live click-through re-confirmation in the deployed app.
