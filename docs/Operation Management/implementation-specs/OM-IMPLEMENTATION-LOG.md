@@ -5116,3 +5116,39 @@ reserved 3696.3, so PO11 should now report 13806.06 for this material once deplo
 
 **Not yet done:** live click-through re-confirmation in the deployed app (no dev login in this
 environment, per established session pattern — verified via code + live DB query instead).
+
+---
+
+### 2026-08-25, still later — AC06 "Manage Materials" Included/Excluded: bulk multi-select (Claude-implemented, frontend only)
+
+Business owner screenshot showed the SLOC Group "Manage Materials" modal with a per-row Exclude/
+Include button on every line — asked for the same multi-select pattern already used on Material
+Master's "Company Mapping" tab (`frontend/src/admin/sa/screens/SAMaterialMaster.jsx`): tick one,
+tick many, or select-all via the header checkbox, then a single bulk action button instead of
+clicking each row separately.
+
+**No backend change needed** — `setAc06MaterialInclusionHandler`
+(`ac06_workspace.handlers.ts:361`) already accepted `line_ids` as an array and updated all of them
+in one query (`.in("id", lineIds)`); the frontend was just calling it with a single-element array
+per click.
+
+**Frontend (`SlocCostingGroupPage.jsx`):**
+- `buildAc06MaterialListColumns()` gained an optional `selection` param — when passed, prepends a
+  checkbox column (header checkbox = select-all-currently-listed, row checkbox = that row), same
+  shape as `SAMaterialMaster.jsx`'s `MappingList`. Kept using `ErpDenseGrid` throughout (per
+  established convention — no hand-rolled `<table>`), just added a column instead of a new list
+  component.
+- New `selectedIncludedIds`/`selectedExcludedIds` state (Sets), cleared on opening/closing "Manage
+  Materials" for a group and after a successful bulk action.
+- Replaced the old per-row Exclude/Include button+`onAction` with one bulk button per list header
+  ("Exclude (N)" / "Include (N)"), shown only when something is selected and only for
+  `canSetup` users (view-only roles see no checkboxes/buttons, matching the old disabled-button
+  behavior).
+- Both bulk buttons call `setAc06MaterialInclusion` once with the full selected `line_ids` array,
+  wrapped in the page's existing `withBusy()` (busy-state + `refresh()` + error toast), same as
+  every other mutation on this page.
+
+**Verified:** `eslint` clean, `jsx-no-undef-guard.mjs` clean (263 files, 0 violations). No backend
+touched, so no `deno check` needed for this entry. No live click-through (no dev login in this
+environment) — verified by code review against the already-working reference pattern
+(`SAMaterialMaster.jsx`'s Company Mapping tab) and the pre-existing batch-capable backend handler.

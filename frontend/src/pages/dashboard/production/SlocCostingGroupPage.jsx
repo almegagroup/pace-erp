@@ -57,7 +57,11 @@ function materialIdentityColumns() {
 // Materials -- same Name/External Code/Type/Status(+optional Action) shape
 // everywhere, mirroring PO11's own buildMaterialListColumns() (§35.18/§114.23
 // "follows PO11's ... workspace pattern").
-function buildAc06MaterialListColumns({ statusLabel, actionLabel, actionClassName, onAction } = {}) {
+// `selection` (Material Company Mapping's checkbox pattern, SAMaterialMaster.jsx's
+// "Company Mapping" tab -- select one/many/all, then a single bulk action button,
+// instead of a per-row action button) prepends a checkbox column: header checkbox
+// toggles all currently-listed rows, row checkbox toggles that one row.
+function buildAc06MaterialListColumns({ statusLabel, actionLabel, actionClassName, onAction, selection } = {}) {
   const columns = [
     ...materialIdentityColumns(),
     { key: "material_type", label: "Type", width: "70px", render: (row) => row.material_type || "-" },
@@ -72,6 +76,28 @@ function buildAc06MaterialListColumns({ statusLabel, actionLabel, actionClassNam
         <button type="button" onClick={() => onAction(row)} className={actionClassName}>
           {actionLabel}
         </button>
+      ),
+    });
+  }
+  if (selection) {
+    columns.unshift({
+      key: "__select",
+      label: (
+        <input
+          type="checkbox"
+          checked={selection.allChecked}
+          onChange={selection.onToggleAll}
+          aria-label="Select all"
+        />
+      ),
+      width: "36px",
+      render: (row) => (
+        <input
+          type="checkbox"
+          checked={selection.selected.has(row.id)}
+          onChange={() => selection.onToggle(row.id)}
+          aria-label={`Select ${row.material_name || row.id}`}
+        />
       ),
     });
   }
@@ -166,6 +192,8 @@ export default function SlocCostingGroupPage() {
   const [costingSearch, setCostingSearch] = useState("");
   const [managedSlocGroupId, setManagedSlocGroupId] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
+  const [selectedIncludedIds, setSelectedIncludedIds] = useState(() => new Set());
+  const [selectedExcludedIds, setSelectedExcludedIds] = useState(() => new Set());
   const [rateSearch, setRateSearch] = useState("");
   const [rateCostingGroupId, setRateCostingGroupId] = useState("");
   const [onlyStandalone, setOnlyStandalone] = useState(false);
@@ -362,6 +390,21 @@ export default function SlocCostingGroupPage() {
       list.includes(value)
         ? list.filter((entry) => entry !== value)
         : [...list, value],
+    );
+  }
+
+  function toggleSetMember(setter, id) {
+    setter((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSetAll(setter, rows) {
+    setter((prev) =>
+      rows.length > 0 && prev.size === rows.length ? new Set() : new Set(rows.map((row) => row.id)),
     );
   }
 
@@ -994,6 +1037,8 @@ export default function SlocCostingGroupPage() {
                             onClick={() => {
                               setManagedSlocGroupId(group.id);
                               setMaterialSearch("");
+                              setSelectedIncludedIds(new Set());
+                              setSelectedExcludedIds(new Set());
                             }}
                             className="border border-sky-300 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800"
                           >
@@ -1052,7 +1097,11 @@ export default function SlocCostingGroupPage() {
                             </div>
                             <button
                               type="button"
-                              onClick={() => setManagedSlocGroupId("")}
+                              onClick={() => {
+                                setManagedSlocGroupId("");
+                                setSelectedIncludedIds(new Set());
+                                setSelectedExcludedIds(new Set());
+                              }}
                               className="border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700"
                             >
                               Close
@@ -1071,27 +1120,45 @@ export default function SlocCostingGroupPage() {
                             <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
                               <div className="flex items-center justify-between gap-3">
                                 <h4 className="text-sm font-semibold text-slate-900">Included</h4>
-                                <span className="text-xs text-slate-500">
-                                  {includedSlocMaterialRows.length} item(s)
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-slate-500">
+                                    {includedSlocMaterialRows.length} item(s)
+                                  </span>
+                                  {canSetup && selectedIncludedIds.size > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void withBusy(async () => {
+                                          await setAc06MaterialInclusion({
+                                            company_id: companyId,
+                                            rate_month: month,
+                                            line_ids: [...selectedIncludedIds],
+                                            included: false,
+                                          });
+                                          setSelectedIncludedIds(new Set());
+                                        })
+                                      }
+                                      disabled={busy}
+                                      className="border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700 disabled:opacity-40"
+                                    >
+                                      Exclude ({selectedIncludedIds.size})
+                                    </button>
+                                  ) : null}
+                                </div>
                               </div>
                               <ErpDenseGrid
                                 columns={buildAc06MaterialListColumns({
-                                  actionLabel: "Exclude",
-                                  actionClassName: canSetup
-                                    ? "border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
-                                    : "border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-400 cursor-not-allowed",
-                                  onAction: canSetup
-                                    ? (row) =>
-                                        void withBusy(() =>
-                                          setAc06MaterialInclusion({
-                                            company_id: companyId,
-                                            rate_month: month,
-                                            line_ids: [row.id],
-                                            included: false,
-                                          }),
-                                        )
-                                    : () => {},
+                                  selection: canSetup
+                                    ? {
+                                        selected: selectedIncludedIds,
+                                        allChecked:
+                                          includedSlocMaterialRows.length > 0 &&
+                                          selectedIncludedIds.size === includedSlocMaterialRows.length,
+                                        onToggle: (id) => toggleSetMember(setSelectedIncludedIds, id),
+                                        onToggleAll: () =>
+                                          toggleSetAll(setSelectedIncludedIds, includedSlocMaterialRows),
+                                      }
+                                    : undefined,
                                 }).filter((column) => column.key !== "status")}
                                 rows={includedSlocMaterialRows}
                                 rowKey={(row) => row.id}
@@ -1103,27 +1170,45 @@ export default function SlocCostingGroupPage() {
                             <div className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-4">
                               <div className="flex items-center justify-between gap-3">
                                 <h4 className="text-sm font-semibold text-slate-900">Excluded</h4>
-                                <span className="text-xs text-slate-500">
-                                  {excludedSlocMaterialRows.length} item(s)
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-slate-500">
+                                    {excludedSlocMaterialRows.length} item(s)
+                                  </span>
+                                  {canSetup && selectedExcludedIds.size > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void withBusy(async () => {
+                                          await setAc06MaterialInclusion({
+                                            company_id: companyId,
+                                            rate_month: month,
+                                            line_ids: [...selectedExcludedIds],
+                                            included: true,
+                                          });
+                                          setSelectedExcludedIds(new Set());
+                                        })
+                                      }
+                                      disabled={busy}
+                                      className="border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800 disabled:opacity-40"
+                                    >
+                                      Include ({selectedExcludedIds.size})
+                                    </button>
+                                  ) : null}
+                                </div>
                               </div>
                               <ErpDenseGrid
                                 columns={buildAc06MaterialListColumns({
-                                  actionLabel: "Include",
-                                  actionClassName: canSetup
-                                    ? "border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800"
-                                    : "border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-400 cursor-not-allowed",
-                                  onAction: canSetup
-                                    ? (row) =>
-                                        void withBusy(() =>
-                                          setAc06MaterialInclusion({
-                                            company_id: companyId,
-                                            rate_month: month,
-                                            line_ids: [row.id],
-                                            included: true,
-                                          }),
-                                        )
-                                    : () => {},
+                                  selection: canSetup
+                                    ? {
+                                        selected: selectedExcludedIds,
+                                        allChecked:
+                                          excludedSlocMaterialRows.length > 0 &&
+                                          selectedExcludedIds.size === excludedSlocMaterialRows.length,
+                                        onToggle: (id) => toggleSetMember(setSelectedExcludedIds, id),
+                                        onToggleAll: () =>
+                                          toggleSetAll(setSelectedExcludedIds, excludedSlocMaterialRows),
+                                      }
+                                    : undefined,
                                 }).filter((column) => column.key !== "status")}
                                 rows={excludedSlocMaterialRows}
                                 rowKey={(row) => row.id}
