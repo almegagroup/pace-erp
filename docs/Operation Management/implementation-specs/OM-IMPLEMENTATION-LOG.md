@@ -4732,4 +4732,18 @@ fixed in this pass:**
    not applicable — Stock History has no APPROVE action, no maker-checker, and posts no stock
    movements, so none of those tables were ever touched by this feature.
 
+**Second addendum (same day) — `erp_menu.menu_snapshot` (sidebar cache) explicitly rebuilt, not
+left to lazy TTL.** Business owner asked directly whether the menu/ACL snapshot was actually
+"proper" in Prod — everything verified up to that point was `acl.precomputed_acl_view` (the ACL
+*decision* layer); `erp_menu.menu_snapshot` (the *sidebar cache* the frontend actually reads,
+§8-PERF's read-first/TTL-cached layer) had not been separately checked. Found 8 of the ~46 eligible
+Prod (user, company, work_context) combinations already showed `PROC_STOCK_HISTORY` — real users'
+own requests had already lazily triggered a rebuild in the time since the version bump — but the
+rest were still stale, correctly so (nothing had asked for them yet). Rather than wait out the
+5-minute TTL, called `public.rebuild_acl_menu_snapshot(user_id, company_id, work_context_id)`
+directly for the full set (queried fresh from `precomputed_acl_view` against the new active
+version) in both Prod and Dev. Verified **46/46 in Prod, 2/2 in Dev** now carry a visible
+`PROC_STOCK_HISTORY` row, and spot-checked one row's full content (`route_path`, `title`,
+`parent_menu_code = GRP_ACL_INVENTORY`, `tx_code = IN14`, `is_visible = true`) — all correct.
+
 **Not yet done:** the live click-through in the deployed app (no dev login in this environment).
