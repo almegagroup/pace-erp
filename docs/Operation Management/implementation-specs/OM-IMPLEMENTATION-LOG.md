@@ -4706,4 +4706,30 @@ re-capture needed — `module_resource_map` is read live by that function, not o
 `PROC_CURRENT_STOCK`'s exactly, per company, per user, in both Dev and Prod (including that one
 Prod `DENY` row) — confirmed with a grouped count query, not spot-checked.
 
+**Addendum (same day) — full guard-script sweep, not just the 4 run in the first pass.** Business
+owner asked directly whether every `scripts/*.mjs` guard had actually been run — it hadn't; the
+first pass only ran the 4 that seemed relevant on the spot (`jsx-no-undef-guard`, `route-acl-
+registry-guard`, `wrong-company-source-guard`, `migration-integrity-check`). Ran the rest:
+`hardcoded-role-check-guard`, `company-scope-guard`, `company-scope-write-acl-guard`, `frontend-
+payload-guard`, `stock-posting-guard`, `resource-code-domain-guard`, `migration-column-scan`,
+`migration-order-scan`, `approver-chain-guard` — all clean, 0 new findings (the two migration scans
+flagged only pre-existing unrelated files, not this feature's migration). **Two real gaps found and
+fixed in this pass:**
+1. `dependency-provisioning-check.mjs` (Cross-Module Dependency Taxonomy check, `PROD-ACL-Access-
+   Decisions.md`) flagged `PROC_STOCK_HISTORY` as a routed page with **no
+   `PAGE-DEPENDENCY-MANIFEST.json` entry** — added one (3 deps: the report's own endpoint,
+   `OM_MATERIAL_LIST` for the Material filter, `UNRESOLVED` for the storage-location list, exactly
+   mirroring `PROC_CURRENT_STOCK`'s own entry since both pages use the identical filter hooks).
+   Re-ran a targeted gap query (does every user with `PROC_STOCK_HISTORY:VIEW` also hold
+   `OM_MATERIAL_LIST:VIEW`?) against both Dev and Prod — zero gap rows in both, so the Material
+   filter dropdown will actually populate for every user who can see this page.
+2. `acl-master-drift-check.mjs`/`acl-version-capture-drift-check.mjs` — both re-run scoped to
+   `PROC_STOCK_HISTORY` specifically (the unscoped versions are known-noisy against unrelated
+   pre-existing pages, per this doc's earlier AC06 entry) — zero drift in both Dev and Prod: the
+   de-facto ACL-Master user in every company already has the new grant, and nothing was captured
+   into the live tables after this version's `source_captured_at` that the snapshot missed.
+   `approver-chain-guard`/`approver-map-integrity-check`/`stock-health-check.sql` were judged
+   not applicable — Stock History has no APPROVE action, no maker-checker, and posts no stock
+   movements, so none of those tables were ever touched by this feature.
+
 **Not yet done:** the live click-through in the deployed app (no dev login in this environment).
