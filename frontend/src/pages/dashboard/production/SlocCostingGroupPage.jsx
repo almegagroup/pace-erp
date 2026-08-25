@@ -88,6 +88,45 @@ function rateRowProps(row) {
   return {};
 }
 
+// Report scope's month picker -- was a raw comma-separated text input
+// ("2026-05,2026-06"), which is exactly the kind of thing the Month field
+// right next to it (a native type="month" picker) exists to avoid. Since
+// the report accepts one or many months (§114.23), this stays a native
+// month picker used purely as an "add" control, plus removable chips for
+// whatever's already picked -- no free-text typing required.
+function ReportMonthsPicker({ months, onAdd, onRemove }) {
+  return (
+    <label className="grid gap-1 text-sm text-slate-700">
+      <span className="font-medium text-slate-800">Months</span>
+      <div className="flex min-h-10 flex-wrap items-center gap-2 border border-slate-300 bg-white px-2 py-1">
+        <input
+          type="month"
+          min={AC06_FIRST_MONTH}
+          value=""
+          onChange={(event) => onAdd(event.target.value)}
+          className="h-8 border border-slate-300 px-2 text-sm outline-none focus:border-sky-500"
+        />
+        {months.map((monthValue) => (
+          <span
+            key={monthValue}
+            className="flex items-center gap-1 rounded-full border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800"
+          >
+            {monthValue}
+            <button
+              type="button"
+              onClick={() => onRemove(monthValue)}
+              aria-label={`Remove ${monthValue}`}
+              className="text-sky-900"
+            >
+              &times;
+            </button>
+          </span>
+        ))}
+      </div>
+    </label>
+  );
+}
+
 export default function SlocCostingGroupPage() {
   const { runtimeContext } = useMenu();
   const queryClient = useQueryClient();
@@ -95,6 +134,18 @@ export default function SlocCostingGroupPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const primaryFocusRef = useRef(null);
+  // Report display is driven by local state, not location.pathname (same
+  // reasoning as PO11/ProcurementPlanningPage.jsx). Seed from the URL once
+  // (so a direct deep link to /report, e.g. via Shift+F8 in a new window,
+  // still opens straight into the report), then let openReport()/
+  // backToWorkspace() flip this in-place. Do NOT add an effect that
+  // re-derives showFullReport from isReportRoute on every render -- this
+  // app's screen-stack sync can correct the URL back to the base screen's
+  // registered route a moment after navigate() (the /report path is a
+  // route-only companion, not a registered screen), and an effect watching
+  // isReportRoute would then flip showFullReport back to false right after
+  // the user clicks Execute Full Report, bouncing them back to the
+  // workspace. PO11 hit this exact bug first; state-only display is the fix.
   const isReportRoute = location.pathname.endsWith("/report");
   const [showFullReport, setShowFullReport] = useState(isReportRoute);
   const [companyId, setCompanyId] = useState("");
@@ -122,10 +173,6 @@ export default function SlocCostingGroupPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    setShowFullReport(isReportRoute);
-  }, [isReportRoute]);
-
-  useEffect(() => {
     if (!companyId && runtimeContext?.selectedCompanyId)
       setCompanyId(String(runtimeContext.selectedCompanyId));
   }, [companyId, runtimeContext]);
@@ -149,6 +196,14 @@ export default function SlocCostingGroupPage() {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
+
+  function addReportMonth(monthValue) {
+    if (!monthValue || reportMonthList.includes(monthValue)) return;
+    setReportMonths([...reportMonthList, monthValue].sort().join(","));
+  }
+  function removeReportMonth(monthValue) {
+    setReportMonths(reportMonthList.filter((value) => value !== monthValue).join(","));
+  }
 
   const workspaceQuery = useQuery({
     queryKey: ["ac06-v3", "workspace", companyId, month, slocGroupId],
@@ -440,17 +495,11 @@ export default function SlocCostingGroupPage() {
                     ))}
                   </select>
                 </label>
-                <label className="grid gap-1 text-sm text-slate-700">
-                  <span className="font-medium text-slate-800">
-                    Months (comma-separated, YYYY-MM)
-                  </span>
-                  <input
-                    value={reportMonths}
-                    onChange={(event) => setReportMonths(event.target.value)}
-                    placeholder="2026-05,2026-06"
-                    className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
-                  />
-                </label>
+                <ReportMonthsPicker
+                  months={reportMonthList}
+                  onAdd={addReportMonth}
+                  onRemove={removeReportMonth}
+                />
               </div>
               <ErpDenseGrid
                 columns={[
@@ -636,17 +685,11 @@ export default function SlocCostingGroupPage() {
                         ))}
                       </select>
                     </label>
-                    <label className="grid gap-1 text-sm text-slate-700">
-                      <span className="font-medium text-slate-800">
-                        Months (comma-separated, YYYY-MM)
-                      </span>
-                      <input
-                        value={reportMonths}
-                        onChange={(event) => setReportMonths(event.target.value)}
-                        placeholder="2026-05,2026-06"
-                        className="h-10 border border-slate-300 px-3 outline-none focus:border-sky-500"
-                      />
-                    </label>
+                    <ReportMonthsPicker
+                      months={reportMonthList}
+                      onAdd={addReportMonth}
+                      onRemove={removeReportMonth}
+                    />
                     <div className="flex items-end">
                       <button
                         type="button"

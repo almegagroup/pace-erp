@@ -1231,6 +1231,10 @@ export function getStockValuation(params) {
   return fetchProcurement("GET", "/api/procurement/stock-valuation", undefined, params);
 }
 
+export function getStockHistory(params) {
+  return fetchProcurement("GET", "/api/procurement/stock-history", undefined, params);
+}
+
 export function listReservations(params) {
   return fetchProcurement("GET", "/api/procurement/reservations", undefined, params);
 }

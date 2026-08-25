@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 // Matches --erp-row-height in index.css. Only used as the virtualizer's size
@@ -29,6 +29,46 @@ function normalizeCellAlign(align) {
   if (align === "right") return "text-right";
   if (align === "center") return "text-center";
   return "text-left";
+}
+
+// Legacy fallback for non-secure contexts / older browsers where
+// navigator.clipboard is unavailable — mirrors the standard
+// hidden-textarea + execCommand("copy") pattern.
+function legacyCopyToClipboard(text) {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // fall through to legacy path
+    }
+  }
+  legacyCopyToClipboard(text);
+}
+
+function normalizeSelection(selection) {
+  if (!selection) return null;
+  return {
+    rowMin: Math.min(selection.anchorRow, selection.activeRow),
+    rowMax: Math.max(selection.anchorRow, selection.activeRow),
+    colMin: Math.min(selection.anchorCol, selection.activeCol),
+    colMax: Math.max(selection.anchorCol, selection.activeCol),
+  };
 }
 
 export default function ErpDenseGrid({
@@ -56,9 +96,22 @@ export default function ErpDenseGrid({
   // onKeyDown/onClick/className still apply to the <tr> itself (unaffected),
   // but ArrowUp/ArrowDown/ArrowLeft/ArrowRight/Enter are handled per-cell.
   cellNavigate = false,
+  // Opt-in only (§130.10) — default false, every existing caller unaffected.
+  // Pass true for report grids that need Excel-style range selection:
+  // Shift+Click / click-drag / Shift+Arrow extends a rectangular selection
+  // from the last plain click/arrow move, and Ctrl+C (Cmd+C on Mac) copies
+  // the selected range as tab/newline-separated text. Implies cellNavigate's
+  // per-cell focus rendering (a caller doesn't need to also pass
+  // cellNavigate). Each column may define `copyValue(row)` to control what
+  // gets copied for that column — falls back to the same raw
+  // `row?.[column.key]` value used when `render` is absent, so a column with
+  // a custom `render` (e.g. colored/formatted JSX) should also define
+  // `copyValue` to copy sensible plain text instead of "[object Object]".
+  rangeSelect = false,
 }) {
+  const effectiveCellNavigate = cellNavigate || rangeSelect;
   const rowRefs = useRef([]);
-  // cellRefs.current[rowIndex][colIndex] — only populated when cellNavigate.
+  // cellRefs.current[rowIndex][colIndex] — only populated when effectiveCellNavigate.
   const cellRefs = useRef([]);
   // Tracks which single cell currently carries tabIndex=0 so Tab from
   // outside the grid lands on the right spot next time, without triggering
@@ -66,6 +119,11 @@ export default function ErpDenseGrid({
   // below, just one level deeper).
   const activeCellRef = useRef({ row: 0, col: 0 });
   const scrollElementRef = useRef(null);
+  // Selection state is only ever populated when rangeSelect is on — kept as
+  // real state (not a ref) since the selected range needs to re-render as a
+  // highlight, unlike the single active cell above which only needs tabIndex.
+  const [selection, setSelection] = useState(null);
+  const isDraggingRef = useRef(false);
   const hasRows = Array.isArray(rows) && rows.length > 0;
   const viewportClassName =
     maxHeight === "none"
@@ -79,6 +137,17 @@ export default function ErpDenseGrid({
     estimateSize: () => ROW_HEIGHT_PX,
     overscan: 12,
   });
+
+  // Ends a click-drag range selection even if the mouseup happens outside
+  // the grid (or outside the browser window and back in).
+  useEffect(() => {
+    if (!rangeSelect) return undefined;
+    function handleWindowMouseUp() {
+      isDraggingRef.current = false;
+    }
+    window.addEventListener("mouseup", handleWindowMouseUp);
+    return () => window.removeEventListener("mouseup", handleWindowMouseUp);
+  }, [rangeSelect]);
 
   const focusRow = useCallback(
     (index) => {
@@ -123,10 +192,39 @@ export default function ErpDenseGrid({
     [virtualize, virtualizer, rows.length, columns.length],
   );
 
+  const copySelectionToClipboard = useCallback(
+    (rowIndex, colIndex) => {
+      const normalized = normalizeSelection(selection) ?? { rowMin: rowIndex, rowMax: rowIndex, colMin: colIndex, colMax: colIndex };
+      const lines = [];
+      for (let r = normalized.rowMin; r <= normalized.rowMax; r += 1) {
+        const row = rows[r];
+        const cells = [];
+        for (let c = normalized.colMin; c <= normalized.colMax; c += 1) {
+          const column = columns[c];
+          if (!column) continue;
+          const value = typeof column.copyValue === "function"
+            ? column.copyValue(row)
+            : (row?.[column.key] ?? "");
+          cells.push(String(value ?? ""));
+        }
+        lines.push(cells.join("\t"));
+      }
+      void copyTextToClipboard(lines.join("\n"));
+    },
+    [selection, rows, columns],
+  );
+
+  function isCellSelected(rowIndex, colIndex) {
+    const normalized = normalizeSelection(selection);
+    if (!normalized) return false;
+    return rowIndex >= normalized.rowMin && rowIndex <= normalized.rowMax
+      && colIndex >= normalized.colMin && colIndex <= normalized.colMax;
+  }
+
   function renderRow(row, index) {
     const externalRowProps = getRowProps?.(row, index) ?? {};
 
-    if (cellNavigate) {
+    if (effectiveCellNavigate) {
       if (!cellRefs.current[index]) cellRefs.current[index] = [];
       const { className: externalClassName, onKeyDown: externalOnKeyDown, ...restRowProps } = externalRowProps;
 
@@ -139,17 +237,42 @@ export default function ErpDenseGrid({
         >
           {columns.map((column, colIndex) => {
             const cellKeyboardHandler = (event) => {
+              const isCopyShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c";
+              if (rangeSelect && isCopyShortcut) {
+                event.preventDefault();
+                copySelectionToClipboard(index, colIndex);
+                return;
+              }
+              if (rangeSelect && event.shiftKey && ["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"].includes(event.key)) {
+                event.preventDefault();
+                setSelection((current) => {
+                  const anchor = current ?? { anchorRow: index, anchorCol: colIndex, activeRow: index, activeCol: colIndex };
+                  let nextActiveRow = anchor.activeRow;
+                  let nextActiveCol = anchor.activeCol;
+                  if (event.key === "ArrowRight") nextActiveCol = Math.min(columns.length - 1, anchor.activeCol + 1);
+                  if (event.key === "ArrowLeft") nextActiveCol = Math.max(0, anchor.activeCol - 1);
+                  if (event.key === "ArrowDown") nextActiveRow = Math.min(rows.length - 1, anchor.activeRow + 1);
+                  if (event.key === "ArrowUp") nextActiveRow = Math.max(0, anchor.activeRow - 1);
+                  if (virtualize) virtualizer.scrollToIndex(nextActiveRow, { align: "auto" });
+                  return { ...anchor, activeRow: nextActiveRow, activeCol: nextActiveCol };
+                });
+                return;
+              }
               if (event.key === "ArrowRight") {
                 event.preventDefault();
+                if (rangeSelect) setSelection(null);
                 focusCell(index, colIndex + 1);
               } else if (event.key === "ArrowLeft") {
                 event.preventDefault();
+                if (rangeSelect) setSelection(null);
                 focusCell(index, colIndex - 1);
               } else if (event.key === "ArrowDown") {
                 event.preventDefault();
+                if (rangeSelect) setSelection(null);
                 focusCell(index + 1, colIndex);
               } else if (event.key === "ArrowUp") {
                 event.preventDefault();
+                if (rangeSelect) setSelection(null);
                 focusCell(index - 1, colIndex);
               } else if (event.key === "Enter" && typeof onRowActivate === "function") {
                 event.preventDefault();
@@ -157,6 +280,7 @@ export default function ErpDenseGrid({
               }
             };
             const isInitialActiveCell = index === activeCellRef.current.row && colIndex === activeCellRef.current.col;
+            const selected = rangeSelect && isCellSelected(index, colIndex);
 
             return (
               <td
@@ -164,10 +288,25 @@ export default function ErpDenseGrid({
                 ref={(el) => { cellRefs.current[index][colIndex] = el; }}
                 tabIndex={isInitialActiveCell ? 0 : -1}
                 onKeyDown={mergeHandlers(externalOnKeyDown, cellKeyboardHandler)}
-                onClick={(event) => {
+                onMouseDown={rangeSelect ? (event) => {
+                  isDraggingRef.current = true;
+                  setSelection((current) => {
+                    if (event.shiftKey && current) {
+                      return { ...current, activeRow: index, activeCol: colIndex };
+                    }
+                    return { anchorRow: index, anchorCol: colIndex, activeRow: index, activeCol: colIndex };
+                  });
                   focusCell(index, colIndex);
                   externalRowProps.onClick?.(event);
-                }}
+                } : undefined}
+                onMouseEnter={rangeSelect ? () => {
+                  if (!isDraggingRef.current) return;
+                  setSelection((current) => (current ? { ...current, activeRow: index, activeCol: colIndex } : current));
+                } : undefined}
+                onClick={!rangeSelect ? (event) => {
+                  focusCell(index, colIndex);
+                  externalRowProps.onClick?.(event);
+                } : undefined}
                 // Found live 2026-08-19 (business owner): cells had no
                 // white-space rule, so any column narrower than its content
                 // silently wrapped -- rows becoming taller than the fixed
@@ -177,7 +316,7 @@ export default function ErpDenseGrid({
                 // container already scrolls horizontally); a column that
                 // genuinely needs multi-line text (long remarks/notes) can
                 // opt back in with `wrap: true`.
-                className={`px-2 py-1 align-middle outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)}`}
+                className={`px-2 py-1 align-middle outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${selected ? "bg-sky-100" : ""}`}
               >
                 {typeof column.render === "function"
                   ? column.render(row, index)

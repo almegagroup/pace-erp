@@ -5072,6 +5072,36 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/reports/StockHistoryPage.jsx",
+    "dependencyCount": 3,
+    "deps": [
+      {
+        "fn": "getStockHistory",
+        "method": "GET",
+        "path": "/api/procurement/stock-history",
+        "resourceCode": "PROC_STOCK_HISTORY",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listMaterials",
+        "method": "GET",
+        "path": "/api/om/materials?${params.toString()}",
+        "resourceCode": "OM_MATERIAL_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listStorageLocations",
+        "method": "GET",
+        "path": "/api/om/storage-locations?${query.toString()}",
+        "resourceCode": "UNRESOLVED",
+        "action": "?",
+        "skipAcl": true
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/reports/StockLedgerReportPage.jsx",
     "dependencyCount": 10,
     "deps": [

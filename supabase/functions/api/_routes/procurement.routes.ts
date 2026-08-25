@@ -87,6 +87,7 @@ import {
 } from "../_core/procurement/report_layout.handlers.ts";
 import {
   getCurrentStockHandler,
+  getStockHistoryHandler,
   getStockLedgerReportHandler,
   listReservationsHandler,
   listStockLedgerMovementTypesHandler,
@@ -590,6 +591,8 @@ export async function dispatchProcurementRoutes(
       return await searchCurrentStockPackingPoNumbersHandler(req, ctx);
     case "GET:/api/procurement/current-stock":
       return await getCurrentStockHandler(req, ctx);
+    case "GET:/api/procurement/stock-history":
+      return await getStockHistoryHandler(req, ctx);
     case "GET:/api/procurement/stock-valuation":
       return await getStockValuationHandler(req, ctx);
     case "GET:/api/procurement/reservations":
