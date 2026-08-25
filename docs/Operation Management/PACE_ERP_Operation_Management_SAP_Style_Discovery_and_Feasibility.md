@@ -20525,3 +20525,300 @@ MM05 (RM/PM/INT sale customer redesign) — deferred to a future session, busine
 explicit sequencing. The Depot Code Direct/Depot `dispatch_type` field's own downstream usage
 (how Dispatch/L5 actually branches on Direct vs Depot) is not designed here — out of scope,
 belongs to the still-paused Dispatch/L5 formal session (§114).
+
+---
+
+## Section 130 — Stock History (Inventory group): Opening → transaction buckets → Closing, per Material x Status x Location (✅ DESIGN LOCKED + IMPLEMENTATION COMPLETE — 2026-08-25, tx_code IN14)
+
+### 130.1 — Purpose and origin
+
+Business owner has maintained a manual Google Sheet called "Stock History" for years, structured
+as: pick a date range, Item Type, and Storage Location, and see one row per material showing
+Opening stock, a handful of transaction-category columns, and Closing stock. No PACE-native report
+currently does this — IN02 (Stock Ledger) is a raw per-transaction log (ZMB51-style), IN03
+(Current Stock) is a point-in-time balance only (MB52-style), and SAP's own closest equivalent
+(MB5B) evaluates opening/closing per single material, not as a scannable multi-material list. This
+section locks the data model this report needs; it does not replace SAP's MB5B, it replaces the
+manual sheet.
+
+### 130.2 — Opening/Closing computation mechanic
+
+Neither `stock_ledger` nor `stock_snapshot` stores a point-in-time balance for an arbitrary past
+date — `stock_snapshot` only holds the *current* running balance (same limitation already
+documented for WAR/valuation revaluation, §109/§111). Opening and Closing for this report are
+therefore always **derived**, not read from a stored value:
+
+- **Opening** (as of the range's start date) = the balance as of the end of the day *before* the
+  range starts. This must not be computed by summing forward from a material's entire ledger
+  history (expensive, unbounded as a company ages) — compute backward instead: `stock_snapshot`'s
+  current balance minus every ledger row posted strictly after the cutoff date. Cost is bounded by
+  "today back to the cutoff," not by total company history.
+- **Closing** (as of the range's end date) = Opening + every ledger row posted within the range
+  (inclusive), split by movement direction.
+- This is entirely independent of *when* the material's very first Opening Stock (`P561`/`P563`/
+  `P565`) posting happened. A material set up on 1 Aug and reported on 22–27 Aug shows its true
+  22 Aug Opening (netting every transaction from 1–21 Aug into one number), not the raw Opening
+  Stock document value. If a material's Opening Stock posting itself falls **inside** the selected
+  range (a rare case — a brand-new material set up mid-range), that one event is treated exactly
+  like any other in-range transaction and lands in the **Inward** bucket (§130.5); it is not a
+  special case requiring different code.
+
+### 130.3 — Row grain: flat rows, one per Material x Status x Location
+
+**Locked over an initially-proposed expandable/stacked-cell UI (business owner rejected both in
+favor of this, 2026-08-25).** Every row is `(Material, Stock Status, Storage Location)` — no
+click-to-expand, no per-cell stacking. A material held at 2 locations across 3 active statuses is
+up to 6 rows; a material with no Blocked activity and Blocked balance of zero simply has no
+Blocked row for that location. **A row where every column (Opening, every bucket, Closing) is
+zero is dropped entirely, not printed** — this is what keeps the list from exploding for the
+overwhelming majority of material/location/status combinations that were never active for a given
+report scope. Location filtering (Item Type / Storage Location / Date Range, all multi-select
+except Date Range) works by restricting the underlying `storage_location_id IN (...)` set the
+Opening/Closing/bucket sums are computed over — see §130.6 for why this needs no special-case
+logic for transfers.
+
+### 130.4 — Stock status set (rows), not fixed at 3
+
+Earlier IN03/IN02 work only ever needed to talk about Unrestricted/QI/Blocked. This report's own
+worked examples (§130.8) surfaced two more real, schema-native stock types that must be full peer
+statuses, each getting its own row (and its own Opening/Closing) exactly like Unrestricted/QI/
+Blocked do, not folded into an existing bucket:
+
+- **In Transit** — the interim state during a two-step Plant Transfer (`P303` issues out of
+  Unrestricted into `IN_TRANSIT`; `P305` receives it back into Unrestricted at the destination,
+  possibly days later). If a report's date range catches a transfer mid-flight, the material must
+  visibly sit in an "In Transit" row rather than silently disappearing from the report.
+- **For Reprocess** (`FOR_REPROCESS` stock type, §108.4) — material set aside for rework. Likely
+  low-volume/rarely used today, but structurally a full peer of Blocked/QI, not a footnote — kept
+  as a genuine status row so it drops out cleanly (via §130.3's zero-row rule) for materials that
+  never touch it, rather than needing separate-code handling.
+
+### 130.5 — Transaction bucket columns (final mapping, locked 2026-08-25)
+
+**General rule, applies to every bucket below:** any movement code's reversal (per
+`movement_type_master.reversal_of`) automatically nets into its parent's bucket with the opposite
+sign — never listed or displayed as a separate line. A GRN followed by its own reversal inside the
+same range shows as the true net Inward, not two offsetting rows.
+
+**Second general rule:** a bucket is defined by a *business event*, and both sides of a transfer
+-type movement (the source status's outflow and the target status's inflow) always share the same
+bucket name — the status *row* each leg lands on is what tells the reader which "flavor" of that
+event this was, not a duplicated `<Bucket> Reject`-style column. (`Opening Reject`/`PID Reject` as
+separate top-level columns were proposed early and explicitly rejected for exactly this reason —
+business owner caught the redundancy live: "Opening Reject" is just the Opening column's value on
+the Blocked row, nothing more.)
+
+| Bucket | Movement codes (parent, "+reversal" implied by the general rule) | Business event |
+|---|---|---|
+| **Inward** | `P101` (+ `P561`/`P563`/`P565` only if posted inside the range, §130.2) | Purchase/production receipt entering the company |
+| **Cons.** | `P261` | Issued to a Process/Packing Order |
+| **Sale/Dispatch** | `P601` | Left via Sales Order or STO dispatch (renamed from the sheet's unexplained "RP Sale") |
+| **PID** | `P701`/`P702` (Unrestricted row), `P703`/`P704` (QI row), `P705`/`P706` (Blocked row) | Physical inventory count correction — one column name, the status row it lands on carries which stock type was recounted |
+| **QA** | `P321`/`P322` (QI <-> Unrestricted), `P323`/`P349` (QI <-> Blocked) | Any QA disposition decision where Quality Inspection is one endpoint — release, hold, or a direct QI-to-Blocked/Blocked-to-QI call |
+| **Reject** | `P344`/`P343` | Unrestricted <-> Blocked directly, bypassing QI entirely (a quarantine/release decision made without a formal inspection step) |
+| **Return** | `P651`/`P652` (customer return receipt, into Blocked), `P653`/`P654` (salvage decision, Blocked -> Unrestricted), `P655`/`P656` (Blocked -> QI for re-check), `P657`/`P658` (confirmed still Blocked) | The full lifecycle of handling one customer return, start to disposition — all four pairs share this bucket regardless of which status row they land on |
+| **RTV** | `P122`/`P123` (Unrestricted-sourced), `P124`/`P125` (Blocked-sourced) | Returning our own purchased stock to our vendor — kept separate from "Return" even though both use the word: Return is customer-to-us, RTV is us-to-our-vendor, an unrelated business relationship. Applies whether it is a full or partial GRN return, or drawn from general stock — the movement code and bucket are the same either way |
+| **Scrap** | `P551`/`P552` (Unrestricted), `P553`/`P554` (QI), `P555`/`P556` (Blocked) | Permanent write-off — deliberately not folded into Cons., which must stay a clean production-usage number |
+| **Reprocess** | `P901`/`P902` (Unrestricted <-> For Reprocess), `P903`/`P904` (Blocked <-> For Reprocess), `P905`/`P906` (QI <-> For Reprocess) | Material set aside for rework — a different outcome from Reject/Scrap, kept distinct on purpose |
+| **Transfer** | `P311`/`P312` (Storage Location Transfer), `P301`/`P302`/`P303`/`P304`/`P305`/`P306` (Plant Transfer, one- and two-step) | Renamed from the sheet's "Location Reverse", which described only the reversal half of this bucket, not the transfer itself |
+
+Not yet given its own bucket / deliberately not asked about: none outstanding as of this lock —
+every code in the live `erp_inventory.movement_type_master` catalog (63 active codes at lock time)
+maps into exactly one bucket above via the two general rules.
+
+### 130.6 — Multi-location selection needs no special-case code
+
+**A real design trap avoided, not just described.** A transfer-type movement (e.g. `P311`) posts
+two ledger rows — an OUT leg at the source location, an IN leg at the target location, same
+movement code. If the report's query simply sums only the rows whose `storage_location_id` is in
+the user's selected location set:
+
+- **Both locations selected** -> both legs are summed -> they cancel -> the transfer shows as 0,
+  correctly, because nothing left the scope being reported on.
+- **Only one location selected** -> only one leg is summed -> it shows as a real net
+  inflow/outflow, correctly, because stock genuinely crossed the boundary of what's in scope.
+- **"All Locations" selected** -> every transfer's both legs are always included -> transfers
+  never show non-zero at the company level, correctly.
+
+No per-transfer pairing logic, no location-boundary detection code is required — this falls out
+automatically from filtering the underlying query by the selected `storage_location_id` set.
+Verified against real prod data (CMP003, `HIMFLOWCRETE HWR 9F02` / RM-00057, a genuine
+two-location material, T003 <-> S003) in an interactive mock before this was accepted as
+sufficient — see the artifact referenced in §130.8.
+
+### 130.7 — Opening is bucket-agnostic
+
+Adding new named buckets (§130.5) never changes how Opening is computed. Opening sums *every*
+historical ledger row up to the cutoff regardless of which movement code or bucket it would be
+classified under if it had happened inside the range — a material's Return/Scrap/RTV/Reprocess
+history from before the report's start date is already folded into its Opening balance the same
+as any other movement type always has been. This was confirmed explicitly (business owner asked
+directly) rather than assumed.
+
+### 130.8 — Worked examples used to validate this design
+
+All of the following were built as real, running mocks (not described in the abstract) before
+being accepted — a business-owner discipline already established elsewhere in this doc (see the
+AC06 UI/UX section, §114.23-adjacent work same week) and continued here:
+
+- **Sodium Gluconate 98% (RM-00028, CMP006), hypothetical 22-27 Aug scenario** — Opening 100
+  (Unrestricted 90 / Blocked 10), a 15 KG receipt landing in QI on day 1 that only reaches
+  Unrestricted via QA release on the range's last day. Used to prove the Opening/Closing mechanic
+  (§130.2) and that a bucket (QA) can correctly show 0 net at the *Total* level while the
+  status-row breakdown shows the real 15 KG movement — the reason per-status rows, not a single
+  blended number, were locked as necessary at all.
+- **DYN E 35 (RM-00007) and BIOTREAT-V8 (RM-00002), CMP006, real ledger, 22-24 Aug 2026** —
+  single-location materials, used to validate the reversal-netting rule (`P261`/`P262`) against
+  real data.
+- **HIMFLOWCRETE HWR 9F02 (RM-00057), CMP003, real ledger, 18-22 Aug 2026** — the one real
+  multi-location material found in prod at lock time (T003, S003). Used to validate §130.6 with
+  real transfer + same-day-reversal data, and (extended) a real `P344` Reject event plus a
+  QI-receipt-then-QA-release chain, giving a genuine multi-bucket, multi-status worked example.
+
+### 130.9 — UI/UX deferral, superseded same day
+
+**Superseded by §130.10-130.14 below, locked later the same day (2026-08-25).** This subsection
+originally deferred all visual UI/UX to a following session; business owner continued straight
+into it instead. Left here only as a history marker of the sequencing, per this doc's own
+convention of not silently deleting a superseded note.
+
+### 130.10 — Grid primitive: ErpDenseGrid, Excel-style range select + copy (new opt-in mode)
+
+Built on `ErpDenseGrid` (`frontend/src/components/data/ErpDenseGrid.jsx`), which already has an
+opt-in `cellNavigate` mode (arrow keys move focus cell-to-cell, already used by CSN Tracker/AC01/
+AC03) — Stock History reuses that mode as-is for single-cell keyboard navigation. Two capabilities
+that mode does **not** yet have, and this report needs, are new to the shared component:
+
+- **Range selection** — Shift+Arrow extends a rectangular selection from the active cell (Excel's
+  own behavior); Shift+Click extends to a clicked cell. Selection state is anchor-cell +
+  active-cell, matching the existing `activeCellRef` pattern already in the component rather than
+  introducing a second, parallel selection model.
+- **Ctrl+C copy** — serializes the current selection (a single cell or a rectangular range) to the
+  clipboard as tab-separated values (rows newline-separated, columns tab-separated) via
+  `navigator.clipboard.writeText()` — the same plain-text shape Excel/Google Sheets themselves
+  write and read on copy/paste, so pasting Stock History's selection straight into a spreadsheet
+  reproduces the grid shape with no extra work.
+
+**Both ship as a new opt-in flag on `ErpDenseGrid` itself** (mirroring how `virtualize` and
+`cellNavigate` were each added as opt-in, never changing existing callers' behavior by default) —
+this is a shared component touched by many pages (§8A's own standing warning on this exact file),
+so the extension must not alter `cellNavigate`'s existing single-cell behavior for CSN Tracker/
+AC01/AC03 unless those pages explicitly opt in too.
+
+### 130.11 — Value rendering and column identity rules
+
+- **No `+` prefix on positive values** — sign is conveyed by color alone (green = positive,
+  red/rose = negative), not by a leading `+`/`-` character. Matches the semantic-color convention
+  already used elsewhere in this report family (verified/pending/critical chips, §35.18-adjacent
+  work), kept consistent here for numeric cells specifically.
+- **No Pace Code anywhere** — same repo-wide rule already applied to PO11/AC06/IN02/IN03
+  (material-master note, §35.18). Material identity is **Item Name** + **External Code**, two
+  separate columns, never combined into one cell.
+- **Company Code precedes Item** — column order starts `Company | Item Name | External Code |
+  Status | Storage Location`, then the numeric columns (§130.5's Opening through Closing), in that
+  order. Status is the stock-status label (Unrestricted / Quality Inspection / Blocked / In
+  Transit / For Reprocess); Storage Location is the location code, both already locked as row
+  dimensions in §130.3-130.4 — this section only fixes their column position, left of every
+  numeric column.
+
+### 130.12 — Dynamic column and row suppression, scoped to the executed report
+
+Two independent suppression rules, both evaluated **after** a report actually runs (against that
+run's full result set, not a fixed schema):
+
+- **Column-level:** a bucket column (§130.5) whose value is zero on every row currently in the
+  result set is not rendered at all — not shown-as-zero, omitted entirely. A report with no Scrap,
+  no Return, and no Reprocess activity in its filtered scope simply never grows those three columns
+  wide.
+- **Row-level:** already locked in §130.3 (any `Material x Status x Location` row where every
+  column is zero is dropped) — this section just reconfirms it holds at the whole-report scale,
+  not only per material: a status that never carries a value anywhere in the current report (e.g.
+  no material in scope ever touched For Reprocess) produces zero rows for that status, which is
+  exactly the same rule already dropping individual zero rows, not a second mechanism.
+
+Net effect confirmed with the business owner directly: both rules only ever *remove* columns/rows
+that carry no information for the current report run — the report gets narrower and shorter the
+less activity a given scope had, never the reverse.
+
+### 130.13 — Total row per Material
+
+After the last `Status x Location` row for a given material (its rows are already grouped
+together, sorted by name per the established merged-alphabetical convention, §35.12), one **Total**
+row sums every status and location for that material into a single row — same columns, same
+suppression rules (a bucket column hidden for the report is hidden for the Total row too, since
+it's zero everywhere by definition if it was already hidden). The Total row gets its own distinct
+fill color (not reused from any status's row styling) so it reads as a subtotal, not one more
+status row, at a glance.
+
+### 130.14 — Colored Excel export
+
+CSV cannot carry cell color at all — this is a hard format limitation, not an implementation
+choice, so a plain CSV export (as several other reports in this app already use) cannot satisfy
+this requirement. Export must produce a real `.xlsx` file with cell styling. **New frontend
+dependency: `exceljs`** (MIT license, no cost, no API/network calls, runs entirely client-side —
+confirmed directly with business owner before adding, given it's the shared component/dependency
+class of change this repo treats carefully). Every cell's export color matches its on-screen color
+exactly (value-sign green/red per §130.11, plus the Total row's distinct fill per §130.13) — the
+exported file is not just the numbers, it is a faithful copy of what the grid showed at the moment
+of export, including the column/row suppression already applied (§130.12): a column or row absent
+from the live grid is absent from the exported file too, not silently reintroduced.
+
+### 130.15 — Filter bar (final, locked 2026-08-25)
+
+- **Company** — session/runtime-scoped, never a free global picker (§130.1 restated: single-company
+  user sees a locked value, multi-company user chooses only among their own allowed companies, via
+  the same `TransactionCompanySelector`/`runtimeContext.availableCompanies` pattern already used by
+  PO11/AC06/IN03 — never an admin/global company source, this is a standing company-scope-leak
+  guard, not new to this report).
+- **Material Type** — multi-select, includes an explicit "All" option (not merely "select nothing
+  = all"). Broad category filter (RM/PM/SFG/FG/INT/...).
+- **Material** — a second, independent multi-select filter, **searchable/autocomplete, picks
+  specific named items**, not a category. Added specifically so a user can scope the report to an
+  exact handful of materials (e.g. "just these 3") without relying on Material Type plus manual
+  scanning. Works alongside Material Type, not instead of it — Material Type narrows the pool,
+  Material (if used) narrows further to exact items; leaving Material empty means "every item
+  matching the other filters."
+- **Storage Location** — multi-select, includes an explicit "All" option, same interaction pattern
+  as Material Type.
+- **Date Range** — From/To, native date pickers (no free-text date entry).
+- **Free-text auto-suggest search** — a separate, always-available search box that matches against
+  any visible column's data (Item Name, External Code, etc.) on the already-filtered result set —
+  a fast narrow-down tool, not a replacement for the structured filters above.
+- **Status is never a pre-query filter** — it is purely a row dimension of the result (§130.3-130.4):
+  whichever statuses actually carry a value for a matched Material/Location/Date scope appear as
+  their own rows automatically. There is no separate "Status" dropdown to pre-select before running
+  the report.
+
+### 130.16 — Page architecture: one dedicated report page, no workspace toggle
+
+**Closer to IN02/IN03's own pattern than to PO11/AC06's**, and deliberately not copied wholesale
+from either. PO11 and AC06 each carry two modes on one page component — a maintenance "Workspace"
+(SLOC Group setup, rate/plan entry) and a read-only "Report" — so they need the
+`showFullReport` state + a companion `/report` sub-route to flip between the two (§114.23's AC06
+UI-parity work, same week). Stock History has **no maintenance/workspace mode at all** — there is
+nothing to set up or enter, it is a report from the moment the page opens, exactly like IN02
+(Stock Ledger) and IN03 (Current Stock) already are. It therefore ships as a single page: filter
+bar (§130.15) plus grid (§130.10-130.14), no toggle, no companion route. Shift+F8 "open in a new
+ERP window" still works, unaffected — that is an app-wide, route-level capability every normal
+page already gets, not something built per-page.
+
+### 130.17 — Implementation summary (2026-08-25, Claude direct-implemented, not a Codex brief)
+
+All of 130.1-130.16 built end-to-end same day as the design lock. `erp_inventory.
+stock_history_bucket_map` + `get_stock_history()` (migration `20260825100000`, applied to both Dev
+and Prod, `migration-integrity-check.mjs` confirmed `in_sync=true` in both). Backend
+`getStockHistoryHandler` added to `stock_reports.handlers.ts` alongside IN02/IN03. Frontend
+`StockHistoryPage.jsx`, routed and registered in the sidebar. `ErpDenseGrid` gained the §130.10
+`rangeSelect` opt-in mode (Excel-style range select + Ctrl+C copy) without touching any existing
+`cellNavigate` caller's behavior. §130.14's colored export shipped as a new `exceljs`-based
+`shared/downloadColoredExcelFile.js`, dynamically imported only when Export is clicked.
+
+**tx_code `IN14`**, menu group `GRP_ACL_INVENTORY`, resource `PROC_STOCK_HISTORY:VIEW`, granted to
+`CAP_PROC_INVENTORY` (both Dev and Prod, mirrors IN02/IN03) plus `CAP_EVERYONE_REPORTS` in Prod
+only (Prod's own already-established broader grant on this exact class of report page — verified
+live, not assumed, before reusing it). Full detail, including a real `module_resource_map` gap
+found and fixed during verification (the new resource initially bypassed the per-company
+`MOD_INVENTORY` enable/disable boundary that IN02/IN03 already respect), is in
+`OM-IMPLEMENTATION-LOG.md`'s 2026-08-25 "IN14 Stock History" entry — not repeated here.
+
+**Not yet done:** live click-through in the deployed app (no dev login in this environment).

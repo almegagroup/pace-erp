@@ -205,6 +205,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/current-stock/batch-search":  { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
   "GET:/api/procurement/current-stock/po-search":     { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
   "GET:/api/procurement/current-stock":               { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
+  "GET:/api/procurement/stock-history":               { skipAcl: false, resourceCode: "PROC_STOCK_HISTORY",  action: "VIEW" },
   "GET:/api/procurement/reservations":                { skipAcl: false, resourceCode: "PROC_RESERVATION_LIST", action: "VIEW" },
   "GET:/api/procurement/stock-valuation":             { skipAcl: false, resourceCode: "PROC_STOCK_VALUATION", action: "VIEW" },
 

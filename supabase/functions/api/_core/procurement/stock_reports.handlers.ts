@@ -1700,3 +1700,236 @@ export async function listReservationsHandler(
     return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch reservation list.");
   }
 }
+
+// IN14 — Stock History (feasibility §130). Legacy Google-Sheet-equivalent:
+// one row per (Material, Stock Status, Storage Location), Opening -> per-
+// business-event bucket columns -> Closing, for a date range. Opening/
+// Closing are computed BACKWARD from stock_snapshot's current running
+// balance (§130.2) via the erp_inventory.get_stock_history() SQL function
+// (migration 20260825100000) — cost is bounded by "today back to the
+// report's end date", not by a material's total ledger history. The raw
+// movement_type_master -> business-bucket mapping lives in the
+// stock_history_bucket_map table (data, not a TS CASE ladder) so a new
+// movement code only ever needs one INSERT there, never a code change here.
+const STOCK_HISTORY_BUCKET_ORDER = [
+  "INWARD", "CONS", "SALE_DISPATCH", "PID", "QA", "REJECT",
+  "RETURN", "RTV", "SCRAP", "REPROCESS", "TRANSFER",
+] as const;
+
+const STOCK_HISTORY_STOCK_TYPE_LABELS: Record<string, string> = {
+  UNRESTRICTED: "Unrestricted",
+  QUALITY_INSPECTION: "Quality Inspection",
+  BLOCKED: "Blocked",
+  IN_TRANSIT: "In Transit",
+  FOR_REPROCESS: "For Reprocess",
+};
+
+type StockHistoryRpcRow = {
+  material_id: string;
+  stock_type_code: string;
+  storage_location_id: string;
+  opening: number;
+  closing: number;
+  buckets: Record<string, number>;
+};
+
+export async function getStockHistoryHandler(
+  req: Request,
+  ctx: StockReportHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+
+    const url = new URL(req.url);
+    const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
+    const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+    const dateRangeState = validateRequiredDateRange(dateFrom, dateTo);
+    if (dateRangeState === "MISSING") {
+      return reportErrorResponse(req, ctx, "STOCK_HISTORY_DATE_RANGE_REQUIRED", 400, "date_from and date_to are required.");
+    }
+    if (dateRangeState === "INVALID") {
+      return reportErrorResponse(req, ctx, "STOCK_HISTORY_DATE_RANGE_INVALID", 400, "date_from/date_to are invalid.");
+    }
+    if (dateRangeState === "TOO_WIDE") {
+      return reportErrorResponse(req, ctx, "STOCK_HISTORY_DATE_RANGE_TOO_WIDE", 400, "Date range cannot exceed 365 days.");
+    }
+
+    const companyIds = parseMultiValueParams(url, "company_ids", "company_id");
+    const materialTypes = parseMultiValueParams(url, "material_types", undefined, (value) => value.toUpperCase());
+    const materialIds = parseMultiValueParams(url, "material_ids", "material_id");
+    const storageLocationIds = parseMultiValueParams(url, "storage_location_ids", "storage_location_id");
+    const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_inventory")
+      .rpc("get_stock_history", {
+        p_company_id: companyId,
+        p_from_date: dateFrom,
+        p_to_date: dateTo,
+        p_material_type_codes: materialTypes.length > 0 ? materialTypes : null,
+        p_material_ids: materialIds.length > 0 ? materialIds : null,
+        p_storage_location_ids: storageLocationIds.length > 0 ? storageLocationIds : null,
+      });
+    if (error) {
+      return reportErrorResponse(req, ctx, "STOCK_HISTORY_FETCH_FAILED", 500, "Unable to fetch stock history.");
+    }
+
+    // §130.3 — any row where Opening, every bucket, and Closing are all zero
+    // is dropped entirely (the SQL function's `groups` CTE can still emit one
+    // whenever a snapshot/ledger row happens to net to exactly zero over this
+    // range). Defensive, not load-bearing for the common case.
+    const rpcRows = ((data ?? []) as StockHistoryRpcRow[]).filter((row) => {
+      const buckets = row.buckets ?? {};
+      const bucketsAllZero = STOCK_HISTORY_BUCKET_ORDER.every((key) => Math.abs(Number(buckets[key] ?? 0)) < 0.000001);
+      return bucketsAllZero === false
+        || Math.abs(Number(row.opening ?? 0)) >= 0.000001
+        || Math.abs(Number(row.closing ?? 0)) >= 0.000001;
+    });
+
+    if (rpcRows.length === 0) {
+      return okResponse({ data: [], total: 0, visible_buckets: [] }, ctx.request_id, req);
+    }
+
+    const materialIdsForLookup = [...new Set(rpcRows.map((row) => row.material_id).filter(Boolean))];
+    const slocIdsForLookup = [...new Set(rpcRows.map((row) => row.storage_location_id).filter(Boolean))];
+
+    let materialRows: JsonRecord[];
+    let slocRows: JsonRecord[];
+    let companyRows: JsonRecord[];
+    try {
+      [materialRows, slocRows, companyRows] = await Promise.all([
+        fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
+          serviceRoleClient
+            .schema("erp_master")
+            .from("material_master")
+            .select("id, external_code, material_name, document_name, material_type, base_uom_code")
+            .in("id", idChunk)),
+        fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
+          serviceRoleClient
+            .schema("erp_inventory")
+            .from("storage_location_master")
+            .select("id, code")
+            .in("id", idChunk)),
+        fetchInChunks<JsonRecord>([companyId], (idChunk) =>
+          serviceRoleClient
+            .schema("erp_master")
+            .from("companies")
+            .select("id, company_code")
+            .in("id", idChunk)),
+      ]);
+    } catch {
+      return reportErrorResponse(req, ctx, "STOCK_HISTORY_FETCH_FAILED", 500, "Unable to fetch stock history.");
+    }
+
+    const materialMap = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
+    const slocMap = new Map(slocRows.map((row) => [toTrimmedString(row.id), row]));
+    const companyCode = toTrimmedString(companyRows[0]?.company_code) || "—";
+
+    // §130.12 — a bucket column that is zero on EVERY returned row for this
+    // executed report is hidden entirely (not just shown as an all-zero
+    // column); computed once across the whole result set below.
+    const visibleBuckets = new Set<string>();
+    for (const row of rpcRows) {
+      for (const bucketCode of STOCK_HISTORY_BUCKET_ORDER) {
+        if (Math.abs(Number(row.buckets?.[bucketCode] ?? 0)) >= 0.000001) {
+          visibleBuckets.add(bucketCode);
+        }
+      }
+    }
+
+    const detailRows = rpcRows.map((row) => {
+      const material = materialMap.get(row.material_id);
+      const sloc = slocMap.get(row.storage_location_id);
+      const materialLabel = resolveMaterialLabel(material) || "—";
+      const stockTypeCode = toTrimmedString(row.stock_type_code).toUpperCase();
+      const buckets: Record<string, number> = {};
+      for (const bucketCode of STOCK_HISTORY_BUCKET_ORDER) {
+        buckets[bucketCode] = normalizeNumber(row.buckets?.[bucketCode] ?? 0);
+      }
+      return {
+        row_key: `${row.material_id}__${stockTypeCode}__${row.storage_location_id}`,
+        is_total: false,
+        company: companyCode,
+        material_id: row.material_id,
+        material_type: toTrimmedString(material?.material_type) || "—",
+        material: materialLabel,
+        external_code: toTrimmedString(material?.external_code) || "—",
+        base_uom_code: toTrimmedString(material?.base_uom_code) || "—",
+        stock_status: STOCK_HISTORY_STOCK_TYPE_LABELS[stockTypeCode] || stockTypeCode || "—",
+        storage_location: toTrimmedString(sloc?.code) || "—",
+        opening: normalizeNumber(row.opening),
+        buckets,
+        closing: normalizeNumber(row.closing),
+      };
+    }).sort((left, right) =>
+      left.material.localeCompare(right.material)
+      || left.stock_status.localeCompare(right.stock_status)
+      || left.storage_location.localeCompare(right.storage_location)
+    );
+
+    // §130.13 — one Total row per Material, summing every Stock Status x
+    // Storage Location row that material produced in this report.
+    const totalsByMaterial = new Map<string, typeof detailRows[number]>();
+    for (const row of detailRows) {
+      let total = totalsByMaterial.get(row.material_id);
+      if (!total) {
+        total = {
+          row_key: `${row.material_id}__TOTAL`,
+          is_total: true,
+          company: row.company,
+          material_id: row.material_id,
+          material_type: row.material_type,
+          material: row.material,
+          external_code: row.external_code,
+          base_uom_code: row.base_uom_code,
+          stock_status: "Total",
+          storage_location: "—",
+          opening: 0,
+          buckets: Object.fromEntries(STOCK_HISTORY_BUCKET_ORDER.map((key) => [key, 0])),
+          closing: 0,
+        };
+        totalsByMaterial.set(row.material_id, total);
+      }
+      total.opening = normalizeNumber(total.opening + row.opening);
+      total.closing = normalizeNumber(total.closing + row.closing);
+      for (const bucketCode of STOCK_HISTORY_BUCKET_ORDER) {
+        total.buckets[bucketCode] = normalizeNumber((total.buckets[bucketCode] ?? 0) + (row.buckets[bucketCode] ?? 0));
+      }
+    }
+
+    // Group by material_id preserving first-seen (sorted) order, emit each
+    // group's own rows followed by its Total row (only when that material
+    // produced more than one row — a lone row's Total would just repeat it).
+    const orderedMaterialIds: string[] = [];
+    const rowsByMaterial = new Map<string, typeof detailRows>();
+    for (const row of detailRows) {
+      if (!rowsByMaterial.has(row.material_id)) {
+        rowsByMaterial.set(row.material_id, []);
+        orderedMaterialIds.push(row.material_id);
+      }
+      rowsByMaterial.get(row.material_id)?.push(row);
+    }
+    const responseRows: typeof detailRows = [];
+    for (const materialId of orderedMaterialIds) {
+      const group = rowsByMaterial.get(materialId) ?? [];
+      responseRows.push(...group);
+      const total = totalsByMaterial.get(materialId);
+      if (total && group.length > 1) {
+        responseRows.push(total);
+      }
+    }
+
+    return okResponse(
+      {
+        data: responseRows,
+        total: responseRows.length,
+        visible_buckets: STOCK_HISTORY_BUCKET_ORDER.filter((code) => visibleBuckets.has(code)),
+      },
+      ctx.request_id,
+      req,
+    );
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "STOCK_HISTORY_FETCH_FAILED";
+    return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch stock history.");
+  }
+}

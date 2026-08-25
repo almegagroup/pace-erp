@@ -4614,3 +4614,96 @@ design change.
   need), not the real Director/Auditor test identities (`P0004`/`P0007`), which do correctly have
   every AC06 resource after the fix.
 - Not yet done: live click-through in the deployed app (no dev login in this environment).
+
+### 2026-08-25 - IN14 Stock History (Claude direct-implemented, not a Codex brief)
+
+**Scope:** new Inventory-group report (feasibility §130, fully locked design session same day) —
+legacy Google-Sheet-equivalent SAP MB5B-style report, one row per (Material, Stock Status, Storage
+Location): Opening → per-business-event bucket columns → Closing, for a date range. Not built off an
+existing IN0x page — new DB function, new handler, new frontend page, new tx_code, new ACL grant,
+end-to-end.
+
+**DB:** `erp_inventory.stock_history_bucket_map` (data table, movement_type_master code → one of 11
+business-event buckets — INWARD/CONS/SALE_DISPATCH/PID/QA/REJECT/RETURN/RTV/SCRAP/REPROCESS/
+TRANSFER, §130.5) + `erp_inventory.get_stock_history()` (migration `20260825100000`). Opening/
+Closing are computed **backward** from `stock_snapshot`'s current running balance (§130.2) —
+`opening = current_balance − Σ(postings after to_date) − Σ(postings in range)`,
+`closing = current_balance − Σ(postings after to_date)` — cost is bounded by "today back to the
+report's end date," never by a material's total ledger history. A migration-time `DO` block
+hard-fails if any active `movement_type_master` code is missing from the bucket map, so a future new
+movement code can never silently fall through this report uncategorized. Verified against real data
+in both Dev (BIOTREAT-V8, 3 date-range scenarios: full range, partial-range opening, before-latest-
+posting closing — all hand-calculated and matched exactly) and Prod (Sodium Gluconate 98%, QA
+release netting correctly across the QI/Unrestricted status rows). Applied to both projects,
+`schema_migrations` reconciled to the local filename timestamp in both, `migration-integrity-check.
+mjs` confirmed `in_sync=true` in both before and after.
+
+**Backend:** `getStockHistoryHandler`, added to the existing `stock_reports.handlers.ts` (same file
+as IN02/IN03 — reused every existing convention: `assertCompanyScope`/`resolveMandatorySingleCompanyId`,
+`fetchInChunks` for bulk material/storage-location/company lookups, `parseMultiValueParams`,
+`reportErrorResponse`). Zero-row drop (§130.3 — a row where Opening, every bucket, and Closing are
+all zero is dropped), dynamic bucket-column suppression (§130.12 — a bucket zero on every returned
+row is omitted from `visible_buckets` entirely, not just shown as an empty column), one Total row
+per material (§130.13). Route `GET /api/procurement/stock-history` + ACL registry entry
+(`PROC_STOCK_HISTORY:VIEW`). `deno check` — 0 new errors (only the pre-existing `.gt()` Supabase-
+client typing noise, confirmed identical before/after via `git stash`). `route-acl-registry-guard.
+mjs` — 0 missing matches.
+
+**Frontend:** `StockHistoryPage.jsx` — IN02/IN03-style two-page filter→grid layout (no maintenance-
+mode toggle, §130.16), filters per §130.15 final lock (Company via `TransactionCompanySelector`,
+Material Type/Material/Storage Location all multi-select via `MultiValueFilterField`, mandatory
+Date Range ≤365 days). Value rendering per §130.11: no `+` on positives, emerald/rose color by sign,
+"—" for an individually-zero cell in an otherwise-visible bucket, no Pace Code, Company before Item.
+Routed (`AppRouter.jsx`) and registered in the sidebar screen registry (`operationScreens.js`).
+`eslint`/`jsx-no-undef-guard.mjs` — clean.
+
+**§130.10 — `ErpDenseGrid` gained a new opt-in `rangeSelect` prop** (Excel-style Shift+Click /
+click-drag / Shift+Arrow rectangular selection + Ctrl+C copy as tab/newline-separated text).
+Deliberately opt-in and layered on top of the existing `cellNavigate` per-cell-focus rendering path
+(`rangeSelect` now implies `cellNavigate` internally) rather than a parallel implementation — every
+existing `cellNavigate` caller (CSN Tracker, AC01, AC03, the two VDC mapping pages) is unaffected
+since none of them pass `rangeSelect`, confirmed by grep + `eslint` clean on all of them. Each
+column may define `copyValue(row)` to control exactly what gets copied for a column with a custom
+colored `render` — falls back to the same raw `row[column.key]` value already used when `render` is
+absent.
+
+**§130.14 — coloured `.xlsx` export.** Added `exceljs` as a new frontend dependency (MIT, confirmed
+no cost with the business owner before installing). Kept in its own module
+(`shared/downloadColoredExcelFile.js`, sibling to the existing `shared/downloadTabularFile.js` CSV
+helper) rather than folded into the CSV file, specifically so `exceljs` — a genuinely heavy
+dependency — only ever enters a page's bundle via a dynamic `import()` at the moment Export is
+clicked, never as part of that page's main chunk. Same `copyValue`/`excelColor` per-column functions
+drive both the range-copy feature and the Excel export, so there is exactly one place that defines
+"what does this cell actually mean as plain text/color," not two.
+
+**tx_code / menu group / ACL decision:** `IN14` (`IN01`–`IN13` already taken, confirmed by querying
+both projects' live `erp_menu.menu_master`, identical set in both). Menu group `GRP_ACL_INVENTORY`
+(same group as IN02/IN03/IN12). Gated on `VIEW`, resource `PROC_STOCK_HISTORY` — granted to
+`CAP_PROC_INVENTORY` in both projects (mirrors IN02/IN03 exactly), **and additionally to
+`CAP_EVERYONE_REPORTS` in Prod**, found live while comparing Prod's actual grant set for the sibling
+resources against what Dev had — Prod has evolved a broader "everyone can view reports" capability
+already covering `PROC_CURRENT_STOCK`/`PROC_STOCK_LEDGER`/`PROC_RESERVATION_LIST` and 8 other report
+pages; verified via `acl.capabilities`/`acl.capability_menu_actions` that this is a real, deliberate,
+already-established pattern for exactly this class of page (not a blanket-leak candidate, pattern
+#3) before granting it. Menu/ACL registered via the CLAUDE.md §8 4-step MCP sequence (menu_master +
+menu_tree + capability_menu_actions insert → `capture_acl_version_source` → `generate_acl_snapshot`)
+in both Dev and Prod, each on a freshly bumped `acl_versions` row per company (re-capturing an
+already-captured version is a documented no-op, per the §3 "second correction" — a new version was
+created in every case, not reused).
+
+**Real gap found and fixed while verifying (not a pre-existing bug — introduced by this session's
+own registration, caught before it shipped uncorrected):** the new `PROC_STOCK_HISTORY` resource was
+never added to `acl.module_resource_map`, so it never joined into `generate_acl_snapshot`'s
+`module_deny_candidates` CTE — meaning it silently **bypassed** the per-company module-enable/
+disable boundary that `PROC_CURRENT_STOCK`/`PROC_STOCK_LEDGER` (both mapped to `MOD_INVENTORY`)
+already respect. Confirmed live in Prod: one company (`bf8c61c0-...`) has `MOD_INVENTORY` disabled
+for its one ACL user, correctly `DENY/MODULE_DISABLED` on `PROC_CURRENT_STOCK`, but the freshly-
+generated snapshot showed `ALLOW/CAPABILITY_ALLOW` on `PROC_STOCK_HISTORY` for that same user — a
+real access-scope leak, not theoretical. Fixed by inserting `('PROC_STOCK_HISTORY','MOD_INVENTORY')`
+into the live `module_resource_map` in both projects and re-running `generate_acl_snapshot` (no
+re-capture needed — `module_resource_map` is read live by that function, not one of the six tables
+`capture_acl_version_source` versions). Re-verified: `PROC_STOCK_HISTORY`'s decision now matches
+`PROC_CURRENT_STOCK`'s exactly, per company, per user, in both Dev and Prod (including that one
+Prod `DENY` row) — confirmed with a grouped count query, not spot-checked.
+
+**Not yet done:** the live click-through in the deployed app (no dev login in this environment).
