@@ -1177,6 +1177,39 @@ existing shape instead of being the outlier of the three.
   L2_Manager, not just Manager-tier). Director (P0074) — VIEW only, no WRITE, rank ceiling holds.
   ACL-MASTER (P0076) — VIEW+WRITE. ACL-MASTER drift check — clean.
 
+**🔁 Reverted 2026-08-25 (business owner directive — supersedes the 2026-08-06 revision above,
+does not delete it).** AC04 goes back to its *original* shape: **only Auditor (L1/L2) can
+set/update; Accounts and Director are VIEW-only.** Same session that also removed the
+Soni-exclusive personal override referenced at line ~1170 above — business owner's own words:
+"এরকম user specific বলে কোনো জিনিস নেই, সবই role আর rank-এর উপর" (there is no such thing as
+user-specific; everything is role/rank-based) — applies to this access-shape decision too, not
+just the removed override.
+
+- **Accounts' WRITE removed, not the capability itself.** Deleted exactly two
+  `capability_menu_actions` rows — `(CAP_CONVCOST_MAKER, ACC_CONVERSION_COST, WRITE)` and
+  `(CAP_PROC_ACCOUNTS, ACC_CONVERSION_COST, WRITE)` — both capabilities' `VIEW` rows on this menu
+  are untouched, so Accounts still sees the page, just can no longer save a rate. `CAP_PROC_ACCOUNTS`
+  needed the same treatment as `CAP_CONVCOST_MAKER` because it's a broader, shared capability that
+  *also* independently grants WRITE on this exact menu (also used by AC01 elsewhere) — fixing only
+  `CAP_CONVCOST_MAKER` would have left this second, wider path still leaking WRITE to Accounts.
+- **Director's VIEW-only status needed no change at all** — confirmed live before touching
+  anything: `CAP_CONVCOST_AUDITOR` (the WRITE-granting capability) was never linked to the
+  `DIRECTOR` work context in `work_context_capabilities`, only to `AUDIT`/`ACL-MASTER` — so a
+  plain Director (sitting in their own `DIRECTOR` work context) never had WRITE via any path,
+  despite `role_capabilities` listing `DIRECTOR` as one of `CAP_CONVCOST_AUDITOR`'s eligible
+  roles. That role-level entry exists only so **ACL-MASTER** (role `DIRECTOR`, work context
+  `ACL-MASTER`) gets WRITE as its maintenance-full-access identity — a work-context-level
+  distinction, not a role one. Deliberately left untouched, and confirmed still working after
+  today's change: ACL-MASTER (P0076) still shows `VIEW+WRITE`.
+- **Verified live (current active version, both companies):** Accounts (P0007/P0008/P0025/P0060
+  CMP003, P0066/P0068 CMP006) — `VIEW` only, `WRITE` gone. Auditor (P0010 L2_AUDITOR, P0079
+  L1_AUDITOR) — `VIEW+WRITE`, both companies, identical to each other (role/rank-based, no
+  per-person difference). ACL-MASTER (P0076) — `VIEW+WRITE`, unaffected.
+- **Dev not touched** — Dev's `ACC_CONVERSION_COST` access is structurally different (only the
+  broad `CAP_PROC_ACCOUNTS` exists there; the granular `CAP_CONVCOST_MAKER`/`_AUDITOR`/`_VIEW`
+  split from the 2026-08-06 Prod revision was never built in Dev). Flagged, not built out, since
+  Dev's test users are broad-access-by-design (see memory) and this wasn't asked for explicitly.
+
 AC02 — still left exactly as-is (ACL-MASTER only), not decided; see the original Group 7 notes
 below for the current (undesigned) state and the earlier code-audit findings.
 
@@ -1232,6 +1265,22 @@ approver, same as Quality's Stroke Master but Accounts instead of Quality":
   (P0010, CMP003+CMP006) -- VIEW on AC03 only. ACL-MASTER (P0076) -- full on both, no drift.
 - **CMP010 not provisioned** (no ACCOUNTS/MANAGEMENT/SUPPLY-CHAIN/ACL-MASTER department exists
   there, only AUDIT) -- same accepted-gap pattern as other CMP010 notes elsewhere in this doc.
+  **Deeper root cause found 2026-08-25: CMP010 has ZERO rows in `acl.company_module_map` at
+  all** (confirmed live -- CMP003/CMP006 have 15 module rows each, CMP014 has 11, CMP010 has 0),
+  so every module-gated resource company-wide DENYs there via `MODULE_DISABLED`, not just
+  Accounts -- this "not provisioned" note undersold the scope. Not fixed (which modules CMP010
+  should get is a business decision, not something to assume -- CMP014's own 11-vs-15 split
+  proves module scope genuinely varies per company) -- flagged for the business owner to decide.
+- **Real gap found live 2026-08-25 (P0010/CMP006, business owner's own browser console) and
+  fixed:** the *design* above correctly grants Auditor/SCM `PROC_LC_LIST:VIEW` for AC03, but the
+  actual backend route (`GET /api/procurement/ac01/grns`, shared by AC01 and AC03 -- same
+  component/routes) was gated on `PROC_IV_LIST:VIEW` only, in `route-acl-registry.ts`. Its own
+  2026-08-21 comment had already flagged this exact mismatch as a known follow-up, never closed --
+  a `PROC_LC_LIST`-only viewer got a live `403 ACL_DEFAULT_DENY_NO_MATCH` on AC03's data, not just
+  a design gap. Fixed by granting `CAP_ACC_GRN_COST_AUDITOR` and `CAP_PROC_BUYER` a second, hidden
+  (`menu_visible=false`) `PROC_IV_LIST:VIEW` row each -- VIEW only, never WRITE, so AC01 stays
+  uneditable for them. See `OM-IMPLEMENTATION-LOG.md`'s 2026-08-25 "Two real bugs found via
+  P0010's live click-through" entry for full verification detail.
 
 **Code audit before deciding (no edits made, all findings logged for a
 future code-fix pass):**
@@ -2444,3 +2493,60 @@ affected. Fixed in Dev via MCP direct SQL: granted the same 6 capabilities to
 the real `MANAGEMENT` work context instead, where Dev's actual DIRECTOR
 (`P0004`) and L1_AUDITOR (`P0007`) test users sit — the same work context
 `CAP_PI_AUDITOR` already correctly uses.
+
+---
+
+### 2026-08-25 — AC06 Setup/Rate/Verify/Close: orphan companion menu items in sidebar (not an ACL decision bug)
+
+**Trigger:** business owner screenshot of P0079's (L1_AUDITOR) sidebar showed two stray numbered
+top-level rows — "AC06 Costing Cl[ose] Operation" and "AC06 Costing Ra[te] Operation" — sitting
+outside every menu group, alongside real top-level groups (Accounts, Inventory, ..., Production).
+Same shape reported for an L4_MANAGER test user. Business owner's framing: a page should either be
+locked or open, but should always live inside its own menu group — this violated that.
+
+**Root cause — NOT an ACL/access-decision bug, confirmed by direct query:**
+`acl.precomputed_acl_view` and `erp_menu.menu_snapshot` were both internally consistent
+(`is_visible=false` correctly propagated end-to-end) — the 4 companion resource codes created by
+the 2026-08-24 AC06 4-way split (`ACC_SLOC_COSTING_SETUP`/`_RATE`/`_VERIFY`/`_CLOSE` — see the
+Dev-only bug note directly above this entry, same migration) exist **only** to gate their own
+backend POST/PATCH/DELETE routes (`route-acl-registry.ts` lines 253-260, 588, 592) — they were
+never meant to be independently navigable pages. But they were registered in
+`erp_menu.menu_master` as `menu_type='PAGE'` with dummy `route_path`s (`/__acl/ac06-setup`,
+`/__acl/ac06-rate`, `/__acl/ac06-verify`, `/__acl/ac06-close`) that don't correspond to any real
+frontend route (only `ACC_SLOC_COSTING_GROUP` itself, `/dashboard/production/sloc-costing-group`,
+has a real page — `frontend/src/navigation/screens/.../operationScreens.js` has no registration
+for the other 4 at all) — and with **no `erp_menu.menu_tree` parent link** (`parent_menu_id NULL`
+for all 4, in both Dev and Prod). `MenuShell.jsx` treats `is_visible=false` as "show but disabled/
+locked" (not "hide"), by design, for legitimately-lockable real pages — but with no parent group to
+nest under, the tree-builder had nowhere to place these 4 except as orphan top-level rows. This
+directly violates the existing, established rule (CLAUDE.md §8, "Companion screens menu_master এ
+নেই — route-only") — action-only companion resource codes are supposed to skip `erp_menu.menu_master`
+entirely and exist purely as `acl.menu_master` rows (needed only for the `capability_menu_actions`
+FK / backend route gate), never as sidebar-tree entries.
+
+**Blast radius (Prod):** 45 distinct (user, company, universe) scopes, 196 stale `menu_snapshot`
+rows — i.e. every user with any AC06 grant at all saw these 4 stray rows, not just Auditor/
+L4_MANAGER (those were simply the roles the business owner happened to test).
+
+**Fix (data-only, R-04 MCP not migration — no schema/DDL changed, only cleaning up 4 wrongly-added
+rows):**
+- `DELETE FROM erp_menu.menu_snapshot WHERE menu_code IN (the 4 codes)` — immediate cache
+  invalidation for already-affected users (would otherwise self-heal within the 5-minute
+  `MENU_SNAPSHOT_CACHE_TTL_SECONDS`, per §8-PERF, but deleted directly for an instant fix).
+- `DELETE FROM erp_menu.menu_master WHERE resource_code IN (the 4 codes)` — removes them from the
+  sidebar-tree source entirely. Safe: the only FK referencing `erp_menu.menu_master.id` is
+  `erp_menu.menu_tree` (parent/child), and none of the 4 had a `menu_tree` row either way.
+- `acl.menu_master` + `acl.capability_menu_actions` for these 4 codes **deliberately left
+  untouched** — `precomputed_acl_view`/route-acl-registry backend gating for the 4 POST/PATCH/
+  DELETE routes above is entirely independent of `erp_menu.*` and continues to work exactly as
+  before (verified: all 4 `acl.menu_master` rows still present after the fix).
+- Applied identically to both Prod and Dev (same orphan-registration bug existed in both).
+- Verified post-fix: `ACC_SLOC_COSTING_GROUP` itself (the real AC06 page, tx AC06) still correctly
+  `is_visible=true`, `parent_menu_code='GRP_ACL_ACCOUNTS'` for P0079 in both CMP003/CMP006 — only
+  the 4 orphan companion rows are gone, nothing else changed.
+
+**Lesson for future companion-resource-code additions (e.g. any future *_SETUP/_APPROVE/_CLOSE
+action-only resource):** creating the `acl.menu_master` row (needed for `capability_menu_actions`)
+does **not** mean an `erp_menu.menu_master` row is also needed — that second insert is the mistake.
+Only add an `erp_menu.menu_master` row when the resource is a real, independently-navigable page
+with its own frontend route.

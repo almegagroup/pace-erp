@@ -35,6 +35,7 @@ const STOCK_TYPE_OPTIONS = [
   { value: "UNRESTRICTED", label: "Unrestricted" },
   { value: "QUALITY_INSPECTION", label: "Quality Inspection" },
   { value: "BLOCKED", label: "Blocked" },
+  { value: "IN_TRANSIT", label: "In Transit" },
 ];
 
 const DEFAULT_VISIBLE_COLUMNS = [
@@ -51,6 +52,7 @@ const DEFAULT_VISIBLE_COLUMNS = [
   "net_available_qty",
   "qi_qty",
   "blocked_qty",
+  "intransit_qty",
 ];
 
 function formatQuantity(value) {
@@ -183,6 +185,7 @@ export default function CurrentStockPage() {
       { key: "net_available_qty", label: "Net Available", width: "130px", align: "right", render: (row) => formatQuantity(row.net_available_qty) },
       { key: "qi_qty", label: "Quality Inspection", width: "150px", align: "right", render: (row) => formatQuantity(row.qi_qty) },
       { key: "blocked_qty", label: "Blocked", width: "120px", align: "right", render: (row) => formatQuantity(row.blocked_qty) },
+      { key: "intransit_qty", label: "In Transit", width: "120px", align: "right", render: (row) => formatQuantity(row.intransit_qty) },
     ],
     [],
   );

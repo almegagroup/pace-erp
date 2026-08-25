@@ -4918,3 +4918,201 @@ before; not a real error). `company-scope-guard.mjs`/`route-acl-registry-guard.m
 `hardcoded-role-check-guard.mjs` — all clean, 0 new findings.
 
 **Not yet done:** live click-through re-confirmation in the deployed app.
+
+### 2026-08-25 (still later) - IN03 gains an In Transit column
+
+Business owner asked whether a plain (no reservation/net-available) In Transit column could be
+added to IN03 (Current Stock), company-scope-safe. `IN_TRANSIT` is a real, already-used
+`stock_type_code` (verified against `movement_type_master`: `P303` Plant Transfer Issue writes
+`UNRESTRICTED -> IN_TRANSIT`, `P305` Plant Transfer Receipt writes `IN_TRANSIT -> UNRESTRICTED`) —
+`getCurrentStockHandler` just never queried for it, only `UNRESTRICTED`/`QUALITY_INSPECTION`/
+`BLOCKED`.
+
+Added `intransit_qty` alongside the existing three quantity fields end-to-end: `CurrentStockDraftRow`
+type, `initializeCurrentStockDraftRow`, `appendStockTypeQuantity`, `isZeroBalanceRow`, the
+`requestedStockTypes` allow-list, and the response row builder (same FG pack-size conversion
+treatment as the other three for `path_kind === "C"` rows). Deliberately no `reserved_qty`/
+`net_available_qty` equivalent — In Transit is a Plant Transfer's interim state, not stock that can
+itself be reserved against, so it's a plain quantity column, per business owner's own
+confirmation. Frontend: `STOCK_TYPE_OPTIONS` and the column definitions in `CurrentStockPage.jsx`
+gained the matching entries; both already derive their defaults dynamically from these two arrays,
+so no other state initialization needed touching.
+
+No company-scope change needed or made — this is a new stock_type value inside the already
+company-scoped `getCurrentStockHandler`, not a new access path. `eslint` — 0 errors.
+`deno check` — 0 new errors (only the pre-existing `.gt()` line-number shift). Confirmed no live
+`IN_TRANSIT` rows currently exist in Prod's `stock_snapshot` (no material is mid-transfer right
+now) — ran the underlying query directly to confirm it executes cleanly regardless, returning an
+empty set correctly rather than erroring; the column will simply show blank/0 for everyone until a
+real Plant Transfer is actually in flight.
+
+**Not yet done:** live click-through re-confirmation in the deployed app (also can't be end-to-end
+visually verified with real nonzero data until a real Plant Transfer happens to be in transit at
+verification time).
+
+### 2026-08-25 (still later) - Two real bugs found via P0010's live click-through, both fixed
+
+Business owner tested P0010 (real Prod user, L1_AUDITOR, SONI MANOHAR DHING) directly against
+CMP006 and caught two genuinely separate bugs — an ACL route-registry gap (security/functionality)
+and a UI layout bug (`ErpDenseGrid` reused across pages). Neither was found by static review; both
+surfaced from an actual browser console + screenshot the business owner supplied.
+
+**Bug 1 — `GET /api/procurement/ac01/grns` 403 `ACL_DEFAULT_DENY_NO_MATCH` for a `PROC_LC_LIST`-only
+viewer (Auditor/SCM on AC03).** Root-caused via `precomputed_acl_view` cross-checked against
+`route-acl-registry.ts` line-by-line, not guessed. AC01 (edit) and AC03 (read-only) are the same
+frontend component/routes; the shared data route `GET:/api/procurement/ac01/grns` is gated on
+`PROC_IV_LIST:VIEW` only. The 2026-08-21 AC01/AC03 redesign correctly granted Auditor
+(`CAP_ACC_GRN_COST_AUDITOR`) and SCM (`CAP_PROC_BUYER`) `PROC_LC_LIST:VIEW` for AC03's sidebar
+visibility, but **neither capability was ever also granted `PROC_IV_LIST:VIEW`** — the resource the
+actual data route checks. The route-registry file's own 2026-08-21 comment already flagged this
+exact gap ("a PROC_LC_LIST-only user cannot yet reach these routes -- flagged as a known
+follow-up") but it was never closed. This matches this doc's own Pattern #8 (route/ACL registry
+mismatch) exactly.
+
+**Fix:** granted both capabilities a second, hidden (`menu_visible=false`) `capability_menu_actions`
+row for `PROC_IV_LIST:VIEW` — VIEW only, deliberately never WRITE, so AC01 stays uneditable for
+Auditor/SCM, preserving the locked "AC03 is read-only" design. Applied via MCP direct SQL (business/
+operational ACL data, per R-04) in both Dev and Prod, each on a freshly bumped `acl_versions` row
+per company (capture + `generate_acl_snapshot`). Verified: P0010 now shows `PROC_IV_LIST:VIEW =
+ALLOW` in CMP003/CMP006 (CMP010 still correctly `DENY/MODULE_DISABLED` — that's the separate,
+already-known CMP010 module-provisioning gap, unrelated to this fix and not touched here) and
+`PROC_IV_LIST:WRITE` still absent entirely (functionally DENY) — confirms no accidental edit
+access leaked through. Updated the route-registry's own stale comment in place (it explicitly said
+"flagged as a known follow-up" — that follow-up is now done) rather than deleting the history.
+`route-acl-registry-guard.mjs` — clean, 0 new findings (this was a grant gap, not a registry-shape
+violation the guard would have caught).
+
+**Bug 2 — AC06 SLOC Group "Manage Materials" Include/Exclude button unreachable without losing the
+material's own name.** Screenshot showed the Included/Excluded tables' Material Name column
+scrolled out of view by the time horizontal scroll reaches the Exclude/Include button — the two
+half-width (`lg:grid-cols-2`) panels are narrower than their own columns' combined fixed width
+(220px name + 120px code + 70px type (+110px status on the Costing Group Setup variant) + 90px
+action). A user has no way to confirm which material they're about to exclude/include at the
+moment they click.
+
+**Fix, in the shared component (not per-page), matching this session's own established discipline
+for `ErpDenseGrid` bugs:** added a new opt-in `stickyFirstColumn` prop (default `false`, every
+existing caller unaffected) — pins the first column (`position: sticky; left: 0`, solid white
+background, right border) in both the header and every row, in both the `cellNavigate`/`rangeSelect`
+render branch and the plain branch. Wired it into all four of `SlocCostingGroupPage.jsx`'s
+Included/Excluded and Available-Item-Pool/Current-Members `ErpDenseGrid` instances (SLOC Group
+Setup's Manage Materials modal, and the wider Costing Group Setup panels which have the exact same
+shape of problem, found by grepping every `ErpDenseGrid` call in the file rather than fixing only
+the one instance in the screenshot). Known simplification, not fixed here: a colored row (e.g. a
+`getRowProps` background like the AC06 group-lead row or Stock History's Total row) would show a
+visible white seam at the sticky cell when scrolled, since the sticky cell's background is
+hardcoded white rather than inheriting the row's own resolved color — none of the four instances
+this was wired into use row coloring, so not a live issue today, but worth remembering if
+`stickyFirstColumn` is ever combined with a colored `getRowProps` elsewhere. `eslint` — 0 errors on
+both files. `jsx-no-undef-guard.mjs` — 0 violations.
+
+**Not yet done:** live click-through re-confirmation in the deployed app.
+
+### 2026-08-25 (still later) - P0079 provisioned as L1_AUDITOR, AC04 reverted to Auditor-writes-only
+
+Business owner promoted P0010 to L2_AUDITOR and set up P0079 as a new L1_AUDITOR (parent company
+CMP006), directive: "role/rank shapes access, nothing user-specific." Pure data work, all via MCP
+(R-04), no code changed.
+
+- **P0079 was completely unprovisioned** — zero rows in `erp_map.user_companies` and
+  `erp_acl.user_work_contexts`. Mapped to CMP006 then CMP003 (matching P0010's own footprint,
+  business owner asked for CMP003 explicitly after the first pass), both on the real `AUDIT` work
+  context, `is_primary=true` (avoids the same class of bug this doc's "Identity note" already
+  documents for a wrong/false `is_primary`).
+- **Regenerated `precomputed_acl_view` for both companies** (`generate_acl_snapshot` on the
+  already-active version — a role/company/work-context change is live-table data, not versioned,
+  so no version bump needed for this part) and rebuilt both users' `menu_snapshot`.
+- **Caught my own mistake mid-fix:** briefly generated/rebuilt P0079's CMP003 snapshot against an
+  already-inactive `acl_version_id` (stale from an earlier step in the same conversation) before
+  re-fetching the real active version and redoing it correctly.
+- **Full-ERP verification, not just AC01/AC03/AC06:** diffed every `(resource_code, action_code)`
+  ALLOW row between P0010 and P0079 in both companies. Zero differences in CMP003 (after the AC04
+  override cleanup below); the one CMP006 difference before that cleanup was P0010's own
+  soon-to-be-removed personal override.
+
+**Real gap found via this comparison — a personal `user_overrides` grant that duplicated an
+already-correct role-based one.** P0010 held a standing `ACC_CONVERSION_COST` VIEW+WRITE+EDIT
+`user_overrides` row ("AC04 create/edit exclusive to Soni", 2026-07-27) — business owner
+explicitly rejected this as a pattern: no user-specific grants should exist, only role/rank.
+Checked first (not assumed): `CAP_CONVCOST_AUDITOR` already grants `L1_AUDITOR`/`L2_AUDITOR`
+VIEW+WRITE via the real `AUDIT` work context in both companies — the override was pure duplicate
+noise (its only unique contribution was `EDIT`, an action no route in the system ever checks for
+this menu). Revoked all 9 live rows (soft-delete, `revoked_at` set, 3 companies x 3 actions),
+re-captured+regenerated the active version, verified `precomputed_acl_view` now shows
+`CAPABILITY_ALLOW` not `USER_OVERRIDE_ALLOW` for both P0010 and P0079. Updated
+`scripts/acl-master-drift-check.mjs`'s now-stale `KNOWN_INTENTIONAL_EXCLUSIONS` entry in place
+(emptied the CTE, corrected the header comment) rather than leaving a script that still excuses a
+grant that no longer exists.
+
+**Business owner then gave the actual locked AC04 access shape** (reverting the 2026-08-06
+revision documented in `PROD-ACL-Access-Decisions.md`): Auditor (L1/L2) = full set/update;
+Accounts and Director = VIEW only, dependencies elsewhere unaffected. Two live
+`capability_menu_actions` rows deleted -- `(CAP_CONVCOST_MAKER, ACC_CONVERSION_COST, WRITE)` and
+`(CAP_PROC_ACCOUNTS, ACC_CONVERSION_COST, WRITE)` (`CAP_PROC_ACCOUNTS` needed the same fix since
+it's a broader capability that *also* independently granted WRITE here -- found by checking, not
+assumed, after the first delete alone would have left it silently leaking). Director's own
+VIEW-only status needed zero change -- confirmed live that `CAP_CONVCOST_AUDITOR` (the WRITE path)
+was never linked to the `DIRECTOR` work context at all, only `AUDIT`/`ACL-MASTER`; the `DIRECTOR`
+row in its `role_capabilities` exists solely so ACL-MASTER (role `DIRECTOR`, work context
+`ACL-MASTER`) keeps its maintenance-full-access WRITE, confirmed still intact after the change.
+Verified live: Accounts (6 real users, both companies) now VIEW-only; Auditor (P0010, P0079) both
+VIEW+WRITE, identical; ACL-MASTER (P0076) unaffected. Dev intentionally not touched -- it never had
+the granular `CAP_CONVCOST_*` split this fix operates on, only the broad `CAP_PROC_ACCOUNTS`;
+flagged in `PROD-ACL-Access-Decisions.md`, not built out unprompted.
+
+Full detail (exact capability/role/work-context shape, before/after verification) in
+`PROD-ACL-Access-Decisions.md`'s "Reverted 2026-08-25" addendum under Group 7/AC04. Pure ACL data
+change (MCP only, R-04) -- no migration, no code touched, so no `deno check`/`eslint` needed for
+this entry.
+
+**Not yet done:** live click-through re-confirmation in the deployed app.
+
+---
+
+### 2026-08-25, still later — PO11 (Procurement Planning) Available Qty bug: reservation never deducted (Claude-implemented, code fix)
+
+Business owner live-caught: "Procurement planning e je avaliable qty asche seta actually stock ta
+asche, reservation deduct kore aschena" — reported against CMP006's DYN E 35 (RM,
+material_id `0f840951-9e2d-4ee1-b8ce-645a19262435`), comparing IN03 (Current Stock) vs PO11
+(Procurement Planning) side by side for the same material.
+
+**Root cause confirmed:** `planning.handlers.ts`'s workspace-row builder computed
+`available_stock_qty` purely from `stock_snapshot` rows with `stock_type_code='UNRESTRICTED'`
+(grouped by `buildMaterialScopeKey(materialId, sourceSlocGroupId)`) — grepping the whole file for
+"reservation"/"reserved" returned zero matches before this fix. IN03's own `getCurrentStockHandler`
+already correctly nets `unrestrictedQty - reservedQty` (`net_available_qty`) against
+`erp_production.reservation_document` — PO11 never had the equivalent. Live prod data for DYN E 35
+@ CMP006/T003: Unrestricted = 17502.36, two OPEN `reservation_document` rows (PROCESS_PO source,
+1796.3 + 1900 = 3696.3) at the same location — so PO11 was overstating available stock by 3696.3
+(true Net Available = 13806.06), meaning a fully/over-committed material could still show as
+plentiful for new procurement planning.
+
+**Fix (`planning.handlers.ts`, `loadWorkspaceRows`):**
+- Added a 3rd parallel query to the existing `Promise.all([materialMap, snapshotRows, ...])` —
+  `erp_production.reservation_document` filtered to `company_id` + `status='OPEN'` +
+  `material_id`/`storage_location_id` in the same active-material/active-SLoc sets the snapshot
+  query already uses. `material_id` list is chunked via `fetchInChunks()` (§8E — list scales with
+  plan size, same reasoning as IN02/IN03/PR24), `storage_location_id` list is the pre-existing
+  bounded `activeSlocIds` array (not chunked, same as the sibling snapshot query).
+- Added a `reservedMap` built with the exact same `buildMaterialScopeKey(materialId,
+  slocGroupByLocationId.get(locationId))` grouping `availableMap`/`qaMap` already use, so a
+  reservation nets against the precise Unrestricted pool it was drawn from.
+- `availableStockQty` changed from `normalizeQty(availableMap.get(scopeKey) ?? 0)` to
+  `normalizeQty((availableMap.get(scopeKey) ?? 0) - reservedMap.get(scopeKey) ?? 0)`) —
+  **deliberately not clamped at zero**, matching IN03's own Net Available convention (an
+  over-committed material, more reserved than on hand, is a real signal worth showing negative,
+  not hiding).
+- No new response field added, no schema/frontend change — `available_stock_qty`'s existing name
+  and shape are unchanged, only its computation is corrected, so the fix propagates for free into
+  every consumer of that field (the workspace grid, the plan-archive snapshot writer at
+  `archiveLines.map(...)`, CSV export) without touching any of them.
+
+**Verified:** `deno check` — 9 pre-existing errors before and after (git-stash technique), zero new
+(all 9 are unrelated pre-existing `getCompanyScope`/spread-property noise already known in this
+file). `scripts/company-scope-guard.mjs` — clean (new query reuses the handler's own already-scoped
+`companyId`, same pattern as the sibling snapshot query immediately above it). Live prod re-check
+(2026-08-25) reconfirmed the same figures found during initial triage: Unrestricted 17502.36,
+reserved 3696.3, so PO11 should now report 13806.06 for this material once deployed.
+
+**Not yet done:** live click-through re-confirmation in the deployed app (no dev login in this
+environment, per established session pattern — verified via code + live DB query instead).

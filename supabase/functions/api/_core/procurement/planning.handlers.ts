@@ -1069,7 +1069,7 @@ async function loadWorkspaceRows(
   const activeSlocIds = [...new Set(slocRows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
   const materialIds = [...new Set(planLines.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
 
-  const [materialMap, snapshotRows, trnRows, geRows] = await Promise.all([
+  const [materialMap, snapshotRows, reservationRows, trnRows, geRows] = await Promise.all([
     loadMaterialMap(materialIds),
     materialIds.length === 0 || activeSlocIds.length === 0
       ? Promise.resolve([] as JsonRecord[])
@@ -1083,6 +1083,27 @@ async function loadWorkspaceRows(
         .then(({ data, error }) => {
           if (error) throw new Error("PROCUREMENT_PLANNING_STOCK_FAILED");
           return (data ?? []) as JsonRecord[];
+        }),
+    // Found live 2026-08-25 (business owner, CMP006/DYN E 35): "Available Qty"
+    // here was raw Unrestricted stock with zero reservation deduction, unlike
+    // IN03's own "Net Available" (unrestricted - open reservations) for the
+    // exact same material/location. A material fully committed to open
+    // Process/Packing PO or SO/STO reservations could still show as plenty
+    // available for new procurement. material_id list scales with plan size —
+    // chunked per §8E, same reasoning as IN02/IN03/PR24 (see chunkedIn.ts).
+    materialIds.length === 0 || activeSlocIds.length === 0
+      ? Promise.resolve([] as JsonRecord[])
+      : fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
+          serviceRoleClient
+            .schema("erp_production")
+            .from("reservation_document")
+            .select("material_id, storage_location_id, balance_qty")
+            .eq("company_id", companyId)
+            .eq("status", "OPEN")
+            .in("material_id", idChunk)
+            .in("storage_location_id", activeSlocIds))
+        .catch(() => {
+          throw new Error("PROCUREMENT_PLANNING_RESERVATION_FAILED");
         }),
     materialIds.length === 0
       ? Promise.resolve([] as JsonRecord[])
@@ -1128,6 +1149,19 @@ async function loadWorkspaceRows(
     }
   }
 
+  // Same scope key as availableMap (material + SLoc Group, not raw location)
+  // so a reservation nets against the exact Unrestricted pool it was drawn
+  // from. Not clamped at zero — an over-committed material (more reserved
+  // than on hand) is a real, meaningful signal, same convention IN03's own
+  // Net Available column already uses.
+  const reservedMap = new Map<string, number>();
+  for (const row of reservationRows) {
+    const materialId = toTrimmedString(row.material_id);
+    const sourceSlocGroupId = slocGroupByLocationId.get(toTrimmedString(row.storage_location_id)) || null;
+    const scopeKey = buildMaterialScopeKey(materialId, sourceSlocGroupId);
+    reservedMap.set(scopeKey, normalizeQty((reservedMap.get(scopeKey) ?? 0) + normalizeQty(row.balance_qty)));
+  }
+
   const trnMap = new Map<string, number>();
   for (const row of trnRows) {
     const materialId = toTrimmedString(row.material_id);
@@ -1165,7 +1199,8 @@ async function loadWorkspaceRows(
     const fixedReplenishment = parseNullableNumber(row.fixed_replenishment_stock_qty);
     const effectiveSafetyStockQty = normalizeQty(fixedSafety ?? derivedSafetyStockQty);
     const effectiveReplenishmentStockQty = normalizeQty(fixedReplenishment ?? derivedReplenishmentStockQty);
-    const availableStockQty = normalizeQty(availableMap.get(scopeKey) ?? 0);
+    const reservedStockQty = normalizeQty(reservedMap.get(scopeKey) ?? 0);
+    const availableStockQty = normalizeQty((availableMap.get(scopeKey) ?? 0) - reservedStockQty);
     const trnStockQty = normalizeQty(trnMap.get(materialId) ?? 0);
     const geStockQty = normalizeQty(geMap.get(materialId) ?? 0);
     const qaStockQty = normalizeQty(qaMap.get(scopeKey) ?? 0);
