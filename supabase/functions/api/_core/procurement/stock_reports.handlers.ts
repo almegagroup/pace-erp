@@ -53,6 +53,7 @@ type CurrentStockDraftRow = {
   unrestricted_qty: number;
   qi_qty: number;
   blocked_qty: number;
+  intransit_qty: number;
   base_uom_code: string;
   material_type: string;
   path_kind: "A" | "B" | "C";
@@ -388,6 +389,7 @@ function initializeCurrentStockDraftRow(params: {
     unrestricted_qty: 0,
     qi_qty: 0,
     blocked_qty: 0,
+    intransit_qty: 0,
     base_uom_code: params.base_uom_code,
     material_type: params.material_type,
     path_kind: params.path_kind,
@@ -404,6 +406,8 @@ function appendStockTypeQuantity(row: CurrentStockDraftRow, stockTypeCode: strin
     row.qi_qty = normalizeNumber(row.qi_qty + quantity);
   } else if (normalized === "BLOCKED") {
     row.blocked_qty = normalizeNumber(row.blocked_qty + quantity);
+  } else if (normalized === "IN_TRANSIT") {
+    row.intransit_qty = normalizeNumber(row.intransit_qty + quantity);
   }
 }
 
@@ -411,7 +415,8 @@ function isZeroBalanceRow(row: CurrentStockDraftRow): boolean {
   return (
     Math.abs(Number(row.unrestricted_qty ?? 0)) < 0.000001 &&
     Math.abs(Number(row.qi_qty ?? 0)) < 0.000001 &&
-    Math.abs(Number(row.blocked_qty ?? 0)) < 0.000001
+    Math.abs(Number(row.blocked_qty ?? 0)) < 0.000001 &&
+    Math.abs(Number(row.intransit_qty ?? 0)) < 0.000001
   );
 }
 
@@ -824,8 +829,8 @@ export async function getCurrentStockHandler(
       ? materialTypes.filter((value) => ["RM", "PM", "INT", "SFG", "FG"].includes(value))
       : ["RM", "PM", "INT", "SFG", "FG"];
     const requestedStockTypes = stockTypes.length
-      ? stockTypes.filter((value) => ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"].includes(value))
-      : ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
+      ? stockTypes.filter((value) => ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED", "IN_TRANSIT"].includes(value))
+      : ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED", "IN_TRANSIT"];
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
 
     let materialQuery = serviceRoleClient
@@ -1161,6 +1166,12 @@ export async function getCurrentStockHandler(
       const blockedQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(row.blocked_qty, row.fill_qty_per_pack)
         : normalizeNumber(row.blocked_qty);
+      // Plain quantity, no reservation/net-available concept — In Transit is
+      // a Plant Transfer's interim state (P303 out / P305 in), not stock
+      // that can itself be reserved against.
+      const intransitQty = row.path_kind === "C"
+        ? convertFgQtyToPrimary(row.intransit_qty, row.fill_qty_per_pack)
+        : normalizeNumber(row.intransit_qty);
       const reservedQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(reservedBaseQty, row.fill_qty_per_pack)
         : normalizeNumber(reservedBaseQty);
@@ -1188,6 +1199,7 @@ export async function getCurrentStockHandler(
         net_available_qty: normalizeNumber(unrestrictedQty - reservedQty),
         qi_qty: qiQty,
         blocked_qty: blockedQty,
+        intransit_qty: intransitQty,
       };
     }).sort((left, right) =>
       String(left.company_code).localeCompare(String(right.company_code))

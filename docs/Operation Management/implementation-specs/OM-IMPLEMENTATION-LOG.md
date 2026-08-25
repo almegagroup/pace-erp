@@ -4918,3 +4918,34 @@ before; not a real error). `company-scope-guard.mjs`/`route-acl-registry-guard.m
 `hardcoded-role-check-guard.mjs` — all clean, 0 new findings.
 
 **Not yet done:** live click-through re-confirmation in the deployed app.
+
+### 2026-08-25 (still later) - IN03 gains an In Transit column
+
+Business owner asked whether a plain (no reservation/net-available) In Transit column could be
+added to IN03 (Current Stock), company-scope-safe. `IN_TRANSIT` is a real, already-used
+`stock_type_code` (verified against `movement_type_master`: `P303` Plant Transfer Issue writes
+`UNRESTRICTED -> IN_TRANSIT`, `P305` Plant Transfer Receipt writes `IN_TRANSIT -> UNRESTRICTED`) —
+`getCurrentStockHandler` just never queried for it, only `UNRESTRICTED`/`QUALITY_INSPECTION`/
+`BLOCKED`.
+
+Added `intransit_qty` alongside the existing three quantity fields end-to-end: `CurrentStockDraftRow`
+type, `initializeCurrentStockDraftRow`, `appendStockTypeQuantity`, `isZeroBalanceRow`, the
+`requestedStockTypes` allow-list, and the response row builder (same FG pack-size conversion
+treatment as the other three for `path_kind === "C"` rows). Deliberately no `reserved_qty`/
+`net_available_qty` equivalent — In Transit is a Plant Transfer's interim state, not stock that can
+itself be reserved against, so it's a plain quantity column, per business owner's own
+confirmation. Frontend: `STOCK_TYPE_OPTIONS` and the column definitions in `CurrentStockPage.jsx`
+gained the matching entries; both already derive their defaults dynamically from these two arrays,
+so no other state initialization needed touching.
+
+No company-scope change needed or made — this is a new stock_type value inside the already
+company-scoped `getCurrentStockHandler`, not a new access path. `eslint` — 0 errors.
+`deno check` — 0 new errors (only the pre-existing `.gt()` line-number shift). Confirmed no live
+`IN_TRANSIT` rows currently exist in Prod's `stock_snapshot` (no material is mid-transfer right
+now) — ran the underlying query directly to confirm it executes cleanly regardless, returning an
+empty set correctly rather than erroring; the column will simply show blank/0 for everyone until a
+real Plant Transfer is actually in flight.
+
+**Not yet done:** live click-through re-confirmation in the deployed app (also can't be end-to-end
+visually verified with real nonzero data until a real Plant Transfer happens to be in transit at
+verification time).
