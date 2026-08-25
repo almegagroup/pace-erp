@@ -2493,3 +2493,60 @@ affected. Fixed in Dev via MCP direct SQL: granted the same 6 capabilities to
 the real `MANAGEMENT` work context instead, where Dev's actual DIRECTOR
 (`P0004`) and L1_AUDITOR (`P0007`) test users sit — the same work context
 `CAP_PI_AUDITOR` already correctly uses.
+
+---
+
+### 2026-08-25 — AC06 Setup/Rate/Verify/Close: orphan companion menu items in sidebar (not an ACL decision bug)
+
+**Trigger:** business owner screenshot of P0079's (L1_AUDITOR) sidebar showed two stray numbered
+top-level rows — "AC06 Costing Cl[ose] Operation" and "AC06 Costing Ra[te] Operation" — sitting
+outside every menu group, alongside real top-level groups (Accounts, Inventory, ..., Production).
+Same shape reported for an L4_MANAGER test user. Business owner's framing: a page should either be
+locked or open, but should always live inside its own menu group — this violated that.
+
+**Root cause — NOT an ACL/access-decision bug, confirmed by direct query:**
+`acl.precomputed_acl_view` and `erp_menu.menu_snapshot` were both internally consistent
+(`is_visible=false` correctly propagated end-to-end) — the 4 companion resource codes created by
+the 2026-08-24 AC06 4-way split (`ACC_SLOC_COSTING_SETUP`/`_RATE`/`_VERIFY`/`_CLOSE` — see the
+Dev-only bug note directly above this entry, same migration) exist **only** to gate their own
+backend POST/PATCH/DELETE routes (`route-acl-registry.ts` lines 253-260, 588, 592) — they were
+never meant to be independently navigable pages. But they were registered in
+`erp_menu.menu_master` as `menu_type='PAGE'` with dummy `route_path`s (`/__acl/ac06-setup`,
+`/__acl/ac06-rate`, `/__acl/ac06-verify`, `/__acl/ac06-close`) that don't correspond to any real
+frontend route (only `ACC_SLOC_COSTING_GROUP` itself, `/dashboard/production/sloc-costing-group`,
+has a real page — `frontend/src/navigation/screens/.../operationScreens.js` has no registration
+for the other 4 at all) — and with **no `erp_menu.menu_tree` parent link** (`parent_menu_id NULL`
+for all 4, in both Dev and Prod). `MenuShell.jsx` treats `is_visible=false` as "show but disabled/
+locked" (not "hide"), by design, for legitimately-lockable real pages — but with no parent group to
+nest under, the tree-builder had nowhere to place these 4 except as orphan top-level rows. This
+directly violates the existing, established rule (CLAUDE.md §8, "Companion screens menu_master এ
+নেই — route-only") — action-only companion resource codes are supposed to skip `erp_menu.menu_master`
+entirely and exist purely as `acl.menu_master` rows (needed only for the `capability_menu_actions`
+FK / backend route gate), never as sidebar-tree entries.
+
+**Blast radius (Prod):** 45 distinct (user, company, universe) scopes, 196 stale `menu_snapshot`
+rows — i.e. every user with any AC06 grant at all saw these 4 stray rows, not just Auditor/
+L4_MANAGER (those were simply the roles the business owner happened to test).
+
+**Fix (data-only, R-04 MCP not migration — no schema/DDL changed, only cleaning up 4 wrongly-added
+rows):**
+- `DELETE FROM erp_menu.menu_snapshot WHERE menu_code IN (the 4 codes)` — immediate cache
+  invalidation for already-affected users (would otherwise self-heal within the 5-minute
+  `MENU_SNAPSHOT_CACHE_TTL_SECONDS`, per §8-PERF, but deleted directly for an instant fix).
+- `DELETE FROM erp_menu.menu_master WHERE resource_code IN (the 4 codes)` — removes them from the
+  sidebar-tree source entirely. Safe: the only FK referencing `erp_menu.menu_master.id` is
+  `erp_menu.menu_tree` (parent/child), and none of the 4 had a `menu_tree` row either way.
+- `acl.menu_master` + `acl.capability_menu_actions` for these 4 codes **deliberately left
+  untouched** — `precomputed_acl_view`/route-acl-registry backend gating for the 4 POST/PATCH/
+  DELETE routes above is entirely independent of `erp_menu.*` and continues to work exactly as
+  before (verified: all 4 `acl.menu_master` rows still present after the fix).
+- Applied identically to both Prod and Dev (same orphan-registration bug existed in both).
+- Verified post-fix: `ACC_SLOC_COSTING_GROUP` itself (the real AC06 page, tx AC06) still correctly
+  `is_visible=true`, `parent_menu_code='GRP_ACL_ACCOUNTS'` for P0079 in both CMP003/CMP006 — only
+  the 4 orphan companion rows are gone, nothing else changed.
+
+**Lesson for future companion-resource-code additions (e.g. any future *_SETUP/_APPROVE/_CLOSE
+action-only resource):** creating the `acl.menu_master` row (needed for `capability_menu_actions`)
+does **not** mean an `erp_menu.menu_master` row is also needed — that second insert is the mistake.
+Only add an `erp_menu.menu_master` row when the resource is a real, independently-navigable page
+with its own frontend route.
