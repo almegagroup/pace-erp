@@ -4747,3 +4747,40 @@ version) in both Prod and Dev. Verified **46/46 in Prod, 2/2 in Dev** now carry 
 `parent_menu_code = GRP_ACL_INVENTORY`, `tx_code = IN14`, `is_visible = true`) — all correct.
 
 **Not yet done:** the live click-through in the deployed app (no dev login in this environment).
+
+### 2026-08-25 (later same day) - AC01/AC03 grid gains §130.10/§130.14 range-copy + coloured export
+
+Business owner asked whether the same two ErpDenseGrid features built for IN14 (Excel-style
+range-select + Ctrl+C copy, coloured `.xlsx` export) could reuse onto AC01's main table. AC01
+(`AC01Page.jsx`) already used `ErpDenseGrid` with `cellNavigate`, and the same component also
+serves AC03 (`readOnly` prop, `AppRouter.jsx:763`) — so this one file change lands both.
+
+**Change:** swapped `cellNavigate` for `rangeSelect` (implies `cellNavigate` internally, so no
+behavior lost) on the grid, and added an "Export Excel" action reusing the identical
+`shared/downloadColoredExcelFile.js` module built for IN14 — no new dependency, no new shared
+code, purely wiring.
+
+**Two real bugs found and fixed while adding `copyValue` to the ~30 columns (needed so range-copy
+and export don't grab the wrong text off a column with a custom `render`):**
+1. **§8A raw-UUID leak** — `transporter_id`/`last_mile_transporter_id` columns render the resolved
+   `transporter_name`/`last_mile_transporter_name`, but their `key` is the raw FK id. Without
+   `copyValue`, ErpDenseGrid's default fallback (`row[column.key]`) would have copied/exported the
+   **raw UUID** instead of the name shown on screen — exactly the class of bug §8A exists to
+   prevent, just reached through a new feature instead of the original render path.
+2. **Override-blind copy** — `vendor_suggested_payable`/`transporter_suggested_payable`/
+   `last_mile_suggested_payable`/`cha_suggested_payable` all render
+   `row.X_override ?? row.X_suggested_payable` (a manager's override wins when present), but the
+   default fallback would always copy the un-overridden suggested value, silently discarding the
+   override. Fixed with matching override-aware `copyValue` for all four.
+
+Also added `copyValue` for every date column (`toDDMMYYYY`-formatted, matching on-screen instead
+of a raw ISO string), the `status` column (two colour dots have no text value on their own — copy
+now gives `UD:<status> Payment:<status>`), and `invoice_rate` (copies `"<rate> (mismatch)"` when
+`rate_mismatch` is set, with matching red `excelColor` in the export). AC01 has far less color to
+carry into Excel than IN14 (only the mismatch flag) — the export's main value here is accurate
+formatted values, not a fully-colored sheet.
+
+`eslint` — 0 errors/warnings. `jsx-no-undef-guard.mjs` — 0 violations. No backend/ACL/schema
+touched at all, so no DB-side verification needed for this change.
+
+**Not yet done:** the live click-through in the deployed app (no dev login in this environment).

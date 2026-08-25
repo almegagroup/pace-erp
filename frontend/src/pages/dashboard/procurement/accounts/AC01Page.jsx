@@ -242,14 +242,17 @@ function buildColumns() {
           />
         </div>
       ),
+      // Two dots, not one raw value — copy/export get a plain-text summary
+      // of both instead of nothing.
+      copyValue: (row) => `UD:${row.ud_status || "—"} Payment:${paymentDotStatus(row) || "—"}`,
     },
     { key: "csn_number", label: "CSN Number", width: "120px" },
     { key: "grn_number", label: "GRN Number", width: "120px" },
-    { key: "grn_date", label: "GRN Date", width: "100px", render: (row) => toDDMMYYYY(row.grn_date) },
+    { key: "grn_date", label: "GRN Date", width: "100px", render: (row) => toDDMMYYYY(row.grn_date), copyValue: (row) => toDDMMYYYY(row.grn_date) },
     { key: "company_code", label: "Company", width: "90px" },
     { key: "supplier_name", label: "Supplier", width: "160px" },
     { key: "invoice_number", label: "Invoice No.", width: "120px" },
-    { key: "invoice_date", label: "Invoice Date", width: "100px", render: (row) => toDDMMYYYY(row.invoice_date) },
+    { key: "invoice_date", label: "Invoice Date", width: "100px", render: (row) => toDDMMYYYY(row.invoice_date), copyValue: (row) => toDDMMYYYY(row.invoice_date) },
     { key: "item_name", label: "Item Name", width: "160px" },
     { key: "external_code", label: "External Code", width: "110px" },
     { key: "grn_qty", label: "GRN Qty", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.grn_qty) },
@@ -265,6 +268,8 @@ function buildColumns() {
           {row.rate_mismatch ? <span className="ml-1 text-[9px] font-semibold text-rose-600">mismatch</span> : null}
         </span>
       ),
+      copyValue: (row) => `${formatNumberOrBlank(row.invoice_rate)}${row.rate_mismatch ? " (mismatch)" : ""}`,
+      excelColor: (row) => (row.rate_mismatch ? { fontArgb: "FFBE123C", bold: true } : null),
     },
     { key: "confirmed_rate", label: "Confirmed Rate", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.confirmed_rate) },
     { key: "currency", label: "Currency", width: "70px" },
@@ -276,34 +281,49 @@ function buildColumns() {
     {
       key: "vendor_suggested_payable", label: "Vendor Payable (total)", width: "140px", align: "right",
       render: (row) => formatNumberOrBlank(row.vendor_payable_override ?? row.vendor_suggested_payable),
+      // The raw row[key] fallback would always copy the un-overridden
+      // suggested value, silently ignoring a manager's override — same
+      // override-aware value the cell itself renders.
+      copyValue: (row) => formatNumberOrBlank(row.vendor_payable_override ?? row.vendor_suggested_payable),
     },
     {
       key: "transporter_suggested_payable", label: "Transporter Payable", width: "140px", align: "right",
       render: (row) => formatNumberOrBlank(row.transporter_payable_override ?? row.transporter_suggested_payable),
+      copyValue: (row) => formatNumberOrBlank(row.transporter_payable_override ?? row.transporter_suggested_payable),
     },
     {
       key: "last_mile_suggested_payable", label: "Last Mile Payable", width: "140px", align: "right",
       render: (row) => formatNumberOrBlank(row.last_mile_payable_override ?? row.last_mile_suggested_payable),
+      copyValue: (row) => formatNumberOrBlank(row.last_mile_payable_override ?? row.last_mile_suggested_payable),
     },
     {
       key: "cha_suggested_payable", label: "CHA Payable", width: "120px", align: "right",
       render: (row) => formatNumberOrBlank(row.cha_payable_override ?? row.cha_suggested_payable),
+      copyValue: (row) => formatNumberOrBlank(row.cha_payable_override ?? row.cha_suggested_payable),
     },
     { key: "payment_days", label: "Payment Days", width: "90px", align: "right" },
     { key: "payment_type", label: "Payment Type", width: "140px" },
-    { key: "actual_payment_date", label: "Actual Payment Date", width: "120px", render: (row) => toDDMMYYYY(row.actual_payment_date) },
-    { key: "revised_payment_date", label: "Revised Payment Date", width: "130px", render: (row) => toDDMMYYYY(row.revised_payment_date) },
+    { key: "actual_payment_date", label: "Actual Payment Date", width: "120px", render: (row) => toDDMMYYYY(row.actual_payment_date), copyValue: (row) => toDDMMYYYY(row.actual_payment_date) },
+    { key: "revised_payment_date", label: "Revised Payment Date", width: "130px", render: (row) => toDDMMYYYY(row.revised_payment_date), copyValue: (row) => toDDMMYYYY(row.revised_payment_date) },
     { key: "freight_type", label: "Freight Type", width: "100px" },
-    { key: "transporter_id", label: "Transporter", width: "160px", render: (row) => row.transporter_name || "—" },
-    { key: "last_mile_transporter_id", label: "Last Mile Transporter", width: "170px", render: (row) => row.last_mile_transporter_name || "—" },
+    {
+      key: "transporter_id", label: "Transporter", width: "160px", render: (row) => row.transporter_name || "—",
+      // §8A — key is the raw FK id; without copyValue the default fallback
+      // would copy that UUID instead of the resolved name shown on screen.
+      copyValue: (row) => row.transporter_name || "",
+    },
+    {
+      key: "last_mile_transporter_id", label: "Last Mile Transporter", width: "170px", render: (row) => row.last_mile_transporter_name || "—",
+      copyValue: (row) => row.last_mile_transporter_name || "",
+    },
     { key: "lr_number", label: "LR Number", width: "100px" },
-    { key: "lr_date", label: "LR Date", width: "90px", render: (row) => toDDMMYYYY(row.lr_date) },
+    { key: "lr_date", label: "LR Date", width: "90px", render: (row) => toDDMMYYYY(row.lr_date), copyValue: (row) => toDDMMYYYY(row.lr_date) },
     { key: "bl_number", label: "BL Number", width: "100px" },
-    { key: "bl_date", label: "BL Date", width: "90px", render: (row) => toDDMMYYYY(row.bl_date) },
+    { key: "bl_date", label: "BL Date", width: "90px", render: (row) => toDDMMYYYY(row.bl_date), copyValue: (row) => toDDMMYYYY(row.bl_date) },
     { key: "lc_number", label: "LC Number", width: "100px" },
-    { key: "lc_date", label: "LC Date", width: "90px", render: (row) => toDDMMYYYY(row.lc_date) },
+    { key: "lc_date", label: "LC Date", width: "90px", render: (row) => toDDMMYYYY(row.lc_date), copyValue: (row) => toDDMMYYYY(row.lc_date) },
     { key: "boe_number", label: "BOE Number", width: "100px" },
-    { key: "boe_date", label: "BOE Date", width: "90px", render: (row) => toDDMMYYYY(row.boe_date) },
+    { key: "boe_date", label: "BOE Date", width: "90px", render: (row) => toDDMMYYYY(row.boe_date), copyValue: (row) => toDDMMYYYY(row.boe_date) },
   ];
 }
 
@@ -432,6 +452,31 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
 
   const rows = useMemo(() => (Array.isArray(listQuery.data?.items) ? listQuery.data.items : []), [listQuery.data]);
   const columns = useMemo(() => buildColumns(), []);
+
+  const [exporting, setExporting] = useState(false);
+  async function handleExportExcel() {
+    setExporting(true);
+    try {
+      // Dynamic import — exceljs only ever loads once Export is actually
+      // clicked, never as part of this page's own bundle (same pattern as
+      // Stock History's IN14 export).
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `${readOnly ? "ac03_landed_costs" : "ac01_grn_landed_cost"}_${dateFrom || "from"}_${dateTo || "to"}.xlsx`,
+        sheetName: readOnly ? "AC03 Landed Costs" : "AC01 GRN Landed Cost",
+        columns,
+        rows,
+        getCellValue: (row, column) =>
+          typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
+        getCellColor: (row, column) =>
+          typeof column.excelColor === "function" ? column.excelColor(row) : null,
+      });
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "AC01_EXPORT_FAILED");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const grnDetailQuery = useQuery({
     queryKey: ["ac01", "grn", selectedGrnId],
@@ -638,6 +683,14 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         eyebrow="Accounts"
         title={readOnly ? "AC03 · Landed Costs (View)" : "AC01 · Invoice Verifications"}
         notices={error ? [{ key: "ac01-error", tone: "error", message: error }] : []}
+        actions={[
+          {
+            key: "export",
+            label: exporting ? "Exporting..." : "Export Excel",
+            onClick: () => void handleExportExcel(),
+            disabled: exporting || rows.length === 0,
+          },
+        ]}
         filterSection={{
           eyebrow: "",
           title: "",
@@ -692,7 +745,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               rows={rows}
               rowKey={(row) => row.grn_id}
               onRowActivate={openDrawer}
-              cellNavigate
+              rangeSelect
               virtualize
               emptyMessage={listQuery.isLoading ? "Loading GRNs..." : "No GRNs matched the current filter."}
               getRowProps={() => ({ onDoubleClick: undefined })}
