@@ -4888,3 +4888,33 @@ doc-history convention.
 
 **Not yet done:** live click-through re-confirmation in the deployed app (business owner will do
 this directly, same as before).
+
+### 2026-08-25 (still later) - AC01 Search box: supplier/item search never actually worked
+
+Business owner's own AC01 click-through (screenshots) caught this: typed "Time techno" into
+Search with the placeholder text literally reading "GRN, invoice, item, supplier..." — several
+visible rows had Supplier = TIME TECHNOPLAST LIMITED, but the result came back "No GRNs matched
+the current filter." Traced to `ac01.handlers.ts`'s `listAC01GRNsHandler` — the `search` filter's
+`.or()` only ever matched `grn_number`/`invoice_number`/`lr_number`, all columns that live directly
+on `goods_receipt`. The placeholder's promise of "item, supplier" was never implemented — and
+couldn't be as a simple column match anyway, since `goods_receipt` has no denormalized
+`item_name`/`supplier_name`, only `material_id`/`vendor_id` FKs (confirmed against the live table's
+own column list).
+
+**Fix:** when `search` is set, first resolve matching `vendor_master`/`material_master` ids (name +
+`external_code` ILIKE, capped at 50 each — a short pre-lookup, not the main query), then OR
+`vendor_id.in.(...)`/`material_id.in.(...)` into the same filter alongside the existing
+`grn_number`/`invoice_number`/`lr_number` text match. These lookups are deliberately unscoped by
+company (global name search) — safe, since they only ever contribute candidate ids into the outer
+query, which is already `company_id`-scoped; they can never leak another company's rows.
+
+Verified directly against live Prod data: 8 real GRNs exist for `TIME TECHNOPLAST LIMITED` in
+CMP003, matching exactly the rows visible in the business owner's own screenshot — confirming the
+fix's vendor-lookup-then-filter logic surfaces the right rows.
+
+`deno check` — 2 new lines, both the same documented `.ilike()`/`.or()` Supabase-client typing
+noise already accepted elsewhere in this codebase (this file simply hadn't used those two methods
+before; not a real error). `company-scope-guard.mjs`/`route-acl-registry-guard.mjs`/
+`hardcoded-role-check-guard.mjs` — all clean, 0 new findings.
+
+**Not yet done:** live click-through re-confirmation in the deployed app.
