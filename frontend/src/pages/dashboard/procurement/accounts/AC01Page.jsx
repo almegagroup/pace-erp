@@ -115,6 +115,17 @@ function udDotClass(status) {
   return "bg-slate-300";
 }
 
+// Same status->color mapping as udDotClass, as an Excel font ARGB instead of
+// a Tailwind class — used by the Status column's richText export so the
+// exported cell carries the same two colored dots shown on screen instead
+// of a plain-text label.
+function dotFontArgb(status) {
+  if (status === "GREEN") return "FF10B981";
+  if (status === "YELLOW") return "FFF59E0B";
+  if (status === "RED") return "FFF43F5E";
+  return "FFCBD5E1";
+}
+
 function paymentDotStatus(row) {
   if (row.payment_status) return row.payment_status;
   // Payment status genuinely depends on AC02's Vendor Ledger, not yet built —
@@ -242,9 +253,15 @@ function buildColumns() {
           />
         </div>
       ),
-      // Two dots, not one raw value — copy/export get a plain-text summary
-      // of both instead of nothing.
+      // Two dots, not one raw value. Ctrl+C copy is plain clipboard text, so
+      // it gets a text summary; the Excel export can carry real formatting,
+      // so it gets the same two colored dots shown on screen instead (see
+      // excelRichText below).
       copyValue: (row) => `UD:${row.ud_status || "—"} Payment:${paymentDotStatus(row) || "—"}`,
+      excelRichText: (row) => [
+        { text: "●", fontArgb: dotFontArgb(row.ud_status) },
+        { text: " ● ", fontArgb: dotFontArgb(paymentDotStatus(row)) },
+      ],
     },
     { key: "csn_number", label: "CSN Number", width: "120px" },
     { key: "grn_number", label: "GRN Number", width: "120px" },
@@ -470,6 +487,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
           typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
         getCellColor: (row, column) =>
           typeof column.excelColor === "function" ? column.excelColor(row) : null,
+        getCellRichText: (row, column) =>
+          typeof column.excelRichText === "function" ? column.excelRichText(row) : null,
       });
     } catch (exportError) {
       setError(exportError instanceof Error ? exportError.message : "AC01_EXPORT_FAILED");

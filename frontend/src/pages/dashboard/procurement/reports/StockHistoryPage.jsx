@@ -61,7 +61,10 @@ function joinValues(entries) {
 // the §130.14 coloured Excel export matches the live grid exactly.
 const POSITIVE_FONT_ARGB = "FF047857";
 const NEGATIVE_FONT_ARGB = "FFBE123C";
-const TOTAL_ROW_FILL_ARGB = "FFFFFBEB"; // amber-50, matches the Total row's on-screen fill
+// amber-100, not amber-50 — amber-50 (#FFFBEB) is nearly imperceptible
+// against white in a dense data grid; amber-100 (#FEF3C7) actually reads as
+// a distinct fill. Matches the Total row's on-screen fill.
+const TOTAL_ROW_FILL_ARGB = "FFFEF3C7";
 
 function formatSignedQuantity(value) {
   const amount = Number(value ?? 0);
@@ -454,7 +457,7 @@ export default function StockHistoryPage() {
                   // so it reads as a subtotal, not just another data row.
                   getRowProps={(row) =>
                     row.is_total
-                      ? { className: "bg-amber-50 font-semibold border-t-2 border-amber-300" }
+                      ? { className: "bg-amber-100 font-semibold border-t-2 border-amber-300" }
                       : {}
                   }
                   emptyMessage={loading ? "Executing..." : "No stock history matched the selected filters."}

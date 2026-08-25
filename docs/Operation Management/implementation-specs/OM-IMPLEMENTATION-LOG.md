@@ -4784,3 +4784,63 @@ formatted values, not a fully-colored sheet.
 touched at all, so no DB-side verification needed for this change.
 
 **Not yet done:** the live click-through in the deployed app (no dev login in this environment).
+
+### 2026-08-25 (still later same day) - Real live-app bug found + fixed: ErpDenseGrid row-fill CSS cascade
+
+Business owner did the live click-through on the deployed Prod app (screenshots) and caught two
+real problems.
+
+**1. Stock History's Total row had no visible fill at all — traced to a real, pre-existing bug in
+`ErpDenseGrid.jsx` itself, not something introduced this session, and not cosmetic-only.** The
+Total row's `getRowProps` returns `className: "bg-amber-50 ..."`, appended to the grid's own
+hardcoded `bg-white` base class on the same `<tr>`. Both are plain single-class selectors —
+identical CSS specificity — so the winner is whichever rule is declared LATER in the *compiled*
+stylesheet, not whichever class comes later in the `className` string (a classic, easy-to-miss
+Tailwind gotcha). Ran an actual `vite build` and inspected the real generated CSS to confirm
+empirically rather than guess: `.bg-white` is emitted at byte offset 39037, `.bg-amber-50` at
+33362, `.bg-rose-50` at 35974, `.bg-emerald-50` at 34776, `.bg-slate-50` at 37134 — `.bg-white` is
+declared last, so it silently won every time, regardless of source order in the class string.
+**This was never Stock-History-specific — grepping every `getRowProps` caller found the identical
+pattern already broken in 5 pre-existing pages:** `IVDetailPage.jsx` (rate-variance >50% highlight),
+`GRNDetailPage.jsx` (discrepancy highlight), `PIDocumentRecountPage.jsx` and
+`PIDocumentDetailPage.jsx` (count-variance +/- coloring), `LocationTransferRequestWorkspacePage.jsx`
+(shortage highlight) — every one of these row highlights has been silently invisible since it was
+built, on every page, not just this new one.
+
+**Fix, in the shared component (not per-page):** `ErpDenseGrid.jsx` now only emits its own default
+`bg-white` when the caller's `getRowProps` didn't already supply a `bg-*` utility
+(`hasBackgroundUtility()` — a simple regex check), so the two classes are never present on the same
+row at once and the cascade-order ambiguity can't occur, regardless of which Tailwind version or
+build ever changes that ordering again. This single fix in the shared component silently repairs
+all 5 pre-existing broken pages above, plus Stock History's new Total row — none of those 5 pages
+needed their own touch. Also bumped Stock History's Total-row fill from `amber-50` (`#FFFBEB`,
+confirmed too pale to read as a fill at all even once the override actually applies) to
+`amber-100` (`#FEF3C7`), and updated its matching Excel-export `TOTAL_ROW_FILL_ARGB` to match.
+
+**2. AC01's Excel-exported Status column showed literal text (`UD:GREEN Payment:—`) instead of the
+two colored dots shown on screen** — business owner asked directly why the "exact symbol" wasn't
+there. The on-screen cell is two independently-colored indicators (UD status dot + payment status
+dot), which a single `getCellColor` (one color per whole cell) can't represent, and Ctrl+C
+clipboard copy can only ever be plain text anyway — so `copyValue` correctly stays a text summary
+for that path. Extended `shared/downloadColoredExcelFile.js` with an optional
+`getCellRichText(row, column)` hook (exceljs `richText` cell value — multiple independently-colored
+text runs in one cell) that takes precedence over `getCellValue`/`getCellColor` when present. AC01's
+Status column now defines `excelRichText` returning two "●" runs colored to match
+`udDotClass`/`paymentDotStatus`'s own emerald/amber/rose/slate mapping (`dotFontArgb()`, same status
+keys as the existing `udDotClass()`) — the exported cell now shows the same two colored dots the
+screen does, not a text label.
+
+**Separately, business owner also asked why Stock History's Opening column showed 0.000 for every
+row** — verified against live Prod data, not a bug: `CMP003`'s entire `stock_ledger` history starts
+`2026-07-27` (earliest row in the whole company, checked directly). Any "Date From" on or before
+that date correctly produces Opening=0 for every material, since §130.2's backward-computed
+mechanic has nothing to subtract from — there is no prior balance before the company's own first
+posting. Confirmed the specific material in the screenshot (`Aluminium Sulphate Oxyhydrate`)
+individually starts `2026-08-01`, consistent with the same explanation.
+
+`eslint`/`jsx-no-undef-guard.mjs` — clean on all 4 touched files
+(`ErpDenseGrid.jsx`/`downloadColoredExcelFile.js`/`AC01Page.jsx`/`StockHistoryPage.jsx`). Frontend-
+only change, no backend/ACL/schema touched.
+
+**Not yet done:** the live click-through in the deployed app (no dev login in this environment) —
+business owner is doing this directly now, per the screenshots above.

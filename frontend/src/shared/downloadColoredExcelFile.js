@@ -25,6 +25,11 @@ function pxWidthToExcelWidth(width) {
  * @param {(row:object, column:object) => (string|number)} [params.getCellValue] — defaults to row[column.key]
  * @param {(row:object, column:object) => ({fontArgb?:string, bold?:boolean}|null)} [params.getCellColor]
  * @param {(row:object) => (string|null)} [params.getRowFillArgb] — whole-row fill, e.g. a Total row
+ * @param {(row:object, column:object) => (Array<{text:string,fontArgb?:string}>|null)} [params.getCellRichText]
+ *   — for a cell whose on-screen render carries more than one independently
+ *   colored signal in one spot (e.g. two status dots) that a single
+ *   getCellColor can't represent. Takes precedence over getCellValue/
+ *   getCellColor for that cell when it returns a non-empty array.
  */
 export async function downloadColoredExcelFile({
   fileName,
@@ -34,6 +39,7 @@ export async function downloadColoredExcelFile({
   getCellValue,
   getCellColor,
   getRowFillArgb,
+  getCellRichText,
 }) {
   const safeColumns = Array.isArray(columns) ? columns : [];
   const safeRows = Array.isArray(rows) ? rows : [];
@@ -69,6 +75,18 @@ export async function downloadColoredExcelFile({
       if (rowFillArgb) {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFillArgb } };
       }
+
+      const richTextRuns = typeof getCellRichText === "function" ? getCellRichText(row, column) : null;
+      if (Array.isArray(richTextRuns) && richTextRuns.length > 0) {
+        cell.value = {
+          richText: richTextRuns.map((run) => ({
+            text: run.text ?? "",
+            font: run.fontArgb ? { color: { argb: run.fontArgb } } : undefined,
+          })),
+        };
+        return;
+      }
+
       const colorInfo = typeof getCellColor === "function" ? getCellColor(row, column) : null;
       if (colorInfo?.fontArgb || colorInfo?.bold) {
         cell.font = {
