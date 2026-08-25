@@ -5066,3 +5066,53 @@ change (MCP only, R-04) -- no migration, no code touched, so no `deno check`/`es
 this entry.
 
 **Not yet done:** live click-through re-confirmation in the deployed app.
+
+---
+
+### 2026-08-25, still later — PO11 (Procurement Planning) Available Qty bug: reservation never deducted (Claude-implemented, code fix)
+
+Business owner live-caught: "Procurement planning e je avaliable qty asche seta actually stock ta
+asche, reservation deduct kore aschena" — reported against CMP006's DYN E 35 (RM,
+material_id `0f840951-9e2d-4ee1-b8ce-645a19262435`), comparing IN03 (Current Stock) vs PO11
+(Procurement Planning) side by side for the same material.
+
+**Root cause confirmed:** `planning.handlers.ts`'s workspace-row builder computed
+`available_stock_qty` purely from `stock_snapshot` rows with `stock_type_code='UNRESTRICTED'`
+(grouped by `buildMaterialScopeKey(materialId, sourceSlocGroupId)`) — grepping the whole file for
+"reservation"/"reserved" returned zero matches before this fix. IN03's own `getCurrentStockHandler`
+already correctly nets `unrestrictedQty - reservedQty` (`net_available_qty`) against
+`erp_production.reservation_document` — PO11 never had the equivalent. Live prod data for DYN E 35
+@ CMP006/T003: Unrestricted = 17502.36, two OPEN `reservation_document` rows (PROCESS_PO source,
+1796.3 + 1900 = 3696.3) at the same location — so PO11 was overstating available stock by 3696.3
+(true Net Available = 13806.06), meaning a fully/over-committed material could still show as
+plentiful for new procurement planning.
+
+**Fix (`planning.handlers.ts`, `loadWorkspaceRows`):**
+- Added a 3rd parallel query to the existing `Promise.all([materialMap, snapshotRows, ...])` —
+  `erp_production.reservation_document` filtered to `company_id` + `status='OPEN'` +
+  `material_id`/`storage_location_id` in the same active-material/active-SLoc sets the snapshot
+  query already uses. `material_id` list is chunked via `fetchInChunks()` (§8E — list scales with
+  plan size, same reasoning as IN02/IN03/PR24), `storage_location_id` list is the pre-existing
+  bounded `activeSlocIds` array (not chunked, same as the sibling snapshot query).
+- Added a `reservedMap` built with the exact same `buildMaterialScopeKey(materialId,
+  slocGroupByLocationId.get(locationId))` grouping `availableMap`/`qaMap` already use, so a
+  reservation nets against the precise Unrestricted pool it was drawn from.
+- `availableStockQty` changed from `normalizeQty(availableMap.get(scopeKey) ?? 0)` to
+  `normalizeQty((availableMap.get(scopeKey) ?? 0) - reservedMap.get(scopeKey) ?? 0)`) —
+  **deliberately not clamped at zero**, matching IN03's own Net Available convention (an
+  over-committed material, more reserved than on hand, is a real signal worth showing negative,
+  not hiding).
+- No new response field added, no schema/frontend change — `available_stock_qty`'s existing name
+  and shape are unchanged, only its computation is corrected, so the fix propagates for free into
+  every consumer of that field (the workspace grid, the plan-archive snapshot writer at
+  `archiveLines.map(...)`, CSV export) without touching any of them.
+
+**Verified:** `deno check` — 9 pre-existing errors before and after (git-stash technique), zero new
+(all 9 are unrelated pre-existing `getCompanyScope`/spread-property noise already known in this
+file). `scripts/company-scope-guard.mjs` — clean (new query reuses the handler's own already-scoped
+`companyId`, same pattern as the sibling snapshot query immediately above it). Live prod re-check
+(2026-08-25) reconfirmed the same figures found during initial triage: Unrestricted 17502.36,
+reserved 3696.3, so PO11 should now report 13806.06 for this material once deployed.
+
+**Not yet done:** live click-through re-confirmation in the deployed app (no dev login in this
+environment, per established session pattern — verified via code + live DB query instead).
