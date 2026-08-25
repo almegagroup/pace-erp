@@ -31,6 +31,21 @@ function normalizeCellAlign(align) {
   return "text-left";
 }
 
+// A row's own bg-* override (from getRowProps, e.g. a Total row's amber
+// fill, or a variance/discrepancy highlight) and this component's default
+// `bg-white` have identical CSS specificity (both plain single-class
+// selectors) — whichever rule is declared LATER in the compiled Tailwind
+// stylesheet wins the cascade, regardless of which class comes later in the
+// className string. Confirmed empirically against this project's own build:
+// .bg-white is emitted after .bg-amber-50/.bg-rose-50/.bg-emerald-50/
+// .bg-slate-50, so bg-white was silently winning and swallowing every such
+// row highlight (Total rows, variance/discrepancy rows) across every caller
+// of this component, not just a cosmetic Stock History issue. Only ever
+// emit bg-white when the caller hasn't already supplied its own bg-*.
+function hasBackgroundUtility(className) {
+  return /(^|\s)bg-\S/.test(className ?? "");
+}
+
 // Legacy fallback for non-secure contexts / older browsers where
 // navigator.clipboard is unavailable — mirrors the standard
 // hidden-textarea + execCommand("copy") pattern.
@@ -233,7 +248,7 @@ export default function ErpDenseGrid({
           key={rowKey ? rowKey(row, index) : `${index}`}
           ref={(el) => { rowRefs.current[index] = el; }}
           {...restRowProps}
-          className={`h-[var(--erp-row-height)] border-b border-slate-200 bg-white text-[12px] text-slate-800 ${externalClassName ?? ""}`.trim()}
+          className={`h-[var(--erp-row-height)] border-b border-slate-200 ${hasBackgroundUtility(externalClassName) ? "" : "bg-white"} text-[12px] text-slate-800 ${externalClassName ?? ""}`.trim()}
         >
           {columns.map((column, colIndex) => {
             const cellKeyboardHandler = (event) => {
@@ -352,7 +367,7 @@ export default function ErpDenseGrid({
         ref={(el) => { rowRefs.current[index] = el; }}
         tabIndex={rowTabIndex}
         {...mergedRowProps}
-        className={`h-[var(--erp-row-height)] cursor-pointer border-b border-slate-200 bg-white text-[12px] text-slate-800 outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${externalRowProps.className ?? ""}`.trim()}
+        className={`h-[var(--erp-row-height)] cursor-pointer border-b border-slate-200 ${hasBackgroundUtility(externalRowProps.className) ? "" : "bg-white"} text-[12px] text-slate-800 outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${externalRowProps.className ?? ""}`.trim()}
       >
         {columns.map((column) => (
           <td

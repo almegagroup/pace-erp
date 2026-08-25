@@ -4784,3 +4784,107 @@ formatted values, not a fully-colored sheet.
 touched at all, so no DB-side verification needed for this change.
 
 **Not yet done:** the live click-through in the deployed app (no dev login in this environment).
+
+### 2026-08-25 (still later same day) - Real live-app bug found + fixed: ErpDenseGrid row-fill CSS cascade
+
+Business owner did the live click-through on the deployed Prod app (screenshots) and caught two
+real problems.
+
+**1. Stock History's Total row had no visible fill at all — traced to a real, pre-existing bug in
+`ErpDenseGrid.jsx` itself, not something introduced this session, and not cosmetic-only.** The
+Total row's `getRowProps` returns `className: "bg-amber-50 ..."`, appended to the grid's own
+hardcoded `bg-white` base class on the same `<tr>`. Both are plain single-class selectors —
+identical CSS specificity — so the winner is whichever rule is declared LATER in the *compiled*
+stylesheet, not whichever class comes later in the `className` string (a classic, easy-to-miss
+Tailwind gotcha). Ran an actual `vite build` and inspected the real generated CSS to confirm
+empirically rather than guess: `.bg-white` is emitted at byte offset 39037, `.bg-amber-50` at
+33362, `.bg-rose-50` at 35974, `.bg-emerald-50` at 34776, `.bg-slate-50` at 37134 — `.bg-white` is
+declared last, so it silently won every time, regardless of source order in the class string.
+**This was never Stock-History-specific — grepping every `getRowProps` caller found the identical
+pattern already broken in 5 pre-existing pages:** `IVDetailPage.jsx` (rate-variance >50% highlight),
+`GRNDetailPage.jsx` (discrepancy highlight), `PIDocumentRecountPage.jsx` and
+`PIDocumentDetailPage.jsx` (count-variance +/- coloring), `LocationTransferRequestWorkspacePage.jsx`
+(shortage highlight) — every one of these row highlights has been silently invisible since it was
+built, on every page, not just this new one.
+
+**Fix, in the shared component (not per-page):** `ErpDenseGrid.jsx` now only emits its own default
+`bg-white` when the caller's `getRowProps` didn't already supply a `bg-*` utility
+(`hasBackgroundUtility()` — a simple regex check), so the two classes are never present on the same
+row at once and the cascade-order ambiguity can't occur, regardless of which Tailwind version or
+build ever changes that ordering again. This single fix in the shared component silently repairs
+all 5 pre-existing broken pages above, plus Stock History's new Total row — none of those 5 pages
+needed their own touch. Also bumped Stock History's Total-row fill from `amber-50` (`#FFFBEB`,
+confirmed too pale to read as a fill at all even once the override actually applies) to
+`amber-100` (`#FEF3C7`), and updated its matching Excel-export `TOTAL_ROW_FILL_ARGB` to match.
+
+**2. AC01's Excel-exported Status column showed literal text (`UD:GREEN Payment:—`) instead of the
+two colored dots shown on screen** — business owner asked directly why the "exact symbol" wasn't
+there. The on-screen cell is two independently-colored indicators (UD status dot + payment status
+dot), which a single `getCellColor` (one color per whole cell) can't represent, and Ctrl+C
+clipboard copy can only ever be plain text anyway — so `copyValue` correctly stays a text summary
+for that path. Extended `shared/downloadColoredExcelFile.js` with an optional
+`getCellRichText(row, column)` hook (exceljs `richText` cell value — multiple independently-colored
+text runs in one cell) that takes precedence over `getCellValue`/`getCellColor` when present. AC01's
+Status column now defines `excelRichText` returning two "●" runs colored to match
+`udDotClass`/`paymentDotStatus`'s own emerald/amber/rose/slate mapping (`dotFontArgb()`, same status
+keys as the existing `udDotClass()`) — the exported cell now shows the same two colored dots the
+screen does, not a text label.
+
+**Separately, business owner also asked why Stock History's Opening column showed 0.000 for every
+row** — verified against live Prod data, not a bug: `CMP003`'s entire `stock_ledger` history starts
+`2026-07-27` (earliest row in the whole company, checked directly). Any "Date From" on or before
+that date correctly produces Opening=0 for every material, since §130.2's backward-computed
+mechanic has nothing to subtract from — there is no prior balance before the company's own first
+posting. Confirmed the specific material in the screenshot (`Aluminium Sulphate Oxyhydrate`)
+individually starts `2026-08-01`, consistent with the same explanation.
+
+`eslint`/`jsx-no-undef-guard.mjs` — clean on all 4 touched files
+(`ErpDenseGrid.jsx`/`downloadColoredExcelFile.js`/`AC01Page.jsx`/`StockHistoryPage.jsx`). Frontend-
+only change, no backend/ACL/schema touched.
+
+**Not yet done:** the live click-through in the deployed app (no dev login in this environment) —
+business owner is doing this directly now, per the screenshots above.
+
+### 2026-08-25 (still later) - §130.2 correction: Opening Stock postings must ALWAYS fold into Opening
+
+Business owner's own live click-through in Prod caught a real design bug in §130.2's original
+locked rule (see feasibility §130.2's inline correction for the full worked example). Original
+rule: an Opening Stock posting (`P561`–`P566`) that falls *inside* the selected date range is
+treated like any other in-range transaction and lands in the Inward bucket. Live symptom: a
+material's only history before the report was its own Opening Stock entry (`P561`, 48,097 KG dated
+1 Aug 2026, real Prod data — Aluminium Sulphate Oxyhydrate, CMP003) — picking From=1 Aug (the exact
+same date as the posting) showed Opening=0, Inward=48,097, when the entire point of an Opening
+Stock entry is that it *is* the starting balance.
+
+**Corrected rule (business-owner-specified, confirmed with a worked example before implementing):**
+`P561`–`P566` are now ALWAYS excluded from every bucket column / in-range total and always fold
+into Opening — unconditionally, regardless of where the posting's own date falls relative to the
+selected range (before, exactly on, or even after From-date, as long as still `<= To-date`). Not
+date-conditional the way the original rule was.
+
+**Migration `20260825120000`:** added `stock_history_bucket_map.is_opening_source boolean`
+(`true` for `P561`–`P566`, `false` for everything else — including `P101`/`P102`, which share
+Inward's bucket_code but are real GRN receipts and are unaffected). `get_stock_history()`'s
+`in_range_by_bucket` CTE now excludes `is_opening_source = true` rows entirely, regardless of date.
+`after_range_real` (backs Closing out to the report's own To-date) is deliberately untouched — it
+still counts every movement type, so Closing stays chronologically correct even for a hypothetical
+Opening Stock entry dated after To-date.
+
+**Verified with real data in both Dev and Prod before/after applying:**
+- Dev (BIOTREAT-V8) — From=exactly its own P561 date (2026-06-30, the exact boundary case the old
+  rule got wrong): now `opening=2076.000000, closing=1902.320000, buckets={"CONS":-173.68}` — no
+  Inward bucket at all, matches hand calculation exactly.
+- Prod (Aluminium Sulphate Oxyhydrate, CMP003) — ran both From=1 Aug (same date as its P561) and
+  From=5 Aug (business owner's own second worked example, "P561-566 + 1st-4th Aug all fold into
+  5th Aug's Opening") — both now return **identical** `opening=48097.000000,
+  closing=39697.000000, buckets={"CONS":-8400}`, exactly as specified.
+
+Both projects: `apply_migration`, `schema_migrations` version reconciled to the local filename
+timestamp, `NOTIFY pgrst, 'reload schema'`, `migration-integrity-check.mjs` confirmed
+`in_sync=true` (Dev: 471/471; Prod: 471/471) before and after. `migration-column-scan.mjs`/
+`migration-order-scan.mjs` — clean on the new file. Feasibility doc §130.2 and §130.5's bucket
+table updated in place with correction annotations (not silently rewritten) per this repo's
+doc-history convention.
+
+**Not yet done:** live click-through re-confirmation in the deployed app (business owner will do
+this directly, same as before).

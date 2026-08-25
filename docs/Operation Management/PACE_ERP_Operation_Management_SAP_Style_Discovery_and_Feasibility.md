@@ -20555,13 +20555,30 @@ therefore always **derived**, not read from a stored value:
   "today back to the cutoff," not by total company history.
 - **Closing** (as of the range's end date) = Opening + every ledger row posted within the range
   (inclusive), split by movement direction.
-- This is entirely independent of *when* the material's very first Opening Stock (`P561`/`P563`/
-  `P565`) posting happened. A material set up on 1 Aug and reported on 22–27 Aug shows its true
-  22 Aug Opening (netting every transaction from 1–21 Aug into one number), not the raw Opening
-  Stock document value. If a material's Opening Stock posting itself falls **inside** the selected
-  range (a rare case — a brand-new material set up mid-range), that one event is treated exactly
-  like any other in-range transaction and lands in the **Inward** bucket (§130.5); it is not a
-  special case requiring different code.
+- This is entirely independent of *when* the material's very first Opening Stock (`P561`–`P566`)
+  posting happened. A material set up on 1 Aug and reported on 22–27 Aug shows its true 22 Aug
+  Opening (netting every transaction from 1–21 Aug into one number), not the raw Opening Stock
+  document value.
+- **Correction, 2026-08-25 (business owner, caught via live click-through the same day this
+  section was first locked) — supersedes the paragraph originally here.** The original text said
+  an Opening Stock posting that falls inside the selected range is "treated exactly like any other
+  in-range transaction" and lands in Inward. **That is wrong and was reversed the same day.**
+  Real example that exposed it: a material's *only* posting before a live report's From-date was
+  its own Opening Stock entry (`P561`, e.g. 48,097 KG dated 1 Aug) — picking From=1 Aug (the exact
+  same date) made that entry land in Inward with Opening shown as 0, even though the whole point of
+  an Opening Stock entry is that it *is* the starting balance, not an in-period event. Locked rule
+  now: **the Opening Stock movement family (`P561`–`P566`) is ALWAYS excluded from every bucket
+  column and the in-range total, and always folds into Opening — unconditionally, regardless of
+  where its own `posting_date` falls relative to the selected range** (before, exactly on, or even
+  after From-date, as long as it's still `<= To-date`). This is not date-conditional the way the
+  original text implied; it's an unconditional rule per movement type. `stock_history_bucket_map`
+  gained an `is_opening_source boolean` column (migration `20260825120000`) — `true` for
+  `P561`–`P566`, `false` for everything else, including the OTHER movement types that share
+  Inward's own bucket_code (`P101`/`P102`, real GRN receipts) — those are unaffected and still
+  behave the original way. `after_range_real` (used only to correctly back Closing out to the
+  report's own To-date) is untouched by this — it still counts every movement type regardless of
+  `is_opening_source`, so Closing stays chronologically accurate even for a hypothetical Opening
+  Stock entry dated after To-date.
 
 ### 130.3 — Row grain: flat rows, one per Material x Status x Location
 
@@ -20608,9 +20625,14 @@ separate top-level columns were proposed early and explicitly rejected for exact
 business owner caught the redundancy live: "Opening Reject" is just the Opening column's value on
 the Blocked row, nothing more.)
 
+**Third general rule, corrected 2026-08-25 (§130.2's own correction — see that section for the
+worked example and reasoning):** the Opening Stock movement family (`P561`–`P566`) is never a
+bucket entry at all, under any circumstances — not even the original "only if posted inside the
+range" carve-out this table used to state. It unconditionally folds into Opening instead.
+
 | Bucket | Movement codes (parent, "+reversal" implied by the general rule) | Business event |
 |---|---|---|
-| **Inward** | `P101` (+ `P561`/`P563`/`P565` only if posted inside the range, §130.2) | Purchase/production receipt entering the company |
+| **Inward** | `P101` only — `P561`–`P566` never land here, per the corrected third general rule above | Purchase/production receipt entering the company |
 | **Cons.** | `P261` | Issued to a Process/Packing Order |
 | **Sale/Dispatch** | `P601` | Left via Sales Order or STO dispatch (renamed from the sheet's unexplained "RP Sale") |
 | **PID** | `P701`/`P702` (Unrestricted row), `P703`/`P704` (QI row), `P705`/`P706` (Blocked row) | Physical inventory count correction — one column name, the status row it lands on carries which stock type was recounted |
