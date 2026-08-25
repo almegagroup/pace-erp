@@ -1177,6 +1177,39 @@ existing shape instead of being the outlier of the three.
   L2_Manager, not just Manager-tier). Director (P0074) — VIEW only, no WRITE, rank ceiling holds.
   ACL-MASTER (P0076) — VIEW+WRITE. ACL-MASTER drift check — clean.
 
+**🔁 Reverted 2026-08-25 (business owner directive — supersedes the 2026-08-06 revision above,
+does not delete it).** AC04 goes back to its *original* shape: **only Auditor (L1/L2) can
+set/update; Accounts and Director are VIEW-only.** Same session that also removed the
+Soni-exclusive personal override referenced at line ~1170 above — business owner's own words:
+"এরকম user specific বলে কোনো জিনিস নেই, সবই role আর rank-এর উপর" (there is no such thing as
+user-specific; everything is role/rank-based) — applies to this access-shape decision too, not
+just the removed override.
+
+- **Accounts' WRITE removed, not the capability itself.** Deleted exactly two
+  `capability_menu_actions` rows — `(CAP_CONVCOST_MAKER, ACC_CONVERSION_COST, WRITE)` and
+  `(CAP_PROC_ACCOUNTS, ACC_CONVERSION_COST, WRITE)` — both capabilities' `VIEW` rows on this menu
+  are untouched, so Accounts still sees the page, just can no longer save a rate. `CAP_PROC_ACCOUNTS`
+  needed the same treatment as `CAP_CONVCOST_MAKER` because it's a broader, shared capability that
+  *also* independently grants WRITE on this exact menu (also used by AC01 elsewhere) — fixing only
+  `CAP_CONVCOST_MAKER` would have left this second, wider path still leaking WRITE to Accounts.
+- **Director's VIEW-only status needed no change at all** — confirmed live before touching
+  anything: `CAP_CONVCOST_AUDITOR` (the WRITE-granting capability) was never linked to the
+  `DIRECTOR` work context in `work_context_capabilities`, only to `AUDIT`/`ACL-MASTER` — so a
+  plain Director (sitting in their own `DIRECTOR` work context) never had WRITE via any path,
+  despite `role_capabilities` listing `DIRECTOR` as one of `CAP_CONVCOST_AUDITOR`'s eligible
+  roles. That role-level entry exists only so **ACL-MASTER** (role `DIRECTOR`, work context
+  `ACL-MASTER`) gets WRITE as its maintenance-full-access identity — a work-context-level
+  distinction, not a role one. Deliberately left untouched, and confirmed still working after
+  today's change: ACL-MASTER (P0076) still shows `VIEW+WRITE`.
+- **Verified live (current active version, both companies):** Accounts (P0007/P0008/P0025/P0060
+  CMP003, P0066/P0068 CMP006) — `VIEW` only, `WRITE` gone. Auditor (P0010 L2_AUDITOR, P0079
+  L1_AUDITOR) — `VIEW+WRITE`, both companies, identical to each other (role/rank-based, no
+  per-person difference). ACL-MASTER (P0076) — `VIEW+WRITE`, unaffected.
+- **Dev not touched** — Dev's `ACC_CONVERSION_COST` access is structurally different (only the
+  broad `CAP_PROC_ACCOUNTS` exists there; the granular `CAP_CONVCOST_MAKER`/`_AUDITOR`/`_VIEW`
+  split from the 2026-08-06 Prod revision was never built in Dev). Flagged, not built out, since
+  Dev's test users are broad-access-by-design (see memory) and this wasn't asked for explicitly.
+
 AC02 — still left exactly as-is (ACL-MASTER only), not decided; see the original Group 7 notes
 below for the current (undesigned) state and the earlier code-audit findings.
 

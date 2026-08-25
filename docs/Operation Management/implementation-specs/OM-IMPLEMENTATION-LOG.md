@@ -5007,3 +5007,62 @@ this was wired into use row coloring, so not a live issue today, but worth remem
 both files. `jsx-no-undef-guard.mjs` — 0 violations.
 
 **Not yet done:** live click-through re-confirmation in the deployed app.
+
+### 2026-08-25 (still later) - P0079 provisioned as L1_AUDITOR, AC04 reverted to Auditor-writes-only
+
+Business owner promoted P0010 to L2_AUDITOR and set up P0079 as a new L1_AUDITOR (parent company
+CMP006), directive: "role/rank shapes access, nothing user-specific." Pure data work, all via MCP
+(R-04), no code changed.
+
+- **P0079 was completely unprovisioned** — zero rows in `erp_map.user_companies` and
+  `erp_acl.user_work_contexts`. Mapped to CMP006 then CMP003 (matching P0010's own footprint,
+  business owner asked for CMP003 explicitly after the first pass), both on the real `AUDIT` work
+  context, `is_primary=true` (avoids the same class of bug this doc's "Identity note" already
+  documents for a wrong/false `is_primary`).
+- **Regenerated `precomputed_acl_view` for both companies** (`generate_acl_snapshot` on the
+  already-active version — a role/company/work-context change is live-table data, not versioned,
+  so no version bump needed for this part) and rebuilt both users' `menu_snapshot`.
+- **Caught my own mistake mid-fix:** briefly generated/rebuilt P0079's CMP003 snapshot against an
+  already-inactive `acl_version_id` (stale from an earlier step in the same conversation) before
+  re-fetching the real active version and redoing it correctly.
+- **Full-ERP verification, not just AC01/AC03/AC06:** diffed every `(resource_code, action_code)`
+  ALLOW row between P0010 and P0079 in both companies. Zero differences in CMP003 (after the AC04
+  override cleanup below); the one CMP006 difference before that cleanup was P0010's own
+  soon-to-be-removed personal override.
+
+**Real gap found via this comparison — a personal `user_overrides` grant that duplicated an
+already-correct role-based one.** P0010 held a standing `ACC_CONVERSION_COST` VIEW+WRITE+EDIT
+`user_overrides` row ("AC04 create/edit exclusive to Soni", 2026-07-27) — business owner
+explicitly rejected this as a pattern: no user-specific grants should exist, only role/rank.
+Checked first (not assumed): `CAP_CONVCOST_AUDITOR` already grants `L1_AUDITOR`/`L2_AUDITOR`
+VIEW+WRITE via the real `AUDIT` work context in both companies — the override was pure duplicate
+noise (its only unique contribution was `EDIT`, an action no route in the system ever checks for
+this menu). Revoked all 9 live rows (soft-delete, `revoked_at` set, 3 companies x 3 actions),
+re-captured+regenerated the active version, verified `precomputed_acl_view` now shows
+`CAPABILITY_ALLOW` not `USER_OVERRIDE_ALLOW` for both P0010 and P0079. Updated
+`scripts/acl-master-drift-check.mjs`'s now-stale `KNOWN_INTENTIONAL_EXCLUSIONS` entry in place
+(emptied the CTE, corrected the header comment) rather than leaving a script that still excuses a
+grant that no longer exists.
+
+**Business owner then gave the actual locked AC04 access shape** (reverting the 2026-08-06
+revision documented in `PROD-ACL-Access-Decisions.md`): Auditor (L1/L2) = full set/update;
+Accounts and Director = VIEW only, dependencies elsewhere unaffected. Two live
+`capability_menu_actions` rows deleted -- `(CAP_CONVCOST_MAKER, ACC_CONVERSION_COST, WRITE)` and
+`(CAP_PROC_ACCOUNTS, ACC_CONVERSION_COST, WRITE)` (`CAP_PROC_ACCOUNTS` needed the same fix since
+it's a broader capability that *also* independently granted WRITE here -- found by checking, not
+assumed, after the first delete alone would have left it silently leaking). Director's own
+VIEW-only status needed zero change -- confirmed live that `CAP_CONVCOST_AUDITOR` (the WRITE path)
+was never linked to the `DIRECTOR` work context at all, only `AUDIT`/`ACL-MASTER`; the `DIRECTOR`
+row in its `role_capabilities` exists solely so ACL-MASTER (role `DIRECTOR`, work context
+`ACL-MASTER`) keeps its maintenance-full-access WRITE, confirmed still intact after the change.
+Verified live: Accounts (6 real users, both companies) now VIEW-only; Auditor (P0010, P0079) both
+VIEW+WRITE, identical; ACL-MASTER (P0076) unaffected. Dev intentionally not touched -- it never had
+the granular `CAP_CONVCOST_*` split this fix operates on, only the broad `CAP_PROC_ACCOUNTS`;
+flagged in `PROD-ACL-Access-Decisions.md`, not built out unprompted.
+
+Full detail (exact capability/role/work-context shape, before/after verification) in
+`PROD-ACL-Access-Decisions.md`'s "Reverted 2026-08-25" addendum under Group 7/AC04. Pure ACL data
+change (MCP only, R-04) -- no migration, no code touched, so no `deno check`/`eslint` needed for
+this entry.
+
+**Not yet done:** live click-through re-confirmation in the deployed app.

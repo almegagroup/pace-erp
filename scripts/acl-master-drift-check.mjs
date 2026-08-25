@@ -24,12 +24,20 @@
  * সারিতে আসবে।
  *
  * ⚠️ ২০২৬-০৮-০৬ prod-এ প্রথমবার চালিয়ে একটা false-positive পাওয়া গেছে:
- * `ACC_CONVERSION_COST:EDIT` — এটা bug না, ইচ্ছাকৃত business-exclusivity
+ * `ACC_CONVERSION_COST:EDIT` — তখন ধরা হয়েছিল ইচ্ছাকৃত business-exclusivity
  * (`version_user_overrides.override_reason`: "AC04 create/edit exclusive to
  * Soni (business owner 2026-07-27)" — শুধু P0010-কে দেওয়া, ACL-MASTER-কেও না)।
- * নিচের `KNOWN_INTENTIONAL_EXCLUSIONS` CTE দিয়ে এটা বাদ দেওয়া হয়েছে যাতে প্রতিবার
- * এই একই false-positive আবার investigate করতে না হয় — নতুন কোনো সত্যিকারের
- * exclusive-grant design এলে এখানে এক লাইন যোগ করো, reason-সহ।
+ * **সংশোধন, ২০২৬-০৮-২৫ (business owner-এর directive): এই পুরো ধারণাটাই ভুল
+ * ছিল।** এই ERP-তে কোনো "নির্দিষ্ট ব্যক্তির জন্য exclusive" grant বলে কিছু নেই —
+ * সবকিছুই role/rank-ভিত্তিক। যাচাই করে দেখা গেল `CAP_CONVCOST_AUDITOR` capability
+ * আগে থেকেই VIEW+WRITE দেয় L1_AUDITOR/L2_AUDITOR/DIRECTOR role-কে (AUDIT work
+ * context-এ, CMP003+CMP006) — personal override-টা ছিল সম্পূর্ণ redundant, শুধু
+ * P0010-কে একটা অতিরিক্ত (আর অস্তিত্বহীন) `EDIT` action দিচ্ছিল যেটা
+ * `capability_menu_actions`-এ কোনো route-ই কখনো check করে না। ৯টা live
+ * `user_overrides` row revoke করা হয়েছে (soft-delete, audit trail বহাল), তাই
+ * `KNOWN_INTENTIONAL_EXCLUSIONS` CTE এখন খালি — নতুন কোনো *সত্যিকারের*
+ * role-based-না-হওয়া exclusive-grant design এলে (যেটা এখন পর্যন্ত এই ERP-তে
+ * কখনো হয়নি) তবেই এক লাইন যোগ করো, নাহলে খালি রাখো।
  * (একই session-এ `PROC_OPENING_STOCK_APPROVAL:WRITE` ধরা পড়েছিল আর real gap
  * প্রমাণিত হয়ে fix হয়েছে — P0076 CAP_OPENING_STOCK_AUDITOR পায়নি, capability
  * ভুলটা `acl.menu_master`/`erp_menu.menu_master` দুটো আলাদা table, ভুল টেবিলে
@@ -48,13 +56,15 @@ console.log(`-- ACL-MASTER drift check — run against dev AND prod separately.
 -- against ACL-MASTER.
 --
 -- KNOWN_INTENTIONAL_EXCLUSIONS = documented business decisions to deny
--- ACL-MASTER a specific grant on purpose (e.g. a named-person-exclusive
--- action). Verified 2026-08-06 against acl.version_user_overrides before
--- being added here — do not add an entry without that same verification.
+-- ACL-MASTER a specific grant on purpose. Empty as of 2026-08-25 — this
+-- ERP has no named-person-exclusive grants; everything is role/rank-based
+-- (see the header comment above for the ACC_CONVERSION_COST correction that
+-- emptied this list). Do not add an entry without the same rigor: verify
+-- against acl.version_user_overrides AND confirm the grant genuinely cannot
+-- be expressed as a role_capabilities row first.
 
 WITH known_intentional_exclusions (resource_code, action_code, reason) AS (
-  VALUES
-    ('ACC_CONVERSION_COST', 'EDIT', 'AC04 create/edit exclusive to Soni (business owner 2026-07-27) — see acl.version_user_overrides override_reason')
+  SELECT NULL::text, NULL::text, NULL::text WHERE FALSE
 ),
 ranked AS (
   SELECT pav.company_id, c.company_code, pav.auth_user_id, u.user_code,
