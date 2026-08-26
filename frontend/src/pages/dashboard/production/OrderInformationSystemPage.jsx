@@ -19,7 +19,6 @@ import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useScreenBackInterceptor } from "../../../hooks/useScreenBackInterceptor.js";
 import { buildTransactionCompanyList } from "../../../components/inputs/transactionCompanyRuntime.js";
-import { downloadCsvFile } from "../../../shared/downloadTabularFile.js";
 import { getOrderInformationReport, listStrokeMasters } from "./prodApi.js";
 import { listMachines } from "../om/omApi.js";
 
@@ -35,6 +34,27 @@ const REF_BADGE_COLORS = {
   PACK_PO: "bg-violet-50 text-violet-700",
   PI: "bg-amber-50 text-amber-700",
 };
+
+// Matches IN14 (Stock History) exactly — positive green, negative red, zero "--".
+// Font ARGB values feed the coloured Excel export so it mirrors the on-screen grid.
+const POSITIVE_FONT_ARGB = "FF047857";
+const NEGATIVE_FONT_ARGB = "FFBE123C";
+// Each new group starts at its Process PO's own SFG-101 row (tier 1) — banding that
+// row is what lets a long, mixed-date-range list read as a sequence of distinct
+// groups instead of one undifferentiated blob.
+const GROUP_START_ROW_FILL_ARGB = "FFE0F2FE"; // sky-100, matches the on-screen band
+
+function formatSignedQuantity(value) {
+  if (value == null) return { text: "--", className: "text-slate-300", fontArgb: null };
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || Math.abs(amount) < 0.000001) {
+    return { text: "0.000", className: "text-slate-400", fontArgb: null };
+  }
+  const text = Math.abs(amount).toLocaleString(undefined, { minimumFractionDigits: 3 });
+  return amount > 0
+    ? { text, className: "text-emerald-700 font-medium", fontArgb: POSITIVE_FONT_ARGB }
+    : { text: `-${text}`, className: "text-rose-700 font-medium", fontArgb: NEGATIVE_FONT_ARGB };
+}
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -74,7 +94,25 @@ const GRID_COLUMNS = [
     align: "center",
     render: (r) => <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${DIR_COLORS[r.direction] ?? ""}`}>{r.direction}</span>,
   },
-  { key: "quantity", label: "Posted Qty", align: "right", width: "100px", render: (r) => Number(r.quantity ?? 0).toLocaleString(undefined, { minimumFractionDigits: 3 }) },
+  {
+    key: "quantity",
+    label: "Posted Qty",
+    align: "right",
+    width: "100px",
+    render: (r) => {
+      const { text, className } = formatSignedQuantity(r.quantity);
+      return <span className={className}>{text}</span>;
+    },
+    copyValue: (r) => formatSignedQuantity(r.quantity).text,
+    excelColor: (r) => {
+      const { fontArgb } = formatSignedQuantity(r.quantity);
+      return fontArgb ? { fontArgb } : null;
+    },
+  },
+  // Only ever populated on the Packing PO's own FG-101 row (tier 3) — every other
+  // row's num_packs/fill_qty_per_pack come back null from the backend and render blank.
+  { key: "num_packs", label: "Num Packs", align: "right", width: "90px", render: (r) => (r.num_packs == null ? "" : Number(r.num_packs).toLocaleString()) },
+  { key: "fill_qty_per_pack", label: "Per Pack", align: "right", width: "90px", render: (r) => (r.fill_qty_per_pack == null ? "" : Number(r.fill_qty_per_pack).toLocaleString(undefined, { maximumFractionDigits: 3 })) },
   { key: "batch_number", label: "Batch #", width: "100px", render: (r) => r.batch_number || "--" },
   {
     key: "reference_document_number",
@@ -90,18 +128,50 @@ const GRID_COLUMNS = [
       </span>
     ),
   },
-  { key: "standard_qty", label: "Standard Qty", align: "right", width: "100px", render: (r) => (r.standard_qty == null ? <span className="text-slate-300">--</span> : Number(r.standard_qty).toLocaleString(undefined, { minimumFractionDigits: 3 })) },
+  {
+    key: "standard_qty",
+    label: "Standard Qty",
+    align: "right",
+    width: "100px",
+    render: (r) => {
+      const { text, className } = formatSignedQuantity(r.standard_qty);
+      return <span className={className}>{text}</span>;
+    },
+    copyValue: (r) => formatSignedQuantity(r.standard_qty).text,
+    excelColor: (r) => {
+      const { fontArgb } = formatSignedQuantity(r.standard_qty);
+      return fontArgb ? { fontArgb } : null;
+    },
+  },
   { key: "dosage_pct", label: "Dosage %", align: "right", width: "90px", render: (r) => (r.dosage_pct == null ? <span className="text-slate-300">--</span> : `${Number(r.dosage_pct).toLocaleString(undefined, { maximumFractionDigits: 4 })}%`) },
-  { key: "apl_qty", label: "APL Qty", align: "right", width: "100px", render: (r) => (r.apl_qty == null ? <span className="text-slate-300">--</span> : Number(r.apl_qty).toLocaleString(undefined, { minimumFractionDigits: 3 })) },
+  {
+    key: "apl_qty",
+    label: "APL Qty",
+    align: "right",
+    width: "100px",
+    render: (r) => {
+      const { text, className } = formatSignedQuantity(r.apl_qty);
+      return <span className={className}>{text}</span>;
+    },
+    copyValue: (r) => formatSignedQuantity(r.apl_qty).text,
+    excelColor: (r) => {
+      const { fontArgb } = formatSignedQuantity(r.apl_qty);
+      return fontArgb ? { fontArgb } : null;
+    },
+  },
   {
     key: "variance_qty",
     label: "Variance",
     align: "right",
     width: "100px",
     render: (r) => {
-      if (r.variance_qty == null) return <span className="text-slate-300">--</span>;
-      const v = Number(r.variance_qty);
-      return <span className={v !== 0 ? "font-semibold text-amber-700" : "text-slate-400"}>{v.toLocaleString(undefined, { minimumFractionDigits: 3 })}</span>;
+      const { text, className } = formatSignedQuantity(r.variance_qty);
+      return <span className={className}>{text}</span>;
+    },
+    copyValue: (r) => formatSignedQuantity(r.variance_qty).text,
+    excelColor: (r) => {
+      const { fontArgb } = formatSignedQuantity(r.variance_qty);
+      return fontArgb ? { fontArgb } : null;
     },
   },
 ];
@@ -196,13 +266,30 @@ export default function OrderInformationSystemPage() {
     setPage(2);
   }
 
-  function handleExport() {
+  const [exporting, setExporting] = useState(false);
+  async function handleExport() {
     if (rows.length === 0) return;
-    downloadCsvFile({
-      fileName: `order_information_system_${filters.dateFrom || "from"}_${filters.dateTo || "to"}.csv`,
-      columns: GRID_COLUMNS.map((c) => ({ key: c.key, label: c.label })),
-      rows,
-    });
+    setExporting(true);
+    try {
+      // Dynamic import — exceljs only ever loads once Export is actually clicked,
+      // matching IN14 (Stock History)'s own coloured-export pattern.
+      const { downloadColoredExcelFile } = await import("../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `order_information_system_${filters.dateFrom || "from"}_${filters.dateTo || "to"}.xlsx`,
+        sheetName: "Order Information System",
+        columns: GRID_COLUMNS,
+        rows,
+        getCellValue: (row, column) =>
+          typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
+        getCellColor: (row, column) =>
+          typeof column.excelColor === "function" ? column.excelColor(row) : null,
+        getRowFillArgb: (row) => (row.is_group_start ? GROUP_START_ROW_FILL_ARGB : null),
+      });
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "ORDER_INFORMATION_EXPORT_FAILED");
+    } finally {
+      setExporting(false);
+    }
   }
 
   // Esc / shell Back returns to the filter page instead of leaving the screen entirely.
@@ -234,7 +321,7 @@ export default function OrderInformationSystemPage() {
             ]
           : [
               { key: "back", label: "Back to Filters", hint: "Esc", onClick: () => setPage(1) },
-              { key: "export", label: "Export Excel", onClick: handleExport, disabled: rows.length === 0 },
+              { key: "export", label: exporting ? "Exporting..." : "Export Excel", onClick: () => void handleExport(), disabled: exporting || rows.length === 0 },
               {
                 key: "execute",
                 label: reportQ.isFetching ? "Executing..." : "Execute Again",
@@ -383,11 +470,19 @@ export default function OrderInformationSystemPage() {
               {reportQ.isLoading ? "Loading..." : `${rows.length} movement${rows.length === 1 ? "" : "s"}`}
             </span>
           </div>
+          <div className="mb-2 text-xs text-slate-500">
+            Click and drag (or Shift+Click / Shift+Arrow) to select a range, then Ctrl+C to copy — same as Excel. The
+            shaded row at the top of each block marks where that order's group begins.
+          </div>
           <ErpDenseGrid
             columns={GRID_COLUMNS}
             rows={rows}
             rowKey={(row) => row.id}
             virtualize
+            rangeSelect
+            // Bands the Process PO's own SFG-101 row (tier 1) so a long, mixed-date-range
+            // list visually reads as a sequence of distinct order-groups.
+            getRowProps={(row) => (row.is_group_start ? { className: "bg-sky-50" } : {})}
             maxHeight="calc(100vh - 260px)"
             emptyMessage={reportQ.isLoading ? "Loading..." : "No movements match this criteria."}
           />

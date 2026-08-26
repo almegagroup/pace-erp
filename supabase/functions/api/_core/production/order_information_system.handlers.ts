@@ -124,7 +124,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       const isPackingNumber = poNumber.startsWith("94");
       if (isPackingNumber || tab === "PACKING") {
         let pq = serviceRoleClient.schema("erp_production").from("packing_order")
-          .select("id, company_id, po_number, po_type, process_order_id, status")
+          .select("id, company_id, po_number, po_type, process_order_id, status, num_packs, fill_qty_per_pack")
           .eq("po_number", poNumber);
         if (companyIds) pq = pq.in("company_id", companyIds);
         const { data, error } = await pq;
@@ -167,7 +167,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       processOrders = (data ?? []) as JsonRecord[];
     } else {
       let pq = serviceRoleClient.schema("erp_production").from("packing_order")
-        .select("id, company_id, po_number, po_type, process_order_id, status, material_id, segment_code")
+        .select("id, company_id, po_number, po_type, process_order_id, status, material_id, segment_code, num_packs, fill_qty_per_pack")
         .order("created_at", { ascending: false })
         .limit(MAX_ORDERS_MATCHED);
       if (companyIds) pq = pq.in("company_id", companyIds);
@@ -202,7 +202,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     if (showLinkedPacking && processOrderIds.length > 0) {
       const { data: linked, error: linkedErr } = await serviceRoleClient
         .schema("erp_production").from("packing_order")
-        .select("id, company_id, po_number, po_type, process_order_id, status")
+        .select("id, company_id, po_number, po_type, process_order_id, status, num_packs, fill_qty_per_pack")
         .in("process_order_id", processOrderIds);
       if (linkedErr) throw new Error("PROD_OIS_LOOKUP_FAILED");
       const seen = new Set(linkedPackingOrders.map((r) => String(r.id)));
@@ -321,65 +321,134 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     const materialMap = new Map(materialRows.map((r) => [String(r.id), r]));
     const companyMap = new Map(companyRows.map((r) => [String(r.id), r]));
 
-    // APL Qty / Variance / Dosage / Standard sidecar — §122.3. Matched by
-    // (process_order_id|packing_order_id) + material_id, is_voided=false. SFG/FG rows never
-    // match (reco tracks RM/PM/INT/PM consumption only) and stay null, not zero — "no reco
-    // line" and "zero variance" are different facts. Dosage %/Standard Qty only exist on
-    // process_order_line_reco (the recipe-driven RM/INT side) — packing_order_line_reco has
-    // no such columns, so PM rows always show blank there, by design, not a bug.
+    // APL Qty / Variance / Dosage / Standard sidecar — §122.3, redesigned 2026-08-26.
+    // Previously matched by (process_order_id|packing_order_id) + material_id, which stamps
+    // the SAME aggregated numbers onto EVERY stock_ledger row for that material — including a
+    // later P262 reversal or a correction-added extra P261 line. Confirmed live on prod
+    // (CMP006 PO 9300000070, batch BM05698, material WATER): a COR6 correction posted a P262
+    // credit of 1.8, and the old logic showed that P262 row with the SAME Standard Qty/Dosage%
+    // as the original P261 issue — a user reading the grid row-by-row would double-count it.
+    //
+    // Fix: each process_order_line/packing_order_line row has its own stock_ledger_id, which
+    // always anchors to that line's OWN ORIGINAL posting (verified live — corrections/
+    // reversals post a NEW stock_ledger row but never repoint this column). Reco rows are
+    // now aggregated per line_id (so a correction against the same line still nets in), then
+    // attached ONLY to that line's anchor stock_ledger row. Any other ledger row for the same
+    // material in the same order (a P262 reversal, or a second, independent line — e.g. the
+    // same RM entered twice in the Stroke recipe, each with its own line + anchor) shows null,
+    // never a duplicated/borrowed value. SFG/FG rows still never match (no process_order_line
+    // exists for them), so they stay null exactly as before.
+    const [procLineRows, packLineRows] = await Promise.all([
+      processOrderIds.length > 0
+        ? fetchInChunks<JsonRecord>(processOrderIds, (idChunk) =>
+            serviceRoleClient.schema("erp_production").from("process_order_line")
+              .select("id, stock_ledger_id").in("process_order_id", idChunk).not("stock_ledger_id", "is", null))
+            .catch(() => { throw new Error("PROD_OIS_ENRICH_FAILED"); })
+        : Promise.resolve([]),
+      packingOrderIds.length > 0
+        ? fetchInChunks<JsonRecord>(packingOrderIds, (idChunk) =>
+            serviceRoleClient.schema("erp_production").from("packing_order_line")
+              .select("id, stock_ledger_id").in("packing_order_id", idChunk).not("stock_ledger_id", "is", null))
+            .catch(() => { throw new Error("PROD_OIS_ENRICH_FAILED"); })
+        : Promise.resolve([]),
+    ]);
     const [procRecoResp, packRecoResp] = await Promise.all([
       processOrderIds.length > 0
         ? serviceRoleClient.schema("erp_production").from("process_order_line_reco")
-            .select("process_order_id, material_id, ap_approved_qty, variance_qty, dosage_pct, standard_qty")
+            .select("process_order_line_id, ap_approved_qty, variance_qty, dosage_pct, standard_qty")
             .in("process_order_id", processOrderIds).eq("is_voided", false)
         : Promise.resolve({ data: [], error: null }),
       packingOrderIds.length > 0
         ? serviceRoleClient.schema("erp_production").from("packing_order_line_reco")
-            .select("packing_order_id, material_id, ap_approved_qty, variance_qty")
+            .select("packing_order_line_id, ap_approved_qty, variance_qty, standard_qty")
             .in("packing_order_id", packingOrderIds).eq("is_voided", false)
         : Promise.resolve({ data: [], error: null }),
     ]);
     if (procRecoResp.error || packRecoResp.error) throw new Error("PROD_OIS_ENRICH_FAILED");
 
     type RecoAgg = { apl: number; variance: number; dosagePct: number | null; standardQty: number | null };
-    const recoByOrderMaterial = new Map<string, RecoAgg>();
+    const recoByProcLineId = new Map<string, RecoAgg>();
     for (const row of (procRecoResp.data ?? []) as JsonRecord[]) {
-      const key = `${row.process_order_id}|${row.material_id}`;
-      const prev = recoByOrderMaterial.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
-      recoByOrderMaterial.set(key, {
+      const key = String(row.process_order_line_id);
+      const prev = recoByProcLineId.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
+      const rowDosagePct = row.dosage_pct != null ? Number(row.dosage_pct) : null;
+      recoByProcLineId.set(key, {
         apl: prev.apl + (Number(row.ap_approved_qty) || 0),
         variance: prev.variance + (Number(row.variance_qty) || 0),
-        // dosage_pct is a fixed recipe attribute for this material, not a per-event value —
-        // take it as-is rather than summing (identical across every reco row for this pairing).
-        dosagePct: row.dosage_pct != null ? Number(row.dosage_pct) : prev.dosagePct,
+        // A correction row against this same line (e.g. COR6_CORRECTION) may have no
+        // dosage_pct of its own — add nothing rather than resetting the running total.
+        dosagePct: rowDosagePct != null ? (prev.dosagePct ?? 0) + rowDosagePct : prev.dosagePct,
         standardQty: (prev.standardQty ?? 0) + (Number(row.standard_qty) || 0),
       });
     }
+    const recoByPackLineId = new Map<string, RecoAgg>();
     for (const row of (packRecoResp.data ?? []) as JsonRecord[]) {
-      const key = `${row.packing_order_id}|${row.material_id}`;
-      const prev = recoByOrderMaterial.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
-      recoByOrderMaterial.set(key, {
+      const key = String(row.packing_order_line_id);
+      const prev = recoByPackLineId.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
+      recoByPackLineId.set(key, {
         apl: prev.apl + (Number(row.ap_approved_qty) || 0),
         variance: prev.variance + (Number(row.variance_qty) || 0),
-        dosagePct: prev.dosagePct,
-        standardQty: prev.standardQty,
+        // Corrected 2026-08-26: packing_order_line_reco.standard_qty IS a real, populated
+        // column (qty_per_pack x num_packs at Final) -- this was previously discarded as
+        // null, even though the data existed. There is genuinely no dosage_pct column for
+        // PM (Pack BOM has no %-based concept, only qty_per_pack), so that stays null.
+        dosagePct: null,
+        standardQty: (prev.standardQty ?? 0) + (Number(row.standard_qty) || 0),
       });
     }
 
-    // §122.1 (this pass) — "FG/SFG transactions first within each PO group's list": every
-    // row is tagged with the Process Order it ultimately belongs to (directly via a PROC_PO
-    // reference, via a linked Packing PO's own parent, or via the batch_number union for
-    // non-PO-tagged events like a PID difference), then re-sorted group-by-group with
-    // SFG/FG output rows first, RM/PM/INT/PM input rows after.
+    const recoByStockLedgerId = new Map<string, RecoAgg>();
+    for (const line of procLineRows) {
+      const reco = recoByProcLineId.get(String(line.id));
+      if (reco) recoByStockLedgerId.set(String(line.stock_ledger_id), reco);
+    }
+    for (const line of packLineRows) {
+      const reco = recoByPackLineId.get(String(line.id));
+      if (reco) recoByStockLedgerId.set(String(line.stock_ledger_id), reco);
+    }
+
+    // §122.1, refined 2026-08-26 — every row is tagged with the Process Order it ultimately
+    // belongs to (directly via a PROC_PO reference, via a linked Packing PO's own parent, or
+    // via the batch_number union for non-PO-tagged events like a PID difference), then
+    // re-sorted group-by-group into 6 fixed tiers so a large date-range list visually reads
+    // as a sequence of distinct order-groups instead of an undifferentiated blob:
+    //   1. Process PO's own SFG P101 (the batch's output — always leads its group)
+    //   2. Process PO's RM/INT issues (what made that SFG)
+    //   3. Packing PO's FG P101 (the SFG turned into a dispatchable SKU)
+    //   4. Packing PO's PM issues (what packed that FG)
+    //   5. QA movements (P32x/P33x/P34x release/hold/reject family) — regardless of which
+    //      order they're tagged to; Process PO Verify's own P321 auto-release leg on the SAME
+    //      SFG material as tier 1 belongs here, not tier 1, since it's a QA action, not the
+    //      output-creation event itself.
+    //   6. Packing PO's SFG P261 (the SFG being consumed to make that FG — closes the loop)
+    // Anything not matching any of the above (e.g. a bare P262 reversal leg) falls into a
+    // catch-all last tier rather than silently breaking the sort.
     const processOrderById = new Map(processOrders.map((o) => [String(o.id), o]));
     const processOrderByBatch = new Map(
       processOrders.filter((o) => toTrimmedString(o.batch_number)).map((o) => [toTrimmedString(o.batch_number), o]),
     );
+    const packingOrderById = new Map(linkedPackingOrders.map((po) => [String(po.id), po]));
     const packingOrderToProcessOrder = new Map(
       linkedPackingOrders
         .map((po) => [String(po.id), processOrderById.get(String(po.process_order_id))] as const)
         .filter((entry): entry is [string, JsonRecord] => Boolean(entry[1])),
     );
+
+    const QA_MOVEMENT_PREFIXES = ["P32", "P33", "P34"];
+    function computeRowTier(refType: string, materialType: string, movementTypeCode: string): number {
+      const mvt = toUpperTrimmedString(movementTypeCode);
+      if (QA_MOVEMENT_PREFIXES.some((prefix) => mvt.startsWith(prefix))) return 5;
+      if (refType === "PROC_PO") {
+        if (materialType === "SFG" && mvt === "P101") return 1;
+        if (materialType === "RM" || materialType === "INT") return 2;
+      }
+      if (refType === "PACK_PO") {
+        if (materialType === "FG" && mvt === "P101") return 3;
+        if (materialType === "PM") return 4;
+        if (materialType === "SFG" && mvt === "P261") return 6;
+      }
+      return 7;
+    }
 
     const rows = ledgerRows.map((row) => {
       const doc = docMap.get(String(row.stock_document_id));
@@ -387,8 +456,10 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       const company = companyMap.get(String(row.company_id));
       const refType = toTrimmedString(doc?.reference_document_type);
       const refId = toTrimmedString(doc?.reference_document_id);
-      const recoKey = refId ? `${refId}|${row.material_id}` : "";
-      const reco = recoKey ? recoByOrderMaterial.get(recoKey) : undefined;
+      // Keyed by this exact ledger row's own id — only the line's ORIGINAL anchor posting
+      // matches (see the recoByStockLedgerId build above); a later reversal/correction
+      // posting against the same material is a different stock_ledger row and gets null.
+      const reco = recoByStockLedgerId.get(String(row.id));
 
       let owningOrder: JsonRecord | undefined;
       if (refType === "PROC_PO") owningOrder = processOrderById.get(refId);
@@ -397,6 +468,11 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       const groupPoNumber = owningOrder ? toTrimmedString(owningOrder.po_number) : (toTrimmedString(doc?.reference_document_number) || "UNGROUPED");
 
       const materialType = toUpperTrimmedString(material?.material_type);
+      const tier = computeRowTier(refType, materialType, String(row.movement_type_code ?? ""));
+      // Num Packs / Per Pack only mean anything on the Packing PO's own FG receipt row
+      // (tier 3) -- every other row leaves these null, not zero, since "not applicable"
+      // and "zero packs" are different facts.
+      const packingOrder = tier === 3 ? packingOrderById.get(refId) : undefined;
       return {
         id: row.id,
         company_id: row.company_id,
@@ -420,9 +496,15 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
         standard_qty: reco ? reco.standardQty : null,
         apl_qty: reco ? reco.apl : null,
         variance_qty: reco ? reco.variance : null,
+        num_packs: packingOrder ? packingOrder.num_packs ?? null : null,
+        fill_qty_per_pack: packingOrder ? packingOrder.fill_qty_per_pack ?? null : null,
+        // Tier 1 (Process PO's own SFG receipt) is where every group visually begins —
+        // the frontend bands this row so a long, mixed-date-range list reads as a
+        // sequence of distinct groups instead of one undifferentiated blob.
+        is_group_start: tier === 1,
         _group_po_number: groupPoNumber,
         _created_at: toTrimmedString(row.created_at),
-        _output_priority: materialType === "SFG" || materialType === "FG" ? 0 : 1,
+        _tier: tier,
       };
     });
 
@@ -436,7 +518,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       const groupCompare = (groupMinDate.get(a._group_po_number) ?? "").localeCompare(groupMinDate.get(b._group_po_number) ?? "");
       if (groupCompare !== 0) return groupCompare;
       if (a._group_po_number !== b._group_po_number) return a._group_po_number.localeCompare(b._group_po_number);
-      if (a._output_priority !== b._output_priority) return a._output_priority - b._output_priority;
+      if (a._tier !== b._tier) return a._tier - b._tier;
       const dateCompare = String(a.posting_date ?? "").localeCompare(String(b.posting_date ?? ""));
       if (dateCompare !== 0) return dateCompare;
       return a._created_at.localeCompare(b._created_at);
@@ -444,7 +526,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     for (const row of rows) {
       delete (row as JsonRecord)._group_po_number;
       delete (row as JsonRecord)._created_at;
-      delete (row as JsonRecord)._output_priority;
+      delete (row as JsonRecord)._tier;
     }
 
     return okResponse({
