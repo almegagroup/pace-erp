@@ -108,6 +108,18 @@ function formatNumberOrBlank(value) {
   return Number.isFinite(num) ? num.toLocaleString("en-IN", { maximumFractionDigits: 4 }) : "";
 }
 
+// discrepancy_qty = ge_qty (Invoice Qty) - received_qty (GRN Qty), the exact
+// formula grn.handlers.ts's create-time calc already uses -- positive means
+// the invoice claimed more than what was actually received (shortage),
+// negative means more was received than invoiced (excess).
+function formatQtyVarianceNote(grn) {
+  if (!grn) return "";
+  const discrepancy = grn.discrepancy_qty != null ? Number(grn.discrepancy_qty) : null;
+  if (discrepancy == null || Number.isNaN(discrepancy) || discrepancy === 0) return "None";
+  const magnitude = formatNumberOrBlank(Math.abs(discrepancy));
+  return discrepancy > 0 ? `Shortage ${magnitude}` : `Excess ${magnitude}`;
+}
+
 function udDotClass(status) {
   if (status === "GREEN") return "bg-emerald-500";
   if (status === "YELLOW") return "bg-amber-500";
@@ -173,7 +185,13 @@ function deriveDefaultsForCostType(costType, currentPartyType, defaultChaId) {
 // deductionLines/draft on every relevant change, not from the server.
 function computeLivePreview(grn, draft, costLines, deductionLines) {
   if (!grn || !draft) return null;
-  const receivedQty = Number(grn.received_qty ?? 0);
+  // Considered Qty (business owner, 2026-08-26) drives Payable + Landed
+  // Cost/unit throughout -- never received_qty. Falls back to the fetched
+  // grn.considered_qty, then Invoice Qty, matching the "always prefilled"
+  // rule, if the draft field is somehow blank.
+  const consideredQty = draft.considered_qty !== "" && draft.considered_qty != null
+    ? Number(draft.considered_qty)
+    : Number(grn.considered_qty ?? grn.ge_qty ?? grn.received_qty ?? 0);
   const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : null;
   const hasPackConversion = perPackQty != null && perPackQty > 0;
   const effectiveRate = draft.confirmed_rate !== "" && draft.confirmed_rate != null
@@ -184,10 +202,10 @@ function computeLivePreview(grn, draft, costLines, deductionLines) {
         ? Number(grn.grn_rate)
         : 0;
   const materialGstPct = draft.gst_pct !== "" && draft.gst_pct != null ? Number(draft.gst_pct) : (grn.gst_pct != null ? Number(grn.gst_pct) : 0);
-  const purchaseCost = effectiveRate * receivedQty;
+  const purchaseCost = effectiveRate * consideredQty;
   const purchaseCostGross = purchaseCost * (1 + materialGstPct / 100);
   const baseUomRate = hasPackConversion ? effectiveRate / perPackQty : effectiveRate;
-  const receivedQtyBase = hasPackConversion ? receivedQty * perPackQty : receivedQty;
+  const consideredQtyBase = hasPackConversion ? consideredQty * perPackQty : consideredQty;
 
   let totalCharges = 0;
   const chargesGross = { VENDOR: 0, TRANSPORTER: 0, LAST_MILE_TRANSPORTER: 0, CHA: 0 };
@@ -196,7 +214,7 @@ function computeLivePreview(grn, draft, costLines, deductionLines) {
     let net = Number(line.amount);
     let gross = Number(line.amount);
     if (Number.isNaN(net)) continue;
-    if (line.entry_mode === "PER_UOM") { net *= receivedQtyBase; gross *= receivedQtyBase; }
+    if (line.entry_mode === "PER_UOM") { net *= consideredQtyBase; gross *= consideredQtyBase; }
     if (line.cost_type === "ADDITIONAL_DUTY_IGST") net = 0;
     const gstRate = line.gst_rate === "" || line.gst_rate == null ? 0 : Number(line.gst_rate);
     if (line.has_gst && gstRate > 0) {
@@ -220,7 +238,7 @@ function computeLivePreview(grn, draft, costLines, deductionLines) {
   }
 
   const landedCostTotal = totalCharges + totalDeductions;
-  const landedCostPerUnit = receivedQtyBase > 0 ? baseUomRate + landedCostTotal / receivedQtyBase : baseUomRate;
+  const landedCostPerUnit = consideredQtyBase > 0 ? baseUomRate + landedCostTotal / consideredQtyBase : baseUomRate;
 
   return {
     // Item Value -- business owner, 2026-08-22: "amader business e amra landed
@@ -516,6 +534,9 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       invoice_number: grn.invoice_number ?? "",
       invoice_date: toDDMMYYYY(grn.invoice_date),
       confirmed_rate: grn.confirmed_rate ?? "",
+      // Always prefilled from Invoice Qty if considered_qty was somehow never
+      // set (pre-backfill edge case) -- matches the "always prefilled" rule.
+      considered_qty: grn.considered_qty ?? grn.ge_qty ?? grn.received_qty ?? "",
       revised_payment_date: toDDMMYYYY(grn.revised_payment_date),
       gst_pct: grn.gst_pct ?? "",
       last_mile_transporter_id: grn.last_mile_transporter_id ?? "",
@@ -589,6 +610,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         invoice_number: draft.invoice_number || null,
         invoice_date: draft.invoice_date ? toISODate(draft.invoice_date) : null,
         gst_pct: draft.gst_pct === "" ? null : Number(draft.gst_pct),
+        considered_qty: draft.considered_qty === "" ? null : Number(draft.considered_qty),
         revised_payment_date: draft.revised_payment_date ? toISODate(draft.revised_payment_date) : null,
         clear_revised_payment_date: !draft.revised_payment_date,
         vendor_payable_override: draft.vendor_payable_override === "" ? null : Number(draft.vendor_payable_override),
@@ -808,6 +830,28 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                 </DrawerField>
                 <DrawerField label="Invoice date">
                   <input disabled={readOnly} value={draft.invoice_date} onChange={(event) => setDraft((current) => ({ ...current, invoice_date: event.target.value }))} placeholder="DD-MM-YYYY" className={inputCls} />
+                </DrawerField>
+              </div>
+            </DrawerSection>
+
+            <DrawerSection eyebrow="Quantity" title="Invoice qty, GRN qty and Considered Qty">
+              <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
+                <DrawerField label="Invoice Qty (from GE)">
+                  <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.ge_qty ?? grnDetailQuery.data?.received_qty)} className={inputCls} />
+                </DrawerField>
+                <DrawerField label="GRN Qty (received)">
+                  <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.received_qty)} className={inputCls} />
+                </DrawerField>
+                <DrawerField label="Shortage / Excess">
+                  <input disabled value={formatQtyVarianceNote(grnDetailQuery.data)} className={inputCls} />
+                </DrawerField>
+                <DrawerField label="Considered Qty (drives Payable + Landed Cost)">
+                  <input
+                    disabled={readOnly}
+                    value={draft.considered_qty}
+                    onChange={(event) => setDraft((current) => ({ ...current, considered_qty: event.target.value }))}
+                    className={inputCls}
+                  />
                 </DrawerField>
               </div>
             </DrawerSection>

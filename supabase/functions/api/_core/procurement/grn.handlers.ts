@@ -766,6 +766,10 @@ export async function createAndPostGRNFromLineHandler(
         // Receipt
         ge_qty: geQty,
         received_qty: receivedQty,
+        // AC01 Considered Qty (business owner, 2026-08-26) -- always prefilled
+        // from Invoice Qty (ge_qty) at creation, user-editable in AC01's drawer
+        // thereafter. Drives Payable + Landed Cost/unit, never received_qty.
+        considered_qty: geQty,
         uom_code: geLine.uom_code ?? material.base_uom_code,
         discrepancy_qty: discrepancyQty,
         discrepancy_remarks: discrepancyRemarks,
