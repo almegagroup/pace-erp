@@ -1658,6 +1658,36 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
   }
 }
 
+// §131.2 (2026-08-26): lets PR09's frontend disable po_type options the caller can't
+// actually use (e.g. MTEST for Production, or MTO/HPS/MTS/INT for QA) WITHOUT
+// hardcoding role/department names client-side (CLAUDE.md bug pattern #12 — this
+// exact anti-pattern already bit QAQueuePage.jsx once). It just asks the real ACL
+// engine "can I WRITE to PROD_PO_CREATE / PROD_MTEST_PO_CREATE at this company",
+// same check createProcessOrderHandler itself performs — this is read-only and
+// reveals nothing beyond two booleans, so it's registered skipAcl:true (any
+// authenticated user can ask about their own capability).
+export async function getProcessOrderCreateCapabilityHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    const companyId = toTrimmedString(new URL(req.url).searchParams.get("company_id"));
+    if (!companyId) {
+      return poErr(req, ctx, "PROD_PO_INVALID", 400, "company_id required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    const [standard, mtest] = await Promise.all([
+      canMaintainCompanyResource(ctx, companyId, "PROD_PO_CREATE", "WRITE"),
+      canMaintainCompanyResource(ctx, companyId, "PROD_MTEST_PO_CREATE", "WRITE"),
+    ]);
+    return okResponse({ standard, mtest }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PO_CAPABILITY_CHECK_FAILED";
+    return poErr(req, ctx, code, 500, "Capability check failed");
+  }
+}
+
 export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
@@ -1683,7 +1713,12 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    if (!(await canMaintainCompanyResource(ctx, companyId, "PROD_PO_CREATE", "WRITE"))) {
+    // §131.2 (2026-08-26): MTEST is QA-exclusive, gated by its OWN resource code —
+    // PROD_PO_CREATE stays exactly as it was (Production-only) for every other
+    // po_type. Never widen PROD_PO_CREATE itself to cover MTEST; that would also
+    // hand Production MTEST access, which is not the design.
+    const createResourceCode = poType === "MTEST" ? "PROD_MTEST_PO_CREATE" : "PROD_PO_CREATE";
+    if (!(await canMaintainCompanyResource(ctx, companyId, createResourceCode, "WRITE"))) {
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Process PO for this company.");
     }
 
@@ -2086,6 +2121,13 @@ export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandle
     if (po.po_type === "INT") {
       return poErr(req, ctx, "PROD_PO_QA_NOT_APPLICABLE", 422, "INT Process Orders skip QA approval — finalize directly from STANDARD");
     }
+    // §131.1 (2026-08-26): MTEST also skips this step — Start Batch now requires exactly
+    // STANDARD for MTEST (matching MTS), not QA_APPROVED. Approving here would move status
+    // to QA_APPROVED and strand the PO — Start Batch would then reject it, since it no
+    // longer accepts QA_APPROVED as MTEST's required status.
+    if (po.po_type === "MTEST") {
+      return poErr(req, ctx, "PROD_PO_QA_NOT_APPLICABLE", 422, "MTEST Process Orders skip QA approval — start batch directly from STANDARD");
+    }
 
     const lines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
     if (lines.length === 0) {
@@ -2189,11 +2231,16 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_START_BATCH", "WRITE"))) {
+    // §131.2 (2026-08-26): MTEST is QA-exclusive, gated by its own resource code —
+    // PROD_START_BATCH itself stays Production-only for MTO/HPS/MTS, unchanged.
+    const startBatchResourceCode = po.po_type === "MTEST" ? "PROD_MTEST_START_BATCH" : "PROD_START_BATCH";
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), startBatchResourceCode, "WRITE"))) {
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Start Batch access for this company.");
     }
 
-    const requiredStatus = po.po_type === "MTS" ? "STANDARD" : "QA_APPROVED";
+    // §131.1 (2026-08-26): MTEST joins MTS in skipping the QA_APPROVED gate — QA is the
+    // only actor on an MTEST PO end to end, so there is no separate "QA approves" step to wait for.
+    const requiredStatus = (po.po_type === "MTS" || po.po_type === "MTEST") ? "STANDARD" : "QA_APPROVED";
     if (po.status !== requiredStatus) {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Must be ${requiredStatus} to start batch`);
     }
@@ -2548,14 +2595,24 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
     } catch {
       return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_FINAL", "WRITE"))) {
+    // §131.2 (2026-08-26): MTEST is QA-exclusive, gated by its own resource code —
+    // PROD_PO_FINAL itself stays Production-only for MTO/HPS/MTS/INT, unchanged. This
+    // one gate now covers both the Final write AND the Verify-equivalent posting that
+    // follows it for MTEST (§131.1) — there is no separate PROD_MTEST_PO_VERIFY,
+    // deliberately, since for MTEST that's the same single QA action as Final.
+    const finalResourceCode = po.po_type === "MTEST" ? "PROD_MTEST_PO_FINAL" : "PROD_PO_FINAL";
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), finalResourceCode, "WRITE"))) {
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Final posting access for this company.");
     }
     // Locked 2026-08-12: INT skips QA and Start Batch entirely (no batch number, per
     // §83.5) so it finalizes directly from STANDARD. Every other po_type still needs
-    // BATCH_STARTED (reached via QA approval + Start Batch), MTEST included — MTEST now
-    // runs the exact same Standard->QA->Start Batch->Final lifecycle as MTO/HPS, it just
-    // posts stock at Final instead of Verify (see the postsAtFinal branch below).
+    // BATCH_STARTED (reached via Start Batch — MTEST skips the QA_APPROVED gate before
+    // that per §131.1, but still needs BATCH_STARTED to reach Final). MTEST does NOT use
+    // the postsAtFinal/INT branch below (its posting shape — RM+PM+SFG+QI-release+reco —
+    // is nothing like INT's simple RM-only output) — instead, after the generic FINAL
+    // write further down runs, MTEST calls runProcessOrderVerify() directly (see the
+    // po.po_type === "MTEST" branch right after that write) so Final absorbs Verify in
+    // one request, same posting logic verifyProcessOrderHandler uses for MTO/HPS/MTS.
     const requiredStatus = po.po_type === "INT" ? "STANDARD" : "BATCH_STARTED";
     if (po.status !== requiredStatus) {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Must be ${requiredStatus} to finalize`);
@@ -2640,8 +2697,11 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
       }
     }
 
-    // Locked 2026-08-15 (§120.1): INT is still the only direct-post type at Final.
-    // MTEST now follows the exact same Final(record)->Verify(post) split as MTO/HPS.
+    // INT is the only po_type using THIS branch's simple direct-post shape (RM issue +
+    // single output receipt, no reco, no QI hold). MTEST also now posts at Final
+    // (§131.1, 2026-08-26, superseding the 2026-08-15/§120.1 Final-record/Verify-post
+    // split this comment used to describe) but through the full MTO/HPS-shaped posting
+    // (runProcessOrderVerify, called separately further below) — not this branch.
     const postsAtFinal = po.po_type === "INT";
     if (postsAtFinal) {
       const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
@@ -2817,6 +2877,18 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
       throw new Error("PROD_PO_FINALIZE_FAILED");
     }
 
+    // §131.1 (2026-08-26): MTEST's Final absorbs Verify — QA is the only actor on an
+    // MTEST PO end to end, so there is no separate "QA verifies" click to wait for.
+    // The FINAL write just above still ran (so finalized_at/finalized_by/actual_qty
+    // are set exactly like every other po_type), then this immediately runs the same
+    // posting logic verifyProcessOrderHandler would — same as a user clicking Final
+    // and then Verify back-to-back, just in one request. `po.status` in memory is
+    // still BATCH_STARTED here; runProcessOrderVerify doesn't re-check it (only
+    // verifyProcessOrderHandler's own status gate does), so that's fine.
+    if (po.po_type === "MTEST") {
+      return await runProcessOrderVerify(req, ctx, po, id, allLines, actualQty, applyResult.hasUnapprovedDeviation ?? false);
+    }
+
     return okResponse({ id, status: "FINAL" }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PO_FINALIZE_FAILED";
@@ -2854,7 +2926,29 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     if (applyResult.response) return applyResult.response;
 
     const lines = applyResult.lines ?? await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
-    const stockNeeds = buildLineAvailabilityNeeds(lines);
+    return await runProcessOrderVerify(req, ctx, po, id, lines, verifiedQty, applyResult.hasUnapprovedDeviation ?? false);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PO_VERIFY_FAILED";
+    return poErr(req, ctx, code, 500, `Verify failed: ${err instanceof Error ? err.message : ""}`);
+  }
+}
+
+// §131.1 (2026-08-26): extracted so finalizeProcessOrderHandler can run this same
+// posting logic for MTEST immediately after its own Final write, in one request —
+// MTEST's Final absorbs Verify (no separate QA click), everything else (MTO/HPS/MTS)
+// still reaches this only through the standalone verifyProcessOrderHandler above.
+// Nothing here changed except: (a) this signature, (b) the MTEST conversion-rate
+// exemption noted below. The posting/reco/costing logic is byte-for-byte the same.
+async function runProcessOrderVerify(
+  req: Request,
+  ctx: ProdHandlerContext,
+  po: JsonRecord,
+  id: string,
+  lines: JsonRecord[],
+  verifiedQty: number,
+  hasUnapprovedDeviation: boolean,
+): Promise<Response> {
+  const stockNeeds = buildLineAvailabilityNeeds(lines);
     const shortRows = (await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds, id)).filter((row) => row.short);
     if (shortRows.length > 0) {
       return poErr(
@@ -2898,13 +2992,16 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         })),
     );
     // (b) conversion rate/KG — HARD-BLOCK if not configured for this segment/prodshade/date.
-    const conversionRate = await resolveConversionRate(
+    // §131.1 (2026-08-26): MTEST is exempt — lab samples have no conversion cost concept,
+    // same "0-and-proceed" treatment INT already gets, rather than blocking the posting.
+    const rawConversionRate = await resolveConversionRate(
       String(po.company_id), String(po.segment_code ?? ""), String(po.material_id), today,
     );
-    if (conversionRate === null) {
+    if (rawConversionRate === null && po.po_type !== "MTEST") {
       return poErr(req, ctx, "PROD_PO_CONVERSION_RATE_MISSING", 422,
         "Conversion cost rate is not configured for this segment/prodshade as of the posting date. Set it in the Conversion Cost config before verifying (Section 104.8).");
     }
+    const conversionRate = rawConversionRate ?? 0;
     let totalRmValue = 0;
 
     for (const line of lines) {
@@ -3125,7 +3222,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
           actual_qty: verifiedQty,
           verified_by: ctx.auth_user_id,
           last_updated_by: ctx.auth_user_id,
-          has_unapproved_deviation: applyResult.hasUnapprovedDeviation ?? false,
+          has_unapproved_deviation: hasUnapprovedDeviation,
         },
         reservations: reservationUpdates,
         reco_rows: recoRows,
@@ -3147,10 +3244,6 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         stock_ledger_id: p.stock_ledger_id,
       })),
     }, ctx.request_id, req);
-  } catch (err) {
-    const code = err instanceof Error ? err.message : "PROD_PO_VERIFY_FAILED";
-    return poErr(req, ctx, code, 500, `Verify failed: ${err instanceof Error ? err.message : ""}`);
-  }
 }
 
 const RM_CORRECTION_MOVEMENT_TYPES = new Set(["P261", "P262"]);

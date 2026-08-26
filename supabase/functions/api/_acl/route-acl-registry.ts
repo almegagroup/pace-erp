@@ -430,11 +430,25 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/batch-variance-report":        { skipAcl: false, resourceCode: "PROD_BATCH_VARIANCE", action: "VIEW" },
   "GET:/api/production/process-orders":              { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   "GET:/api/production/process-orders/availability-preview": { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
+  // §131.2 (2026-08-26) — read-only self-capability check (two booleans, nothing else),
+  // any authenticated user may ask about their own grants.
+  "GET:/api/production/process-orders/create-capability": { skipAcl: true },
   "POST:/api/production/process-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+  // §131.2 (2026-08-26) — MTEST-only route, distinct resource code so QA can be granted
+  // this WITHOUT touching PROD_PO_CREATE/PROD_START_BATCH/PROD_PO_FINAL (which stay
+  // Production-only, unchanged, for MTO/HPS/MTS/INT). Same handler as the routes above/
+  // below, just a different URL so this static per-route gate can tell them apart.
+  "POST:/api/production/process-orders/mtest":       { skipAcl: false, resourceCode: "PROD_MTEST_PO_CREATE", action: "WRITE" },
     "GET:/api/production/packing-orders":              { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
     "GET:/api/production/packing-orders/availability-preview": { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
     "GET:/api/production/packing-orders/sfg-batches":  { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
+    // §131.4 item #11 (2026-08-26) — same VIEW-level gate as sfg-batches above (read-only
+    // stock lookup); QA already has PROD_ORDER_LIST:VIEW via CAP_EVERYONE_REPORTS.
+    "GET:/api/production/packing-orders/mtest-sfg-options": { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
     "POST:/api/production/packing-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+    // §131.2 (2026-08-26) — PTEST-only route, distinct resource so QA can be granted
+    // this without touching PROD_PO_CREATE (stays Production-only for PMTO/PHPS/PMTS).
+    "POST:/api/production/packing-orders/mtest":        { skipAcl: false, resourceCode: "PROD_MTEST_PACK_PO_CREATE", action: "WRITE" },
   "GET:/api/production/fg-stock-breakdown":           { skipAcl: false, resourceCode: "PROD_FG_STOCK_BREAKDOWN", action: "VIEW" },
   // Split off PROD_QA_QUEUE 2026-07-29 — PR18 (SFG Result Recording) shared
   // this resource with PR16 (QA Approval Queue), but the two need different
@@ -1409,8 +1423,23 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROD_START_BATCH", action: "WRITE" } },
   },
   {
+    // §131.2 (2026-08-26) — MTEST-only route, same reasoning as the /mtest create
+    // route above: a distinct resource code so QA can be granted this without
+    // touching PROD_START_BATCH (stays Production-only for MTO/HPS/MTS).
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/start-batch-mtest$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_MTEST_START_BATCH", action: "WRITE" } },
+  },
+  {
     pattern: /^\/api\/production\/process-orders\/[^/]+\/finalize$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_FINAL", action: "WRITE" } },
+  },
+  {
+    // §131.2 (2026-08-26) — MTEST-only route. This single resource covers both the
+    // Final write and the Verify-equivalent posting §131.1 has it run afterward —
+    // there is no separate PROD_MTEST_PO_VERIFY, since for MTEST that's the same
+    // one QA action as Final.
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/finalize-mtest$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_MTEST_PO_FINAL", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/production\/process-orders\/[^/]+\/verify$/,
@@ -1468,6 +1497,11 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/production\/packing-orders\/[^/]+\/finalize$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_FINAL", action: "WRITE" } },
+  },
+  {
+    // §131.2 (2026-08-26) — PTEST-only route, same reasoning as its create sibling.
+    pattern: /^\/api\/production\/packing-orders\/[^/]+\/finalize-mtest$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_MTEST_PACK_PO_FINAL", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/production\/packing-orders\/[^/]+\/reverse$/,

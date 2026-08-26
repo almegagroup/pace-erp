@@ -142,13 +142,35 @@ export const availabilityPreviewProcessOrder = (params = {}) => fetchProd(
   },
 );
 export const getProcessOrder = (id) => fetchProd("GET", `/api/production/process-orders/${id}`);
-export const createProcessOrder = (body) => fetchProd("POST", "/api/production/process-orders", body);
+// §131.2 (2026-08-26): { standard, mtest } — which po_type family this user can
+// actually create at this company, so PR09 can disable options it can't use.
+export const getProcessOrderCreateCapability = (companyId) => fetchProd(
+  "GET", "/api/production/process-orders/create-capability", undefined, { company_id: companyId },
+);
+// §131.2 (2026-08-26): MTEST is QA-exclusive, gated by its OWN resource code at the
+// route level (route-acl-registry.ts can't see the request body, so it needs a
+// distinct URL) — createProcessOrder branches on body.po_type itself since that's
+// always present; startBatch/finalizeProcessOrder take an explicit poType param
+// instead, since at that point all the caller has is the existing order/po object.
+export const createProcessOrder = (body) => fetchProd(
+  "POST",
+  body?.po_type === "MTEST" ? "/api/production/process-orders/mtest" : "/api/production/process-orders",
+  body,
+);
 export const updateProcessOrderLines = (id, body) => fetchProd("PATCH", `/api/production/process-orders/${id}/lines`, body);
 export const editProcessOrder = (id, body) => fetchProd("PATCH", `/api/production/process-orders/${id}/edit`, body);
 export const qaApproveProcessOrder = (id) => fetchProd("POST", `/api/production/process-orders/${id}/qa-approve`);
 export const qaRejectProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/qa-reject`, body);
-export const startBatch = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/start-batch`, body ?? {});
-export const finalizeProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/finalize`, body);
+export const startBatch = (id, body, poType) => fetchProd(
+  "POST",
+  `/api/production/process-orders/${id}/${poType === "MTEST" ? "start-batch-mtest" : "start-batch"}`,
+  body ?? {},
+);
+export const finalizeProcessOrder = (id, body, poType) => fetchProd(
+  "POST",
+  `/api/production/process-orders/${id}/${poType === "MTEST" ? "finalize-mtest" : "finalize"}`,
+  body,
+);
 export const verifyProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/verify`, body);
 export const correctProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/correct`, body);
 export const reverseProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/reverse`, body);
@@ -165,11 +187,29 @@ export const listPackingOrders = (p) => fetchProd("GET", "/api/production/packin
 export const getPackingOrder = (id) => fetchProd("GET", `/api/production/packing-orders/${id}`);
 export const availabilityPreviewPackingOrder = (p) => fetchProd("GET", "/api/production/packing-orders/availability-preview", undefined, p);
 export const listPackingSfgBatches = (p) => fetchProd("GET", "/api/production/packing-orders/sfg-batches", undefined, p);
-export const createPackingOrder = (body) => fetchProd("POST", "/api/production/packing-orders", body);
+// §131.2 (2026-08-26): PTEST is QA-exclusive, gated by its own resource code at the
+// route level — same reasoning as createProcessOrder/startBatch/finalizeProcessOrder
+// above. createPackingOrder branches on body.po_type itself (always present);
+// finalizePackingOrder takes an explicit poType param since the caller only has the
+// existing po object at that point.
+export const createPackingOrder = (body) => fetchProd(
+  "POST",
+  body?.po_type === "PTEST" ? "/api/production/packing-orders/mtest" : "/api/production/packing-orders",
+  body,
+);
+// §131.4 item #11: which Prodshade+Stroke combos have SFG stock at L003, for PTEST's
+// Standard-time picker (no Pack BOM SFG row to derive material_id from — item #10).
+export const listMtestSfgProdshadeOptions = (companyId) => fetchProd(
+  "GET", "/api/production/packing-orders/mtest-sfg-options", undefined, { company_id: companyId },
+);
 export const updatePackingOrderLines = (id, body) => fetchProd("PATCH", `/api/production/packing-orders/${id}/lines`, body);
 export const editPackingOrder = (id, body) => fetchProd("PATCH", `/api/production/packing-orders/${id}/edit`, body);
 export const cancelPackingOrder = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/cancel`, body);
-export const finalizePackingOrder = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/finalize`, body);
+export const finalizePackingOrder = (id, body, poType) => fetchProd(
+  "POST",
+  `/api/production/packing-orders/${id}/${poType === "PTEST" ? "finalize-mtest" : "finalize"}`,
+  body,
+);
 export const reversePackingOrder = (id) => fetchProd("POST", `/api/production/packing-orders/${id}/reverse`);
 export const correctPackingOrder = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/correct`, body);
 export const getFgStockBreakdown = (p) => fetchProd("GET", "/api/production/fg-stock-breakdown", undefined, p);

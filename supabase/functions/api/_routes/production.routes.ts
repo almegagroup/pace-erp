@@ -96,6 +96,7 @@ import {
   listProcessOrdersHandler,
   getProcessOrderHandler,
   availabilityPreviewProcessOrderHandler,
+  getProcessOrderCreateCapabilityHandler,
   createProcessOrderHandler,
   updateProcessOrderLinesHandler,
   editProcessOrderHandler,
@@ -115,6 +116,7 @@ import {
   getPackingOrderHandler,
   availabilityPreviewPackingOrderHandler,
   listPackingSfgBatchOptionsHandler,
+  listMtestSfgProdshadeOptionsHandler,
   createPackingOrderHandler,
   updatePackingOrderLinesHandler,
   finalizePackingOrderHandler,
@@ -297,7 +299,18 @@ export async function dispatchProductionRoutes(
       return await listProcessOrdersHandler(req, ctx);
     case "GET:/api/production/process-orders/availability-preview":
       return await availabilityPreviewProcessOrderHandler(req, ctx);
+    // §131.2 (2026-08-26): read-only self-capability check for PR09's Type dropdown —
+    // see the handler's own comment for why this exists instead of a frontend role check.
+    case "GET:/api/production/process-orders/create-capability":
+      return await getProcessOrderCreateCapabilityHandler(req, ctx);
     case "POST:/api/production/process-orders":
+      return await createProcessOrderHandler(req, ctx);
+    // §131.2 (2026-08-26): MTEST-only route, same handler as above — createProcessOrderHandler
+    // itself branches on body.po_type to pick PROD_PO_CREATE vs PROD_MTEST_PO_CREATE, but the
+    // pipeline-level ACL gate (route-acl-registry.ts) is static per-URL and can't see the body,
+    // so MTEST needs its own URL to get its own resource code at that gate too. Never grant QA
+    // WRITE on PROD_PO_CREATE itself — that would also open MTO/HPS/MTS/INT to QA.
+    case "POST:/api/production/process-orders/mtest":
       return await createProcessOrderHandler(req, ctx);
 
     // Packing Orders
@@ -307,7 +320,16 @@ export async function dispatchProductionRoutes(
       return await availabilityPreviewPackingOrderHandler(req, ctx);
     case "GET:/api/production/packing-orders/sfg-batches":
       return await listPackingSfgBatchOptionsHandler(req, ctx);
+    // §131.4 item #11 — which Prodshade+Stroke combos have SFG stock at L003, for
+    // PTEST's Standard-time picker (no Pack BOM SFG row to derive material_id from).
+    case "GET:/api/production/packing-orders/mtest-sfg-options":
+      return await listMtestSfgProdshadeOptionsHandler(req, ctx);
     case "POST:/api/production/packing-orders":
+      return await createPackingOrderHandler(req, ctx);
+    // §131.2 (2026-08-26): PTEST-only route, same handler as above — see the process-orders
+    // /mtest route's comment for why a distinct URL is needed (pipeline ACL gate is static
+    // per-route, can't see body.po_type).
+    case "POST:/api/production/packing-orders/mtest":
       return await createPackingOrderHandler(req, ctx);
     case "GET:/api/production/fg-stock-breakdown":
       return await fgStockBreakdownHandler(req, ctx);
@@ -446,7 +468,16 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/process-orders\/[^/]+\/start-batch$/.test(pathname) && req.method === "POST") {
     return await startBatchHandler(req, ctx);
   }
+  // §131.2: MTEST-only route, same handler — see the create-route comment above for why a
+  // distinct URL (not just the handler's own po_type branch) is needed here.
+  if (/^\/api\/production\/process-orders\/[^/]+\/start-batch-mtest$/.test(pathname) && req.method === "POST") {
+    return await startBatchHandler(req, ctx);
+  }
   if (/^\/api\/production\/process-orders\/[^/]+\/finalize$/.test(pathname) && req.method === "POST") {
+    return await finalizeProcessOrderHandler(req, ctx);
+  }
+  // §131.2: MTEST-only route, same handler — see the create-route comment above.
+  if (/^\/api\/production\/process-orders\/[^/]+\/finalize-mtest$/.test(pathname) && req.method === "POST") {
     return await finalizeProcessOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/process-orders\/[^/]+\/verify$/.test(pathname) && req.method === "POST") {
@@ -490,6 +521,10 @@ export async function dispatchProductionRoutes(
     return await cancelPackingOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/packing-orders\/[^/]+\/finalize$/.test(pathname) && req.method === "POST") {
+    return await finalizePackingOrderHandler(req, ctx);
+  }
+  // §131.2: PTEST-only route, same handler.
+  if (/^\/api\/production\/packing-orders\/[^/]+\/finalize-mtest$/.test(pathname) && req.method === "POST") {
     return await finalizePackingOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/packing-orders\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
