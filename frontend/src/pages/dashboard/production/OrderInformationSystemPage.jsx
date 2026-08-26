@@ -481,8 +481,11 @@ export default function OrderInformationSystemPage() {
             virtualize
             rangeSelect
             // Bands the Process PO's own SFG-101 row (tier 1) so a long, mixed-date-range
-            // list visually reads as a sequence of distinct order-groups.
-            getRowProps={(row) => (row.is_group_start ? { className: "bg-sky-50" } : {})}
+            // list visually reads as a sequence of distinct order-groups. sky-100, not
+            // sky-50 -- sky-50 is nearly imperceptible against white in a dense grid (same
+            // lesson IN14 already learned for its Total row, see TOTAL_ROW_FILL_ARGB there).
+            // Also matches the Excel export's fill color exactly now (see GROUP_START_ROW_FILL_ARGB).
+            getRowProps={(row) => (row.is_group_start ? { className: "bg-sky-100" } : {})}
             maxHeight="calc(100vh - 260px)"
             emptyMessage={reportQ.isLoading ? "Loading..." : "No movements match this criteria."}
           />

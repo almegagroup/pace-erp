@@ -1910,8 +1910,11 @@ export async function getStockHistoryHandler(
     }
 
     // Group by material_id preserving first-seen (sorted) order, emit each
-    // group's own rows followed by its Total row (only when that material
-    // produced more than one row — a lone row's Total would just repeat it).
+    // group's own rows followed by its Total row. Corrected 2026-08-26 (business
+    // owner): every material gets its Total row, even a single-status/location
+    // material whose Total would just repeat that one row — the point is visual
+    // consistency (every material's block ends in the same yellow Total row),
+    // not avoiding a literal duplicate.
     const orderedMaterialIds: string[] = [];
     const rowsByMaterial = new Map<string, typeof detailRows>();
     for (const row of detailRows) {
@@ -1926,7 +1929,7 @@ export async function getStockHistoryHandler(
       const group = rowsByMaterial.get(materialId) ?? [];
       responseRows.push(...group);
       const total = totalsByMaterial.get(materialId);
-      if (total && group.length > 1) {
+      if (total) {
         responseRows.push(total);
       }
     }
