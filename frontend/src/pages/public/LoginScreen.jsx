@@ -32,7 +32,14 @@ export default function LoginScreen() {
     if (loading) return;
 
     if (!identifier || !password) {
-      setError("Please enter identifier and password");
+      setError("Please enter your PACE User ID and password");
+      return;
+    }
+
+    if (identifier.includes("@")) {
+      setError(
+        "Login with Email ID is disabled. Please use your PACE User ID (e.g., P0004) to log in."
+      );
       return;
     }
 
@@ -64,7 +71,7 @@ export default function LoginScreen() {
       const code = err?.message || "UNKNOWN";
 
       if (code === "INVALID_LOGIN") {
-        message = "Invalid UserID or password";
+        message = "Invalid PACE User ID or password";
       }
 
       setError(`${message} (${code})`);
@@ -89,11 +96,11 @@ export default function LoginScreen() {
       <form onSubmit={handleLogin} className="space-y-4">
         <div className="space-y-2">
           <label className="block text-sm font-medium text-slate-700">
-            Email or User ID
+            PACE User ID
           </label>
           <input
             type="text"
-            placeholder="erp@company.com / P000X"
+            placeholder="P000X"
             value={identifier}
             onChange={(e) => setIdentifier(e.target.value)}
             onKeyDown={handleKeyDown}
