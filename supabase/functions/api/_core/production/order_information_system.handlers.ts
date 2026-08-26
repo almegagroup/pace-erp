@@ -360,7 +360,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
         : Promise.resolve({ data: [], error: null }),
       packingOrderIds.length > 0
         ? serviceRoleClient.schema("erp_production").from("packing_order_line_reco")
-            .select("packing_order_line_id, ap_approved_qty, variance_qty")
+            .select("packing_order_line_id, ap_approved_qty, variance_qty, standard_qty")
             .in("packing_order_id", packingOrderIds).eq("is_voided", false)
         : Promise.resolve({ data: [], error: null }),
     ]);
@@ -388,8 +388,12 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       recoByPackLineId.set(key, {
         apl: prev.apl + (Number(row.ap_approved_qty) || 0),
         variance: prev.variance + (Number(row.variance_qty) || 0),
+        // Corrected 2026-08-26: packing_order_line_reco.standard_qty IS a real, populated
+        // column (qty_per_pack x num_packs at Final) -- this was previously discarded as
+        // null, even though the data existed. There is genuinely no dosage_pct column for
+        // PM (Pack BOM has no %-based concept, only qty_per_pack), so that stays null.
         dosagePct: null,
-        standardQty: null,
+        standardQty: (prev.standardQty ?? 0) + (Number(row.standard_qty) || 0),
       });
     }
 
