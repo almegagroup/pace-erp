@@ -5181,3 +5181,31 @@ one entry fixes both. No backend/ACL change -- this is purely the frontend's own
 click-through (no dev login in this environment) -- verified by tracing the exact guard code path
 (`HiddenRouteRedirect.jsx`/`DeepLinkGuard.jsx` -> `useMenu().allowedRoutes` -> `buildRouteIndex()`)
 against the reported symptom.
+
+---
+
+### 2026-08-26 — GRN 2000000019 (VISFLOW VW 220, CMP006): GE Qty data correction (MCP, prod only)
+
+Business owner traced a real invoice/GE mismatch via AC01: CSN 3000000010's Dispatch Qty = 29870 KG
+(the real invoice qty for invoice 26511702), but the linked GE (1000000016) and GRN (2000000019) both
+had `ge_qty = 29770 KG` -- 100 KG short of what the vendor actually invoiced/dispatched. Business
+owner confirmed the correct figure is 29870 and asked to correct GE Qty so AC01 follows.
+
+**Traced why AC01 needed a direct fix, not just the GE record:** AC01's `invoice_qty` column
+(`ac01.handlers.ts:361`, `grn.ge_qty ?? grn.received_qty`) reads `erp_procurement.goods_receipt`'s
+own `ge_qty` column directly -- a value snapshotted onto the GRN row at GRN-creation time, not a live
+join back to `gate_entry_line`. Editing only `gate_entry_line.ge_qty` would correct the Gate Entry
+record but leave AC01 (and the GRN's own discrepancy calc) still showing the old 29770.
+
+**Fix (MCP direct SQL, prod only -- R-04, real transactional data, not schema/config):**
+- `gate_entry_line.ge_qty` (id `5b8f318b-...`): 29770 -> 29870.
+- `goods_receipt.ge_qty` (grn_number `2000000019`): 29770 -> 29870.
+- `goods_receipt.discrepancy_qty` recalculated to match the same formula the create-handler itself
+  uses (`ge_qty - received_qty`, `grn.handlers.ts:653`): 0 -> 100.
+
+**Deliberately untouched:** `received_qty` (29770, the actual weighed/received qty -- this is real,
+GE Qty correcting to the true invoice figure doesn't change what physically arrived), `grn_rate`/
+`po_rate`/`invoice_rate`/`confirmed_rate`, and `stock_ledger_id` -- no stock posting or vendor-payable
+figure is affected (`vendorPayable = effectiveRate * receivedQty` in AC01 never reads `ge_qty`).
+Purely a reference-field correction; AC01's Invoice Qty column and the GRN's own discrepancy figure
+now correctly read 29870/100. Dev untouched -- this is prod-specific transactional data.
