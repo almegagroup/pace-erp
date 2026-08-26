@@ -91,6 +91,7 @@ import {
   checkOrderedStrokeHandler,
   listStrokeOptionsHandler,
   findPlanFeedByNumberHandler,
+  listMtestSkusHandler,
 } from "../_core/production/plan_feed.handlers.ts";
 import {
   listProcessOrdersHandler,
@@ -285,6 +286,8 @@ export async function dispatchProductionRoutes(
       return await listStrokeOptionsHandler(req, ctx);
     case "GET:/api/production/plan-feed/find":
       return await findPlanFeedByNumberHandler(req, ctx);
+    case "GET:/api/production/plan-feed/mtest-skus":
+      return await listMtestSkusHandler(req, ctx);
 
     // PR24 Order Information System
     case "GET:/api/production/order-information-system":

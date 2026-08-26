@@ -241,9 +241,22 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
     if (strokeIds.length > 0) {
       const { data: strokes } = await serviceRoleClient
         .schema("erp_production").from("stroke_master")
-        .select("id, stroke_number")
+        .select("id, stroke_number, prodshade_material_id")
         .in("id", strokeIds);
-      strokeMap = new Map(((strokes ?? []) as JsonRecord[]).map((s) => [String(s.id), s]));
+      // §131.5 item #3 (2026-08-26) -- an MTEST FO's allocated Packing POs can each draw
+      // from a different Prodshade's batch (§131.4 item #11 picker, since the 5 generic
+      // sample SKUs have no fixed Prodshade of their own) -- unlike a normal FO where
+      // every allocated Packing PO shares the FO's own single SKU-derived Prodshade. The
+      // Prodshade name travels alongside the Stroke here so the Edit page can disambiguate.
+      const prodshadeMaterialIds = [...new Set(((strokes ?? []) as JsonRecord[]).map((s) => String(s.prodshade_material_id ?? "")).filter(Boolean))];
+      const prodshadeMaterialMap = await getMaterialMapByIds(prodshadeMaterialIds);
+      strokeMap = new Map(((strokes ?? []) as JsonRecord[]).map((s) => {
+        const prod = prodshadeMaterialMap.get(String(s.prodshade_material_id ?? ""));
+        return [String(s.id), {
+          ...s,
+          prodshade_name: prod ? (toTrimmedString(prod.material_name) || toTrimmedString(prod.document_name) || null) : null,
+        }];
+      }));
     }
     for (const po of (procOrders ?? []) as JsonRecord[]) {
       strokeByProcessOrder.set(String(po.id), {
@@ -365,6 +378,23 @@ export async function getPlanFeedHandler(req: Request, ctx: ProdHandlerContext):
         .filter(Boolean)
         .map((s) => (s as JsonRecord).stroke_number as string),
     )];
+    // §131.5 item #3 -- prodshade-qualified companion to actual_stroke_numbers above,
+    // deduped by (prodshade, stroke) pair rather than stroke_number alone, since an
+    // MTEST FO's allocations can span different Prodshades whose stroke numbers may
+    // coincidentally collide. Non-MTEST FOs always resolve to one Prodshade, so this is
+    // harmless there too -- the frontend only renders it for MTEST-typed FOs.
+    const actualStrokeDetails = [...new Map(
+      allocations
+        .map((a) => (a.packing_order as JsonRecord | null)?.actual_stroke as JsonRecord | null)
+        .filter(Boolean)
+        .map((s) => {
+          const stroke = s as JsonRecord;
+          return [`${stroke.stroke_number}|${stroke.prodshade_name ?? ""}`, {
+            stroke_number: stroke.stroke_number as string,
+            prodshade_name: (stroke.prodshade_name as string | null) ?? null,
+          }];
+        }),
+    ).values()];
 
     return okResponse({
       data: {
@@ -373,6 +403,7 @@ export async function getPlanFeedHandler(req: Request, ctx: ProdHandlerContext):
         party: customerMap.get(String(row.party_id ?? "")) ?? null,
         allocations,
         actual_stroke_numbers: actualStrokeNumbers,
+        actual_stroke_details: actualStrokeDetails,
       },
     }, ctx.request_id, req);
   } catch (err) {
@@ -905,6 +936,61 @@ export async function listStrokeOptionsHandler(req: Request, ctx: ProdHandlerCon
   }
 }
 
+// GET /api/production/plan-feed/mtest-skus?company_id=
+// §131.5 item #1 (2026-08-26 Plan Feed changes, LOCKED) -- when an FO's PO Type is
+// MTEST, the SKU field must be restricted to ONLY the 5 generic MTEST sample SKUs
+// (§131.4 item #1) -- no ad-hoc/new SKU creation in that context, unlike MTO/HPS/MTS
+// where SkuTypeaheadField's free-text path is intentional. Discriminated the same way
+// as Pack BOM (§131.4 item #10) and Packing PO's Prodshade+Stroke picker (§131.4 item
+// #11): pack_code_master.pack_type = 'MTEST', not bom_required (599/000 also have
+// bom_required=false but have real, resolvable Prodshades).
+export async function listMtestSkusHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    if (!companyId) return foErr(req, ctx, "PROD_PLAN_FEED_MTEST_SKUS_INVALID", 400, "company_id required");
+    await assertCompanyScope(ctx, companyId);
+
+    const { data: extRows, error: extErr } = await serviceRoleClient
+      .schema("erp_master").from("material_company_ext")
+      .select("material_id")
+      .eq("company_id", companyId)
+      .eq("status", "ACTIVE");
+    if (extErr) {
+      console.error("[plan_feed.listMtestSkus] company-ext query failed:", JSON.stringify(extErr));
+      throw new Error("PROD_PLAN_FEED_MTEST_SKUS_FAILED");
+    }
+    const materialIds = [...new Set(((extRows ?? []) as JsonRecord[]).map((r) => String(r.material_id ?? "")).filter(Boolean))];
+    if (materialIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const skuRows = await fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
+      serviceRoleClient.schema("erp_master").from("material_master")
+        .select("id, pace_code, external_code, material_name, document_name, pack_code, status")
+        .in("id", idChunk)
+        .eq("material_type", "FG")
+        .eq("status", "ACTIVE"));
+    if (skuRows.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const packCodes = [...new Set(skuRows.map((s) => toTrimmedString(s.pack_code)).filter(Boolean))];
+    const { data: packCodeRows, error: packErr } = await serviceRoleClient
+      .schema("erp_production").from("pack_code_master")
+      .select("pack_code, pack_type")
+      .in("pack_code", packCodes);
+    if (packErr) {
+      console.error("[plan_feed.listMtestSkus] pack-code query failed:", JSON.stringify(packErr));
+      throw new Error("PROD_PLAN_FEED_MTEST_SKUS_FAILED");
+    }
+    const packTypeByCode = new Map(((packCodeRows ?? []) as JsonRecord[]).map((p) => [toTrimmedString(p.pack_code), toUpperTrimmedString(p.pack_type)]));
+
+    const mtestSkus = skuRows.filter((s) => packTypeByCode.get(toTrimmedString(s.pack_code)) === "MTEST");
+    return okResponse({ data: mtestSkus }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_MTEST_SKUS_FAILED";
+    return foErr(req, ctx, code, 500, "MTEST SKU lookup failed");
+  }
+}
+
 // Batched SKU -> Prodshade resolution for the Total Table's "ordered stroke missing"
 // check -- one prodshade_pack_config fetch for the whole page instead of one per row.
 async function resolveProdshadeMapForMaterials(materialIds: string[]): Promise<Map<string, string>> {
@@ -1018,10 +1104,17 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     // this table immediately, no extra sync step.
     const partyIds = [...new Set((fos as JsonRecord[]).map((f) => toTrimmedString(f.party_id)).filter(Boolean))];
     const townRows = await fetchInChunks<JsonRecord>(partyIds, (idChunk) =>
-      serviceRoleClient.schema("erp_master").from("customer_master").select("id, town").in("id", idChunk));
+      serviceRoleClient.schema("erp_master").from("customer_master").select("id, town, fo_customer_type").in("id", idChunk));
     const townByPartyId = new Map<string, string | null>();
+    // §131.5 item #4 -- the FO's PO Type isn't stored on plan_feed itself, it's always
+    // derived from the party's own fo_customer_type (same convention the page's "PO Type
+    // (for Party filter)" dropdown already uses) -- resolved here so the Total Table can
+    // decide whether to show Prodshade alongside each mapped batch number below.
+    const foTypeByPartyId = new Map<string, string | null>();
     for (const row of townRows) {
       townByPartyId.set(String(row.id), (row.town as string | null) ?? null);
+      const rawType = toUpperTrimmedString(row.fo_customer_type as string | null);
+      foTypeByPartyId.set(String(row.id), rawType === "ZTEST" ? "MTEST" : (rawType || null));
     }
 
     // §83.18-REVISED: flag rows whose Ordered Stroke isn't (yet) in Stroke Master --
@@ -1063,7 +1156,8 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     }
 
     const poIds = [...new Set(((allocs ?? []) as JsonRecord[]).map((row) => String(row.packing_order_id ?? "")).filter(Boolean))];
-    const batchByPoId = new Map<string, string>();
+    type BatchInfo = { batch_number: string; prodshade_name: string | null; stroke_number: string | null };
+    const batchByPoId = new Map<string, BatchInfo>();
     if (poIds.length > 0) {
       const { data: packingOrders, error: poErr } = await serviceRoleClient
         .schema("erp_production").from("packing_order")
@@ -1072,22 +1166,59 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       if (poErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
 
       const processOrderIds = [...new Set(((packingOrders ?? []) as JsonRecord[]).map((row) => String(row.process_order_id ?? "")).filter(Boolean))];
-      const batchByProcessOrderId = new Map<string, string>();
+      const batchByProcessOrderId = new Map<string, { batch_number: string; stroke_master_id: string | null }>();
       if (processOrderIds.length > 0) {
         const { data: processOrders, error: procErr } = await serviceRoleClient
           .schema("erp_production").from("process_order")
-          .select("id, batch_number")
+          .select("id, batch_number, stroke_master_id")
           .in("id", processOrderIds);
         if (procErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
         for (const row of (processOrders ?? []) as JsonRecord[]) {
           const batchNumber = toTrimmedString(row.batch_number);
-          if (batchNumber) batchByProcessOrderId.set(String(row.id), batchNumber);
+          if (batchNumber) {
+            batchByProcessOrderId.set(String(row.id), {
+              batch_number: batchNumber,
+              stroke_master_id: toTrimmedString(row.stroke_master_id) || null,
+            });
+          }
+        }
+      }
+
+      // §131.5 item #4 -- resolve each batch's Prodshade + Stroke so the Total Table can
+      // show both alongside the batch number for MTEST FOs (different mapped Packing POs
+      // there can belong to entirely different Prodshades, unlike a regular FO's single
+      // shared one).
+      const strokeMasterIds = [...new Set(
+        [...batchByProcessOrderId.values()].map((v) => v.stroke_master_id).filter(Boolean) as string[],
+      )];
+      const strokeInfoByStrokeId = new Map<string, { prodshade_name: string | null; stroke_number: string | null }>();
+      if (strokeMasterIds.length > 0) {
+        const { data: strokeRows, error: strokeErr } = await serviceRoleClient
+          .schema("erp_production").from("stroke_master")
+          .select("id, stroke_number, prodshade_material_id")
+          .in("id", strokeMasterIds);
+        if (strokeErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
+        const prodshadeMaterialIds = [...new Set(((strokeRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.prodshade_material_id)).filter(Boolean))];
+        const prodshadeMaterialMap = await getMaterialMapByIds(prodshadeMaterialIds);
+        for (const row of (strokeRows ?? []) as JsonRecord[]) {
+          const prod = prodshadeMaterialMap.get(toTrimmedString(row.prodshade_material_id));
+          strokeInfoByStrokeId.set(String(row.id), {
+            prodshade_name: prod ? (toTrimmedString(prod.material_name) || toTrimmedString(prod.document_name) || null) : null,
+            stroke_number: toTrimmedString(row.stroke_number) || null,
+          });
         }
       }
 
       for (const row of (packingOrders ?? []) as JsonRecord[]) {
-        const batchNumber = batchByProcessOrderId.get(String(row.process_order_id ?? ""));
-        if (batchNumber) batchByPoId.set(String(row.id), batchNumber);
+        const info = batchByProcessOrderId.get(String(row.process_order_id ?? ""));
+        if (info) {
+          const strokeInfo = info.stroke_master_id ? strokeInfoByStrokeId.get(info.stroke_master_id) : undefined;
+          batchByPoId.set(String(row.id), {
+            batch_number: info.batch_number,
+            prodshade_name: strokeInfo?.prodshade_name ?? null,
+            stroke_number: strokeInfo?.stroke_number ?? null,
+          });
+        }
       }
     }
 
@@ -1100,10 +1231,16 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       const allocatedKg = foAllocs.reduce((s, a) => s + (Number(a.allocated_qty_kg) || 0), 0);
       const mappedBatchNumbers = [...new Set(
         foAllocs
-          .map((a) => batchByPoId.get(String(a.packing_order_id ?? "")) ?? "")
+          .map((a) => batchByPoId.get(String(a.packing_order_id ?? ""))?.batch_number ?? "")
           .map((batch) => batch.trim())
           .filter(Boolean),
       )];
+      const mappedBatchDetails = mappedBatchNumbers.map((batchNumber) => {
+        const info = foAllocs
+          .map((a) => batchByPoId.get(String(a.packing_order_id ?? "")))
+          .find((i) => i?.batch_number === batchNumber);
+        return { batch_number: batchNumber, prodshade_name: info?.prodshade_name ?? null, stroke_number: info?.stroke_number ?? null };
+      });
       const orderedKg = Number(fo.ordered_qty_kg) || 0;
       const dispatchedKg = 0;
       const strokeNumber = toTrimmedString(fo.ordered_stroke_number);
@@ -1118,6 +1255,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         fo_number: fo.fo_number,
         party_name: fo.party_name,
         party_town: fo.party_id ? (townByPartyId.get(toTrimmedString(fo.party_id)) ?? null) : null,
+        fo_customer_type: fo.party_id ? (foTypeByPartyId.get(toTrimmedString(fo.party_id)) ?? null) : null,
         sku: fo.sku,
         description: fo.description,
         ordered_qty_kg: orderedKg,
@@ -1130,6 +1268,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         allocated_qty_kg: allocatedKg,
         packing_po_count: foAllocs.length,
         mapped_batch_numbers: mappedBatchNumbers,
+        mapped_batch_details: mappedBatchDetails,
         production_status: computeProductionStatus(orderedKg, allocatedKg),
         dispatched_qty_kg: dispatchedKg,
         dispatch_status: "UNDISPATCHED",

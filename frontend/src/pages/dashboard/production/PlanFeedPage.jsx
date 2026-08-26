@@ -23,7 +23,7 @@ import {
   listPlanFeed, getPlanFeed, createPlanFeed, updatePlanFeed,
   cancelPlanFeed, reactivatePlanFeed, getPlanFeedSummary, upsertFoAllocation,
   getUnmappedStock, checkOrderedStroke, listStrokeOptions, listPackingOrders,
-  findPlanFeedByNumber,
+  findPlanFeedByNumber, listMtestSkus,
 } from "./prodApi.js";
 import { listMaterials, listCustomers, updateCustomer } from "../om/omApi.js";
 
@@ -206,6 +206,19 @@ export default function PlanFeedPage() {
     queryFn: () => listMaterials({ material_type: "FG", status: "ACTIVE", limit: 500 }),
     select: (d) => d?.data ?? [],
   });
+  // §131.5 item #1 -- when the FO is MTEST-typed, the SKU field is restricted to ONLY
+  // these 5 generic sample SKUs (no ad-hoc/new SKU creation), unlike MTO/HPS/MTS which
+  // use materialsQ + the free-text SkuTypeaheadField.
+  const mtestSkusQ = useQuery({
+    queryKey: ["plan-feed-mtest-skus", effectiveCompanyId],
+    queryFn: () => listMtestSkus({ company_id: effectiveCompanyId }),
+    enabled: Boolean(effectiveCompanyId),
+    select: (d) => d?.data ?? [],
+  });
+  const mtestSkuOptions = useMemo(
+    () => (mtestSkusQ.data ?? []).map((m) => ({ value: m.id, label: materialLabel(m) })),
+    [mtestSkusQ.data],
+  );
   const normalizedCustomers = useMemo(
     () => (customersQ.data ?? []).map((customer) => ({
       ...customer,
@@ -225,6 +238,7 @@ export default function PlanFeedPage() {
   const [editPartyOpen, setEditPartyOpen] = useState(false);
 
   const selectedParty = customerMap.get(form.party_id) ?? null;
+  const isMtestCreate = poTypeFilter === "MTEST";
 
   const strokeCheckQ = useQuery({
     queryKey: ["plan-feed-stroke-check", effectiveCompanyId, form.material_id, form.ordered_stroke_number],
@@ -337,6 +351,11 @@ export default function PlanFeedPage() {
   }, [listQ.data, editSearch]);
 
   const skuLockedForEdit = Boolean(editData?.allocations?.length);
+  // §131.5 -- the FO's type isn't stored on plan_feed itself, it's always derived from
+  // its party's own fo_customer_type (embedded server-side in getPlanFeedHandler's
+  // `party` object) -- more reliable here than the page-local poTypeFilter/customerMap,
+  // which only reflect whichever PO Type the Create tab's filter happens to be set to.
+  const isMtestEdit = normalizeFoCustomerType(editData?.party?.fo_customer_type) === "MTEST";
 
   const editStrokeOptionsQ = useQuery({
     queryKey: ["plan-feed-stroke-options", editData?.company_id, editDraft.material_id],
@@ -687,21 +706,41 @@ export default function PlanFeedPage() {
 
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">SKU <span className="text-rose-500">*</span></label>
-              <SkuTypeaheadField
-                skuText={form.sku}
-                materials={materialsQ.data ?? []}
-                placeholder="Type SKU — pick a match, or keep typing for a new one"
-                onTextChange={(text) => setForm(f => ({ ...f, sku: text, material_id: "" }))}
-                onPickMaterial={(m) => setForm(f => ({
-                  ...f,
-                  sku: m.external_code || m.pace_code || f.sku,
-                  material_id: m.id,
-                  description: m.document_name || m.material_name || f.description,
-                }))}
-              />
-              {form.material_id
-                ? <span className="text-[11px] text-emerald-700">Linked to an existing FG material.</span>
-                : <span className="text-[11px] text-amber-700">No existing material picked — will be saved as a new/free-text SKU.</span>}
+              {isMtestCreate ? (
+                <ErpComboboxField
+                  value={form.material_id}
+                  onChange={(v) => {
+                    const m = (mtestSkusQ.data ?? []).find((row) => row.id === v);
+                    setForm(f => ({
+                      ...f,
+                      material_id: v,
+                      sku: m?.external_code || m?.pace_code || "",
+                      description: m?.document_name || m?.material_name || f.description,
+                    }));
+                  }}
+                  options={mtestSkuOptions}
+                  placeholder="-- Select MTEST sample SKU --"
+                  emptyStateLabel={mtestSkusQ.isLoading ? "Loading..." : "No MTEST sample SKUs mapped to this company"}
+                />
+              ) : (
+                <>
+                  <SkuTypeaheadField
+                    skuText={form.sku}
+                    materials={materialsQ.data ?? []}
+                    placeholder="Type SKU — pick a match, or keep typing for a new one"
+                    onTextChange={(text) => setForm(f => ({ ...f, sku: text, material_id: "" }))}
+                    onPickMaterial={(m) => setForm(f => ({
+                      ...f,
+                      sku: m.external_code || m.pace_code || f.sku,
+                      material_id: m.id,
+                      description: m.document_name || m.material_name || f.description,
+                    }))}
+                  />
+                  {form.material_id
+                    ? <span className="text-[11px] text-emerald-700">Linked to an existing FG material.</span>
+                    : <span className="text-[11px] text-amber-700">No existing material picked — will be saved as a new/free-text SKU.</span>}
+                </>
+              )}
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">Description</label>
@@ -888,19 +927,38 @@ export default function PlanFeedPage() {
                     <label className="text-xs text-slate-600 font-medium">
                       SKU {skuLockedForEdit ? <span className="text-amber-600">(locked — allocations exist)</span> : null}
                     </label>
-                    <SkuTypeaheadField
-                      skuText={editDraft.sku ?? ""}
-                      materials={materialsQ.data ?? []}
-                      placeholder="Type SKU — pick a match, or keep typing for a new one"
-                      disabled={editData.status === "CANCELLED" || skuLockedForEdit}
-                      onTextChange={(text) => setEditDraft(d => ({ ...d, sku: text, material_id: "" }))}
-                      onPickMaterial={(m) => setEditDraft(d => ({
-                        ...d,
-                        sku: m.external_code || m.pace_code || d.sku,
-                        material_id: m.id,
-                        description: m.document_name || m.material_name || d.description,
-                      }))}
-                    />
+                    {isMtestEdit ? (
+                      <ErpComboboxField
+                        value={editDraft.material_id}
+                        onChange={(v) => {
+                          const m = (mtestSkusQ.data ?? []).find((row) => row.id === v);
+                          setEditDraft(d => ({
+                            ...d,
+                            material_id: v,
+                            sku: m?.external_code || m?.pace_code || "",
+                            description: m?.document_name || m?.material_name || d.description,
+                          }));
+                        }}
+                        options={mtestSkuOptions}
+                        placeholder="-- Select MTEST sample SKU --"
+                        emptyStateLabel={mtestSkusQ.isLoading ? "Loading..." : "No MTEST sample SKUs mapped to this company"}
+                        disabled={editData.status === "CANCELLED" || skuLockedForEdit}
+                      />
+                    ) : (
+                      <SkuTypeaheadField
+                        skuText={editDraft.sku ?? ""}
+                        materials={materialsQ.data ?? []}
+                        placeholder="Type SKU — pick a match, or keep typing for a new one"
+                        disabled={editData.status === "CANCELLED" || skuLockedForEdit}
+                        onTextChange={(text) => setEditDraft(d => ({ ...d, sku: text, material_id: "" }))}
+                        onPickMaterial={(m) => setEditDraft(d => ({
+                          ...d,
+                          sku: m.external_code || m.pace_code || d.sku,
+                          material_id: m.id,
+                          description: m.document_name || m.material_name || d.description,
+                        }))}
+                      />
+                    )}
                   </div>
                   <div className="flex flex-col gap-1 col-span-2">
                     <label className="text-xs text-slate-600 font-medium">
@@ -943,9 +1001,19 @@ export default function PlanFeedPage() {
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Actual Stroke(s)</label>
                     <div className="border border-slate-200 bg-slate-50 rounded px-2 py-1.5 text-sm text-slate-600 min-h-[34px]">
-                      {(editData.actual_stroke_numbers ?? []).length > 0
-                        ? editData.actual_stroke_numbers.map((s) => <div key={s}>{s}</div>)
-                        : "-- none yet --"}
+                      {isMtestEdit ? (
+                        (editData.actual_stroke_details ?? []).length > 0
+                          ? editData.actual_stroke_details.map((s) => (
+                            <div key={`${s.prodshade_name ?? ""}|${s.stroke_number}`}>
+                              {s.prodshade_name ? `${s.prodshade_name} — ${s.stroke_number}` : s.stroke_number}
+                            </div>
+                          ))
+                          : "-- none yet --"
+                      ) : (
+                        (editData.actual_stroke_numbers ?? []).length > 0
+                          ? editData.actual_stroke_numbers.map((s) => <div key={s}>{s}</div>)
+                          : "-- none yet --"
+                      )}
                     </div>
                   </div>
                   <div className="col-span-2 flex gap-3 pt-2">
@@ -1127,11 +1195,25 @@ export default function PlanFeedPage() {
                       <td className="py-2 px-3 text-right font-mono">{row.pack_qty ?? "--"}</td>
                       <td className="py-2 px-3 text-right font-mono">{fmt(row.allocated_qty_kg)}</td>
                       <td className="py-2 px-3 font-mono text-xs text-slate-600">
-                        {(row.mapped_batch_numbers ?? []).length > 0
-                          ? row.mapped_batch_numbers.map((batchNo) => (
-                            <div key={batchNo}>{batchNo}</div>
-                          ))
-                          : ""}
+                        {normalizeFoCustomerType(row.fo_customer_type) === "MTEST" ? (
+                          (row.mapped_batch_details ?? []).length > 0
+                            ? row.mapped_batch_details.map((info) => {
+                              const suffix = [info.prodshade_name, info.stroke_number].filter(Boolean).join(" — ");
+                              return (
+                                <div key={info.batch_number}>
+                                  {info.batch_number}
+                                  {suffix ? <span className="text-slate-400"> — {suffix}</span> : null}
+                                </div>
+                              );
+                            })
+                            : ""
+                        ) : (
+                          (row.mapped_batch_numbers ?? []).length > 0
+                            ? row.mapped_batch_numbers.map((batchNo) => (
+                              <div key={batchNo}>{batchNo}</div>
+                            ))
+                            : ""
+                        )}
                       </td>
                       <td className="py-2 px-3 text-center">
                         <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${productionStatusTone(row.production_status)}`}>

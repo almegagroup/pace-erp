@@ -129,6 +129,7 @@ export const getUnmappedStock = (p) => fetchProd("GET", "/api/production/plan-fe
 export const checkOrderedStroke = (p) => fetchProd("GET", "/api/production/plan-feed/check-stroke", undefined, p);
 export const listStrokeOptions = (p) => fetchProd("GET", "/api/production/plan-feed/stroke-options", undefined, p);
 export const findPlanFeedByNumber = (p) => fetchProd("GET", "/api/production/plan-feed/find", undefined, p);
+export const listMtestSkus = (p) => fetchProd("GET", "/api/production/plan-feed/mtest-skus", undefined, p);
 
 // ── Process Orders ────────────────────────────────────────────────────────────
 export const listProcessOrders = (p) => fetchProd("GET", "/api/production/process-orders", undefined, p);
