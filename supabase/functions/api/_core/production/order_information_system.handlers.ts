@@ -346,12 +346,19 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     for (const row of (procRecoResp.data ?? []) as JsonRecord[]) {
       const key = `${row.process_order_id}|${row.material_id}`;
       const prev = recoByOrderMaterial.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
+      const rowDosagePct = row.dosage_pct != null ? Number(row.dosage_pct) : null;
       recoByOrderMaterial.set(key, {
         apl: prev.apl + (Number(row.ap_approved_qty) || 0),
         variance: prev.variance + (Number(row.variance_qty) || 0),
-        // dosage_pct is a fixed recipe attribute for this material, not a per-event value —
-        // take it as-is rather than summing (identical across every reco row for this pairing).
-        dosagePct: row.dosage_pct != null ? Number(row.dosage_pct) : prev.dosagePct,
+        // Corrected 2026-08-26: dosage_pct is NOT guaranteed identical across every reco
+        // row for this pairing — Stroke Master explicitly allows the same RM to appear on
+        // more than one line at different dosage%s (§83.3), and a live prod example
+        // confirmed it (CMP003 PO 9300000061, WATER: 29.5% + 6.45% across two real
+        // PRODUCTION reco rows). The old "take the last non-null value" logic silently
+        // dropped every line but one. Sum instead, like apl/standardQty already do — a
+        // null-dosage row (e.g. a COR6_CORRECTION line with no recipe % of its own) adds
+        // nothing rather than resetting the running total.
+        dosagePct: rowDosagePct != null ? (prev.dosagePct ?? 0) + rowDosagePct : prev.dosagePct,
         standardQty: (prev.standardQty ?? 0) + (Number(row.standard_qty) || 0),
       });
     }
