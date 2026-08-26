@@ -18,6 +18,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -33,6 +34,28 @@ import {
 type JsonRecord = Record<string, unknown>;
 
 const QTY_TOL = 0.0005;
+
+function isMtestParty(party: JsonRecord | undefined): boolean {
+  const type = toUpperTrimmedString(party?.fo_customer_type);
+  return type === "MTEST" || type === "ZTEST";
+}
+
+async function assertMtestPlanFeed(
+  req: Request,
+  ctx: ProdHandlerContext,
+  fo: JsonRecord,
+): Promise<Response | null> {
+  const partyId = toTrimmedString(fo.party_id);
+  const party = partyId ? (await getCustomerMapByIds([partyId])).get(partyId) : undefined;
+  if (!isMtestParty(party)) {
+    return foErr(req, ctx, "PROD_PLAN_FEED_MTEST_ONLY", 403, "QA can edit or map Packing POs only for MTEST FOs.");
+  }
+  const companyId = toTrimmedString(fo.company_id);
+  if (!(await canMaintainCompanyResource(ctx, companyId, "PROD_MTEST_PLAN_FEED", "EDIT"))) {
+    return foErr(req, ctx, "PROD_PLAN_FEED_MTEST_ACCESS_DENIED", 403, "You do not have MTEST Plan Feed edit access for this company.");
+  }
+  return null;
+}
 
 function foErr(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
@@ -480,14 +503,14 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
 // FO frozen" rule): FO Number is never editable (never accepted here, unchanged).
 // SKU/material/Description lock only once >=1 allocation exists. Everything else
 // (Party, Ordered Qty, Pack Qty, dates, Ordered Stroke) is always editable.
-export async function updatePlanFeedHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: boolean): Promise<Response> {
   try {
     const id = getIdFromPath(req);
     if (!id) return foErr(req, ctx, "PROD_PLAN_FEED_ID_MISSING", 400, "FO ID required");
 
     const { data: existing, error: fetchErr } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
-      .select("id, status, company_id").eq("id", id).maybeSingle();
+      .select("id, status, company_id, party_id").eq("id", id).maybeSingle();
 
     if (fetchErr) throw new Error("PROD_PLAN_FEED_FETCH_FAILED");
     if (!existing) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
@@ -498,6 +521,11 @@ export async function updatePlanFeedHandler(req: Request, ctx: ProdHandlerContex
     }
     if ((existing as JsonRecord).status === "CANCELLED") {
       return foErr(req, ctx, "PROD_PLAN_FEED_CANCELLED", 422, "Cancelled FO cannot be edited");
+    }
+
+    if (mtestOnly) {
+      const accessError = await assertMtestPlanFeed(req, ctx, existing as JsonRecord);
+      if (accessError) return accessError;
     }
 
     const body = await parseBody(req);
@@ -527,6 +555,12 @@ export async function updatePlanFeedHandler(req: Request, ctx: ProdHandlerContex
     // desync from party_id, regardless of what any future caller sends.
     if (body.party_id !== undefined) {
       const newPartyId = toTrimmedString(body.party_id) || null;
+      if (mtestOnly) {
+        const newParty = newPartyId ? (await getCustomerMapByIds([newPartyId])).get(newPartyId) : undefined;
+        if (!isMtestParty(newParty)) {
+          return foErr(req, ctx, "PROD_PLAN_FEED_MTEST_ONLY", 422, "An MTEST FO must remain assigned to an MTEST party.");
+        }
+      }
       updates.party_id = newPartyId;
       if (newPartyId) {
         const customerMap = await getCustomerMapByIds([newPartyId]);
@@ -558,6 +592,15 @@ export async function updatePlanFeedHandler(req: Request, ctx: ProdHandlerContex
     const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_UPDATE_FAILED";
     return foErr(req, ctx, code, 500, "Plan feed update failed");
   }
+}
+
+export async function updatePlanFeedHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  return await updatePlanFeed(req, ctx, false);
+}
+
+// Dedicated route because the pipeline ACL gate is static and cannot inspect the FO's party type.
+export async function updateMtestPlanFeedHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  return await updatePlanFeed(req, ctx, true);
 }
 
 // POST /api/production/plan-feed/:id/cancel
@@ -697,7 +740,7 @@ export async function listFoAllocationsHandler(req: Request, ctx: ProdHandlerCon
 // block: unconfirmed mismatch returns 409 without writing; confirm_mismatch=true writes
 // anyway. The only hard rule: sum of allocations against one Packing PO (across every
 // FO) can never exceed that Packing PO's own qty.
-export async function upsertFoAllocationHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOnly: boolean): Promise<Response> {
   try {
     const planFeedId = getIdFromPath(req);
     if (!planFeedId) return foErr(req, ctx, "PROD_PLAN_FEED_ID_MISSING", 400, "FO ID required");
@@ -712,7 +755,7 @@ export async function upsertFoAllocationHandler(req: Request, ctx: ProdHandlerCo
 
     const { data: fo, error: foErrRes } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
-      .select("id, status, material_id, company_id").eq("id", planFeedId).maybeSingle();
+      .select("id, status, material_id, company_id, party_id").eq("id", planFeedId).maybeSingle();
     if (foErrRes || !fo) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
     try {
       await assertCompanyScope(ctx, (fo as JsonRecord).company_id as string);
@@ -721,6 +764,10 @@ export async function upsertFoAllocationHandler(req: Request, ctx: ProdHandlerCo
     }
     if ((fo as JsonRecord).status !== "ACTIVE") {
       return foErr(req, ctx, "PROD_PLAN_FEED_NOT_ACTIVE", 422, "FO is not ACTIVE");
+    }
+    if (mtestOnly) {
+      const accessError = await assertMtestPlanFeed(req, ctx, fo as JsonRecord);
+      if (accessError) return accessError;
     }
 
     const { data: po, error: poErrRes } = await serviceRoleClient
@@ -798,6 +845,32 @@ export async function upsertFoAllocationHandler(req: Request, ctx: ProdHandlerCo
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_ALLOCATION_UPDATE_FAILED";
     return foErr(req, ctx, code, 500, "Allocation update failed");
+  }
+}
+
+export async function upsertFoAllocationHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  return await upsertFoAllocation(req, ctx, false);
+}
+
+export async function upsertMtestFoAllocationHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  return await upsertFoAllocation(req, ctx, true);
+}
+
+// Read-only self-capability endpoint. The frontend uses this instead of a role/department-name check.
+export async function getMtestPlanFeedCapabilityHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const companyId = toTrimmedString(new URL(req.url).searchParams.get("company_id") ?? "");
+    if (!companyId) return foErr(req, ctx, "PROD_PLAN_FEED_MTEST_CAPABILITY_INVALID", 400, "company_id required");
+    await assertCompanyScope(ctx, companyId);
+    const [standard, mtest] = await Promise.all([
+      canMaintainCompanyResource(ctx, companyId, "PROD_PLAN_FEED", "EDIT"),
+      canMaintainCompanyResource(ctx, companyId, "PROD_MTEST_PLAN_FEED", "EDIT"),
+    ]);
+    return okResponse({ standard, mtest }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_MTEST_CAPABILITY_FAILED";
+    return foErr(req, ctx, code, 500, "Plan Feed capability lookup failed");
   }
 }
 

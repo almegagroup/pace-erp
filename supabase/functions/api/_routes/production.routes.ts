@@ -87,6 +87,9 @@ import {
   planFeedSummaryHandler,
   listFoAllocationsHandler,
   upsertFoAllocationHandler,
+  upsertMtestFoAllocationHandler,
+  updateMtestPlanFeedHandler,
+  getMtestPlanFeedCapabilityHandler,
   listUnmappedStockHandler,
   checkOrderedStrokeHandler,
   listStrokeOptionsHandler,
@@ -288,6 +291,8 @@ export async function dispatchProductionRoutes(
       return await findPlanFeedByNumberHandler(req, ctx);
     case "GET:/api/production/plan-feed/mtest-skus":
       return await listMtestSkusHandler(req, ctx);
+    case "GET:/api/production/plan-feed/mtest-capability":
+      return await getMtestPlanFeedCapabilityHandler(req, ctx);
 
     // PR24 Order Information System
     case "GET:/api/production/order-information-system":
@@ -436,6 +441,10 @@ export async function dispatchProductionRoutes(
     if (req.method === "GET") return await getPlanFeedHandler(req, ctx);
     if (req.method === "PATCH") return await updatePlanFeedHandler(req, ctx);
   }
+  // QA receives this resource only for MTEST FOs. The handler validates the row's party type.
+  if (/^\/api\/production\/plan-feed\/[^/]+\/edit-mtest$/.test(pathname) && req.method === "PATCH") {
+    return await updateMtestPlanFeedHandler(req, ctx);
+  }
   if (/^\/api\/production\/plan-feed\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
     return await cancelPlanFeedHandler(req, ctx);
   }
@@ -445,6 +454,9 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/plan-feed\/[^/]+\/allocations$/.test(pathname)) {
     if (req.method === "GET") return await listFoAllocationsHandler(req, ctx);
     if (req.method === "POST") return await upsertFoAllocationHandler(req, ctx);
+  }
+  if (/^\/api\/production\/plan-feed\/[^/]+\/allocations-mtest$/.test(pathname) && req.method === "POST") {
+    return await upsertMtestFoAllocationHandler(req, ctx);
   }
 
   // PR14 Batch Variance Report /:id detail

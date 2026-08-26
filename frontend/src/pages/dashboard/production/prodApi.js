@@ -120,16 +120,19 @@ export const listPlanFeed = (p) => fetchProd("GET", "/api/production/plan-feed",
 export const getPlanFeed = (id) => fetchProd("GET", `/api/production/plan-feed/${id}`);
 export const createPlanFeed = (body) => fetchProd("POST", "/api/production/plan-feed", body);
 export const updatePlanFeed = (id, body) => fetchProd("PATCH", `/api/production/plan-feed/${id}`, body);
+export const updateMtestPlanFeed = (id, body) => fetchProd("PATCH", `/api/production/plan-feed/${id}/edit-mtest`, body);
 export const cancelPlanFeed = (id) => fetchProd("POST", `/api/production/plan-feed/${id}/cancel`);
 export const reactivatePlanFeed = (id) => fetchProd("POST", `/api/production/plan-feed/${id}/reactivate`);
 export const getPlanFeedSummary = (p) => fetchProd("GET", "/api/production/plan-feed/summary", undefined, p);
 export const listFoAllocations = (foId) => fetchProd("GET", `/api/production/plan-feed/${foId}/allocations`);
 export const upsertFoAllocation = (foId, body) => fetchProd("POST", `/api/production/plan-feed/${foId}/allocations`, body);
+export const upsertMtestFoAllocation = (foId, body) => fetchProd("POST", `/api/production/plan-feed/${foId}/allocations-mtest`, body);
 export const getUnmappedStock = (p) => fetchProd("GET", "/api/production/plan-feed/unmapped-stock", undefined, p);
 export const checkOrderedStroke = (p) => fetchProd("GET", "/api/production/plan-feed/check-stroke", undefined, p);
 export const listStrokeOptions = (p) => fetchProd("GET", "/api/production/plan-feed/stroke-options", undefined, p);
 export const findPlanFeedByNumber = (p) => fetchProd("GET", "/api/production/plan-feed/find", undefined, p);
 export const listMtestSkus = (p) => fetchProd("GET", "/api/production/plan-feed/mtest-skus", undefined, p);
+export const getMtestPlanFeedCapability = (companyId) => fetchProd("GET", "/api/production/plan-feed/mtest-capability", undefined, { company_id: companyId });
 
 // ── Process Orders ────────────────────────────────────────────────────────────
 export const listProcessOrders = (p) => fetchProd("GET", "/api/production/process-orders", undefined, p);
