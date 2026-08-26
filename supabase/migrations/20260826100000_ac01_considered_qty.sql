@@ -38,6 +38,21 @@ WHERE considered_qty IS NULL;
 -- v_grn.received_qty itself is still read (needed nowhere in this function's
 -- math now, kept only because the RECORD already selected it) but never used
 -- for a calculation.
+--
+-- CREATE OR REPLACE alone does NOT replace the old 20-arg signature with this
+-- new 21-arg one -- Postgres treats a changed parameter list as a distinct
+-- overload, not a replacement, leaving BOTH versions live. Found live
+-- 2026-08-26 (business owner, real prod AC01 save failing): PostgREST's RPC
+-- call then hits "function ... is not unique" whenever the caller's params
+-- object satisfies both signatures (every new param has a DEFAULT, so it
+-- usually does) -- every AC01 save broke in prod until the old signature was
+-- dropped by hand via MCP. The DROP below makes this migration correct for a
+-- fresh sequential apply too, not just the hand-patched live databases.
+DROP FUNCTION IF EXISTS erp_procurement.save_ac01_grn_cost(
+  uuid, uuid, numeric, uuid, text, date, numeric, jsonb, jsonb, text, date,
+  numeric, numeric, numeric, numeric, boolean, boolean, boolean, boolean, boolean
+);
+
 CREATE OR REPLACE FUNCTION erp_procurement.save_ac01_grn_cost(
   p_grn_id uuid,
   p_actor uuid,

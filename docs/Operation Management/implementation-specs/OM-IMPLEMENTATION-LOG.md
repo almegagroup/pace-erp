@@ -5283,3 +5283,37 @@ Payable/Landed Cost for this GRN will now compute against 29870 the next time it
 
 **Not yet done:** live click-through in the deployed app (no dev login in this environment) --
 verified via code review + direct DB spot-check instead, per established session pattern.
+
+---
+
+### 2026-08-26, still later — AC01 Considered Qty: real prod incident, fixed within minutes
+
+Business owner reported Accounts getting an error in AC01 shortly after the Considered Qty
+migration landed. Root cause confirmed by directly reproducing it: `CREATE OR REPLACE FUNCTION
+erp_procurement.save_ac01_grn_cost(...)` with a NEW trailing parameter (`p_considered_qty`) does
+**not** replace the old 20-argument signature -- Postgres treats a changed parameter list as a
+distinct overload, not a replacement, so both the old (20-arg) and new (21-arg) versions existed
+side by side in both prod and dev. Since every new-function parameter carries a `DEFAULT`, a
+PostgREST RPC call whose params object could satisfy either signature became ambiguous --
+`ERROR: function ... is not unique / Could not choose a best candidate function` -- breaking every
+AC01 Save in prod. Reproduced directly via a rolled-back diagnostic call before touching anything
+further.
+
+**Fix (MCP, immediate, both dev and prod):** `DROP FUNCTION` the old 20-arg signature explicitly by
+its full type list, then `NOTIFY pgrst, 'reload schema'`. Re-ran the same diagnostic call
+afterward -- resolves cleanly, returns a valid result, no ambiguity. `stock_health_check()` re-run
+post-fix, all 16 checks OK.
+
+**Migration file corrected too** (`20260826100000_ac01_considered_qty.sql`, same file -- this
+migration was created and applied within this same session, not yet relied on elsewhere, so
+amending it in place is correct rather than stacking a follow-up migration): added the same
+`DROP FUNCTION IF EXISTS erp_procurement.save_ac01_grn_cost(<old 20-arg list>)` immediately before
+the `CREATE OR REPLACE`, so a fresh sequential apply (new environment, or any future full replay)
+produces a single unambiguous function from the start, not the same live incident again.
+
+**Lesson for future `CREATE OR REPLACE FUNCTION` migrations that add/remove a parameter:** verify
+with `SELECT p.oid::regprocedure FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE
+n.nspname = '<schema>' AND p.proname = '<function>'` that exactly ONE signature exists after
+applying -- CREATE OR REPLACE only replaces when the parameter TYPE LIST is unchanged; adding,
+removing, or reordering parameters silently creates a second overload instead of erroring, and
+Postgres/PostgREST only surface the ambiguity later, at call time, not at migration time.
