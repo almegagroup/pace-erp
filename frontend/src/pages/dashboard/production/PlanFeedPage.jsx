@@ -20,8 +20,9 @@ import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import CustomerCreateForm from "../om/customer/CustomerCreateForm.jsx";
 import CustomerEditForm from "../om/customer/CustomerEditForm.jsx";
 import {
-  listPlanFeed, getPlanFeed, createPlanFeed, updatePlanFeed,
+  listPlanFeed, getPlanFeed, createPlanFeed, updatePlanFeed, updateMtestPlanFeed,
   cancelPlanFeed, reactivatePlanFeed, getPlanFeedSummary, upsertFoAllocation,
+  upsertMtestFoAllocation, getMtestPlanFeedCapability,
   getUnmappedStock, checkOrderedStroke, listStrokeOptions, listPackingOrders,
   findPlanFeedByNumber, listMtestSkus,
 } from "./prodApi.js";
@@ -356,6 +357,17 @@ export default function PlanFeedPage() {
   // `party` object) -- more reliable here than the page-local poTypeFilter/customerMap,
   // which only reflect whichever PO Type the Create tab's filter happens to be set to.
   const isMtestEdit = normalizeFoCustomerType(editData?.party?.fo_customer_type) === "MTEST";
+  // Uses runtime ACL decisions, never a department/role-name check. QA has MTEST-only
+  // edit permission; Production and ACL-MASTER retain their broader Plan Feed authority.
+  const planFeedCapabilityQ = useQuery({
+    queryKey: ["plan-feed-mtest-capability", effectiveCompanyId],
+    queryFn: () => getMtestPlanFeedCapability(effectiveCompanyId),
+    enabled: Boolean(effectiveCompanyId),
+    select: (d) => d?.data ?? d ?? {},
+  });
+  const canEditStandardPlanFeed = planFeedCapabilityQ.data?.standard === true;
+  const canEditMtestPlanFeed = planFeedCapabilityQ.data?.mtest === true;
+  const canEditSelectedFo = canEditStandardPlanFeed || (isMtestEdit && canEditMtestPlanFeed);
 
   const editStrokeOptionsQ = useQuery({
     queryKey: ["plan-feed-stroke-options", editData?.company_id, editDraft.material_id],
@@ -440,7 +452,7 @@ export default function PlanFeedPage() {
 
   async function handleSaveEdit(e) {
     e.preventDefault();
-    if (!editData) return;
+    if (!editData || !canEditSelectedFo) return;
     setSaving(true);
     try {
       const payload = {
@@ -456,7 +468,7 @@ export default function PlanFeedPage() {
         payload.sku = editDraft.sku || null;
         payload.description = editDraft.description || null;
       }
-      await updatePlanFeed(editData.id, payload);
+      await (isMtestEdit ? updateMtestPlanFeed : updatePlanFeed)(editData.id, payload);
       toast("FO updated.");
       await loadEditFo(editData.id);
       qc.invalidateQueries({ queryKey: ["prod-plan-feed-list"] });
@@ -506,7 +518,7 @@ export default function PlanFeedPage() {
   }
 
   async function handleFindAllocationCandidate() {
-    if (!editData || !allocPoNumber.trim()) return;
+    if (!editData || !canEditSelectedFo || !allocPoNumber.trim()) return;
     setAllocSearching(true);
     setAllocCandidate(null);
     setAllocNumPacks("");
@@ -535,10 +547,10 @@ export default function PlanFeedPage() {
   }
 
   async function submitAllocation(confirmMismatch) {
-    if (!editData || !allocCandidate) return;
+    if (!editData || !canEditSelectedFo || !allocCandidate) return;
     setSaving(true);
     try {
-      await upsertFoAllocation(editData.id, {
+      await (isMtestEdit ? upsertMtestFoAllocation : upsertFoAllocation)(editData.id, {
         packing_order_id: allocCandidate.id,
         allocated_qty_kg: parseFloat(allocQty || "0"),
         confirm_mismatch: confirmMismatch === true,
@@ -564,9 +576,9 @@ export default function PlanFeedPage() {
   }
 
   async function handleAllocationQtyChange(allocation, newQty) {
-    if (!editData) return;
+    if (!editData || !canEditSelectedFo) return;
     try {
-      await upsertFoAllocation(editData.id, {
+      await (isMtestEdit ? upsertMtestFoAllocation : upsertFoAllocation)(editData.id, {
         packing_order_id: allocation.packing_order_id,
         allocated_qty_kg: Number(newQty) || 0,
       });
@@ -873,7 +885,13 @@ export default function PlanFeedPage() {
                     This FO is cancelled. You can reactivate it, but Packing PO and Sales Order mappings will need to be rebuilt manually afterwards.
                   </div>
                 )}
+                {!canEditSelectedFo && !planFeedCapabilityQ.isLoading && (
+                  <p className="col-span-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    This is not an MTEST FO. QA can view it, but only Production or ACL-MASTER can edit or map Packing POs.
+                  </p>
+                )}
                 <form onSubmit={handleSaveEdit} className="grid grid-cols-2 gap-4 max-w-3xl">
+                  <fieldset disabled={!canEditSelectedFo} className="contents disabled:opacity-55">
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Party</label>
                     <ErpComboboxField
@@ -1016,14 +1034,15 @@ export default function PlanFeedPage() {
                       )}
                     </div>
                   </div>
+                  </fieldset>
                   <div className="col-span-2 flex gap-3 pt-2">
                     {editData.status !== "CANCELLED" ? (
                       <>
-                        <button type="submit" disabled={saving} className="px-5 py-2 bg-sky-600 text-white text-sm font-medium rounded hover:bg-sky-700 disabled:opacity-50">Save Changes</button>
-                        <button type="button" onClick={handleCancel} disabled={saving} className="px-4 py-2 border border-rose-300 text-rose-700 text-sm rounded hover:bg-rose-50 disabled:opacity-50">Cancel FO</button>
+                        <button type="submit" disabled={saving || !canEditSelectedFo} className="px-5 py-2 bg-sky-600 text-white text-sm font-medium rounded hover:bg-sky-700 disabled:opacity-50">Save Changes</button>
+                        {canEditStandardPlanFeed && <button type="button" onClick={handleCancel} disabled={saving} className="px-4 py-2 border border-rose-300 text-rose-700 text-sm rounded hover:bg-rose-50 disabled:opacity-50">Cancel FO</button>}
                       </>
                     ) : (
-                      <button type="button" onClick={handleReactivate} disabled={saving} className="px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 disabled:opacity-50">Reactivate FO</button>
+                      canEditStandardPlanFeed && <button type="button" onClick={handleReactivate} disabled={saving} className="px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 disabled:opacity-50">Reactivate FO</button>
                     )}
                   </div>
                 </form>
@@ -1031,6 +1050,7 @@ export default function PlanFeedPage() {
 
               {editData.status !== "CANCELLED" && (
                 <ErpSectionCard title="Packing PO Allocation">
+                  <fieldset disabled={!canEditSelectedFo} className="contents disabled:opacity-55">
                   <table className="w-full text-sm border-collapse mb-4">
                     <thead>
                       <tr className="bg-slate-50 text-slate-500 text-xs uppercase">
@@ -1130,6 +1150,7 @@ export default function PlanFeedPage() {
                       );
                     })()}
                   </div>
+                  </fieldset>
                 </ErpSectionCard>
               )}
             </>
