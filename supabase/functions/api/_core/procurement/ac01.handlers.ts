@@ -102,19 +102,23 @@ function computeActualPaymentDate(
 // NULL, so the Base-UoM conversion is a no-op today) -- and getAC01GRNHandler
 // never computed this field at all, so the drawer's Summary section had no
 // per-unit landed price to show, only the total.
+// Considered Qty (business owner, 2026-08-26) -- both this and
+// computeSuggestedPayables below divide/multiply by grn.considered_qty, not
+// grn.received_qty. Considered Qty is always prefilled from Invoice Qty
+// (ge_qty) at GRN creation and user-editable in the AC01 drawer thereafter;
+// received_qty (actual physical stock) is never touched by any of this.
 function computeLandedCostPerUnit(grn: JsonRecord, landedCostTotal: number): number {
   const effectiveRate = grn.confirmed_rate != null
     ? Number(grn.confirmed_rate)
     : grn.grn_rate != null
       ? Number(grn.grn_rate)
       : 0;
+  const consideredQty = grn.considered_qty != null ? Number(grn.considered_qty) : Number(grn.received_qty ?? 0);
   const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : null;
   const hasPackConversion = perPackQty != null && perPackQty > 0;
   const baseUomRate = hasPackConversion ? effectiveRate / perPackQty : effectiveRate;
-  const receivedQtyBase = hasPackConversion
-    ? Number(grn.received_qty ?? 0) * perPackQty
-    : Number(grn.received_qty ?? 0);
-  return receivedQtyBase > 0 ? baseUomRate + landedCostTotal / receivedQtyBase : baseUomRate;
+  const consideredQtyBase = hasPackConversion ? consideredQty * perPackQty : consideredQty;
+  return consideredQtyBase > 0 ? baseUomRate + landedCostTotal / consideredQtyBase : baseUomRate;
 }
 
 // Mirrors save_ac01_grn_cost()'s own per-party suggested-payable math exactly
@@ -144,24 +148,27 @@ function computeSuggestedPayables(
     : grn.grn_rate != null
       ? Number(grn.grn_rate)
       : 0;
-  const purchaseCost = effectiveRate * Number(grn.received_qty ?? 0);
+  // Considered Qty (business owner, 2026-08-26), not received_qty -- see
+  // computeLandedCostPerUnit's comment above.
+  const consideredQty = grn.considered_qty != null ? Number(grn.considered_qty) : Number(grn.received_qty ?? 0);
+  const purchaseCost = effectiveRate * consideredQty;
   const materialGstPct = grn.gst_pct != null ? Number(grn.gst_pct) : 0;
   const purchaseCostGross = purchaseCost * (1 + materialGstPct / 100);
   // PER_UOM lines store a rate, not a total -- mirrors save_ac01_grn_cost()'s
-  // own v_received_qty_base multiplication (migration 20260822130000). Found
+  // own v_considered_qty_base multiplication (migration 20260826100000). Found
   // live 2026-08-22: a real prod GRN (2000000030) saved a PER_UOM line whose
   // amount was never multiplied by qty anywhere -- this read-side mirror
   // must apply the same Base-UoM qty the RPC uses, or GET/LIST would show a
   // different Suggested Payable than what SAVE just computed and returned.
   const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : null;
-  const receivedQtyBase = perPackQty != null && perPackQty > 0
-    ? Number(grn.received_qty ?? 0) * perPackQty
-    : Number(grn.received_qty ?? 0);
+  const consideredQtyBase = perPackQty != null && perPackQty > 0
+    ? consideredQty * perPackQty
+    : consideredQty;
 
   const charges = { VENDOR: 0, TRANSPORTER: 0, LAST_MILE_TRANSPORTER: 0, CHA: 0 } as Record<string, number>;
   for (const line of costLines) {
     let gross = Number(line.amount ?? 0);
-    if (line.entry_mode === "PER_UOM") gross = gross * receivedQtyBase;
+    if (line.entry_mode === "PER_UOM") gross = gross * consideredQtyBase;
     const gstRate = line.gst_rate != null ? Number(line.gst_rate) : 0;
     if (line.has_gst === true && gstRate > 0) {
       if (line.gst_treatment === "EXCLUSIVE") gross = gross * (1 + gstRate / 100);
@@ -338,9 +345,13 @@ function buildListRow(
   const grnRate = grn.grn_rate != null ? Number(grn.grn_rate) : null;
   const effectiveRate = confirmedRate ?? grnRate ?? 0;
   const landedCostTotal = landedCost ? Number(landedCost.total_cost ?? 0) : 0;
-  const receivedQty = Number(grn.received_qty ?? 0);
+  const invoiceQty = grn.ge_qty != null ? Number(grn.ge_qty) : Number(grn.received_qty ?? 0);
+  // Considered Qty (business owner, 2026-08-26) -- always prefilled from
+  // Invoice Qty at GRN creation; drives Payable + Landed Cost/unit, never
+  // received_qty. See computeSuggestedPayables/computeLandedCostPerUnit.
+  const consideredQty = grn.considered_qty != null ? Number(grn.considered_qty) : invoiceQty;
   const costPerUnit = computeLandedCostPerUnit(grn, landedCostTotal);
-  const vendorPayable = effectiveRate * receivedQty;
+  const vendorPayable = effectiveRate * consideredQty;
   const referenceType = paymentTerms?.reference_date_type as JsonRecord | JsonRecord[] | undefined;
   const referenceTypeCode = Array.isArray(referenceType) ? referenceType[0]?.code : referenceType?.code;
 
@@ -359,6 +370,14 @@ function buildListRow(
     grn_qty: grn.received_qty,
     // Invoice quantity is captured at Gate Entry; GRN quantity is what was actually received.
     invoice_qty: grn.ge_qty ?? grn.received_qty,
+    // Considered Qty (business owner, 2026-08-26): what Payable/Landed Cost
+    // actually get computed against. discrepancy_qty (= ge_qty - received_qty,
+    // grn.handlers.ts's own create-time formula) is the raw Invoice-vs-GRN
+    // shortage/excess signal -- positive = shortage (invoiced more than
+    // received), negative = excess (received more than invoiced). Left as a
+    // plain number here; the drawer derives the shortage/excess label from it.
+    considered_qty: consideredQty,
+    discrepancy_qty: grn.discrepancy_qty != null ? Number(grn.discrepancy_qty) : null,
     base_uom_code: material?.base_uom_code ?? null,
     pack_uom_code: grn.uom_code ?? null,
     purchase_rate: grn.po_rate,
@@ -369,7 +388,7 @@ function buildListRow(
       && Number(grn.invoice_rate) !== Number(grn.po_rate) && !grn.rate_confirmed,
     currency: "INR",
     gst_pct: grn.gst_pct,
-    taxable_value: Number((effectiveRate * receivedQty).toFixed(4)),
+    taxable_value: Number((effectiveRate * consideredQty).toFixed(4)),
     landed_cost_total: landedCostTotal,
     cost_per_unit: Number(costPerUnit.toFixed(4)),
     vendor_payable: Number(vendorPayable.toFixed(4)),
@@ -820,6 +839,7 @@ export async function saveAC01GRNCostHandler(
         p_clear_transporter_payable_override: body.clear_transporter_payable_override === true,
         p_clear_last_mile_payable_override: body.clear_last_mile_payable_override === true,
         p_clear_cha_payable_override: body.clear_cha_payable_override === true,
+        p_considered_qty: body.considered_qty != null ? Number(body.considered_qty) : null,
       });
 
     if (error) {

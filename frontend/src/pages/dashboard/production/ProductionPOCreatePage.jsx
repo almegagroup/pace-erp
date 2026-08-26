@@ -22,10 +22,12 @@ import {
   availabilityPreviewProcessOrder,
   createPackingOrder,
   createProcessOrder,
+  getProcessOrderCreateCapability,
   getPackBom,
   getStrokeMaster,
   listPackBoms,
   listPackCodes,
+  listMtestSfgProdshadeOptions,
   listSegmentLocations,
   listStrokeMasters,
 } from "./prodApi.js";
@@ -35,6 +37,7 @@ import {
   listMachines,
   listMaterialCategoryGroups,
   listMaterials,
+  listMaterialUomConversions,
   listStorageLocations,
 } from "../om/omApi.js";
 import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
@@ -66,6 +69,10 @@ const EMPTY_PACKING = {
   num_packs: "",
   fill_qty_per_pack: "",
   pm_lines: [],
+  // §131.4 item #11 (2026-08-26): PTEST-only — chosen Prodshade+Stroke, since these SKUs'
+  // Pack BOM has no SFG row to derive it from (item #10).
+  sfg_material_id: "",
+  sfg_stroke_master_id: "",
 };
 
 const PACKING_ERRORS = {
@@ -182,6 +189,24 @@ export default function ProductionPOCreatePage() {
   const materialById = useMemo(
     () => new Map(materialRows.map((material) => [material.id, material])),
     [materialRows],
+  );
+  // §131.2 (2026-08-26): which po_type family this user can actually create here —
+  // drives disabling (not removing) PO Type options below, ACL-driven rather than a
+  // hardcoded role check (see the backend handler's own comment for why).
+  const createCapabilityQ = useQuery({
+    queryKey: ["production-create-capability", effectiveCompanyId],
+    queryFn: () => getProcessOrderCreateCapability(effectiveCompanyId),
+    enabled: Boolean(effectiveCompanyId),
+  });
+  const canCreateStandardType = createCapabilityQ.data?.standard !== false;
+  const canCreateMtest = createCapabilityQ.data?.mtest !== false;
+  const processTypeOptions = useMemo(
+    () => PROCESS_TYPES.map((type) => ({
+      value: type,
+      label: type,
+      disabled: type === "MTEST" ? !canCreateMtest : !canCreateStandardType,
+    })),
+    [canCreateMtest, canCreateStandardType],
   );
   const approvedStrokesQ = useQuery({
     queryKey: ["production-create-approved-strokes", effectiveCompanyId],
@@ -351,6 +376,42 @@ export default function ProductionPOCreatePage() {
     const packCode = (packCodesQ.data ?? []).find((pc) => pc.pack_code === packingSku?.pack_code);
     return packCode ? packCode.bom_required !== false : true;
   }, [packCodesQ.data, packingSku?.pack_code]);
+  // §131.4 item #11: the 5 MTEST sample SKUs have no SFG row on their Pack BOM at all
+  // (item #10) — this SKU family is identified by pack_type, not just bom_required
+  // (599/000 are also bom_required=false but DO have a real fixed Prodshade/SFG line).
+  const isMtestPackingSku = useMemo(() => {
+    const packCode = (packCodesQ.data ?? []).find((pc) => pc.pack_code === packingSku?.pack_code);
+    return String(packCode?.pack_type || "").toUpperCase() === "MTEST";
+  }, [packCodesQ.data, packingSku?.pack_code]);
+  const mtestSfgOptionsQ = useQuery({
+    queryKey: ["packing-create-mtest-sfg-options", effectivePackingCompanyId],
+    queryFn: () => listMtestSfgProdshadeOptions(effectivePackingCompanyId),
+    enabled: Boolean(effectivePackingCompanyId && isMtestPackingSku),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const mtestSfgOptions = useMemo(
+    () => (mtestSfgOptionsQ.data ?? []).map((row) => ({
+      value: `${row.prodshade_material_id}|${row.stroke_master_id}`,
+      label: `${materialLabel(row.prodshade) || "Prodshade"} — Stroke ${row.stroke_number || "--"} (${qtyFmt(row.available_qty)} KG available)`,
+    })),
+    [mtestSfgOptionsQ.data],
+  );
+  // §131.4 item #11: fixed PKT->KG factor already set on the SKU at creation time
+  // (item #1) — used here only to preview "Planned SFG Qty" on this page; the actual
+  // fill qty is re-derived authoritatively server-side at submit (never trusted from
+  // the client).
+  const mtestPackingConversionQ = useQuery({
+    queryKey: ["packing-create-mtest-conversion", packingForm.material_id],
+    queryFn: () => listMaterialUomConversions(packingForm.material_id),
+    enabled: Boolean(packingForm.material_id && isMtestPackingSku),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const mtestFixedFillQtyPerPack = useMemo(() => {
+    const row = (mtestPackingConversionQ.data ?? []).find(
+      (r) => r.from_uom_code === "PKT" && r.to_uom_code === "KG" && r.variable_conversion === false,
+    );
+    return row ? Number(row.conversion_factor || 0) : 0;
+  }, [mtestPackingConversionQ.data]);
 
   const packingStorageQ = useQuery({
     queryKey: ["packing-create-storage-locations", effectivePackingCompanyId],
@@ -379,7 +440,9 @@ export default function ProductionPOCreatePage() {
 
   const packingNumPacks = Number(packingForm.num_packs || 0);
   const packingFillQtyPerPack = Number(packingForm.fill_qty_per_pack || 0);
-  const packingSfgQtyPerPack = packingBomRequired ? Number(packingSfgLine?.qty || 0) : packingFillQtyPerPack;
+  const packingSfgQtyPerPack = isMtestPackingSku
+    ? mtestFixedFillQtyPerPack
+    : (packingBomRequired ? Number(packingSfgLine?.qty || 0) : packingFillQtyPerPack);
   const packingPlannedQtyKg = packingSfgQtyPerPack * packingNumPacks;
 
   // Fixed Pack BOM types (bomRequired=true): PM material/dosage/alternate/group
@@ -693,6 +756,8 @@ export default function ProductionPOCreatePage() {
         next.num_packs = "";
         next.fill_qty_per_pack = "";
         next.pm_lines = [];
+        next.sfg_material_id = "";
+        next.sfg_stroke_master_id = "";
         setPackingManualPmLines([]);
       }
       return next;
@@ -854,7 +919,11 @@ export default function ProductionPOCreatePage() {
       toast("Num Packs is required.", "error");
       return;
     }
-    if (!packingBomRequired && !packingFillQtyPerPack) {
+    if (isMtestPackingSku && !packingForm.sfg_material_id) {
+      toast("Select a Prodshade + Stroke for the SFG source.", "error");
+      return;
+    }
+    if (!isMtestPackingSku && !packingBomRequired && !packingFillQtyPerPack) {
       toast("Fill Qty Per Pack is required for this pack code.", "error");
       return;
     }
@@ -882,7 +951,11 @@ export default function ProductionPOCreatePage() {
         po_type: packingPoType,
         material_id: packingForm.material_id,
         num_packs: packingNumPacks,
-        fill_qty_per_pack: packingBomRequired ? undefined : packingFillQtyPerPack,
+        // §131.4 item #11: MTEST samples never send fill_qty_per_pack — the server
+        // derives it from the SKU's own fixed conversion factor (item #1), ignoring
+        // whatever the client might send, so there's nothing useful to send here.
+        fill_qty_per_pack: (packingBomRequired || isMtestPackingSku) ? undefined : packingFillQtyPerPack,
+        sfg_material_id: isMtestPackingSku ? packingForm.sfg_material_id : undefined,
         pm_lines: packingBomRequired
           ? packingBomPmPreviewLines
               .filter((line) => line.material_id && line.storage_location_id)
@@ -956,7 +1029,7 @@ export default function ProductionPOCreatePage() {
                     <ErpComboboxField
                       value={processForm.po_type}
                       onChange={(value) => updateProcess("po_type", value)}
-                      options={PROCESS_TYPES.map((type) => ({ value: type, label: type }))}
+                      options={processTypeOptions}
                       hideBlank
                     />
                   </div>
@@ -1423,7 +1496,7 @@ export default function ProductionPOCreatePage() {
                       required
                     />
                   </div>
-                  {!packingBomRequired && (
+                  {!packingBomRequired && !isMtestPackingSku && (
                     <div className="flex flex-col gap-1">
                       <label className="text-xs font-medium text-slate-600">Fill Qty Per Pack (KG) <span className="text-rose-500">*</span></label>
                       <input
@@ -1437,11 +1510,46 @@ export default function ProductionPOCreatePage() {
                       />
                     </div>
                   )}
+                  {isMtestPackingSku && (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-slate-600">Fill Qty Per Pack (KG)</label>
+                      <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-mono text-slate-600">
+                        {mtestFixedFillQtyPerPack ? `${qtyFmt(mtestFixedFillQtyPerPack)} (fixed by SKU)` : "--"}
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <p className="text-xs text-slate-400">Planned SFG Qty</p>
                     <p className="font-mono font-semibold">{qtyFmt(packingPlannedQtyKg)} KG</p>
                   </div>
                 </div>
+
+                {isMtestPackingSku && (
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-slate-600">
+                      SFG Source — Prodshade + Stroke <span className="text-rose-500">*</span>
+                    </label>
+                    <ErpComboboxField
+                      value={packingForm.sfg_material_id && packingForm.sfg_stroke_master_id
+                        ? `${packingForm.sfg_material_id}|${packingForm.sfg_stroke_master_id}`
+                        : ""}
+                      onChange={(value) => {
+                        const [prodshadeMaterialId, strokeMasterId] = String(value || "").split("|");
+                        setPackingForm((current) => ({
+                          ...current,
+                          sfg_material_id: prodshadeMaterialId || "",
+                          sfg_stroke_master_id: strokeMasterId || "",
+                        }));
+                      }}
+                      options={mtestSfgOptions}
+                      placeholder={mtestSfgOptionsQ.isFetching ? "Loading L003 stock..." : "-- Select Prodshade + Stroke --"}
+                      emptyStateLabel="No SFG stock available at L003 for this company"
+                    />
+                    <p className="text-xs text-slate-400">
+                      Only combos with SFG stock currently sitting in L003 are shown. The exact batch is chosen at Final.
+                    </p>
+                  </div>
+                )}
 
                 <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto">
                   <table className="w-full min-w-[900px] border-collapse text-sm">
@@ -1464,8 +1572,12 @@ export default function ProductionPOCreatePage() {
                       </tr>
                       <tr className="border-b border-slate-100">
                         <td className="px-3 py-2 font-semibold">SFG</td>
-                        <td className="px-3 py-2">{materialLabel(packingSfgLine?.material) || "--"}</td>
-                        <td className="px-3 py-2">{slocLabel(packingSfgLine?.storage_location) || "--"}</td>
+                        <td className="px-3 py-2">
+                          {isMtestPackingSku
+                            ? (materialLabel((mtestSfgOptionsQ.data ?? []).find((row) => row.prodshade_material_id === packingForm.sfg_material_id)?.prodshade) || "-- select above --")
+                            : (materialLabel(packingSfgLine?.material) || "--")}
+                        </td>
+                        <td className="px-3 py-2">{isMtestPackingSku ? "L003 (ADMIX LAB)" : (slocLabel(packingSfgLine?.storage_location) || "--")}</td>
                         <td className="px-3 py-2 text-right font-mono">{qtyFmt(packingPlannedQtyKg)} KG</td>
                         <td className="px-3 py-2 font-mono">P261</td>
                       </tr>

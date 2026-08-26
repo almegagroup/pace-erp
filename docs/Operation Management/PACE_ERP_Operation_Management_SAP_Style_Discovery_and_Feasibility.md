@@ -20844,3 +20844,327 @@ found and fixed during verification (the new resource initially bypassed the per
 `OM-IMPLEMENTATION-LOG.md`'s 2026-08-25 "IN14 Stock History" entry — not repeated here.
 
 **Not yet done:** live click-through in the deployed app (no dev login in this environment).
+
+---
+
+## Section 131 — MTEST/PTEST Redesign #2: QA-exclusive lifecycle, Stroke Master adoption, Final absorbs Verify, PTEST fixed-sample-SKU flow (✅ DESIGN LOCKED — 2026-08-26, IMPLEMENTATION NOT STARTED)
+
+**প্রেক্ষাপট:** Section 120 (2026-08-15)-এ MTEST/ZTEST-কে MTO/HPS-এর সাথে exact মেলানো হয়েছিল
+(Stroke ছাড়াই, manual RM entry, full Verify সহ)। এই session-এ business owner সম্পূর্ণ নতুন করে
+আবার revisit করলেন — ব্যবসায় বাস্তব চাহিদা বদলে গেছে। **এই section §120-কে replace করে না, বরং
+তার উপরেই আরও একধাপ এগিয়ে যায়** — §120.4 (batch number per-company format)-এর সিদ্ধান্ত অপরিবর্তিত
+থাকছে; §120.1-120.3-এর কিছু অংশ এখানে সংশোধিত হলো (নিচে স্পষ্ট করে চিহ্নিত)।
+
+### 131.1 — Process PO (MTEST) — চূড়ান্ত lifecycle (LOCKED)
+
+**নতুন করে যোগ হলো:** MTEST-এর জন্য এখন **Stroke Master** ব্যবহার হবে — আগে ছিল না ("কোনো
+Stroke/BOM নেই, RM line manually বসাতে হয়" — §120.1-এর পুরনো lock)। Stroke Master নিজের
+established QA-approval workflow-ই অনুসরণ করবে (§83.3: QA বানায় → Manager review+edit →
+Manager Save = Approved) — এখানে নতুন কিছু বদলাচ্ছে না।
+
+**পুরো lifecycle (MTO/HPS-এর সাথে তুলনা করে):**
+
+| ধাপ | MTO/HPS (অপরিবর্তিত) | MTEST (নতুন) |
+|---|---|---|
+| Stroke Master | আছে, QA-approved | **এখন আছে** (আগে ছিল না), QA-approved — same mechanism |
+| Process PO Create | Stroke থেকে RM auto-populate | **একই** — Stroke থেকে RM auto-populate |
+| Machine | Mandatory | **এখনো optional** (§83.9 exemption বহাল, বদলাচ্ছে না) |
+| Standard → পরের ধাপ | QA_APPROVED gate, তারপর Start Batch | **QA_APPROVED gate নেই** — সরাসরি Start Batch (MTS আজ যেভাবে করে সেই একই shortcut, `startBatchHandler`-এর `requiredStatus` branch-এ MTEST-ও যোগ হবে) |
+| Start Batch | Batch number generate | **একই mechanism** — batch number generate হয় |
+| Final | Actual qty record (stock post না) | **Final-ই সব করে** — record + real stock posting (RM/PM issue, SFG receipt, QA auto-release) + reco write, একটাই ক্লিকে, status সরাসরি **VERIFIED**-এ যায় (আলাদা "Verify" ক্লিক নেই user-facing ভাবে) |
+| Verify (আলাদা ক্লিক) | আছে | **নেই** — কোডে internally Final-এর হ্যান্ডলারই Verify-এর logic call করবে (দুটো ইতিমধ্যে shared helper `applyFinalOrVerifyLineUpdates` ব্যবহার করে, তাই merge করা কাঠামোগতভাবে সহজ) |
+| Reco write (`process_order_line_reco`) | হয় | **একই, হয়** — MTS-এর মতো skip হয় না (§108.2-এর MTS-exemption MTEST-এ প্রযোজ্য না) |
+| RM/INT storage location | Segment location config (rm_sloc) | **অপরিবর্তিত** — একই normal mechanism |
+| Access | Production করে Standard/StartBatch/Final; QA করে Approve/Verify | **শুধু QA — সব ধাপেই।** Production-এর কোনো access নেই MTEST-এ। |
+| Conversion cost | MTO/HPS/MTS-এ hard-block যদি `conversion_cost_config`-এ rate না থাকে (§104.8, `PROD_PO_CONVERSION_RATE_MISSING`) | **MTEST-এর জন্য নেই — hard-block skip।** Lab sample-এর কোনো conversion cost concept নেই (business owner, 2026-08-26)। INT ইতিমধ্যে যে "0-and-proceed" pattern পায় (§104.8 — conversionRate null হলে 0 ধরে এগিয়ে যাওয়া, `resolveConversionRate(...) ?? 0`), MTEST-ও সেই একই pattern পাবে — hard-block শুধু MTO/HPS/MTS-এর জন্যই থাকবে |
+
+**কেন status সরাসরি VERIFIED হতে হবে (শুধু FINAL-এ থামলে চলবে না):** Packing PO (PTEST) তৈরির
+শর্তই হলো source Process PO **VERIFIED** থাকতে হবে (§120.2)। তাই user-এর কাছে এক-ক্লিক মনে হলেও,
+ভেতরে ভেতরে কোডকে অবশ্যই উভয় ধাপের (Final + Verify) কাজ করে status=VERIFIED-এ পৌঁছাতে হবে — নাহলে
+PTEST creation-সহ বাকি সিস্টেমের (যেখানেই "VERIFIED" চেক হয়) special-casing লাগবে, যেটা এড়ানো
+সম্ভব শুধু এই ভাবে করলে।
+
+**Conversion cost — code-verified detail (2026-08-26):** বর্তমান `verifyProcessOrderHandler`
+(`process_order.handlers.ts` লাইন ~2900-2907) `resolveConversionRate()` null হলে সব po_type-এর
+জন্যই unconditionally `PROD_PO_CONVERSION_RATE_MISSING` hard-block করে — INT-এর নিজের ব্র্যাঞ্চে
+(লাইন ~2744-2750, `completeIntProcessOrderHandler`) আলাদা করে `?? 0` fallback আছে, কিন্তু main
+Verify path-এ কোনো po_type exemption নেই। **নতুন কাজ:** Final-absorbs-Verify (§131.1) বানানোর
+সময় MTEST-কে INT-এর মতোই exempt করতে হবে — hard-block-এর `if (conversionRate === null)` চেকটা
+`po.po_type !== "MTEST"` দিয়ে গার্ড করে, MTEST হলে সরাসরি `?? 0` ধরে sfgCostPerKg হিসাব চালিয়ে
+যাবে (RMC তখনো ঠিকঠাক যোগ হবে, শুধু conversion অংশটা শূন্য থাকবে)।
+
+### 131.2 — ACL: MTEST-exclusive resource code দরকার প্রতিটা ধাপে (LOCKED)
+
+**সমস্যা (code-verified):** Process PO-র প্রতিটা action-ই একটাই resource code দিয়ে গেটেড, po_type
+অনুযায়ী আলাদা না —
+
+| Action | বর্তমান resource:action |
+|---|---|
+| Stroke Master create/approve | `PROD_STROKE_MASTER:WRITE`/`APPROVE` |
+| Process PO Create | `PROD_PO_CREATE:WRITE` |
+| Start Batch | `PROD_START_BATCH:WRITE` |
+| Finalize | `PROD_PO_FINAL:WRITE` |
+| Verify | `PROD_PO_VERIFY:APPROVE` |
+
+যদি QA-কে সরাসরি এই resource code-গুলোতেই grant দেওয়া হয়, তাহলে সেই একই grant দিয়ে QA
+**MTO/HPS/MTS-েও** এই action-গুলো করতে পারবে — যেটা চাওয়া হয়নি ("বাকিগুলোতে যেমন ACL আছে তেমন
+থাকবে")।
+
+**Locked সমাধান:** প্রতিটা action-এর জন্য **নতুন, MTEST-exclusive resource code** বানাতে হবে
+(যেমন `PROD_MTEST_STROKE_MASTER`, `PROD_MTEST_PO_CREATE`, `PROD_MTEST_START_BATCH`,
+`PROD_MTEST_PO_FINAL`) — এগুলো শুধু QA-র work context capability-তে grant হবে। Production-এর
+পুরনো resource code-এর grant অপরিবর্তিত থাকবে (MTO/HPS/MTS-এর জন্য)। **প্রতিটা handler-কে
+(create/start-batch/finalize, আর stroke create/approve) আগে request/PO-র po_type দেখে ঠিক
+করতে হবে কোন resource code check করবে** — এটা route-level static registry দিয়ে সম্ভব না
+(registry PO-র ভেতরের po_type জানে না), তাই handler-এর ভিতরেই এই branch বসাতে হবে (Process PO
+Create-এ request body-র `po_type` থেকে; Start Batch/Finalize-এ PO fetch করে তার `po_type`
+থেকে)।
+
+### 131.3 — Packing PO (PTEST) — নতুন fixed-sample-SKU flow (LOCKED)
+
+**নতুন Master Data — ৫টা generic "Admix sample" FG SKU** (কোনো নির্দিষ্ট Prodshade-এর সাথে বাঁধা
+না, যেকোনো prodshade-এর test batch-এই ব্যবহার হবে), **CMP003 এবং CMP006 দুটো company-তেই**:
+
+| Material Name (code) | Document Name | Fixed per-pack qty |
+|---|---|---|
+| 6763SM01122 | Admix sample 1 kg | 1 kg |
+| 6763SM02122 | Admix sample 5 kg | 5 kg |
+| 6763SM03122 | Admix sample 10 kg | 10 kg |
+| 6763SM04122 | Admix sample 20 kg | 20 kg |
+| 6763SM05122 | Admix sample 50 kg | 50 kg |
+
+Per-pack quantity প্রতিটা SKU-তে **fixed** (`material_uom_conversion`-এ একটা fixed conversion
+factor হিসেবে বসবে — SKU নামের টেক্সট থেকে parse করা হবে না, fragile) — Packing PO creation-এ
+user শুধু **Num Packs** দেবে, `fill_qty_per_pack` সেই SKU-র নিজের conversion factor থেকে
+auto-resolve হবে। FG output storage location: **F003** (দুই company-তেই)।
+
+**Pack BOM — §83.15-এর ব্যতিক্রম, ইচ্ছাকৃত:** এই ৫টা SKU-র Pack BOM-এ **শুধু OUTPUT (FG) row
+থাকবে, কোনো fixed SFG/INPUT row না** — কারণ কোনো একটা নির্দিষ্ট Prodshade-এর সাথে বাঁধা নেই, তাই
+`resolveProdshadeForSku()`-এর existing "exactly one prodshade match" logic এখানে কাজই করবে
+না (code-verified — match না পেলে `PROD_BOM_PRODSHADE_NOT_FOUND` error দেয়)। এটা §83.15-এর
+"OUTPUT+INPUT উভয়ই মান্ডাটরি" lock-এর সরাসরি ব্যতিক্রম — **শুধু pack_code 001-এর এই ৫টা
+MTEST-sample SKU-র জন্যই**, বাকি সব SKU-তে সেই lock অপরিবর্তিত। কোনো PM line-ও Pack BOM-এ সেভ
+করা থাকবে না — PM সম্পূর্ণ ad-hoc, Standard-এ ইচ্ছা করলে যোগ করা যাবে।
+
+**⚠️ সংশোধন/coupling আবিষ্কার (2026-08-26) — Pack BOM OUTPUT-only একা যথেষ্ট না, এটা
+`packing_order.handlers.ts`-এর Create logic-এর সাথে জোড়া লাগানো লাগবে:** Live code check করে
+পাওয়া গেছে, `createPackingOrderHandler` **সবসময়ই** (bomRequired true/false নির্বিশেষে) একটা
+ACTIVE Pack BOM খোঁজে, আর সেই BOM-এ OUTPUT **এবং SFG** দুটো row-ই না থাকলে
+`PROD_PACK_BOM_INCOMPLETE` error দেয় — `bomRequired=false` (pack_code 001/599/000) শুধু SFG-এর
+**quantity** কোথা থেকে আসবে সেটা বদলায় (Pack BOM-এর qty না, বরং `fill_qty_per_pack` থেকে),
+SFG **row-এর অস্তিত্ব**-এর বাধ্যবাধকতা বদলায় না। তাই এই ৫ SKU-র Pack BOM-এ SFG row না রাখলে
+Packing PO Create-ই fail করবে। **সমাধান একসাথেই করতে হবে:** Pack BOM OUTPUT-only creation
+(§131.4 item #10) *এবং* `createPackingOrderHandler`-এর `!outputLine || !sfgBomLine` check-টা
+এই pack_code-এর জন্য শুধু `outputLine`-এ নামিয়ে আনা (SFG material_id তখন Pack BOM থেকে না,
+§131.4 item #11-এর নতুন Prodshade+Stroke picker থেকে resolve হবে) — এই দুটো আলাদা করে করা যাবে
+না, একটাই coupled change।
+
+**⚠️ আরেকটা সংশোধন — fill qty manual entry না, SKU-র নিজের fixed factor থেকে auto:**
+`createPackingOrderHandler`-এ `bomRequired=false` হলে `fill_qty_per_pack` **request body থেকে
+manual input হিসেবে required** ধরে (না দিলে `PROD_PACK_FILL_QTY_REQUIRED` error) — এই generic
+mechanism আসলে 599/510 (ব্যারেল/IBC, সত্যিই প্রতি PO-তে ভিন্ন ভিন্ন fill হতে পারে)-এর জন্য ঠিক,
+কিন্তু আমাদের ৫টা MTEST sample SKU-র জন্য ভুল — এদের fill qty **fixed, SKU নিজেই ঠিক করে দেয়**
+(`material_uom_conversion`-এ আগেই বসানো fixed factor, §131.4 item #1)। User-কে আবার টাইপ
+করতে বলা ঠিক না। **সমাধান:** এই SKU-দের জন্য (material-এর নিজের PKT→KG fixed, non-variable
+conversion থাকলে) `fillQtyPerPack` request body থেকে না নিয়ে সেই conversion factor থেকেই
+auto-derive করতে হবে — user শুধু Num Packs দেবে।
+
+**নতুন storage location — L003 ("ADMIX LAB", `location_type=LOGICAL`)** — business owner
+নিজেই **শুধু Prod-এ** তৈরি করেছেন (CMP003+CMP006 দুটোতেই `storage_location_plant_map`-এ
+mapped, verified), **Dev-এ নেই এখনো**। এই location শুধু **SFG**-এর জন্য (Stroke Master-এর
+`default_storage_location_id` MTEST strokes-এ L003 বসবে, P101 receipt আর Packing PO-র SFG
+P261 issue দুটোই L003)। **RM/PM/INT-এর storage location অপরিবর্তিত** — সেগুলো এখনো normal
+segment location config (`rm_sloc_id`/`pm_sloc_id`) থেকেই আসবে, MTO/HPS-এর মতোই।
+
+**Packing PO Standard → Final flow:**
+
+1. **Standard** — user একটা Drawer-এ **Prodshade + Stroke** (দুটো একসাথে, combo হিসেবে) বেছে
+   SFG line বানাবে — L003-এ stock থাকা prodshade+stroke combo-গুলোর তালিকা থেকে। FG SKU (৫টার
+   একটা) + Num Packs দেবে (per-pack qty SKU থেকে auto)। ইচ্ছা করলে PM line + dosage যোগ করতে
+   পারবে (Pack BOM-এ কোনো PM template নেই বলে, পুরোটাই manual)।
+2. **Final** — Standard-এ বেছে নেওয়া (Prodshade+Stroke) combo-র মধ্যে থেকে **শুধু সেই batch
+   গুলোই দেখাবে যাদের L003-এ available quantity ≥ এই Packing PO-র required quantity** (ছোট
+   leftover batch গুলো (যেমন 6kg batch-এ 5kg packing-এর পর বেঁচে যাওয়া 1kg) সময়ের সাথে জমে
+   list-কে বড় করে ফেলবে বলে, filter করাটা জরুরি)। নির্দিষ্ট batch বেছে, PM line থাকলে actual qty
+   বসিয়ে, post করে দেয় — SFG issue (P261, from L003) + PM issue (P261, normal PM sloc থেকে) +
+   FG receipt (P101, to F003), সব একসাথে, Packing PO-র existing 3-movement Final posting
+   pattern-এই (কোনো Verify নেই Packing PO-র জন্য, এটা সবার জন্যই সত্যি, MTEST-নির্দিষ্ট না)।
+
+**Reservation — সংশোধিত (2026-08-26, code-verified) — এটা নতুন কাজ না, existing mechanism-ই
+কাজে লাগবে:** RM/PM/INT-এর reservation (Process PO-র Stroke-lines, Packing PO-র PM lines)
+`reservation_document`-এ **already generic, po_type-নিরপেক্ষভাবে তৈরি হয়** (`process_order.
+handlers.ts` লাইন ~1880 আর `packing_order.handlers.ts` লাইন ~1525 — কোনো po_type check নেই) —
+MTEST/PTEST-এর জন্য আলাদা কিছু লাগবে না। **SFG-এর reservation-ও already ঠিক এই shape-এই আছে:**
+Create/Standard-এ material+location দিয়ে reservation খোলে, `batch_number = NULL` (ঠিক এই
+কারণেই যে batch তখনো বাছা হয়নি), আর Final-এ গিয়ে `finalizePackingOrderHandler` সেই **একই row-কে
+upgrade করে specific batch বসিয়ে** (কোডের নিজস্ব comment: "SFG's batch_number stays NULL until
+Final assigns one")। PTEST-এর জন্য শুধু এটুকুই নতুন লাগবে: Standard-এ Prodshade+Stroke বেছে
+নেওয়ার পরেই SFG-এর material_id resolve হয়ে যাবে (সেই prodshade-র নিজস্ব SFG material), সেটা দিয়ে
+এই already-existing reservation-open logic চলবে — আলাদা কোনো নতুন reservation-mechanism বানাতে
+হবে না। Concurrent-race সুরক্ষা (দুটো PTEST PO একই batch পছন্দ করলে) reservation নিজেই দেয় (batch
+assign হওয়ার মুহূর্তে qty চেক), `post_stock_movement()`-এর negative-stock hard block তার উপরে
+দ্বিতীয় স্তরের সুরক্ষা।
+
+**Access:** Process PO-র মতোই **শুধু QA** — নতুন MTEST-exclusive resource code (§131.2-এর একই
+pattern, Packing PO-র নিজের resource code-গুলোতেও প্রযোজ্য)।
+
+### 131.4 — Implementation status
+
+Design সম্পূর্ণ locked (§131.1–§131.3)। কোডে এখনো এই section-এর নতুন কাজের কিছুই build হয়নি,
+তবে 2026-08-26-এ code-verify করে দেখা গেছে **§120 (2026-08-15)-এর কাজ থেকে ইতিমধ্যেই কিছু অংশ
+বিনামূল্যে পাওয়া যাচ্ছে** — নিচে "✅ Already done" ভাগে যা আছে সেগুলো নতুন করে বানাতে হবে না,
+শুধু ব্যবহার করতে হবে।
+
+**✅ Already done (§120-এর কাজ থেকে, নতুন কিছু লাগবে না):**
+- Stroke Master ইতিমধ্যেই `po_type=MTEST` accept করে SFG-type stroke হিসেবে
+  (`stroke_master.handlers.ts:34`, `PO_TYPES_BY_MATERIAL_TYPE.SFG` set-এ MTEST আছে) — RM
+  auto-populate, QA-approval flow সবই কাজ করে, MTEST-কে আলাদা করে কোনো path-এ ঢোকাতে হবে না।
+- Process PO Create-এ Stroke থেকে RM/INT line prepopulate ও তাদের `reservation_document`
+  generic ভাবে (po_type-নিরপেক্ষ) তৈরি হয় (`process_order.handlers.ts` লাইন ~1880) — MTEST-এর
+  RM/INT reservation already কাজ করে।
+- Packing PO-র PM line reservation একই ভাবে generic (`packing_order.handlers.ts` লাইন
+  ~1525) — PTEST-এও কাজ করে, নতুন কিছু লাগবে না।
+- Packing PO-র SFG reservation mechanism-ই already "Create-এ batch-blind open → Final-এ
+  upgrade with actual batch" shape-এ আছে (§131.3-এর reservation note দেখো) — শুধু Standard-এ
+  Prodshade+Stroke বেছে SFG material_id resolve করার নতুন UI/backend লাগবে, reservation-এর
+  ভেতরের logic-এ change লাগবে না।
+- **L003 ("ADMIX LAB", `location_type=LOGICAL`) Dev-এও তৈরি হয়ে গেছে (2026-08-26, MCP direct
+  SQL)** — Prod-এর config হুবহু মিলিয়ে (`storage_location_master` + `storage_location_plant_map`,
+  CMP003+CMP006 দুই company-তেই, `allowed_stock_types=['UNRESTRICTED']`)। Dev id:
+  `6e49293d-f76f-4876-9032-d068a3635abb`। এটা pure data-config, migration না — Prod-এ আগে
+  থেকেই আছে, শুধু Dev-এ ছিল না, সেই gap বন্ধ হলো।
+
+**✅ ৫টা FG SKU তৈরি — DONE (2026-08-26, MCP direct SQL, Dev ও Prod দুটোতেই):**
+- Material Master: 6763SM01122…05122, material_type=FG, base_uom_code=KG, pack_code='001',
+  shade_code=NULL (কোনো নির্দিষ্ট prodshade-এর সাথে বাঁধা না), procurement_type=IN_HOUSE,
+  batch_tracking_required=true, qa_required_on_fg=true, status=**ACTIVE** সরাসরি (DRAFT দিয়ে
+  শুরু করে আলাদা approve করানো হয়নি, project convention অনুযায়ী)। pace_code
+  `erp_master.generate_material_pace_code('FG')` দিয়েই generate — Dev: FG-00011…00015,
+  Prod: FG-00289…00293।
+- **পাশাপাশি একটা real pre-existing bug পাওয়া গেছে ও ঠিক করা হয়েছে:** Dev-এর
+  `material_code_sequence`-এ FG-এর `last_number` ছিল 0, অথচ ইতিমধ্যেই ১০টা FG material
+  (FG-00001…00010) সরাসরি DB-তে বসানো হয়েছিল counter না বাড়িয়েই (সম্ভবত পুরনো seed/MCP insert,
+  ফাংশন call না করে) — ফলে `generate_material_pace_code('FG')` প্রথমবার ডাকতেই
+  `FG-00001` ফেরত দিয়ে duplicate-key error দেয়। Fix: `last_number` কে actual MAX (10)-এ
+  resync করে তারপর function call করা হয়েছে। Prod-এ counter ইতিমধ্যেই সঠিক ছিল (288=288),
+  ওখানে এই সমস্যা হয়নি।
+- material_plant_ext: ৫ SKU × ২ company (CMP003+CMP006) = ১০টা row, `default_storage_location_id
+  = F003`, status=ACTIVE, দুই environment-েই।
+- **আরেকটা gap পাওয়া গেছে ও ঠিক করা হয়েছে:** Dev-এ F003 storage location শুধু CMP003-এ mapped
+  ছিল, CMP006-এ ছিল না (Prod-এ দুটোতেই ছিল)। `storage_location_plant_map`-এ CMP006-এর জন্য
+  missing row যোগ করা হলো (Prod-এর config হুবহু মিলিয়ে) — এটা ছাড়া material_plant_ext-এ
+  CMP006-এর জন্য F003 বসানোই যেত না।
+- material_uom_conversion: প্রতিটা SKU-র জন্য `from_uom_code='PKT', to_uom_code='KG'`,
+  `conversion_factor` = তার fixed fill qty (1/5/10/20/50), `variable_conversion=false` — এই
+  shape-টা `pack_bom.handlers.ts`-এর `syncPackBomConversions()` (§83.15) ঠিক যা লিখত তার সাথেই
+  হুবহু মিলিয়ে বসানো হয়েছে, যাতে ভবিষ্যতে এই SKU-গুলোর Pack BOM তৈরি হলে conflict না হয়
+  (onConflict material_id+from+to দিয়ে upsert করবে, harmless)।
+
+**✅ Process PO — Start Batch QA-gate skip + Final-absorbs-Verify + conversion-cost skip
+— DONE (2026-08-26, Dev, code + verified):**
+- `process_order.handlers.ts:2196` — MTEST যোগ হলো MTS-এর `requiredStatus` branch-এ (STANDARD-ই
+  যথেষ্ট, QA_APPROVED লাগবে না)। সাথে `qaApproveProcessOrderHandler`-এ MTEST block করা হয়েছে
+  (INT-এর মতোই) — নাহলে কেউ approve করলে PO আটকে যেত (Start Batch তখন QA_APPROVED accept করত না)।
+- `finalizeProcessOrderHandler`-এর ভেতর থেকে Verify-এর পুরো posting logic (`runProcessOrderVerify`
+  নামে আলাদা করা হয়েছে, MTO/HPS/MTS-এর জন্য ব্যবহার অপরিবর্তিত) MTEST-এর জন্য সরাসরি call হয় —
+  status সরাসরি VERIFIED-এ যায়, আলাদা কোনো Verify click লাগে না।
+- Conversion-cost hard-block MTEST-এ skip (`?? 0` fallback, INT-এর মতোই), বাকি সব po_type-এ
+  অপরিবর্তিত।
+- Frontend: QA Queue page-এ MTS/MTEST-এর জন্য সরাসরি STANDARD-এ Start Batch (+ Cancel) button,
+  Final page-এ label/toast MTEST-এর জন্য "Complete & Post Stock" (qty computation অপরিবর্তিত)।
+
+**✅ ACL — MTEST-exclusive resource code — DONE Dev-এ, Prod বাকি (2026-08-26):**
+- Live verify করে পাওয়া গেছে Stroke Master (`PROD_STROKE_MASTER`) **আগে থেকেই QA-exclusive** —
+  কোনো change লাগেনি। শুধু Create/Start Batch/Final-এর জন্যই নতুন resource code লেগেছে
+  (`PROD_MTEST_PO_CREATE`, `PROD_MTEST_START_BATCH`, `PROD_MTEST_PO_FINAL`), QA-র existing
+  `CAP_QA_PROD_STANDARD` capability-তেই যোগ করা হয়েছে (নতুন capability বানানো হয়নি — "Quality-র
+  যা আছে তার সাথে যোগ" নীতি মেনে)।
+- **Pipeline-level ACL gate route-registry-তে static, body দেখে না** — তাই শুধু handler-level
+  po_type branch যথেষ্ট ছিল না। ৩টা নতুন dedicated route বানানো হয়েছে (একই handler function
+  reuse করে): `POST .../process-orders/mtest`, `.../start-batch-mtest`, `.../finalize-mtest`।
+  `route-acl-registry-guard.mjs` pass (0 mismatch)।
+- PR09/PR11 sidebar visibility QA-র জন্যও খোলা হয়েছে (`PROD_PO_CREATE`/`PROD_PO_FINAL`-এ শুধু
+  VIEW গ্রান্ট, WRITE না) — তাই পেজ দেখা যাবে কিন্তু non-MTEST create/final এ WRITE ছাড়া block
+  থাকবে।
+- Type dropdown filtering **role hardcode না করে** — নতুন read-only self-capability endpoint
+  (`GET .../process-orders/create-capability`, `canMaintainCompanyResource()` দিয়ে আসল ACL
+  decision জিজ্ঞেস করে) দিয়ে PR09-এ non-usable option গুলো `disabled` (মুছে ফেলা না)। এটা এড়িয়ে
+  গেছে সেই anti-pattern যেটা QAQueuePage.jsx-এই আগে একবার ধরা পড়েছিল (bug pattern #12,
+  hardcoded role/department name check)।
+- **যাচাই (live precomputed_acl_view query দিয়ে):** pure QA user → `PROD_MTEST_*:WRITE=ALLOW`,
+  `PROD_PO_CREATE/PROD_PO_FINAL` শুধু VIEW, `PROD_START_BATCH`-এ কোনো row-ই নেই। pure Production
+  user → পুরনো ৩টা resource অপরিবর্তিত ALLOW, নতুন কোনো `PROD_MTEST_*` resource-এ কোনো row নেই।
+  দুই দিকেই leak-mukto, confirmed।
+- ACL version bump লেগেছে ৪ company-তেই (active version আগেই capture হয়ে গিয়েছিল অন্য কাজে,
+  একই version দ্বিতীয়বার capture করলে no-op — এই gotcha ধরা পড়েছিল আগেই CLAUDE.md-এ, তাই নতুন
+  version বানিয়ে capture+snapshot+rebuild করা হয়েছে)।
+- **বাকি: Prod-এ একই সব change (code deploy + এই একই ACL data sequence) replicate করা।**
+
+**✅ Pack BOM — OUTPUT-only creation path (item #10) — DONE (2026-08-26, Dev, code + verified):**
+- `pack_bom.handlers.ts`-এর `createPackBomHandler`-এ `packCodeRow.pack_type === 'MTEST'` হলে
+  prodshade/stroke resolution সম্পূর্ণ skip, শুধু OUTPUT row লিখবে — SFG row লিখবেই না (caller
+  যাই পাঠাক), PM line-ও লিখবে না (defensively ignore)। `syncPackBomConversions()`-ও এই SKU-দের
+  জন্য skip করা হয়েছে, যাতে আগে থেকে বসানো fixed (`variable_conversion=false`) conversion
+  factor ভুলে overwrite না হয় (এটা real risk ছিল, ধরা পড়েছে code পড়ার সময়)। `deno check`
+  clean (শূন্য নতুন error, একই pre-existing baseline, git-stash দিয়ে যাচাই করা)।
+- **⚠️ Coupling আবিষ্কার, একই সাথে ঠিক করতে হয়েছে:** `createPackingOrderHandler` সবসময়ই একটা
+  ACTIVE Pack BOM-এ OUTPUT+SFG দুটো row-ই বাধ্যতামূলক ধরে (`bom_required=false`-ও ব্যতিক্রম না)
+  — তাই শুধু Pack BOM-কে OUTPUT-only করলেই যথেষ্ট ছিল না, item #11-এর অংশ হিসেবে সেই check-ও
+  relax করতে হবে (নিচে দেখো)।
+
+**✅ ACL — Packing PO-র নিজের Create/Final action (item #11-এর ACL অংশ) — DONE (2026-08-26,
+Dev, code + verified):** Process PO-র মতোই আবিষ্কার হলো — Packing PO-র Create
+(`POST /api/production/packing-orders`) আর Finalize (`.../finalize`) route দুটোই **same**
+`PROD_PO_CREATE`/`PROD_PO_FINAL` resource শেয়ার করে Process PO-র সাথে (আলাদা resource না)। তাই
+item #9-এর একই pattern এখানেও লাগলো:
+- নতুন resource code: `PROD_MTEST_PACK_PO_CREATE`, `PROD_MTEST_PACK_PO_FINAL` (WRITE →
+  `CAP_QA_PROD_STANDARD`, একই capability, নতুন কিছু বানানো হয়নি)।
+- নতুন dedicated route (একই handler reuse): `POST .../packing-orders/mtest`,
+  `.../packing-orders/:id/finalize-mtest`।
+- Sidebar visibility-এর জন্য আলাদা VIEW গ্রান্ট লাগেনি — Packing PO-ও একই PR09/PR11 page ব্যবহার
+  করে (tabs), যেটার VIEW ইতিমধ্যেই item #9-এ QA-কে দেওয়া হয়ে গেছে।
+- আবার একটা নতুন ACL version bump লেগেছে ৪ company-তেই (আগেরটা already capture হয়ে গিয়েছিল আজই,
+  একই version দ্বিতীয়বার capture no-op — তাই v23/v29→v24/v30)।
+- **যাচাই (live precomputed_acl_view):** pure QA user → নতুন ২টা resource WRITE=ALLOW, পুরনো
+  শেয়ার্ড resource শুধু VIEW। pure Production user → পুরনো resource অপরিবর্তিত, নতুন resource-এ
+  কোনো row নেই। দুই দিকেই leak-mukto।
+- Frontend: `createPackingOrder`/`finalizePackingOrder` (prodApi.js) po_type/poType দেখে নতুন
+  URL-এ route করে, `ProductionPOFinalPage.jsx`-এর call site আপডেট করা হয়েছে।
+
+**✅ বড় discovery — item #12 (Final-এ batch picker) already সম্পূর্ণ তৈরি, নতুন কিছু লাগবে না
+(2026-08-26):** `ProductionPOFinalPage.jsx`-এ একটা **stale comment** ছিল যেটা বলছিল "PTEST এখনো
+batch-blind" — কিন্তু আসল code (`const isBatchBlind = false;`, unconditional, সব po_type-এর
+জন্যই) সেটার বিপরীত করে, আগে থেকেই। Batch selection সম্পূর্ণ generic — শুধু `sfgLine.material_id`
+আর `sfgLine.storage_location` দিয়ে চালিত, po_type চেক করেই না। Existing endpoint (`sfg-batches`
+→ `resolvePackingSfgBatchOptions()`) already দেয়: batch_number, available_qty (reservation বাদ
+দিয়ে, net), Prodshade label, Stroke number, machine — ঠিক যা item #12-এর জন্য দরকার ছিল, sorted
+by qty descending। **মানে item #11 ঠিকমতো SFG line-এর material_id/storage_location (L003) সেট
+করে দিলেই item #12 automatically কাজ করবে, আলাদা কোনো কাজ লাগবে না।** Stale comment ঠিক করে
+দেওয়া হয়েছে।
+
+**✅ Item #11 — সম্পূর্ণ, Dev-এ (2026-08-26, code + verified):**
+- Backend: `resolveMtestSfgProdshadeOptions(companyId)` (নতুন) — L003-এ কোন Prodshade+Stroke
+  combo-র SFG stock আছে, aggregate qty সহ (batch-level না — `resolvePackingSfgBatchOptions()`-এর
+  একই ধরনের ledger/reservation/batch→process_order→stroke join, materialId filter ছাড়া, তারপর
+  prodshade+stroke-wise group করে)। নতুন route
+  (`GET /api/production/packing-orders/mtest-sfg-options`, `PROD_ORDER_LIST:VIEW`-গেটেড, QA-র
+  আগে থেকেই CAP_EVERYONE_REPORTS দিয়ে access আছে)।
+- Backend: `createPackingOrderHandler`-এ `sfgBomLine` না থাকলে (isMtestSampleSku) request
+  body-র `sfg_material_id` + resolve করা L003 দিয়ে একটা synthesized SFG-line object বসানো
+  হয় — এর পরের সব downstream code (materialMap lookup, FG/SFG line insert) অপরিবর্তিত
+  ব্যবহার করে। `fillQtyPerPack`-ও isMtestSampleSku হলে manual input না নিয়ে
+  `material_uom_conversion`-এর fixed (PKT→KG, variable_conversion=false) factor থেকে
+  server-side auto-derive হয়।
+- Frontend (`ProductionPOCreatePage.jsx`, Packing tab): `isMtestPackingSku` detection
+  (pack_type='MTEST' দিয়ে, শুধু bom_required=false দিয়ে না — 599/000-ও bom_required=false
+  কিন্তু আসল fixed prodshade আছে)। নতুন Prodshade+Stroke dropdown (L003 lookup থেকে, qty সহ
+  label), Fill Qty field-এর জায়গায় read-only "fixed by SKU" preview, SFG preview row-এ
+  বাছাই করা Prodshade + "L003 (ADMIX LAB)" দেখানো। Submit payload-এ `sfg_material_id` যায়,
+  `fill_qty_per_pack` যায় না (server-derived)।
+- **যাচাই:** `deno check` (process_order/packing_order/pack_bom/routes/registry — সবকটায়
+  শূন্য নতুন error, একই pre-existing baseline) + `eslint` (সব touched frontend file, একই
+  pre-existing warning/error) + `route-acl-registry-guard.mjs` (0 mismatch)।
+
+**পরের ধাপ:** Prod-এ আজকের সব change replicate করা (code deploy + একই ACL data sequence),
+তারপর live click-through verify (এই environment-এ login নেই বলে করা যায়নি)। এরপর Codex-কে
+বাকি কোনো polish/task brief দেওয়া হলে established Claude/Codex split workflow অনুযায়ী।

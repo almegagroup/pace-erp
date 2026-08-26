@@ -49,6 +49,13 @@ function machineLabel(machine) {
   return [machine?.machine_code, machine?.machine_name].filter(Boolean).join(" - ");
 }
 
+// §131.1/§120: MTS and MTEST skip the QA_APPROVED gate entirely — Start Batch accepts
+// them directly from STANDARD, so this page must offer Start Batch there instead of
+// Approve/Reject (which the backend now rejects for these two po_types at STANDARD).
+function skipsQaApproval(poType) {
+  return poType === "MTS" || poType === "MTEST";
+}
+
 function statusTone(status) {
   if (status === "STANDARD") return "bg-amber-100 text-amber-800";
   if (status === "QA_APPROVED") return "bg-sky-100 text-sky-700";
@@ -74,7 +81,7 @@ export default function QAQueuePage() {
     queryKey: ["qa-queue", effectiveCompanyId],
     queryFn: () => listProcessOrders({
       company_id: effectiveCompanyId || undefined,
-      po_type_in: "MTO,HPS",
+      po_type_in: "MTO,HPS,MTS,MTEST",
       per_page: 100,
     }),
     enabled: Boolean(effectiveCompanyId),
@@ -143,6 +150,7 @@ export default function QAQueuePage() {
       const result = await startBatch(
         order.id,
         batchNumberInstanceId ? { batch_number_instance_id: batchNumberInstanceId } : { skip_released_batch: true },
+        order.po_type,
       );
       toast(`Batch ${result?.batch_number ?? "—"} started for ${order.po_number ?? "Process PO"}.`);
       setStartBatchOrder(null);
@@ -219,7 +227,7 @@ export default function QAQueuePage() {
         ) : queueQ.isLoading ? (
           <p className="py-4 text-center text-sm text-slate-500">Loading...</p>
         ) : queue.length === 0 ? (
-          <p className="py-8 text-center text-sm text-slate-400">No MTO/HPS Process Orders found for this queue.</p>
+          <p className="py-8 text-center text-sm text-slate-400">No MTO/HPS/MTS/MTEST Process Orders found for this queue.</p>
         ) : filteredQueue.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-400">No rows match this search.</p>
         ) : (
@@ -264,7 +272,7 @@ export default function QAQueuePage() {
                           onClick={(event) => event.stopPropagation()}
                         >
                           <div className="flex justify-end gap-2">
-                            {order.status === "STANDARD" && (
+                            {order.status === "STANDARD" && !skipsQaApproval(order.po_type) && (
                               <>
                                 <button
                                   onClick={() => handleApprove(order.id)}
@@ -282,6 +290,27 @@ export default function QAQueuePage() {
                                   className="rounded border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
                                 >
                                   Reject
+                                </button>
+                              </>
+                            )}
+                            {order.status === "STANDARD" && skipsQaApproval(order.po_type) && (
+                              <>
+                                <button
+                                  onClick={() => setStartBatchOrder(order)}
+                                  disabled={saving}
+                                  className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                                >
+                                  Start Batch
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setRejectOrderId(order.id);
+                                    setRejectReason("");
+                                  }}
+                                  disabled={saving}
+                                  className="rounded border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                                >
+                                  Cancel
                                 </button>
                               </>
                             )}

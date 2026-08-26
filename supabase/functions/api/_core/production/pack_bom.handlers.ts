@@ -708,18 +708,37 @@ export async function createPackBomHandler(
       return bomError(req, ctx, "PROD_BOM_OUTPUT_SLOC_INVALID", 422, "Output storage location must be an active F-location for the selected company");
     }
 
-    const prodshadeConfig = await resolveProdshadeForSku(sku as JsonRecord);
-    const prodshade = (prodshadeConfig?.prodshade ?? null) as JsonRecord | null;
-    if (!prodshade) {
-      return bomError(req, ctx, "PROD_BOM_PRODSHADE_NOT_FOUND", 422, "FG SKU prodshade link not found");
-    }
-    const stroke = await resolveApprovedStroke(String(prodshade.id), companyId, poType);
-    if (!stroke) {
-      return bomError(req, ctx, "PROD_BOM_STROKE_NOT_FOUND", 422, "Approved stroke not found for company, PO type and prodshade");
-    }
-    const sfgStorageLocationId = toTrimmedString(stroke.default_storage_location_id);
-    if (!sfgStorageLocationId) {
-      return bomError(req, ctx, "PROD_BOM_SFG_SLOC_REQUIRED", 422, "Stroke default storage location is required");
+    const packCode = toTrimmedString((sku as JsonRecord).pack_code);
+    const packCodeRow = await getPackCodeByCode(packCode);
+    if (!packCodeRow) return bomError(req, ctx, "PROD_BOM_PACK_CODE_NOT_FOUND", 422, "Pack code not found for selected SKU");
+    const bomRequired = Boolean(packCodeRow.bom_required);
+    // §131.4 item #10 (2026-08-26): pack_type=MTEST (pack_code 001 today) is the generic
+    // AP-sample SKU family — never tied to one specific Prodshade (§131.3), so
+    // resolveProdshadeForSku()'s "exactly one match" lookup structurally cannot succeed
+    // and must not even be attempted. These BOMs get OUTPUT only; SFG material resolves
+    // later, per Packing PO, from the new Standard-time Prodshade+Stroke picker instead
+    // (item #11) — never from the Pack BOM. Every other pack_type (including other
+    // bom_required=false codes like 599/000, which DO map to one real Prodshade) is
+    // completely untouched by this branch.
+    const isMtestSampleSku = toUpperTrimmedString(packCodeRow.pack_type) === "MTEST";
+
+    let sfgMaterialId: string | null = null;
+    let sfgStorageLocationId: string | null = null;
+    if (!isMtestSampleSku) {
+      const prodshadeConfig = await resolveProdshadeForSku(sku as JsonRecord);
+      const prodshade = (prodshadeConfig?.prodshade ?? null) as JsonRecord | null;
+      if (!prodshade) {
+        return bomError(req, ctx, "PROD_BOM_PRODSHADE_NOT_FOUND", 422, "FG SKU prodshade link not found");
+      }
+      const stroke = await resolveApprovedStroke(String(prodshade.id), companyId, poType);
+      if (!stroke) {
+        return bomError(req, ctx, "PROD_BOM_STROKE_NOT_FOUND", 422, "Approved stroke not found for company, PO type and prodshade");
+      }
+      sfgStorageLocationId = toTrimmedString(stroke.default_storage_location_id);
+      if (!sfgStorageLocationId) {
+        return bomError(req, ctx, "PROD_BOM_SFG_SLOC_REQUIRED", 422, "Stroke default storage location is required");
+      }
+      sfgMaterialId = String(prodshade.id);
     }
 
     // Check no existing DRAFT or ACTIVE BOM for this company + SKU
@@ -735,10 +754,6 @@ export async function createPackBomHandler(
       return bomError(req, ctx, "PROD_BOM_ALREADY_EXISTS", 409, "A DRAFT or ACTIVE Pack BOM already exists for this company and SKU");
     }
 
-    const packCode = toTrimmedString((sku as JsonRecord).pack_code);
-    const packCodeRow = await getPackCodeByCode(packCode);
-    if (!packCodeRow) return bomError(req, ctx, "PROD_BOM_PACK_CODE_NOT_FOUND", 422, "Pack code not found for selected SKU");
-    const bomRequired = Boolean(packCodeRow.bom_required);
     if (bomRequired && !sfgQty) {
       return bomError(req, ctx, "PROD_BOM_SFG_QTY_REQUIRED", 422, "SFG input qty must be positive when BOM is required");
     }
@@ -782,10 +797,14 @@ export async function createPackBomHandler(
         is_primary_container: false,
         display_order: 0,
       },
-      {
+      // §131.4 item #10: MTEST sample SKUs get NO SFG row at all — there is no single
+      // Prodshade to point it at (sfgMaterialId/sfgStorageLocationId are both null here,
+      // by construction above). Packing PO's own create handler is updated separately
+      // to not require an SFG bom-line for pack_type=MTEST.
+      ...(isMtestSampleSku ? [] : [{
         pack_bom_id: bomId,
         line_type: SFG_LINE_TYPE,
-        material_id: String(prodshade.id),
+        material_id: sfgMaterialId,
         qty: bomRequired ? sfgQty : null,
         uom_code: "KG",
         storage_location_id: sfgStorageLocationId,
@@ -794,8 +813,10 @@ export async function createPackBomHandler(
         material_group_id: null,
         is_primary_container: false,
         display_order: 1,
-      },
-      ...pmLines.map((line, idx) => ({
+      }]),
+      // §131.3: MTEST sample SKUs never carry PM lines on the Pack BOM itself (ad-hoc
+      // at Packing PO Standard instead) — ignore whatever the caller sent, defensively.
+      ...(isMtestSampleSku ? [] : pmLines).map((line, idx) => ({
         pack_bom_id: bomId,
         line_type: PM_LINE_TYPE,
         material_id: toTrimmedString(line.material_id),
@@ -817,7 +838,14 @@ export async function createPackBomHandler(
 
     if (lErr) throw new Error("PROD_BOM_LINES_INSERT_FAILED");
 
-    if (!bomRequired) {
+    // §131.4 item #1: MTEST sample SKUs already carry their own FIXED PKT->KG
+    // conversion (set directly at material-creation time — variable_conversion=false,
+    // one exact factor per SKU). Never let the auto-sync touch it: with no SFG line to
+    // derive a qty from, and this SKU family not being genuinely variable-fill like
+    // 599/000, syncPackBomConversions() would either write nothing useful or, via its
+    // upsert onConflict(material_id,from_uom_code,to_uom_code), clobber the real fixed
+    // factor with a variable_conversion=true/NULL-factor row.
+    if (!bomRequired && !isMtestSampleSku) {
       await syncPackBomConversions(bomId, ctx.auth_user_id);
     }
 

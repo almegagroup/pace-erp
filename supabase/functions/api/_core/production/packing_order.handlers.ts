@@ -479,6 +479,202 @@ async function resolvePackingSfgBatchOptions(
     .sort((a, b) => b.available_qty - a.available_qty || a.batch_number.localeCompare(b.batch_number));
 }
 
+// §131.4 item #11 (2026-08-26): L003's own storage_location_id for a company — MTEST's
+// SFG lives only here (§131.3). Two plain lookups (not a cross-schema FK embed) to match
+// the rest of this codebase's pattern for storage_location_master/plant_map joins.
+async function resolveL003StorageLocationId(companyId: string): Promise<string | null> {
+  const { data: locRow, error: locErr } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_master")
+    .select("id")
+    .eq("code", "L003")
+    .maybeSingle();
+  if (locErr) {
+    console.error("[packing_order.resolveL003StorageLocationId] location query failed:", JSON.stringify(locErr));
+    throw new Error("PROD_PACK_L003_LOOKUP_FAILED");
+  }
+  if (!locRow) return null;
+  const locationId = String((locRow as JsonRecord).id);
+  const { data: mapRow, error: mapErr } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_plant_map")
+    .select("storage_location_id")
+    .eq("storage_location_id", locationId)
+    .eq("company_id", companyId)
+    .eq("active", true)
+    .maybeSingle();
+  if (mapErr) {
+    console.error("[packing_order.resolveL003StorageLocationId] plant-map query failed:", JSON.stringify(mapErr));
+    throw new Error("PROD_PACK_L003_LOOKUP_FAILED");
+  }
+  return mapRow ? locationId : null;
+}
+
+// §131.4 item #11: which Prodshade+Stroke combos have any SFG stock sitting in L003 for
+// this company, aggregated (not per-batch — that granularity is Final's job, via the
+// existing resolvePackingSfgBatchOptions() above once the material_id is known). This is
+// the one-level-up lookup PTEST's Standard picker needs, since — unlike MTO/HPS/PMTS —
+// there is no Pack BOM SFG line to read a material_id off in the first place (§131.4
+// item #10: these SKUs' Pack BOM has no SFG row at all).
+async function resolveMtestSfgProdshadeOptions(companyId: string): Promise<JsonRecord[]> {
+  const l003Id = await resolveL003StorageLocationId(companyId);
+  if (!l003Id) return [];
+
+  const [ledgerResult, reservationResult] = await Promise.all([
+    serviceRoleClient
+      .schema("erp_inventory")
+      .from("stock_ledger")
+      .select("batch_number, direction, quantity")
+      .eq("company_id", companyId)
+      .eq("stock_type_code", "UNRESTRICTED")
+      .eq("storage_location_id", l003Id),
+    serviceRoleClient
+      .schema("erp_production")
+      .from("reservation_document")
+      .select("batch_number, balance_qty")
+      .eq("company_id", companyId)
+      .eq("storage_location_id", l003Id)
+      .in("status", RESERVATION_OPEN_STATUSES),
+  ]);
+  if (ledgerResult.error) {
+    console.error("[packing_order.resolveMtestSfgProdshadeOptions] ledger query failed:", JSON.stringify(ledgerResult.error));
+    throw new Error("PROD_PACK_MTEST_SFG_LOOKUP_FAILED");
+  }
+  if (reservationResult.error) {
+    console.error("[packing_order.resolveMtestSfgProdshadeOptions] reservation query failed:", JSON.stringify(reservationResult.error));
+    throw new Error("PROD_PACK_MTEST_SFG_LOOKUP_FAILED");
+  }
+
+  const ledgerByBatch = new Map<string, number>();
+  for (const row of (ledgerResult.data ?? []) as JsonRecord[]) {
+    const batchNumber = toTrimmedString(row.batch_number);
+    if (!batchNumber) continue;
+    const qty = Number(row.quantity ?? 0);
+    const signedQty = String(row.direction) === "IN" ? qty : -qty;
+    ledgerByBatch.set(batchNumber, (ledgerByBatch.get(batchNumber) ?? 0) + signedQty);
+  }
+  const reservedByBatch = new Map<string, number>();
+  for (const row of (reservationResult.data ?? []) as JsonRecord[]) {
+    const batchNumber = toTrimmedString(row.batch_number);
+    if (!batchNumber) continue;
+    reservedByBatch.set(batchNumber, (reservedByBatch.get(batchNumber) ?? 0) + Number(row.balance_qty ?? 0));
+  }
+
+  const batchNumbers = [...ledgerByBatch.keys()]
+    .filter((batchNumber) => (ledgerByBatch.get(batchNumber) ?? 0) - (reservedByBatch.get(batchNumber) ?? 0) > 0);
+  if (batchNumbers.length === 0) return [];
+
+  const { data: batchRows, error: batchErr } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .select("batch_number, source_process_order_id")
+    .eq("company_id", companyId)
+    .in("batch_number", batchNumbers);
+  if (batchErr) {
+    console.error("[packing_order.resolveMtestSfgProdshadeOptions] batch instance query failed:", JSON.stringify(batchErr));
+    throw new Error("PROD_PACK_MTEST_SFG_LOOKUP_FAILED");
+  }
+
+  const processOrderIds = [...new Set(((batchRows ?? []) as JsonRecord[])
+    .map((row) => toTrimmedString(row.source_process_order_id))
+    .filter(Boolean))];
+  // Defensively scoped to po_type=MTEST — L003 is only ever populated by MTEST Verify
+  // (§131.3), so this should already be every row, but a stray batch at L003 from
+  // anywhere else must never surface here as a pickable Prodshade+Stroke option.
+  const { data: processRows, error: processErr } = processOrderIds.length
+    ? await serviceRoleClient
+        .schema("erp_production")
+        .from("process_order")
+        .select("id, material_id, stroke_master_id")
+        .eq("po_type", "MTEST")
+        .in("id", processOrderIds)
+    : { data: [], error: null };
+  if (processErr) {
+    console.error("[packing_order.resolveMtestSfgProdshadeOptions] process order query failed:", JSON.stringify(processErr));
+    throw new Error("PROD_PACK_MTEST_SFG_LOOKUP_FAILED");
+  }
+
+  const strokeIds = [...new Set(((processRows ?? []) as JsonRecord[])
+    .map((row) => toTrimmedString(row.stroke_master_id)).filter(Boolean))];
+  const prodshadeIds = [...new Set(((processRows ?? []) as JsonRecord[])
+    .map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+  const [strokeLookup, prodshadeLookup] = await Promise.all([
+    strokeIds.length
+      ? serviceRoleClient.schema("erp_production").from("stroke_master").select("id, stroke_number").in("id", strokeIds)
+      : Promise.resolve({ data: [], error: null }),
+    prodshadeIds.length
+      ? serviceRoleClient.schema("erp_master").from("material_master")
+          .select("id, pace_code, material_name, document_name, shade_code").in("id", prodshadeIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (strokeLookup.error) {
+    console.error("[packing_order.resolveMtestSfgProdshadeOptions] stroke query failed:", JSON.stringify(strokeLookup.error));
+    throw new Error("PROD_PACK_MTEST_SFG_LOOKUP_FAILED");
+  }
+  if (prodshadeLookup.error) {
+    console.error("[packing_order.resolveMtestSfgProdshadeOptions] prodshade query failed:", JSON.stringify(prodshadeLookup.error));
+    throw new Error("PROD_PACK_MTEST_SFG_LOOKUP_FAILED");
+  }
+
+  const batchMap = new Map(((batchRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.batch_number), row]));
+  const processMap = new Map(((processRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const strokeMap = new Map(((strokeLookup.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const prodshadeMap = new Map(((prodshadeLookup.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+
+  const grouped = new Map<string, { prodshadeMaterialId: string; strokeMasterId: string; availableQty: number }>();
+  for (const batchNumber of batchNumbers) {
+    const batch = batchMap.get(batchNumber);
+    const processOrderId = batch ? toTrimmedString(batch.source_process_order_id) : "";
+    const process = processOrderId ? processMap.get(processOrderId) : null;
+    if (!process) continue;
+    const prodshadeMaterialId = toTrimmedString(process.material_id);
+    const strokeMasterId = toTrimmedString(process.stroke_master_id);
+    if (!prodshadeMaterialId || !strokeMasterId) continue;
+    const availableQty = (ledgerByBatch.get(batchNumber) ?? 0) - (reservedByBatch.get(batchNumber) ?? 0);
+    const key = `${prodshadeMaterialId}|${strokeMasterId}`;
+    const existing = grouped.get(key);
+    grouped.set(key, {
+      prodshadeMaterialId,
+      strokeMasterId,
+      availableQty: (existing?.availableQty ?? 0) + availableQty,
+    });
+  }
+
+  return [...grouped.values()]
+    .filter((row) => row.availableQty > 0)
+    .map((row) => ({
+      prodshade_material_id: row.prodshadeMaterialId,
+      prodshade: prodshadeMap.get(row.prodshadeMaterialId) ?? null,
+      stroke_master_id: row.strokeMasterId,
+      stroke_number: toTrimmedString(strokeMap.get(row.strokeMasterId)?.stroke_number) || null,
+      available_qty: row.availableQty,
+      storage_location_id: l003Id,
+    }))
+    .sort((a, b) => b.available_qty - a.available_qty);
+}
+
+// GET /api/production/packing-orders/mtest-sfg-options?company_id=
+export async function listMtestSfgProdshadeOptionsHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    if (!companyId) {
+      return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id required");
+    }
+    try {
+      await assertPackingCompanyScope(ctx, companyId);
+    } catch {
+      return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    const options = await resolveMtestSfgProdshadeOptions(companyId);
+    return okResponse({ data: options }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PACK_MTEST_SFG_LOOKUP_FAILED";
+    return packErr(req, ctx, code, 500, "MTEST SFG option lookup failed");
+  }
+}
+
 /*
  * Batch-BLIND SFG availability for Create (feasibility §83.4.1 hygiene check).
  *
@@ -1230,7 +1426,11 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       return packErr(req, ctx, "PROD_PACK_INVALID", 400, "company_id, po_type, material_id and num_packs required");
     }
     await assertPackingCompanyScope(ctx, companyId);
-    if (!(await canMaintainCompanyResource(ctx, companyId, "PROD_PO_CREATE", "WRITE"))) {
+    // §131.2 (2026-08-26): PTEST is QA-exclusive, gated by its own resource code —
+    // PROD_PO_CREATE stays exactly as it was (Production-only) for every other
+    // packing po_type, same pattern as Process PO's own MTEST split.
+    const packCreateResourceCode = poType === "PTEST" ? "PROD_MTEST_PACK_PO_CREATE" : "PROD_PO_CREATE";
+    if (!(await canMaintainCompanyResource(ctx, companyId, packCreateResourceCode, "WRITE"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Packing PO for this company.");
     }
 
@@ -1248,15 +1448,36 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     const { data: packCodeRow, error: packCodeErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_code_master")
-      .select("id, pack_code, bom_required, outer_uom_code")
+      .select("id, pack_code, pack_type, bom_required, outer_uom_code")
       .eq("pack_code", toTrimmedString((sku as JsonRecord).pack_code))
       .maybeSingle();
     if (packCodeErr) throw new Error("PROD_PACK_CODE_LOOKUP_FAILED");
     if (!packCodeRow) return packErr(req, ctx, "PROD_PACK_CODE_NOT_FOUND", 422, "FG SKU pack code is not configured");
     const packCodeId = String((packCodeRow as JsonRecord).id ?? "");
     const bomRequired = (packCodeRow as JsonRecord).bom_required !== false;
+    // §131.4 item #11 (2026-08-26): the 5 MTEST sample SKUs (pack_type=MTEST) carry their
+    // own FIXED PKT->KG conversion (set at material-creation time, §131.4 item #1) — fill
+    // qty is derived from that, never a manual per-PO entry like real 599/000 barrels/IBCs.
+    const isMtestSampleSku = toUpperTrimmedString((packCodeRow as JsonRecord).pack_type) === "MTEST";
 
-    if (!bomRequired && !fillQtyPerPack) {
+    let effectiveFillQtyPerPack = fillQtyPerPack;
+    if (isMtestSampleSku) {
+      const { data: convRow, error: convErr } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_uom_conversion")
+        .select("conversion_factor")
+        .eq("material_id", materialId)
+        .eq("from_uom_code", "PKT")
+        .eq("to_uom_code", "KG")
+        .eq("variable_conversion", false)
+        .maybeSingle();
+      if (convErr) throw new Error("PROD_PACK_MTEST_CONVERSION_LOOKUP_FAILED");
+      const fixedFactor = convRow ? parsePositiveNumber((convRow as JsonRecord).conversion_factor) : null;
+      if (!fixedFactor) {
+        return packErr(req, ctx, "PROD_PACK_MTEST_CONVERSION_MISSING", 422, "This SKU has no fixed PKT->KG conversion configured");
+      }
+      effectiveFillQtyPerPack = fixedFactor;
+    } else if (!bomRequired && !fillQtyPerPack) {
       return packErr(req, ctx, "PROD_PACK_FILL_QTY_REQUIRED", 400, "fill_qty_per_pack is required for this pack code");
     }
 
@@ -1280,16 +1501,35 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     }
     const bomLines = ((bom as JsonRecord).lines ?? []) as JsonRecord[];
     const outputLine = bomLines.find((line) => String(line.line_type) === "OUTPUT");
-    const sfgBomLine = bomLines.find((line) => String(line.line_type) === "SFG");
+    let sfgBomLine = bomLines.find((line) => String(line.line_type) === "SFG");
     const pmBomLines = bomLines.filter((line) => String(line.line_type) === "INPUT");
-    if (!outputLine || !sfgBomLine) {
+    if (!outputLine || (!sfgBomLine && !isMtestSampleSku)) {
       return packErr(req, ctx, "PROD_PACK_BOM_INCOMPLETE", 422, "Pack BOM must have OUTPUT and SFG lines");
     }
-    if (!toTrimmedString(outputLine.storage_location_id) || !toTrimmedString(sfgBomLine.storage_location_id)) {
+    // §131.4 item #10/#11: MTEST sample SKUs' Pack BOM has no SFG row at all (no single
+    // Prodshade to fix it to) — the caller supplies which Prodshade+Stroke it picked
+    // (from the mtest-sfg-options lookup) instead, and the SFG location is always L003.
+    if (isMtestSampleSku && !sfgBomLine) {
+      const sfgMaterialId = toTrimmedString(body.sfg_material_id);
+      if (!sfgMaterialId) {
+        return packErr(req, ctx, "PROD_PACK_MTEST_SFG_MATERIAL_REQUIRED", 400, "sfg_material_id (chosen Prodshade) is required for this SKU");
+      }
+      const l003Id = await resolveL003StorageLocationId(companyId);
+      if (!l003Id) {
+        return packErr(req, ctx, "PROD_PACK_MTEST_L003_NOT_CONFIGURED", 422, "L003 storage location is not configured for this company");
+      }
+      sfgBomLine = {
+        material_id: sfgMaterialId,
+        storage_location_id: l003Id,
+        movement_type_code: "P261",
+        qty: null,
+      };
+    }
+    if (!sfgBomLine || !toTrimmedString(outputLine.storage_location_id) || !toTrimmedString(sfgBomLine.storage_location_id)) {
       return packErr(req, ctx, "PROD_PACK_BOM_SLOC_MISSING", 422, "Pack BOM OUTPUT/SFG storage locations are not set");
     }
 
-    const sfgQtyPerPack = bomRequired ? (parsePositiveNumber(sfgBomLine.qty) ?? 0) : (fillQtyPerPack ?? 0);
+    const sfgQtyPerPack = bomRequired ? (parsePositiveNumber(sfgBomLine.qty) ?? 0) : (effectiveFillQtyPerPack ?? 0);
     const plannedQtyKg = sfgQtyPerPack * numPacks;
     if (!plannedQtyKg) {
       return packErr(req, ctx, "PROD_PACK_QTY_INVALID", 400, "Could not derive a valid planned quantity from the Pack BOM");
@@ -1938,7 +2178,10 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     } catch {
       return packErr(req, ctx, "PROD_PACK_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    if (!(await canMaintainCompanyResource(ctx, String((po as JsonRecord).company_id ?? ""), "PROD_PO_FINAL", "WRITE"))) {
+    // §131.2 (2026-08-26): PTEST is QA-exclusive, gated by its own resource code —
+    // PROD_PO_FINAL stays Production-only for every other packing po_type, unchanged.
+    const packFinalResourceCode = (po as JsonRecord).po_type === "PTEST" ? "PROD_MTEST_PACK_PO_FINAL" : "PROD_PO_FINAL";
+    if (!(await canMaintainCompanyResource(ctx, String((po as JsonRecord).company_id ?? ""), packFinalResourceCode, "WRITE"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have Final posting access for this company.");
     }
     if ((po as JsonRecord).status !== "STANDARD") {

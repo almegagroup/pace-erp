@@ -5152,3 +5152,168 @@ per click.
 touched, so no `deno check` needed for this entry. No live click-through (no dev login in this
 environment) — verified by code review against the already-working reference pattern
 (`SAMaterialMaster.jsx`'s Company Mapping tab) and the pre-existing batch-capable backend handler.
+
+---
+
+### 2026-08-25, still later — AC06 "Execute Full Report" bounced to Dashboard (Claude-implemented, frontend routing only)
+
+Business owner: clicking AC06's "Execute Full Report" button sent them to the Dashboard instead of
+the report. Root cause: the button's `openReport()` handler (`SlocCostingGroupPage.jsx`) is the same
+state-only `navigate({replace:true})` pattern already used by PO11
+(`/dashboard/production/sloc-costing-group` -> `.../report`), which relies on the companion route
+being registered in `frontend/src/router/routeIndex.js`'s `companionRoutePairs` list -- `allowedRoutes`
+(built by `buildRouteIndex()`, consumed by both `HiddenRouteRedirect.jsx` and `DeepLinkGuard.jsx`) only
+contains routes that come straight from the menu snapshot, so a route-only companion page (per the
+same established "companion screens have no menu_master row" convention, CLAUDE.md §8) is invisible to
+it unless explicitly paired here. AC06's pair was simply never added when the report screen was built
+-- PO11's own pair (`/dashboard/procurement/planning` -> `.../report`, line ~145) was there as the
+template, AC06's sibling entry was missing entirely. The moment `navigate()` pushed the `/report` URL,
+both guards saw an unrecognized `location.pathname` and redirected to `/` (Dashboard).
+
+**Fix:** one line added to `companionRoutePairs` in `routeIndex.js` --
+`["/dashboard/production/sloc-costing-group", "/dashboard/production/sloc-costing-group/report"]` --
+same shape as every other entry in the list, under a new "── Production ──" section header (the list
+previously only had HR/OM/Procurement/SA sections).
+
+**Verified:** `eslint` clean. Single source of truth (`buildRouteIndex()`) feeds both route guards, so
+one entry fixes both. No backend/ACL change -- this is purely the frontend's own route-allowlist, not
+`acl.*`/`erp_menu.*` data, so nothing to run in prod/dev beyond deploying this file. No live
+click-through (no dev login in this environment) -- verified by tracing the exact guard code path
+(`HiddenRouteRedirect.jsx`/`DeepLinkGuard.jsx` -> `useMenu().allowedRoutes` -> `buildRouteIndex()`)
+against the reported symptom.
+
+---
+
+### 2026-08-26 — GRN 2000000019 (VISFLOW VW 220, CMP006): GE Qty data correction (MCP, prod only)
+
+Business owner traced a real invoice/GE mismatch via AC01: CSN 3000000010's Dispatch Qty = 29870 KG
+(the real invoice qty for invoice 26511702), but the linked GE (1000000016) and GRN (2000000019) both
+had `ge_qty = 29770 KG` -- 100 KG short of what the vendor actually invoiced/dispatched. Business
+owner confirmed the correct figure is 29870 and asked to correct GE Qty so AC01 follows.
+
+**Traced why AC01 needed a direct fix, not just the GE record:** AC01's `invoice_qty` column
+(`ac01.handlers.ts:361`, `grn.ge_qty ?? grn.received_qty`) reads `erp_procurement.goods_receipt`'s
+own `ge_qty` column directly -- a value snapshotted onto the GRN row at GRN-creation time, not a live
+join back to `gate_entry_line`. Editing only `gate_entry_line.ge_qty` would correct the Gate Entry
+record but leave AC01 (and the GRN's own discrepancy calc) still showing the old 29770.
+
+**Fix (MCP direct SQL, prod only -- R-04, real transactional data, not schema/config):**
+- `gate_entry_line.ge_qty` (id `5b8f318b-...`): 29770 -> 29870.
+- `goods_receipt.ge_qty` (grn_number `2000000019`): 29770 -> 29870.
+- `goods_receipt.discrepancy_qty` recalculated to match the same formula the create-handler itself
+  uses (`ge_qty - received_qty`, `grn.handlers.ts:653`): 0 -> 100.
+
+**Deliberately untouched:** `received_qty` (29770, the actual weighed/received qty -- this is real,
+GE Qty correcting to the true invoice figure doesn't change what physically arrived), `grn_rate`/
+`po_rate`/`invoice_rate`/`confirmed_rate`, and `stock_ledger_id` -- no stock posting or vendor-payable
+figure is affected (`vendorPayable = effectiveRate * receivedQty` in AC01 never reads `ge_qty`).
+Purely a reference-field correction; AC01's Invoice Qty column and the GRN's own discrepancy figure
+now correctly read 29870/100. Dev untouched -- this is prod-specific transactional data.
+
+---
+
+### 2026-08-26 — AC01 "Considered Qty" (Claude-implemented, DB+backend+frontend, dev+prod)
+
+Trigger: same GRN 2000000019 investigation (previous entry) exposed a structural gap, not just a
+one-off data typo -- AC01 had no field representing "what quantity are we actually paying/costing
+the vendor for" when Invoice Qty and GRN (received) Qty disagree, only the blunt
+`vendor_payable_override`. Business owner's design: a new **Considered Qty** field, always
+prefilled from Invoice Qty (`ge_qty`) at GRN creation, editable per-GRN in the AC01 drawer, driving
+Payable AND Landed Cost/unit.
+
+**Design checkpoint before building (business owner explicitly walked through this, not skipped):**
+`save_ac01_grn_cost()` (the RPC AC01's Save button calls) feeds its computed `landed_cost_per_unit`
+straight into `erp_inventory.recalculate_valuation_at_row()` -- i.e. it's not a display-only figure,
+it actually rewrites the material's real WAR/stock valuation rate. Flagged this before writing any
+code: dividing Landed Cost by Considered Qty (rather than physical Received Qty) could distort the
+per-unit cost of what's actually sitting in the warehouse whenever the two diverge. Business owner,
+after seeing the concrete distortion illustrated against this exact GRN's own numbers, made an
+explicit, informed call: base BOTH Payable and Landed Cost/unit on Considered Qty throughout, not
+just Payable -- "considered qty er uporei koro, future e change korte hole korbo." Implemented per
+that decision, not overridden.
+
+**Schema (migration `20260826100000_ac01_considered_qty.sql`, dev+prod):**
+- `erp_procurement.goods_receipt.considered_qty numeric(20,6)` -- new column, same precision as
+  `ge_qty`/`received_qty`.
+- Backfill: `considered_qty = COALESCE(ge_qty, received_qty)` for every pre-existing row (44 rows
+  prod, 8 rows dev, 0 nulls remaining either side) -- the "always prefilled" invariant holds for
+  historical GRNs too, not just new ones.
+- `save_ac01_grn_cost()` (CREATE OR REPLACE, same function, new trailing `p_considered_qty numeric
+  DEFAULT NULL` param -- safe for existing named-param callers): persists it (`COALESCE(p_considered_qty,
+  considered_qty)`, same pattern every other field here already uses), and every `v_received_qty`/
+  `v_received_qty_base` reference in the cost math became `v_considered_qty`/`v_considered_qty_base`
+  -- `v_purchase_cost` (feeds Vendor Payable), PER_UOM cost-line multiplication, and
+  `v_landed_cost_per_unit`'s divisor (which feeds the WAR recalc call).
+
+**Backend (`ac01.handlers.ts`, `grn.handlers.ts`):**
+- `grn.handlers.ts`'s GRN-create insert now seeds `considered_qty: geQty` alongside `ge_qty` --
+  confirmed this is the only `goods_receipt` insert site in the codebase (grepped).
+- `computeLandedCostPerUnit()` and `computeSuggestedPayables()` (the read-side TS mirrors of the
+  RPC's own math, used by both List and GET-detail so a page load never triggers a write) switched
+  from `grn.received_qty` to `grn.considered_qty` (falling back to received_qty defensively) --
+  same treatment as the RPC, kept in lockstep since this file's own comments already document a
+  real prior incident (2026-08-22, GRN 2000000030) where the TS mirror and RPC drifted.
+- `buildListRow()`: `vendor_payable`/`taxable_value` switched to considered-qty basis; added
+  `considered_qty` and `discrepancy_qty` (`ge_qty - received_qty`, grn.handlers.ts's own create-time
+  formula -- positive = shortage, negative = excess) to the row/response shape.
+- `saveAC01GRNCostHandler`: passes `p_considered_qty` through to the RPC.
+- ACL: no new resource -- Considered Qty edits go through the drawer's existing Save flow, already
+  gated on `PROC_IV_LIST:WRITE` (`requireAC01WriteAccess`), unchanged.
+
+**Frontend (`AC01Page.jsx`):** new "Quantity" drawer section (Identification -> Quantity -> Rate
+confirmation) with 4 fields: Invoice Qty (read-only, `ge_qty ?? received_qty`), GRN Qty (read-only,
+`received_qty`), Shortage/Excess (read-only, derived from `discrepancy_qty` via new
+`formatQtyVarianceNote()` -- "Shortage N" / "Excess N" / "None"), and Considered Qty (editable,
+disabled when `readOnly` i.e. on AC03). `draft.considered_qty` prefilled from
+`grn.considered_qty ?? grn.ge_qty ?? grn.received_qty` on load. `computeLivePreview()` (the
+preview-before-save mirror that already recomputes Payable/Landed Cost on every keystroke, per its
+own 2026-08-22 comment) switched from `receivedQty`/`receivedQtyBase` to `consideredQty`/
+`consideredQtyBase` throughout -- editing Considered Qty now live-updates every Suggested Payable
+card and the Landed Price/Unit figure in the drawer before Save, same as editing Confirmed Rate or
+a cost line already did. `handleSave()` sends `considered_qty` to the RPC.
+
+**Verified:** `deno check` on both backend files -- zero new errors both (3 pre-existing on
+ac01.handlers.ts, 53 pre-existing on grn.handlers.ts, git-stash-compared before/after, all known
+Supabase-client `.range()`/`.ilike()`/`.or()` typing noise). `eslint` clean on AC01Page.jsx.
+`jsx-no-undef-guard.mjs` clean (263 files). `frontend-payload-guard.mjs` clean. Migration applied
+to dev+prod, `migration-integrity-check.mjs` confirms both `in_sync=true` (472/472, identical md5).
+`stock_health_check()` all-OK post-migration (16/16 checks). GRN 2000000019 spot-checked:
+`considered_qty` backfilled to 29870 (matching the GE Qty correction from the previous entry) --
+Payable/Landed Cost for this GRN will now compute against 29870 the next time it's saved or viewed.
+
+**Not yet done:** live click-through in the deployed app (no dev login in this environment) --
+verified via code review + direct DB spot-check instead, per established session pattern.
+
+---
+
+### 2026-08-26, still later — AC01 Considered Qty: real prod incident, fixed within minutes
+
+Business owner reported Accounts getting an error in AC01 shortly after the Considered Qty
+migration landed. Root cause confirmed by directly reproducing it: `CREATE OR REPLACE FUNCTION
+erp_procurement.save_ac01_grn_cost(...)` with a NEW trailing parameter (`p_considered_qty`) does
+**not** replace the old 20-argument signature -- Postgres treats a changed parameter list as a
+distinct overload, not a replacement, so both the old (20-arg) and new (21-arg) versions existed
+side by side in both prod and dev. Since every new-function parameter carries a `DEFAULT`, a
+PostgREST RPC call whose params object could satisfy either signature became ambiguous --
+`ERROR: function ... is not unique / Could not choose a best candidate function` -- breaking every
+AC01 Save in prod. Reproduced directly via a rolled-back diagnostic call before touching anything
+further.
+
+**Fix (MCP, immediate, both dev and prod):** `DROP FUNCTION` the old 20-arg signature explicitly by
+its full type list, then `NOTIFY pgrst, 'reload schema'`. Re-ran the same diagnostic call
+afterward -- resolves cleanly, returns a valid result, no ambiguity. `stock_health_check()` re-run
+post-fix, all 16 checks OK.
+
+**Migration file corrected too** (`20260826100000_ac01_considered_qty.sql`, same file -- this
+migration was created and applied within this same session, not yet relied on elsewhere, so
+amending it in place is correct rather than stacking a follow-up migration): added the same
+`DROP FUNCTION IF EXISTS erp_procurement.save_ac01_grn_cost(<old 20-arg list>)` immediately before
+the `CREATE OR REPLACE`, so a fresh sequential apply (new environment, or any future full replay)
+produces a single unambiguous function from the start, not the same live incident again.
+
+**Lesson for future `CREATE OR REPLACE FUNCTION` migrations that add/remove a parameter:** verify
+with `SELECT p.oid::regprocedure FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE
+n.nspname = '<schema>' AND p.proname = '<function>'` that exactly ONE signature exists after
+applying -- CREATE OR REPLACE only replaces when the parameter TYPE LIST is unchanged; adding,
+removing, or reordering parameters silently creates a second overload instead of erroring, and
+Postgres/PostgREST only surface the ambiguity later, at call time, not at migration time.

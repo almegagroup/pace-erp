@@ -184,9 +184,14 @@ function PackingPoFinalTab() {
     setNewPmRows([]);
   }, [po?.id, po?.status]);
 
-  // §108.2 item 8 (2026-07-24, business owner correction): PMTS reversed back to
-  // batch-selection like PMTO/PHPS — "Fixed BOM/pack size" and "batch choice" are
-  // independent decisions; only PTEST (MTEST) stays generically batch-blind.
+  // §108.2 item 8 (2026-07-24): PMTS reversed back to batch-selection like PMTO/PHPS
+  // — "Fixed BOM/pack size" and "batch choice" are independent decisions.
+  // §131.3 (2026-08-26): PTEST/MTEST is NOT batch-blind either — this had already been
+  // flattened to `false` here (this comment used to say PTEST was the one exception
+  // that stayed batch-blind, which no longer matched the code — corrected). Every
+  // po_type picks its SFG batch here generically, keyed only by sfgLine.material_id/
+  // storage_location — that's what makes the same query below work for MTEST/PTEST's
+  // new Standard-time-picked SFG material without any po_type-specific branch.
   const isBatchBlind = false;
   // §108.2 item 7 — PMTS has no Approved/AP-Approved reco workflow (§108.4); the
   // backend already skips the reco insert entirely for PMTS at Final/COR6.
@@ -347,7 +352,7 @@ function PackingPoFinalTab() {
       await finalizePackingOrder(po.id, {
         ...(isBatchBlind ? {} : { sfg_batch_number: effectiveSfgBatchNumber }),
         lines: [...pmLinePayload, ...newLinePayload],
-      });
+      }, po.po_type);
       toast("Packing PO finalized.");
       qc.invalidateQueries({ queryKey: ["pack-orders"] });
       qc.invalidateQueries({ queryKey: ["packing-final-detail", po.id] });
@@ -949,8 +954,10 @@ function storageLocationLabel(location) {
 }
 
 // Locked 2026-08-12: INT skips QA and Start Batch entirely (no batch number, per
-// §83.5) so it finalizes directly from STANDARD — every other po_type (MTEST included,
-// now running the exact same lifecycle as MTO/HPS) still needs BATCH_STARTED.
+// §83.5) so it finalizes directly from STANDARD — every other po_type still needs
+// BATCH_STARTED (reached via Start Batch), MTEST included — §131.1 (2026-08-26)
+// changed what happens AT Final for MTEST (it now also posts/verifies in that same
+// click), not the status required to reach Final in the first place.
 function requiredFinalStatus(poType) {
   return String(poType || "").toUpperCase() === "INT" ? "STANDARD" : "BATCH_STARTED";
 }
@@ -1083,6 +1090,12 @@ function ProcessPoFinalTab() {
   // billing relationship, and both now post stock at Final instead of Verify.
   const hideRmApproval = po?.po_type === "MTS" || po?.po_type === "INT";
   const isDirectPostType = po?.po_type === "INT";
+  // §131.1 (2026-08-26): MTEST's Final absorbs Verify (single QA action, no separate
+  // Verify click) — same "completes in one step" cosmetic treatment as INT below, but
+  // kept as its OWN flag rather than folded into isDirectPostType: MTEST's output qty
+  // is still derived from RM approved qty (like MTO/HPS/MTS), never the free-entry
+  // manualOutputQty field isDirectPostType gates — only wording changes for MTEST.
+  const completesInOneStep = isDirectPostType || po?.po_type === "MTEST";
   const lookupMessage = useMemo(() => {
     if (lookupQ.error) return lookupQ.error.message || "Process PO lookup failed.";
     if (!submittedPoNumber || lookupQ.isFetching) return "";
@@ -1218,8 +1231,8 @@ function ProcessPoFinalTab() {
       await finalizeProcessOrder(po.id, {
         actual_qty: outputActualQty,
         lines: inputRows,
-      });
-      toast(isDirectPostType ? "Process PO completed and stock posted." : "Process PO saved as FINAL.");
+      }, po.po_type);
+      toast(completesInOneStep ? "Process PO completed and stock posted." : "Process PO saved as FINAL.");
       qc.invalidateQueries({ queryKey: ["process-orders"] });
       qc.invalidateQueries({ queryKey: ["production-final-detail", po.id] });
     } catch (error) {
@@ -1328,7 +1341,7 @@ function ProcessPoFinalTab() {
                   disabled={saving}
                   className="rounded bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
                 >
-                  {saving ? "Saving..." : isDirectPostType ? "Complete & Post Stock" : "Save as Final"}
+                  {saving ? "Saving..." : completesInOneStep ? "Complete & Post Stock" : "Save as Final"}
                 </button>
               </div>
 
