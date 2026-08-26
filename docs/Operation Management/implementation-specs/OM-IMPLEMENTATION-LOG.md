@@ -5317,3 +5317,21 @@ n.nspname = '<schema>' AND p.proname = '<function>'` that exactly ONE signature 
 applying -- CREATE OR REPLACE only replaces when the parameter TYPE LIST is unchanged; adding,
 removing, or reordering parameters silently creates a second overload instead of erroring, and
 Postgres/PostgREST only surface the ambiguity later, at call time, not at migration time.
+
+---
+
+### 2026-08-26, still later — AC01 drawer: Material Name/External Code/Vendor Name (Claude-implemented)
+
+Business owner: the same drawer that now shows Invoice Qty/GRN Qty/Considered Qty had never shown
+material or vendor identity at all -- `getAC01GRNHandler` only ever returned the raw
+`goods_receipt` row (material_id/vendor_id sitting unused, never resolved), unlike the list row
+which already resolves both via `buildListRow`.
+
+**Fix:** `getAC01GRNHandler` now fetches `material_master`/`vendor_master` in the SAME `Promise.all`
+round as the Landed Cost query (§8B -- independent reads), adds `item_name`/`external_code`/
+`supplier_name` to the response (same field names `buildListRow` already uses, for consistency).
+Frontend: 3 new read-only fields (Material name, External code, Vendor name) added to the drawer's
+existing "Identification" section, right above Invoice number/date.
+
+**Verified:** `deno check` -- 3 pre-existing errors, unchanged (git-stash technique). `eslint`,
+`jsx-no-undef-guard.mjs`, `company-scope-guard.mjs` all clean.
