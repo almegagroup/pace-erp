@@ -124,7 +124,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       const isPackingNumber = poNumber.startsWith("94");
       if (isPackingNumber || tab === "PACKING") {
         let pq = serviceRoleClient.schema("erp_production").from("packing_order")
-          .select("id, company_id, po_number, po_type, process_order_id, status")
+          .select("id, company_id, po_number, po_type, process_order_id, status, num_packs, fill_qty_per_pack")
           .eq("po_number", poNumber);
         if (companyIds) pq = pq.in("company_id", companyIds);
         const { data, error } = await pq;
@@ -167,7 +167,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       processOrders = (data ?? []) as JsonRecord[];
     } else {
       let pq = serviceRoleClient.schema("erp_production").from("packing_order")
-        .select("id, company_id, po_number, po_type, process_order_id, status, material_id, segment_code")
+        .select("id, company_id, po_number, po_type, process_order_id, status, material_id, segment_code, num_packs, fill_qty_per_pack")
         .order("created_at", { ascending: false })
         .limit(MAX_ORDERS_MATCHED);
       if (companyIds) pq = pq.in("company_id", companyIds);
@@ -202,7 +202,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     if (showLinkedPacking && processOrderIds.length > 0) {
       const { data: linked, error: linkedErr } = await serviceRoleClient
         .schema("erp_production").from("packing_order")
-        .select("id, company_id, po_number, po_type, process_order_id, status")
+        .select("id, company_id, po_number, po_type, process_order_id, status, num_packs, fill_qty_per_pack")
         .in("process_order_id", processOrderIds);
       if (linkedErr) throw new Error("PROD_OIS_LOOKUP_FAILED");
       const seen = new Set(linkedPackingOrders.map((r) => String(r.id)));
@@ -407,20 +407,48 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       if (reco) recoByStockLedgerId.set(String(line.stock_ledger_id), reco);
     }
 
-    // §122.1 (this pass) — "FG/SFG transactions first within each PO group's list": every
-    // row is tagged with the Process Order it ultimately belongs to (directly via a PROC_PO
-    // reference, via a linked Packing PO's own parent, or via the batch_number union for
-    // non-PO-tagged events like a PID difference), then re-sorted group-by-group with
-    // SFG/FG output rows first, RM/PM/INT/PM input rows after.
+    // §122.1, refined 2026-08-26 — every row is tagged with the Process Order it ultimately
+    // belongs to (directly via a PROC_PO reference, via a linked Packing PO's own parent, or
+    // via the batch_number union for non-PO-tagged events like a PID difference), then
+    // re-sorted group-by-group into 6 fixed tiers so a large date-range list visually reads
+    // as a sequence of distinct order-groups instead of an undifferentiated blob:
+    //   1. Process PO's own SFG P101 (the batch's output — always leads its group)
+    //   2. Process PO's RM/INT issues (what made that SFG)
+    //   3. Packing PO's FG P101 (the SFG turned into a dispatchable SKU)
+    //   4. Packing PO's PM issues (what packed that FG)
+    //   5. QA movements (P32x/P33x/P34x release/hold/reject family) — regardless of which
+    //      order they're tagged to; Process PO Verify's own P321 auto-release leg on the SAME
+    //      SFG material as tier 1 belongs here, not tier 1, since it's a QA action, not the
+    //      output-creation event itself.
+    //   6. Packing PO's SFG P261 (the SFG being consumed to make that FG — closes the loop)
+    // Anything not matching any of the above (e.g. a bare P262 reversal leg) falls into a
+    // catch-all last tier rather than silently breaking the sort.
     const processOrderById = new Map(processOrders.map((o) => [String(o.id), o]));
     const processOrderByBatch = new Map(
       processOrders.filter((o) => toTrimmedString(o.batch_number)).map((o) => [toTrimmedString(o.batch_number), o]),
     );
+    const packingOrderById = new Map(linkedPackingOrders.map((po) => [String(po.id), po]));
     const packingOrderToProcessOrder = new Map(
       linkedPackingOrders
         .map((po) => [String(po.id), processOrderById.get(String(po.process_order_id))] as const)
         .filter((entry): entry is [string, JsonRecord] => Boolean(entry[1])),
     );
+
+    const QA_MOVEMENT_PREFIXES = ["P32", "P33", "P34"];
+    function computeRowTier(refType: string, materialType: string, movementTypeCode: string): number {
+      const mvt = toUpperTrimmedString(movementTypeCode);
+      if (QA_MOVEMENT_PREFIXES.some((prefix) => mvt.startsWith(prefix))) return 5;
+      if (refType === "PROC_PO") {
+        if (materialType === "SFG" && mvt === "P101") return 1;
+        if (materialType === "RM" || materialType === "INT") return 2;
+      }
+      if (refType === "PACK_PO") {
+        if (materialType === "FG" && mvt === "P101") return 3;
+        if (materialType === "PM") return 4;
+        if (materialType === "SFG" && mvt === "P261") return 6;
+      }
+      return 7;
+    }
 
     const rows = ledgerRows.map((row) => {
       const doc = docMap.get(String(row.stock_document_id));
@@ -440,6 +468,11 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       const groupPoNumber = owningOrder ? toTrimmedString(owningOrder.po_number) : (toTrimmedString(doc?.reference_document_number) || "UNGROUPED");
 
       const materialType = toUpperTrimmedString(material?.material_type);
+      const tier = computeRowTier(refType, materialType, String(row.movement_type_code ?? ""));
+      // Num Packs / Per Pack only mean anything on the Packing PO's own FG receipt row
+      // (tier 3) -- every other row leaves these null, not zero, since "not applicable"
+      // and "zero packs" are different facts.
+      const packingOrder = tier === 3 ? packingOrderById.get(refId) : undefined;
       return {
         id: row.id,
         company_id: row.company_id,
@@ -463,9 +496,15 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
         standard_qty: reco ? reco.standardQty : null,
         apl_qty: reco ? reco.apl : null,
         variance_qty: reco ? reco.variance : null,
+        num_packs: packingOrder ? packingOrder.num_packs ?? null : null,
+        fill_qty_per_pack: packingOrder ? packingOrder.fill_qty_per_pack ?? null : null,
+        // Tier 1 (Process PO's own SFG receipt) is where every group visually begins —
+        // the frontend bands this row so a long, mixed-date-range list reads as a
+        // sequence of distinct groups instead of one undifferentiated blob.
+        is_group_start: tier === 1,
         _group_po_number: groupPoNumber,
         _created_at: toTrimmedString(row.created_at),
-        _output_priority: materialType === "SFG" || materialType === "FG" ? 0 : 1,
+        _tier: tier,
       };
     });
 
@@ -479,7 +518,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       const groupCompare = (groupMinDate.get(a._group_po_number) ?? "").localeCompare(groupMinDate.get(b._group_po_number) ?? "");
       if (groupCompare !== 0) return groupCompare;
       if (a._group_po_number !== b._group_po_number) return a._group_po_number.localeCompare(b._group_po_number);
-      if (a._output_priority !== b._output_priority) return a._output_priority - b._output_priority;
+      if (a._tier !== b._tier) return a._tier - b._tier;
       const dateCompare = String(a.posting_date ?? "").localeCompare(String(b.posting_date ?? ""));
       if (dateCompare !== 0) return dateCompare;
       return a._created_at.localeCompare(b._created_at);
@@ -487,7 +526,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     for (const row of rows) {
       delete (row as JsonRecord)._group_po_number;
       delete (row as JsonRecord)._created_at;
-      delete (row as JsonRecord)._output_priority;
+      delete (row as JsonRecord)._tier;
     }
 
     return okResponse({
