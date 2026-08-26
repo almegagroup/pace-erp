@@ -5152,3 +5152,32 @@ per click.
 touched, so no `deno check` needed for this entry. No live click-through (no dev login in this
 environment) — verified by code review against the already-working reference pattern
 (`SAMaterialMaster.jsx`'s Company Mapping tab) and the pre-existing batch-capable backend handler.
+
+---
+
+### 2026-08-25, still later — AC06 "Execute Full Report" bounced to Dashboard (Claude-implemented, frontend routing only)
+
+Business owner: clicking AC06's "Execute Full Report" button sent them to the Dashboard instead of
+the report. Root cause: the button's `openReport()` handler (`SlocCostingGroupPage.jsx`) is the same
+state-only `navigate({replace:true})` pattern already used by PO11
+(`/dashboard/production/sloc-costing-group` -> `.../report`), which relies on the companion route
+being registered in `frontend/src/router/routeIndex.js`'s `companionRoutePairs` list -- `allowedRoutes`
+(built by `buildRouteIndex()`, consumed by both `HiddenRouteRedirect.jsx` and `DeepLinkGuard.jsx`) only
+contains routes that come straight from the menu snapshot, so a route-only companion page (per the
+same established "companion screens have no menu_master row" convention, CLAUDE.md §8) is invisible to
+it unless explicitly paired here. AC06's pair was simply never added when the report screen was built
+-- PO11's own pair (`/dashboard/procurement/planning` -> `.../report`, line ~145) was there as the
+template, AC06's sibling entry was missing entirely. The moment `navigate()` pushed the `/report` URL,
+both guards saw an unrecognized `location.pathname` and redirected to `/` (Dashboard).
+
+**Fix:** one line added to `companionRoutePairs` in `routeIndex.js` --
+`["/dashboard/production/sloc-costing-group", "/dashboard/production/sloc-costing-group/report"]` --
+same shape as every other entry in the list, under a new "── Production ──" section header (the list
+previously only had HR/OM/Procurement/SA sections).
+
+**Verified:** `eslint` clean. Single source of truth (`buildRouteIndex()`) feeds both route guards, so
+one entry fixes both. No backend/ACL change -- this is purely the frontend's own route-allowlist, not
+`acl.*`/`erp_menu.*` data, so nothing to run in prod/dev beyond deploying this file. No live
+click-through (no dev login in this environment) -- verified by tracing the exact guard code path
+(`HiddenRouteRedirect.jsx`/`DeepLinkGuard.jsx` -> `useMenu().allowedRoutes` -> `buildRouteIndex()`)
+against the reported symptom.

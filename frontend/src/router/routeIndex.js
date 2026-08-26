@@ -146,6 +146,13 @@ export function buildRouteIndex(menuSnapshot) {
 
     ["/dashboard/procurement/opening-stock", "/dashboard/procurement/opening-stock/:id"],
 
+    // ── Production ───────────────────────────────────────────────────────────
+    // AC06's "Execute Full Report" companion route, same PO11 pattern (state-only
+    // display, navigate({replace:true}) to a /report suffix) -- was missing here
+    // entirely, so every click bounced straight to the dashboard (found live
+    // 2026-08-25, business owner).
+    ["/dashboard/production/sloc-costing-group", "/dashboard/production/sloc-costing-group/report"],
+
     // ── SA ────────────────────────────────────────────────────────────────────
     ["/sa/users",              "/sa/users/report"],
   ];
