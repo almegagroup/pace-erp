@@ -321,56 +321,86 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     const materialMap = new Map(materialRows.map((r) => [String(r.id), r]));
     const companyMap = new Map(companyRows.map((r) => [String(r.id), r]));
 
-    // APL Qty / Variance / Dosage / Standard sidecar — §122.3. Matched by
-    // (process_order_id|packing_order_id) + material_id, is_voided=false. SFG/FG rows never
-    // match (reco tracks RM/PM/INT/PM consumption only) and stay null, not zero — "no reco
-    // line" and "zero variance" are different facts. Dosage %/Standard Qty only exist on
-    // process_order_line_reco (the recipe-driven RM/INT side) — packing_order_line_reco has
-    // no such columns, so PM rows always show blank there, by design, not a bug.
+    // APL Qty / Variance / Dosage / Standard sidecar — §122.3, redesigned 2026-08-26.
+    // Previously matched by (process_order_id|packing_order_id) + material_id, which stamps
+    // the SAME aggregated numbers onto EVERY stock_ledger row for that material — including a
+    // later P262 reversal or a correction-added extra P261 line. Confirmed live on prod
+    // (CMP006 PO 9300000070, batch BM05698, material WATER): a COR6 correction posted a P262
+    // credit of 1.8, and the old logic showed that P262 row with the SAME Standard Qty/Dosage%
+    // as the original P261 issue — a user reading the grid row-by-row would double-count it.
+    //
+    // Fix: each process_order_line/packing_order_line row has its own stock_ledger_id, which
+    // always anchors to that line's OWN ORIGINAL posting (verified live — corrections/
+    // reversals post a NEW stock_ledger row but never repoint this column). Reco rows are
+    // now aggregated per line_id (so a correction against the same line still nets in), then
+    // attached ONLY to that line's anchor stock_ledger row. Any other ledger row for the same
+    // material in the same order (a P262 reversal, or a second, independent line — e.g. the
+    // same RM entered twice in the Stroke recipe, each with its own line + anchor) shows null,
+    // never a duplicated/borrowed value. SFG/FG rows still never match (no process_order_line
+    // exists for them), so they stay null exactly as before.
+    const [procLineRows, packLineRows] = await Promise.all([
+      processOrderIds.length > 0
+        ? fetchInChunks<JsonRecord>(processOrderIds, (idChunk) =>
+            serviceRoleClient.schema("erp_production").from("process_order_line")
+              .select("id, stock_ledger_id").in("process_order_id", idChunk).not("stock_ledger_id", "is", null))
+            .catch(() => { throw new Error("PROD_OIS_ENRICH_FAILED"); })
+        : Promise.resolve([]),
+      packingOrderIds.length > 0
+        ? fetchInChunks<JsonRecord>(packingOrderIds, (idChunk) =>
+            serviceRoleClient.schema("erp_production").from("packing_order_line")
+              .select("id, stock_ledger_id").in("packing_order_id", idChunk).not("stock_ledger_id", "is", null))
+            .catch(() => { throw new Error("PROD_OIS_ENRICH_FAILED"); })
+        : Promise.resolve([]),
+    ]);
     const [procRecoResp, packRecoResp] = await Promise.all([
       processOrderIds.length > 0
         ? serviceRoleClient.schema("erp_production").from("process_order_line_reco")
-            .select("process_order_id, material_id, ap_approved_qty, variance_qty, dosage_pct, standard_qty")
+            .select("process_order_line_id, ap_approved_qty, variance_qty, dosage_pct, standard_qty")
             .in("process_order_id", processOrderIds).eq("is_voided", false)
         : Promise.resolve({ data: [], error: null }),
       packingOrderIds.length > 0
         ? serviceRoleClient.schema("erp_production").from("packing_order_line_reco")
-            .select("packing_order_id, material_id, ap_approved_qty, variance_qty")
+            .select("packing_order_line_id, ap_approved_qty, variance_qty")
             .in("packing_order_id", packingOrderIds).eq("is_voided", false)
         : Promise.resolve({ data: [], error: null }),
     ]);
     if (procRecoResp.error || packRecoResp.error) throw new Error("PROD_OIS_ENRICH_FAILED");
 
     type RecoAgg = { apl: number; variance: number; dosagePct: number | null; standardQty: number | null };
-    const recoByOrderMaterial = new Map<string, RecoAgg>();
+    const recoByProcLineId = new Map<string, RecoAgg>();
     for (const row of (procRecoResp.data ?? []) as JsonRecord[]) {
-      const key = `${row.process_order_id}|${row.material_id}`;
-      const prev = recoByOrderMaterial.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
+      const key = String(row.process_order_line_id);
+      const prev = recoByProcLineId.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
       const rowDosagePct = row.dosage_pct != null ? Number(row.dosage_pct) : null;
-      recoByOrderMaterial.set(key, {
+      recoByProcLineId.set(key, {
         apl: prev.apl + (Number(row.ap_approved_qty) || 0),
         variance: prev.variance + (Number(row.variance_qty) || 0),
-        // Corrected 2026-08-26: dosage_pct is NOT guaranteed identical across every reco
-        // row for this pairing — Stroke Master explicitly allows the same RM to appear on
-        // more than one line at different dosage%s (§83.3), and a live prod example
-        // confirmed it (CMP003 PO 9300000061, WATER: 29.5% + 6.45% across two real
-        // PRODUCTION reco rows). The old "take the last non-null value" logic silently
-        // dropped every line but one. Sum instead, like apl/standardQty already do — a
-        // null-dosage row (e.g. a COR6_CORRECTION line with no recipe % of its own) adds
-        // nothing rather than resetting the running total.
+        // A correction row against this same line (e.g. COR6_CORRECTION) may have no
+        // dosage_pct of its own — add nothing rather than resetting the running total.
         dosagePct: rowDosagePct != null ? (prev.dosagePct ?? 0) + rowDosagePct : prev.dosagePct,
         standardQty: (prev.standardQty ?? 0) + (Number(row.standard_qty) || 0),
       });
     }
+    const recoByPackLineId = new Map<string, RecoAgg>();
     for (const row of (packRecoResp.data ?? []) as JsonRecord[]) {
-      const key = `${row.packing_order_id}|${row.material_id}`;
-      const prev = recoByOrderMaterial.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
-      recoByOrderMaterial.set(key, {
+      const key = String(row.packing_order_line_id);
+      const prev = recoByPackLineId.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
+      recoByPackLineId.set(key, {
         apl: prev.apl + (Number(row.ap_approved_qty) || 0),
         variance: prev.variance + (Number(row.variance_qty) || 0),
-        dosagePct: prev.dosagePct,
-        standardQty: prev.standardQty,
+        dosagePct: null,
+        standardQty: null,
       });
+    }
+
+    const recoByStockLedgerId = new Map<string, RecoAgg>();
+    for (const line of procLineRows) {
+      const reco = recoByProcLineId.get(String(line.id));
+      if (reco) recoByStockLedgerId.set(String(line.stock_ledger_id), reco);
+    }
+    for (const line of packLineRows) {
+      const reco = recoByPackLineId.get(String(line.id));
+      if (reco) recoByStockLedgerId.set(String(line.stock_ledger_id), reco);
     }
 
     // §122.1 (this pass) — "FG/SFG transactions first within each PO group's list": every
@@ -394,8 +424,10 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       const company = companyMap.get(String(row.company_id));
       const refType = toTrimmedString(doc?.reference_document_type);
       const refId = toTrimmedString(doc?.reference_document_id);
-      const recoKey = refId ? `${refId}|${row.material_id}` : "";
-      const reco = recoKey ? recoByOrderMaterial.get(recoKey) : undefined;
+      // Keyed by this exact ledger row's own id — only the line's ORIGINAL anchor posting
+      // matches (see the recoByStockLedgerId build above); a later reversal/correction
+      // posting against the same material is a different stock_ledger row and gets null.
+      const reco = recoByStockLedgerId.get(String(row.id));
 
       let owningOrder: JsonRecord | undefined;
       if (refType === "PROC_PO") owningOrder = processOrderById.get(refId);
