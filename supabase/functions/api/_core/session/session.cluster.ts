@@ -10,11 +10,22 @@
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertRlsEnabled } from "../../_shared/rls_assert.ts";
+import { log } from "../../_lib/logger.ts";
 import {
   SESSION_CLUSTER_MAX_WINDOWS,
   SESSION_CLUSTER_STATE,
   SESSION_CLUSTER_WINDOW_STATE,
 } from "./session.cluster.types.ts";
+
+// Widened from 60s (2026-08-26): the popup opened by Shift+F8 has to finish
+// a full page load + boot + this admit call before the ticket expires. On a
+// slow network/cold cache that regularly exceeded 60s, which made the
+// popup treat itself as "not authenticated" and redirect to /login — the
+// user would then re-login there, and because every fresh login revokes
+// every OTHER active session for that user (see session.create.ts), the
+// ORIGINAL window's session got silently killed too. See CLAUDE.md's
+// "new window logout" investigation for the full trace.
+const JOIN_TICKET_TTL_MS = 5 * 60 * 1000;
 
 type ClusterTerminationState =
   | SESSION_CLUSTER_STATE.REVOKED
@@ -99,6 +110,16 @@ async function requireActiveCluster(clusterId: string) {
     .maybeSingle();
 
   if (error || !data || data.status !== SESSION_CLUSTER_STATE.ACTIVE) {
+    log({
+      level: "WARN",
+      event: "SESSION_CLUSTER_NOT_ACTIVE",
+      meta: {
+        clusterId,
+        found: Boolean(data),
+        status: data?.status ?? null,
+        supabaseError: error?.message ?? null,
+      },
+    });
     throw new Error("SESSION_CLUSTER_NOT_ACTIVE");
   }
 
@@ -335,6 +356,15 @@ export async function issueSessionClusterJoinTicket(
     .maybeSingle();
 
   if (issuingWindowError || !issuingWindow?.cluster_window_id) {
+    log({
+      level: "WARN",
+      event: "SESSION_CLUSTER_WINDOW_NOT_ADMITTED",
+      meta: {
+        clusterId: args.clusterId,
+        windowToken: args.windowToken,
+        supabaseError: issuingWindowError?.message ?? null,
+      },
+    });
     throw new Error("SESSION_CLUSTER_WINDOW_NOT_ADMITTED");
   }
 
@@ -350,10 +380,16 @@ export async function issueSessionClusterJoinTicket(
   }
 
   if ((count ?? 0) >= SESSION_CLUSTER_MAX_WINDOWS) {
+    log({
+      level: "WARN",
+      event: "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED_AT_TICKET_ISSUE",
+      meta: { clusterId: args.clusterId, admittedCount: count },
+    });
     throw new Error("SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED");
   }
 
-  const expiresAtIso = new Date(Date.now() + 60 * 1000).toISOString();
+  const issuedAtIso = new Date().toISOString();
+  const expiresAtIso = new Date(Date.now() + JOIN_TICKET_TTL_MS).toISOString();
 
   const { data, error } = await serviceRoleClient
     .schema("erp_core")
@@ -369,6 +405,17 @@ export async function issueSessionClusterJoinTicket(
   if (error || !data?.join_token) {
     throw new Error("SESSION_CLUSTER_JOIN_TICKET_CREATE_FAILED");
   }
+
+  log({
+    level: "INFO",
+    event: "SESSION_CLUSTER_JOIN_TICKET_ISSUED",
+    meta: {
+      clusterId: args.clusterId,
+      issuedAt: issuedAtIso,
+      expiresAt: expiresAtIso,
+      ttlMs: JOIN_TICKET_TTL_MS,
+    },
+  });
 
   return data.join_token;
 }
@@ -406,21 +453,50 @@ export async function admitSessionClusterWindow(
   let joinTicketId: string | null = null;
 
   if (args.joinToken) {
-    const { data: joinTicket, error: joinError } = await serviceRoleClient
+    // Fetch the raw ticket row first (no validity filters) so a failure can
+    // be logged with the SPECIFIC reason (not found / wrong cluster /
+    // already consumed / expired-by-how-much) instead of one opaque
+    // "invalid" bucket — this is what lets us pin down the real trigger
+    // behind the "new window logout" race instead of guessing at it.
+    const { data: rawTicket, error: joinError } = await serviceRoleClient
       .schema("erp_core")
       .from("session_cluster_join_tickets")
-      .select("join_token")
+      .select("join_token, cluster_id, expires_at, consumed_at")
       .eq("join_token", args.joinToken)
-      .eq("cluster_id", args.clusterId)
-      .is("consumed_at", null)
-      .gt("expires_at", currentIso)
       .maybeSingle();
 
-    if (joinError || !joinTicket?.join_token) {
+    const nowMs = Date.now();
+    const expiresAtMs = rawTicket?.expires_at
+      ? new Date(rawTicket.expires_at).getTime()
+      : null;
+
+    const ticketValid =
+      !joinError &&
+      Boolean(rawTicket?.join_token) &&
+      rawTicket?.cluster_id === args.clusterId &&
+      !rawTicket?.consumed_at &&
+      expiresAtMs !== null &&
+      expiresAtMs > nowMs;
+
+    if (!ticketValid) {
+      log({
+        level: "WARN",
+        event: "SESSION_CLUSTER_JOIN_TICKET_INVALID",
+        meta: {
+          clusterId: args.clusterId,
+          windowInstanceId: args.windowInstanceId,
+          supabaseError: joinError?.message ?? null,
+          ticketFound: Boolean(rawTicket?.join_token),
+          clusterMatches: rawTicket ? rawTicket.cluster_id === args.clusterId : null,
+          alreadyConsumedAt: rawTicket?.consumed_at ?? null,
+          expiresAt: rawTicket?.expires_at ?? null,
+          msPastExpiry: expiresAtMs !== null ? nowMs - expiresAtMs : null,
+        },
+      });
       throw new Error("SESSION_CLUSTER_JOIN_TICKET_INVALID");
     }
 
-    joinTicketId = joinTicket.join_token;
+    joinTicketId = rawTicket.join_token;
   }
 
   const { data: admittedRows, error: admittedError } = await serviceRoleClient
@@ -443,10 +519,20 @@ export async function admitSessionClusterWindow(
     : nextAvailableWindowSlot(admittedSlots);
 
   if (availableSlot == null) {
+    log({
+      level: "WARN",
+      event: "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED_AT_ADMIT",
+      meta: { clusterId: args.clusterId, windowInstanceId: args.windowInstanceId, admittedSlots },
+    });
     throw new Error("SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED");
   }
 
   if (!args.joinToken && admittedSlots.length > 0 && !existingWindow) {
+    log({
+      level: "WARN",
+      event: "SESSION_CLUSTER_JOIN_REQUIRED",
+      meta: { clusterId: args.clusterId, windowInstanceId: args.windowInstanceId, admittedSlots },
+    });
     throw new Error("SESSION_CLUSTER_JOIN_REQUIRED");
   }
 
@@ -504,6 +590,18 @@ export async function admitSessionClusterWindow(
     .from("session_clusters")
     .update({ last_seen_at: currentIso })
     .eq("cluster_id", args.clusterId);
+
+  log({
+    level: "INFO",
+    event: "SESSION_CLUSTER_WINDOW_ADMITTED",
+    meta: {
+      clusterId: args.clusterId,
+      windowInstanceId: args.windowInstanceId,
+      windowSlot: admittedWindow.window_slot,
+      hadJoinToken: Boolean(args.joinToken),
+      wasReAdmission: Boolean(existingWindow),
+    },
+  });
 
   return {
     clusterId: args.clusterId,
