@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import { isPublicRoute } from "../router/publicRoutes.js";
@@ -7,9 +7,11 @@ import {
   claimClusterWindowOwnership,
   clearClusterAdmission,
   getClusterAdmission,
+  getWindowInstanceId,
   requestSessionClusterAdmission,
 } from "../store/sessionCluster.js";
 import { getShellSnapshotAgeMs } from "../store/shellSnapshotCache.js";
+import paceBackground from "../assets/pace-bgr.png";
 
 const SESSION_IDENTITY_RECHECK_AFTER_HIDDEN_MS = 5 * 60 * 1000;
 const SHELL_SNAPSHOT_BACKGROUND_REFRESH_MS = 3 * 60 * 1000;
@@ -59,6 +61,138 @@ function deriveStableBootstrapIssue(error) {
     code: "WORKSPACE_BOOT_FAILED",
     message: "Workspace shell could not be loaded right now.",
   };
+}
+
+function ClusterWindowIssueScreen({ issue }) {
+  const isSecondaryWindow = issue?.kind === "popup" || issue?.kind === "ownership";
+
+  useEffect(() => {
+    if (!isSecondaryWindow) return undefined;
+
+    const timer = window.setTimeout(() => {
+      try {
+        window.close();
+      } catch {
+        // Best-effort only — some browsers refuse to close a window
+        // that wasn't opened purely by script.
+      }
+    }, 1400);
+
+    return () => window.clearTimeout(timer);
+  }, [isSecondaryWindow]);
+
+  const title = isSecondaryWindow
+    ? "This window could not be linked"
+    : "Workspace could not load";
+
+  const message = isSecondaryWindow
+    ? "This window did not join your existing session in time. It is closing automatically — please return to your original window and press Shift+F8 again to retry. You do NOT need to log in again."
+    : "Your session is still valid, but this window's workspace could not be prepared. Please retry.";
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        placeItems: "center",
+        padding: "28px",
+        background:
+          "radial-gradient(circle at top, rgba(145,188,214,0.24), transparent 38%), linear-gradient(135deg, #edf4f8 0%, #f7fbfd 48%, #e4eef4 100%)",
+      }}
+    >
+      <div
+        style={{
+          width: "min(640px, 100%)",
+          border: "1px solid rgba(24,52,71,0.12)",
+          borderRadius: "28px",
+          background: "rgba(255,255,255,0.92)",
+          boxShadow: "0 28px 80px rgba(16,41,57,0.14)",
+          padding: "32px",
+          color: "#102939",
+          textAlign: "center",
+        }}
+      >
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "10px",
+            padding: "8px 12px",
+            borderRadius: "999px",
+            background: "#dfeef7",
+            color: "#245574",
+            fontSize: "12px",
+            letterSpacing: "0.16em",
+            textTransform: "uppercase",
+            fontWeight: 800,
+          }}
+        >
+          Secure Window Guard
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "center", marginTop: "18px" }}>
+          <img
+            src={paceBackground}
+            alt="Pace ERP"
+            style={{
+              width: "min(180px, 50vw)",
+              height: "auto",
+              objectFit: "contain",
+              filter: "drop-shadow(0 10px 20px rgba(16,41,57,0.12))",
+            }}
+          />
+        </div>
+
+        <h1 style={{ margin: "18px 0 10px", fontSize: "26px", lineHeight: 1.1, letterSpacing: "-0.03em" }}>
+          {title}
+        </h1>
+
+        <p style={{ margin: "0 0 20px", fontSize: "15px", lineHeight: 1.7, color: "#4a6273" }}>
+          {message}
+        </p>
+
+        {isSecondaryWindow ? (
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                window.close();
+              } catch {
+                // Best-effort only.
+              }
+            }}
+            style={{
+              border: "none",
+              borderRadius: "14px",
+              padding: "10px 20px",
+              background: "#2f7db1",
+              color: "#fff",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Close this window
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            style={{
+              border: "none",
+              borderRadius: "14px",
+              padding: "10px 20px",
+              background: "#2f7db1",
+              color: "#fff",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Retry
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function isAuthResponseFailure(response, json) {
@@ -151,6 +285,7 @@ export default function AuthBootstrap({ children }) {
     inFlight: false,
     lastStartedAt: 0,
   });
+  const [windowAdmissionIssue, setWindowAdmissionIssue] = useState(null);
 
   const {
     menu,
@@ -399,17 +534,36 @@ export default function AuthBootstrap({ children }) {
         });
 
         if (!clusterAdmission.ok) {
-          clearMenuSnapshot();
+          // NOTE: admission failing here does NOT mean the user is logged
+          // out — /api/me (or an existing menu snapshot) already proved
+          // this window is authenticated. Treating this as an auth failure
+          // used to redirect straight to /login, which invited the user to
+          // type credentials again in a window that was never actually
+          // logged out — and a fresh login there silently revokes every
+          // OTHER active window's session (single-session-per-user rule),
+          // so the original window would get logged out too.
+          console.warn("CLUSTER_WINDOW_ADMISSION_FAILED", {
+            code: clusterAdmission.code,
+            hadJoinToken: Boolean(joinToken),
+            windowInstanceId: getWindowInstanceId(),
+            at: new Date().toISOString(),
+          });
           clearClusterAdmission();
-          navigate("/login", { replace: true });
+          setWindowAdmissionIssue({
+            kind: joinToken ? "popup" : "primary",
+            code: clusterAdmission.code,
+          });
           return false;
         }
       }
 
       if (!claimClusterWindowOwnership()) {
-        clearMenuSnapshot();
+        console.warn("CLUSTER_WINDOW_OWNERSHIP_CONFLICT", {
+          windowInstanceId: getWindowInstanceId(),
+          at: new Date().toISOString(),
+        });
         clearClusterAdmission();
-        navigate("/login", { replace: true });
+        setWindowAdmissionIssue({ kind: "ownership", code: "OWNERSHIP_CONFLICT" });
         return false;
       }
 
@@ -597,6 +751,10 @@ export default function AuthBootstrap({ children }) {
     setRuntimeContext,
     startMenuLoading,
   ]);
+
+  if (windowAdmissionIssue) {
+    return <ClusterWindowIssueScreen issue={windowAdmissionIssue} />;
+  }
 
   return children;
 }
