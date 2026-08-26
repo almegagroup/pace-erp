@@ -409,10 +409,39 @@ export async function listPackBomEligibleSkusHandler(
     const packCodeMap = await getPackCodeMapByCodes(
       skuList.map((sku) => toTrimmedString(sku.pack_code)),
     );
+    // §131.4 item #10 (2026-08-26): MTEST sample SKUs need no Prodshade/Stroke match at
+    // all — split them out BEFORE any of the prodshade-matching logic below, since that
+    // logic's own early-returns (packCodeIds/configRows/matchedProdshadeIds all empty)
+    // would otherwise return [] and silently drop these SKUs whenever no OTHER SKU in
+    // this company/po_type happens to have a resolvable Prodshade. Mirrors
+    // createPackBomHandler's own pack_type=MTEST bypass.
+    //
+    // ⚠️ Also gated on poType === "MTEST" (caught live, 2026-08-26): pack_type alone
+    // would surface these 5 SKUs regardless of which PO Type the caller asked for —
+    // selecting MTO/HPS/MTS would still show "Admix sample 1kg" etc., which is wrong.
+    // These SKUs only make sense as MTEST results.
+    const mtestSkus = poType === "MTEST"
+      ? skuList.filter(
+          (sku) => toUpperTrimmedString(packCodeMap.get(toTrimmedString(sku.pack_code))?.pack_type) === "MTEST",
+        )
+      : [];
+    const nonMtestSkus = skuList.filter(
+      (sku) => toUpperTrimmedString(packCodeMap.get(toTrimmedString(sku.pack_code))?.pack_type) !== "MTEST",
+    );
+    const mtestOutput: JsonRecord[] = mtestSkus.map((sku) => ({
+      ...sku,
+      company_id: companyId,
+      po_type: poType,
+      prodshade_material_id: null,
+      prodshade: null,
+      pack_code_row: packCodeMap.get(toTrimmedString(sku.pack_code)) ?? null,
+      stroke_master: null,
+    }));
+
     const packCodeIds = [...new Set(
       [...packCodeMap.values()].map((packCode) => toTrimmedString(packCode.id)).filter(Boolean),
     )];
-    if (packCodeIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+    if (packCodeIds.length === 0) return okResponse({ data: mtestOutput }, ctx.request_id, req);
 
     const { data: prodshadeConfigs, error: prodshadeConfigErr } = await serviceRoleClient
       .schema("erp_production")
@@ -429,7 +458,7 @@ export async function listPackBomEligibleSkusHandler(
     }
 
     const configRows = (prodshadeConfigs ?? []) as JsonRecord[];
-    if (configRows.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+    if (configRows.length === 0) return okResponse({ data: mtestOutput }, ctx.request_id, req);
 
     const prodshadeMap = await getMaterialMapByIds(
       configRows.map((row) => String(row.material_id ?? "")),
@@ -455,7 +484,7 @@ export async function listPackBomEligibleSkusHandler(
     }
 
     const matchedProdshadeIds = [...new Set(
-      skuList
+      nonMtestSkus
         .map((sku) => {
           const key = toUpperTrimmedString(sku.external_code ?? sku.material_name);
           const match = prodshadeBySkuKey.get(key);
@@ -463,7 +492,7 @@ export async function listPackBomEligibleSkusHandler(
         })
         .filter(Boolean),
     )];
-    if (matchedProdshadeIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+    if (matchedProdshadeIds.length === 0) return okResponse({ data: mtestOutput }, ctx.request_id, req);
 
     const { data: strokeRows, error: strokeErr } = await serviceRoleClient
       .schema("erp_production")
@@ -491,7 +520,7 @@ export async function listPackBomEligibleSkusHandler(
     );
 
     const output: JsonRecord[] = [];
-    for (const sku of skuList) {
+    for (const sku of nonMtestSkus) {
       const packCode = packCodeMap.get(toTrimmedString(sku.pack_code));
       if (!packCode) continue;
       const key = toUpperTrimmedString(sku.external_code ?? sku.material_name);
@@ -514,7 +543,9 @@ export async function listPackBomEligibleSkusHandler(
       });
     }
 
-    return okResponse({ data: output }, ctx.request_id, req);
+    // §131.4 item #10: MTEST sample SKUs (collected earlier, before any of the
+    // prodshade-matching short-circuits above could drop them) are always included.
+    return okResponse({ data: [...mtestOutput, ...output] }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BOM_ELIGIBLE_FAILED";
     return bomError(req, ctx, code, 500, "Eligible SKU list failed");

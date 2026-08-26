@@ -10,6 +10,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
@@ -564,33 +565,41 @@ async function resolveMtestSfgProdshadeOptions(companyId: string): Promise<JsonR
     .filter((batchNumber) => (ledgerByBatch.get(batchNumber) ?? 0) - (reservedByBatch.get(batchNumber) ?? 0) > 0);
   if (batchNumbers.length === 0) return [];
 
-  const { data: batchRows, error: batchErr } = await serviceRoleClient
-    .schema("erp_production")
-    .from("batch_number_instance")
-    .select("batch_number, source_process_order_id")
-    .eq("company_id", companyId)
-    .in("batch_number", batchNumbers);
-  if (batchErr) {
-    console.error("[packing_order.resolveMtestSfgProdshadeOptions] batch instance query failed:", JSON.stringify(batchErr));
+  // §8E: batchNumbers grows with L003's accumulated history (small MTEST batches pile
+  // up over time, per the business owner's own concern in §131.3) — an unbounded .in()
+  // here is exactly the pattern that silently broke IN02/PR24 once a filter pulled in
+  // ~400+ ids. Chunked, not a single raw .in().
+  let batchRows: JsonRecord[];
+  try {
+    batchRows = await fetchInChunks<JsonRecord>(batchNumbers, (idChunk) =>
+      serviceRoleClient
+        .schema("erp_production")
+        .from("batch_number_instance")
+        .select("batch_number, source_process_order_id")
+        .eq("company_id", companyId)
+        .in("batch_number", idChunk));
+  } catch (err) {
+    console.error("[packing_order.resolveMtestSfgProdshadeOptions] batch instance query failed:", err instanceof Error ? err.message : String(err));
     throw new Error("PROD_PACK_MTEST_SFG_LOOKUP_FAILED");
   }
 
-  const processOrderIds = [...new Set(((batchRows ?? []) as JsonRecord[])
+  const processOrderIds = [...new Set(batchRows
     .map((row) => toTrimmedString(row.source_process_order_id))
     .filter(Boolean))];
   // Defensively scoped to po_type=MTEST — L003 is only ever populated by MTEST Verify
   // (§131.3), so this should already be every row, but a stray batch at L003 from
   // anywhere else must never surface here as a pickable Prodshade+Stroke option.
-  const { data: processRows, error: processErr } = processOrderIds.length
-    ? await serviceRoleClient
+  let processRows: JsonRecord[];
+  try {
+    processRows = await fetchInChunks<JsonRecord>(processOrderIds, (idChunk) =>
+      serviceRoleClient
         .schema("erp_production")
         .from("process_order")
         .select("id, material_id, stroke_master_id")
         .eq("po_type", "MTEST")
-        .in("id", processOrderIds)
-    : { data: [], error: null };
-  if (processErr) {
-    console.error("[packing_order.resolveMtestSfgProdshadeOptions] process order query failed:", JSON.stringify(processErr));
+        .in("id", idChunk));
+  } catch (err) {
+    console.error("[packing_order.resolveMtestSfgProdshadeOptions] process order query failed:", err instanceof Error ? err.message : String(err));
     throw new Error("PROD_PACK_MTEST_SFG_LOOKUP_FAILED");
   }
 

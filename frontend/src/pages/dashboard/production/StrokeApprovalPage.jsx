@@ -123,6 +123,15 @@ export default function StrokeApprovalPage() {
   const lineMaterialsByType = { RM: rmMaterialsQ.data ?? [], INT: intMaterialsQ.data ?? [] };
   const uomOptions = uoms.map((u) => ({ value: u.code, label: `${u.code} — ${u.name}` }));
   const storageLocationOptions = (storageLocationsQ.data ?? []).map((s) => ({ value: s.id, label: `${s.code} — ${s.name}` }));
+  // §131.3 (2026-08-26): same L003-only rule as PR01 (StrokeMasterPage.jsx) — MTEST's
+  // SFG output location is always L003, backend-enforced. PO Type is itself editable
+  // on this review page, so this keys off editForm.po_type (the live value), not the
+  // original row's.
+  const l003Location = (storageLocationsQ.data ?? []).find((s) => String(s.code ?? "").toUpperCase() === "L003") ?? null;
+  const isMtestEditForm = editForm.po_type === "MTEST";
+  const approvalStorageLocationOptions = isMtestEditForm && l003Location
+    ? [{ value: l003Location.id, label: `${l003Location.code} — ${l003Location.name}` }]
+    : storageLocationOptions;
 
   async function toggleExpand(row) {
     if (expandedId === row.id) {
@@ -395,7 +404,14 @@ export default function StrokeApprovalPage() {
                                 <Field label="PO Type" required>
                                   <ErpComboboxField
                                     value={editForm.po_type}
-                                    onChange={(v) => setEditForm((f) => ({ ...f, po_type: v }))}
+                                    onChange={(v) => setEditForm((f) => ({
+                                      ...f,
+                                      po_type: v,
+                                      // §131.3: same auto-lock as PR01 when switching to/from MTEST.
+                                      default_storage_location_id: v === "MTEST"
+                                        ? (l003Location?.id ?? "")
+                                        : (f.po_type === "MTEST" ? "" : f.default_storage_location_id),
+                                    }))}
                                     options={PO_TYPE_OPTIONS_BY_MATERIAL_TYPE[s.material_type] ?? []}
                                   />
                                 </Field>
@@ -440,12 +456,17 @@ export default function StrokeApprovalPage() {
                               ) : null}
 
                               {s.status === "DRAFT" ? (
-                                <Field label="Default Storage Location (Output)" required>
+                                <Field
+                                  label="Default Storage Location (Output)"
+                                  required
+                                  hint={isMtestEditForm ? "MTEST always uses L003 (ADMIX LAB) — locked." : undefined}
+                                >
                                   <ErpComboboxField
                                     value={editForm.default_storage_location_id}
                                     onChange={(v) => setEditForm((f) => ({ ...f, default_storage_location_id: v }))}
-                                    options={storageLocationOptions}
-                                    emptyStateLabel="No storage locations mapped to this company"
+                                    options={approvalStorageLocationOptions}
+                                    emptyStateLabel={isMtestEditForm ? "L003 is not mapped to this company yet" : "No storage locations mapped to this company"}
+                                    disabled={isMtestEditForm}
                                     className={attemptedSave && !editForm.default_storage_location_id ? "ring-2 ring-rose-400 rounded" : ""}
                                   />
                                   {attemptedSave && !editForm.default_storage_location_id && (
