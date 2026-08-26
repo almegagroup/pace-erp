@@ -212,30 +212,20 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
     return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
   }
 
-  let authUserId: string;
+  const { data, error } = await authClient.auth.admin.getUserById(
+    resolved.authUserId,
+  );
 
-  if (resolved.kind === "email") {
-    const result = await verifyPassword(resolved.email, password);
-    if (!result.ok || !result.session) {
-      return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
-    }
-    authUserId = result.user.id;
-  } else {
-    const { data, error } = await authClient.auth.admin.getUserById(
-      resolved.authUserId,
-    );
-
-    if (error || !data?.user?.email) {
-      return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
-    }
-
-    const result = await verifyPassword(data.user.email, password);
-    if (!result.ok || !result.session) {
-      return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
-    }
-
-    authUserId = resolved.authUserId;
+  if (error || !data?.user?.email) {
+    return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
   }
+
+  const result = await verifyPassword(data.user.email, password);
+  if (!result.ok || !result.session) {
+    return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
+  }
+
+  const authUserId = resolved.authUserId;
 
   const state = await getAccountState(authUserId);
   if (state !== "ACTIVE") {

@@ -11,15 +11,17 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertRlsEnabled } from "../../_shared/rls_assert.ts";
 
-export type ResolvedIdentifier =
-  | { kind: "email"; email: string }
-  | { kind: "erp"; authUserId: string };
+export type ResolvedIdentifier = { kind: "erp"; authUserId: string };
 
 /**
  * ERP identifier resolver
  * - Enumeration safe (returns null on any failure)
  * - No password handling
  * - No session handling
+ * - Login is PACE User ID only — email login is intentionally disabled
+ *   (LoginScreen.jsx already blocks an "@" identifier client-side with a
+ *   clear message; an email-shaped identifier reaching here means a direct
+ *   API call, and is rejected the same as any other malformed identifier)
  */
 export async function resolveIdentifier(
   rawIdentifier: string
@@ -28,18 +30,8 @@ export async function resolveIdentifier(
 
   if (!identifier) return null;
 
-  /**
-   * EMAIL PATH
-   */
   if (identifier.includes("@")) {
-    const email = identifier.toLowerCase();
-
-    // minimal sanity (not RFC)
-    if (email.length > 254 || !email.includes(".")) {
-      return null;
-    }
-
-    return { kind: "email", email };
+    return null;
   }
 
   /**
