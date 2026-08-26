@@ -38,16 +38,14 @@ const ERRORS = {
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 function companyLabel(company) { return [company?.company_code, company?.company_name].filter(Boolean).join(" - "); }
-// §131.4 (2026-08-26) fix: document_name is the human-readable product name
-// ("Maximoplast PC 300"); material_name is just the material's own code
-// ("6763HG32") — always prefer the readable name, code is a fallback for
-// whatever legacy row never got a document_name set at all. This was
-// backwards before (material_name first), so every SKU/Prodshade on this
-// page showed a bare code instead of its real name.
-function materialLabel(material) { return [material?.pace_code || material?.external_code, material?.document_name || material?.material_name].filter(Boolean).join(" - "); }
+// Reverted 2026-08-26 (business owner correction) — material_name-first here is the
+// intended convention for MTO/HPS, not a bug. Only skuLabel()'s own fallback below is
+// new, for the one real gap: MTEST sample SKUs have no Prodshade at all (§131.3), so
+// prodLabel is always empty and there was nothing to fall back to.
+function materialLabel(material) { return [material?.pace_code || material?.external_code, material?.material_name || material?.document_name].filter(Boolean).join(" - "); }
 function skuLabel(sku) {
   const prod = sku?.prodshade ?? {};
-  const prodLabel = prod?.document_name || prod?.material_name;
+  const prodLabel = prod?.material_name || prod?.document_name;
   // §131.4: MTEST sample SKUs have no Prodshade at all (§131.3 — generic, not tied to
   // one), so prodLabel is always empty for them — fall back to the SKU's own
   // document_name/material_name ("Admix sample 1 kg" etc.) instead of showing nothing
