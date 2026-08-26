@@ -38,14 +38,23 @@ const ERRORS = {
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 function companyLabel(company) { return [company?.company_code, company?.company_name].filter(Boolean).join(" - "); }
+// Reverted 2026-08-26 (business owner correction) — material_name-first here is the
+// intended convention for MTO/HPS, not a bug. Only skuLabel()'s own fallback below is
+// new, for the one real gap: MTEST sample SKUs have no Prodshade at all (§131.3), so
+// prodLabel is always empty and there was nothing to fall back to.
 function materialLabel(material) { return [material?.pace_code || material?.external_code, material?.material_name || material?.document_name].filter(Boolean).join(" - "); }
 function skuLabel(sku) {
   const prod = sku?.prodshade ?? {};
+  const prodLabel = prod?.material_name || prod?.document_name;
+  // §131.4: MTEST sample SKUs have no Prodshade at all (§131.3 — generic, not tied to
+  // one), so prodLabel is always empty for them — fall back to the SKU's own
+  // document_name/material_name ("Admix sample 1 kg" etc.) instead of showing nothing
+  // but a bare pace_code.
   return [
     sku?.pace_code || sku?.external_code,
     sku?.external_code,
     prod?.pace_code || prod?.external_code,
-    prod?.material_name || prod?.document_name,
+    prodLabel || sku?.document_name || sku?.material_name,
   ].filter((value, index, list) => Boolean(value) && list.indexOf(value) === index).join(" - ");
 }
 function slocLabel(location) { return [location?.code, location?.name].filter(Boolean).join(" - "); }
