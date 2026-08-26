@@ -121,6 +121,15 @@ export default function StrokeMasterPage() {
   const companyOptions = companies.map((c) => ({ value: c.id, label: `${c.company_code} — ${c.company_name}` }));
   const uomOptions = uoms.map((u) => ({ value: u.code, label: `${u.code} — ${u.name}` }));
   const storageLocationOptions = storageLocations.map((s) => ({ value: s.id, label: `${s.code} — ${s.name}` }));
+  // §131.3 (2026-08-26): MTEST strokes' SFG output location is always L003 (ADMIX
+  // LAB), backend-enforced (createStrokeMasterHandler/updateStrokeMasterHandler both
+  // hard-block anything else) — narrow the picker to just that option so a QA user
+  // can't accidentally pick something the backend will reject anyway.
+  const l003Location = storageLocations.find((s) => String(s.code ?? "").toUpperCase() === "L003") ?? null;
+  const isMtestStroke = form.po_type === "MTEST";
+  const strokeStorageLocationOptions = isMtestStroke && l003Location
+    ? [{ value: l003Location.id, label: `${l003Location.code} — ${l003Location.name}` }]
+    : storageLocationOptions;
   const prodshadeOptions = (prodshadeMaterialsByType[form.material_type] ?? []).map((m) => ({
     value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
   }));
@@ -471,7 +480,20 @@ export default function StrokeMasterPage() {
               />
             </Field>
             <Field label="PO Type" required hint={PO_TYPE_OPTIONS_BY_MATERIAL_TYPE[form.material_type]?.find((o) => o.value === form.po_type)?.desc}>
-              <ErpComboboxField value={form.po_type} onChange={(v) => setForm((f) => ({ ...f, po_type: v }))} options={PO_TYPE_OPTIONS_BY_MATERIAL_TYPE[form.material_type] ?? []} />
+              <ErpComboboxField
+                value={form.po_type}
+                onChange={(v) => setForm((f) => ({
+                  ...f,
+                  po_type: v,
+                  // §131.3: switching to/from MTEST re-derives the storage location —
+                  // into L003 automatically, or clears a stale L003 pick when switching
+                  // away (that value would no longer even appear in the now-unfiltered list).
+                  default_storage_location_id: v === "MTEST"
+                    ? (l003Location?.id ?? "")
+                    : (f.po_type === "MTEST" ? "" : f.default_storage_location_id),
+                }))}
+                options={PO_TYPE_OPTIONS_BY_MATERIAL_TYPE[form.material_type] ?? []}
+              />
             </Field>
             <Field label="Prodshade" required>
               <div className="flex flex-col gap-1.5">
@@ -527,14 +549,20 @@ export default function StrokeMasterPage() {
             <Field label="Conversion Factor" hint="e.g. KG per Litre (density-based).">
               <input className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-full" type="number" step="0.0001" min="0" value={form.conversion_factor} onChange={(e) => setForm((f) => ({ ...f, conversion_factor: e.target.value }))} placeholder="Optional" />
             </Field>
-            <Field label="Default Storage Location (Output)" required hint="Company-mapped locations only. Process PO Verify posts SFG/INT output here.">
+            <Field
+              label="Default Storage Location (Output)"
+              required
+              hint={isMtestStroke
+                ? "MTEST always uses L003 (ADMIX LAB) — locked, not a per-stroke choice."
+                : "Company-mapped locations only. Process PO Verify posts SFG/INT output here."}
+            >
               <ErpComboboxField
                 value={form.default_storage_location_id}
                 onChange={(v) => setForm((f) => ({ ...f, default_storage_location_id: v }))}
-                options={storageLocationOptions}
+                options={strokeStorageLocationOptions}
                 placeholder={form.company_id ? "-- Select --" : "-- Select Company first --"}
-                emptyStateLabel="No storage locations mapped to this company"
-                disabled={!form.company_id}
+                emptyStateLabel={isMtestStroke ? "L003 is not mapped to this company yet" : "No storage locations mapped to this company"}
+                disabled={!form.company_id || isMtestStroke}
                 className={attemptedSave && !form.default_storage_location_id ? "ring-2 ring-rose-400 rounded" : ""}
               />
               {attemptedSave && !form.default_storage_location_id && (
@@ -601,11 +629,15 @@ export default function StrokeMasterPage() {
                   <ErpComboboxField
                     value={detail.default_storage_location_id ?? ""}
                     onChange={(v) => setDetail((d) => ({ ...d, default_storage_location_id: v }))}
-                    options={storageLocationOptions}
+                    options={detail.po_type === "MTEST" ? strokeStorageLocationOptions : storageLocationOptions}
                     placeholder="-- Select --"
                     emptyStateLabel="No storage locations mapped to this company"
+                    disabled={detail.po_type === "MTEST"}
                     className={attemptedSave && !detail.default_storage_location_id ? "ring-2 ring-rose-400 rounded" : ""}
                   />
+                  {detail.po_type === "MTEST" && (
+                    <p className="text-[11px] text-slate-400 mt-1">MTEST always uses L003 (ADMIX LAB) — locked.</p>
+                  )}
                   {attemptedSave && !detail.default_storage_location_id && (
                     <p className="text-[11px] font-medium text-rose-600 mt-1">Required.</p>
                   )}

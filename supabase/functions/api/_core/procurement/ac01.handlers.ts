@@ -660,13 +660,32 @@ export async function getAC01GRNHandler(
       return ac01ErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
-    const { data: lcRows, error: lcError } = await serviceRoleClient
-      .schema("erp_procurement").from("landed_cost").select("*")
-      .eq("grn_id", grnId).order("created_at", { ascending: false }).limit(1);
+    // §8A Foundation Rule -- the drawer never showed material/vendor identity
+    // at all (only raw material_id/vendor_id sat unused on `grn`), unlike the
+    // list row which already resolves these via buildListRow. Found live
+    // 2026-08-26 (business owner): fetched INDEPENDENT of the Landed Cost
+    // query above (§8B), not sequentially after it.
+    const [lcResp, materialResp, vendorResp] = await Promise.all([
+      serviceRoleClient
+        .schema("erp_procurement").from("landed_cost").select("*")
+        .eq("grn_id", grnId).order("created_at", { ascending: false }).limit(1),
+      grn.material_id
+        ? serviceRoleClient.schema("erp_master").from("material_master")
+          .select("material_name, external_code").eq("id", String(grn.material_id)).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      grn.vendor_id
+        ? serviceRoleClient.schema("erp_master").from("vendor_master")
+          .select("vendor_name").eq("id", String(grn.vendor_id)).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+    const { data: lcRows, error: lcError } = lcResp;
     if (lcError) {
       return ac01ErrorResponse(req, ctx, "AC01_LC_FETCH_FAILED", 500, "Unable to fetch landed cost.");
     }
     const landedCost = (lcRows ?? [])[0] as JsonRecord | undefined;
+    const materialName = (materialResp.data as JsonRecord | null)?.material_name ?? null;
+    const materialExternalCode = (materialResp.data as JsonRecord | null)?.external_code ?? null;
+    const vendorName = (vendorResp.data as JsonRecord | null)?.vendor_name ?? null;
 
     let costLines: JsonRecord[] = [];
     let deductionLines: JsonRecord[] = [];
@@ -767,6 +786,9 @@ export async function getAC01GRNHandler(
 
     return okResponse({
       ...grn,
+      item_name: materialName,
+      external_code: materialExternalCode,
+      supplier_name: vendorName,
       last_mile_transporter_name: lastMileTransporterName,
       freight_type: freightType,
       actual_payment_date: actualPaymentDate,

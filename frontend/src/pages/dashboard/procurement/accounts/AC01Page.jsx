@@ -825,6 +825,15 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
           <div className="grid gap-2 p-3">
             <DrawerSection eyebrow="Identification" title="Company, supplier and invoice reference">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
+                <DrawerField label="Material name">
+                  <input disabled value={grnDetailQuery.data?.item_name || "—"} className={inputCls} />
+                </DrawerField>
+                <DrawerField label="External code">
+                  <input disabled value={grnDetailQuery.data?.external_code || "—"} className={inputCls} />
+                </DrawerField>
+                <DrawerField label="Vendor name">
+                  <input disabled value={grnDetailQuery.data?.supplier_name || "—"} className={inputCls} />
+                </DrawerField>
                 <DrawerField label="Invoice number">
                   <input disabled={readOnly} value={draft.invoice_number} onChange={(event) => setDraft((current) => ({ ...current, invoice_number: event.target.value }))} className={inputCls} />
                 </DrawerField>

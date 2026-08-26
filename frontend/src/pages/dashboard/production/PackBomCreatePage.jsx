@@ -306,38 +306,52 @@ export default function PackBomCreatePage() {
                     </td>
                     <td className="py-2 px-3 font-mono">P101</td>
                   </tr>
-                  <tr className="border-t">
-                    <td className="py-2 px-3 font-semibold">INPUT / SFG</td>
-                    <td className="py-2 px-3">{materialLabel(selectedSku?.prodshade)}</td>
-                    <td className="py-2 px-3 text-right">
-                      {bomRequired ? (
-                        <input className="h-8 w-28 border border-slate-300 rounded px-2 text-right font-mono" type="number" min="0" step="0.001" value={sfgQty} onChange={(event) => setSfgQty(event.target.value)} />
-                      ) : "Calculated"}
-                    </td>
-                    <td className="py-2 px-3">KG</td>
-                    <td className="py-2 px-3">{slocLabel(sfgLineLocation)}</td>
-                    <td className="py-2 px-3 font-mono">P261</td>
-                  </tr>
+                  {/* §131.4 item #10 (2026-08-26): MTEST sample SKUs get no SFG row at
+                      all — there's no single Prodshade to tie it to (chosen later, per
+                      Packing PO, at Standard). Showing this row for them would just be a
+                      blank Prodshade/location, which is confusing rather than informative. */}
+                  {packCode.pack_type !== "MTEST" && (
+                    <tr className="border-t">
+                      <td className="py-2 px-3 font-semibold">INPUT / SFG</td>
+                      <td className="py-2 px-3">{materialLabel(selectedSku?.prodshade)}</td>
+                      <td className="py-2 px-3 text-right">
+                        {bomRequired ? (
+                          <input className="h-8 w-28 border border-slate-300 rounded px-2 text-right font-mono" type="number" min="0" step="0.001" value={sfgQty} onChange={(event) => setSfgQty(event.target.value)} />
+                        ) : "Calculated"}
+                      </td>
+                      <td className="py-2 px-3">KG</td>
+                      <td className="py-2 px-3">{slocLabel(sfgLineLocation)}</td>
+                      <td className="py-2 px-3 font-mono">P261</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
 
-            <ErpSectionCard title="PM Lines">
-              {!bomRequired && (
-                <p className="mb-3 text-xs text-slate-500">
-                  This pack code is non-fixed. Material/group mapping stays editable here, while quantity can remain blank until Packing PO time.
+            {packCode.pack_type === "MTEST" ? (
+              <ErpSectionCard title="PM Lines">
+                <p className="text-xs text-slate-500">
+                  This Pack BOM never stores PM lines — add them ad-hoc at Packing PO Standard instead, every time.
                 </p>
-              )}
-              <PackBomLinesTable
-                lines={pmLines}
-                setLines={setPmLines}
-                materials={pmMaterialsQ.data ?? []}
-                groups={groupsQ.data ?? []}
-                onCreateGroup={openCreateGroupModal}
-                onAddMember={(groupId) => setMemberModal(groupId)}
-                qtyDisabled={!bomRequired}
-              />
-            </ErpSectionCard>
+              </ErpSectionCard>
+            ) : (
+              <ErpSectionCard title="PM Lines">
+                {!bomRequired && (
+                  <p className="mb-3 text-xs text-slate-500">
+                    This pack code is non-fixed. Material/group mapping stays editable here, while quantity can remain blank until Packing PO time.
+                  </p>
+                )}
+                <PackBomLinesTable
+                  lines={pmLines}
+                  setLines={setPmLines}
+                  materials={pmMaterialsQ.data ?? []}
+                  groups={groupsQ.data ?? []}
+                  onCreateGroup={openCreateGroupModal}
+                  onAddMember={(groupId) => setMemberModal(groupId)}
+                  qtyDisabled={!bomRequired}
+                />
+              </ErpSectionCard>
+            )}
             <div className="flex justify-between">
               <button type="button" className="px-4 py-2 border rounded text-sm" onClick={() => setStep(1)}>Back</button>
               <button type="button" className="px-5 py-2 bg-sky-600 text-white rounded text-sm disabled:opacity-50" onClick={handleSubmit} disabled={submitMutation.isPending}>

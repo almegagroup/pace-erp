@@ -582,6 +582,26 @@ export async function createStrokeMasterHandler(
     if (!defaultStorageLocationId) {
       return strokeError(req, ctx, "PROD_STROKE_STORAGE_LOCATION_REQUIRED", 400, "default_storage_location_id required");
     }
+    // §131.3 (2026-08-26): MTEST's SFG storage location is always L003 ("ADMIX LAB") —
+    // not a suggestion. The mtest-sfg-options lookup (§131.4 item #11) and Verify's own
+    // P101 receipt both key specifically off L003; a MTEST stroke pointed anywhere else
+    // would post correctly but become permanently invisible to the Packing PO picker,
+    // with no error anywhere to explain why.
+    if (poType === "MTEST") {
+      const { data: slocRow, error: slocErr } = await serviceRoleClient
+        .schema("erp_inventory")
+        .from("storage_location_master")
+        .select("code")
+        .eq("id", defaultStorageLocationId)
+        .maybeSingle();
+      if (slocErr) {
+        console.error("[stroke_master.createStrokeMaster] L003 check query failed:", JSON.stringify(slocErr));
+        throw new Error("PROD_STROKE_STORAGE_LOCATION_LOOKUP_FAILED");
+      }
+      if (toTrimmedString((slocRow as JsonRecord | null)?.code) !== "L003") {
+        return strokeError(req, ctx, "PROD_STROKE_MTEST_SLOC_MUST_BE_L003", 422, "MTEST strokes must use L003 (ADMIX LAB) as the default storage location");
+      }
+    }
 
     const lineErrorCode = validateLines(lines);
     if (lineErrorCode) {
@@ -704,6 +724,23 @@ export async function updateStrokeMasterHandler(
       : (existing.default_storage_location_id as string | null);
     if (!effectiveStorageLocationId) {
       return strokeError(req, ctx, "PROD_STROKE_STORAGE_LOCATION_REQUIRED", 400, "default_storage_location_id required");
+    }
+    // §131.3: same L003-only rule as create — a DRAFT MTEST stroke edited to point
+    // somewhere else would silently break the Packing PO picker (see create's own note).
+    if (String(existing.po_type ?? "") === "MTEST" && body.default_storage_location_id !== undefined) {
+      const { data: slocRow, error: slocErr } = await serviceRoleClient
+        .schema("erp_inventory")
+        .from("storage_location_master")
+        .select("code")
+        .eq("id", effectiveStorageLocationId)
+        .maybeSingle();
+      if (slocErr) {
+        console.error("[stroke_master.updateStrokeMaster] L003 check query failed:", JSON.stringify(slocErr));
+        throw new Error("PROD_STROKE_STORAGE_LOCATION_LOOKUP_FAILED");
+      }
+      if (toTrimmedString((slocRow as JsonRecord | null)?.code) !== "L003") {
+        return strokeError(req, ctx, "PROD_STROKE_MTEST_SLOC_MUST_BE_L003", 422, "MTEST strokes must use L003 (ADMIX LAB) as the default storage location");
+      }
     }
     if (body.default_storage_location_id !== undefined) {
       patch.default_storage_location_id = effectiveStorageLocationId;
