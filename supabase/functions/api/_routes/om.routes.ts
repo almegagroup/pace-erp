@@ -90,7 +90,6 @@ import {
   findFgParentCompanyByGstHandler,
   listDepotCodesHandler,
   listParentCompaniesHandler,
-  mapFgParentCompanyToCompanyHandler,
   updateDepotCodeHandler,
   updateParentCompanyHandler,
 } from "../_core/om/fg_parent_company.handlers.ts";
@@ -292,8 +291,6 @@ export async function dispatchOmRoutes(
       return await updateParentCompanyHandler(req, ctx);
     case "GET:/api/om/fg-parent-company/by-gst":
       return await findFgParentCompanyByGstHandler(req, ctx);
-    case "POST:/api/om/fg-parent-company/company-map":
-      return await mapFgParentCompanyToCompanyHandler(req, ctx);
     case "POST:/api/om/fg-depot-code":
       return await createOrGetDepotCodeHandler(req, ctx);
     case "GET:/api/om/fg-depot-codes":

@@ -17,11 +17,31 @@ const AC06_FIRST_MONTH = "2026-05-01";
 const ac06Error = (req: Request, ctx: ProdHandlerContext, code: string, status: number, message: string) =>
   errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 
+// getMonth() throwing AC06_MONTH_SEQUENCE_REQUIRED is a real, user-actionable
+// validation (open the previous month first), not a system failure -- every
+// catch block whose try-body calls getMonth() routes through this instead of
+// duplicating the check, so it never gets flattened into the generic 500 the
+// rest of this file's fallback errors use.
+function ac06ErrorFromCaught(req: Request, ctx: ProdHandlerContext, error: unknown, fallbackCode: string, fallbackMessage: string): Response {
+  const code = error instanceof Error ? error.message : fallbackCode;
+  if (code === "AC06_MONTH_SEQUENCE_REQUIRED") {
+    return ac06Error(req, ctx, code, 409, "Open the previous month first — months must be opened in order so carry-forward always reflects the true prior month's setup.");
+  }
+  return ac06Error(req, ctx, code, 500, fallbackMessage);
+}
+
 function monthStart(raw: unknown): string | null {
   const value = toTrimmedString(raw);
   if (!/^\d{4}-\d{2}(-\d{2})?$/.test(value)) return null;
   const normalized = value.length === 7 ? `${value}-01` : value;
   return /^\d{4}-\d{2}-01$/.test(normalized) && normalized >= AC06_FIRST_MONTH ? normalized : null;
+}
+
+function previousMonthOf(rateMonth: string): string {
+  const [year, month] = rateMonth.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, 1));
+  date.setUTCMonth(date.getUTCMonth() - 1);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-01`;
 }
 
 function ids(input: unknown): string[] {
@@ -81,6 +101,24 @@ async function getMonth(ctx: ProdHandlerContext, companyId: string, rateMonth: s
   const { data: found, error: foundError } = await db.from("ac06_month").select("*").eq("company_id", companyId).eq("rate_month", rateMonth).maybeSingle();
   if (foundError) throw new Error("AC06_MONTH_LOOKUP_FAILED");
   if (found) return found as Row;
+
+  // Carry-forward must always source from the TRUE immediately-preceding
+  // calendar month, never from "whichever older month happens to already
+  // exist" -- otherwise jumping straight to a future month (e.g. opening
+  // August before June/July ever existed) permanently stamps that month
+  // with a stale ancestor's data, and it never re-syncs even after the
+  // skipped months get created later (found live 2026-08-27: a company did
+  // exactly this, August carried forward from May while June/July had
+  // already evolved their own, different group membership). Requiring the
+  // immediately-preceding month to exist first (or this being the very
+  // first month) makes that permanently impossible.
+  if (rateMonth !== AC06_FIRST_MONTH) {
+    const previousMonth = previousMonthOf(rateMonth);
+    const { data: previousRow, error: previousError } = await db.from("ac06_month")
+      .select("id").eq("company_id", companyId).eq("rate_month", previousMonth).maybeSingle();
+    if (previousError) throw new Error("AC06_MONTH_LOOKUP_FAILED");
+    if (!previousRow) throw new Error("AC06_MONTH_SEQUENCE_REQUIRED");
+  }
 
   const { data: priorCandidates, error: priorError } = await db.from("ac06_month").select("*").eq("company_id", companyId).order("rate_month", { ascending: false });
   if (priorError) throw new Error("AC06_MONTH_LOOKUP_FAILED");
@@ -249,7 +287,7 @@ export async function getAc06WorkspaceHandler(req: Request, ctx: ProdHandlerCont
       summary: { rows: activeRows.length, excluded: scopedRows.length - activeRows.length, verified: activeRows.filter((row) => row.verification_status === "VERIFIED").length,
         pending: activeRows.filter((row) => row.verification_status === "PENDING").length,
         standalone: activeRows.filter((row) => row.is_standalone).length } } }, ctx.request_id, req);
-  } catch (error) { const code = error instanceof Error ? error.message : "AC06_WORKSPACE_LOAD_FAILED"; return ac06Error(req, ctx, code, 500, "Unable to load AC06 workspace."); }
+  } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_WORKSPACE_LOAD_FAILED", "Unable to load AC06 workspace."); }
 }
 
 export async function saveAc06RatesHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -283,7 +321,7 @@ export async function saveAc06RatesHandler(req: Request, ctx: ProdHandlerContext
       if (updateError) throw new Error("AC06_RATE_SAVE_FAILED");
     }
     return okResponse({ data: { saved: lineIds.length } }, ctx.request_id, req);
-  } catch (error) { const code = error instanceof Error ? error.message : "AC06_RATE_SAVE_FAILED"; return ac06Error(req, ctx, code, 500, "Unable to save monthly costing rates."); }
+  } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_RATE_SAVE_FAILED", "Unable to save monthly costing rates."); }
 }
 
 export async function verifyAc06RatesHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -299,7 +337,7 @@ export async function verifyAc06RatesHandler(req: Request, ctx: ProdHandlerConte
     });
     if (error) return ac06Error(req, ctx, "AC06_VERIFY_SELECTION_INVALID", 409, "Select only pending standalone items or the first item of a pending Costing Group.");
     return okResponse({ data: { verified: Number(verified ?? 0) } }, ctx.request_id, req);
-  } catch (error) { const code = error instanceof Error ? error.message : "AC06_VERIFY_FAILED"; return ac06Error(req, ctx, code, 500, "Unable to verify selected costing rates."); }
+  } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_VERIFY_FAILED", "Unable to verify selected costing rates."); }
 }
 
 export async function createAc06SlocGroupHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -355,7 +393,7 @@ export async function assignAc06CostingGroupHandler(req: Request, ctx: ProdHandl
     const { data: parent } = await db.from("ac06_sloc_group").select("group_name").eq("id", group.sloc_group_id).single();
     await db.from("ac06_month_group_config").upsert(materialIds.map((material_id) => ({ month_id: month.id, company_id: companyId, source_sloc_group_id: group.sloc_group_id, costing_group_id: group.id, material_id, source_sloc_group_name_snapshot: parent?.group_name ?? "", costing_group_name_snapshot: group.group_name, last_updated_at: now, last_updated_by: ctx.auth_user_id })), { onConflict: "month_id,source_sloc_group_id,material_id" });
     return okResponse({ data: { assigned: materialIds.length } }, ctx.request_id, req);
-  } catch (error) { const code = error instanceof Error ? error.message : "AC06_ASSIGN_FAILED"; return ac06Error(req, ctx, code, 500, "Unable to assign Costing Group members."); }
+  } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_ASSIGN_FAILED", "Unable to assign Costing Group members."); }
 }
 
 export async function setAc06MaterialInclusionHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -394,8 +432,7 @@ export async function setAc06MaterialInclusionHandler(req: Request, ctx: ProdHan
     }
     return okResponse({ data: { included, changed: lineIds.length } }, ctx.request_id, req);
   } catch (error) {
-    const code = error instanceof Error ? error.message : "AC06_MATERIAL_INCLUSION_FAILED";
-    return ac06Error(req, ctx, code, 500, "Unable to update material inclusion.");
+    return ac06ErrorFromCaught(req, ctx, error, "AC06_MATERIAL_INCLUSION_FAILED", "Unable to update material inclusion.");
   }
 }
 
@@ -574,7 +611,7 @@ export async function unassignAc06CostingGroupHandler(req: Request, ctx: ProdHan
     if (updateError) throw new Error("AC06_UNASSIGN_FAILED");
     for (const row of (rows ?? []) as Row[]) await db.from("ac06_month_group_config").update({ costing_group_id: null, costing_group_name_snapshot: null, last_updated_at: now, last_updated_by: ctx.auth_user_id }).eq("month_id", month.id).eq("source_sloc_group_id", row.source_sloc_group_id).eq("material_id", row.material_id);
     return okResponse({ data: { unassigned: lineIds.length } }, ctx.request_id, req);
-  } catch (error) { const code = error instanceof Error ? error.message : "AC06_UNASSIGN_FAILED"; return ac06Error(req, ctx, code, 500, "Unable to make selected items standalone."); }
+  } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_UNASSIGN_FAILED", "Unable to make selected items standalone."); }
 }
 
 export async function closeAc06MonthHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -586,7 +623,7 @@ export async function closeAc06MonthHandler(req: Request, ctx: ProdHandlerContex
     const { data: archiveId, error } = await serviceRoleClient.schema("erp_production").rpc("close_ac06_month", { p_month_id: month.id, p_closed_by: ctx.auth_user_id });
     if (error || !archiveId) throw new Error("AC06_CLOSE_FAILED");
     return okResponse({ data: { archive_id: archiveId, status: "CLOSED" } }, ctx.request_id, req);
-  } catch (error) { const code = error instanceof Error ? error.message : "AC06_CLOSE_FAILED"; return ac06Error(req, ctx, code, 500, "Unable to close monthly costing rates."); }
+  } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_CLOSE_FAILED", "Unable to close monthly costing rates."); }
 }
 
 export async function getAc06HistoryHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {

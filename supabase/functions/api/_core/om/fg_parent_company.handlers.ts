@@ -15,14 +15,11 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
-import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
-import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
-import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
 import { assertOmReadContext } from "./shared.ts";
-import { getCallerCompanyIds } from "./customer.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -98,37 +95,6 @@ async function getDepotCodeById(id: string): Promise<JsonRecord | null> {
   return (data as JsonRecord | null) ?? null;
 }
 
-// company-scope-write-acl-guard.mjs (2026-08-11 PO11 Planning precedent) --
-// assertCompanyScope() alone only proves company MEMBERSHIP, not that the
-// caller's ACL grant at this specific company is actually the tier this
-// write needs. Same real-ACL-tier pattern as customer.handlers.ts's own
-// assertCustomerCompanyScope() (2026-08-21) -- reused here rather than
-// re-derived, since both ultimately check the same MM04 resource family.
-async function assertParentCompanyScope(
-  ctx: OmHandlerContext,
-  parentCompanyId: string,
-  resourceCode: string,
-  actionCode: string,
-): Promise<void> {
-  const parent = await getParentCompanyById(parentCompanyId);
-  if (!parent) throw new Error("MM05_PARENT_COMPANY_NOT_FOUND");
-  if (isCompanyScopeAdminBypass(ctx)) return;
-  // §129 correction (2026-08-22) -- scope now comes from
-  // fg_parent_company_company_map (many-to-many), not the single
-  // fg_parent_company.company_id column, so a Parent Company shared across
-  // companies grants access via ANY of its mapped companies the caller also
-  // belongs to -- same intersection pattern as assertCustomerCompanyScope.
-  const mappedCompanyIds = await getParentCompanyMappedCompanyIds(parentCompanyId);
-  if (mappedCompanyIds.length === 0) throw new Error("COMPANY_SCOPE_VIOLATION");
-  const callerCompanyIds = await getCallerCompanyIds(ctx);
-  const candidateCompanyIds = mappedCompanyIds.filter((id) => callerCompanyIds.includes(id));
-  if (candidateCompanyIds.length === 0) throw new Error("COMPANY_SCOPE_VIOLATION");
-  const decisions = await Promise.all(
-    candidateCompanyIds.map((companyId) => canMaintainCompanyResource(ctx, companyId, resourceCode, actionCode)),
-  );
-  if (!decisions.some(Boolean)) throw new Error("COMPANY_SCOPE_VIOLATION");
-}
-
 function mapMutationError(req: Request, ctx: OmHandlerContext, code: string, fallbackMessage: string): Response {
   switch (code) {
     case "COMPANY_SCOPE_VIOLATION":
@@ -149,21 +115,6 @@ function mapMutationError(req: Request, ctx: OmHandlerContext, code: string, fal
     default:
       return mm05Error(req, ctx, code, 500, fallbackMessage);
   }
-}
-
-// §129 correction (2026-08-22) -- a real-world Bill-To entity must be
-// shareable across PACE companies without duplicating the row, or every
-// company that later needs the same Parent Company would have to recreate
-// it. Mirrors customer_master's own customer_company_map pattern exactly.
-async function getParentCompanyMappedCompanyIds(parentCompanyId: string): Promise<string[]> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_master")
-    .from("fg_parent_company_company_map")
-    .select("company_id")
-    .eq("parent_company_id", parentCompanyId)
-    .eq("active", true);
-  if (error) throw new Error("MM05_PARENT_COMPANY_LOOKUP_FAILED");
-  return [...new Set<string>((data ?? []).map((row: JsonRecord) => String(row.company_id)))];
 }
 
 export async function createParentCompanyHandler(req: Request, ctx: OmHandlerContext): Promise<Response> {
@@ -204,30 +155,17 @@ export async function createParentCompanyHandler(req: Request, ctx: OmHandlerCon
       throw new Error("MM05_PARENT_COMPANY_CREATE_FAILED");
     }
 
-    // Seed this Parent Company's first company mapping -- the creating
-    // company is always mapped, other companies join later via
-    // mapFgParentCompanyToCompanyHandler (reuse, not duplication).
-    const { error: mapError } = await serviceRoleClient
-      .schema("erp_master")
-      .from("fg_parent_company_company_map")
-      .insert({ parent_company_id: data.id, company_id: companyId, active: true });
-    if (mapError) {
-      console.error("[mm05.createParentCompany] company map insert failed:", JSON.stringify(mapError));
-      await serviceRoleClient.schema("erp_master").from("fg_parent_company").delete().eq("id", data.id);
-      throw new Error("MM05_PARENT_COMPANY_COMPANY_MAP_FAILED");
-    }
-
     return okResponse({ data }, ctx.request_id, req);
   } catch (error) {
     return mapMutationError(req, ctx, error instanceof Error ? error.message : "MM05_PARENT_COMPANY_CREATE_FAILED", "Parent company create failed.");
   }
 }
 
-// §129 correction (2026-08-22) -- lets a company search for an EXISTING
-// Parent Company (by GST, across every company) before creating a
-// duplicate. Deliberately bypasses the caller's own company-scope filter --
-// finding a cross-company match is the entire point, and the result only
-// exposes business master data (name/state/GST), not anything sensitive.
+// Parent Company is a global master (feasibility §129, corrected 2026-08-27
+// per business owner: no per-company mapping -- a Parent Company/VDC/DC
+// exists once and is usable from every company). This search-by-GST lookup
+// lets the create form warn "this already exists, use it" instead of
+// letting a typo create a second row for the same real-world GST.
 export async function findFgParentCompanyByGstHandler(req: Request, ctx: OmHandlerContext): Promise<Response> {
   try {
     assertOmReadContext(ctx);
@@ -242,145 +180,32 @@ export async function findFgParentCompanyByGstHandler(req: Request, ctx: OmHandl
       .eq("gst_number", gstNumber)
       .eq("status", "ACTIVE");
     if (error) throw new Error("MM05_PARENT_COMPANY_LOOKUP_FAILED");
-    const rows = (data ?? []) as JsonRecord[];
-    if (rows.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
-
-    // §8A/§8E — bulk-resolve which companies each match is already mapped to.
-    const parentIds = rows.map((r) => String(r.id));
-    const { data: maps, error: mapErr } = await serviceRoleClient
-      .schema("erp_master")
-      .from("fg_parent_company_company_map")
-      .select("parent_company_id, companies:company_id(company_code, company_name)")
-      .in("parent_company_id", parentIds)
-      .eq("active", true);
-    if (mapErr) throw new Error("MM05_PARENT_COMPANY_LOOKUP_FAILED");
-    const companiesByParent = new Map<string, JsonRecord[]>();
-    for (const m of (maps ?? []) as JsonRecord[]) {
-      const key = String(m.parent_company_id);
-      const list = companiesByParent.get(key) ?? [];
-      list.push(m.companies as JsonRecord);
-      companiesByParent.set(key, list);
-    }
-    const enriched = rows.map((row) => ({ ...row, mapped_companies: companiesByParent.get(String(row.id)) ?? [] }));
-    return okResponse({ data: enriched }, ctx.request_id, req);
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     return mapMutationError(req, ctx, error instanceof Error ? error.message : "MM05_PARENT_COMPANY_LOOKUP_FAILED", "Parent company GST lookup failed.");
   }
 }
 
-// §129 correction (2026-08-22) -- adds the CALLER's own company to an
-// EXISTING Parent Company's mapping instead of creating a duplicate row.
-// Authorization is deliberately NOT via assertParentCompanyScope (that
-// checks the parent's EXISTING mapped companies, which by definition
-// doesn't yet include the caller) -- it's a plain WRITE-tier check at the
-// company being newly added, same shape as mapCustomerToCompanyHandler.
-export async function mapFgParentCompanyToCompanyHandler(req: Request, ctx: OmHandlerContext): Promise<Response> {
-  try {
-    assertOmReadContext(ctx);
-    const body = await parseBody(req);
-    const parentCompanyId = toTrimmedString(body.parent_company_id);
-    const companyId = toTrimmedString(body.company_id);
-    if (!parentCompanyId || !companyId) {
-      return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "parent_company_id and company_id are required.");
-    }
-    if (!(await getParentCompanyById(parentCompanyId))) {
-      return mm05Error(req, ctx, "MM05_PARENT_COMPANY_NOT_FOUND", 404, "Parent company not found.");
-    }
-    if (!(await ensureCompanyExists(companyId))) {
-      return mm05Error(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found.");
-    }
-    if (!isCompanyScopeAdminBypass(ctx)) {
-      await assertCompanyScope(ctx, companyId);
-      const allowed = await canMaintainCompanyResource(ctx, companyId, "OM_CUSTOMER_CREATE", "WRITE");
-      if (!allowed) throw new Error("COMPANY_SCOPE_VIOLATION");
-    }
-    const { data, error } = await serviceRoleClient
-      .schema("erp_master")
-      .from("fg_parent_company_company_map")
-      .upsert({ parent_company_id: parentCompanyId, company_id: companyId, active: true }, { onConflict: "parent_company_id,company_id" })
-      .select("*")
-      .single();
-    if (error || !data) {
-      console.error("[mm05.mapFgParentCompanyToCompany] upsert failed:", JSON.stringify(error));
-      throw new Error("MM05_PARENT_COMPANY_COMPANY_MAP_FAILED");
-    }
-    return okResponse({ data }, ctx.request_id, req);
-  } catch (error) {
-    return mapMutationError(req, ctx, error instanceof Error ? error.message : "MM05_PARENT_COMPANY_COMPANY_MAP_FAILED", "Parent company mapping failed.");
-  }
-}
-
+// Global master list -- every ACTIVE Parent Company, optionally filtered by
+// state. No company scoping: Parent Company/VDC/DC are not per-company
+// records (feasibility §129, corrected 2026-08-27).
 export async function listParentCompaniesHandler(req: Request, ctx: OmHandlerContext): Promise<Response> {
   try {
     assertOmReadContext(ctx);
     const url = new URL(req.url);
     const state = toTrimmedString(url.searchParams.get("state"));
 
-    // §129 default: only Parent Companies mapped to one of the CALLER's own
-    // companies -- never a blended cross-company list (business owner's own
-    // explicit worry, 2026-08-22). Cross-company discovery goes through
-    // findFgParentCompanyByGstHandler instead, not this default list.
-    const requestedCompanyId = toTrimmedString(url.searchParams.get("company_id"));
-    let scopedParentIds: string[] | null = null;
-    if (requestedCompanyId) {
-      await getCompanyScope(ctx, requestedCompanyId);
-      const { data: maps, error: mapErr } = await serviceRoleClient
-        .schema("erp_master")
-        .from("fg_parent_company_company_map")
-        .select("parent_company_id")
-        .eq("company_id", requestedCompanyId)
-        .eq("active", true);
-      if (mapErr) throw new Error("MM05_PARENT_COMPANY_LIST_FAILED");
-      scopedParentIds = [...new Set<string>((maps ?? []).map((row: JsonRecord) => String(row.parent_company_id)))];
-    } else if (!isCompanyScopeAdminBypass(ctx)) {
-      const callerCompanyIds = await getCallerCompanyIds(ctx);
-      if (callerCompanyIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
-      const { data: maps, error: mapErr } = await serviceRoleClient
-        .schema("erp_master")
-        .from("fg_parent_company_company_map")
-        .select("parent_company_id")
-        .in("company_id", callerCompanyIds)
-        .eq("active", true);
-      if (mapErr) throw new Error("MM05_PARENT_COMPANY_LIST_FAILED");
-      scopedParentIds = [...new Set<string>((maps ?? []).map((row: JsonRecord) => String(row.parent_company_id)))];
-    }
-    if (scopedParentIds !== null && scopedParentIds.length === 0) {
-      return okResponse({ data: [] }, ctx.request_id, req);
-    }
-
-    if (scopedParentIds === null) {
-      // Admin bypass with no explicit company_id filter -- sees everything.
-      const { data, error } = await serviceRoleClient
-        .schema("erp_master")
-        .from("fg_parent_company")
-        .select("id, company_id, company_name, gst_number, state, full_address, pin_code, status, created_at")
-        .eq("status", "ACTIVE")
-        .order("company_name", { ascending: true })
-        .order("state", { ascending: true });
-      if (error) throw new Error("MM05_PARENT_COMPANY_LIST_FAILED");
-      const rows = (state ? (data ?? []).filter((r: JsonRecord) => r.state === state) : data) ?? [];
-      return okResponse({ data: rows }, ctx.request_id, req);
-    }
-
-    // §8E — scopedParentIds comes from a live mapping query, not a bounded
-    // constant, so it must be chunked rather than a single raw .in().
-    let rows: JsonRecord[];
-    try {
-      rows = await fetchInChunks<JsonRecord>(scopedParentIds, (idChunk) => {
-        let chunkQuery = serviceRoleClient
-          .schema("erp_master")
-          .from("fg_parent_company")
-          .select("id, company_id, company_name, gst_number, state, full_address, pin_code, status, created_at")
-          .eq("status", "ACTIVE")
-          .in("id", idChunk);
-        if (state) chunkQuery = chunkQuery.eq("state", state);
-        return chunkQuery;
-      });
-    } catch {
-      throw new Error("MM05_PARENT_COMPANY_LIST_FAILED");
-    }
-    rows.sort((a, b) => String(a.company_name).localeCompare(String(b.company_name)) || String(a.state).localeCompare(String(b.state)));
-    return okResponse({ data: rows }, ctx.request_id, req);
+    let query = serviceRoleClient
+      .schema("erp_master")
+      .from("fg_parent_company")
+      .select("id, company_id, company_name, gst_number, state, full_address, pin_code, status, created_at")
+      .eq("status", "ACTIVE")
+      .order("company_name", { ascending: true })
+      .order("state", { ascending: true });
+    if (state) query = query.eq("state", state);
+    const { data, error } = await query;
+    if (error) throw new Error("MM05_PARENT_COMPANY_LIST_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     return mapMutationError(req, ctx, error instanceof Error ? error.message : "MM05_PARENT_COMPANY_LIST_FAILED", "Parent company list failed.");
   }
@@ -396,7 +221,9 @@ export async function createOrGetDepotCodeHandler(req: Request, ctx: OmHandlerCo
     if (!parentCompanyId || !DISPATCH_TYPES.has(dispatchType) || !code) {
       return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "parent_company_id, dispatch_type, and code are required.");
     }
-    await assertParentCompanyScope(ctx, parentCompanyId, "OM_CUSTOMER_CREATE", "WRITE");
+    if (!(await getParentCompanyById(parentCompanyId))) {
+      return mm05Error(req, ctx, "MM05_PARENT_COMPANY_NOT_FOUND", 404, "Parent company not found.");
+    }
     const stateValue = toTrimmedString(body.state);
     if (stateValue && !INDIAN_STATE_NAMES.has(stateValue)) {
       return mm05Error(req, ctx, "MM05_INVALID_STATE", 400, "State must be a valid Indian state.");
@@ -458,13 +285,17 @@ export async function createOrGetDepotCodeHandler(req: Request, ctx: OmHandlerCo
   }
 }
 
+// Global master list -- every ACTIVE VDC/DC, optionally filtered by its
+// Parent Company or dispatch type. No company scoping: a VDC/DC belongs to
+// exactly one Parent Company (never many), and Parent Company itself is a
+// global master, not per-company (feasibility §129, corrected 2026-08-27).
 export async function listDepotCodesHandler(req: Request, ctx: OmHandlerContext): Promise<Response> {
   try {
     assertOmReadContext(ctx);
     const url = new URL(req.url);
     const parentCompanyId = toTrimmedString(url.searchParams.get("parent_company_id"));
     const dispatchType = toUpperTrimmedString(url.searchParams.get("dispatch_type"));
-    if (parentCompanyId) await assertParentCompanyScope(ctx, parentCompanyId, "OM_CUSTOMER_LIST", "VIEW");
+
     let query = serviceRoleClient
       .schema("erp_master")
       .from("fg_depot_code")
@@ -491,7 +322,9 @@ export async function updateParentCompanyHandler(req: Request, ctx: OmHandlerCon
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
     if (!id) return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "Parent company id is required.");
-    await assertParentCompanyScope(ctx, id, "OM_CUSTOMER_CREATE", "EDIT");
+    if (!(await getParentCompanyById(id))) {
+      return mm05Error(req, ctx, "MM05_PARENT_COMPANY_NOT_FOUND", 404, "Parent company not found.");
+    }
 
     const updates: JsonRecord = {};
     if (body.company_name !== undefined) {
@@ -544,15 +377,14 @@ export async function updateDepotCodeHandler(req: Request, ctx: OmHandlerContext
 
     const existing = await getDepotCodeById(id);
     if (!existing) return mm05Error(req, ctx, "MM05_DEPOT_CODE_NOT_FOUND", 404, "Depot code not found.");
-    // Caller must have access to BOTH the depot code's current parent company
-    // and (if re-pointing) the new one — check current first.
-    await assertParentCompanyScope(ctx, toTrimmedString(existing.parent_company_id), "OM_CUSTOMER_CREATE", "EDIT");
 
     const updates: JsonRecord = {};
     if (body.parent_company_id !== undefined) {
       const newParentCompanyId = toTrimmedString(body.parent_company_id);
       if (!newParentCompanyId) return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "parent_company_id cannot be empty.");
-      await assertParentCompanyScope(ctx, newParentCompanyId, "OM_CUSTOMER_CREATE", "EDIT");
+      if (!(await getParentCompanyById(newParentCompanyId))) {
+        return mm05Error(req, ctx, "MM05_PARENT_COMPANY_NOT_FOUND", 404, "Parent company not found.");
+      }
       updates.parent_company_id = newParentCompanyId;
     }
     if (body.code !== undefined) {
