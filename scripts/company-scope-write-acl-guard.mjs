@@ -96,11 +96,19 @@ const BASELINE = new Set([
   // lives inside the helper, not inline in the handler.
   "supabase/functions/api/_core/om/customer.handlers.ts::updateCustomerHandler",
   "supabase/functions/api/_core/om/customer.handlers.ts::changeCustomerStatusHandler",
-  "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::createParentCompanyHandler",
-  "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::createOrGetDepotCodeHandler",
-  "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::upgradeDispatchCustomerToRegisteredHandler",
-  "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::addDispatchCustomerAddressHandler",
-  "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::updateDispatchCustomerAddressHandler",
+  // §132.5 point 4 (2026-08-27) -- retroactive Vendor-link, same shape as
+  // updateCustomerHandler/changeCustomerStatusHandler directly above: calls
+  // assertCustomerCompanyScope(ctx, customerId, resourceCode, actionCode),
+  // the real canMaintainCompanyResource() check one call-frame away.
+  "supabase/functions/api/_core/om/customer.handlers.ts::linkCustomerToVendorHandler",
+  // §132.5 point 6 (2026-08-27) -- fg_dispatch_customer.handlers.ts was split:
+  // MM05's dead Dispatch-Customer code was deleted, but these 4 live
+  // Parent-Company/VDC handlers (still used by MM04's own
+  // VdcParentCompanyMasterPage.jsx) moved to fg_parent_company.handlers.ts
+  // unchanged -- same exemption reasoning as before (assertParentCompanyScope
+  // one call-frame away), just a renamed file.
+  "supabase/functions/api/_core/om/fg_parent_company.handlers.ts::createParentCompanyHandler",
+  "supabase/functions/api/_core/om/fg_parent_company.handlers.ts::createOrGetDepotCodeHandler",
   // Genuinely exempt (2026-08-22, feasibility doc §129) -- same shape as the
   // customer.handlers.ts exemption above: createCustomerAddressHandler/
   // updateCustomerAddressHandler both call the local
@@ -122,8 +130,9 @@ const BASELINE = new Set([
   // helper -- the real EDIT-level check is one call-frame away, this regex
   // heuristic only recognizes the single-lookup shape, not the array one.
   "supabase/functions/api/_core/om/customer_address.handlers.ts::bulkMapCustomerAddressesHandler",
-  "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::updateParentCompanyHandler",
-  "supabase/functions/api/_core/om/fg_dispatch_customer.handlers.ts::updateDepotCodeHandler",
+  // (see the fg_parent_company.handlers.ts note above -- same split, same file)
+  "supabase/functions/api/_core/om/fg_parent_company.handlers.ts::updateParentCompanyHandler",
+  "supabase/functions/api/_core/om/fg_parent_company.handlers.ts::updateDepotCodeHandler",
   "supabase/functions/api/_core/om/location.handlers.ts::unmapStorageLocationFromPlantHandler",
   "supabase/functions/api/_core/om/location.handlers.ts::mapStorageLocationToPlantHandler",
   "supabase/functions/api/_core/om/machine.handlers.ts::createMachineHandler",
