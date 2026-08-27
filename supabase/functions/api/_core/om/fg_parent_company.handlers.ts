@@ -465,17 +465,65 @@ export async function listDepotCodesHandler(req: Request, ctx: OmHandlerContext)
     const parentCompanyId = toTrimmedString(url.searchParams.get("parent_company_id"));
     const dispatchType = toUpperTrimmedString(url.searchParams.get("dispatch_type"));
     if (parentCompanyId) await assertParentCompanyScope(ctx, parentCompanyId, "OM_CUSTOMER_LIST", "VIEW");
-    let query = serviceRoleClient
-      .schema("erp_master")
-      .from("fg_depot_code")
-      .select("id, parent_company_id, dispatch_type, code, description, address_line, state, pin_code, gst_number, status, created_at")
-      .eq("status", "ACTIVE")
-      .order("code", { ascending: true });
-    if (parentCompanyId) query = query.eq("parent_company_id", parentCompanyId);
-    if (dispatchType) query = query.eq("dispatch_type", dispatchType);
-    const { data, error } = await query;
-    if (error) throw new Error("MM05_DEPOT_CODE_LIST_FAILED");
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+
+    // §132-VDC-list-scope fix (2026-08-27) -- without an explicit
+    // parent_company_id filter this previously returned EVERY company's
+    // VDC/DC rows unscoped (bug pattern #2). A caller in one company could
+    // see (but never edit -- assertParentCompanyScope on the write side
+    // correctly blocks it) another company's VDC, including one whose Parent
+    // Company duplicate-named row isn't in their own scoped Parent Company
+    // list at all (shows up as a blank "Parent Company" column client-side).
+    // Mirrors listParentCompaniesHandler's own scoping exactly.
+    let scopedParentIds: string[] | null = null;
+    if (!parentCompanyId && !isCompanyScopeAdminBypass(ctx)) {
+      const callerCompanyIds = await getCallerCompanyIds(ctx);
+      if (callerCompanyIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+      const { data: maps, error: mapErr } = await serviceRoleClient
+        .schema("erp_master")
+        .from("fg_parent_company_company_map")
+        .select("parent_company_id")
+        .in("company_id", callerCompanyIds)
+        .eq("active", true);
+      if (mapErr) throw new Error("MM05_DEPOT_CODE_LIST_FAILED");
+      scopedParentIds = [...new Set<string>((maps ?? []).map((row: JsonRecord) => String(row.parent_company_id)))];
+      if (scopedParentIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+    }
+
+    const baseSelect = "id, parent_company_id, dispatch_type, code, description, address_line, state, pin_code, gst_number, status, created_at";
+    let rows: JsonRecord[];
+    if (scopedParentIds !== null) {
+      // §8E — scopedParentIds comes from a live mapping query, not a bounded
+      // constant, so it must be chunked rather than a single raw .in().
+      try {
+        rows = await fetchInChunks<JsonRecord>(scopedParentIds, (idChunk) => {
+          let chunkQuery = serviceRoleClient
+            .schema("erp_master")
+            .from("fg_depot_code")
+            .select(baseSelect)
+            .eq("status", "ACTIVE")
+            .in("parent_company_id", idChunk);
+          if (dispatchType) chunkQuery = chunkQuery.eq("dispatch_type", dispatchType);
+          return chunkQuery;
+        });
+      } catch {
+        throw new Error("MM05_DEPOT_CODE_LIST_FAILED");
+      }
+    } else {
+      // Explicit parent_company_id filter (already scope-checked above) or
+      // admin bypass with no filter -- both are a single, bounded query.
+      let query = serviceRoleClient
+        .schema("erp_master")
+        .from("fg_depot_code")
+        .select(baseSelect)
+        .eq("status", "ACTIVE");
+      if (parentCompanyId) query = query.eq("parent_company_id", parentCompanyId);
+      if (dispatchType) query = query.eq("dispatch_type", dispatchType);
+      const { data, error } = await query;
+      if (error) throw new Error("MM05_DEPOT_CODE_LIST_FAILED");
+      rows = (data ?? []) as JsonRecord[];
+    }
+    rows.sort((a, b) => String(a.code ?? "").localeCompare(String(b.code ?? "")));
+    return okResponse({ data: rows }, ctx.request_id, req);
   } catch (error) {
     return mapMutationError(req, ctx, error instanceof Error ? error.message : "MM05_DEPOT_CODE_LIST_FAILED", "Depot code list failed.");
   }
