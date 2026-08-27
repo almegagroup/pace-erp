@@ -258,6 +258,7 @@ export default function CustomerAddressVdcMappingPage() {
                   <ErpDenseGrid
                     columns={[
                       { key: "display_code", label: "Customer", render: (row) => row.display_code || row.customer_name || "-" },
+                      { key: "billing_state", label: "State", render: (row) => row.billing_state || "-" },
                       {
                         key: "picked",
                         label: "Picked",

@@ -26,7 +26,7 @@ import {
   getUnmappedStock, checkOrderedStroke, listStrokeOptions, listPackingOrders,
   findPlanFeedByNumber, listMtestSkus,
 } from "./prodApi.js";
-import { listMaterials, listCustomers, updateCustomer, listCustomerAddresses } from "../om/omApi.js";
+import { createCustomerAddress, listMaterials, listCustomers, updateCustomer, listCustomerAddresses } from "../om/omApi.js";
 
 const EMPTY_ARRAY = [];
 
@@ -253,14 +253,18 @@ export default function PlanFeedPage() {
   const [form, setForm] = useState({ ...EMPTY_FO });
   const [newPartyOpen, setNewPartyOpen] = useState(false);
   const [editPartyOpen, setEditPartyOpen] = useState(false);
+  const [addressPickerOpen, setAddressPickerOpen] = useState(false);
+  const [addressPickerSeenForPartyId, setAddressPickerSeenForPartyId] = useState("");
+  const [newAddressOpen, setNewAddressOpen] = useState(false);
+  const [newAddress, setNewAddress] = useState({ site_name: "", address_line: "", town: "" });
+  const [newAddressSaving, setNewAddressSaving] = useState(false);
+  const [newAddressError, setNewAddressError] = useState("");
 
   const selectedParty = customerMap.get(form.party_id) ?? null;
   const isMtestCreate = poTypeFilter === "MTEST";
 
-  // A party can have multiple addresses/sites (erp_master.customer_address) --
-  // showing only customer_master's own single delivery_address field silently
-  // hid every other site. This is purely a reference display for whoever is
-  // creating the FO (Plan Feed itself has no address column of its own).
+  // A party can have multiple addresses/sites. The address is a Ship-To
+  // reference for the FO creator; Plan Feed itself does not store an address FK.
   const [selectedAddressId, setSelectedAddressId] = useState("");
   const partyAddressesQ = useQuery({
     queryKey: ["plan-feed-party-addresses", form.party_id],
@@ -270,10 +274,62 @@ export default function PlanFeedPage() {
   });
   const partyAddresses = partyAddressesQ.data ?? EMPTY_ARRAY;
   useEffect(() => {
-    setSelectedAddressId(partyAddresses[0]?.id ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.party_id, partyAddresses.length]);
+    if (!form.party_id) {
+      setSelectedAddressId("");
+      setAddressPickerOpen(false);
+      return;
+    }
+    if (partyAddresses.length === 1) {
+      setSelectedAddressId(partyAddresses[0].id);
+      return;
+    }
+    if (partyAddresses.length > 1 && addressPickerSeenForPartyId !== form.party_id) {
+      setSelectedAddressId("");
+      setAddressPickerOpen(true);
+      setAddressPickerSeenForPartyId(form.party_id);
+    }
+  }, [addressPickerSeenForPartyId, form.party_id, partyAddresses]);
   const selectedAddress = partyAddresses.find((a) => a.id === selectedAddressId) ?? null;
+
+  function choosePartyAddress(addressId) {
+    setSelectedAddressId(addressId);
+    setAddressPickerOpen(false);
+  }
+
+  function openNewAddress() {
+    setNewAddress({ site_name: "", address_line: "", town: "" });
+    setNewAddressError("");
+    setNewAddressOpen(true);
+  }
+
+  async function handleCreatePartyAddress() {
+    if (!form.party_id || !selectedParty) return;
+    if (!newAddress.site_name.trim() || !newAddress.address_line.trim() || !newAddress.town.trim()) {
+      setNewAddressError("Site Name, Address, and Town are required.");
+      return;
+    }
+    setNewAddressSaving(true);
+    setNewAddressError("");
+    try {
+      const result = await createCustomerAddress({
+        customer_id: form.party_id,
+        site_name: newAddress.site_name.trim(),
+        address_line: newAddress.address_line.trim(),
+        town: newAddress.town.trim(),
+        state: selectedParty.billing_state || "",
+      });
+      const createdAddress = result?.data;
+      await qc.invalidateQueries({ queryKey: ["plan-feed-party-addresses", form.party_id] });
+      if (createdAddress?.id) setSelectedAddressId(createdAddress.id);
+      setNewAddressOpen(false);
+      setAddressPickerOpen(false);
+      toast("Party address added and selected.");
+    } catch (err) {
+      setNewAddressError(err instanceof Error ? err.message : "OM_ADDRESS_CREATE_FAILED");
+    } finally {
+      setNewAddressSaving(false);
+    }
+  }
 
   const strokeCheckQ = useQuery({
     queryKey: ["plan-feed-stroke-check", effectiveCompanyId, form.material_id, form.ordered_stroke_number],
@@ -692,7 +748,11 @@ export default function PlanFeedPage() {
               <label className="text-xs text-slate-600 font-medium">Party <span className="text-rose-500">*</span></label>
               <ErpComboboxField
                 value={form.party_id}
-                onChange={(v) => setForm(f => ({ ...f, party_id: v }))}
+                onChange={(v) => {
+                  setSelectedAddressId("");
+                  setAddressPickerSeenForPartyId("");
+                  setForm(f => ({ ...f, party_id: v }));
+                }}
                 options={customerOptions}
                 placeholder="-- Select party --"
                 emptyStateLabel={customersQ.isLoading ? "Loading..." : "No party matches this PO Type"}
@@ -721,22 +781,74 @@ export default function PlanFeedPage() {
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">Party Address</label>
-              {partyAddresses.length > 1 ? (
-                <>
-                  <ErpComboboxField
-                    value={selectedAddressId}
-                    onChange={setSelectedAddressId}
-                    options={partyAddresses.map((a) => ({ value: a.id, label: addressLabel(a) }))}
-                    placeholder="-- Select address --"
-                  />
-                  <div className="text-[11px] text-slate-500 mt-0.5">{addressFullText(selectedAddress)}</div>
-                </>
-              ) : (
-                <div className="border border-slate-200 bg-slate-50 rounded px-2 py-1.5 text-sm text-slate-600 min-h-[34px]">
-                  {selectedAddress ? addressFullText(selectedAddress) : (selectedParty?.delivery_address || "--")}
+              <div className="border border-slate-200 bg-slate-50 rounded px-2 py-1.5 text-sm text-slate-600 min-h-[34px]">
+                {partyAddressesQ.isLoading ? "Loading addresses..." : selectedAddress
+                  ? <><span className="font-medium text-slate-800">{addressLabel(selectedAddress)}</span><span className="text-slate-500"> - {addressFullText(selectedAddress)}</span></>
+                  : selectedParty ? "No address selected." : "Select a party first."}
+              </div>
+              {selectedParty ? (
+                <div className="flex gap-3 text-[11px]">
+                  {partyAddresses.length > 1 ? (
+                    <button type="button" onClick={() => setAddressPickerOpen(true)} className="text-sky-600 underline">
+                      {selectedAddress ? "Change address" : "Choose address"}
+                    </button>
+                  ) : null}
+                  <button type="button" onClick={openNewAddress} className="text-sky-600 underline">+ Add address</button>
                 </div>
-              )}
+              ) : null}
             </div>
+
+            <DrawerBase
+              visible={addressPickerOpen}
+              title={`Choose address${selectedParty ? ` - ${customerLabel(selectedParty)}` : ""}`}
+              side="center"
+              width="min(760px, calc(100vw - 24px))"
+              onEscape={() => setAddressPickerOpen(false)}
+              onClose={() => setAddressPickerOpen(false)}
+            >
+              <div className="grid gap-2">
+                <p className="text-xs text-slate-500">Choose the customer site for this Plan Feed entry.</p>
+                {partyAddresses.map((address) => (
+                  <button
+                    key={address.id}
+                    type="button"
+                    onClick={() => choosePartyAddress(address.id)}
+                    className={`grid gap-1 border px-3 py-2 text-left text-sm ${selectedAddressId === address.id ? "border-sky-600 bg-sky-50" : "border-slate-200 bg-white hover:bg-slate-50"}`}
+                  >
+                    <span className="font-semibold text-slate-900">{address.site_name || "Unnamed site"}</span>
+                    <span className="text-slate-600">{addressFullText(address)}</span>
+                  </button>
+                ))}
+                <button type="button" onClick={() => { setAddressPickerOpen(false); openNewAddress(); }} className="justify-self-start text-xs text-sky-600 underline">
+                  + Add a new address for this customer
+                </button>
+              </div>
+            </DrawerBase>
+
+            <DrawerBase
+              visible={newAddressOpen}
+              title={`Add address${selectedParty ? ` - ${customerLabel(selectedParty)}` : ""}`}
+              side="center"
+              width="min(620px, calc(100vw - 24px))"
+              onEscape={() => setNewAddressOpen(false)}
+              onClose={() => setNewAddressOpen(false)}
+              actions={(
+                <>
+                  <button type="button" onClick={() => setNewAddressOpen(false)} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
+                  <button type="button" onClick={() => void handleCreatePartyAddress()} disabled={newAddressSaving} className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50">
+                    {newAddressSaving ? "Saving..." : "Add and select"}
+                  </button>
+                </>
+              )}
+            >
+              <div className="grid gap-3">
+                {newAddressError ? <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-800">{newAddressError}</div> : null}
+                <label className="grid gap-1 text-xs font-medium text-slate-600">Site Name<input value={newAddress.site_name} onChange={(event) => setNewAddress((current) => ({ ...current, site_name: event.target.value }))} className="h-9 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></label>
+                <label className="grid gap-1 text-xs font-medium text-slate-600">Address<textarea rows={3} value={newAddress.address_line} onChange={(event) => setNewAddress((current) => ({ ...current, address_line: event.target.value }))} className="border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></label>
+                <label className="grid gap-1 text-xs font-medium text-slate-600">Town<input value={newAddress.town} onChange={(event) => setNewAddress((current) => ({ ...current, town: event.target.value }))} className="h-9 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></label>
+                <div className="text-xs text-slate-500">State: <span className="font-medium text-slate-700">{selectedParty?.billing_state || "Not set on this customer"}</span>. Addresses under one customer must use the same state.</div>
+              </div>
+            </DrawerBase>
 
             <DrawerBase
               visible={newPartyOpen}
