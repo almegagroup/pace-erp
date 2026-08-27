@@ -87,7 +87,7 @@ export default function CustomerListPage() {
     <>
     <ErpMasterListTemplate
       eyebrow="Operation Management"
-      title="FG Sales Customer"
+      title="Customer Master"
       actions={[
         {
           key: "refresh",
@@ -192,18 +192,22 @@ export default function CustomerListPage() {
             <ErpDenseGrid
               columns={[
                 { key: "customer_code", label: "Customer Code", render: (row) => row.customer_code || "-" },
-                { key: "customer_name", label: "Customer Name", render: (row) => row.customer_name || "-" },
-                // §129.4 — "{gst_state_code} - {name}" display label, computed
-                // server-side (enrichCustomerRows), never recomputed here.
-                { key: "display_code", label: "Display Code", render: (row) => row.display_code || "-" },
+                // §132.7 list column spec — Party Name, Address, Category,
+                // VDC/DC, Parent Company, GST Number, Created From (Company).
+                // Blank data stays blank (no fake placeholder) — fills in
+                // once that field is actually entered/mapped later.
+                { key: "customer_name", label: "Party Name", render: (row) => row.customer_name || "-" },
+                { key: "site_name", label: "Address", render: (row) => row.site_name || "" },
                 {
-                  key: "company_codes",
-                  label: "Company",
-                  render: (row) => (Array.isArray(row.company_codes) && row.company_codes.length ? row.company_codes.join(", ") : "-"),
+                  key: "is_dependent",
+                  label: "Category",
+                  render: (row) => (row.is_dependent ? "Dependent" : "Independent"),
                 },
-                { key: "customer_type", label: "Type" },
+                { key: "vdc_code", label: "VDC/DC", render: (row) => row.vdc_code || "" },
+                { key: "vdc_parent_company_name", label: "Parent Company", render: (row) => row.vdc_parent_company_name || "" },
+                { key: "gst_number", label: "GST Number", render: (row) => row.gst_number || "" },
+                { key: "origin_company_code", label: "Created From", render: (row) => row.origin_company_code || "" },
                 { key: "status", label: "Status" },
-                { key: "vendor_code", label: "Linked Vendor", render: (row) => row.vendor_code || "-" },
               ]}
               rows={rows}
               rowKey={(row) => row.id}
@@ -222,7 +226,7 @@ export default function CustomerListPage() {
     />
       <DrawerBase
         visible={drawerOpen}
-        title="Edit FG Sales Customer"
+        title="Edit Customer"
         onClose={closeDrawer}
         side="center"
         width="min(720px, calc(100vw - 24px))"

@@ -21168,3 +21168,238 @@ by qty descending। **মানে item #11 ঠিকমতো SFG line-এর 
 **পরের ধাপ:** Prod-এ আজকের সব change replicate করা (code deploy + একই ACL data sequence),
 তারপর live click-through verify (এই environment-এ login নেই বলে করা যায়নি)। এরপর Codex-কে
 বাকি কোনো polish/task brief দেওয়া হলে established Claude/Codex split workflow অনুযায়ী।
+
+---
+
+## Section 132 — RM/PM/INT Sale Module Revisit, Part 1: MM04 becomes the single unified Customer Master (Dependent/Independent), MM05 fully retired (✅ DESIGN LOCKED + IMPLEMENTATION COMPLETE — 2026-08-27, Claude direct-implemented, task brief `docs/CODEX-MM04-COMPLETE-REDESIGN-MM05-RETIRE-TASK-BRIEF.md`)
+
+### 132.1 — কেন এই session Customer দিয়ে শুরু হলো
+
+Locked sequence-এর Step 3 (§6 handoff, RM/PM/INT Sale Module Revisit) শুরু করতে গিয়ে দেখা গেল —
+SO01/PO07/SO03/SO02 (§113) transaction mechanism code-complete থাকলেও, live code check করে
+ধরা পড়ে `SOCreatePage.jsx` আজও Customer dropdown-এর জন্য `customer_master` (MM04)-ই ব্যবহার
+করে, আর MM04 এখন DB-তেই "**FG Sales Customer**" নামে explicitly redesignated (§129,
+2026-08-22)। অর্থাৎ RM/PM/INT sale-এর নিজস্ব কোনো customer master আজ পর্যন্ত নেই — MM05
+(`OM_FG_DISPATCH_CUSTOMER`) শুধু DB-তে একটা placeholder title বহন করছিল
+("RM/PM/INT Sale Customer (Design Pending)"), কোনো real design/build হয়নি। SO/DO টেস্ট করার
+আগে এই gap-টাই সবচেয়ে বড় blocker হিসেবে ধরা পড়ে, তাই business owner সিদ্ধান্ত নেন প্রথমে পুরো
+Customer/MM05 প্রশ্নটা business-logic দিয়ে সমাধান করা হবে, তারপর SO/DO-তে যাওয়া হবে।
+
+### 132.2 — IBN (Inbound Number) — business concept (নতুন discovery)
+
+PACE Asian Paints (AP)-এর জন্য materials বানায় ("as such goods"), আর AP-র নির্দেশ অনুযায়ী সেগুলো
+বিভিন্ন জায়গায় dispatch করতে হয়। **IBN = Inbound Number** — এটা আমাদের সিস্টেমের কোনো নম্বর না,
+**AP নিজের portal-এ generate করে** যখন আমাদের কোনো Sales Order-এর বিপরীতে তারা নিজেদের delivery
+নেওয়ার জন্য একটা DO তৈরি করে। সেই AP-portal-DO-কেই আমরা IBN বলি।
+
+**IBN grouping — একই SO-এর ভিতরে ৩ রকম হতে পারে:**
+1. Item-wise — প্রতিটা line-এর জন্য আলাদা IBN
+2. Order-wise — সব line মিলিয়ে একটাই IBN
+3. Mixed — কিছু line একসাথে এক IBN group-এ, বাকি line গুলো standalone আলাদা IBN
+
+**Lock (2026-08-27):** IBN **SO level-এ entry হবে** (header/line যেখানেই হোক, entry point SO)।
+**IBN-এর SO→DO→Invoice posting-এ পুরো propagation/grouping mechanism ইচ্ছাকৃতভাবে এখানে design
+করা হয়নি** — এটা §132.6-এ explicitly SO/DO design-phase-এর জন্য deferred, MM04 close-out-এর
+অংশ না।
+
+### 132.3 — RM/PM/INT-এর ৫ ধরনের customer, ২টা category + এক per-SO override-এ reduce হলো
+
+Business owner-এর দেওয়া ৫টা customer type:
+
+| # | Customer Type | Dispatch কে ঠিক করে | Bill-To কে | IBN লাগে? |
+|---|---|---|---|---|
+| 1 | MM04-এর মতো standard pattern | Asian নিজেই | Asian Paints (Parent Company) | ✅ হ্যাঁ |
+| 2 | STO Customer (internal company) | আমরা নিজেরা | N/A (internal transfer) | ❌ না |
+| 3 | Asian বলে কোথায় পাঠাতে হবে — Independent Party | Asian | সেই third-party নিজেই | ❌ না |
+| 4 | Asian বলে কোথায় পাঠাতে হবে — কিন্তু billing Asian-এর নামেই | Asian | Asian Paints (Parent Company) | ✅ হ্যাঁ |
+| 5 | আমরা নিজেরাই পাঠাই (Asian-নির্ভর না) | আমরা নিজেরা | যাকে বিক্রি করছি | ❌ না |
+
+**Insight (confirm করা হয়েছে):** IBN লাগে exactly তখনই যখন Bill-To = Asian Paints (Type 1, 4) —
+dispatch কে ঠিক করছে সেটা IBN লাগা/না-লাগার নির্ধারক না, আসল নির্ধারক Bill-To।
+
+**Reduction (locked):**
+- **Type 2 (STO)** সম্পূর্ণ orthogonal — Customer Master touch করেই না, STO number-ই party data
+  carry করে।
+- **Type 3, 4, 5** আসলে একই জিনিস — একটা flat **"Independent Party"** (নাম+ঠিকানা+GST, কোনো
+  hierarchy ছাড়া)। Type 4-এর "Bill-To = Asian" ব্যাপারটা party-master-এ stored কোনো attribute
+  না — এটা **per-SO-transaction** একটা "Under Parent Company" override toggle (SO-তে Party
+  select করার পর, Under Parent Company বেছে কোনো Parent Company choose করলে Bill-To সেই Parent
+  Company হয়ে যাবে, Ship-To সেই Party-ই থেকে যাবে)। তাই একই real-world party এক SO-তে Type 3,
+  আরেক SO-তে Type 4 হতে পারে — party-র নিজের কোনো fixed "type" নেই।
+- **Type 1** structurally MM04-এরই existing Address→VDC→Parent-Company hierarchy (§129) —
+  আলাদা কোনো নতুন concept না।
+
+### 132.4 — Direct vs Depot dispatch_type — Ship-To resolution polymorphic হওয়া দরকার (§129.6-এর correction)
+
+Live schema check (dev, 2026-08-27) — `fg_depot_code` (VDC/DC) আর `fg_parent_company`
+দুটোতেই নিজের নিজের সম্পূর্ণ ঠিকানা+GST identity আছে:
+
+- `erp_master.fg_depot_code`: `address_line`, `state`, `pin_code`, `gst_number` (নিজস্ব, কোনো
+  child address লাগে না)
+- `erp_master.fg_parent_company`: `full_address`, `state`, `pin_code`, `gst_number` (নিজস্ব)
+
+**দুটো chain (একই `fg_depot_code` টেবিল, শুধু `dispatch_type` অনুযায়ী ভূমিকা আলাদা):**
+
+```
+Direct ("VDC" role):
+  customer_address (Ship-To) -> depot_code_id -> fg_depot_code[DIRECT] -> parent_company_id -> fg_parent_company (Bill-To)
+
+Depot ("DC" role):
+  fg_depot_code[DEPOT] (নিজের address_line/state/pin_code = Ship-To সরাসরি) -> parent_company_id -> fg_parent_company (Bill-To)
+```
+
+একই Parent Company-র নিচে DIRECT আর DEPOT — দুই role-এরই `fg_depot_code` row মিশিয়ে থাকতে পারে
+(many-to-one, কোনো বাধা নেই) — Parent Company real/physical, virtual না।
+
+**Correction লক করা হলো — §129.6 বলেছিল Ship-To সবসময় Address-level-এ resolve হয়, এটা এখন আর
+সত্যি না RM/PM/INT-এর জন্য।** Ship-To আসলে **polymorphic** — তিনটা entity-র (Customer Address /
+VDC / Parent Company) যেকোনো একটাতে থামতে পারে:
+
+| যদি বাছা হয় | Ship-To | Bill-To |
+|---|---|---|
+| Customer Address | সেই address-এর ঠিকানা | উপরে উঠে VDC->Parent Company |
+| VDC সরাসরি (কোনো address ছাড়া) | VDC-র নিজের ঠিকানা | parent_company_id->Parent Company |
+| Parent Company সরাসরি (কোনো VDC/address ছাড়া) | Parent Company-র নিজের ঠিকানা | Parent Company নিজেই (Ship-To=Bill-To) |
+
+এই polymorphic resolver বানানো (`ship_to_ref_type`+`ship_to_ref_id` জাতীয় mechanism) **SO/DO
+design phase-এর কাজ, MM04-এর অংশ না** — এখানে শুধু concept + data-model-readiness lock করা হলো
+(§132.6-এ ফর্মালি deferred হিসেবে তালিকাভুক্ত)।
+
+`fo_customer_type` (MTO_HPS/MTEST/MTS, `customer_master`-এর উপর, Plan Feed item-filtering-এর
+জন্য) আর `dispatch_type` (DIRECT/DEPOT, `fg_depot_code`-এর উপর, delivery-routing-এর জন্য) —
+এই দুটো **সম্পূর্ণ independent dimension**, schema-তে কোনো সম্পর্ক নেই, confirm করা হয়েছে live
+data দিয়ে (dev-এ `fg_depot_code` আজও ০ row, VDC layer বাস্তবে একবারও ব্যবহার হয়নি)।
+
+### 132.5 — MM04/MM05 চূড়ান্ত ভূমিকা: MM05 সম্পূর্ণ retire, MM04-ই একমাত্র unified Customer Master
+
+**Business owner-এর নিজের যুক্তি:** same customer-এর জন্য আলাদা আলাদা data বানানো ঠিক না
+(§129.1-এর "uniform cycle" নীতিরই সম্প্রসারণ) — RM/PM/INT-এর Independent Party একটা আলাদা MM05
+table-এ বানানোর বদলে MM04-এরই মধ্যে বানানো উচিত, কারণ MM04-এর `fo_customer_type` column আগে
+থেকেই nullable — একটা Independent Party structurally আসলে শুধু "একটা `customer_master` row
+যার hierarchy কিছুই ভরা নেই", নতুন schema লাগে না।
+
+**Locked সিদ্ধান্তসমূহ:**
+
+1. **Title change** — MM04-র title "FG Sales Customer" থেকে সাধারণ **"Customer Master"**-এ
+   বদলাবে (`erp_menu.menu_master`/`acl.menu_master` row আপডেট)। এখন থেকে এটাই FG + RM/PM/INT
+   দুই ধরনের party-ই রাখবে।
+2. **নতুন derived boolean `customer_master.is_dependent`** — rule: সেই customer-এর **অন্তত
+   একটা** `customer_address` row-এ `depot_code_id` set থাকলে TRUE, নাহলে FALSE। User কখনো এই
+   field সরাসরি ভরবে না/দেখবে না হিসেবে input করবে না — **`updateCustomerAddressHandler` আর
+   `bulkMapCustomerAddressesHandler`, দুটোতেই, `depot_code_id` সফল update হওয়ার ঠিক পরেই
+   parent customer-এর `is_dependent` flag recompute করে বসাতে হবে** (denormalize-for-read,
+   derive-on-write pattern, DO commercial snapshot §113.13-এর একই idiom)। List/filter page-এ
+   এই indexed column দিয়েই দ্রুত filter হবে, কোনো live JOIN লাগবে না।
+3. **Mixed VDC-per-address explicitly allowed** — একই customer-এর ভিন্ন ভিন্ন address ভিন্ন
+   ভিন্ন VDC/Parent-Company-তে map হতে পারবে (business owner confirmed, কোনো restriction না)।
+   এই কারণেই `is_dependent`-এর rule "অন্তত একটা" (ANY), "সবগুলো" (ALL) না।
+4. **Vendor-link retroactive করা দরকার (নতুন gap, fix করতে হবে)** — আজকে `customer_master.
+   vendor_id` শুধু **create-time-এই** set করা যায় (`CustomerCreateForm.jsx`-এর
+   INDEPENDENT/VENDOR_LINKED source toggle); `updateCustomerHandler`-এর `mutableFields`
+   লিস্টে `vendor_id` নেই — অর্থাৎ পরে link করার কোনো উপায় নেই। এই redesign-এ Customer Edit
+   page-এ একটা **"Link to existing Vendor"** action যোগ করতে হবে, যাতে "আজ independent customer
+   বানালাম, পরে দেখা গেল সে আমাদের vendor-ও" — এই বাস্তব case handle করা যায়। Link হলে
+   customer_name/gst_number vendor থেকে live-derive হওয়া শুরু করবে (create-time link-এর মতোই
+   আচরণ)।
+5. **Independent Party creation — নতুন কিছু বানাতে হবে না** — MM04-এর existing "+Create
+   Customer" flow (`source=INDEPENDENT`, hierarchy fields খালি রেখে) reuse হবে। `is_dependent`
+   flag automatically FALSE থাকবে যতক্ষণ না কোনো address VDC-তে map হয়।
+6. **MM05 সম্পূর্ণ retire (Option 1 — full retire, cleanup সহ, business owner-এর নিজের পছন্দ)**:
+   - `erp_menu.menu_master`/`acl.menu_master`-এর MM05 (`OM_FG_DISPATCH_CUSTOMER`) row মুছে
+     ফেলা, sidebar থেকে সরানো
+   - Dead code মুছে ফেলা: `erp_master.fg_dispatch_customer`,
+     `erp_master.fg_dispatch_customer_address` টেবিল (দুটোই আজও ০ row, কখনো ব্যবহার হয়নি),
+     `FgDispatchCustomerPage.jsx`, `fg_dispatch_customer.handlers.ts`
+   - `erp_master.fg_parent_company`/`fg_depot_code` — এই দুটো **retire হয় না**, MM04-এর সাথে
+     shared থেকে যাবে (§129.2-এর lock অপরিবর্তিত)
+   - কারণ: এই টেবিল/page কখনোই live ব্যবহার হয়নি (০ row, কোনো historical data loss ঝুঁকি নেই),
+     dead code রেখে দিলে ভবিষ্যতে confusion তৈরি করবে
+
+### 132.6 — এখানে explicitly deferred, SO/DO design-phase-এর কাজ (MM04 close-out-এর অংশ না)
+
+- Polymorphic Ship-To/Bill-To resolver বানানো (§132.4-এর mechanism)
+- `sales_order`-এ polymorphic reference column (`ship_to_ref_type`+`ship_to_ref_id`) — পুরনো
+  flat `ship_to_*` (§113.16) columns-এর জায়গায়/পাশে
+- SO01 Ship-To picker rebuild — নতুন resolver ব্যবহার করে
+- Type 4-এর "Under Parent Company" per-SO-transaction override toggle, SO Create-এ
+- DO (`delivery_challan`)-তে resolved Bill-To/Ship-To snapshot freeze করা (§113.13 pattern)
+- IBN-এর SO→DO→Invoice পূর্ণ grouping/propagation mechanism (§132.2)
+- RM/PM/INT SO-তে item-selection MTO_HPS/MTS/MTEST-ভিত্তিক filtering আদৌ প্রযোজ্য কিনা/কীভাবে —
+  এখনো খোলা প্রশ্ন
+- FG dispatch batch-tracking-এর কারণে (§113.10 বাগ #10 — `issueSOStockHandler` হার্ডকোড
+  `batch_id IS NULL`) FG আর RM/PM/INT একই SO transaction-page শেয়ার করবে কিনা — সিদ্ধান্ত এখনো
+  খোলা, তবে Bill-To/Ship-To resolver অংশটা দুই ক্ষেত্রেই shared/reusable রাখার সুপারিশ করা
+  হয়েছে
+
+### 132.7 — MM04 UI Redesign: List + Detail, ErpDenseGrid + Center Drawer + keyboard nav (✅ LOCKED — 2026-08-27)
+
+**পটভূমি:** MM04-এর data model (§132.1-132.6) ঠিক থাকলেও business owner-এর নিজের অভিজ্ঞতা —
+আজকের Customer Edit **"boddo clumsy"**, অনেক scroll করতে হয়, keyboard দিয়ে চালানো যায় না।
+এটা আসলে নতুন সিদ্ধান্ত না — **§128.6 আগেই ErpDenseGrid `cellNavigate`+`virtualize`+center
+`DrawerBase`-কে standard pattern হিসেবে lock করেছিল, আর §129.8 স্পষ্ট করে Customer Detail-কে
+এই migration-এর জন্য flag করেছিল** ("keeps its old row-only behavior unchanged... this section
+is that migration") — এই session সেই বাকি থাকা কাজটাই করার সময় নির্ধারণ করল।
+
+**Lock:**
+- **List page** (`CustomerListPage.jsx`) — `ErpDenseGrid` gets `cellNavigate virtualize`,
+  `onRowActivate` আর আলাদা route-এ navigate করবে না, বরং **center `DrawerBase`**
+  (`side="center"`, AC01-এর মতো `min(1480px, calc(100vw - 24px))` width) খুলবে, in-place।
+- **List-এর column spec (locked):** Party Name, Address (Site Name), **Category**
+  (Dependent/Independent — `is_dependent` থেকে, §132.5), **VDC/DC** (code, blank যদি কোনো
+  address mapped না থাকে), **Parent Company** (name, blank যদি VDC না থাকে), **GST Number**
+  (blank যদি না থাকে), **Created From (Company)** (নতুন column, §132.9)। কোনো data না থাকলে
+  blank-ই থাকবে (fake placeholder না) — পরে ভরলে আসবে।
+- **Detail/Edit drawer-এর ভেতরে** — Customer header fields আজকের মতো লম্বা vertical
+  stacked-field form না হয়ে **compact table/grid layout**-এ redesign হবে (scroll কমানোর জন্য),
+  আর Address list নিজেও একটা nested `ErpDenseGrid` (`cellNavigate virtualize`) হবে —
+  `CustomerAddressVdcMappingPage.jsx`-এর existing multi-select bulk-map mechanism অক্ষত থেকে যাবে।
+- **Keyboard navigation** — Tab/Arrow-key দিয়ে grid/form-এর ভিতরে navigate করা যাবে (`ErpDenseGrid`
+  built-in keyboard support অনুযায়ী, নতুন কিছু বানাতে হবে না), আর **Save/Edit-সহ প্রতিটা action
+  button-এ keyboard shortcut** থাকবে — center drawer-এর ভেতরের বাটন হলেও (app-এর existing
+  shortcut-keyed-button convention অনুসরণ করে, নতুন pattern না)।
+- `Escape`-এ drawer বন্ধ হবে (`DrawerBase`-এর নিজস্ব `onEscape`, আগে থেকেই built-in)।
+
+### 132.8 — Customer/Party "Already Exists" duplicate-detect + reuse (Parent Company-র pattern mirror করে) (✅ LOCKED — 2026-08-27)
+
+**Gap পাওয়া গেছে (code check করে):** Parent Company-তে already একটা duplicate-prevention
+mechanism আছে — `findFgParentCompanyByGst()` (GST দিয়ে খুঁজে বের করে আগে থেকে আছে কিনা) +
+`fg_parent_company_company_map` (global entity, একাধিক company-তে map হতে পারে) +
+`mapFgParentCompanyToCompany()` (নতুন row না বানিয়ে existing-কে নতুন company-তে map করে দেয়)।
+কিন্তু **`createCustomerHandler`-এ এই মেকানিজম নেই** — সরাসরি insert করে, কোনো duplicate-check
+ছাড়াই।
+
+**Business owner-এর decision অনুযায়ী Lock:**
+1. **GST না থাকলে (Unregistered Independent Party) duplicate-check হবে না** — শুধু GST যখন
+   entered/present তখনই check চলবে।
+2. **Duplicate পেলে "Reuse" হবে, নতুন row তৈরি হবে না** — ঠিক Parent Company-র pattern-এ:
+   নতুন Customer Create form-এ GST দেওয়ার পর একটা `findCustomerByGst()`-জাতীয় check চলবে
+   (সব company জুড়ে, company-scope ছাড়াই সার্চ) — match পেলে UI "Create New"-এর বদলে
+   **"Map to my Company"** অপশন দেখাবে, ক্লিক করলে শুধু `customer_company_map`-এ একটা নতুন row
+   বসবে (`customer_id`=পাওয়া গেছে যেটা, `company_id`=বর্তমান company) — কোনো নতুন
+   `customer_master` row তৈরি হবে না। GST না থাকলে/match না পেলে normal create flow চলবে
+   যেমন আজ চলে।
+
+### 132.9 — নতুন column: `customer_master.origin_company_id` (✅ LOCKED — 2026-08-27)
+
+- **নতুন explicit, immutable column** — customer তৈরি হওয়ার সময় **একবারই** set হবে (যে company
+  থেকে প্রথম তৈরি হলো), পরে কখনো বদলাবে না — এমনকি পরে অন্য company `customer_company_map`-এ
+  যোগ হলেও (§132.8-এর reuse flow) এই column অপরিবর্তিত থাকবে।
+- **কারণ:** `customer_company_map`-এর সবচেয়ে পুরনো row থেকে derive করলে ইতিহাস হারানোর ঝুঁকি
+  থাকে (সেই row কখনো deactivate/delete হলে), তাই derive না করে সরাসরি stored column রাখা হবে —
+  list-এ দ্রুত/simple দেখানোর জন্যও ভালো (§132.7-এর column spec-এ এটাই "Created From (Company)")।
+
+**Status: ✅ IMPLEMENTATION COMPLETE (2026-08-27, Claude direct-implemented, same session).**
+MM04/MM05-এর data model এবং UI redesign দুটোই শুধু design-lock না, সম্পূর্ণ code-এ implement হয়ে
+গেছে dev-এ — migration applied+reconciled (`in_sync=true`), backend (`is_dependent` auto-recompute,
+retroactive vendor-link, GST duplicate-detect+reuse), frontend (list column spec, "Link to
+Vendor"/"Map to my Company" UI, Save keyboard-shortcut), আর MM05 সম্পূর্ণ retire (dead table drop
++ menu/ACL cleanup + dead code delete, একটা real correction সহ — `fg_dispatch_customer.handlers.ts`
+আসলে live Parent-Company/VDC handler-ও বহন করছিল, blind delete করলে MM04-এর নিজের VDC page ভেঙে
+যেত, তাই split করে `fg_parent_company.handlers.ts`-এ আলাদা করা হয়েছে)। সব verify করা হয়েছে
+(`deno check` baseline অপরিবর্তিত, `eslint` ০ নতুন error, ৮টা guard script-ই clean)। পূর্ণ detail
+task brief-এ: `docs/CODEX-MM04-COMPLETE-REDESIGN-MM05-RETIRE-TASK-BRIEF.md`।
+
+**যা এখনো বাকি (deliberately out of scope এই session-এ):** live click-through (এই environment-এ
+dev login নেই), prod-এ replicate করা (dev-only এখন)। পরের ধাপ: SO/DO/Invoice-এর বাকি design point
+(item selection, IBN grouping mechanism বিস্তারিত, polymorphic resolver-এর concrete schema) নিয়ে
+আলোচনা চালিয়ে, তারপর একসাথে একটা task brief লেখা।

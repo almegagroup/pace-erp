@@ -20,9 +20,15 @@ import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { INDIAN_STATES } from "../../../../data/indianStates.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
+import {
+  MASTER_PICKER_FETCH_LIMIT,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 import {
   createCustomerAddress,
   getCustomer,
+  linkCustomerToVendor,
   listCustomerAddresses,
   listFgDepotCodes,
   listFgParentCompanies,
@@ -208,6 +214,15 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
   const [savingEditAddress, setSavingEditAddress] = useState(false);
   const [editAddressError, setEditAddressError] = useState("");
 
+  // §132.5 point 4 -- retroactive Vendor-link (independent -> vendor-linked,
+  // one-time). Only ever shown/usable when NOT already vendor-linked.
+  const [linkingVendor, setLinkingVendor] = useState(false);
+  const [linkVendorId, setLinkVendorId] = useState("");
+  const [linkVendorSaving, setLinkVendorSaving] = useState(false);
+  const [linkVendorError, setLinkVendorError] = useState("");
+  const vendorOptionsQuery = useVendorOptionsQuery({ status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
+  const vendorOptions = vendorOptionsQuery.vendors ?? [];
+
   const queryClient = useQueryClient();
 
   const customerQuery = useQuery({
@@ -316,6 +331,32 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
     }
   }
 
+  async function handleLinkVendor() {
+    if (!linkVendorId) {
+      setLinkVendorError("Select a vendor first.");
+      return;
+    }
+    setLinkVendorSaving(true);
+    setLinkVendorError("");
+    try {
+      const result = await linkCustomerToVendor(customerId, linkVendorId);
+      setLinkingVendor(false);
+      setLinkVendorId("");
+      await queryClient.invalidateQueries({ queryKey: ["om", "customer-edit-form", customerId] });
+      onSaved?.(result?.data ?? customer);
+    } catch (linkError) {
+      setLinkVendorError(linkError instanceof Error ? linkError.message : "OM_CUSTOMER_VENDOR_LINK_FAILED");
+    } finally {
+      setLinkVendorSaving(false);
+    }
+  }
+
+  // Registers on whatever route currently hosts this shared form -- standalone
+  // MM04 detail page or the list page's center drawer, either way.
+  useErpScreenHotkeys({
+    save: { disabled: saving || !form, perform: () => void handleSubmit() },
+  });
+
   async function handleAddAddress() {
     if (!newAddress.site_name.trim() || !newAddress.address_line.trim() || !newAddress.town.trim()) {
       setAddressError("Site Name, Address, and Town are required.");
@@ -410,6 +451,52 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
         </p>
       ) : (
         <>
+          {/* §132.5 point 4 -- retroactive Vendor-link. Independent customer
+              today, may turn out to also be one of our Vendors later. */}
+          {linkingVendor ? (
+            <div className="grid gap-2 border border-sky-300 bg-sky-50 px-3 py-2">
+              {linkVendorError ? <p className="text-xs text-rose-700">{linkVendorError}</p> : null}
+              <ErpDenseFormRow label="Vendor">
+                <select
+                  value={linkVendorId}
+                  onChange={(event) => setLinkVendorId(event.target.value)}
+                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                >
+                  <option value="">-- Select vendor --</option>
+                  {vendorOptions.map((vendor) => (
+                    <option key={vendor.id} value={vendor.id}>
+                      {vendor.vendor_code} — {vendor.vendor_name}
+                    </option>
+                  ))}
+                </select>
+              </ErpDenseFormRow>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleLinkVendor()}
+                  disabled={linkVendorSaving || !linkVendorId}
+                  className="h-8 border border-sky-600 bg-sky-600 px-3 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  {linkVendorSaving ? "Linking..." : "Confirm Link"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setLinkingVendor(false); setLinkVendorId(""); setLinkVendorError(""); }}
+                  className="h-8 border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setLinkingVendor(true)}
+              className="w-fit text-xs font-semibold text-sky-700 underline"
+            >
+              Link to existing Vendor →
+            </button>
+          )}
           <ErpDenseFormRow label="Customer Name" required>
             <input
               value={form.customer_name}

@@ -674,6 +674,19 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 >    implement শুরু**
 > 3. **RM Sale Module Revisit** — test, fixes, finalize (§113-এর SO/STO/PGI/Invoice
 >    implementation-এর উপর built, RM/PM/INT scope — FG Dispatch Phase 2 না)
+>    **⚠️ 2026-08-27 আপডেট — Customer/MM05 অংশ নতুন করে ডিজাইন লক হয়েছে, feasibility doc
+>    Section 132 পড়ো এই ধাপ চালিয়ে যাওয়ার আগে।** সংক্ষেপে: MM05 সম্পূর্ণ **retired** (কখনো
+>    build হয়নি, ০ row, dead code+table cleanup বাকি) — MM04 (title বদলে সাধারণ "Customer
+>    Master" হবে) এখন FG + RM/PM/INT দুই ধরনের party-ই রাখবে, নতুন derived
+>    `is_dependent` boolean দিয়ে আলাদা করা হবে (Parent-Company/VDC hierarchy-নির্ভর হলে
+>    TRUE, flat Independent Party হলে FALSE — user কখনো নিজে সেট করে না, address-mapping
+>    handler থেকেই auto-recompute হয়)। নতুন IBN (Inbound Number, Asian Paints-এর নিজস্ব
+>    portal-generated number) concept discover হয়েছে, SO-level এ capture হবে (§132.2)।
+>    Ship-To resolution polymorphic হতে হবে (Address/VDC/Parent-Company যেকোনো level-এ থামতে
+>    পারে) — এটা §129.6-এর "Ship-To সবসময় Address" lock-কে RM/PM/INT-এর জন্য supersede করে
+>    (§132.4)। **✅ MM04 অংশ (data model + UI + MM05 retirement) সম্পূর্ণ implement+verify হয়ে
+>    গেছে dev-এ, একই দিনে (§132.7-132.9)।** SO/DO-এর বাকি design (polymorphic resolver build,
+>    IBN grouping, item-selection filtering) এখনো implementation শুরু হয়নি — এটাই পরের কাজ।
 > 4. **Dispatch + Costing/AP-Reco + Return Receipt** — সবটা একসাথে, এক session-এ (§7-এর আগের
 >    lock অনুযায়ী Dispatch design-ই Costing formula-র numerator, তাই এই তিনটা আলাদা করা যাবে না)
 >

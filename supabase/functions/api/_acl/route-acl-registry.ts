@@ -363,9 +363,18 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/om/fg-depot-codes":                       { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
   "POST:/api/om/fg-depot-code":                       { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
   "PATCH:/api/om/fg-depot-code":                      { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
-  // MM05's own dispatch-customer create route -- left on OM_FG_DISPATCH_CUSTOMER
-  // deliberately (dead, §129.9, not part of this redesign).
-  "POST:/api/om/fg-dispatch-customer":                { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
+  // §132.5 point 6 (2026-08-27) -- MM05 fully retired, `fg_dispatch_customer`/
+  // `fg_dispatch_customer_address` dropped, OM_FG_DISPATCH_CUSTOMER menu entry
+  // removed. The dead dispatch-customer routes that used to live here are gone
+  // too -- fg_parent_company/fg_depot_code (above) are the only pieces that
+  // survived, unchanged.
+  // §132.8 -- cross-company GST lookup for Customer, same VIEW-tier shape as
+  // the Parent Company one above (finds an existing match to reuse, never
+  // mutates -- the actual reuse-write is mapCustomerToCompanyHandler, already
+  // registered below under company-map).
+  "GET:/api/om/customer/by-gst":                      { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
+  // §132.5 point 4 -- retroactive Vendor-link, same EDIT-tier as updateCustomerHandler.
+  "POST:/api/om/customer/vendor-link":                { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
 
   // §129.3 — customer_address (Stage-1 address list + Stage-2 VDC mapping).
   "GET:/api/om/customer-addresses":                   { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
@@ -618,23 +627,6 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     },
   },
 
-  {
-    pattern: /^\/api\/om\/fg-dispatch-customers\/[^/]+\/upgrade-gst$/,
-    methods: { POST: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "EDIT" } },
-  },
-  {
-    pattern: /^\/api\/om\/fg-dispatch-customers\/[^/]+\/addresses$/,
-    methods: {
-      GET: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "VIEW" },
-      POST: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "WRITE" },
-    },
-  },
-  {
-    pattern: /^\/api\/om\/fg-dispatch-addresses\/[^/]+$/,
-    methods: {
-      PATCH: { skipAcl: false, resourceCode: "OM_FG_DISPATCH_CUSTOMER", action: "EDIT" },
-    },
-  },
   {
     pattern: /^\/api\/procurement\/planning\/sloc-groups\/[^/]+$/,
     methods: {

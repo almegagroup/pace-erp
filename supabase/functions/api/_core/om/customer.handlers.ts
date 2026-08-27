@@ -121,7 +121,9 @@ async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Reco
   const parentIds = [...new Set(rows.map((r) => r.parent_customer_id as string).filter(Boolean))];
   const customerIds = [...new Set(rows.map((r) => r.id as string).filter(Boolean))];
 
-  const [vendorResult, parentResult, companyMapResult] = await Promise.all([
+  const originCompanyIds = [...new Set(rows.map((r) => r.origin_company_id as string).filter(Boolean))];
+
+  const [vendorResult, parentResult, companyMapResult, originCompanyResult, dependentAddressResult, firstAddressResult] = await Promise.all([
     vendorIds.length
       ? serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_code, vendor_name, gst_number").in("id", vendorIds)
       : Promise.resolve({ data: [] as Record<string, unknown>[] }),
@@ -136,6 +138,30 @@ async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Reco
           .select("customer_id, companies:company_id(company_code)")
           .in("customer_id", customerIds)
           .eq("active", true)
+      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+    // §132.9 — which company this customer was FIRST created under.
+    originCompanyIds.length
+      ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code").in("id", originCompanyIds)
+      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+    // §132.5/132.7 — for is_dependent=true customers, show ONE representative
+    // VDC + Parent Company on the list row (a customer can have multiple
+    // addresses on multiple different VDCs, §132.5 point 3 — the full
+    // breakdown lives in the address grid inside the drawer, this is just a
+    // list-row summary, earliest-mapped wins). Bounded by page size (§8E).
+    customerIds.length
+      ? serviceRoleClient.schema("erp_master").from("customer_address")
+          .select("customer_id, created_at, depot_code:depot_code_id(id, code, parent_company:parent_company_id(id, company_name))")
+          .in("customer_id", customerIds)
+          .not("depot_code_id", "is", null)
+          .order("created_at", { ascending: true })
+      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+    // §132.7 "Address" column — one representative Site Name per customer
+    // (its first-created address), regardless of VDC mapping.
+    customerIds.length
+      ? serviceRoleClient.schema("erp_master").from("customer_address")
+          .select("customer_id, created_at, site_name")
+          .in("customer_id", customerIds)
+          .order("created_at", { ascending: true })
       : Promise.resolve({ data: [] as Record<string, unknown>[] }),
   ]);
 
@@ -156,6 +182,25 @@ async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Reco
     list.push(code);
     companyCodesByCustomer.set(customerId, list);
   }
+  const originCompanyMap = new Map<string, string>();
+  for (const c of (originCompanyResult.data ?? []) as Record<string, unknown>[]) {
+    originCompanyMap.set(c.id as string, c.company_code as string);
+  }
+  // First row per customer wins (already ordered earliest-created-at-first).
+  const vdcByCustomer = new Map<string, Record<string, unknown>>();
+  for (const a of (dependentAddressResult.data ?? []) as Record<string, unknown>[]) {
+    const customerId = String(a.customer_id ?? "");
+    if (!customerId || vdcByCustomer.has(customerId)) continue;
+    const depot = a.depot_code as Record<string, unknown> | null;
+    if (!depot) continue;
+    vdcByCustomer.set(customerId, depot);
+  }
+  const firstAddressByCustomer = new Map<string, string>();
+  for (const a of (firstAddressResult.data ?? []) as Record<string, unknown>[]) {
+    const customerId = String(a.customer_id ?? "");
+    if (!customerId || firstAddressByCustomer.has(customerId)) continue;
+    firstAddressByCustomer.set(customerId, (a.site_name as string) ?? "");
+  }
 
   return rows.map((row) => {
     const vendor = row.vendor_id ? vendorMap.get(row.vendor_id as string) : null;
@@ -166,6 +211,8 @@ async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Reco
     // digits win when set, else fall back to the customer's own state. This is
     // the only place this label is computed — frontend must never recompute it.
     const gstStateCode = gstStateCodeFromGstNumber(resolvedGst) ?? gstStateCodeFromState(row.billing_state as string | null);
+    const depot = vdcByCustomer.get(row.id as string) ?? null;
+    const depotParent = depot ? (depot.parent_company as Record<string, unknown> | null) : null;
     return {
       ...row,
       customer_name: resolvedName,
@@ -176,6 +223,11 @@ async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Reco
       company_codes: companyCodesByCustomer.get(row.id as string) ?? [],
       gst_state_code: gstStateCode,
       display_code: gstStateCode && resolvedName ? `${gstStateCode} - ${resolvedName}` : resolvedName,
+      // §132.7 list column spec
+      origin_company_code: row.origin_company_id ? (originCompanyMap.get(row.origin_company_id as string) ?? null) : null,
+      site_name: firstAddressByCustomer.get(row.id as string) || null,
+      vdc_code: depot ? (depot.code as string) : null,
+      vdc_parent_company_name: depotParent ? (depotParent.company_name as string) : null,
     };
   });
 }
@@ -320,6 +372,10 @@ export async function createCustomerHandler(
       // PACE ERP is an India-based FG/RM/PM dispatch business (GST/state
       // driven throughout) -- INR is the correct default, not BDT.
       currency_code: toTrimmedString(body.currency_code).toUpperCase() || "INR",
+      // §132.9 -- immutable once set: which company this customer was first
+      // created under. Always known at create time since company_id is
+      // mandatory (§113.6) -- set here directly, never derived later.
+      origin_company_id: companyId,
       status: "ACTIVE",
       approved_by: ctx.auth_user_id,
       approved_at: new Date().toISOString(),
@@ -415,6 +471,60 @@ export async function lookupCustomerGstProfileHandler(
   } catch (err) {
     const code = (err as Error).message || "OM_GST_LOOKUP_FAILED";
     return customerErrorResponse(req, ctx, code, code.includes("REQUIRED") ? 400 : 500, "GST lookup failed");
+  }
+}
+
+// §132.8 -- lets a company search for an EXISTING Customer (by GST, across
+// every company) before creating a duplicate, mirroring
+// findFgParentCompanyByGstHandler exactly. Deliberately bypasses the
+// caller's own company-scope filter -- finding a cross-company match is the
+// entire point. GST-less (Unregistered) parties are never checked here
+// (§132.5/§132.8 business decision) -- caller must not call this with an
+// empty gst_number; the frontend only calls it once a GST is entered.
+export async function findCustomerByGstHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    const gstNumber = toTrimmedString(new URL(req.url).searchParams.get("gst_number")).toUpperCase();
+    if (!gstNumber) {
+      return customerErrorResponse(req, ctx, "OM_GST_NUMBER_REQUIRED", 400, "gst_number is required");
+    }
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("customer_master")
+      .select("*")
+      .eq("gst_number", gstNumber)
+      .eq("status", "ACTIVE");
+    if (error) throw new Error("OM_CUSTOMER_GST_LOOKUP_FAILED");
+    const rows = (data ?? []) as Record<string, unknown>[];
+    if (rows.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const customerIds = rows.map((r) => String(r.id));
+    const { data: maps, error: mapErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from("customer_company_map")
+      .select("customer_id, companies:company_id(id, company_code, company_name)")
+      .in("customer_id", customerIds)
+      .eq("active", true);
+    if (mapErr) throw new Error("OM_CUSTOMER_GST_LOOKUP_FAILED");
+    const companiesByCustomer = new Map<string, Record<string, unknown>[]>();
+    for (const m of (maps ?? []) as Record<string, unknown>[]) {
+      const key = String(m.customer_id);
+      const list = companiesByCustomer.get(key) ?? [];
+      list.push(m.companies as Record<string, unknown>);
+      companiesByCustomer.set(key, list);
+    }
+
+    const enriched = await enrichCustomerRows(rows);
+    const withMapping = enriched.map((row) => ({
+      ...row,
+      mapped_companies: companiesByCustomer.get(String(row.id)) ?? [],
+    }));
+    return okResponse({ data: withMapping }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_CUSTOMER_GST_LOOKUP_FAILED";
+    return customerErrorResponse(req, ctx, code, code.includes("REQUIRED") ? 400 : 500, "Customer GST lookup failed");
   }
 }
 
@@ -641,6 +751,72 @@ export async function updateCustomerHandler(
     const code = (err as Error).message || "OM_CUSTOMER_UPDATE_FAILED";
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("LOCKED") ? 422 : code.includes("NO_CHANGES") ? 400 : 500;
     return customerErrorResponse(req, ctx, code, status, "Customer update failed");
+  }
+}
+
+// §132.5 point 4 -- retroactive Vendor-link. Today vendor_id is only ever set
+// at create time (createCustomerHandler); this is the "I made this an
+// Independent customer, later realized it's also our Vendor" case. One-time
+// transition only (independent -> vendor-linked) -- re-pointing an
+// already-linked customer to a *different* vendor is a separate, not-yet-
+// decided business question, deliberately not allowed here.
+export async function linkCustomerToVendorHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const customerId = toTrimmedString(body.customer_id);
+    const vendorId = toTrimmedString(body.vendor_id);
+
+    if (!customerId) {
+      return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 404, "Customer not found");
+    }
+    if (!vendorId) {
+      return customerErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 400, "vendor_id is required");
+    }
+
+    const existing = await getCustomerById(customerId);
+    if (!existing) {
+      return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 404, "Customer not found");
+    }
+    if (existing.vendor_id) {
+      return customerErrorResponse(req, ctx, "OM_CUSTOMER_ALREADY_VENDOR_LINKED", 422, "This customer is already linked to a vendor");
+    }
+    try {
+      await assertCustomerCompanyScope(ctx, customerId, "OM_CUSTOMER_CREATE", "EDIT");
+    } catch {
+      return customerErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this customer.");
+    }
+    if (!(await ensureVendorExists(vendorId))) {
+      return customerErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
+    }
+
+    // No need to copy the vendor's name/GST onto the row — enrichCustomerRows
+    // already derives customer_name/gst_number live from vendor_master once
+    // vendor_id is set (same as the create-time-linked case).
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("customer_master")
+      .update({
+        vendor_id: vendorId,
+        customer_name: null,
+        gst_number: null,
+      })
+      .eq("id", customerId)
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      throw new Error("OM_CUSTOMER_VENDOR_LINK_FAILED");
+    }
+
+    const [enriched] = await enrichCustomerRows([data as Record<string, unknown>]);
+    return okResponse({ data: enriched }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_CUSTOMER_VENDOR_LINK_FAILED";
+    const status = code.includes("NOT_FOUND") ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("ALREADY_VENDOR_LINKED") ? 422 : 500;
+    return customerErrorResponse(req, ctx, code, status, "Customer vendor link failed");
   }
 }
 
