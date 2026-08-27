@@ -217,9 +217,11 @@ export default function PIDocumentDetailPage() {
   const canAddOrRemoveItems = status === "OPEN";
   const canCancel = status === "OPEN";
   const canReopen = status === "PENDING_APPROVAL";
-  // §MI07-batch — postable items: PENDING_APPROVAL, non-zero difference, not already posted.
+  // §MI07-batch — every counted, unposted line is selectable. Zero-variance lines have no
+  // ledger movement, but selecting them lets MI07 release their block and complete an
+  // otherwise zero-variance document.
   const postableItems = useMemo(
-    () => (status === "PENDING_APPROVAL" ? items.filter((row) => Number(row.difference_qty ?? 0) !== 0 && !row.posted_stock_document_id) : []),
+    () => (status === "PENDING_APPROVAL" ? items.filter((row) => row.physical_qty !== null && row.physical_qty !== undefined && !row.posted_stock_document_id) : []),
     [items, status],
   );
   const canPost = status === "PENDING_APPROVAL" && postableItems.length > 0;
@@ -538,7 +540,7 @@ export default function PIDocumentDetailPage() {
                   label: <input type="checkbox" checked={postableItems.length > 0 && selectedItemIds.size === postableItems.length} onChange={toggleSelectAll} className="h-4 w-4" />,
                   width: "40px",
                   render: (row) => {
-                    const isPostable = Number(row.difference_qty ?? 0) !== 0 && !row.posted_stock_document_id;
+                    const isPostable = row.physical_qty !== null && row.physical_qty !== undefined && !row.posted_stock_document_id;
                     if (!isPostable) return row.posted_stock_document_id ? <span className="text-[10px] text-emerald-700">Posted</span> : null;
                     return (
                       <input

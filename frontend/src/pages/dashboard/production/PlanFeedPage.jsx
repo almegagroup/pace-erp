@@ -418,6 +418,13 @@ export default function PlanFeedPage() {
       });
       toast("FO created successfully.");
       setForm({ ...EMPTY_FO });
+      // Every other mutation on this page invalidates these two -- this was
+      // the one place that never did, so a freshly created FO stayed invisible
+      // on the Edit FO list / Total Table until an unrelated refetch happened
+      // to occur (found live 2026-08-27: an MTEST FO created in CMP006 never
+      // showed up in either place).
+      qc.invalidateQueries({ queryKey: ["prod-plan-feed-list"] });
+      qc.invalidateQueries({ queryKey: ["prod-plan-feed-summary"] });
     } catch (err) { toast(friendlyErr(err.message), "error"); }
     finally { setSaving(false); }
   }
