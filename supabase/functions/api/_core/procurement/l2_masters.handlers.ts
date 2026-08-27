@@ -31,6 +31,11 @@ const PORT_ROLES = new Set(["DISCHARGE", "LOADING", "BOTH"]);
 const TRANSIT_MODES = new Set(["ROAD", "RAIL", "MULTI-MODAL"]);
 const TRANSPORTER_DIRECTIONS = new Set(["IMPORT", "DOMESTIC", "BOTH"]);
 const TRANSPORTER_MODES = new Set(["ROAD", "RAIL", "COURIER", "MULTI-MODAL"]);
+// business owner directive, 2026-08-27 -- which side created this transporter.
+// Sort-priority hint ONLY (see listTransportersHandler) -- a Purchase-created
+// transporter is fully usable in Sales and vice versa, one shared global
+// table, never a hard access/visibility restriction.
+const TRANSPORTER_BUSINESS_CONTEXTS = new Set(["PURCHASE", "SALES"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -1222,10 +1227,15 @@ export async function listTransportersHandler(req: Request, ctx: ProcurementHand
     const direction = toUpperTrimmedString(url.searchParams.get("direction"));
     const activeParam = url.searchParams.get("is_active");
     const search = toTrimmedString(url.searchParams.get("search"));
+    // business owner directive, 2026-08-27 -- "context" is a SORT hint only.
+    // Every caller still gets every transporter; this only decides which
+    // ones come first (Purchase-context pages pass PURCHASE, the future
+    // Sales DO/PGI picker will pass SALES) -- never a WHERE filter.
+    const context = toUpperTrimmedString(url.searchParams.get("context"));
     let query = serviceRoleClient
       .schema("erp_master")
       .from("transporter_master")
-      .select("id, transporter_code, transporter_name, usage_direction, gst_number, active")
+      .select("id, transporter_code, transporter_name, usage_direction, business_context, gst_number, active, created_by, last_updated_by, last_updated_at")
       .order("transporter_name", { ascending: true });
     if (search) {
       query = query.ilike("transporter_name", `%${search}%`);
@@ -1246,7 +1256,31 @@ export async function listTransportersHandler(req: Request, ctx: ProcurementHand
     }
     const { data, error } = await query;
     if (error) throw new Error("PROCUREMENT_TRANSPORTER_LIST_FAILED");
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+    const rows = (data ?? []) as JsonRecord[];
+
+    // §8A -- bulk-resolve created_by/last_updated_by to "code - name", never raw UUID.
+    const userIds = [...new Set(rows.flatMap((r) => [toTrimmedString(r.created_by), toTrimmedString(r.last_updated_by)]).filter(Boolean))];
+    const { data: userRows } = userIds.length
+      ? await serviceRoleClient.schema("erp_hr").from("employee_master").select("auth_user_id, employee_code, full_name").in("auth_user_id", userIds)
+      : { data: [] as JsonRecord[] };
+    const userMap = new Map(((userRows ?? []) as JsonRecord[]).map((row) => [
+      toTrimmedString(row.auth_user_id),
+      `${toTrimmedString(row.employee_code)} - ${toTrimmedString(row.full_name)}`.trim(),
+    ]));
+
+    let enriched: JsonRecord[] = rows.map((row) => ({
+      ...row,
+      created_by_name: row.created_by ? (userMap.get(toTrimmedString(row.created_by)) ?? null) : null,
+      last_updated_by_name: row.last_updated_by ? (userMap.get(toTrimmedString(row.last_updated_by)) ?? null) : null,
+    }));
+
+    if (context === "PURCHASE" || context === "SALES") {
+      const matching = enriched.filter((r) => r.business_context === context);
+      const rest = enriched.filter((r) => r.business_context !== context);
+      enriched = [...matching, ...rest];
+    }
+
+    return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_TRANSPORTER_LIST_FAILED";
     return procurementErrorResponse(req, ctx, code, 500, "Transporter list failed");
@@ -1262,7 +1296,13 @@ export async function createTransporterHandler(req: Request, ctx: ProcurementHan
     const transporterName = toTrimmedString(body.transporter_name);
     const usageDirection = toUpperTrimmedString(body.usage_direction);
     const mode = toUpperTrimmedString(body.mode || "ROAD");
-    if (!transporterName || !TRANSPORTER_DIRECTIONS.has(usageDirection) || !TRANSPORTER_MODES.has(mode)) {
+    const businessContext = toUpperTrimmedString(body.business_context || "PURCHASE");
+    if (
+      !transporterName ||
+      !TRANSPORTER_DIRECTIONS.has(usageDirection) ||
+      !TRANSPORTER_MODES.has(mode) ||
+      !TRANSPORTER_BUSINESS_CONTEXTS.has(businessContext)
+    ) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_TRANSPORTER", 400, "Invalid transporter payload");
     }
     const transporterCode = await generateCodeFromSequence("transporter_code_sequence", "TR-", 5);
@@ -1274,6 +1314,7 @@ export async function createTransporterHandler(req: Request, ctx: ProcurementHan
         transporter_name: transporterName,
         usage_direction: usageDirection,
         mode,
+        business_context: businessContext,
         pan_number: toTrimmedString(body.pan_number) || null,
         gst_number: toTrimmedString(body.gst_number) || null,
         address: toTrimmedString(body.address) || null,
@@ -1320,7 +1361,16 @@ export async function updateTransporterHandler(req: Request, ctx: ProcurementHan
     for (const field of ["pan_number", "gst_number", "address"] as const) {
       if (body[field] !== undefined) updates[field] = toTrimmedString(body[field]) || null;
     }
+    if (body.business_context !== undefined) {
+      const value = toUpperTrimmedString(body.business_context);
+      if (!TRANSPORTER_BUSINESS_CONTEXTS.has(value)) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_TRANSPORTER", 400, "Invalid business context");
+      }
+      updates.business_context = value;
+    }
     if (body.active !== undefined) updates.active = body.active === true;
+    updates.last_updated_by = ctx.auth_user_id;
+    updates.last_updated_at = new Date().toISOString();
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("transporter_master")

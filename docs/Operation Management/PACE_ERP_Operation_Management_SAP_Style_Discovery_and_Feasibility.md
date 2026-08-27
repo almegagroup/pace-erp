@@ -21399,7 +21399,110 @@ Vendor"/"Map to my Company" UI, Save keyboard-shortcut), আর MM05 সম্�
 (`deno check` baseline অপরিবর্তিত, `eslint` ০ নতুন error, ৮টা guard script-ই clean)। পূর্ণ detail
 task brief-এ: `docs/CODEX-MM04-COMPLETE-REDESIGN-MM05-RETIRE-TASK-BRIEF.md`।
 
-**যা এখনো বাকি (deliberately out of scope এই session-এ):** live click-through (এই environment-এ
-dev login নেই), prod-এ replicate করা (dev-only এখন)। পরের ধাপ: SO/DO/Invoice-এর বাকি design point
-(item selection, IBN grouping mechanism বিস্তারিত, polymorphic resolver-এর concrete schema) নিয়ে
-আলোচনা চালিয়ে, তারপর একসাথে একটা task brief লেখা।
+**যা এখনো বাকি (deliberately out of scope এই session-এ):** শুধু live click-through (এই
+environment-এ dev login নেই)। **prod-এ replicate করা হয়ে গেছে একই দিনে** (§132-এর পরের
+sub-session, নিচে §133 দেখো — MM04-এর ACL grant prod-এও applied+verified)। পরের ধাপ:
+SO/DO/Invoice-এর বাকি design point (item selection, IBN grouping mechanism বিস্তারিত,
+polymorphic resolver-এর concrete schema) নিয়ে আলোচনা চালিয়ে, তারপর একসাথে একটা task brief লেখা।
+
+---
+
+## Section 133 — MM04 prod ACL rollout + real duplicate-customer cleanup + Transporter Master Purchase+Sales dual-use (✅ DESIGN LOCKED + IMPLEMENTATION COMPLETE — 2026-08-27)
+
+### 133.1 — MM04 ACL decision, prod rollout
+
+Business owner's locked ACL decision for Customer Master (§132): **ACL-MASTER, DIRECTOR,
+PRODUCTION, LOGISTICS, STORES, ACCOUNTS, SUPPLY CHAIN** — সবাই full access (VIEW+WRITE+EDIT)।
+Production-এর existing Plan Feed capability (`CAP_STORES_LOGISTICS_CUSTOMER_PLANFEED`) অক্ষত
+রাখা হয়েছে। Live prod ACL check করে পাওয়া গেছে: ACL-MASTER/DIRECTOR/SUPPLY CHAIN-এর আগে থেকেই
+full access ছিল; LOGISTICS-এর **কোনো access-ই ছিল না**; STORES/ACCOUNTS-এর ধার-করা
+capability (Plan-Feed/Sales-Accounts-dependency) দিয়ে চলছিল, যার একটার (`CAP_SALES_ACCOUNTS_
+DEPENDENCY`) `menu_visible=false` — Accounts-এর sidebar-এ MM04 দেখাতোই না।
+
+**Fix (prod, live করা হয়েছে):** সরাসরি `CAP_OM_CUSTOMER_VIEW`+`CAP_OM_CUSTOMER_CREATE` grant করা
+হয়েছে LOGISTICS/STORES/ACCOUNTS-কে (CMP003/CMP006/CMP014 জুড়ে, যেখানে যেখানে সেই work-context
+আছে) — পুরনো borrowed capability-গুলো touch করা হয়নি, শুধু নতুন direct grant যোগ হয়েছে। নতুন ACL
+version (CMP003 v88, CMP006 v88, CMP014 v15) → capture → generate_acl_snapshot →
+~৩০ জন affected real user-এর menu snapshot rebuild — সম্পূর্ণ ৪-ধাপ pipeline (§8) চালানো হয়েছে,
+লাইভ verify করা হয়েছে (একজন real ACCOUNTS user-এর snapshot-এ MM04 "Customer Master" এখন
+`is_visible=true`)। ACL-MASTER drift-check চালিয়ে confirm করা হয়েছে — কোনো নতুন drift নেই
+(শুধু একটা পুরনো, MM04-সম্পর্কহীন `ACC_CONVERSION_COST:EDIT` item, আগে থেকেই জানা)।
+
+Dev-এ replicate করা হয়নি ইচ্ছাকৃতভাবে — dev-এর work-context taxonomy আলাদা (DIRECTOR/ACL-MASTER
+নামে কিছু নেই), আর dev-এর test user broad-permission-by-design (established memory pattern)।
+
+### 133.2 — Real duplicate-customer cleanup (prod data)
+
+Business owner-এর অনুরোধে prod-এর `customer_master`-এ (৮৩টা customer) name+state-ভিত্তিক
+duplicate খোঁজা হয়েছে — ৩টা group পাওয়া গেছে:
+
+- **Solvatech Construction Solution (CMP003, Bihar)** — C-00031 (address: Amas) আর C-00038
+  (address: **Darbhanga**, আলাদা) — দুটোরই নিজস্ব সক্রিয় Plan Feed FO ছিল। এটাই আসল
+  "same customer, different site" case — একটাকে duplicate ধরা ভুল হতো।
+- **Asthavinayak Enterprise (CMP006, Maharashtra)** — C-00051 আর C-00061, **হুবহু same address**,
+  একটায় FO ছিল আরেকটায় না — ভুলবশত দ্বিতীয়বার entry।
+- **Lokmanagal Construction (CMP006, Maharashtra)** — C-00073 আর C-00079, একই pattern।
+
+**Fix:** Solvatech-এ C-00038-এর "Darbhanga" address (`customer_address` row) সরাসরি C-00031-এর
+`customer_id`-তে re-point করা হয়েছে (নতুন row insert না করে, existing row move করে) — C-00031
+এখন ২টা address-ওয়ালা একটাই customer। C-00038-এর FO (plan_feed.party_id) C-00031-এ re-point।
+তিনটা duplicate row-ই (C-00038, C-00051, C-00079) **soft-retire** করা হয়েছে (`status='INACTIVE'`
++ `customer_company_map.active=false`) — hard delete না, audit trail বজায় রাখতে। Verify করা
+হয়েছে: active customer-দের মধ্যে আর কোনো name+state duplicate নেই, retired ৩টার কোনো dangling
+reference নেই (Plan Feed/Sales Order কোথাও না)।
+
+**Sequence counter (`customer_code_sequence.last_number`) ইচ্ছাকৃতভাবে touch করা হয়নি** —
+verify করা হয়েছে ১-৮৩ পর্যন্ত কোনো gap নেই আজ (total=max), তাই এই ৩টা mid-sequence code
+(C-00038/051/079) খালি হওয়ার পরে counter পিছিয়ে দিলে **future collision** হতো (পরের নতুন
+customer একটা already-active code পেয়ে যেত)। গ্যাপ স্থায়ীভাবে থেকে যাবে — এই codebase-এরই
+established pattern (document number series reversal/cancellation-এও ঠিক এভাবেই gap থাকে,
+backfill করা হয় না)।
+
+### 133.3 — Transporter Master: Purchase+Sales dual-use (✅ IMPLEMENTED)
+
+**Business logic (business owner):** Transporter Master আজ পর্যন্ত Vendor/Purchase-centric
+বানানো ছিল। এখন এটা Sales-centric-ও হবে — **একটাই global table**, কোনো duplicate/parallel
+structure হবে না। যে department/page থেকে transporter তৈরি/আপডেট হচ্ছে সেটাই deciding factor —
+Purchase-side (SCM নিজে, Stores GRN থেকে) বনাম Sales-side (Logistics, Stores Logistics-privilege
+দিয়ে)। **কিন্তু এই পার্থক্য কখনো access/visibility বন্ধ করবে না** — Purchase-এর transporter
+Sales-এ ব্যবহার করা যাবে, Sales-এর transporter Purchase-এ — সব picker (GRN, SCM নিজের, AC01
+Last-Mile, ভবিষ্যতের Sales DO/PGI) সবসময় **সব transporter দেখাবে**, শুধু matching-context-এর
+transporter-গুলো **উপরে সাজানো** থাকবে (sort hint, hard filter না)। ব্যতিক্রম: Transit Time
+(SCM সেট করে) শুধু Purchase-এর জন্য প্রাসঙ্গিক, Sales-এ লাগে না — এটা আজও একটা আলাদা,
+opt-in টেবিল (`l2_masters`-এর transit-time), তাই automatically শুধু SCM যেসব transporter নিয়ে
+কাজ করে তাদের জন্যই পূরণ হবে, কোনো কোড পরিবর্তন লাগেনি।
+
+**Data model:** `transporter_master`-এ নতুন `business_context` (PURCHASE/SALES, NOT NULL,
+default PURCHASE) — existing ১৭টা row backfill হয়েছে PURCHASE-এ (master আগে পুরোপুরি
+Vendor-centric-ই ছিল)। নতুন `last_updated_by`/`last_updated_at` column-ও যোগ হয়েছে (আগে ছিলই
+না) — UI-তে "কোন দিক থেকে তৈরি/আপডেট হয়েছে" দেখানোর জন্য দরকার।
+
+**Backend (`l2_masters.handlers.ts`):** `createTransporterHandler`/`updateTransporterHandler`
+এখন `business_context` accept করে। `listTransportersHandler`-এ নতুন `?context=PURCHASE|SALES`
+query param — **filter না, শুধু sort**: matching-context row আগে, বাকি পরে। Response-এ
+`created_by_name`/`last_updated_by_name` bulk-resolve করা হয় (`erp_hr.employee_master`,
+"code - name" format, §8A অনুযায়ী কখনো raw UUID না)।
+
+**Root cause found + fixed — "GRN থেকে Stores transporter তৈরি করতে পারছিল না":** GRN page-এ
+আসলে কোনো inline create-form নেই, শুধু একটা লিংক আছে যেটা পুরো Transporter Master page-এ পাঠায়
+(`isRouteAllowed` route-gate দিয়ে visibility check করে)। Stores-এর capability
+(`CAP_GRN_TRANSPORTER_DEP`) `menu_visible=false` ছিল — ঠিক Accounts+MM04-তে (§132.1) পাওয়া
+একই class-এর bug। **ACL fix:** existing generic `CAP_PROC_TRANSPORTER_LIMITED` (VIEW+WRITE+EDIT,
+`menu_visible=true`, কোনো নতুন capability বানাতে হয়নি) সরাসরি STORES/LOGISTICS/ACCOUNTS-কে
+grant করা হয়েছে prod-এ (CMP003/CMP006/CMP014, নতুন ACL version v89/v89/v16, capture+snapshot+
+menu-rebuild সহ, লাইভ verify করা — একজন Stores user-এর snapshot-এ এখন PM06 "Transporters"
+`is_visible=true`)। SCM-এর existing `CAP_PROC_TRANSPORTER` (full, DELETE-সহ) অপরিবর্তিত।
+**DELETE action ইচ্ছাকৃতভাবে শুধু SCM+ACL-MASTER-এর জন্যই রাখা হয়েছে** (আগের code comment-এর
+established design intent অনুযায়ী) — "full access" মানে VIEW+WRITE+EDIT, delete না।
+
+**Frontend (`TransporterMasterPage.jsx`, tx_code PM06) — সম্পূর্ণ rebuild, AC01/MM04 pattern:**
+List page এখন `ErpDenseGrid` (`cellNavigate virtualize`), row click → center `DrawerBase`
+(Edit form + Contacts/Emails/Company-Mapping manage panel, আগের inline-expanding-row থেকে সরানো
+হয়েছে)। নতুন column: Context (Purchase/Sales badge), Created By, Last Updated By। Create
+form-এ নতুন "Created For" dropdown (Purchase/Sales, sort-hint-only বলে note সহ)। Save
+keyboard-shortcut (`useErpScreenHotkeys`) create form আর edit drawer দুটোতেই যোগ হয়েছে।
+
+**Verify:** migration dev+prod দুটোতেই applied+reconciled (`in_sync=true`), `deno check`
+(baseline ১২৫ error অপরিবর্তিত), `eslint` (০ error), সব guard script clean।
+Dev-এ ACL replicate করা হয়নি (transporter-এর জন্য dev-এ কোনো work-context capability wiring-ই
+নেই আজ — dev broad-permission-by-design pattern-এরই অংশ)।
