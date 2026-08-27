@@ -304,11 +304,13 @@ export async function bulkMapCustomerAddressesHandler(
     if (!rows || rows.length !== addressIds.length) {
       return addressErrorResponse(req, ctx, "OM_ADDRESS_NOT_FOUND", 404, "One or more addresses were not found");
     }
+    // Addresses may span multiple customers -- business owner's explicit ask
+    // (2026-08-27): pick several customers, select some/all of each one's
+    // addresses across all of them, then map the whole cross-customer basket
+    // to one VDC in a single Save. §8B: each customer's own scope check is
+    // independent of the others, safe to validate in parallel.
     const customerIds = [...new Set((rows as JsonRecord[]).map((r) => String(r.customer_id)))];
-    if (customerIds.length !== 1) {
-      return addressErrorResponse(req, ctx, "OM_ADDRESS_MIXED_CUSTOMERS", 400, "All selected addresses must belong to the same customer");
-    }
-    await assertCustomerCompanyScope(ctx, customerIds[0], "OM_CUSTOMER_CREATE", "EDIT");
+    await Promise.all(customerIds.map((cid) => assertCustomerCompanyScope(ctx, cid, "OM_CUSTOMER_CREATE", "EDIT")));
 
     if (depotCodeId) {
       const { data: depot, error: depotError } = await serviceRoleClient
@@ -337,7 +339,9 @@ export async function bulkMapCustomerAddressesHandler(
       throw new Error("OM_ADDRESS_BULK_MAP_FAILED");
     }
 
-    await recomputeCustomerIsDependent(customerIds[0]);
+    // §132.5/132.9 -- is_dependent is derived per customer, so recompute each
+    // distinct customer represented in this batch, not just the first.
+    await Promise.all(customerIds.map((cid) => recomputeCustomerIsDependent(cid)));
 
     const enriched = await enrichAddressRows((data ?? []) as JsonRecord[]);
     return okResponse({ data: enriched }, ctx.request_id, req);
@@ -345,7 +349,7 @@ export async function bulkMapCustomerAddressesHandler(
     const code = (err as Error).message || "OM_ADDRESS_BULK_MAP_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403
       : code.includes("NOT_FOUND") ? 404
-      : code.includes("REQUIRED") || code.includes("MIXED_CUSTOMERS") ? 400
+      : code.includes("REQUIRED") ? 400
       : 500;
     return addressErrorResponse(req, ctx, code, status, "Address bulk mapping failed");
   }
