@@ -6,7 +6,7 @@
  *          3 tabs: Create FO | Edit FO (+ Packing PO allocation) | Total Table.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { pushToast } from "../../../store/uiToast.js";
@@ -26,7 +26,7 @@ import {
   getUnmappedStock, checkOrderedStroke, listStrokeOptions, listPackingOrders,
   findPlanFeedByNumber, listMtestSkus,
 } from "./prodApi.js";
-import { listMaterials, listCustomers, updateCustomer } from "../om/omApi.js";
+import { listMaterials, listCustomers, updateCustomer, listCustomerAddresses } from "../om/omApi.js";
 
 const EMPTY_ARRAY = [];
 
@@ -76,6 +76,14 @@ function customerLabel(c) {
   // that would duplicate it. Fall back to the old pairing only when
   // display_code isn't resolved yet (no GST/state on this customer).
   return c.display_code || [c.customer_code, c.customer_name].filter(Boolean).join(" - ");
+}
+function addressLabel(a) {
+  if (!a) return "--";
+  return [a.site_name, a.town].filter(Boolean).join(" — ") || a.address_line || "Address";
+}
+function addressFullText(a) {
+  if (!a) return "--";
+  return [a.address_line, a.town, a.state].filter(Boolean).join(", ") || "--";
 }
 function fmt(n) {
   const v = Number(n ?? 0);
@@ -248,6 +256,24 @@ export default function PlanFeedPage() {
 
   const selectedParty = customerMap.get(form.party_id) ?? null;
   const isMtestCreate = poTypeFilter === "MTEST";
+
+  // A party can have multiple addresses/sites (erp_master.customer_address) --
+  // showing only customer_master's own single delivery_address field silently
+  // hid every other site. This is purely a reference display for whoever is
+  // creating the FO (Plan Feed itself has no address column of its own).
+  const [selectedAddressId, setSelectedAddressId] = useState("");
+  const partyAddressesQ = useQuery({
+    queryKey: ["plan-feed-party-addresses", form.party_id],
+    queryFn: () => listCustomerAddresses(form.party_id),
+    enabled: Boolean(form.party_id),
+    select: (d) => d?.data ?? d ?? [],
+  });
+  const partyAddresses = partyAddressesQ.data ?? EMPTY_ARRAY;
+  useEffect(() => {
+    setSelectedAddressId(partyAddresses[0]?.id ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.party_id, partyAddresses.length]);
+  const selectedAddress = partyAddresses.find((a) => a.id === selectedAddressId) ?? null;
 
   const strokeCheckQ = useQuery({
     queryKey: ["plan-feed-stroke-check", effectiveCompanyId, form.material_id, form.ordered_stroke_number],
@@ -695,9 +721,21 @@ export default function PlanFeedPage() {
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">Party Address</label>
-              <div className="border border-slate-200 bg-slate-50 rounded px-2 py-1.5 text-sm text-slate-600 min-h-[34px]">
-                {selectedParty?.delivery_address || "--"}
-              </div>
+              {partyAddresses.length > 1 ? (
+                <>
+                  <ErpComboboxField
+                    value={selectedAddressId}
+                    onChange={setSelectedAddressId}
+                    options={partyAddresses.map((a) => ({ value: a.id, label: addressLabel(a) }))}
+                    placeholder="-- Select address --"
+                  />
+                  <div className="text-[11px] text-slate-500 mt-0.5">{addressFullText(selectedAddress)}</div>
+                </>
+              ) : (
+                <div className="border border-slate-200 bg-slate-50 rounded px-2 py-1.5 text-sm text-slate-600 min-h-[34px]">
+                  {selectedAddress ? addressFullText(selectedAddress) : (selectedParty?.delivery_address || "--")}
+                </div>
+              )}
             </div>
 
             <DrawerBase
