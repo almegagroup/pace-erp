@@ -197,9 +197,17 @@ export default function PlanFeedPage() {
 
   // ── Shared master lookups ─────────────────────────────────────────────────
   const [poTypeFilter, setPoTypeFilter] = useState("");
+  // MTEST is a sample/test batch, not a distinct customer relationship -- the same
+  // real-world customer who normally orders MTO/HPS can just as well receive an
+  // MTEST sample, so the Party list is never narrowed to fo_customer_type=MTEST-
+  // tagged parties only; it shows every party instead (same as no filter at all).
   const customersQ = useQuery({
     queryKey: ["plan-feed-customers", poTypeFilter],
-    queryFn: () => listCustomers({ fo_customer_type: poTypeFilter || undefined, status: "ACTIVE", limit: 200 }),
+    queryFn: () => listCustomers({
+      fo_customer_type: (poTypeFilter && poTypeFilter !== "MTEST") ? poTypeFilter : undefined,
+      status: "ACTIVE",
+      limit: 200,
+    }),
     select: (d) => d?.data ?? [],
   });
   const materialsQ = useQuery({
