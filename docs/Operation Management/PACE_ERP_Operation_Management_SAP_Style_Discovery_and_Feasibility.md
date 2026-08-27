@@ -20289,6 +20289,23 @@ other dead field, §129.1) is likewise retired from the UI going forward — `Cu
 `CustomerEditForm` stop rendering that field; the column itself is left in place (0 rows, no data
 loss, no migration needed to drop it).
 
+**⚠️ Correction (2026-08-27, business owner directive — supersedes the company-scope mechanism
+described above and in §129.6/§129.10):** Parent Company + VDC/DC are now **fully global, no
+per-company scoping/mapping at all** — matching the same "Transporter Master is global" principle
+locked the same day (§133-এর মতো, Transporter section দ্রষ্টব্য)। Every company can freely see,
+create, and edit any Parent Company/VDC/DC — `assertCompanyScope`/`canMaintainCompanyResource`
+checks against `fg_parent_company_company_map` have been **removed** from
+`createOrGetDepotCodeHandler`, `listDepotCodesHandler`, `listParentCompaniesHandler`,
+`updateParentCompanyHandler`, `updateDepotCodeHandler` (now `fg_parent_company.handlers.ts`, split
+out from `fg_dispatch_customer.handlers.ts` on the same day per §132.5 point 6). `createParentCompanyHandler`
+still resolves/validates a `company_id` at create time (kept purely as an **origin/audit field** —
+same idea as `customer_master.origin_company_id`, §132.9 — not an access gate). The
+`fg_parent_company_company_map` table and `getParentCompanyMappedCompanyIds()`/
+`assertParentCompanyScope()` helpers this session's earlier build relied on are now dead code —
+not yet cleaned up, flagged for a future pass. §129.6's Bill-To/Ship-To resolution chain itself
+(Address → VDC → Parent Company) is unaffected by this change — only the access/visibility layer
+around Parent Company/VDC changed, not the resolution mechanism.
+
 ### 129.3 — New table: `erp_master.customer_address`
 
 A customer can have multiple addresses/sites. One row per address:
@@ -21506,3 +21523,51 @@ keyboard-shortcut (`useErpScreenHotkeys`) create form আর edit drawer দু�
 (baseline ১২৫ error অপরিবর্তিত), `eslint` (০ error), সব guard script clean।
 Dev-এ ACL replicate করা হয়নি (transporter-এর জন্য dev-এ কোনো work-context capability wiring-ই
 নেই আজ — dev broad-permission-by-design pattern-এরই অংশ)।
+
+### 133.4 — SO Item design insight: FG unified into the same SO/DO/Invoice pages (⚠️ supersedes §113.1, DESIGN NOT YET LOCKED — 2026-08-27)
+
+Business owner-এর স্পষ্ট নির্দেশ (এই session-এ): **RM, PM, FG, INT — যাই বিক্রি করি, সবই SO/DO/
+Invoice-এর একই page দিয়ে হবে।** এটা §113.1-এর আগের lock ("FG Dispatch সম্পূর্ণ আলাদা Phase 2
+module") **supersede করছে** — FG আর আলাদা module থাকছে না, একই unified Sales flow-এর অংশ।
+
+**সাথে সাথেই একটা already-known technical blocker আবার প্রাসঙ্গিক হয়ে উঠলো (§113.10, bug #10):**
+`issueSOStockHandler` আজও stock check হার্ডকোড করে `UNRESTRICTED` + `batch_id IS NULL` — এটা FG-র
+জন্য কাজ করবে না, কারণ FG stock সবসময় batch-tracked এবং নির্দিষ্ট Packing PO-র সাথে বাঁধা (§83.15/
+§116)। তাই SO-র প্রতিটা line-এর material type অনুযায়ী **আলাদা আচরণ লাগবে** — RM/PM/INT line সাধারণ
+qty-issue, কিন্তু FG line-এ বাড়তি একটা Batch/Packing-PO picker লাগবে (SO-র existing per-line
+"More" drawer প্যাটার্নে — Freight/Rebate/Packaging-cost যেভাবে বসানো আছে, সেভাবেই)। এই UI mechanism
+এখনো design করা হয়নি — পরের আলোচনায় lock হবে।
+
+### 133.5 — Dependent (Direct) customer-এর জন্য নতুন insight: VDC আগে, Party assignment পরে, আলাদা page-এ (DESIGN NOT YET LOCKED — 2026-08-27)
+
+§132.4/§132.6-এর polymorphic Ship-To model (Address/VDC/Parent-Company — তিনটাই সমান-গুরুত্বের
+বিকল্প হিসেবে বলা হয়েছিল) **Dependent (Direct dispatch_type) customer-এর জন্য সংশোধিত হলো:**
+
+- বাস্তবে SO প্রথমে শুধু **VDC** পর্যন্ত resolve হয়ে আসে (IBN নিজেই একটা VDC-র বিপরীতে তৈরি হয়,
+  §132.2) — নির্দিষ্ট Party/Address তখনও ঠিক হয় না
+- সেই VDC-র under-এ **একাধিক Party** থাকে
+- **কোন নির্দিষ্ট Party-র কাছে এই order/dispatch যাবে — সেটা পরে, একটা সম্পূর্ণ আলাদা page-এ
+  সিদ্ধান্ত হয়** (SO তৈরির একই form/ধাপে না)
+
+এটা শুধু **Dependent (Direct)** case-এর জন্য প্রযোজ্য — Independent Party, Type 4 (Under Parent
+Company override), আর Depot dispatch_type-এ §132.4-এর আগের lock অপরিবর্তিত। এই "আলাদা Party-
+Assignment page"-টার নিজস্ব design (কখন resolve হয়, কে করে, কী validation লাগে) এখনো lock হয়নি।
+
+### 133.6 — STO verification: RM/PM/INT অংশ সম্পূর্ণ সঠিক, FG STO deferred (✅ VERIFIED — 2026-08-27)
+
+Live code audit করে confirm করা হলো — RM/PM/INT-এর STO (Stock Transfer Order) mechanism-এ কোনো
+fix লাগবে না:
+
+- **দুই ধরনের STO** (`sto_type`): `INTER_PLANT` (Independent, সরাসরি company-to-company) আর
+  `CONSIGNMENT_DISTRIBUTION` (Distribution, CSN থেকে generate হয়) — দুটোই আগে থেকেই সঠিকভাবে
+  বানানো (§113.12)।
+- **"STO number দিলে সব resolve হয়ে যাবে" — confirmed working।** STO-তে কোনো external Customer
+  master লাগেই না — `sending_company_id`/`receiving_company_id`-ই resolved identity। DO
+  তৈরির সময় STO source list-এ "From CMP003 — To CMP006" সরাসরি দেখায়, আর একটা STO বাছলে তার
+  সব line (already-DO-hওয়া গুলো বাদ দিয়ে) চলে আসে।
+- **Rate-ও ঠিকভাবে carry হয়** — `createDeliveryOrderHandler`-এ STO line-এর `transfer_price`
+  (SO-র জন্য `net_rate`) সরাসরি commercial-snapshot calculation-এ ব্যবহার হয় (§113.13), সাথে
+  `gst_rate`-ও। শুধু item-picker (browse) endpoint-এ rate column দেখায় না (submit করার পরই
+  ভেতরে বসে) — business owner এটা এভাবেই রাখতে বলেছেন, fix করার দরকার নেই।
+
+**FG STO — ইচ্ছাকৃতভাবে deferred, পরে design হবে।** এই session-এ touch করা হয়নি।
