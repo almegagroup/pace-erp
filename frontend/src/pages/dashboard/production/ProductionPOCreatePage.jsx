@@ -28,6 +28,7 @@ import {
   listPackBoms,
   listPackCodes,
   listMtestSfgProdshadeOptions,
+  listMtestSkusForPacking,
   listSegmentLocations,
   listStrokeMasters,
 } from "./prodApi.js";
@@ -343,10 +344,30 @@ export default function ProductionPOCreatePage() {
     enabled: Boolean(effectivePackingCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
-  const packingSkuOptions = useMemo(
-    () => (packingActiveBomsQ.data ?? []).map((bom) => ({ value: bom.sku_material_id, label: materialLabel(bom.sku) || "SKU" })),
-    [packingActiveBomsQ.data],
+  // §131.4 follow-up (2026-08-27): listPackBoms above has no po_type/pack_type filter at
+  // all, so it always returned EVERY ACTIVE Pack BOM SKU regardless of source_po_type --
+  // the 5 MTEST sample SKUs leaked into the MTO/HPS/MTS dropdown and vice versa. Fetch the
+  // MTEST set separately (same handler Plan Feed uses, reached via a PROD_PO_CREATE-gated
+  // route since Packing PO Create doesn't require Plan Feed access) and split on it.
+  const mtestSkusForPackingQ = useQuery({
+    queryKey: ["packing-create-mtest-skus", effectivePackingCompanyId],
+    queryFn: () => listMtestSkusForPacking({ company_id: effectivePackingCompanyId }),
+    enabled: Boolean(effectivePackingCompanyId),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+  });
+  const mtestSkuIdSet = useMemo(
+    () => new Set((mtestSkusForPackingQ.data ?? []).map((s) => s.id)),
+    [mtestSkusForPackingQ.data],
   );
+  const isPackingMtestSource = packingForm.source_po_type === "MTEST";
+  const packingSkuOptions = useMemo(() => {
+    if (isPackingMtestSource) {
+      return (mtestSkusForPackingQ.data ?? []).map((sku) => ({ value: sku.id, label: materialLabel(sku) || "SKU" }));
+    }
+    return (packingActiveBomsQ.data ?? [])
+      .filter((bom) => !mtestSkuIdSet.has(bom.sku_material_id))
+      .map((bom) => ({ value: bom.sku_material_id, label: materialLabel(bom.sku) || "SKU" }));
+  }, [isPackingMtestSource, mtestSkusForPackingQ.data, packingActiveBomsQ.data, mtestSkuIdSet]);
   const selectedPackingBomRow = useMemo(
     () => (packingActiveBomsQ.data ?? []).find((bom) => bom.sku_material_id === packingForm.material_id) ?? null,
     [packingActiveBomsQ.data, packingForm.material_id],

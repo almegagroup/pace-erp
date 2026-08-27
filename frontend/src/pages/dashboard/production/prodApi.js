@@ -132,6 +132,9 @@ export const checkOrderedStroke = (p) => fetchProd("GET", "/api/production/plan-
 export const listStrokeOptions = (p) => fetchProd("GET", "/api/production/plan-feed/stroke-options", undefined, p);
 export const findPlanFeedByNumber = (p) => fetchProd("GET", "/api/production/plan-feed/find", undefined, p);
 export const listMtestSkus = (p) => fetchProd("GET", "/api/production/plan-feed/mtest-skus", undefined, p);
+// Same 5 MTEST sample SKUs, same handler, reached via the Packing PO Create-scoped
+// route (PROD_PO_CREATE ACL, not PROD_PLAN_FEED) — see route-acl-registry.ts comment.
+export const listMtestSkusForPacking = (p) => fetchProd("GET", "/api/production/mtest-skus", undefined, p);
 export const getMtestPlanFeedCapability = (companyId) => fetchProd("GET", "/api/production/plan-feed/mtest-capability", undefined, { company_id: companyId });
 
 // ── Process Orders ────────────────────────────────────────────────────────────

@@ -433,6 +433,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/plan-feed/stroke-options":    { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
   "GET:/api/production/plan-feed/find":               { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
   "GET:/api/production/plan-feed/mtest-skus":         { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  // Same handler as above, reused for the Packing PO Create FG-SKU dropdown — gated on
+  // PROD_PO_CREATE (the resource that already gates pack-codes/prodshades lookups at
+  // Create time), not PROD_PLAN_FEED, since a Production user creating a Packing PO may
+  // not hold Plan Feed access at all.
+  "GET:/api/production/mtest-skus":                   { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
   "GET:/api/production/plan-feed/mtest-capability":   { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
   // PR24 §122 — deliberately its own resource, not PROD_ORDER_LIST (PR13 stays the plain list).
   "GET:/api/production/order-information-system":    { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },

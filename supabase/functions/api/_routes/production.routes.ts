@@ -291,6 +291,8 @@ export async function dispatchProductionRoutes(
       return await findPlanFeedByNumberHandler(req, ctx);
     case "GET:/api/production/plan-feed/mtest-skus":
       return await listMtestSkusHandler(req, ctx);
+    case "GET:/api/production/mtest-skus":
+      return await listMtestSkusHandler(req, ctx);
     case "GET:/api/production/plan-feed/mtest-capability":
       return await getMtestPlanFeedCapabilityHandler(req, ctx);
 
