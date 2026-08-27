@@ -230,7 +230,12 @@ export default function PlanFeedPage() {
     queryKey: ["plan-feed-mtest-skus", effectiveCompanyId],
     queryFn: () => listMtestSkus({ company_id: effectiveCompanyId }),
     enabled: Boolean(effectiveCompanyId),
-    select: (d) => d?.data ?? [],
+    // listMtestSkusHandler's okResponse({data: mtestSkus}) has no "pagination"
+    // key, so fetchProd's double-unwrap already resolves this down to the bare
+    // array -- `d?.data` on an array is always undefined (bug pattern #15,
+    // found live 2026-08-27: the 5 MTEST SKUs never showed even though the
+    // backend was correctly returning them every time).
+    select: (d) => (Array.isArray(d) ? d : (d?.data ?? [])),
   });
   const mtestSkuOptions = useMemo(
     () => (mtestSkusQ.data ?? []).map((m) => ({ value: m.id, label: materialLabel(m) })),
@@ -351,7 +356,10 @@ export default function PlanFeedPage() {
     queryKey: ["plan-feed-stroke-options", effectiveCompanyId, form.material_id],
     queryFn: () => listStrokeOptions({ company_id: effectiveCompanyId, material_id: form.material_id }),
     enabled: Boolean(effectiveCompanyId && form.material_id),
-    select: (d) => d?.data ?? [],
+    // listStrokeOptionsHandler's okResponse({data: [...]}) has no "pagination"
+    // key, so fetchProd already unwraps this to the bare array -- same bug
+    // pattern #15 as mtestSkusQ above, found in the same sweep (2026-08-27).
+    select: (d) => (Array.isArray(d) ? d : (d?.data ?? [])),
   });
 
   async function handlePartyCreated(customer) {
@@ -463,7 +471,7 @@ export default function PlanFeedPage() {
     queryKey: ["plan-feed-stroke-options", editData?.company_id, editDraft.material_id],
     queryFn: () => listStrokeOptions({ company_id: editData?.company_id, material_id: editDraft.material_id }),
     enabled: Boolean(editData?.company_id && editDraft.material_id),
-    select: (d) => d?.data ?? [],
+    select: (d) => (Array.isArray(d) ? d : (d?.data ?? [])),
   });
   const editStrokeCheckQ = useQuery({
     queryKey: ["plan-feed-stroke-check", editData?.company_id, editDraft.material_id, editDraft.ordered_stroke_number],
