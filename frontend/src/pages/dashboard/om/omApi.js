@@ -653,24 +653,12 @@ export async function listFgParentCompanies(params = {}) {
   return fetchJson(`/api/om/fg-parent-companies?${query.toString()}`, {}, "MM05_PARENT_COMPANY_LIST_FAILED");
 }
 
-// §129 multi-company mapping — find an existing Parent Company by GST
-// across every company (before creating a duplicate) + map an existing one
-// to the caller's own company instead of recreating it.
+// Parent Company is a global master (no per-company mapping) -- this finds an
+// existing one by GST so the create form can offer "use this" instead of
+// creating a duplicate for the same real-world GST.
 export async function findFgParentCompanyByGst(gstNumber) {
   const params = buildParams({ gst_number: gstNumber });
   return fetchJson(`/api/om/fg-parent-company/by-gst?${params.toString()}`, {}, "MM05_PARENT_COMPANY_GST_LOOKUP_FAILED");
-}
-
-export async function mapFgParentCompanyToCompany(payload) {
-  return fetchJson(
-    "/api/om/fg-parent-company/company-map",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    "MM05_PARENT_COMPANY_COMPANY_MAP_FAILED"
-  );
 }
 
 export async function createOrGetFgDepotCode(payload) {

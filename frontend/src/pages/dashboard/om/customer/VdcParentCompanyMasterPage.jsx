@@ -31,7 +31,6 @@ import {
   listFgDepotCodes,
   listFgParentCompanies,
   lookupCustomerGstProfile,
-  mapFgParentCompanyToCompany,
   updateFgDepotCode,
   updateFgParentCompany,
 } from "../omApi.js";
@@ -100,25 +99,34 @@ export default function VdcParentCompanyMasterPage() {
   const [tab, setTab] = useState("PARENT");
 
   // ---------- Parent Company tab ----------
+  // Parent Company is a global master (feasibility §129, corrected 2026-08-27
+  // -- no per-company mapping at all: one Parent Company/VDC/DC exists once
+  // and is usable from every company). companyId only matters as the
+  // "created under" metadata stamped on a brand-new Parent Company row, it
+  // never filters what's visible.
   const [companyId, setCompanyId] = useState(companies[0]?.id ?? "");
   const parentQuery = useQuery({
-    queryKey: ["om", "fg-parent-companies", companyId],
-    queryFn: () => listFgParentCompanies({ company_id: companyId || undefined }),
+    queryKey: ["om", "fg-parent-companies"],
+    queryFn: () => listFgParentCompanies(),
     select: (data) => data?.data ?? [],
   });
   const parentCompanies = useMemo(() => parentQuery.data ?? [], [parentQuery.data]);
+  const parentById = useMemo(() => {
+    const map = new Map();
+    for (const p of parentCompanies) map.set(p.id, p);
+    return map;
+  }, [parentCompanies]);
 
   const [selectedParentId, setSelectedParentId] = useState("");
   const [parentForm, setParentForm] = useState(EMPTY_PARENT_FORM);
   const [creatingParentNew, setCreatingParentNew] = useState(false);
   const [savingParent, setSavingParent] = useState(false);
   const [parentError, setParentError] = useState("");
-  // §129 multi-company mapping (2026-08-22) -- before creating a new Parent
-  // Company, check by GST whether it already exists under a different
-  // company; if so, offer "map to my company" instead of duplicating.
+  // Before creating a new Parent Company, check by GST whether it already
+  // exists (global, so it's already usable everywhere) -- offer to open it
+  // for editing instead of creating a duplicate.
   const [gstMatches, setGstMatches] = useState([]);
   const [checkingGstMatches, setCheckingGstMatches] = useState(false);
-  const [mappingExistingId, setMappingExistingId] = useState("");
 
   function openParentRow(row) {
     setSelectedParentId(row.id);
@@ -156,25 +164,10 @@ export default function VdcParentCompanyMasterPage() {
     }
   }
 
-  async function handleMapExistingParent(parentCompanyId) {
-    if (!companyId) {
-      setParentError("Select a company first.");
-      return;
-    }
-    setMappingExistingId(parentCompanyId);
-    setParentError("");
-    try {
-      await mapFgParentCompanyToCompany({ parent_company_id: parentCompanyId, company_id: companyId });
-      await queryClient.invalidateQueries({ queryKey: ["om", "fg-parent-companies"] });
-      setSelectedParentId("");
-      setCreatingParentNew(false);
-      setGstMatches([]);
-      setParentForm(EMPTY_PARENT_FORM);
-    } catch (mapError) {
-      setParentError(mapError instanceof Error ? mapError.message : "MM05_PARENT_COMPANY_COMPANY_MAP_FAILED");
-    } finally {
-      setMappingExistingId("");
-    }
+  // Parent Company is global -- an existing GST match is already usable from
+  // any company, so "using" it is just opening it for editing, no API call.
+  function handleUseExistingParent(match) {
+    openParentRow(match);
   }
 
   async function handleSaveParent() {
@@ -225,24 +218,6 @@ export default function VdcParentCompanyMasterPage() {
     queryFn: () => listFgDepotCodes(),
     select: (data) => data?.data ?? [],
   });
-  // 2026-08-22 fix — the Parent tab's own parentCompanies is scoped to
-  // whichever ONE company is selected there; a VDC on this tab can belong to
-  // a Parent Company under a DIFFERENT company than that selection, which
-  // would make parentById miss it entirely (showing a blank Parent state for
-  // a row that genuinely has one). Unscoped lookup instead -- every Parent
-  // Company across every company this caller belongs to, same pattern
-  // CustomerEditForm.jsx's own VdcPickerPanel already uses.
-  const parentAllQuery = useQuery({
-    queryKey: ["om", "fg-parent-companies", "all-for-vdc-tab"],
-    queryFn: () => listFgParentCompanies(),
-    select: (data) => data?.data ?? [],
-  });
-  const parentAllList = useMemo(() => parentAllQuery.data ?? [], [parentAllQuery.data]);
-  const parentById = useMemo(() => {
-    const map = new Map();
-    for (const p of parentAllList) map.set(p.id, p);
-    return map;
-  }, [parentAllList]);
   const vdcs = useMemo(() => vdcQuery.data ?? [], [vdcQuery.data]);
 
   const [selectedVdcId, setSelectedVdcId] = useState("");
@@ -464,22 +439,19 @@ export default function VdcParentCompanyMasterPage() {
                   {creatingParentNew && gstMatches.length > 0 ? (
                     <div className="grid gap-2 border border-amber-300 bg-amber-50 p-2">
                       <p className="text-xs font-semibold text-amber-800">
-                        This GST already exists — map to your company instead of creating a duplicate:
+                        This GST already exists — use it instead of creating a duplicate:
                       </p>
                       {gstMatches.map((match) => (
                         <div key={match.id} className="flex items-center justify-between border border-amber-200 bg-white px-2 py-1 text-xs">
                           <span>
                             <span className="font-semibold text-slate-900">{match.company_name}</span> ({match.state})
-                            {" — mapped to: "}
-                            {(match.mapped_companies ?? []).map((c) => c.company_code).join(", ") || "—"}
                           </span>
                           <button
                             type="button"
-                            onClick={() => void handleMapExistingParent(match.id)}
-                            disabled={mappingExistingId === match.id}
-                            className="border border-sky-700 bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-950 disabled:opacity-50"
+                            onClick={() => handleUseExistingParent(match)}
+                            className="border border-sky-700 bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-950"
                           >
-                            {mappingExistingId === match.id ? "Mapping..." : "Map to my company"}
+                            Use this one
                           </button>
                         </div>
                       ))}
@@ -567,7 +539,7 @@ export default function VdcParentCompanyMasterPage() {
                         className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                       >
                         <option value="">Select Parent Company</option>
-                        {parentAllList.map((p) => (
+                        {parentCompanies.map((p) => (
                           <option key={p.id} value={p.id}>{p.company_name} ({p.state})</option>
                         ))}
                       </select>
@@ -592,7 +564,7 @@ export default function VdcParentCompanyMasterPage() {
                             className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                           >
                             <option value="">Select new Parent Company</option>
-                            {parentAllList.filter((p) => p.id !== vdcParentId).map((p) => (
+                            {parentCompanies.filter((p) => p.id !== vdcParentId).map((p) => (
                               <option key={p.id} value={p.id}>{p.company_name} ({p.state})</option>
                             ))}
                           </select>
