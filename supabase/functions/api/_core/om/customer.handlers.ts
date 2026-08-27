@@ -702,12 +702,34 @@ export async function updateCustomerHandler(
       }
     }
 
-    // Same DOMESTIC-only allowlist as create -- customer_type itself isn't
-    // editable here, so the existing row's own type is authoritative.
-    if (toTrimmedString(existing.customer_type).toUpperCase() === "DOMESTIC" && updates.billing_state !== undefined) {
+    if (updates.billing_state !== undefined) {
       const billingState = toTrimmedString(updates.billing_state);
-      if (billingState && !INDIAN_STATE_NAMES.has(billingState)) {
+      // Same DOMESTIC-only allowlist as create -- customer_type itself isn't
+      // editable here, so the existing row's own type is authoritative.
+      if (toTrimmedString(existing.customer_type).toUpperCase() === "DOMESTIC" && billingState && !INDIAN_STATE_NAMES.has(billingState)) {
         return customerErrorResponse(req, ctx, "OM_INVALID_BILLING_STATE", 400, "Invalid billing state");
+      }
+
+      // §129.4 — one customer row represents exactly one state/GST identity.
+      // Once site addresses exist, moving this row to another state would leave
+      // those addresses inconsistent. Create a separate customer instead.
+      if (billingState && billingState !== toTrimmedString(existing.billing_state)) {
+        const { data: addressRows, error: addressLookupError } = await serviceRoleClient
+          .schema("erp_master")
+          .from("customer_address")
+          .select("id")
+          .eq("customer_id", id)
+          .limit(1);
+        if (addressLookupError) throw new Error("OM_CUSTOMER_ADDRESS_LOOKUP_FAILED");
+        if ((addressRows ?? []).length > 0) {
+          return customerErrorResponse(
+            req,
+            ctx,
+            "OM_CUSTOMER_STATE_CHANGE_REQUIRES_NEW_CUSTOMER",
+            400,
+            "A customer with addresses cannot change state. Create a separate customer for the new state.",
+          );
+        }
       }
     }
 

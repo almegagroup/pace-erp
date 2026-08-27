@@ -153,7 +153,7 @@
   },
   {
     "page": "frontend/src/admin/sa/screens/SAMaterialMaster.jsx",
-    "dependencyCount": 16,
+    "dependencyCount": 18,
     "deps": [
       {
         "fn": "listMaterials",
@@ -7185,6 +7185,22 @@
         "path": "/api/om/customers?${params.toString()}",
         "resourceCode": "OM_CUSTOMER_LIST",
         "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listCustomerAddresses",
+        "method": "GET",
+        "path": "/api/om/customer-addresses?${query.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createCustomerAddress",
+        "method": "POST",
+        "path": "/api/om/customer-address",
+        "resourceCode": "OM_CUSTOMER_CREATE",
+        "action": "WRITE",
         "skipAcl": false
       },
       {

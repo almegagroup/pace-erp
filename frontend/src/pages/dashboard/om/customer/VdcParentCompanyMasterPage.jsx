@@ -632,7 +632,7 @@ export default function VdcParentCompanyMasterPage() {
                           Must match the Parent Company's own state{activeParentState ? ` (${activeParentState})` : ""}.
                         </p>
                       </ErpDenseFormRow>
-                      <ErpDenseFormRow label="Address" required>
+                      <ErpDenseFormRow label="Billing / Ship-To Address" required>
                         <textarea
                           rows={2}
                           value={vdcForm.address_line}
@@ -654,8 +654,12 @@ export default function VdcParentCompanyMasterPage() {
                           ...c,
                           state: profile.state_name || c.state,
                           address_line: profile.full_address || c.address_line,
+                          pin_code: profile.pin_code || c.pin_code,
                         }))}
                       />
+                      <p className="text-xs text-slate-500">
+                        GST check fills the registered address. You may overwrite this billing/ship-to address for this Depot Code; multiple Depot Codes may use the same GST.
+                      </p>
                     </>
                   ) : (
                     <>
