@@ -128,7 +128,7 @@ export default function StrokeApprovalPage() {
   // on this review page, so this keys off editForm.po_type (the live value), not the
   // original row's.
   const l003Location = (storageLocationsQ.data ?? []).find((s) => String(s.code ?? "").toUpperCase() === "L003") ?? null;
-  const isMtestEditForm = editForm.po_type === "MTEST";
+  const isMtestEditForm = editForm?.po_type === "MTEST";
   const approvalStorageLocationOptions = isMtestEditForm && l003Location
     ? [{ value: l003Location.id, label: `${l003Location.code} — ${l003Location.name}` }]
     : storageLocationOptions;
