@@ -45,6 +45,27 @@ async function getCustomerStateById(customerId: string): Promise<string | null> 
   return (data?.billing_state as string | null) ?? null;
 }
 
+// feasibility §132.5/132.9 — customer_master.is_dependent is derived, never
+// user-set: TRUE when ANY of the customer's addresses is VDC-mapped. Must be
+// recomputed every time an address's depot_code_id changes (single or bulk).
+async function recomputeCustomerIsDependent(customerId: string): Promise<void> {
+  const { data: mappedRows, error: lookupError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("customer_address")
+    .select("id")
+    .eq("customer_id", customerId)
+    .not("depot_code_id", "is", null)
+    .limit(1);
+  if (lookupError) throw new Error("OM_ADDRESS_DEPENDENT_RECOMPUTE_FAILED");
+
+  const { error: updateError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("customer_master")
+    .update({ is_dependent: (mappedRows ?? []).length > 0 })
+    .eq("id", customerId);
+  if (updateError) throw new Error("OM_ADDRESS_DEPENDENT_RECOMPUTE_FAILED");
+}
+
 async function getAddressById(id: string): Promise<JsonRecord | null> {
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
@@ -238,6 +259,10 @@ export async function updateCustomerAddressHandler(
       .single();
     if (error || !data) throw new Error("OM_ADDRESS_UPDATE_FAILED");
 
+    if (Object.prototype.hasOwnProperty.call(updates, "depot_code_id")) {
+      await recomputeCustomerIsDependent(existing.customer_id as string);
+    }
+
     const [enriched] = await enrichAddressRows([data as JsonRecord]);
     return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {
@@ -311,6 +336,8 @@ export async function bulkMapCustomerAddressesHandler(
       console.error("[bulkMapCustomerAddressesHandler] update failed:", JSON.stringify(error));
       throw new Error("OM_ADDRESS_BULK_MAP_FAILED");
     }
+
+    await recomputeCustomerIsDependent(customerIds[0]);
 
     const enriched = await enrichAddressRows((data ?? []) as JsonRecord[]);
     return okResponse({ data: enriched }, ctx.request_id, req);

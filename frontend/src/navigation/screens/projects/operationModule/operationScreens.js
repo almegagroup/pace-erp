@@ -103,14 +103,6 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  OM_FG_DISPATCH_CUSTOMER: {
-    screen_code: "OM_FG_DISPATCH_CUSTOMER",
-    route: "/dashboard/om/fg-dispatch-customers",
-    universe: "ACL",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
   PROC_PO_LIST: {
     screen_code: "PROC_PO_LIST",
     route: "/dashboard/procurement/purchase-orders",

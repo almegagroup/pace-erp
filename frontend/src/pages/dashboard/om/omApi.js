@@ -561,6 +561,25 @@ export async function lookupCustomerGstProfile(gstNumber) {
   return fetchJson(`/api/om/customer/gst-profile?${params.toString()}`, {}, "OM_CUSTOMER_GST_LOOKUP_FAILED");
 }
 
+// §132.8 -- cross-company duplicate-detect before creating a new customer.
+export async function findCustomerByGst(gstNumber) {
+  const params = buildParams({ gst_number: gstNumber });
+  return fetchJson(`/api/om/customer/by-gst?${params.toString()}`, {}, "OM_CUSTOMER_GST_LOOKUP_FAILED");
+}
+
+// §132.5 point 4 -- retroactive Vendor-link (independent -> vendor-linked, one-time).
+export async function linkCustomerToVendor(customerId, vendorId) {
+  return fetchJson(
+    "/api/om/customer/vendor-link",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ customer_id: customerId, vendor_id: vendorId }),
+    },
+    "OM_CUSTOMER_VENDOR_LINK_FAILED"
+  );
+}
+
 export async function lookupSharedGstProfile(gstNumber) {
   const params = buildParams({ gst_number: gstNumber });
   return fetchJson(`/api/procurement/gst-profile?${params.toString()}`, {}, "PROCUREMENT_GST_LOOKUP_FAILED");
@@ -739,58 +758,6 @@ export async function bulkMapCustomerAddresses(payload) {
       body: JSON.stringify(payload),
     },
     "OM_ADDRESS_BULK_MAP_FAILED"
-  );
-}
-
-export async function createFgDispatchCustomer(payload) {
-  return fetchJson(
-    "/api/om/fg-dispatch-customer",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    "MM05_CUSTOMER_CREATE_FAILED"
-  );
-}
-
-export async function upgradeFgDispatchCustomer(customerId, payload) {
-  return fetchJson(
-    `/api/om/fg-dispatch-customers/${customerId}/upgrade-gst`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    "MM05_CUSTOMER_UPGRADE_FAILED"
-  );
-}
-
-export async function addFgDispatchCustomerAddress(customerId, payload) {
-  return fetchJson(
-    `/api/om/fg-dispatch-customers/${customerId}/addresses`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    "MM05_ADDRESS_CREATE_FAILED"
-  );
-}
-
-export async function listFgDispatchCustomerAddresses(customerId) {
-  return fetchJson(`/api/om/fg-dispatch-customers/${customerId}/addresses`, {}, "MM05_ADDRESS_LIST_FAILED");
-}
-
-export async function updateFgDispatchCustomerAddress(addressId, payload) {
-  return fetchJson(
-    `/api/om/fg-dispatch-addresses/${addressId}`,
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    "MM05_ADDRESS_UPDATE_FAILED"
   );
 }
 

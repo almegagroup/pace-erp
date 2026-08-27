@@ -70,7 +70,9 @@ import {
 import {
   changeCustomerStatusHandler,
   createCustomerHandler,
+  findCustomerByGstHandler,
   getCustomerHandler,
+  linkCustomerToVendorHandler,
   listCustomerCompanyMapsHandler,
   listCustomersHandler,
   lookupCustomerGstProfileHandler,
@@ -83,20 +85,15 @@ import {
   updateParentCustomerHandler,
 } from "../_core/om/parent_customer.handlers.ts";
 import {
-  addDispatchCustomerAddressHandler,
-  createDispatchCustomerHandler,
   createOrGetDepotCodeHandler,
   createParentCompanyHandler,
   findFgParentCompanyByGstHandler,
   listDepotCodesHandler,
-  listDispatchCustomerAddressesHandler,
   listParentCompaniesHandler,
   mapFgParentCompanyToCompanyHandler,
   updateDepotCodeHandler,
-  updateDispatchCustomerAddressHandler,
   updateParentCompanyHandler,
-  upgradeDispatchCustomerToRegisteredHandler,
-} from "../_core/om/fg_dispatch_customer.handlers.ts";
+} from "../_core/om/fg_parent_company.handlers.ts";
 import {
   bulkMapCustomerAddressesHandler,
   createCustomerAddressHandler,
@@ -276,6 +273,10 @@ export async function dispatchOmRoutes(
       return await listCustomerCompanyMapsHandler(req, ctx);
     case "GET:/api/om/customer/gst-profile":
       return await lookupCustomerGstProfileHandler(req, ctx);
+    case "GET:/api/om/customer/by-gst":
+      return await findCustomerByGstHandler(req, ctx);
+    case "POST:/api/om/customer/vendor-link":
+      return await linkCustomerToVendorHandler(req, ctx);
 
     case "GET:/api/om/parent-customers":
       return await listParentCustomersHandler(req, ctx);
@@ -299,8 +300,6 @@ export async function dispatchOmRoutes(
       return await listDepotCodesHandler(req, ctx);
     case "PATCH:/api/om/fg-depot-code":
       return await updateDepotCodeHandler(req, ctx);
-    case "POST:/api/om/fg-dispatch-customer":
-      return await createDispatchCustomerHandler(req, ctx);
 
     // §129.3/§129.8 — MM04 customer_address (Stage-1 Address list, Stage-2
     // VDC mapping). Deliberately under the "customer" family, not a new
@@ -366,19 +365,6 @@ export async function dispatchOmRoutes(
 
     default:
       break;
-  }
-
-  if (/^\/api\/om\/fg-dispatch-customers\/[^/]+\/upgrade-gst$/.test(pathname) && req.method === "POST") {
-    return await upgradeDispatchCustomerToRegisteredHandler(req, ctx);
-  }
-  if (/^\/api\/om\/fg-dispatch-customers\/[^/]+\/addresses$/.test(pathname) && req.method === "POST") {
-    return await addDispatchCustomerAddressHandler(req, ctx);
-  }
-  if (/^\/api\/om\/fg-dispatch-customers\/[^/]+\/addresses$/.test(pathname) && req.method === "GET") {
-    return await listDispatchCustomerAddressesHandler(req, ctx);
-  }
-  if (/^\/api\/om\/fg-dispatch-addresses\/[^/]+$/.test(pathname) && req.method === "PATCH") {
-    return await updateDispatchCustomerAddressHandler(req, ctx);
   }
 
   return null;

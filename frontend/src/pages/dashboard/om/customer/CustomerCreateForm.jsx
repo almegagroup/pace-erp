@@ -16,7 +16,14 @@ import { useEffect, useState } from "react";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { INDIAN_STATES } from "../../../../data/indianStates.js";
-import { createCustomer, getVendor, lookupCustomerGstProfile } from "../omApi.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
+import {
+  createCustomer,
+  findCustomerByGst,
+  getVendor,
+  lookupCustomerGstProfile,
+  mapCustomerToCompany,
+} from "../omApi.js";
 import {
   MASTER_PICKER_FETCH_LIMIT,
   useVendorOptionsQuery,
@@ -96,6 +103,15 @@ export default function CustomerCreateForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  // §132.8 -- GST-based duplicate-detect + reuse. Only ever checked when a
+  // GST number is present (§132.5/132.8: Unregistered parties skip this
+  // entirely). A match found means this exact party already exists
+  // somewhere -- offer to map the existing row to this company instead of
+  // creating a duplicate customer_master row for the same real-world party.
+  const [existingMatches, setExistingMatches] = useState([]);
+  const [mappingExistingId, setMappingExistingId] = useState("");
+  const [mapExistingError, setMapExistingError] = useState("");
+
   const vendorQuery = useVendorOptionsQuery({ status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const vendors = vendorQuery.vendors;
   const loadingDeps = vendorQuery.isLoading;
@@ -150,7 +166,20 @@ export default function CustomerCreateForm({
     setGstLooking(true);
     setError("");
     setGstNotice("");
+    setExistingMatches([]);
+    setMapExistingError("");
     try {
+      // §132.8 -- check OUR OWN customer_master for this GST first, across
+      // every company (not just the one being created for). A match here
+      // means don't create at all -- offer to reuse instead.
+      const matchResult = await findCustomerByGst(gst);
+      const matches = Array.isArray(matchResult?.data) ? matchResult.data : [];
+      if (matches.length > 0) {
+        setExistingMatches(matches);
+        setGstNotice("");
+        return;
+      }
+
       const result = await lookupCustomerGstProfile(gst);
       const profile = result?.data;
       if (!profile) throw new Error("OM_CUSTOMER_GST_LOOKUP_FAILED");
@@ -166,6 +195,23 @@ export default function CustomerCreateForm({
       setError("GST lookup failed. Check the GST number.");
     } finally {
       setGstLooking(false);
+    }
+  }
+
+  async function handleMapExisting(customerId) {
+    if (!form.company_id) {
+      setMapExistingError("Company is required before mapping.");
+      return;
+    }
+    setMappingExistingId(customerId);
+    setMapExistingError("");
+    try {
+      await mapCustomerToCompany({ customer_id: customerId, company_id: form.company_id });
+      onSaved?.({ id: customerId });
+    } catch (mapError) {
+      setMapExistingError(mapError instanceof Error ? mapError.message : "OM_CUSTOMER_COMPANY_MAP_FAILED");
+    } finally {
+      setMappingExistingId("");
     }
   }
 
@@ -226,9 +272,48 @@ export default function CustomerCreateForm({
 
   const selectedVendor = vendors.find((entry) => entry.id === form.vendor_id);
 
+  useErpScreenHotkeys({
+    save: { disabled: saving || existingMatches.length > 0, perform: () => void handleSubmit() },
+  });
+
   return (
     <div className="grid gap-5">
       {error ? <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-800">{error}</div> : null}
+
+      {existingMatches.length > 0 ? (
+        <div className="grid gap-2 border border-amber-300 bg-amber-50 px-3 py-2">
+          <p className="text-xs font-semibold text-amber-800">
+            This GST already belongs to an existing customer — map it to your company instead of creating a duplicate.
+          </p>
+          {mapExistingError ? <p className="text-xs text-rose-700">{mapExistingError}</p> : null}
+          {existingMatches.map((match) => {
+            const alreadyMapped = (match.mapped_companies ?? []).some((c) => c?.id === form.company_id);
+            return (
+              <div key={match.id} className="flex items-center justify-between gap-2 border border-amber-200 bg-white px-2 py-1">
+                <span className="text-xs text-slate-800">
+                  {match.customer_code} — {match.customer_name || "(unnamed)"}
+                  {(match.mapped_companies ?? []).length ? ` (already in: ${match.mapped_companies.map((c) => c?.company_code).filter(Boolean).join(", ")})` : ""}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void handleMapExisting(match.id)}
+                  disabled={alreadyMapped || mappingExistingId === match.id}
+                  className="h-7 border border-sky-600 bg-sky-600 px-2 text-xs font-semibold text-white disabled:opacity-50 whitespace-nowrap"
+                >
+                  {alreadyMapped ? "Already in this company" : mappingExistingId === match.id ? "Mapping..." : "Map to my Company"}
+                </button>
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => setExistingMatches([])}
+            className="w-fit text-xs font-semibold text-slate-600 underline"
+          >
+            Not the same party — create new anyway
+          </button>
+        </div>
+      ) : null}
 
       {companyMode === "SELECT" ? (
         <ErpDenseFormRow label="Company" required>
