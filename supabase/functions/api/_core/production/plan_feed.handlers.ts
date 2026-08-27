@@ -149,6 +149,7 @@ export async function listPlanFeedHandler(req: Request, ctx: ProdHandlerContext)
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
     const status = toUpperTrimmedString(url.searchParams.get("status") ?? "");
     const partyId = toTrimmedString(url.searchParams.get("party_id") ?? "");
+    const search = toTrimmedString(url.searchParams.get("search") ?? "");
     const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10));
     const perPage = Math.min(100, Math.max(10, parseInt(url.searchParams.get("per_page") ?? "20", 10)));
 
@@ -166,6 +167,11 @@ export async function listPlanFeedHandler(req: Request, ctx: ProdHandlerContext)
     if (companyId) query = query.eq("company_id", companyId);
     if (status) query = query.eq("status", status);
     if (partyId) query = query.eq("party_id", partyId);
+    // The "browse recent FOs" search box only searched within whatever page
+    // was already fetched (per_page: 50 from the frontend) -- a real match
+    // outside that page silently looked like "not found" (found live
+    // 2026-08-27). Now filters server-side, across the whole company.
+    if (search) query = query.or(`fo_number.ilike.%${search}%,party_name.ilike.%${search}%`);
 
     const { data, error, count } = await ((query as typeof query & {
       range: (from: number, to: number) => typeof query;
