@@ -311,7 +311,15 @@ export async function saveAc06RatesHandler(req: Request, ctx: ProdHandlerContext
     const byId = new Map((lines as Row[]).map((line) => [toTrimmedString(line.id), line])); const db = serviceRoleClient.schema("erp_production"); const now = new Date().toISOString();
     for (const update of updates) {
       const line = byId.get(toTrimmedString(update.line_id)); const rate = rateValue(update.rate);
-      if (!line || rate === null) return ac06Error(req, ctx, "AC06_RATE_VALUE_INVALID", 400, "Rate must be a non-negative decimal.");
+      if (!line) return ac06Error(req, ctx, "AC06_RATE_LINE_INVALID", 409, "One or more rate rows are invalid for this month.");
+      if (rate === null) {
+        // The generic message alone gave no way to tell WHICH of possibly 100+
+        // visible rows had the bad value -- include the rejected value and the
+        // material so the user can actually find and fix it.
+        const material = await materialMap([toTrimmedString(line.material_id)]);
+        const materialLabel = material.get(toTrimmedString(line.material_id))?.material_name ?? toTrimmedString(line.material_id);
+        return ac06Error(req, ctx, "AC06_RATE_VALUE_INVALID", 400, `Rate "${toTrimmedString(update.rate)}" for ${materialLabel} is not a valid non-negative decimal.`);
+      }
       const groupId = toTrimmedString(line.costing_group_id);
       const statusFields = canVerifyOwnSave
         ? { verification_status: "VERIFIED", verified_at: now, verified_by: ctx.auth_user_id }

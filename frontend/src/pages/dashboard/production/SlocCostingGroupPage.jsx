@@ -421,6 +421,13 @@ export default function SlocCostingGroupPage() {
   }
 
   function setGroupRate(row, value) {
+    // Only accept a value that's still a valid (possibly partial, e.g. "2.")
+    // non-negative decimal as the user types -- letters, commas, a second
+    // decimal point, or a minus sign never enter rateDraft at all. Before this,
+    // a single bad character typed into any one row (among possibly 100+
+    // visible ones) silently blocked the entire "Save Rates" batch with a
+    // generic error that didn't say which row was wrong (found live 2026-08-27).
+    if (!/^\d*\.?\d*$/.test(value)) return;
     setRateDraft((current) => {
       const next = { ...current, [row.id]: value };
       if (row.costing_group_id)
