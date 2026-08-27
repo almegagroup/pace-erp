@@ -241,6 +241,18 @@ export default function PlanFeedPage() {
     () => (mtestSkusQ.data ?? []).map((m) => ({ value: m.id, label: materialLabel(m) })),
     [mtestSkusQ.data],
   );
+  // materialsQ (all ACTIVE FG materials, no pack_type filter) otherwise leaked the 5
+  // MTEST sample SKUs into the MTO/HPS/MTS typeahead too -- same root cause as the
+  // Packing PO Create SKU-dropdown bug fixed the same day, found via the user's own
+  // report that both screens showed this mixing.
+  const mtestSkuIdSet = useMemo(
+    () => new Set((mtestSkusQ.data ?? []).map((m) => m.id)),
+    [mtestSkusQ.data],
+  );
+  const nonMtestMaterials = useMemo(
+    () => (materialsQ.data ?? []).filter((m) => !mtestSkuIdSet.has(m.id)),
+    [materialsQ.data, mtestSkuIdSet],
+  );
   const normalizedCustomers = useMemo(
     () => (customersQ.data ?? []).map((customer) => ({
       ...customer,
@@ -916,7 +928,7 @@ export default function PlanFeedPage() {
                 <>
                   <SkuTypeaheadField
                     skuText={form.sku}
-                    materials={materialsQ.data ?? []}
+                    materials={nonMtestMaterials}
                     placeholder="Type SKU — pick a match, or keep typing for a new one"
                     onTextChange={(text) => setForm(f => ({ ...f, sku: text, material_id: "" }))}
                     onPickMaterial={(m) => setForm(f => ({
@@ -1143,7 +1155,7 @@ export default function PlanFeedPage() {
                     ) : (
                       <SkuTypeaheadField
                         skuText={editDraft.sku ?? ""}
-                        materials={materialsQ.data ?? []}
+                        materials={nonMtestMaterials}
                         placeholder="Type SKU — pick a match, or keep typing for a new one"
                         disabled={editData.status === "CANCELLED" || skuLockedForEdit}
                         onTextChange={(text) => setEditDraft(d => ({ ...d, sku: text, material_id: "" }))}
