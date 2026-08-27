@@ -252,7 +252,6 @@ export default function ProductionPOCreatePage() {
     processForm.mtest_segment_code,
   );
   const machineRequired = ["MTO", "HPS", "MTS", "INT"].includes(processForm.po_type);
-  const isMtest = processForm.po_type === "MTEST";
 
   const strokesQ = useQuery({
     queryKey: ["production-create-strokes", effectiveCompanyId, processForm.prodshade_material_id],
@@ -579,7 +578,12 @@ export default function ProductionPOCreatePage() {
   const strokeLines = Array.isArray(strokeDetailQ.data?.lines) ? strokeDetailQ.data.lines : [];
   const strokePreviewRows = useMemo(
     () => {
-      if (isMtest) return [];
+      // §131.1 (2026-08-26): MTEST's Process PO lifecycle now matches MTO/HPS/MTS
+      // exactly, including real RM/INT lines derived from the Stroke's own dosage
+      // recipe (createProcessOrderHandler already derives these generically,
+      // no po_type branch) -- this used to `return []` for MTEST under the old
+      // pre-redesign assumption ("no stroke/BOM"), which only hid the preview/
+      // availability-check table, it never affected what actually got created.
       return strokeLines.map((line) => {
       const selectedStorageLocationId = lineLocationOverrides[line.material_id] || line.default_storage_location_id || "";
       const plannedQty = (Number(line.dosage_pct ?? 0) / 100) * Number(processForm.planned_qty_kg || 0);
@@ -620,7 +624,7 @@ export default function ProductionPOCreatePage() {
       };
       });
     },
-    [isMtest, lineActualMaterialOverrides, lineLocationOverrides, processForm.planned_qty_kg, strokeLines],
+    [lineActualMaterialOverrides, lineLocationOverrides, processForm.planned_qty_kg, strokeLines],
   );
 
   useEffect(() => {
