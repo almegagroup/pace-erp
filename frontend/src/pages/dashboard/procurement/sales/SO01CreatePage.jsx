@@ -232,6 +232,9 @@ export default function SO01CreatePage() {
   const [shipToGstNumber, setShipToGstNumber] = useState("");
   const [paymentTermId, setPaymentTermId] = useState("");
   const [freightTerm, setFreightTerm] = useState("FOR");
+  const [parentCompanies, setParentCompanies] = useState([]);
+  const [depotCodes, setDepotCodes] = useState([]);
+  const [ac06Months, setAc06Months] = useState([]);
 
   const [lines, setLines] = useState([]);
 
@@ -273,9 +276,6 @@ export default function SO01CreatePage() {
   })();
   const gstTypePreview = deriveGstTypeClientPreview(companyStateName, resolvedShipToStateName);
 
-  const [parentCompanies, setParentCompanies] = useState([]);
-  const [depotCodes, setDepotCodes] = useState([]);
-  const [ac06Months, setAc06Months] = useState([]);
   useEffect(() => {
     if (effectiveNoInboundType !== "DEPENDENT_DIRECT" && effectiveNoInboundType !== "DEPENDENT_DEPOT") return;
     listFgParentCompanies({}).then((result) => setParentCompanies(Array.isArray(result?.data) ? result.data : [])).catch(() => setParentCompanies([]));
