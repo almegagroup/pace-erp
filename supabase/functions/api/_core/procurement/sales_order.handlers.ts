@@ -2372,12 +2372,14 @@ export async function createSalesOrderUnifiedHandler(
     const body = await parseBody(req);
     const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     const dispatchType = toUpperTrimmedString(body.dispatch_type);
+    const customerPoNumber = toTrimmedString(body.customer_po_number);
     const materialTypes = Array.isArray(body.material_types)
       ? Array.from(new Set((body.material_types as unknown[]).map((v) => toUpperTrimmedString(v))))
       : [];
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
 
     if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
+    if (!customerPoNumber) return salesErrorResponse(req, ctx, "SO_CUSTOMER_PO_REQUIRED", 400, "External SO Number is required.");
     if (!DISPATCH_TYPES.has(dispatchType)) return salesErrorResponse(req, ctx, "SO_DISPATCH_TYPE_INVALID", 400, "A valid dispatch_type is required.");
     if (materialTypes.length === 0 || materialTypes.some((t) => !LINE_MATERIAL_TYPES.has(t))) {
       return salesErrorResponse(req, ctx, "SO_MATERIAL_TYPES_INVALID", 400, "At least one valid Material Type must be selected.");
@@ -2451,6 +2453,7 @@ export async function createSalesOrderUnifiedHandler(
         so_date: toTrimmedString(body.so_date) || todayIsoDate(),
         company_id: companyId,
         customer_id: resolved.customerId,
+        customer_po_number: customerPoNumber,
         dispatch_type: dispatchType,
         ibn_required: ibnRequired,
         dispatch_category: dispatchCategory,

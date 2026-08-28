@@ -151,7 +151,7 @@ function computeLinePreview(line, gstType) {
   let taxableValue;
   let gstAmount;
   if (line.line_material_type === "FG") {
-    qtyForAmount = line.rate_basis === "PACK_UOM" ? toNumber(line.pack_qty) : toNumber(line.base_qty);
+    qtyForAmount = line.rate_basis === "PACK_UOM" ? toNumber(line.pack_qty) : getLineBaseQty(line);
     if (line.fg_type === "MTEST" && line.rate_basis === "FIXED") {
       taxableValue = rate;
       gstAmount = (taxableValue * toNumber(line.gst_rate)) / 100;
@@ -237,6 +237,7 @@ export default function SO01CreatePage() {
   const [billToCustomerAddressId, setBillToCustomerAddressId] = useState("");
   const [noInboundSubType, setNoInboundSubType] = useState("DIRECT");
   const [paymentTermId, setPaymentTermId] = useState("");
+  const [externalSoNumber, setExternalSoNumber] = useState("");
   const [freightTerm, setFreightTerm] = useState("FOR");
   const [roundOffAmount, setRoundOffAmount] = useState("0");
   const [parentCompanies, setParentCompanies] = useState([]);
@@ -593,6 +594,7 @@ export default function SO01CreatePage() {
 
   async function handleSubmit() {
     if (lines.length === 0) { setError("At least one item line is required."); return; }
+    if (!externalSoNumber.trim()) { setError("External SO Number is required."); return; }
     // §133.9-G — a manual-SKU FG line has no material_id by design; it must
     // carry a manual_sku_name instead. Every other line always needs a real item.
     if (lines.some((line) => !line.material_id && !(line.__manualSku && line.manual_sku_name.trim()))) {
@@ -608,6 +610,7 @@ export default function SO01CreatePage() {
         so_date: soDate,
         material_types: materialTypes,
         dispatch_type: dispatchType,
+        customer_po_number: externalSoNumber.trim(),
         ibn_required: dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED" ? ibnRequiredManual : undefined,
         payment_term_id: paymentTermId || null,
         freight_term: freightTerm || null,
@@ -783,7 +786,10 @@ export default function SO01CreatePage() {
           </ErpSectionCard>
 
           <ErpSectionCard eyebrow="Page 2" title="Payment Terms & Freight">
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-3">
+              <ErpDenseFormRow label="External SO Number" required>
+                {textInput(externalSoNumber, setExternalSoNumber, { placeholder: "Enter customer/external SO number" })}
+              </ErpDenseFormRow>
               <ErpDenseFormRow label="Payment Terms">
                 <ErpComboboxField value={paymentTermId} onChange={setPaymentTermId} options={paymentTermOptions} blankLabel="Select Payment Terms" />
               </ErpDenseFormRow>
