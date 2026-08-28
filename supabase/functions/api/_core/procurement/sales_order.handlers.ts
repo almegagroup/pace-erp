@@ -2223,12 +2223,18 @@ export async function listSalesOrderFgSkuOptionsHandler(
     const materialIds = [...new Set(mapRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
     if (materialIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
+    // Do not pass the mapping's UUID list through a PostgREST `in(...)` filter.
+    // This endpoint is called at screen load and the generated list can make the
+    // lookup fail before eligibility is evaluated. Fetch the small active FG set
+    // and apply the same active-mapping scope in memory instead.
+    const mappedMaterialIds = new Set(materialIds);
     const { data: materials, error: materialsError } = await serviceRoleClient
       .schema("erp_master").from("material_master")
       .select("id, pace_code, external_code, material_name, document_name, hsn_code, base_uom_code, pack_code")
-      .in("id", materialIds).eq("material_type", "FG").eq("status", "ACTIVE");
+      .eq("material_type", "FG").eq("status", "ACTIVE");
     if (materialsError) throw new Error("SO_FG_SKU_LOOKUP_FAILED");
-    const skuRows = (materials ?? []) as JsonRecord[];
+    const skuRows = ((materials ?? []) as JsonRecord[])
+      .filter((material) => mappedMaterialIds.has(toTrimmedString(material.id)));
     const packCodes = [...new Set(skuRows.map((row) => toTrimmedString(row.pack_code)).filter(Boolean))];
     if (packCodes.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
