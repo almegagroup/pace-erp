@@ -2261,6 +2261,11 @@ export async function createSalesOrderUnifiedHandler(
     const ibnRequired = resolveIbnRequired(dispatchType, body.ibn_required);
     const dispatchCategory = deriveDispatchCategory(materialTypes);
     const freightTerm = toUpperTrimmedString(body.freight_term) || null;
+    const parsedRoundOffAmount = parseNullableNumber(body.round_off_amount);
+    if (body.round_off_amount !== undefined && body.round_off_amount !== "" && parsedRoundOffAmount === null) {
+      return salesErrorResponse(req, ctx, "SO_ROUND_OFF_INVALID", 400, "Round Off must be a valid number.");
+    }
+    const roundOffAmount = parsedRoundOffAmount ?? 0;
 
     const resolvedShipToOrBillState = resolved.shipTo?.ship_to_state ?? resolved.billToState ?? null;
     const linePayload: JsonRecord[] = [];
@@ -2291,6 +2296,7 @@ export async function createSalesOrderUnifiedHandler(
         dispatch_category: dispatchCategory,
         material_types: materialTypes,
         freight_term: freightTerm,
+        round_off_amount: roundOffAmount,
         payment_term_id: toTrimmedString(body.payment_term_id) || null,
         bill_to_type: resolved.billToType,
         bill_to_parent_company_id: resolved.billToParentCompanyId,
@@ -2500,6 +2506,11 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
     if (body.so_date !== undefined) headerUpdate.so_date = toTrimmedString(body.so_date);
     if (body.payment_term_id !== undefined) headerUpdate.payment_term_id = toTrimmedString(body.payment_term_id) || null;
     if (body.freight_term !== undefined) headerUpdate.freight_term = toUpperTrimmedString(body.freight_term) || null;
+    if (body.round_off_amount !== undefined) {
+      const roundOffAmount = parseNullableNumber(body.round_off_amount);
+      if (roundOffAmount === null) return salesErrorResponse(req, ctx, "SO_ROUND_OFF_INVALID", 400, "Round Off must be a valid number.");
+      headerUpdate.round_off_amount = roundOffAmount;
+    }
     const { error: headerError } = await serviceRoleClient
       .schema("erp_procurement").from("sales_order").update(headerUpdate).eq("id", soId);
     if (headerError) return salesErrorResponse(req, ctx, "SO_EDIT_HEADER_UPDATE_FAILED", 500, "Unable to update SO header.");

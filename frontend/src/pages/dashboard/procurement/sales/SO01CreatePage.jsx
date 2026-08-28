@@ -232,6 +232,7 @@ export default function SO01CreatePage() {
   const [shipToGstNumber, setShipToGstNumber] = useState("");
   const [paymentTermId, setPaymentTermId] = useState("");
   const [freightTerm, setFreightTerm] = useState("FOR");
+  const [roundOffAmount, setRoundOffAmount] = useState("0");
   const [parentCompanies, setParentCompanies] = useState([]);
   const [depotCodes, setDepotCodes] = useState([]);
   const [ac06Months, setAc06Months] = useState([]);
@@ -365,7 +366,12 @@ export default function SO01CreatePage() {
   function materialOptionsFor(materialType) {
     return materials
       .filter((entry) => String(entry.material_type || "").toUpperCase() === materialType)
-      .map((entry) => ({ value: entry.id, label: `${entry.pace_code || ""} ${entry.material_name || ""}`.trim() }));
+      .map((entry) => ({
+        value: entry.id,
+        label: [entry.pace_code, entry.external_code, entry.document_name || entry.material_name]
+          .filter(Boolean)
+          .join(" | "),
+      }));
   }
 
   function handleMaterialSelect(key, materialId) {
@@ -459,13 +465,13 @@ export default function SO01CreatePage() {
           ) : null}
         </div>
       ) },
-      // §133.8-D — Document Name shown as its own read-only column (was only
-      // ever embedded inside the SKU combobox's label before). MTO/HPS/MTS
-      // read the resolved material's own name; a manual SKU line shows the
+      // §133.8-D — Document Name is distinct from External Code. A manual SKU line shows the
       // typed name here too, since that IS the document name until the SKU
       // gets added to Material Master.
       { key: "document_name", label: "Document Name", width: "200px", render: (line) => (
-        line.__manualSku ? (line.manual_sku_name.trim() || "—") : (materialMap.get(line.material_id)?.material_name || "—")
+        line.__manualSku
+          ? (line.manual_sku_name.trim() || "—")
+          : (materialMap.get(line.material_id)?.document_name || materialMap.get(line.material_id)?.material_name || "—")
       ) },
       { key: "hsn", label: "HSN Code", width: "100px", render: (line) => textInput(line.hsn_code, (value) => updateLine(line.__key, { hsn_code: value })) },
       { key: "pack_uom", label: "Pack UoM", width: "80px", render: (line) => (
@@ -502,7 +508,7 @@ export default function SO01CreatePage() {
 
   // §133.8-I — Page 2 footer totals: Total Nett Value, GST Breakup (only
   // non-zero components shown, matches intra-state vs inter-state), Round
-  // Off (with sign), Sales Order Value (headline), Amount in Words
+  // Off (user-entered, with sign), Sales Order Value (headline), Amount in Words
   // (display-only, never stored — §133.8-J's persistence principle).
   const linePreviews = useMemo(() => lines.map((line) => computeLinePreview(line, gstTypePreview)), [lines, gstTypePreview]);
   const netTotal = linePreviews.reduce((sum, preview) => sum + preview.taxableValue, 0);
@@ -511,8 +517,8 @@ export default function SO01CreatePage() {
   const totalIgst = linePreviews.reduce((sum, preview) => sum + (preview.igstAmount || 0), 0);
   const totalGst = totalCgst + totalSgst + totalIgst;
   const preRoundValue = netTotal + totalGst;
-  const soValue = Math.round(preRoundValue);
-  const roundOff = soValue - preRoundValue;
+  const roundOff = toNumber(roundOffAmount);
+  const soValue = preRoundValue + roundOff;
 
   function buildBillToShipToPayload() {
     const payload = {};
@@ -561,6 +567,7 @@ export default function SO01CreatePage() {
         ibn_required: dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED" ? ibnRequiredManual : undefined,
         payment_term_id: paymentTermId || null,
         freight_term: freightTerm || null,
+        round_off_amount: roundOff,
         ...buildBillToShipToPayload(),
         lines: lines.map((line) => ({
           line_material_type: line.line_material_type,
@@ -762,6 +769,11 @@ export default function SO01CreatePage() {
 
           {materialTypes.map((materialType) => (
             <ErpSectionCard key={materialType} eyebrow="Item Line" title={materialType}>
+              <div className="mb-2 flex justify-end">
+                <button type="button" onClick={() => addLine(materialType)} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-sky-950">
+                  Add {materialType} Row
+                </button>
+              </div>
               <ErpDenseGrid
                 columns={columnsFor(materialType)}
                 rows={lines.filter((line) => line.line_material_type === materialType)}
@@ -769,9 +781,6 @@ export default function SO01CreatePage() {
                 cellNavigate
                 emptyMessage={`No ${materialType} lines yet.`}
               />
-              <button type="button" onClick={() => addLine(materialType)} className="mt-2 border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-sky-950">
-                Add {materialType} Row
-              </button>
             </ErpSectionCard>
           ))}
 
@@ -782,7 +791,7 @@ export default function SO01CreatePage() {
               {totalSgst > 0 ? <div className="flex justify-between"><span className="text-slate-500">SGST</span><span className="font-mono">{totalSgst.toFixed(2)}</span></div> : null}
               {totalIgst > 0 ? <div className="flex justify-between"><span className="text-slate-500">IGST</span><span className="font-mono">{totalIgst.toFixed(2)}</span></div> : null}
               {gstTypePreview === null && lines.length > 0 ? <div className="text-xs text-amber-700">GST split unresolved — complete Bill-To/Ship-To on Page 2 to preview CGST/SGST vs IGST.</div> : null}
-              <div className="flex justify-between"><span className="text-slate-500">Round Off</span><span className="font-mono">{roundOff >= 0 ? "+" : "-"}{Math.abs(roundOff).toFixed(2)}</span></div>
+              <label className="flex items-center justify-between gap-3"><span className="text-slate-500">Round Off</span>{numberInput(roundOffAmount, setRoundOffAmount, { step: "0.01", className: "h-8 w-28 border border-slate-300 bg-[#fffef7] px-2 text-right font-mono text-sm text-slate-900 outline-none focus:border-sky-500" })}</label>
               <div className="mt-1 flex justify-between border-t border-slate-300 pt-1 text-base font-bold"><span>Sales Order Value</span><span className="font-mono">{soValue.toFixed(2)}</span></div>
               <div className="mt-1 text-xs italic text-slate-500">{amountToWordsIndian(soValue)}</div>
             </div>

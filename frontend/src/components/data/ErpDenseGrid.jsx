@@ -31,6 +31,11 @@ function normalizeCellAlign(align) {
   return "text-left";
 }
 
+function isInteractiveTarget(target) {
+  return target instanceof Element
+    && Boolean(target.closest("input, select, textarea, button, a, [contenteditable='true'], [role='combobox']"));
+}
+
 // A row's own bg-* override (from getRowProps, e.g. a Total row's amber
 // fill, or a variance/discrepancy highlight) and this component's default
 // `bg-white` have identical CSS specificity (both plain single-class
@@ -263,6 +268,9 @@ export default function ErpDenseGrid({
         >
           {columns.map((column, colIndex) => {
             const cellKeyboardHandler = (event) => {
+              // Inputs and comboboxes own their keyboard interaction. Letting the
+              // cell's Excel navigation intercept their keys steals focus/search.
+              if (event.target !== event.currentTarget) return;
               const isCopyShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c";
               if (rangeSelect && isCopyShortcut) {
                 event.preventDefault();
@@ -330,6 +338,7 @@ export default function ErpDenseGrid({
                   setSelection((current) => (current ? { ...current, activeRow: index, activeCol: colIndex } : current));
                 } : undefined}
                 onClick={!rangeSelect ? (event) => {
+                  if (isInteractiveTarget(event.target)) return;
                   focusCell(index, colIndex);
                   externalRowProps.onClick?.(event);
                 } : undefined}
