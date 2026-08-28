@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -27,7 +28,7 @@ import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcure
 import { listFgParentCompanies, listFgDepotCodes } from "../../om/omApi.js";
 import { listAc06ApprovedMonths } from "../../production/prodApi.js";
 import { amountToWordsIndian } from "../../../../utils/numberToWordsIndian.js";
-import { createSalesOrderUnified } from "../procurementApi.js";
+import { createSalesOrderUnified, listSalesOrderFgSkuOptions } from "../procurementApi.js";
 
 // §133.7 — 5 fixed dispatch types.
 const DISPATCH_TYPE_OPTIONS = [
@@ -246,6 +247,18 @@ export default function SO01CreatePage() {
   const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" });
   const materials = useMemo(() => materialQuery.materials ?? [], [materialQuery.materials]);
   const materialMap = useMemo(() => new Map(materials.map((entry) => [entry.id, entry])), [materials]);
+  const fgSkuQuery = useQuery({
+    queryKey: ["so01-fg-sku-options", companyId],
+    queryFn: () => listSalesOrderFgSkuOptions({ company_id: companyId }),
+    enabled: Boolean(companyId && materialTypes.includes("FG")),
+    staleTime: 60_000,
+  });
+  const fgSkusByType = useMemo(() => Object.fromEntries(
+    FG_TYPE_OPTIONS.map(({ value: fgType }) => [fgType, (fgSkuQuery.data ?? []).filter((entry) => entry.fg_type === fgType)]),
+  ), [fgSkuQuery.data]);
+  const fgSkuMap = useMemo(() => new Map(
+    Object.values(fgSkusByType).flat().map((entry) => [entry.id, entry]),
+  ), [fgSkusByType]);
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const paymentTermOptions = useMemo(
     () => (paymentTermQuery.paymentTerms ?? []).map((entry) => ({ value: entry.id, label: `${entry.code || entry.name} | ${entry.name}` })),
@@ -363,7 +376,15 @@ export default function SO01CreatePage() {
     );
   }
 
-  function materialOptionsFor(materialType) {
+  function materialOptionsFor(materialType, fgType = "") {
+    if (materialType === "FG") {
+      return (fgSkusByType[fgType] ?? []).map((entry) => ({
+        value: entry.id,
+        label: [entry.pace_code, entry.external_code, entry.document_name || entry.material_name]
+          .filter(Boolean)
+          .join(" | "),
+      }));
+    }
     return materials
       .filter((entry) => String(entry.material_type || "").toUpperCase() === materialType)
       .map((entry) => ({
@@ -375,12 +396,15 @@ export default function SO01CreatePage() {
   }
 
   function handleMaterialSelect(key, materialId) {
-    const material = materialMap.get(materialId);
+    const material = fgSkuMap.get(materialId) ?? materialMap.get(materialId);
     updateLine(key, {
       material_id: materialId,
       uom_code: material?.base_uom_code || "",
       gst_rate: material?.gst_rate != null ? String(material.gst_rate) : "",
       hsn_code: material?.hsn_code || "",
+      pack_uom_code: material?.pack_uom_code || "",
+      per_pack_qty: material?.per_pack_qty != null ? String(material.per_pack_qty) : "",
+      __perPackVariable: Boolean(material?.variable_conversion),
     });
   }
 
@@ -440,7 +464,7 @@ export default function SO01CreatePage() {
     // FG — mode depends on fg_type (MTEST vs MTO/HPS/MTS), §133.8-E.
     return [
       { key: "fg_type", label: "FG Type", width: "90px", render: (line) => (
-        <select value={line.fg_type || ""} onChange={(event) => updateLine(line.__key, { fg_type: event.target.value, rate_basis: event.target.value === "MTEST" ? "FIXED" : "BASE_UOM" })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
+        <select value={line.fg_type || ""} onChange={(event) => updateLine(line.__key, { fg_type: event.target.value, material_id: "", pack_uom_code: "", per_pack_qty: "", __perPackVariable: false, rate_basis: event.target.value === "MTEST" ? "FIXED" : "BASE_UOM" })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
           <option value="">Select</option>
           {FG_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
@@ -450,7 +474,7 @@ export default function SO01CreatePage() {
           {line.__manualSku ? (
             textInput(line.manual_sku_name, (value) => updateLine(line.__key, { manual_sku_name: value }), { placeholder: "Type SKU name" })
           ) : (
-            <ErpComboboxField value={line.material_id} onChange={(value) => handleMaterialSelect(line.__key, value)} options={materialOptionsFor("FG")} blankLabel="Select SKU" />
+            <ErpComboboxField value={line.material_id} onChange={(value) => handleMaterialSelect(line.__key, value)} options={materialOptionsFor("FG", line.fg_type)} blankLabel={line.fg_type ? "Select SKU" : "Select FG Type first"} />
           )}
           <button
             type="button"
@@ -471,24 +495,25 @@ export default function SO01CreatePage() {
       { key: "document_name", label: "Document Name", width: "200px", render: (line) => (
         line.__manualSku
           ? (line.manual_sku_name.trim() || "—")
-          : (materialMap.get(line.material_id)?.document_name || materialMap.get(line.material_id)?.material_name || "—")
+          : ((fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id))?.document_name || (fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id))?.material_name || "—")
       ) },
       { key: "hsn", label: "HSN Code", width: "100px", render: (line) => textInput(line.hsn_code, (value) => updateLine(line.__key, { hsn_code: value })) },
       { key: "pack_uom", label: "Pack UoM", width: "80px", render: (line) => (
-        line.fg_type === "MTEST"
-          ? <input value="BBL" readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
-          : textInput(line.pack_uom_code, (value) => updateLine(line.__key, { pack_uom_code: value }))
+        <input value={line.pack_uom_code || (line.fg_type === "MTEST" ? "BBL" : "")} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
       ) },
       { key: "pack_qty", label: "Pack Qty", width: "80px", render: (line) => (
         line.fg_type === "MTEST"
           ? <input value={line.per_pack_qty ? (toNumber(line.base_qty) / toNumber(line.per_pack_qty)).toFixed(4) : ""} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
           : numberInput(line.pack_qty, (value) => updateLine(line.__key, { pack_qty: value }))
       ) },
-      { key: "per_pack", label: "Per Pack (KG)", width: "100px", render: (line) => numberInput(line.per_pack_qty, (value) => updateLine(line.__key, { per_pack_qty: value })) },
+      { key: "per_pack", label: "Per Pack (KG)", width: "100px", render: (line) => numberInput(line.per_pack_qty, (value) => updateLine(line.__key, { per_pack_qty: value }), { readOnly: line.fg_type === "MTEST" || !line.__perPackVariable }) },
       { key: "base_qty", label: "Base Qty", width: "100px", render: (line) => (
         line.fg_type === "MTEST"
           ? numberInput(line.base_qty, (value) => updateLine(line.__key, { base_qty: value }))
           : <input value={(toNumber(line.pack_qty) * toNumber(line.per_pack_qty)).toFixed(4)} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
+      ) },
+      { key: "base_uom", label: "Base UoM", width: "80px", render: (line) => (
+        <input value={line.uom_code || "KG"} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
       ) },
       { key: "rate", label: "Rate", width: "90px", render: (line) => numberInput(line.rate, (value) => updateLine(line.__key, { rate: value })) },
       { key: "rate_basis", label: "Rate Basis / Type", width: "100px", render: (line) => (

@@ -2203,6 +2203,119 @@ async function prepareUnifiedSoLine(
   };
 }
 
+// SO01 cannot use the generic Material Master picker for FG rows: SKU eligibility
+// is defined by the approved stroke's PO type, while the pack UOM/conversion live
+// in production masters. Keep this read model server-side so the UI never guesses.
+export async function listSalesOrderFgSkuOptionsHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const companyId = await getCompanyScope(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
+    if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
+
+    const { data: companyMaps, error: companyMapError } = await serviceRoleClient
+      .schema("erp_master").from("material_company_ext")
+      .select("material_id, company_id").eq("status", "ACTIVE");
+    if (companyMapError) throw new Error("SO_FG_SKU_COMPANY_LOOKUP_FAILED");
+    const mapRows = (companyMaps ?? []) as JsonRecord[];
+    const materialIds = [...new Set(mapRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+    if (materialIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const { data: materials, error: materialsError } = await serviceRoleClient
+      .schema("erp_master").from("material_master")
+      .select("id, pace_code, external_code, material_name, document_name, hsn_code, base_uom_code, pack_code")
+      .in("id", materialIds).eq("material_type", "FG").eq("status", "ACTIVE");
+    if (materialsError) throw new Error("SO_FG_SKU_LOOKUP_FAILED");
+    const skuRows = (materials ?? []) as JsonRecord[];
+    const packCodes = [...new Set(skuRows.map((row) => toTrimmedString(row.pack_code)).filter(Boolean))];
+    if (packCodes.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const { data: packs, error: packsError } = await serviceRoleClient
+      .schema("erp_production").from("pack_code_master")
+      .select("id, pack_code, pack_type, outer_uom_code").in("pack_code", packCodes).eq("active", true);
+    if (packsError) throw new Error("SO_FG_PACK_CODE_LOOKUP_FAILED");
+    const packByCode = new Map(((packs ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.pack_code), row]));
+
+    const { data: configs, error: configsError } = await serviceRoleClient
+      .schema("erp_production").from("prodshade_pack_config")
+      .select("material_id, pack_code_id, variant, pack_code:pack_code_master!pack_code_id(pack_code)")
+      .eq("active", true);
+    if (configsError) throw new Error("SO_FG_PRODSHADE_LOOKUP_FAILED");
+    const configRows = (configs ?? []) as JsonRecord[];
+    const prodshadeIds = [...new Set(configRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+    const { data: prodshades, error: prodshadesError } = prodshadeIds.length > 0
+      ? await serviceRoleClient.schema("erp_master").from("material_master")
+        .select("id, external_code").in("id", prodshadeIds)
+      : { data: [], error: null };
+    if (prodshadesError) throw new Error("SO_FG_PRODSHADE_LOOKUP_FAILED");
+    const prodshadeById = new Map(((prodshades ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const prodshadeBySkuKey = new Map<string, string>();
+    for (const config of configRows) {
+      const pack = (config.pack_code ?? {}) as JsonRecord;
+      const prodshade = prodshadeById.get(toTrimmedString(config.material_id));
+      const key = toUpperTrimmedString(`${toTrimmedString(prodshade?.external_code)}${toTrimmedString(pack.pack_code)}${toTrimmedString(config.variant)}`);
+      if (key) prodshadeBySkuKey.set(key, toTrimmedString(config.material_id));
+    }
+
+    const { data: strokes, error: strokesError } = await serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("prodshade_material_id, po_type").eq("company_id", companyId).eq("status", "APPROVED")
+      .in("po_type", [...FG_TYPES]);
+    if (strokesError) throw new Error("SO_FG_STROKE_LOOKUP_FAILED");
+    const validStrokeKeys = new Set(((strokes ?? []) as JsonRecord[]).map((row) =>
+      `${toTrimmedString(row.prodshade_material_id)}|${toUpperTrimmedString(row.po_type)}`,
+    ));
+
+    const { data: conversions, error: conversionsError } = await serviceRoleClient
+      .schema("erp_master").from("material_uom_conversion")
+      .select("material_id, from_uom_code, conversion_factor, variable_conversion")
+      .in("material_id", skuRows.map((row) => toTrimmedString(row.id)))
+      .eq("to_uom_code", "KG").eq("active", true);
+    if (conversionsError) throw new Error("SO_FG_CONVERSION_LOOKUP_FAILED");
+    const conversionsBySku = new Map<string, JsonRecord[]>();
+    for (const conversion of (conversions ?? []) as JsonRecord[]) {
+      const id = toTrimmedString(conversion.material_id);
+      conversionsBySku.set(id, [...(conversionsBySku.get(id) ?? []), conversion]);
+    }
+
+    const ownMaterialIds = new Set(mapRows.filter((row) => toTrimmedString(row.company_id) === companyId).map((row) => toTrimmedString(row.material_id)));
+    const output: JsonRecord[] = [];
+    for (const sku of skuRows) {
+      const pack = packByCode.get(toTrimmedString(sku.pack_code));
+      if (!pack) continue;
+      const isMtest = toUpperTrimmedString(pack.pack_type) === "MTEST";
+      const skuKey = toUpperTrimmedString(sku.external_code ?? sku.material_name);
+      const prodshadeId = prodshadeBySkuKey.get(skuKey) ?? "";
+      const requestedTypes = isMtest ? ["MTEST"] : [...FG_TYPES].filter((type) => type !== "MTEST");
+      for (const fgType of requestedTypes) {
+        if (!isMtest && !validStrokeKeys.has(`${prodshadeId}|${fgType}`)) continue;
+        const packUomCode = fgType === "MTEST" ? "BBL" : toTrimmedString(pack.outer_uom_code);
+        const candidates = conversionsBySku.get(toTrimmedString(sku.id)) ?? [];
+        const conversion = candidates.find((row) => toUpperTrimmedString(row.from_uom_code) === toUpperTrimmedString(packUomCode))
+          ?? (fgType === "MTEST" ? candidates.find((row) => toUpperTrimmedString(row.from_uom_code) === "PKT") : undefined)
+          ?? candidates[0];
+        output.push({
+          ...sku,
+          fg_type: fgType,
+          pack_uom_code: packUomCode,
+          base_uom_code: "KG",
+          per_pack_qty: conversion?.conversion_factor ?? null,
+          variable_conversion: Boolean(conversion?.variable_conversion),
+          own_company_mapping: ownMaterialIds.has(toTrimmedString(sku.id)),
+        });
+      }
+    }
+    output.sort((left, right) => Number(right.own_company_mapping) - Number(left.own_company_mapping)
+      || toTrimmedString(left.pace_code).localeCompare(toTrimmedString(right.pace_code)));
+    return okResponse({ data: output }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "SO_FG_SKU_OPTIONS_FAILED";
+    return salesErrorResponse(req, ctx, code, 500, "FG SKU options could not be resolved.");
+  }
+}
+
 export async function createSalesOrderUnifiedHandler(
   req: Request,
   ctx: ProcurementHandlerContext,

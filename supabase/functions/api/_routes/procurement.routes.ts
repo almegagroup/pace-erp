@@ -309,6 +309,7 @@ import {
   cancelSOHandler,
   createSalesInvoiceHandler,
   createSalesOrderUnifiedHandler,
+  listSalesOrderFgSkuOptionsHandler,
   createSOHandler,
   getSalesInvoiceHandler,
   getSOHandler,
@@ -652,6 +653,8 @@ export async function dispatchProcurementRoutes(
       return await listSOsHandler(req, ctx);
     case "POST:/api/procurement/sales-orders-v2":
       return await createSalesOrderUnifiedHandler(req, ctx);
+    case "GET:/api/procurement/sales-orders/fg-sku-options":
+      return await listSalesOrderFgSkuOptionsHandler(req, ctx);
 
     // ── SO Map (SO01 Tab 2) — feasibility §133.9 ────────────────────────────
     case "GET:/api/procurement/so-map/so-list":

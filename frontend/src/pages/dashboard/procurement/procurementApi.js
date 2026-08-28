@@ -91,6 +91,12 @@ export function listMaterialUomConversionsForProcurement(materialId) {
   return fetchProcurement("GET", "/api/procurement/materials/uom-conversion", undefined, { material_id: materialId });
 }
 
+// SO01 FG rows must use the production-derived SKU eligibility and conversion
+// data; the generic material picker has neither of those relationships.
+export function listSalesOrderFgSkuOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-orders/fg-sku-options", undefined, params);
+}
+
 export function listReferenceDateTypes(params) {
   return fetchProcurement("GET", "/api/procurement/reference-date-types", undefined, params);
 }
