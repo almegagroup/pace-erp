@@ -24,9 +24,24 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listSalesOrders } from "../procurementApi.js";
 
 const LIMIT = 50;
+
+// §133.16-A UI standard — Export Excel, same shape as the current grid
+// columns. Server-side paginated (§113.10), so this exports the currently
+// loaded page only — same limitation as every other paginated list report
+// in the codebase (e.g. ReservationListPage), not a new one.
+const SO_EXPORT_COLUMNS = [
+  { key: "so_number", label: "SO Number" },
+  { key: "customer_display", label: "Customer" },
+  { key: "customer_po_number", label: "Customer PO" },
+  { key: "so_date", label: "SO Date" },
+  { key: "status", label: "Status" },
+  { key: "company_display", label: "Company" },
+  { key: "total_value", label: "Total Value" },
+];
 
 function soStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -89,9 +104,23 @@ export default function SOListPage() {
     navigate("/dashboard/procurement/sales-orders/create");
   }
 
+  function openSoMap() {
+    openScreen(OPERATION_SCREENS.PROC_SO_MAP.screen_code);
+    navigate("/dashboard/procurement/sales-orders/map");
+  }
+
   function openSODetail(row) {
     openScreen(OPERATION_SCREENS.PROC_SO_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/sales-orders/${encodeURIComponent(row.id)}`);
+  }
+
+  function handleExport() {
+    if (rows.length === 0) return;
+    downloadCsvFile({
+      fileName: `sales_orders_${effectiveCompanyId || "all"}_page${page}.csv`,
+      columns: SO_EXPORT_COLUMNS,
+      rows: rows.map((row) => ({ ...row, total_value: formatMoney(row.total_invoice_value ?? row.total_value) })),
+    });
   }
 
   return (
@@ -101,6 +130,8 @@ export default function SOListPage() {
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => soQuery.refetch() },
         { key: "create", label: "Create SO", tone: "primary", onClick: openCreateSO },
+        { key: "so-map", label: "SO Map", tone: "neutral", onClick: openSoMap },
+        { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: rows.length === 0 },
       ]}
       notices={soQuery.error ? [{ key: "so-list-error", tone: "error", message: soQuery.error instanceof Error ? soQuery.error.message : "PROCUREMENT_SO_LIST_FAILED" }] : []}
       filterSection={{

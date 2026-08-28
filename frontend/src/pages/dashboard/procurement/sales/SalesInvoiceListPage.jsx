@@ -7,7 +7,8 @@
  *          page). Lists Delivery Orders, not directly SO/STO -- DOs not
  *          yet PGI'd (status CREATED) sort to the top as action items;
  *          DISPATCHED ones sort below by date. "PGI & INVOICE" on a
- *          pending row opens PgiInvoiceCreatePage for that DO.
+ *          pending row opens PgiInvoiceGroupsCreatePage (§133.13,
+ *          IBN-driven multi-invoice) for that DO.
  * Authority: Frontend
  */
 
@@ -23,9 +24,24 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen, openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listDeliveryOrders } from "../procurementApi.js";
 
 const LIMIT = 100;
+
+// §133.16-A UI standard.
+const DO_QUEUE_EXPORT_COLUMNS = [
+  { key: "dc_number", label: "DO Number" },
+  { key: "source_display", label: "Source" },
+  { key: "source_document_number", label: "SO / STO Number" },
+  { key: "customer_display", label: "Customer" },
+  { key: "dc_date", label: "DO Date" },
+  { key: "status", label: "Status" },
+  { key: "total_value", label: "Total Value" },
+  { key: "invoice_number", label: "Invoice Number" },
+  { key: "invoice_date", label: "Invoice Date" },
+  { key: "tally_invoice_number", label: "Tally Invoice No." },
+];
 
 function getStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -122,14 +138,26 @@ export default function SalesInvoiceListPage() {
   }
 
   function openPgiInvoice(row) {
+    // §133.13 -- routes to the new IBN-driven multi-invoice page, not the
+    // legacy single-invoice PgiInvoiceCreatePage (still on disk, additive
+    // pattern, reachable only via its own now-unlinked route).
     openScreenWithContext(OPERATION_SCREENS.PROC_INV_PGI_CREATE.screen_code, { dcId: row.id, refreshOnReturn: true });
-    navigate("/dashboard/procurement/sales-invoices/pgi/create");
+    navigate("/dashboard/procurement/sales-invoices/pgi-groups");
   }
 
   function openInvoiceDetail(row) {
     if (!row.invoice_id) return;
     openScreenWithContext(OPERATION_SCREENS.PROC_INV_DETAIL.screen_code, { id: row.invoice_id, refreshOnReturn: true });
     navigate(`/dashboard/procurement/sales-invoices/${encodeURIComponent(row.invoice_id)}`);
+  }
+
+  function handleExport() {
+    if (pagedRows.length === 0) return;
+    downloadCsvFile({
+      fileName: `do_pgi_queue_${effectiveCompanyId || "all"}_page${page}.csv`,
+      columns: DO_QUEUE_EXPORT_COLUMNS,
+      rows: pagedRows,
+    });
   }
 
   return (
@@ -139,6 +167,7 @@ export default function SalesInvoiceListPage() {
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setReloadTick((tick) => tick + 1) },
         { key: "do-list", label: "All DOs", tone: "neutral", onClick: () => { openScreen(OPERATION_SCREENS.PROC_DO_LIST.screen_code); navigate("/dashboard/procurement/delivery-orders"); } },
+        { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: pagedRows.length === 0 },
       ]}
       notices={error ? [{ key: "do-queue-error", tone: "error", message: error }] : []}
       filterSection={{
@@ -163,6 +192,7 @@ export default function SalesInvoiceListPage() {
           <div className="grid gap-3">
             <ErpPaginationStrip page={page} setPage={setPage} totalPages={totalPages} startIndex={startIndex} endIndex={endIndex} totalItems={pageTotal} />
             <ErpDenseGrid
+              cellNavigate
               columns={[
                 { key: "dc_number", label: "DO Number", width: "140px" },
                 { key: "source_display", label: "Source", width: "100px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },
