@@ -5335,3 +5335,325 @@ existing "Identification" section, right above Invoice number/date.
 
 **Verified:** `deno check` -- 3 pre-existing errors, unchanged (git-stash technique). `eslint`,
 `jsx-no-undef-guard.mjs`, `company-scope-guard.mjs` all clean.
+
+---
+
+### 2026-08-28 — SO01 (Create SO + SO Map) full implementation, Claude direct-implemented
+
+Locked module sequence step 3 (RM Sale Module Revisit) continues: business owner directed Claude
+to implement §133.7-§133.11 directly (not Codex), one page fully finished before moving on, with
+the full 16-bug-pattern checklist + CLAUDE.md §8 rules + this log + PROD-ACL-Access-Decisions.md
+applied at every step, not just at the start. Full detail: feasibility doc §133.17.
+
+**Schema:** 3 migrations (`20260828100000_so01_unified_dispatch_redesign.sql`,
+`20260828110000_so_map_allocation.sql`, `20260828120000_so01_manual_fg_sku.sql`), all applied to
+dev, reconciled, `migration-integrity-check.mjs` confirms `in_sync=true` after each (final:
+479 migrations, md5 `f805264f...`). The third migration was a real gap found mid-build, not
+foreseen at design time: a manually-typed FG SKU (§133.9-G) cannot be saved against a NOT NULL
+material FK with no matching row, so `sales_order_line.material_id` was made nullable + a new
+`manual_sku_name` column added, CHECK-enforced so one of the two is always set.
+
+**Backend:** `createSalesOrderUnifiedHandler` (5-branch Bill-To/Ship-To, GST split, HSN
+write-back, manual-SKU support), `updateSalesOrderUnifiedHandler`/`cancelSalesOrderUnifiedHandler`/
+`closeSalesOrderUnifiedHandler` (§133.10 cascading rules), `so_map.handlers.ts` (7 handlers, full
+§133.9 validation), new `listAc06ApprovedMonthsHandler` for the Costing Rate Month dropdown.
+
+**Real bug caught by CI, not by review:** `company-scope-write-acl-guard.mjs` failed after adding
+the 3 new SO write handlers -- each resolved the SO's own (non-session) `company_id` and mutated
+with only `assertCompanyScope()` (membership), no secondary EDIT-tier ACL check. Fixed by
+generalizing `canMaintainSo01Create()` to take an `actionCode` param, called with `"EDIT"` in all
+three. No new ACL grant needed -- `CAP_PROC_ACCOUNTS` already had EDIT on `PROC_SO_CREATE` from
+the earlier capability-leak fix (§133.11). All 9 relevant guards EXIT=0 confirmed after every
+change in the session, not batched at the end.
+
+**Frontend:** `SO01CreatePage.jsx` (AC06 Costing Rate Month dropdown, MTEST auto-month, MTS
+deferred placeholder, manual-FG-SKU toggle + red warning), `SODetailPage.jsx` (Edit-mode header +
+line cells, unified Cancel replacing the legacy non-cascading one, new Close action), new
+`SO01Page.jsx` (the literal 3-tab shell -- Create SO / SO Map / Create FG STO -- reusing the
+existing `create`/`map` routes with a different `initialTab`, no new route/ACL/menu needed).
+
+**Verified throughout (git-stash before/after at each step, not just at the end):** `deno check`
+held at 2 pre-existing errors in `sales_order.handlers.ts`, 5 in `production.routes.ts`'s import
+graph -- zero new errors at any point. `eslint` zero errors/warnings on every touched frontend
+file. All 9 guards (`route-acl-registry-guard`, `company-scope-write-acl-guard`,
+`company-scope-guard`, `resource-code-domain-guard`, `hardcoded-role-check-guard`,
+`frontend-payload-guard`, `jsx-no-undef-guard`, `stock-posting-guard`, `wrong-company-source-guard`)
+EXIT=0.
+
+**Not yet done:** live click-through in the deployed app (no dev login in this environment).
+DO/Invoice/Dispatch-Reco/Revoke/catch-up-backfill (§133.12-§133.16) remain design-locked,
+implementation not started -- next per the locked step-3 sequence.
+
+---
+
+### 2026-08-28, later — DO (§133.12) backend Create/Cancel/Get, Claude direct-implemented
+
+Continuing the same session/directive as SO01 above. Two architecture forks left implicit in
+§133.12/§133.13 were resolved with the business owner before writing any code (feasibility
+§133.12-addendum): Independent Party DO lines read straight from `sales_order_line` (no SO-Map
+allocation involved), and non-IBN dispatch types group as one Invoice per SO (confirmed moot in
+practice -- these dispatch types never produce a multi-FO/address split to begin with).
+
+**Real bug fix caught first, before any DO code:** re-reading §133.9 while starting DO surfaced
+that `plan_feed.handlers.ts`'s `upsertFoAllocation()` was missing a check flagged as mandatory
+during SO Map's own build (a prior session note that got missed) -- unmapping an FO's Packing-PO
+link never checked how much of that FO was already SO-Map-consumed. Fixed via a new
+`getFoSoMapConsumedQty()` helper, applied to both the delete and reduce paths.
+
+**Schema:** `20260828130000_do_unified_multi_source.sql` -- new `delivery_challan_source` (which
+SO/STO documents feed one multi-source DO), `delivery_challan_line` gains `so_map_allocation_id`/
+`batch_number`/`expiry_date`/`packing_order_id`, header gains vehicle detail (`lr_date`/
+`gross_weight`/`net_weight`/`driver_number`/`driver_contact_number`), `dc_type` CHECK widened to
+add `MIXED`. Applied to dev, reconciled, `migration-integrity-check.mjs` confirms `in_sync=true`
+(480 migrations).
+
+**Backend:** new additive `do_unified.handlers.ts` (the old single-source `delivery_order.
+handlers.ts` untouched, still serves historical DOs) -- Add-SO/Add-STO drawer listing (branches by
+dispatch_type), storage-location+availability lookup, and the create handler (re-validates
+remaining balance + stock availability server-side regardless of what the client's preview
+showed). `cancelDeliveryOrderHandler`'s CSN-undo logic fixed to resolve each line's own STO via
+`sto_line_id` instead of the DO header's `sto_id` (which a multi-source DO never populates) -- one
+shared handler now correctly serves both old and new-style DOs. `company-scope-write-acl-guard.mjs`
+caught the new create handler missing a secondary WRITE-tier ACL check (same shape as SO01's own
+catch); fixed via `canMaintainDoCreate()`, same template as `canMaintainSo01Create`.
+
+**Verified:** all 9 CI guards EXIT=0 after every change (not batched at the end), `deno check`
+zero new errors at each step (git-stash before/after comparison each time) across `do_unified.
+handlers.ts` (new, 5 pre-existing-class `.gt()`/`.range()` typing-noise errors from its own import
+graph, none from its own logic), `delivery_order.handlers.ts` (4 baseline, unchanged), `plan_feed.
+handlers.ts` (1 baseline, unchanged), `procurement.routes.ts` (125->126, the +1 being exactly the
+same known typing-noise class, confirmed by location).
+
+**Update, same day -- Edit handler + full 3-page frontend wizard done.** `updateDeliveryOrderUnifiedHandler`
+added via a shared `prepareAndValidateDoLines()` extracted from Create (tears down old lines/
+reservations first, then re-validates against a clean slate). Second real correctness bug found
+first: `reservation_document` had no link back to its owning `delivery_challan_line` -- harmless
+under the old exclusive-per-line-lock model, but §133.12's multi-source model lets several DOs
+legitimately hold separate reservations on the same source line at once, so Cancel's old "release
+every open reservation for this line" would wrongly cancel another DO's hold. Fixed via migration
+`20260828140000_reservation_dc_line_link.sql` (new `dc_line_id` column, both create paths set it,
+Cancel releases by it first with a legacy-NULL-row fallback). New `DO01CreatePage.jsx` (3-page
+wizard: Add SO/Add STO repeatable -> RM/PM/INT auto-merge + SFG/FG never-merge + multi-location
+split -> vehicle/transporter header). Merge+location-split's FIFO source-allocation rule was
+confirmed with the business owner before coding, not assumed. `DODetailPage.jsx` rewritten to the
+unified GET (works for old and new DOs alike) with a `sources[]` table replacing the old
+single-source fields. All 9 guards + `deno check`/`eslint` clean at every step, migration
+integrity `in_sync=true` (481 migrations).
+
+**Not yet done:** an "Edit via wizard" UI (backend works, no re-hydration flow into the wizard
+yet). §113.13 (Invoice/PGI IBN-grouping, a full rewrite of the existing PGI mechanism)/§133.14
+(Dispatch Reco)/§133.15 (Revoke) remain fully unbuilt.
+
+---
+
+### 2026-08-28, later still — SO01/SO03 gap-closure round, triggered by a user audit challenge
+
+User asked for an SO01/SO03 design-vs-actual alignment table. The honest table exposed several
+"100%" claims that weren't, and the user directly challenged the overall "complete" claim. A
+broader self-audit (not just the items originally flagged) found real bugs beyond what was first
+reported, all fixed in this same round:
+
+1. **`SO01MapPage.jsx` was completely non-functional** -- all 4 of its API calls hit bug pattern
+   #15 (double-unwrap): the backend handlers already return bare arrays/objects, but the frontend
+   read `.data` off them again, always `undefined`. Every list on that page had been empty since
+   it was built. Also fixed the `useEffect`+`setState` violation (CLAUDE.md §8A) in the same pass
+   -- rewritten to `useQuery`, hotkeys added.
+2. DO01's item-picker drawer: added `ErpDenseGrid`+`cellNavigate`, manual Batch/Expiry entry for
+   RM/PM/INT, Num Packs entry for FG, and a document-number text filter.
+3. SO01 Page 2 footer: was a bare Net Total; rebuilt to CGST/SGST/IGST per-line columns (live
+   preview mirroring `deriveSalesInvoiceGstType`) + GST Breakup + Round Off + SO Value + Amount in
+   Words (new `numberToWordsIndian.js`, Indian Lakh/Crore grouping).
+4. SO Edit add/remove lines: `prepareUnifiedSoLine()` extracted from Create's line-loop (shared,
+   avoids drift); `updateSalesOrderUnifiedHandler` now actually deletes omitted-and-unmapped lines
+   and inserts id-less new lines; `SODetailPage.jsx` gained Remove-line toggles and an Add-Line
+   section.
+5. DO Edit UI: `DO01CreatePage.jsx` now supports `delivery-orders/:id/edit`, reopening the same
+   wizard pre-seeded from the DO's own saved lines (each line becomes its own "pick", Page 2's
+   existing merge logic naturally reconstructs the original grouping/location-splits).
+
+All 9 guards + `deno check`/`eslint` clean after every change, re-verified with one final sweep
+across every touched file. SO01 and SO03 are now genuinely complete against their locked designs
+-- not just re-claimed complete, verified item-by-item against the audit table.
+
+## 2026-08-28, same day, next module -- §133.13 Invoice/PGI (SO02) IBN-driven multi-invoice build
+
+With SO01/SO03 closed out, moved to the next step in the locked sequence: §133.13 (Invoice/PGI),
+which replaces §113.15's "1 DO = 1 Invoice" rule with IBN-driven splitting (one invoice per FO
+when the source SO requires IBN, one per non-FO bucket, one per SO/STO otherwise; SO and STO never
+share an invoice). Claude direct-implemented (not Codex), same session.
+
+**DB** -- migration `20260828150000_so02_ibn_invoice_grouping.sql`: new `additional_cost_category`
+master + `sales_invoice_additional_cost_line` table + 15 new `sales_invoice` columns
+(inbound_number, e_way_bill_applicable/number, freight_mode/rate/net_weight/gst_included/
+gst_treatment/gst_rate/gst_amount, additional_cost_total, round_off_amount, fo_id/fo_number/
+fo_date). `complete_pgi_invoice_action()` rewritten: CREATE branch now per-invoice-group (only the
+LAST group in a multi-invoice POST flips the DC to DISPATCHED), REVERSE branch now only resets DC
+to CREATED when no other active invoice remains against it (was unconditional -- correct under the
+old 1:1 assumption, would have wrongly un-dispatched a DO with other still-valid invoice-groups).
+Applied to dev, migration-integrity reconciled (`in_sync=true`, 482 files, md5 unchanged pattern).
+
+**Backend** -- `do_unified.handlers.ts` gained `computeInvoiceGroups()` (shared grouping engine),
+`previewInvoiceGroupsHandler` (`GET .../delivery-orders-v2/:id/invoice-groups`),
+`postPgiInvoiceGroupsHandler` (`POST .../delivery-orders-v2/:id/pgi-invoice-groups` -- loops
+groups, each its own `post_document` call per §8D, never trusts client-submitted grouping,
+requires full coverage of every server-recomputed group). New
+`additional_cost_category.handlers.ts` (list/create, dedupes by name). Both wired into
+`procurement.routes.ts` + `route-acl-registry.ts` (`PROC_INV_LIST` VIEW/WRITE).
+
+**Real bug found and fixed en route (not just new scope):** the legacy `createPgiInvoiceHandler`
+(§113.15) reads `dc.sales_order_id`/`dc.sto_id`/`dc.customer_id` -- header fields a §133.12
+multi-source DO never populates (its sources live in `delivery_challan_source` instead). PGI was
+silently broken for every DO created via the new DO01CreatePage.jsx wizard before this session.
+`computeInvoiceGroups()` instead resolves everything through each `delivery_challan_line`'s own
+`so_line_id`/`sto_line_id`/`so_map_allocation_id`, which every DO (old and new) always populates,
+and reads Bill-To/Ship-To straight from the `sales_order` row's own frozen columns (§113.16)
+rather than the DC header.
+
+**Frontend** -- new `PgiInvoiceGroupsCreatePage.jsx` (2-page: DO Review, then Invoice-Group table
++ per-row drawer with Invoice preview / Freight / Additional Cost / Round Off / live total),
+reached from `SalesInvoiceListPage.jsx`'s existing per-row "PGI & Invoice" action. Old
+`PgiInvoiceCreatePage.jsx` left on disk untouched (additive pattern, still reachable via its own
+now-unlinked route for historical single-source DOs).
+
+**Verified:** `deno check` on every touched/new file -- zero new errors (only the same pre-existing
+`.range()/.gt()/.ilike()` Supabase-client typing noise documented elsewhere in this codebase,
+confirmed by filtering the error list down to just the files this round touched). All 9 CI guards
+exit 0. `eslint` clean (one pre-existing-pattern `exhaustive-deps` warning, not an error, matches
+how `groups` derives from a query result elsewhere in the codebase too). Grouping/lookup logic
+traced against real dev DB rows end-to-end (a real CREATED DO's line -> so_line -> sales_order
+chain) -- confirmed it fails safe exactly like the old handler already did for a legacy
+pre-SO01-unified SO (`ship_to_state` NULL -> blocked with a clear error, never a silent wrong-GST
+computation).
+
+**Not yet done:** live click-through in the deployed app (no dev login in this environment) --
+dev has no SO created via the new SO01 wizard + a DO01-created DO yet to fully exercise the new
+`ship_to_state`/`ibn_required`/FO-grouping path end-to-end; that needs a real business-owner
+session or fresh test data creation.
+
+## 2026-08-28, same day, gap-closure round -- SO02 completed, SO03/§133.15 re-verified, §133.14 status found
+
+Business owner: complete SO02 fully, then whatever's left of SO03, then whatever else remains.
+Same self-audit discipline as the earlier SO01/SO03 round -- built a design-vs-code table for
+SO02 first, found 4 real gaps, fixed all 4, then re-verified SO03/Revoke rather than assuming the
+earlier "100%" claim was still accurate everywhere.
+
+**SO02 (`PgiInvoiceGroupsCreatePage.jsx`) -- 4 real gaps found and fixed:**
+1. Page 1 "DO Number দিলে" manual entry was entirely missing (page only worked via queue-context
+   entry). Added a real Page 0 with company selector + browsable/filterable CREATED-DO list.
+2. Invoice-group table was missing a DO Number column, combined Tally Number+Date into one cell
+   instead of two, and rendered only party *name* in columns literally labeled "Billing/Ship-To
+   Address" (address text was never shown).
+3. The drawer's "Invoice Preview" was a reduced 6-field subset of §133.13's own locked sample
+   tax-invoice mapping table. Expanded to the full mapping (Delivery Note, Dispatch Doc/Transporter,
+   LR No+Date, Motor Vehicle No, Destination, e-Way Bill, and a real resolved Payment Term name --
+   was a hardcoded placeholder string before).
+4. No "Save → next row" flow existed (just a bare Close button). Added shared validation
+   (`groupInputIsValid`) + a "Save & Next Row" button that advances through groups in order.
+
+Also added `cellNavigate` to all 5 grids in the page (§133.16-A), and fixed a **real backend
+display gap** found while wiring #3: `hydrateSalesInvoice()` never fetched
+`sales_invoice_additional_cost_line` rows, so posted Additional Cost lines were invisible on
+`SalesInvoiceDetailPage.jsx` even though correctly posted to stock/invoice. Fixed with a
+PostgREST FK-embed join (same pattern used ~15 other places in this codebase); detail page gained
+a new "§133.13" section (IBN/FO/e-Way Bill/Freight/Additional Cost/Round Off).
+
+**SO03/§133.15 Revoke -- re-verified, found already working, zero code changes needed.**
+`reverseSalesInvoiceHandler` (§113.15) turned out to be fully generic already -- it keys entirely
+off `sales_invoice.id` + tagged `stock_document` rows, with no dependency on the old
+single-source DC header shape. Combined with this session's earlier
+`complete_pgi_invoice_action()` REVERSE-branch fix, 4 of §133.15's 5 locked Revoke requirements
+(stock reversal, invoice status preserved, DO released for retry, mandatory reason) already work
+correctly for the new multi-invoice engine with no changes. Only point 2 (Dispatch-Reco void) is
+blocked -- same root cause as below.
+
+**§133.14 status audit -- Part A found already done, Part B correctly identified as blocked by
+the design doc's own words, not skipped.** `deriveDispatchCategory()` (RPS/SRPS/FRPS/FSRPS) was
+already built and wired during the original SO01 pass -- verified against live code. Part B-F
+(Dispatch-Reco table + 2-level ratio write) is NOT started: the locked design text itself says
+the table's actual schema is deferred to "পরের session" (a dedicated future design session) --
+building it now would mean inventing a financial-data schema unilaterally. Flagged to the
+business owner rather than built speculatively.
+
+All 9 CI guards, `eslint`, and `deno check` clean after every change in this round (verified
+incrementally, not just at the end).
+
+## 2026-08-28, same day, §133.18 pre-work -- FO<->Packing PO wiring, Plan Feed dispatch_status, SO Map FO filter
+
+Before building Dispatch-Reco, walked the actual traceability chain against real prod data
+(project `bsjpvkigpllichlknmah`) with the business owner rather than assuming the design doc's
+field list was implementable as-is. Found the chain's data model was already complete
+(`plan_feed_packing_order_allocation` exists, real data, built during §83.18-REVISED) but never
+actually read by any Sales-chain code -- a real, previously undiscovered gap, not a missing table.
+
+3 fixes, all in `do_unified.handlers.ts` / `plan_feed.handlers.ts` / `so_map.handlers.ts`:
+1. DO-line building now resolves `packing_order_id` via `plan_feed_packing_order_allocation`
+   instead of the dead `sales_order_line.packing_order_id` column (verified: 0 of 4 dev SO lines
+   had it set). `listDoAddSoOptionsHandler` now attaches `packing_po_options` per FO-linked line
+   when more than one Packing PO is available; `DO01CreatePage.jsx`'s item drawer gained a
+   Packing PO picker (business owner locked: manual choice, not FIFO -- all of an FO's Packing
+   POs can be used, even across separate DOs); `prepareAndValidateDoLines` validates the
+   submitted `packing_order_id` actually belongs to that FO and has real remaining balance
+   (external draws + same-submission usage).
+2. Plan Feed's `dispatch_status` (`plan_feed.handlers.ts`) was a hardcoded `"UNDISPATCHED"`
+   placeholder since §83.18-REVISED -- now traces the real chain (SO Map allocation -> DO line ->
+   POSTED Invoice line) now that SO/DO/Invoice actually exist. Caught a real naming bug while
+   wiring it: the backend computed `"PARTIAL"` but the frontend's `dispatchStatusTone()` switch
+   only matched `"PARTIALLY_DISPATCHED"` -- would have silently rendered as the default gray
+   badge forever. Fixed to match.
+3. `listFoOptionsForSoHandler` (SO Map's FO picker) now excludes FOs with zero Packing PO
+   allocated and FOs that are fully dispatched (reusing #2's same real chain), and returns a
+   `packing_po_details` array per FO (material/pack-count/fill-qty/total-KG) so
+   `SO01MapPage.jsx` can show what's actually available before the user commits the map.
+
+All 9 CI guards + `deno check`/`eslint` clean after each of the 3 fixes.
+
+## 2026-08-28, same day, all 3 remaining Sales-chain tasks built in one round
+
+Business owner: do all 3 back-to-back -- Dispatch-Reco (table + ratio + PGI write), §133.15
+point 2 (Dispatch-Reco void on Revoke), and §133.16 Part B (Backfill), the last one because its
+design was already fully locked with nothing left to discuss.
+
+**Dispatch-Reco:** migration `20260828160000_dispatch_reco.sql` (new
+`erp_production.dispatch_reco` table) + `20260828170000_dispatch_reco_write_and_revoke_void.sql`
+(extends `complete_pgi_invoice_action()`). New `computeDispatchRecoRows()` in
+`do_unified.handlers.ts` implements the 2-level ratio chain (packingPoRatio x invoiceRatio,
+KG-basis for RM/INT via `process_order_line_reco`, pack-count-basis for PM via
+`packing_order_line_reco`, Standard/Actual/AP-Approved independently multiplied) for any line
+carrying a resolved `packing_order_id`, plus the simple RPS-Asian-billed passthrough shape for
+plain RM/PM/INT lines. All derivation in TypeScript; the plpgsql side is a pure
+`INSERT ... SELECT FROM jsonb_array_elements()`, written in the same transaction as the group's
+own P601 posting.
+
+**Revoke-void:** same migration's REVERSE branch now sets `is_voided=true` on every Dispatch-Reco
+row tied to the reversed invoice (PR19/COR6-style, never delete).
+
+**Backfill:** new isolated file `_shared/dispatchBackfillPosting.ts` -- every date-cutoff and both
+Phase-1 rules (RPS/MTEST/MTO-HPS posting-date resolution) live here only, so the whole mechanism
+can be deleted in one place once Phase 3 is permanent. Wired into `postPgiInvoiceGroupsHandler`'s
+per-group loop, replacing the previous unconditional `todayIsoDate()` for `posting_date`. Confirmed
+`posting_date` is a plain `date` column (no time component) on both `stock_document`/
+`stock_ledger` while building this -- the design's "11:00PM-11:50PM" detail for the MTO/HPS
+30/31-August exception has no separate storable effect beyond picking the date itself.
+
+All 9 CI guards + `deno check` (zero new errors beyond the same pre-existing baseline, re-verified
+after each of the 3 tasks) clean. Both migrations applied to dev, migration-integrity reconciled
+(`in_sync=true`, 484 files). **Not yet done:** live click-through (no dev login here) and a
+Dispatch-Reco report/query UI (write-only for now, as the design always said it would be at this
+stage).
+
+**Business owner decision on the 2 open items (§133.14 Part B, §133.16 Part B):** asked directly
+rather than assumed -- both deferred, matching the recommended/conservative option in each case.
+Dispatch-Reco schema design stays for its own dedicated session; the Go-live Catch-up Backfill
+mechanism (time-boxed, doesn't even activate until 7 September 2026) is not needed yet.
+
+**§133.16 Part A (UI standard) -- swept to completion across every SO/DO/Invoice page.** Audited
+`cellNavigate`/hotkeys/Excel-export presence file-by-file rather than assuming the earlier
+SO01/SO03 work covered everything; found and fixed real gaps: `DOListPage.jsx` had none of the
+three (added all); `DODetailPage.jsx` had no hotkeys or `cellNavigate` (added both); `SODetailPage.jsx`,
+`SO01MapPage.jsx`, `SalesInvoiceListPage.jsx`, `SalesInvoiceDetailPage.jsx` all had hotkeys already
+but were missing `cellNavigate` on their grids (added everywhere -- 2+3+1+3 grids respectively);
+`SalesInvoiceListPage.jsx` also gained Excel export (was missing). Create-wizard pages
+(`SO01CreatePage.jsx`, `DO01CreatePage.jsx`, `PgiInvoiceGroupsCreatePage.jsx`) deliberately keep
+the established no-hotkeys convention (matches `POCreatePage.jsx`'s precedent, confirmed earlier
+this session) but do have `cellNavigate` on every grid. `eslint`/`jsx-no-undef-guard` clean across
+all 6 newly-touched files.

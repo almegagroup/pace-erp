@@ -21571,3 +21571,1128 @@ fix লাগবে না:
   ভেতরে বসে) — business owner এটা এভাবেই রাখতে বলেছেন, fix করার দরকার নেই।
 
 **FG STO — ইচ্ছাকৃতভাবে deferred, পরে design হবে।** এই session-এ touch করা হয়নি।
+
+### 133.7 — SO01 (Sales Order) — page-by-page wizard design শুরু, Page 1 LOCKED (2026-08-27/28)
+
+RM/PM/INT/SFG/FG — সব material type-এর sale **একই SO/DO/Invoice page দিয়ে** হবে (§133.4-এর insight
+অনুযায়ী)। SO01 একটা single flat form না — **step-by-step wizard**, page-এর পর page।
+
+**Landing screen (SO01 খুললে):** ২টা Tab —
+- **Sales Order** — এই section-এর scope, নিচে বিস্তারিত
+- **Stock Transfer Order** — শুধু **FG STO** create করার জন্য (RM/PM/INT-এর STO আগে থেকেই §113.12-এ
+  আলাদাভাবে করা, এটা touch হচ্ছে না) — **আপাতত "Coming Soon", design deferred**
+
+#### Sales Order Tab → Page 1 (Criteria Screen) — ✅ LOCKED
+
+| Field | Type | বিস্তারিত |
+|---|---|---|
+| **SO Date** | Date | — |
+| **Material Type** | Multi-select checkbox | RM / PM / INT / SFG / FG — সব **default unchecked**; mix-and-match করা যায় (একটা SO-তে সব ধরনের item একসাথে থাকতে পারে); এই selection-ই Page 2-এর Item list filter/populate করবে (IN03-এর checkbox pattern অনুসরণ করে) |
+| **Dispatch Type** | Dropdown, ৫টা fixed option | **Dependent (Direct)** / **Dependent (Depot)** / **Independent Party** / **Independent Party (Asian-billed)** / **Dependent (No Inbound)** |
+| **IBN Required** | **Read-only auto-resolved indicator (Yes/No) — ব্যতিক্রম Independent Party (Asian-billed), যেখানে এটা user-editable Yes/No dropdown** | ৪টা Dispatch Type-এ Dispatch Type select করার সাথে সাথেই resolve হয়ে দেখানো হয়। Independent Party (Asian-billed)-এ deterministic না বলে user নিজে choose করে (২০২৬-০৮-২৮ সংশোধন) |
+
+**IBN Required resolution rule** (Dispatch Type অনুযায়ী):
+- Dependent (Direct) → **Yes** (hardcoded, auto-resolved read-only)
+- Dependent (Depot) → **Yes** (hardcoded, auto-resolved read-only)
+- Independent Party → **No** (hardcoded, auto-resolved read-only)
+- **Independent Party (Asian-billed) → ⚠️ সংশোধিত (2026-08-28): auto-resolved না, user নিজে Yes/No dropdown থেকে choose করবে** — কারণ এই type-এ IBN থাকতেও পারে, নাও থাকতে পারে, deterministic না
+- Dependent (No Inbound) → **No** (সবসময়, hardcoded — এটাই এই type-এর সংজ্ঞা)
+
+**Page 1-এ এই ৪টা field-ই** — Payment Terms আর Freight **Page 2**-এ থাকবে (Item line-এর ঠিক আগে),
+Page 1-এ না।
+
+**পটভূমি (কেন প্রথমে ৪টা option, পরে ৫টা):** প্রাথমিক আলোচনায় "৫ ধরনের Dispatch" বলা হয়েছিল, যার
+একটা ছিল STO/FG-transfer — সেটা আলাদা Tab-এ সরে যাওয়ায় Sales Order tab-এর নিজস্ব Dispatch Type
+dropdown-এ ৪টা option থেকে গেছে। "Dependent"-কেও প্রথমে একটাই generic option ভাবা হয়েছিল, পরে
+business owner সংশোধন করেন — Direct আর Depot আলাদা treat হয়, কারণ IBN-প্রয়োজনীয়তার দিক থেকে
+Dependent (Depot) আর Independent (Asian-billed) একই groupe পড়ে, কিন্তু plain Independent Party
+আলাদা। **২০২৬-০৮-২৮-এ আরেকটা real scenario ধরা পড়ে ৫ম option যোগ হলো** — Asian Paints-এর VDC/
+Depot/Customer-address নেটওয়ার্কেই dispatch যায়, কিন্তু সেই নির্দিষ্ট dispatch-এর জন্য কোনো IBN
+generate হয় না — এটাই **Dependent (No Inbound)**, নিচে §133.8-B-তে এর Page 2 flow বিস্তারিত।
+
+### 133.8 — SO01 Page 2 — Customer resolution + Payment Terms + Freight + Item Line (✅ FULLY LOCKED — 2026-08-28)
+
+#### A. Page 1 → Page 2 Gating
+- Material Type-এ অন্তত ১টা checked না থাকলে Page 2-তে যাওয়া যাবে না
+- Dispatch Type select করা না থাকলে Page 2-তে যাওয়া যাবে না
+- (IBN Required নিজে থেকেই resolve হয় Dispatch Type select করলে — এর জন্য আলাদা gate নেই)
+
+#### B. Customer / Bill-To / Ship-To resolution — Dispatch Type অনুযায়ী ৪টা branch
+
+| Dispatch Type | Selection flow | Bill-To | Ship-To |
+|---|---|---|---|
+| **Dependent (Direct)** | Parent Company select → সেই Parent Company-র under-এ VDC list (side drawer) → VDC select | Parent Company (এখনই resolve) | **পরে, আলাদা page-এ** নির্দিষ্ট Party select হলে সেটাই Ship-To (§133.5-এর VDC-first, Party-later insight-এর সাথে সঙ্গতিপূর্ণ) |
+| **Dependent (Depot)** | Parent Company select → তার under-এ Depot list (side drawer) → Depot select | Depot-এর নিজের GST/Address | Depot-এর নিজের GST/Address (Bill-To = Ship-To, দুটোই Depot) |
+| **Independent Party** | Independent Customer list থেকে সরাসরি select, সব details চলে আসে | Customer-এর নিজের details | Default = Bill-To-র same (checkbox "Ship To same as Bill To", default checked)। Uncheck করলে Page 2-এই manual Ship-To Name → Address → State — এটা Customer Master-এ যায় না, শুধু সেই SO-তে manually বসে থাকে (record থাকে, master-এ save হয় না) |
+| **Independent Party (Asian-billed)** | Independent Customer list থেকে select। System customer-এর নিজের state দেখে সেই state-এর Asian Parent Company auto-resolve করে (না থাকলে error — "নেই, create করতে হবে")। তারপর প্রশ্ন: "Billing address to Depot?" (Yes/No) | Yes হলে সেই Parent Company-র under-এর Depot select করে তার address/GST; No হলে সরাসরি Parent Company-র address/GST | সবসময় সেই selected Independent Customer |
+| **Dependent (No Inbound)** | Parent Company select → তারপর sub-choice **Depot** না **Direct**। **Depot** হলে Depot Code drawer থেকে select। **Direct** হলে সেই Parent Company-র under-এর VDC select | **Depot** sub-case: Depot-এর নিজের address (Bill-To=Ship-To, Dependent(Depot)-এর মতোই)। **Direct** sub-case: Parent Company-র address | **Depot** sub-case: Depot-এর নিজের address। **Direct** sub-case: **সবসময় পরে, আলাদা page-এ** — VDC শুধু intermediate ধাপ, actual destination address পরের step-এ decide হয় (regular Dependent(Direct)-এর সাথে সঙ্গতিপূর্ণ) |
+
+#### C. Payment Terms
+Dropdown — সরাসরি Payment Terms Master থেকে list আসবে।
+
+#### D. Freight — সম্পূর্ণ locked design (timing-সহ, ২০২৬-০৮-২৮-এ সংশোধিত)
+
+**Page 2 (SO creation)-এ শুধু ১টা field:**
+- **Freight Term** dropdown — `FOR` / `FREIGHT_SEPARATE` / `FREIGHT_AT_ACTUALS` / `EX_TRANSPORTER_GODOWN` (PO/STO-র সাথে একই ৪টা option)
+- এখানে আর কিছুই থাকে না — বাকি সব conditional option SO Page 2-তে আসবে না, কারণ SO-র item qty-র পুরোটা এক DO-তে নাও যেতে পারে (partial dispatch), তাই actual freight হিসাব SO-level-এ করার মানে নেই।
+
+**DO Creation-এর সময়:**
+- **Net Weight** auto-derive হয় — সেই নির্দিষ্ট DO-র সব item line-এর quantity যোগফল, KG-এ convert করে। এটা DO-র নিজের একটা frozen field হয়ে থাকে (§113.13-এর commercial-snapshot pattern-এর মতোই)।
+
+**Invoice Creation-এর সময় (PGI+Invoice stage, `PgiInvoiceCreatePage.jsx`, §113.15):**
+- Freight Term দেখা যাবে (SO/DO থেকে carry হয়ে আসা)
+- **FOR** → কিছুই আসে না
+- **FREIGHT_SEPARATE / FREIGHT_AT_ACTUALS / EX_TRANSPORTER_GODOWN**-এর যেকোনোটা → নতুন প্রশ্ন: **"Other than Order Rate?" (Yes/No)**
+  - No → কিছুই যোগ হবে না
+  - Yes → Mode choose: **Ad Hoc** (সরাসরি Amount) বা **Rate** (Rate × Net Weight [DO থেকে already-derived] = Amount)
+  - তারপর **GST on Freight (Yes/No)**
+    - No → ওই Amount-ই final freight value
+    - Yes → **Inclusive/Exclusive** + **GST Rate** — সেই অনুযায়ী GST calculate হয় (Ad Hoc-এর amount অথবা Rate×Net-Weight থেকে পাওয়া amount-এর উপর)
+
+**Implementation note:** এটা §113.15-এর existing সাধারণ `freight_included`/`freight_amount` boolean+amount toggle-কে replace/extend করবে — implement করার সময় মাথায় রাখতে হবে।
+
+#### E. Item Line — Material Type অনুযায়ী section, ErpDenseGrid + Add Row
+
+Page 1-এ যে Material Type গুলো checked ছিল, শুধু সেগুলোই section আকারে পরপর দেখাবে। প্রতিটা section-এ **Add Row** বাটন — চাপলে ErpDenseGrid-এ নতুন row, একই type-এ multiple row থাকতে পারে।
+
+**Item dropdown filter conditions (RM/PM/INT):**
+- `material_type` সেই section-এর type (RM/PM/INT) হতে হবে
+- Material সেই SO-র নিজের selling company-তে mapped/extended হতে হবে (`material_plant_ext`)
+- শুধু Active material
+- Type-to-search: pace_code / material_name / external_code — যেকোনোটা দিয়ে typed keyword-এ auto-suggest filter
+
+**RM / PM / INT — column structure (✅ LOCKED):**
+Item Type (auto, uneditable) → Item (উপরের filter অনুযায়ী auto-suggest dropdown) → External Code (auto, না থাকলে blank) → **HSN Code** (Document Name-এর ঠিক পরেই — legal requirement, HSN ছাড়া Invoice invalid) → Batch Number (SO create-এ blank) → Expiry Date (SO create-এ blank) → Rate → Currency (default INR) → GST Inclusive/Exclusive (default Exclusive) → GST % → UoM → Order Quantity → Amount → **CGST | SGST | IGST** (৩ আলাদা column — selling company-র state বনাম Ship-To state compare করে যেটা প্রযোজ্য শুধু সেটাই value পায়) → Total Value (সব auto-computed)
+
+**FG SKU dropdown filter conditions:**
+- `material_type = FG`
+- SKU-র underlying Prodshade-এর `stroke_master.po_type` সেই row-এ selected FG Type (MTO/HPS/MTEST/MTS)-এর সাথে মিলতে হবে
+- নিজের company-তে mapped SKU আগে, তারপর PACE-এর বাকি company-র mapped SKU (একই dropdown-এ global search, own-company-first sort)
+- Type-to-search enabled; সত্যিই না পাওয়া গেলে manual entry allow (নিচে warning-সহ)
+
+**FG — MTO / HPS / MTS মোড (✅ LOCKED, prod data দিয়ে verified — §133.8-এর নিচে দ্রষ্টব্য):**
+Item Type (auto "FG") → FG Type (MTO/HPS/MTEST/MTS) → SKU (উপরের filter) → Document Name (Material Master থেকে auto, manual SKU হলে manual) → **HSN Code** → Pack UoM (SKU-র pack_code থেকে auto-resolve, read-only) → Pack Qty (manual entry) → Per Pack in KG (SKU-র `material_uom_conversion`-এ fixed factor থাকলে auto/read-only; `variable_conversion=true` হলে manual entry) → Base UoM Qty (auto-derive = Pack Qty × Per Pack) → Rate → Rate Basis dropdown (Pack UoM / Base UoM) → Currency → GST Exclusive default → GST % → Amount → CGST | SGST | IGST → Total Value → **Costing Rate Month/Year** (dropdown — AC06-এ যে যে month-এ সব item-এর rate approved হয়ে গেছে, শুধু সেগুলো, **+ একটা অতিরিক্ত fixed entry "Manual"** — এই "Manual"-এর নিজস্ব ব্যবহার আছে, পরে বিস্তারিত আসবে)
+
+**FG — MTEST মোড (✅ LOCKED):**
+Item Type → FG Type ("MTEST") → SKU → Document Name → HSN Code → Pack UoM (auto **BBL**, fixed) → Pack Qty (**uneditable**, নিজে থেকে বসে না) → Per Pack (auto, SKU-র fixed conversion থেকে) → Base UoM (read-only, KG) → **Base Qty** (**এখানেই user quantity বসায়**, এখান থেকে Pack Qty উল্টো দিকে derive হয়: Base Qty ÷ Per Pack) → Rate → **Rate Type** dropdown (**Fixed** [default] / Pack UoM / Base UoM — Fixed মানে entered Rate-ই সরাসরি flat Amount, qty দিয়ে multiply হয় না) → Currency → GST % → Amount → CGST | SGST | IGST → Total Value → **Costing Rate Month/Year** (auto = SO Date-এর month/year, dropdown/selection লাগে না)
+
+**FG — MTS মোড:** MTO/HPS-এর কাঠামোই (Per Pack সবসময় auto/fixed, কখনো manual লাগে না)। **Costing Rate Month/Year এখনো deferred/spec-only** — AC05 বর্তমানে monthly (`mts_sku_monthly_rate`), September 2026-এ quarterly-তে redesign হবে; তখন AC05-এর approved-quarter dropdown এই column-এ বসবে। PACE এখনো MTS dispatch করছে না, তাই এখন শুধু জায়গা রাখা হচ্ছে, implement করা হবে না।
+
+**SFG — column structure (✅ LOCKED):**
+RM/PM/INT-এর column pattern + Batch Number (থাকবে, blank না — SFG batch-tracked) − Expiry Date (নেই, blank/not applicable); base UOM-এই rate হয় বলে Pack/Volume নিয়ে কোনো confusion নেই। **Costing Rate Month/Year** column এখানেও থাকবে — MTEST-টাইপ SFG হলে SO Date-এর month/year (auto), MTO/HPS-টাইপ SFG হলে AC06 approved-month dropdown (+ "Manual" entry, উপরের মতোই), MTS-টাইপ SFG এখনো deferred (উপরের মতোই কারণে)।
+
+#### F. HSN Code column (✅ LOCKED, সব material type-এর item row-এ প্রযোজ্য)
+- **Position: Document/Item Name-এর ঠিক পরে** (আগে end-এ ভাবা হয়েছিল, সংশোধিত — HSN Code ছাড়া Invoice আইনত invalid, তাই prominent জায়গায় থাকবে)
+- Material Master-এ HSN Code থাকলে → auto pick হয়ে আসে
+- না থাকলে → manually type করা যায় ওই row-এই
+- SO save হওয়ার পর, manually-typed HSN Code Material Master-এ ফিরে গিয়ে বসে যায় (পরের বার auto-fill হবে)
+
+#### G. Manual FG SKU warning (✅ LOCKED)
+FG SKU manually type করা হলে (Material Master/Stroke Master কোথাও নেই), সেই row-এর ঠিক নিচে **লাল warning** দেখাবে — "এই SKU PACE-এ কোথাও নেই (Material Master/Stroke Master)"। Master-এ পরে যোগ হলে warning নিজে থেকে চলে যায়। **এই একই warning পরবর্তী report-গুলোতেও দেখাতে হবে**, যাতে user report দেখেই বুঝে master data update করতে পারে।
+
+#### H. প্রতি item row-এ GST breakup (✅ LOCKED, সব material type-এ প্রযোজ্য)
+যেহেতু Ship-To state Page 2-তেই resolve হয়ে যায়, তাই selling company-র নিজের state বনাম Ship-To state compare করে **CGST | SGST | IGST** — ৩টা আলাদা column হিসেবে প্রতিটা item row-এ দেখাবে (যেটা প্রযোজ্য নয় সেটা শূন্য/blank থাকবে)।
+
+**Dependent (Direct) / Dependent (No Inbound)-Direct সহ যেসব ক্ষেত্রে চূড়ান্ত Ship-To Party পরে আলাদা page-এ resolve হয়, সেখানেও GST state নিয়ে কোনো সমস্যা নেই** — কারণ VDC সবসময় Parent Company-র under-এই থাকে আর তার নিজস্ব address/state থাকে (§129/§132)। তাই GST breakup calculate করার জন্য **VDC-র state-ই যথেষ্ট**, চূড়ান্ত Party resolve হওয়া পর্যন্ত অপেক্ষা করার দরকার নেই।
+
+#### I. Page 2 Footer — SO-level totals (✅ LOCKED)
+1. **Total Nett Value** — সব line-এর Total Value-র যোগফল
+2. **GST Breakup** — CGST Total / SGST Total / IGST Total (যে component-এর value ০, সেটা দেখানো হবে না — যেমন intra-state হলে শুধু CGST+SGST, inter-state হলে শুধু IGST)
+3. **Round Off** — +/- sign সমেত (round করতে বিয়োগ লাগলে "-" চিহ্ন দিয়ে)
+4. **Sales Order Value** — final headline total
+5. **Amount in Words** — শুধু display-এর জন্য, **database-এ store হবে না**
+
+#### J. Data persistence principle (✅ LOCKED)
+Page 1 + Page 2-এ user যেভাবে যা বসাবে (Amount in Words বাদে), সবকিছুই as-is database-এ যাবে — ভবিষ্যতে report generate আর (পরিকল্পিত, এখনই না) Tally-payload push করার ভিত্তি এই raw data-ই হবে।
+
+#### K. UX requirement (✅ LOCKED)
+- Item/Document Name ও External Code column পুরোপুরি line-break ছাড়া দেখাতে হবে (ErpDenseGrid-এর existing `white-space: nowrap` convention-ই যথেষ্ট — §6 handoff brief-এ আগেই আলোচিত হয়েছে)
+- **Page 1 আর Page 2 — দুটোই সম্পূর্ণ keyboard-operated হতে হবে**, full keyboard navigation (`useErpScreenHotkeys` pattern, AC01/IN02/IN03-এর মতোই)
+
+**Real prod data দিয়ে verify করা (2026-08-28, বাংলাদেশ সময়):** PHPS সবসময় pack_code 450 (BBL, fixed 250 KG/barrel)। PMTO তিন রকম pack_code ব্যবহার করে — 000 (TNK/KG, fill 5,000–10,000, variable), 450 (BBL, fixed 250 — কিছু MTO SKU-ও drum ব্যবহার করে), 599 (BBL, fill 110–230, variable)। অর্থাৎ fixed-vs-variable আসলে **po_type দিয়ে না, pack_code-এর নিজের `material_uom_conversion.variable_conversion` flag দিয়ে** ঠিক হয় — উপরের design সেভাবেই লেখা।
+
+### 133.9 — SO01 ল্যান্ডিং স্ক্রিন সংশোধন: ৩টা Tab, ২য় Tab "SO Map" — Ship-To resolution + IBN logic (✅ LOCKED — 2026-08-28)
+
+§133.7-এ SO01-এর landing screen-এ ২টা Tab বলা হয়েছিল (Sales Order, Stock Transfer Order) — **সংশোধিত, আসলে ৩টা Tab:**
+1. **Create SO** — §133.7/§133.8-এ যে পুরো Page 1 + Page 2 design হলো, সেটাই এই Tab
+2. **SO Map** — নিচে বিস্তারিত, এখানেই Ship-To Party ও IBN চূড়ান্ত resolve হয়
+3. **Create FG STO** — placeholder, "Coming Soon" (§133.7-এ যেমন বলা হয়েছিল, অপরিবর্তিত)
+
+#### IBN-এর সংজ্ঞা
+IBN = Asian Paints-এর নিজস্ব portal-এ generate হওয়া DO number। IBN capture করতে দরকার Customer Order Number — এটাই আমাদের **FO Number** (Plan Feed)।
+
+#### SO Map item table — field visibility ও editability (✅ LOCKED — 2026-08-28)
+- **কোনো commercial/financial column নেই** — Rate, Currency, GST%, Amount, CGST/SGST/IGST, Total Value, HSN Code — এসবের **একটাও Map screen-এ থাকবে না**, সব role-এর জন্যই (Stores/Logistics/Accounts — Accounts-এর নিজেরও Create SO-তে এসব দেখার অধিকার থাকলেও, Map screen-এ কেউই দেখবে না; এই screen-এ শুধু item identity + quantity)
+- **Qty-editable field শুধু সেই একটাই** যেটা মূল SO Item Line design-এ সেই item type/FG type-এর জন্য quantity বসানোর field ছিল — RM/PM/INT/SFG-এ Order Quantity, FG MTO/HPS/MTS মোডে Pack Qty/Per Pack (যেভাবে §133.8-E-তে লক করা হয়েছে সেভাবেই), FG MTEST মোডে Base Qty — **বাকি সব field সেই row-এ inactive/read-only**
+- **ভুল করে item remove হয়ে গেলে সংশোধনের ব্যবস্থা:** একটা FO/Customer-এর জন্য save করা Mapping, **যতক্ষণ না সেই Mapping-এর বিরুদ্ধে কোনো DO তৈরি হয়েছে**, ততক্ষণ আবার খুলে remove করা item ফিরিয়ে আনা বা qty বদলানো যাবে — Edit SO-র cascading rule-এর (§133.10) সাথে সঙ্গতিপূর্ণ একই নীতি: Mapped-but-no-DO = freely re-editable, DO তৈরি হয়ে গেলে lock
+
+#### SO Map — Dispatch Type অনুযায়ী আচরণ
+
+**Dependent (Direct):**
+- একটা SO-র item বিভিন্ন vehicle-এ VDC-র বিভিন্ন customer/address-এ যেতে পারে — তাই **একটা SO-তে একাধিক FO Number map হতে পারে**
+- প্রতিটা FO Number-এর নিজস্ব Party + Ship-To address থাকে — সেখান থেকেই প্রতিটা dispatch-এর Ship-To derive হয়। **চূড়ান্ত Ship-To confirm হয় শুধু DO তৈরির সময়**
+- **RM/PM/INT/SFG (+ MTS FG) validation — strict, hard block:**
+  - প্রতিটা FO-র item অবশ্যই SO-র item list-এর মধ্যেই থাকতে হবে (বাইরের item চলবে না — hard block)
+  - প্রতিটা FO-তে per-item qty ≤ SO-র সেই item-এর qty
+  - **সব FO মিলিয়ে per-item total qty কখনো SO-র সেই item-এর qty exceed করবে না**
+- **FO Number না থাকলে (RM/PM/INT/SFG/MTS):** user একটা একটা করে Customer Address manually select করবে → সেই customer-এর জন্য পুরো SO item list দেখাবে (Rate/Currency ছাড়া, শুধু item component) → user row remove করতে পারে, qty change করতে পারে → Save → পরের customer select করলে remaining/balance qty দেখাবে → যতক্ষণ না সব customer মিলিয়ে total qty পুরো SO-র সাথে match করে ততক্ষণ "Add Customer" option থাকবে
+- **FG — MTO/HPS/MTEST-এর জন্য ব্যতিক্রম:** SKU mismatch হলে **hard block না, শুধু Warning modal** (Asian মাঝেমধ্যে ভুল SKU পাঠায়, কিন্তু আসল জিনিস অন্য SKU-তে যায়) — user continue করলে map হয়, নাহলে change করার সুযোগ। Total mapped volume vs SO total volume না মিললে "Add Customer" option থাকবে, কিন্তু **partial অবস্থাতেও Save করা যাবে**, শুধু Warning modal দেখিয়ে।
+- **⚠️ সংশোধন (2026-08-28): এই SKU-mismatch soft-warning ব্যতিক্রম শুধু MTO/HPS/MTEST-এর জন্য।** MTS, RM, PM, INT, SFG — এদের সবার ক্ষেত্রেই item + qty validation **strict/hard-block** (উপরের RM/PM/INT rule-এর মতোই), কোনো soft-warning exception নেই।
+
+**Dependent (Depot):**
+- একই mechanism, শুধু **customer choose করার দরকার নেই** — Depot নিজেই Ship-To party (Page 2-তেই fixed)
+- FO Number থাকতে পারে (একাধিকও) — থাকলে একই FO-validation rule প্রযোজ্য, শুধু Ship-To সবসময় Depot-ই থাকে
+- FO না থাকলে "Add Customer" loop-এর দরকার নেই — একটাই fixed destination, পুরো SO সরাসরি সেই Depot-এই map হয়ে যায়
+
+**Independent Party:**
+- FO Number concept প্রযোজ্যই না (FO আসে Asian-লিঙ্কড দিক থেকে) — SO তৈরি হলেই **Auto Mapped**, SO Map-এ কোনো action লাগে না
+
+**Independent Party (Asian-billed):**
+- Ship-To আগে থেকেই clear (selected Independent Customer) — এটাও **Auto Mapped**
+- (Page 1-এ IBN Required এখন user-editable Yes/No — উপরে §133.7-এ সংশোধিত)
+
+**Dependent (No Inbound):**
+- শুধু IBN generate হয় না — বাকি সব logic অবিকল তার sub-type অনুযায়ী: Direct sub-case → Dependent(Direct)-এর SO Map logic, Depot sub-case → Dependent(Depot)-এর SO Map logic
+
+#### সার্বজনীন volume/qty নিয়ম (সব Dispatch Type, সব material type-এ প্রযোজ্য)
+- **Per-item mapped qty ≤ SO-র সেই item-এর qty** — exceed করা যাবে না, কম/partial হতে পারে
+- **Total mapped volume ≤ SO-র total volume** — exceed করা যাবে না
+- ব্যতিক্রম শুধু: FG MTO/HPS/MTEST-এর SKU **নাম** mismatch হলে hard-block না, warning — কিন্তু qty/volume limit তখনও অপরিবর্তিতভাবে প্রযোজ্য
+
+#### FO Number-এর source (MTO/HPS/MTEST) — ✅ যাচাই করা (prod DB, 2026-08-28)
+SO Map-এর FO Number dropdown সরাসরি **`erp_production.plan_feed`** থেকে আসবে (এখানেই `company_id`,
+`fo_number`, `party_id`, `material_id`, `status`, `ordered_qty_kg` কলাম আছে, verified) — filter:
+সেই SO-র নিজের `company_id`, আর `status` = CANCELLED না।
+
+**Chain verify করা হলো (prod DB, 2026-08-28) — কোনো real gap নেই, দুটো item flag করা হলো:**
+- `customer_address.customer_id→customer_master.id`, `customer_address.depot_code_id→
+  fg_depot_code.id`, `fg_depot_code.parent_company_id→fg_parent_company.id` — পুরো chain-ই
+  real DB-level FK দিয়ে enforced। VDC/Depot-এর under-এ কোন customer/address আছে তা এই chain
+  দিয়ে সরাসরি বের করা যাবে। Independent Party `customer_master.is_dependent = false` দিয়ে
+  সরাসরি filter হবে।
+- **🔴 `plan_feed.party_id`-এর `customer_master`-এর সাথে কোনো DB-level FK constraint নেই**
+  (bare UUID column) — যদিও data integrity check করে দেখা গেছে বর্তমান ১০৯টা FO-র মধ্যে একটাও
+  orphan `party_id` নেই (সব বৈধ `customer_master.id`-তেই মেলে), তাই আজ পর্যন্ত কোনো live bug
+  নেই। **SO Map implement করার সময় এই FK constraint যোগ করতে হবে** (migration) — নাহলে ভবিষ্যতে
+  bad data ঢুকলেও DB নিজে থেকে আটকাবে না।
+
+**✅ FO ↔ SO mapping cardinality — resolved (2026-08-28):** একটা FO একাধিক SO জুড়ে ভাগ হয়ে map
+হতে পারে, ৩টা বৈধ scenario:
+1. FO map করার সময় SO-র চাহিদার চেয়ে কম qty নেওয়া যায় — বাকিটা **একই Parent Company-র অন্য SO-তে**
+   পরে map হতে পারে
+2. FO-র বাকি quantity সেই FO-তেই পড়ে থাকতে পারে — পরে **unmap করে অন্য FO-তে** সরানো যায়, এমনকি
+   সেই নতুন FO-র Parent Company আলাদাও হতে পারে (Plan Feed-এর existing unmap mechanism-ই এর
+   precedent)
+3. পুরো qty একটা SO-তেই চলে যেতে পারে
+
+তাই FO-র একটা running **remaining/unmapped balance** track করতে হবে; SO Map-এর FO dropdown এই
+balance অনুযায়ী filter হবে (company + status ছাড়াও)।
+
+**✅ FIXED (2026-08-28, caught while starting the DO §133.12 design — re-reading this section
+first, per this session's own discipline, surfaced that the fix had been missed at SO Map build
+time despite being flagged here).** `plan_feed.handlers.ts`-এর `upsertFoAllocation()` (FO ↔
+Packing-PO allocation, §83.18-REVISED) unmap (qty ≤ 0) হলে সরাসরি allocation row delete করে দিত —
+কোনো check ছিল না যে এই FO-র কতটুকু ইতিমধ্যে SO Map-এ ব্যবহৃত হয়ে গেছে। আজকের validation শুধু
+উপরের দিকে ছিল (Packing PO-র নিজের capacity-র বিরুদ্ধে, `otherSum + requestedQty > availableQty`),
+নিচের দিকে (SO-Map consumption) কখনো না। **উদাহরণ:** 22 barrel Packing-PO-allocated একটা FO-তে,
+একটা SO সেই FO-র 16 barrel ব্যবহার করে ফেললে বাকি থাকে 6 — আগের কোড পুরো 22-ই unmap করতে দিত।
+**Fix:** নতুন `getFoSoMapConsumedQty(planFeedId)` helper `erp_procurement.sales_order_map_allocation`
+থেকে সেই FO-র ACTIVE সব row-এর `allocated_qty` যোগ করে; `upsertFoAllocation()` এখন delete
+(unmap) এবং reduce (কমানো, শূন্যে না নামিয়েও) দুটো path-এই — এই FO-র সব Packing-PO allocation
+মিলিয়ে নতুন total যদি SO-Map-consumed qty-র নিচে নেমে যায়, `PROD_PLAN_FEED_ALLOCATION_BELOW_
+SO_MAP_CONSUMED` (422) দিয়ে block করে। `deno check`/guard suite সব clean (baseline error
+অপরিবর্তিত, ১টা pre-existing `.or()` typing noise)।
+
+### 133.10 — SO Edit / Cancel / Close — cascading rules (✅ LOCKED — 2026-08-28)
+
+**নতুন provision — SO Close:** SO-তে যেটুকু balance অব্যবহৃত/unmapped থেকে যায়, সেটা পুরোপুরি release
+করে দেওয়া যায় — FO-linked হলে সেই বাকি অংশ FO-তেই ফিরে যায় (অন্য SO-তে ব্যবহারযোগ্য)। এটা **Cancel
+না** — "যতটুকু হওয়ার হয়েছে, বাকিটা আর হবে না" ধরনের একটা terminal state, SO-র বাকি অংশের জন্য।
+
+**Edit SO — cascading validation:**
+- Item remove / qty কমানো free, যতক্ষণ না সেই item **Mapped** (SO Map-এ FO বা manual customer
+  দিয়ে allocate করা)
+- Mapped item-এর qty কমিয়ে Mapped qty-র নিচে নামালে, বা Mapped item-ই remove করতে চাইলে →
+  **Hard block**, স্পষ্ট কারণ-সহ message
+- DO তৈরি হয়ে গেছে কিন্তু Invoice হয়নি → DO cancel/edit করা যায়, তার সাথে Mapped-ও edit/remove
+  করা যায় (DO reverse হলে Mapped release হয়)
+- DO **Invoicing (PGI)**-এ চলে গেছে → **আর কিছুই বদলানো যাবে না** (permanent lock, physical stock
+  ইতিমধ্যে move করে ফেলেছে)
+
+**Edit SO-র scope — ✅ স্পষ্ট করা হলো (2026-08-28):** উপরের blocker-গুলো বাদ দিলে, user SO-তে
+**top-to-bottom সবকিছু** বদলাতে পারবে (Material Type selection, item add/remove/qty, Payment
+Terms, Freight Term, ইত্যাদি) — **শুধু ব্যতিক্রম: Bill-To/Ship-To identity একবার set হয়ে গেলে
+আর বদলানো যাবে না** (Parent Company, VDC, Depot/DC, বা Independent Party — যা-ই resolve হোক না
+কেন, Page 2-তে যেভাবে lock হয়েছে সেভাবেই থাকবে)। এই identity বদলাতে হলে **SO Cancel করেই নতুন SO
+বানাতে হবে**, নিচের cascading sequence মেনে।
+
+**Cancel SO — cascading:**
+- Open (non-invoiced) DO থাকলে → SO cancel করতে হলে আগে DO cancel হতে হবে → DO cancel হলে Mapped
+  automatically release হয় → তারপর SO cancel সম্পূর্ণ হয়
+- DO ইতিমধ্যে Invoiced হয়ে থাকলে সেই অংশের জন্য SO cancel করা যাবে না — সেক্ষেত্রে বাকি অংশের জন্য
+  **SO Close** ব্যবহার করতে হবে
+
+**Language rule (সব ERP-জুড়ে প্রযোজ্য, শুধু SO01 না):** যেকোনো warning/error message সবসময়
+**English**-এ হবে, বাংলা কোথাও না।
+
+### 133.11 — SO01/SO03/SO02 ACL decisions (✅ LOCKED — 2026-08-28)
+
+| Page/Tab | Access |
+|---|---|
+| **SO01 — Create SO** | শুধু **Accounts** department, **সব rank** (L1_USER থেকে DIRECTOR পর্যন্ত, Accounts-এর নিজস্ব capability দিয়ে) |
+| **SO01 — SO Map** | পূর্ণ access — **Stores**, **Accounts**, **Logistics** — সব rank |
+| **SO01 — Create FG STO** | placeholder-ই, এখনো কোনো real ACL লাগবে না |
+| **SO03 — DO (Delivery Order)** | পূর্ণ access — **Stores**, **Logistics** — সব rank |
+| **SO02 — Invoice/PGI** | পূর্ণ access — **Accounts** — সব rank |
+| **সবকটা (SO01/SO02/SO03)** | **ACL-MASTER (P0076) — পূর্ণ access**, department/rank নির্বিশেষে (CLAUDE.md bug pattern #5 — ACL-MASTER maintenance-drift এড়াতে প্রতিটা নতুন resource_code-এ explicit grant confirm করতে হবে) |
+
+**✅ Implementation-এ যা হলো (2026-08-28, dev-এ verified):**
+- Create SO আর SO Map/Invoice/PGI — একই `PROC_SO_LIST`/`PROC_SO_CREATE` resource, কিন্তু **আলাদা action** (WRITE=Create, EDIT=Map/Post) — এটাই Accounts-only Create-কে Stores/Logistics/Accounts SO-Map থেকে আলাদা রাখে
+- `CAP_PROC_ACCOUNTS` (Accounts+Management, আগে থেকেই AC04-এ ছিল) → `PROC_SO_CREATE` WRITE/EDIT/VIEW + `PROC_SO_LIST` VIEW/EDIT + `PROC_INV_LIST` VIEW/WRITE/APPROVE/EDIT
+- নতুন `CAP_STORES_LOGISTICS_DO` (Stores+Logistics) → `PROC_DO_CREATE`/`PROC_DO_LIST`
+- নতুন `CAP_STORES_LOGISTICS_SO_MAP` (Stores+Logistics) → `PROC_SO_LIST` VIEW/EDIT (Create SO-র WRITE-এ touch করে না, যাতে Stores/Logistics SO তৈরি করতে না পারে, শুধু Map করতে পারে)
+- **পুরনো blanket `CAP_PROC_SALES`** (SO+DO+Invoice একসাথে বান্ডিল করা ছিল, bug pattern #3) — এই ৫টা resource থেকে সরিয়ে ফেলা হয়েছে
+- dev-এর ৪টা active company-তেই ACL version bump + capture + snapshot generate সম্পন্ন
+
+**Company-scope — data leak এড়াতে (bug pattern #2):** Canonical company rule (Law 12) অনুযায়ী —
+single-company user-এর জন্য company auto-resolve হয়ে read-only দেখাবে, multi-company user-এর
+জন্য শুধু তার নিজের allowed company-গুলোর dropdown আসবে। SO01 (Create SO, SO Map), SO03 (DO),
+SO02 (Invoice/PGI) — প্রতিটা read/write path-ই company-scope validate করতে হবে, শুধু
+create/approve-এ না।
+
+**Implementation-time মনে রাখতে হবে (CLAUDE.md-এর ১৫-pattern checklist অনুযায়ী, code লেখার আগে
+আবার পড়তে হবে):**
+- **Create SO, SO Map, DO, Invoice/PGI — প্রতিটা আলাদা `resource_code` হতে হবে** (bug pattern
+  #6 — একই resource_code দুই আলাদা action-এ শেয়ার করা যাবে না, যেহেতু role-access ভিন্ন ভিন্ন)
+- ACL grant capability-driven হতে হবে, **কোনো hardcoded role-array/rank-check** (bug pattern
+  #1/#12) handler বা frontend কোথাও বসানো যাবে না — Accounts/Stores/Logistics-এর জন্য proper
+  capability তৈরি করে `work_context_capabilities`-এ map করতে হবে
+- Menu/ACL provisioning-এ CLAUDE.md §8-এর **৪-ধাপ mandatory sequence** (menu_master +
+  capability_menu_actions insert → `capture_acl_version_source` → `generate_acl_snapshot` →
+  `rebuild_acl_menu_snapshot`) অনুসরণ করতে হবে — শুধু live table এডিট করলে হবে না
+- ACL-MASTER (P0076) coverage confirm করতে হবে নতুন resource_code-গুলোর জন্য (bug pattern #5)
+- Route ↔ ACL-registry ↔ handler ↔ frontend পুরো chain manually verify করতে হবে (bug pattern
+  #8), শুধু registry ঠিক আছে দেখেই থেমে যাওয়া যাবে না
+- Implementation শেষে dependency-provisioning check (SU24-related mechanism,
+  `PAGE-DEPENDENCY-MANIFEST.json` + existing guard scripts) দিয়ে missing dependency আছে কিনা
+  যাচাই করতে হবে
+
+### 133.12 — DO (Delivery Order, TX SO03) — RM/PM/INT/SFG/FG unified redesign, ৩-Page flow (✅ LOCKED — 2026-08-28)
+
+**DO-র সংজ্ঞা:** একটা DO = একটা **vehicle**-এ কী কী যাচ্ছে তার list — DO **per vehicle**। একটা DO-তে
+একাধিক SO-র item যেতে পারে, কিন্তু SO/SO-Map-এ যা যা mapped আছে তার **পুরোটা নাও যেতে পারে** —
+ঠিক কতটুকু এই নির্দিষ্ট vehicle-এ যাচ্ছে সেটাই DO নিজে decide করে। একটা DO-তে **SO আর STO দুটোই**
+একসাথে যেতে পারে (FG STO তৈরি হলে সেটাও একই truck-এ অন্য item-এর সাথে যেতে পারবে)।
+
+**Existing base:** TX **SO03**, `GRP_ACL_SALES`, `DOListPage.jsx`/`DOCreatePage.jsx`/
+`DODetailPage.jsx`, backend `delivery_order.handlers.ts` — §113.13-এ RM/PM/INT-এর জন্য আগে থেকেই
+বানানো (commercial snapshot, rate/GST carry-over)। এই section সেটাকে RM/PM/INT/SFG/FG সব material
+type-এর জন্য unified redesign করছে।
+
+**SO Number — কোনো নতুন কাজ লাগবে না:** CLAUDE.md §8-এ আগে থেকেই `SO` doc_type-এর নিজস্ব global
+range আছে (`9000000001`, `90xxxxxxxx`), Process PO/Packing PO/GRN-এর মতোই `generate_doc_number()`
+দিয়ে — verified, already ready।
+
+#### Landing (SO03 = DOListPage) → "Create DO"
+Click করলে ২টা বাটন: **Add SO** / **Add STO**
+
+#### Page 1 — Add SO / Add STO, item selection per source document
+**Add SO:**
+1. SO Number দিলে → center Drawer-এ সেই SO-র Mapped FO list (FO থাকলে, party/address details-সহ)
+   বা manual-customer-mapping list (FO না থাকলে) — এখান থেকে multiple address বাছা যায়
+2. বাছাই করা items ErpDenseGrid (full keyboard operational)-এ চলে আসে — Mapped details দেখাবে,
+   user ঠিক করবে এই নির্দিষ্ট vehicle-এ কতটুকু যাচ্ছে
+3. **Editable শুধু সেই qty field** যেটা SO Map-এও editable ছিল (§133.9-এর একই condition বহাল —
+   Mapped/DO/Invoice cascading rule অপরিবর্তিত)
+4. **RM/PM/INT/SFG:** Batch Number (manual entry/blank), Expiry Date শুধু RM/PM/INT-এ
+   (manual/blank), item remove/qty-adjust করা যায়। ভুল করে remove হলে "Add Item" দিয়ে সেই
+   SO-Customer-এর mapped list থেকে আবার বেছে নেওয়া যায়, বাকি data auto আসে
+5. **FG (MTO/HPS/MTEST, FO-linked):** Batch Number + Packing PO Number auto দেখাবে (FO-এর সাথে
+   already linked বলে) — pack_code অনুযায়ী Num Packs/Volume editable, কিন্তু **Mapped-এর বেশি না**
+6. আরও SO যোগ করা যায় একইভাবে, repeat
+
+**Add STO:** STO Number দিলে address/company details/item list আসে, একই remove/edit সুবিধা
+
+#### Page 2 — Consolidated Item List + Storage Location (✅ LOCKED)
+- Page 1-এ যত SO/STO থেকে যত item বাছা হলো, তার **cumulative/consolidated list**:
+  - **RM/PM/INT** (batch commitment নেই) → বিভিন্ন SO/customer থেকে একই material হলে
+    **merge/sum হয়ে একটাই line**
+  - **SFG / FG (MTO/HPS/MTEST)** → batch number + Packing PO number দিয়ে already-committed,
+    তাই প্রতিটা distinct batch/PackingPO **আলাদা line-ই থাকে**, merge হয় না
+- প্রতিটা line-এর পাশে **Storage Location** dropdown + **Available Qty** (সূত্র:
+  **Unrestricted stock − Reserved qty = Available**)
+- **Storage Location default resolution (code-verified, 2026-08-28):** P261 (Process PO RM/PM
+  issue)-এর location সরাসরি reuse করা যায় না — সেটা Process PO-র নিজস্ব
+  `production_segment_location_config.rm_sloc_id`/`pm_sloc_id`-এর উপর নির্ভরশীল, Sales DO
+  context-এ কোনো Segment concept-ই নেই। তাই fallback: **`material_plant_ext.
+  default_storage_location_id`** (company+material-scoped, GRN landing-এর একই default) — verified
+  DB-তে আছে, generic, segment-নির্ভরতা নেই। এটাও না থাকলে dropdown খালি থাকবে, user manually বাছবে।
+- **Multi-location split:** একটা consolidated item-এর মোট qty একটা SLoc-এর Available দিয়ে পুরোটা
+  cover না হলে (যেমন 100 KG দরকার, R003-এ 75 KG, S003-এ 40 KG আছে) — user সেই line-এর Qty কমিয়ে
+  75 করবে (R003 রেখে), তারপর নতুন একটা line "Add" করবে — সেই line-এ একই item, SLoc বদলে S003,
+  বাকি 25 বসাবে। প্রতিটা line নিজের SLoc-এর Available দিয়ে আলাদাভাবে validate হয়, সব line মিলিয়ে
+  total মূল consolidated qty-র সমান হতে হবে
+- Stock validation pass করলেই Page 3-এ যাওয়া যায়
+- **এখানেও কোনো Rate/Amount/GST/commercial field নেই** (SO Map-এর একই নীতি, §133.9)
+
+#### Page 3 — Vehicle/Transporter/Weight header (✅ LOCKED)
+Vehicle Number, Transporter (dropdown; তালিকায় না থাকলে inline "Create Transporter" — GRN-এর একই
+mechanism, save হলে auto ফিরে এসে এই DO-তেই available/selected), LR Number, LR Date, Gross Weight
+(manual entry), **Net Weight (auto = truck-এ নেওয়া সব item-এর base-UoM qty-র যোগফল**, পুরো
+truck-এর total হিসেবে দেখানোর জন্য), Driver Number, Driver Contact Number।
+
+**⚠️ সংশোধন (2026-08-28, §133.13 দ্রষ্টব্য):** Freight calculation-এ এই DO-level total Net
+Weight ব্যবহার হয় **না** — যেহেতু একটা DO থেকে একাধিক Invoice তৈরি হতে পারে (§133.13-এর IBN
+grouping), প্রতিটা Invoice নিজের অংশের Net Weight আলাদাভাবে (সেই Invoice-এ থাকা item-গুলোর
+base-UoM qty যোগফল) ব্যবহার করবে freight-এর জন্য। DO-র এই Net Weight শুধু পুরো truck-এর summary
+হিসেবে থাকে।
+
+**Save** → DO Number generate হয়।
+
+#### DO Edit / DO Cancel (✅ LOCKED)
+- DO যদি Invoicing-এ (PGI) ইতিমধ্যে use হয়ে গেছে → **DO Edit বা Cancel কোনোটাই করা যাবে না**
+  (permanent lock, physical stock ইতিমধ্যে move করে ফেলেছে — §133.10-এর SO-level lock-এর সাথে
+  সঙ্গতিপূর্ণ)
+- Invoicing হওয়ার আগে পর্যন্ত DO freely Edit/Cancel করা যায় — Cancel হলে সব Mapped allocation
+  release হয়ে যায় (§133.10)
+- **Post-PGI Revoke mechanism — ✅ LOCKED, §133.15 দ্রষ্টব্য** (আগে এখানে deferred বলা হয়েছিল,
+  একই session-এ পরে design সম্পূর্ণ হয়েছে)
+
+### 133.12-addendum — DO line-sourcing + non-IBN invoice grouping (✅ LOCKED — 2026-08-28, resolved while starting DO implementation)
+
+Two forks §133.12/§133.13's text left implicit, resolved with business owner before touching code:
+
+1. **DO's "Add SO" line source depends on dispatch_type.** For `INDEPENDENT_PARTY`/
+   `INDEPENDENT_PARTY_ASIAN_BILLED` (SO Map "Auto Mapped, কোনো action লাগে না") — DO reads
+   directly from `sales_order_line`, no `sales_order_map_allocation` row involved at all (no
+   auto-created allocation either). Ship-To is already fixed at SO Page 2 for these, so there's
+   nothing to pick. For `DEPENDENT_DIRECT`/`DEPENDENT_DEPOT`/`DEPENDENT_NO_INBOUND` — DO reads
+   through `sales_order_map_allocation` (grouped by `fo_id` or `customer_address_id`), matching
+   §133.12's Drawer description.
+2. **Invoice grouping for dispatch types where IBN isn't required at all** (`INDEPENDENT_PARTY`,
+   `DEPENDENT_NO_INBOUND`'s own sub-cases still resolve to their Direct/Depot logic per §133.9, so
+   this really only ever applies to plain `INDEPENDENT_PARTY`/`INDEPENDENT_PARTY_ASIAN_BILLED`
+   when IBN is toggled off) — whole SO = one Invoice. §133.13 rule 4's "per delivery Address এক
+   IBN" only ever applied to a mixed FO/non-FO split *within* an IBN-required SO — it never
+   addressed a dispatch type where IBN doesn't apply at all. **Confirmed moot in practice, not
+   just a fallback**: business owner confirmed these dispatch types never produce multiple
+   FO/address splits on one SO to begin with (per decision 1 above, there's no split mechanism for
+   them), so "whole SO = one Invoice" never actually competes with a real multi-split scenario —
+   it's simply the only shape that can occur.
+
+### 133.12-implementation — DO backend Create/Cancel/Get DONE (Claude direct-implemented, 2026-08-28); Edit + frontend NOT yet started
+
+Backend for §133.12's Page 1/2/3 (Add SO/Add STO → consolidated storage-location+availability
+→ vehicle header save) is implemented and verified, in a new additive file
+`do_unified.handlers.ts` (the pre-redesign single-source `delivery_order.handlers.ts` is left
+untouched and still serves historical DOs — same additive pattern as SO01's `-v2` endpoints).
+
+**New endpoints:** `GET .../delivery-orders-v2/add-so-options` (branches by dispatch_type per
+§133.12-addendum — DEPENDENT_* reads through `sales_order_map_allocation` grouped by FO/address,
+INDEPENDENT_* reads `sales_order_line` directly), `GET .../add-sto-options`, `GET .../storage-
+options` (Available = Unrestricted − open reservations, `material_plant_ext.default_storage_
+location_id` marked first), `POST .../delivery-orders-v2` (create — re-validates every line's
+remaining balance and stock availability server-side, never trusts client preview), `GET
+.../delivery-orders-v2/:id`. Remaining-balance tracking generalizes the old `fetchLockedLineIds`
+boolean-lock into a running SUM per `so_line_id`/`sto_line_id`/`so_map_allocation_id` (§133.12
+Page 1 point 3 — one vehicle no longer has to take a whole line's balance at once).
+
+**Real gap fixed while building this (would have broken multi-source Cancel):** the existing
+`cancelDeliveryOrderHandler`'s CSN dispatch-qty-undo branch keyed off the DO **header's**
+`dc.sto_id` — a §133.12 multi-source/MIXED DO never populates that column (only pre-redesign
+single-source DOs do), so cancelling a new-style DO with STO lines would have silently skipped
+undoing their CSN sync. Fixed to resolve each line's own STO via its `sto_line_id`, independent of
+how many other sources the same DO also drew from — now correct for both old and new DOs, and this
+one shared handler now serves both without a fork.
+
+**`hydrateDeliveryOrderUnified()`** (the new GET's hydrator) also had to synthesize a
+`delivery_challan_source` row from the header's own `sales_order_id`/`sto_id` for old DOs (which
+predate that table and have no real rows in it) — matches the migration comment's documented
+promise, verified by reading the code, not just asserted.
+
+**Guard/verification discipline (same as SO01):** `company-scope-write-acl-guard.mjs` caught
+`createDeliveryOrderUnifiedHandler` missing a secondary WRITE-tier ACL check (same shape as SO01's
+own catch) — fixed via a new `canMaintainDoCreate()` helper, same template as `canMaintainSo01Create`/
+`canMaintainSoMap`. All 9 guards + `deno check` (zero new errors, git-stash-verified at each step)
+confirmed clean after every change, not batched at the end.
+
+**Update (same day) — Edit handler + full frontend DONE.** `updateDeliveryOrderUnifiedHandler`
+fully replaces a DO's line set (tears down old lines/reservations first via a shared
+`prepareAndValidateDoLines()` helper extracted from Create, so "remaining balance" is never
+polluted by the very lines being replaced) — same non-transactional multi-step shape the rest of
+this codebase's pre-§8D-step-4 handlers already have, not a new class of risk.
+
+**Second real correctness bug found and fixed before Edit could be built:** `reservation_document`
+had no link back to which `delivery_challan_line` created it. Under the OLD single-source model
+this never mattered (a line could only ever have one ACTIVE DO against it, by exclusive lock), but
+§133.12's multi-source/partial-qty-per-vehicle model lets several DOs legitimately hold separate
+OPEN reservations against the SAME source line at once — so `cancelDeliveryOrderHandler`'s existing
+"release every open reservation for this source_line_id" would have silently cancelled ANOTHER
+DO's reservation too. Fixed via new migration `20260828140000_reservation_dc_line_link.sql`
+(`reservation_document.dc_line_id`, nullable FK) — both create paths (legacy and unified) now set
+it, and Cancel releases by `dc_line_id` first, falling back to the old source_line_id-wide match
+only for legacy NULL rows (safe there, since the old model never had concurrent reservations on
+one line). Applied to dev, reconciled, `in_sync=true` (481 migrations).
+
+**Frontend — `DO01CreatePage.jsx` (new, 3-page wizard), `DODetailPage.jsx` (rewritten to the
+unified GET):**
+- Page 1: Add SO / Add STO, repeatable (browsable document picker + per-group/FO/address item
+  picker, reusing §113's existing discovery drawer for step 1).
+- Page 2: RM/PM/INT auto-merge across sources into one row; SFG/FG never merge. Multi-location
+  split per row, validated to sum exactly to the row's total.
+- **Merge+location-split ambiguity resolved with business owner before coding (2026-08-28):** when
+  a merged row is split across locations, which underlying source feeds which location is resolved
+  **FIFO** — consume the group's source picks in the order they were added, not proportionally or
+  user-chosen per source/location cell. Confirmed as the deliberate choice, not a placeholder.
+- Page 3: Vehicle/Transporter (reuses the existing `TransporterPicker` search + inline
+  "Add to Transporter Master" pattern)/LR/Weight, Net Weight auto-summed, Save.
+- `DODetailPage.jsx` now calls `getDeliveryOrderUnified` for every DO (old and new alike — the
+  hydrator's old-DO fallback makes this safe) and shows a `sources[]` table (multi-SO/STO, each
+  with a resolved party/receiving-company display) instead of the old single-source fields; the
+  now-inapplicable header fields (cost center/payment term/freight term/delivery address — moved
+  off DO entirely per the addendum) were dropped from this page's display.
+
+**Verified throughout, not batched at the end:** all 9 guards EXIT=0 after every change, `deno
+check` held at the same baseline error counts at every step (git-stash-verified), `eslint`
+zero errors on every touched frontend file, migration integrity `in_sync=true` after each of the 2
+migrations this increment added.
+
+**Update (same day) — every remaining gap closed after a user audit challenge.** Business owner
+asked for a table of SO01/SO03 design-vs-actual alignment; the honest first pass exposed that
+several items previously reported "100%" were not, and a broader self-audit (prompted by the
+same challenge) found real bugs beyond what was originally flagged:
+
+- **🔴 SO01MapPage.jsx was completely non-functional** — every one of its 4 API calls
+  (`getSoMapStatus`/`listFoOptionsForSo`/`listCustomerAddressesForSo`/`listSoForMap`) hit bug
+  pattern #15 (API double-unwrap): each backend handler already returns a bare array/object via
+  `okResponse(X, ...)`, but the frontend read `.data` off it a second time, which was always
+  `undefined`. The whole SO Map screen showed empty lists from the day it was built. Also used
+  `useEffect`+`setState` (forbidden, CLAUDE.md §8A). Fully rewritten to `useQuery` reading the
+  resolved value directly, plus `useErpScreenHotkeys` added (it's a genuine list page, unlike the
+  Create wizards where the codebase's own established convention — confirmed by checking
+  `POCreatePage.jsx`, which also has no hotkeys — is to skip this hook).
+- DO01's item-picker drawer gained: `ErpDenseGrid`+`cellNavigate` (was plain buttons), manual
+  Batch Number/Expiry Date entry for RM/PM/INT (was display-only), Num Packs entry for FG lines
+  with a known pack size (was missing entirely, generic qty only), and a text filter over the
+  document list (closest equivalent to "type the SO/STO number" without a second round trip).
+- SO01's Page 2 footer was a bare "Net Total" — rebuilt to the full locked design: live CGST/SGST/
+  IGST columns per line (mirrors `deriveSalesInvoiceGstType`'s exact state-comparison client-side,
+  shows "—" rather than guessing when Ship-To isn't resolved yet), GST Breakup totals, Round Off,
+  Sales Order Value headline, and Amount in Words (new `numberToWordsIndian.js` util, Indian
+  Lakh/Crore grouping, display-only per the design's own persistence principle).
+- **SO Edit could only ever modify existing lines — add/remove was silently a no-op.** The
+  mapped-line-removal check existed, but a legitimately-removable (unmapped) line omitted from the
+  submitted set was never actually deleted, and a line with no `id` (a new line) was silently
+  ignored. Fixed on both ends: `prepareUnifiedSoLine()` extracted from Create's line-loop (shared,
+  not duplicated) so Edit's new-line path gets the identical validation; `updateSalesOrderUnifiedHandler`
+  now deletes omitted-and-unmapped lines and inserts id-less submitted lines. `SODetailPage.jsx`
+  gained a Remove toggle per existing line and an "Add Line" section (material-type-aware, including
+  FG pack-qty/per-pack fields for non-MTEST types).
+- **DO Edit had no UI at all.** `DO01CreatePage.jsx` now accepts an edit route
+  (`delivery-orders/:id/edit`) and reopens the identical 3-page wizard pre-seeded from the DO's own
+  saved lines — each existing line becomes its own "pick" (source_kind inferred from which id
+  column is populated), and Page 2's own merge/never-merge grouping naturally re-derives the
+  original consolidation; location splits are rebuilt by grouping existing lines by
+  (group key, storage_location_id). `DODetailPage.jsx` gained the "Edit DO" button.
+
+**Verified exactly like every other pass in this session** — every fix re-checked against actual
+handler/component code before being trusted (not assumed), all 9 CI guards + `deno check` + `eslint`
+clean after every change, re-confirmed with one final full sweep across every touched file at the
+end. SO01 and SO03 (DO) are now genuinely complete against their locked designs. Next: §133.13
+(Invoice/PGI IBN-grouping rewrite), §133.14 (Dispatch Category+Reco), §133.15 (Revoke).
+
+### 133.13 — Invoice/PGI (SO02) — IBN-driven multi-invoice generation, per-invoice Freight/Additional-Cost drawer (✅ LOCKED — 2026-08-28)
+
+**IBN → Invoice grouping rule (✅ LOCKED) — বড় structural পরিবর্তন, §113.15-এর পুরনো "1 DO =
+1 Invoice" নিয়ম replace করছে:**
+1. যে Dispatch Type-এ IBN Required = True, তাদের IBN Number না দিলে এগোনো যাবে না
+2. একটা DO-তে যত item/যত ইচ্ছা FO থাকুক না কেন — **একটা FO number-এর against-এ যত item থাকুক,
+   সবার একটাই IBN**
+3. FO number না থাকলেও (কিন্তু IBN লাগে এমন dispatch type) — সেই DO-র সব item-এর একটাই IBN
+4. একটা DO-তে multiple FO number থাকলে, তত গুলো IBN। একই DO-তে FO ও non-FO item মিশে থাকলে —
+   FO-ওয়ালাদের জন্য rule ২ প্রযোজ্য, non-FO-দের জন্য **per delivery Address এক IBN**; IBN
+   লাগে না এমন item নিয়ে কিছু করার নেই
+5. STO-তে IBN কখনো লাগে না
+6. **যাদের IBN আছে, তাদের প্রতি IBN-এ একটা করে Invoice generate হবে** — সেই IBN-এর under-এ যত
+   item থাকুক না কেন
+
+**ফলে একটা DO থেকে একাধিক Invoice তৈরি হতে পারে** (একাধিক FO/IBN থাকলে) — এবং **SO ও STO সবসময়
+আলাদা Invoice-এ যাবে**, কখনো এক Invoice-এ মিশবে না (Bill-To/GST context সম্পূর্ণ ভিন্ন বলে)।
+
+#### Page 1 — DO Number entry (SO02)
+SO02-তে ঢুকে "Generate Invoice" → DO Number দিলে সেই DO-র সব details (Item Line, Rate/Amount/GST
+breakup, Storage Location — সব SO-র মতোই কিন্তু qty DO অনুযায়ী) table আকারে চলে আসে।
+
+#### Page 2 — DO-wise review
+শুধু review/display — সেই DO-তে (SO+STO মিশে থাকলেও) মোট কী কী আছে তার সবকিছু, Invoice generation
+logic এখনো এখানে প্রযোজ্য না।
+
+#### Page 3 — Invoice-group table
+উপরের IBN rule অনুযায়ী system হিসাব করে ফেলবে কয়টা Invoice তৈরি হবে, তারপর ErpDenseGrid table —
+**প্রতিটা row = একটা হতে-যাওয়া Invoice**:
+
+SO/STO Number → SO/STO Date → DO Number → Billing Address → Ship-To Address → **Inbound Number**
+(manual) → **Tally Invoice Number** (manual) → **Tally Invoice Date** (manual)
+
+#### Per-row Drawer (row-এ click/Enter করলে খোলে) — Invoice preview + Freight + Additional Cost
+
+**উপরের অংশ — Invoice preview** (sample tax-invoice format অনুযায়ী field mapping, শুধু preview-র
+জন্য — আসল Print template design পরে আলাদা session-এ, কিন্তু **✅ locked requirement**: printed
+Invoice-এ item table-এর সাথে **Freight (প্রযোজ্য হলে) আর Additional Cost (add করা থাকলে)-ও আলাদা
+line item হিসেবে বসবে**, নিজের নিজের GST treatment-সহ, Total-এর আগে — শুধু preview drawer-এ না,
+আসল printed document-এও):
+
+| Printed field | আমাদের data |
+|---|---|
+| Invoice No. | Tally Invoice Number |
+| Dated | Tally Invoice Date |
+| **Delivery Note** | **Tally Invoice Number** (same value, real sample-এ দুটোই identical) |
+| Delivery Note Date | Tally Invoice Date |
+| Dispatch Doc No | Transporter (name) |
+| Dispatched through | Transporter (name) |
+| Bill of Lading/LR-RR No + Dated | LR Number + LR Date |
+| Reference No. & Date / Buyer's Order No | FO Number + FO Date |
+| Other References | Inbound Number (থাকলে) |
+| **e-Way Bill No.** | **Yes/No selection** — PACE এখনো GST e-way-bill generation-এর সাথে লিঙ্কড না, তাই No = blank; Yes হলে Tally-generated e-Way Bill Number manually বসানো যায় |
+| Mode/Terms of Payment | Payment Terms |
+| Motor Vehicle No | Vehicle Number (DO) |
+| Destination | Ship-To town/city |
+| Item table | আমাদের Item Line, Pack UoM-এ হলে নিচে bracket-এ KG-equivalent (sample-এ "42 BR (9,660.00 KGS)" pattern অনুসরণ করে) |
+| IRN, Ack No, Ack Date | **out of scope, কিছুই capture হবে না** (future GST e-invoice/Tally integration) |
+| **PACE-এর নিজস্ব Invoice Number** | নতুন, আলাদা field — Save/Post-এর আগ পর্যন্ত blank, Post করলে `SALES_INVOICE` global range (§8, 92xxxxxxxx) থেকে auto-generate, নিজের Date-সহ |
+
+**নিচের অংশ — Freight (✅ LOCKED, §133.8-D-এর সাথে সঙ্গতিপূর্ণ, একটা গুরুত্বপূর্ণ সংশোধন-সহ):**
+- SO-র Freight Term FOR না হলে → **"Other than Order Rate?" (Yes/No)**
+  - No → কিছুই যোগ হবে না
+  - Yes → Mode: **Ad Hoc** (flat Amount) বা **Rate** (Rate × Net Weight = Amount)
+  - **⚠️ সংশোধন: এই Net Weight DO-র total না, বরং এই নির্দিষ্ট Invoice-এ থাকা item-গুলোর
+    base-UoM qty-র যোগফল** — কারণ একটা DO একাধিক Invoice-এ split হতে পারে, প্রতিটার নিজের
+    weight-ই তার নিজের freight নির্ধারণ করবে
+  - তারপর GST on Freight (Yes/No) → Yes হলে Inclusive/Exclusive + GST Rate
+
+**তার নিচে — Additional Cost (✅ LOCKED, নতুন mechanism):**
+- নতুন master: **"Additional Cost Category"** — inline creatable, একবার তৈরি হলে reusable
+- Drawer-এ optional একাধিক Additional Cost line যোগ করা যায় (যেকোনো তৈরি করা category থেকে),
+  amount **Ad Hoc** (flat), GST resolve হয় Freight-এর একই logic-এ (Yes/No → Inclusive/Exclusive
+  + Rate)
+- প্রতিটা line **removable**
+
+**সবশেষে — Round Off**, তারপর live-recalculated Total Value + GST দেখাবে (Freight/Additional
+Cost যোগ-বাদ দিলে সাথে সাথেই recalculate)।
+
+**Per-row Save → পরের row।** সব row শেষ হলে DO-level-এ একটাই বাটন: **"Post Goods & Create
+Invoice"** — এটাই একসাথে সব Invoice generate করে (P601 posting) আর PGI সম্পন্ন করে, single
+action-এ, পুরো DO-র জন্য। Storage Location আলাদা জিজ্ঞেস করা হয় না (DO Page 2-তেই আগে resolve)।
+
+**✅ 133.13 — IMPLEMENTATION COMPLETE (code-level, 2026-08-28, Claude direct-implemented,
+same session as SO01/SO03 gap-closure round).** Migration `20260828150000_so02_ibn_invoice_grouping.sql`
+— new `additional_cost_category` master + `sales_invoice_additional_cost_line` table + 15 new
+`sales_invoice` columns (inbound_number, e_way_bill_*, freight_mode/rate/net_weight/gst_*,
+additional_cost_total, round_off_amount, fo_id/number/date) + `complete_pgi_invoice_action()`
+rewritten to be per-INVOICE-GROUP (was per-DO) — only the FINAL group in a multi-invoice loop
+flips the DC to DISPATCHED, and REVERSE now only resets DC to CREATED when no other active
+invoice remains against it (was unconditional, wrong once multi-invoice-per-DO exists). Applied
+to dev + migration-integrity reconciled (`in_sync=true`, 482 files). Backend: new
+`do_unified.handlers.ts` functions `computeInvoiceGroups()` (shared grouping engine — buckets DO
+lines by STO/SO/FO per the locked rule, resolves Bill-To/Ship-To straight from the `sales_order`
+row's own frozen `bill_to_*`/`ship_to_*` columns rather than the DC header, which a §133.12
+multi-source DO never populates), `previewInvoiceGroupsHandler` (GET .../invoice-groups),
+`postPgiInvoiceGroupsHandler` (POST .../pgi-invoice-groups — loops groups, each its own
+`post_document` call, §8D-compliant); new `additional_cost_category.handlers.ts` (list/create).
+Routes + ACL registry wired (`PROC_INV_LIST` VIEW/WRITE, same resource as the legacy PGI route).
+**Real bug fixed along the way, not just a new build:** the legacy `createPgiInvoiceHandler`
+(§113.15) reads `dc.sales_order_id/sto_id/customer_id` header fields — a §133.12 multi-source DO
+never populates those (sources live in `delivery_challan_source` instead), so PGI was silently
+broken for every DO created via the new DO01CreatePage.jsx wizard before this fix; the new handler
+reads through `delivery_challan_line`'s own `so_line_id`/`sto_line_id`/`so_map_allocation_id`
+instead, which every DO (old and new) always populates. Frontend: new
+`PgiInvoiceGroupsCreatePage.jsx` (2-page: DO Review, then Invoice-Group table + per-row drawer
+with Invoice preview/Freight/Additional Cost/Round Off/live total), reached from
+`SalesInvoiceListPage.jsx`'s existing per-row "PGI & Invoice" action (old `PgiInvoiceCreatePage.jsx`
+left on disk untouched, additive pattern). **Verified:** `deno check` on every touched/new backend
+file shows zero new errors (only the same pre-existing `.range()/.gt()/.ilike()` Supabase-client
+typing noise already documented elsewhere in this codebase); all 9 CI guards (route-acl-registry,
+company-scope×2, resource-code-domain, hardcoded-role-check, stock-posting, wrong-company-source,
+frontend-payload, jsx-no-undef) exit 0; `eslint` clean on all new/touched frontend files;
+grouping/lookup logic traced against real dev DB rows (a real CREATED DO's line → so_line →
+sales_order chain), confirmed it correctly resolves or fails-safe exactly the same way the old
+handler already did for legacy pre-SO01-unified SOs (`ship_to_state` NULL → blocked with a clear
+error, not a silent wrong-GST computation). **Not yet done:** live click-through in the deployed
+app (no dev login in this environment) — needs a real SO01-created SO + DO01-created DO (dev has
+none yet with the new `ship_to_state`/`ibn_required` fields populated) to exercise end-to-end.
+
+**✅ Gap-closure round, same day (2026-08-28) — business owner audit challenge again, same
+discipline as SO01/SO03's own round.** A design-vs-code table caught 4 real UI gaps in
+`PgiInvoiceGroupsCreatePage.jsx`, all fixed:
+1. **Page 1 "DO Number দিলে" manual entry** — was entirely missing (page assumed context-only
+   entry from the queue). Added a real Page 0: Company selector + `listDeliveryOrders({status:
+   "CREATED"})` browsable/filterable list, `cellNavigate`-enabled grid, picking a row sets `dcId`
+   and advances — this is the literal manual fallback the design specifies for a direct/bookmarked
+   open, on top of the (already-correct) queue-driven entry path.
+2. **Invoice-group table columns** — added the missing **DO Number** column (was only in the page
+   title), split the combined "Tally Invoice" cell into separate **Tally Invoice Number** and
+   **Tally Invoice Date** columns, and Billing/Ship-To Address columns now render the actual
+   address text (were rendering only the party name).
+3. **Invoice Preview mapping** — was a reduced 6-field subset; expanded to the full sample
+   tax-invoice mapping from §133.13's own locked table: Invoice No/Dated, Delivery Note/Date,
+   Dispatch Doc No/Dispatched Through (from `dc.transporter_display`), LR No+Date (from
+   `dc.lr_number`/`dc.lr_date`), Motor Vehicle No (`dc.vehicle_number`), Destination, e-Way Bill
+   No, and a real resolved **Payment Term name** (was a placeholder string "As per SO Payment
+   Term" — now fetches via `usePaymentTermOptionsQuery` and shows the actual term).
+4. **Per-row "Save → next row" flow** — was a bare "Done — Close" button with no validation/
+   auto-advance. Added `groupInputIsValid()` (shared with the final `allGroupsReady` check, so a
+   row can never advance in a state that would later fail server-side), a "Save & Next Row →"
+   button that validates then jumps to the next unopened group (or closes on the last row), and a
+   separate "Close (without validating)" escape hatch.
+
+Also added: `cellNavigate` on all 5 grids in the page (§133.16-A UI standard), and closed a real
+**backend display gap** found while fixing #3/#4 above — `hydrateSalesInvoice()` (used by
+`getSalesInvoiceHandler`, i.e. `SalesInvoiceDetailPage.jsx`) never fetched
+`sales_invoice_additional_cost_line` rows at all, so a posted invoice's Additional Cost lines were
+completely invisible on its own detail page even though they were correctly written to stock/
+invoice at PGI time. Fixed (embedded `additional_cost_category:category_id(category_name)`
+join, same PostgREST embed-by-FK-column pattern already used ~15 other places in this codebase);
+`SalesInvoiceDetailPage.jsx` gained a new "§133.13" section showing IBN/FO/e-Way Bill/Freight
+detail/Additional Cost lines/Round Off for any invoice that has them (blank/hidden for legacy
+§113.15 invoices, which never had these fields to begin with).
+
+**Verified §133.15 Revoke while auditing SO03/DO "what's left" per the same round:**
+`reverseSalesInvoiceHandler` (§113.15, `delivery_order.handlers.ts`) turned out to already be
+fully generic — it operates purely on `sales_invoice.id` + `stock_document` rows tagged
+`reference_document_type='SALES_INVOICE'`, with zero assumption of the old single-source
+`dc.sales_order_id`/`sto_id` header shape. Combined with this session's earlier
+`complete_pgi_invoice_action()` REVERSE-branch fix (only resets DC to CREATED when no other active
+invoice remains against it), **§133.15's points 1, 3, 4, 5 (stock reversal via P602 at original
+rate, invoice status preserved not deleted, DO released back to the PGI queue for a fresh attempt,
+mandatory reason) all already work correctly for invoices created via the new
+`PgiInvoiceGroupsCreatePage.jsx` engine, with zero code changes needed** — confirmed by reading the
+handler line-by-line against each of the 5 locked Revoke requirements, not assumed.
+**§133.15 point 2 (Dispatch-Reco void) is the one exception — see §133.14 below, it's blocked on
+the same thing.**
+
+All 9 CI guards re-run and pass EXIT=0 after this round; `eslint`/`deno check` clean (only the
+same pre-existing baseline noise, confirmed by line-number diff against the prior check).
+
+### 133.14 — Dispatch Category + Dispatch-Reco (PGI-time write) — ✅ LOCKED (2026-08-28)
+
+**Status (checked 2026-08-28, same round as §133.13's gap-closure):**
+- **Part A (Dispatch Category) — ✅ ALREADY IMPLEMENTATION COMPLETE.** Turned out to have been
+  built during the original §133.7-133.11 SO01 pass, not §133.13 — `deriveDispatchCategory()` in
+  `sales_order.handlers.ts` implements the exact RPS/SRPS/FRPS/FSRPS rule below, called and written
+  into `sales_order.dispatch_category` on every Create. Verified against live code + the
+  `sales_order` table's actual column list (dev). Nothing left to build here.
+- **Part B-F (Dispatch-Reco table + 2-level ratio write) — 🔴 NOT STARTED, genuinely blocked, not
+  skipped out of laziness.** The locked text itself says so explicitly: *"পুরো Reco table
+  schema/report design পরের session-এ হবে, কিন্তু এই write-timing/scope-টা এখনই lock"* — i.e. the
+  business rationale, scope, traceability chain, and ratio FORMULA are locked, but the actual
+  table's column-level schema was deliberately left for a dedicated future session, not this one.
+  Building it now would mean inventing that schema unilaterally for data that feeds real AP
+  billing/costing reconciliation — a correctness-critical financial-data structure, not a UI
+  nuance. Flagged to the business owner rather than built speculatively; needs that dedicated
+  session before implementation starts. (§133.15's own point 2, "Dispatch-Reco void" on Revoke,
+  is blocked on this same missing table for the same reason — everything else in §133.15 already
+  works, see the note in §133.13's gap-closure round above.)
+- **Business owner confirmed (2026-08-28, asked directly rather than assumed): hold Part B for its
+  own dedicated session.** Not built this round.
+
+#### A. Dispatch Category (report filtering, compositional naming)
+Material Type selection অনুযায়ী প্রতিটা dispatch/SO-কে একটা category tag দেওয়া হবে — কোন letter
+(F/S) present তার উপর ভিত্তি করে, RPS বেস ধরে:
+
+| Combination | Category |
+|---|---|
+| শুধু RM/PM/INT | **RPS** |
+| + SFG (FG নেই) | **SRPS** |
+| + FG (SFG নেই) | **FRPS** |
+| + FG + SFG দুটোই | **FSRPS** |
+
+**Migration:** `sales_order`-এ নতুন `dispatch_category` column (stored, report-filter performance-এর
+জন্য)। **BE:** SO Create/Edit handler-এ Material Type selection থেকে compute করে save — Edit SO-তে
+Material Type বদলালে (§133.10) re-compute করতে হবে।
+
+#### B. Reco table-এর আসল উদ্দেশ্য (business rationale, ✅ confirmed)
+Asian Paints টাকা দেয় **Production-এর ভিত্তিতে না, Dispatch-এর ভিত্তিতে।** তাই existing
+production-level Reco (`process_order_line_reco`/`packing_order_line_reco` — batch-এর জন্য single
+Standard/Actual/AP-Approved number, §133-এর আগের অংশে code-verified করা হয়েছে এরা কখনো dispatch-এর
+সাথে touch করে না) যথেষ্ট না — একটা batch একাধিক আলাদা Invoice-এ split হয়ে dispatch হতে পারে, আর
+প্রতিটা Invoice-এর নিজস্ব RM/PM/INT Standard/Actual/AP-Approved দরকার।
+
+#### C. Scope — কোন dispatch এই mechanism-এ ঢুকবে
+- **MTO, HPS, MTEST dispatch** — সবসময় (production-tied, Prodshade আলাদা হলেও same mechanism)
+- **RPS (pure RM/PM/INT sale), শুধু Bill-To = Asian Paints হলে** (Dispatch Type: Dependent Direct/
+  Depot/No-Inbound, Independent Party Asian-billed) — এখানে **AP-Approved Qty = সরাসরি Dispatch
+  Qty**, কোনো ratio/production-chain লাগে না
+- **MTS** — এই mechanism-এ ঢোকে না, AC05-এর নিজস্ব (September 2026 redesign-এর পরের) আলাদা mechanism
+
+#### D. Traceability chain (✅ code-verified, 2026-08-28)
+- **FO সরাসরি Packing PO-র সাথে map হয়** (Plan Feed allocation) — Process PO-র সাথে না
+- **Packing PO ↔ Process PO** সংযুক্ত থাকে `packing_order.process_order_id` FK দিয়ে (verified —
+  MTEST-এর PTEST Packing PO-ও এই একই FK ব্যবহার করে তার MTEST Process PO-র সাথে, Prodshade আলাদা
+  namespace হলেও architecture identical, কোনো special-case লাগে না)
+- Dispatch (SKU/Invoice) তাই **সরাসরি Process PO-কে না, Packing PO-কে touch করে** — RM/INT বের করতে
+  Packing PO হয়েই যেতে হয়
+
+#### E. Derivation formula — 2-level ratio (✅ LOCKED, §104.7-এর existing lock-এর সম্প্রসারণ)
+
+**Level 1 — Packing PO-র নিজস্ব ratio Process PO-র সাথে (আগে থেকেই lock, §104.7):**
+`packingPoRatio = (এই Packing PO-র SFG draw qty) ÷ (Process PO batch-এর total actual output qty)`
+
+**Level 2 — Invoice-এর নিজস্ব ratio Packing PO-র সাথে (নতুন, এই session-এ locked):**
+`invoiceRatio = (এই Invoice-এ dispatch হওয়া qty, এই Packing PO থেকে) ÷ (সেই Packing PO-র total output)`
+
+**RM/INT (Process PO থেকে):**
+`RM/INT as per Dispatch = process_order_line_reco value × packingPoRatio × invoiceRatio`
+
+**PM (সরাসরি Packing PO থেকে, Process PO হয়ে না):**
+`PM as per Dispatch = packing_order_line_reco value × invoiceRatio`
+
+⚠️ **গুরুত্বপূর্ণ — একটাই uniform ratio না, প্রতিটার (Standard/Actual/AP-Approved) নিজস্ব আলাদা
+ratio লাগবে:**
+- `standardRatio = Dispatch Qty ÷ Standard Output Total` (Standard Output Total = SUM(standard_qty),
+  সব RM/INT line মিলিয়ে)
+- `actualRatio = Dispatch Qty ÷ Actual Output Total`
+- `apApprovedRatio = Dispatch Qty ÷ AP-Approved Output Total`
+
+এই তিনটা total **ভিন্ন হতে পারে** — real prod data দিয়ে proof করা হয়েছে (PO 9300000173, batch
+BM05757): CARAMEL COLOR DS400-এর কোনো formal dosage নেই (`dosage_pct=NULL`,
+`is_formulation_line=false`, Standard=0) কিন্তু Actual/AP-Approved-এ 0.57 KG ব্যবহার হয়েছে —
+ফলে Standard Output Total (7130.000) ≠ Actual/AP-Approved Output Total (7130.570)। তাই
+standardRatio ≠ actualRatio এই batch-এর জন্য (দুটো ভিন্ন সংখ্যা)।
+
+**RM/INT-এর ratio Base UoM (KG)-ভিত্তিক, PM-এর ratio pack-count-ভিত্তিক** (PM consumption
+per-pack scale করে, যেমন ১টা barrel/label প্রতি pack-এ — per-KG না)।
+
+#### F. PGI-সময় Dispatch-Reco table-এ যা লেখা হবে (নতুন table, `process_order_line_reco`/
+`packing_order_line_reco` থেকে আলাদা — ওগুলো কখনো dispatch touch করে না)
+
+**Document identifiers (header-level, flat/denormalized COID-style, প্রতি line-এ repeat):**
+- PACE Invoice Number + PACE Invoice Date
+- Tally Invoice Number + Tally Invoice Date
+- Inbound Number (থাকলে)
+- DO Number, SO/STO Number, FO Number (থাকলে)
+- Dispatch Category (RPS/SRPS/FRPS/FSRPS)
+- Company ID
+
+**Production-side traceability (MTO/HPS/MTEST):**
+- Process PO Number + Batch Number, Packing PO Number, po_type
+
+**Dispatch quantity:** এই Invoice-এ এই batch/SKU-র dispatch qty (KG)
+
+**Per-material line (RM/PM/INT):** Material ID + Line Material Type, Standard as per Dispatch,
+Actual as per Dispatch, AP-Approved as per Dispatch
+
+**RPS-to-Asian dispatch (সরল case):** Material ID, Dispatch Qty = AP-Approved Qty (সরাসরি)
+
+**Implementation note:** এই write §8D-এর নিয়ম অনুযায়ী PGI posting-এর **একই transaction-এ** হতে
+হবে (`createPgiInvoiceHandler`-এর P601 posting-এর সাথে একসাথে, আলাদা round-trip না) — পুরো
+Reco table schema/report design পরের session-এ হবে, কিন্তু এই write-timing/scope-টা এখনই lock।
+
+### 133.15 — Invoice/PGI Revoke — SAP VF11/VL09-এর সমতুল্য, PACE-এ একটাই combined action (✅ LOCKED — 2026-08-28)
+
+#### পটভূমি — SAP-এর standard process
+- **Cancel Invoice (VF11):** Invoice delete হয় না, একটা cancellation/reversal invoice তৈরি হয়ে
+  original-কে net করে শূন্য করে (audit-এর জন্য দুটোই থাকে) — শুধু billing/financial document,
+  stock movement touch করে না
+- **Cancel PGI (VL09):** আলাদা ধাপ, আসল goods movement reverse করে stock ফিরিয়ে আনে
+- **Sequence — LIFO:** Invoice তৈরি হয় PGI-র পরে, তাই reversal-ও উল্টো দিকে যায় — আগে Invoice
+  Cancel, তারপর PGI Cancel
+
+#### PACE-এ পার্থক্য — কেন একটাই combined action
+PACE-এ Invoice আর PGI **একসাথে, একটাই action**-এ তৈরি হয় ("Post Goods & Create Invoice",
+§133.13) — তাই SAP-এর মতো আলাদা করে "শুধু Invoice Cancel" বা "শুধু PGI Cancel" করা যাবে না।
+**একটাই combined "Revoke" action** লাগবে যেটা দুটোই একসাথে ফেরায়।
+
+#### Scope — per-Invoice, পুরো DO-র জন্য না
+একটা DO থেকে একাধিক Invoice হতে পারে (§133.13-এর IBN grouping)। **Revoke প্রতিটা নির্দিষ্ট
+Invoice-এর জন্য আলাদাভাবে করা যায়** — একই DO-র অন্য Invoice-group-গুলো অপ্রভাবিত থাকে (কারণ
+প্রতিটা Invoice-group-এর নিজস্ব P601 posting আলাদা করে tagged, §133.14-এর
+`reference_document_id` দিয়ে)।
+
+#### Revoke হলে যা যা হয় (✅ LOCKED)
+1. **Stock reversal:** সেই Invoice-এর সব P601 posting-এর বিপরীতে **P602** পোস্ট হয়, প্রতিটা
+   original leg-এর নিজস্ব valuation_rate-এ (existing `reverseSalesInvoiceHandler` pattern,
+   §113.15-এ আগে থেকেই built — এই নতুন unified design-এর জন্য extend করা হবে)
+2. **Dispatch-Reco void:** §133.14-এ লেখা সেই Invoice-এর Dispatch-Reco entry-গুলো **delete না
+   হয়ে `is_voided=true`/`voided_at` set হয়** (PR19/COR6-এর established append-on-reversal
+   pattern — history preserve থাকে, audit-এ দেখা যায়)
+3. **Invoice document status:** REVERSED-এ যায়, delete হয় না — Tally Invoice Number/Date/PACE
+   Invoice Number সব preserve থাকে reference-এর জন্য
+4. **Qty release:** সেই Invoice-এর items আবার **SO Map-এর "Mapped, dispatch হয়নি" pool-এ ফিরে
+   যায়** — একটা নতুন DO/Invoice-এ আবার ব্যবহারযোগ্য হয়ে যায়
+5. **Mandatory Reason:** Revoke করার সময় একটা reason/remark বাধ্যতামূলক (PR19/Batch-Release-এর
+   established pattern অনুসরণ করে)
+
+#### ACL
+Revoke = আলাদা ACL action (**EDIT**), Create/Post-এর (**WRITE**) থেকে ভিন্ন — §113.15-এর
+`reverseSalesInvoiceHandler`-এর already-established pattern ("reversal authority is grantable to
+a different role later without touching the create handlers")। বর্তমানে Create SO-র মতোই
+**Accounts department**-কেই এই ACL action grant করা হবে — ভবিষ্যতে আলাদা rank-এ narrow করা যাবে
+প্রয়োজন হলে, কোড বদলাতে হবে না।
+
+### 133.16 — UI standard + Go-live Catch-up Backfill (temporary, time-boxed) — ✅ LOCKED (2026-08-28)
+
+#### A. UI standard (permanent, সব Sales-chain page-এ প্রযোজ্য)
+SO01/SO03/SO02 আর তাদের যত report/detail page — সব **AC01-এর design pattern অনুসরণ করবে**:
+ErpDenseGrid + `cellNavigate` + `useErpScreenHotkeys` (§133.8-K-তে আগেই lock, এখানে uniformly
+সব page-এ প্রযোজ্য বলে reconfirm), full keyboard navigation (Arrow/Tab/Enter/Space), proper
+Drawer usage, ভালো Excel export — কারণ Dispatch-এর কাজের পরিমাণ অনেক বড়, keyboard-first UI না
+হলে user-দের জন্য কঠিন হয়ে যাবে।
+
+#### B. Go-live Catch-up Backfill — ⚠️ TEMPORARY mechanism, permanent Invoice/PGI design
+(§133.13)-থেকে আলাদা, 15 September 2026-এর পরে dead/disabled হয়ে যাবে
+
+**পটভূমি:** Dispatch module-এর design অনেক দেরিতে finalize হওয়ায়, August-এর real dispatch-গুলো
+এখন (September-এ) system-এ entry হবে। এটা backdating না — সত্যিকারের ঐতিহাসিক ঘটনা তাদের আসল
+তারিখেই post হচ্ছে, তাই WAR chain স্বাভাবিক chronological order-এই সঠিকভাবে calculate হয়, কোনো
+special ripple-recalculation লাগে না।
+
+**Phase 1 — এখন থেকে 7 September 2026: Automated posting-date resolution**
+
+| Dispatch Category | Posting Date/Time resolution |
+|---|---|
+| **RPS** | সরাসরি **Tally Invoice Date** |
+| **MTEST** | **28–31 August-এর মধ্যে random date** (কোনো নির্দিষ্ট reference date নেই বলে) |
+| **MTO/HPS** | সেই dispatch-এর Packing PO-র **Final timestamp + 10 মিনিট** (নিশ্চিত করে dispatch/issue posting সবসময় production/receipt posting-এর পরে বসে) — **ব্যতিক্রম:** Packing PO Final date 30 বা 31 August হলে, posting time জোর করে **31 August রাত 11:00PM–11:50PM**-এর মধ্যে নেওয়া হবে |
+
+**Phase 2 — 8 September থেকে 15 September 2026:** স্বাভাবিক real-time posting আশা করা হয়, কিন্তু
+এখনো hard-enforced না (grace/transition period)।
+
+**Phase 3 — 15 September 2026-এর পর: strict enforcement**
+**Tally Invoice Date ≠ PGI (posting) Date হলে posting হার্ড-ব্লক হয়ে যাবে** — এর ফলে user-রা
+বাধ্য হবে timely entry করতে, কোনো backdated posting আর সম্ভব হবে না।
+
+**Accepted trade-off (Phase 1-এর জন্য):** এই সময়ে PACE-এর নিজস্ব SO/DO/Invoice **sequence
+number** (global auto-increment)-গুলো real chronological order-এর সাথে সাময়িকভাবে নাও মিলতে
+পারে (September-এর timely entry আর August-এর backlog entry একসাথে চলবে বলে) — এটা সমস্যা না,
+কারণ এই number গুলো Tally/Asian-এর কোথাও ব্যবহার হয় না, সম্পূর্ণ internal reference।
+
+**Implementation note:** এই পুরো mechanism **temporary/time-boxed** — কোড-এ clearly flag করে
+রাখতে হবে (যেমন একটা config/feature-flag দিয়ে date-cutoff চেক করা, hardcoded date magic-number
+ছড়িয়ে না দিয়ে) যাতে 15 September-এর পরে Phase 1/2-এর logic সম্পূর্ণ disable হয়ে যায় আর শুধু
+strict enforcement থেকে যায়।
+
+**Business owner confirmed (2026-08-28, asked directly): এখনই দরকার নেই।** Mechanism-টা 7
+September 2026 থেকে কার্যকর হওয়ার কথা — এখনো সময় আছে, later build করা যাবে।
+
+---
+
+### 133.17 — SO01 (Create SO + SO Map) IMPLEMENTATION COMPLETE (Claude direct-implemented, 2026-08-28)
+
+Business owner directive this session: implement §133.7-§133.11 directly (not via Codex),
+following the 16-pattern checklist + CLAUDE.md §8 rules + this doc + PROD-ACL-Access-Decisions.md,
+one page fully finished before moving to the next (DO/Invoice/Reco/Revoke, §133.12-§133.16 —
+still design-only, implementation not started).
+
+**Schema (2 migrations, both applied+reconciled dev, `migration-integrity-check.mjs` confirms
+`in_sync=true` at every step):**
+- `20260828100000_so01_unified_dispatch_redesign.sql` — `sales_order`/`sales_order_line` unified
+  columns (dispatch_type, bill_to_*, material_types, per-line fg_type/batch/HSN/pack/costing_rate_month
+  etc.), new `erp_master.additional_cost_category`, `plan_feed.party_id` real FK fix.
+- `20260828110000_so_map_allocation.sql` — `erp_procurement.sales_order_map_allocation` (FO or
+  address allocation, qty-level, ACTIVE/RELEASED).
+- `20260828120000_so01_manual_fg_sku.sql` — `sales_order_line.material_id` made nullable +
+  new `manual_sku_name` text column + CHECK (one of the two always set). Real gap found while
+  building §133.9-G's manual-FG-SKU warning: a manually-typed SKU literally cannot be saved
+  against a real material FK, since no material row exists to point to — the original
+  redesign migration never anticipated this, so this was a genuinely new schema need, not an
+  oversight in a locked design.
+
+**Backend (`sales_order.handlers.ts`, `so_map.handlers.ts`, `ac06_workspace.handlers.ts`,
+routes+registry):**
+- `createSalesOrderUnifiedHandler` — full 5-branch Bill-To/Ship-To resolution, dispatch_category
+  derivation, per-line RM/PM/INT/SFG/FG logic, CGST/SGST/IGST split, HSN write-back (§133.8-F),
+  manual-FG-SKU support (§133.9-G, `material_id` OR `manual_sku_name`, never both null).
+- `updateSalesOrderUnifiedHandler`/`cancelSalesOrderUnifiedHandler`/`closeSalesOrderUnifiedHandler`
+  (§133.10) — Edit blocks removing/reducing a Mapped line below its allocated qty and never
+  touches Bill-To/Ship-To/dispatch_type; Cancel releases every ACTIVE `sales_order_map_allocation`
+  row then sets CANCELLED; Close requires a mandatory reason, sets CLOSED.
+- `so_map.handlers.ts` — 7 handlers (list-for-map, status, FO options, address options, map-to-FO,
+  map-to-address, unmap), shared `validateAndUpsertAllocation()` implementing every §133.9 rule
+  (per-line qty cap, per-FO capacity cap, material-mismatch hard-block except FG MTO/HPS/MTEST
+  soft-warning via `sku_mismatch_confirmed`).
+- New `listAc06ApprovedMonthsHandler` (`GET /api/production/ac06/approved-months`) — SO01's
+  "Costing Rate Month" dropdown source (§133.8-E): a month qualifies only when every one of that
+  company's non-excluded AC06 line is VERIFIED (checked identically whether the month is still
+  OPEN or already CLOSED, since closing an AC06 month never itself re-checks verification).
+
+**Bug pattern #2 (company-scope gap) caught by `company-scope-write-acl-guard.mjs` and fixed
+same session:** `updateSalesOrderUnifiedHandler`/`cancelSalesOrderUnifiedHandler`/
+`closeSalesOrderUnifiedHandler` each resolved the SO's own `company_id` (from the fetched row,
+not the session's) and mutated, but only called `assertCompanyScope()` (membership) — never a
+secondary EDIT-tier ACL check at that specific company. Fixed by generalizing the existing
+`canMaintainSo01Create()` helper (already used by Create) to accept an `actionCode` parameter and
+calling it with `"EDIT"` in all three. Confirmed live: `CAP_PROC_ACCOUNTS` already carries
+EDIT/VIEW/WRITE on `PROC_SO_CREATE` from the earlier §133.11 capability-leak fix, so no additional
+ACL provisioning was needed — only the code-level check was missing. All 9 relevant CI guards
+(`route-acl-registry-guard`, `company-scope-write-acl-guard`, `company-scope-guard`,
+`resource-code-domain-guard`, `hardcoded-role-check-guard`, `frontend-payload-guard`,
+`jsx-no-undef-guard`, `stock-posting-guard`, `wrong-company-source-guard`) pass EXIT=0 after every
+change in this pass, not just at the end.
+
+**Frontend:**
+- `SO01CreatePage.jsx` — Page 1 + Page 2 wizard; AC06-backed Costing Rate Month dropdown (MTO/HPS,
+  + fixed "Manual" entry), MTEST auto-derives SO Date's month/year read-only, MTS shows a
+  deferred/spec-only placeholder and never sends a real value (§133.8-E); manual-FG-SKU toggle +
+  red "not found in PACE" warning right under that row (§133.9-G).
+- `SODetailPage.jsx` — extended with an Edit-mode header card (SO Date/Payment Term/Freight Term)
+  and editable line cells (Rate/Qty/GST/HSN/Batch), both gated to non-terminal status; legacy
+  `handleCancel`/`cancelSalesOrder` call replaced with the unified cancel (cascades SO-Map release,
+  which the legacy path never did); new Close action added. Cancel/Close both available for any
+  non-terminal status now, not just CREATED.
+- `SO01Page.jsx` (new) — the literal 3-tab landing shell (Create SO / SO Map / Create FG STO,
+  §133.7/§133.9). "Create FG STO" stays the locked placeholder. Wired as one component reused for
+  both `sales-orders/create` and `sales-orders/map` routes (different `initialTab`), so no new
+  route/ACL/menu entry was needed — `SO01CreatePage.jsx`/`SO01MapPage.jsx` stay as the tab bodies.
+
+**Verification discipline applied throughout (not just at the end):** every backend edit followed
+by `deno check` with a `git stash`/`git stash pop` before/after comparison (baseline held at 2
+pre-existing `.range()` errors in `sales_order.handlers.ts`, 5 in `production.routes.ts`'s import
+graph — zero new errors at every step); every frontend edit followed by `eslint` (zero
+errors/warnings throughout); migration integrity reconciled and re-verified after each of the 3
+migrations (`in_sync=true` each time, `NOTIFY pgrst, 'reload schema'` run each time).
+
+**Deliberately out of scope for this pass, unchanged from the earlier gap list:** a literal
+separate "Document Name" column distinct from the SKU picker (the combobox's own label already
+shows code+name together; treated as a display nuance, not a functional gap). DO/Invoice/
+Dispatch-Reco/Revoke/catch-up-backfill (§133.12-§133.16) remain design-locked, implementation not
+started — next in sequence per the locked 4-step module order (CLAUDE.md §6).
+
+### 133.18 — Dispatch-Reco pre-work: FO↔Packing-PO wiring + Plan Feed dispatch_status (✅ LOCKED — 2026-08-28)
+
+Surfaced while scoping §133.14 Part B (Dispatch-Reco) for real implementation. Business owner
+walked through the actual traceability chain with live prod data before deciding whether the
+Reco table is truly buildable now — this section captures what that walkthrough found and locked.
+
+**Finding 1 — the FO↔Packing-PO link already exists as data, just never read by any code.**
+`erp_production.plan_feed_packing_order_allocation` (`plan_feed_id`, `packing_order_id`,
+`allocated_qty_kg`) was built during the §83.18-REVISED Plan Feed redesign specifically for this,
+and has real data in dev (verified). But `do_unified.handlers.ts`'s DO-line-building logic only
+ever reads `sales_order_line.packing_order_id` directly — and that column is **never populated**
+by `sales_order.handlers.ts`'s `prepareUnifiedSoLine()` (verified: 0 of 4 dev `sales_order_line`
+rows have it set; `SO01CreatePage.jsx` has no UI to capture it, correctly so — for MTO/HPS the
+Packing PO doesn't exist yet at SO-create time). The comment in `do_unified.handlers.ts` claiming
+"packing_order_id straight off sales_order_line when SO Map (or SO create) already set them" was
+aspirational, never actually true. **Fix (not yet built):** when building a DO line from an
+FO-linked `sales_order_map_allocation`, resolve `packing_order_id` via
+`plan_feed_packing_order_allocation` (keyed by the allocation's `fo_id`) instead of the dead
+`sales_order_line.packing_order_id` column. Open sub-question not yet resolved: when one FO maps
+to *multiple* Packing POs (real scenario, verified in prod — e.g. one FO's demand split across 2
+batches), which specific Packing PO does a *partial* DO/dispatch draw from, and in what order/
+proportion? Needs the same kind of FIFO-or-explicit-choice decision §133.12 already made for
+DO01's own multi-source location splits — not yet decided for this specific case.
+
+**Finding 2 — Plan Feed's own `dispatch_status` field is a real placeholder, never wired.**
+`plan_feed.handlers.ts`'s Total Table row builder hardcodes `dispatchedKg = 0` and
+`dispatch_status: "UNDISPATCHED"` unconditionally (§83.18-REVISED's own original note already
+flagged this as "placeholder until Dispatch/L5 exists" — confirmed still true). Now that SO/DO/
+Invoice exist (this session), the real chain is buildable: `sales_order_map_allocation` (this
+FO's allocations) → `delivery_challan_line` (via `so_map_allocation_id`) →
+`sales_invoice_line`/`sales_invoice.status='POSTED'` (via `dc_line_id`) → `SUM(quantity)` = real
+`dispatchedKg`. **✅ LOCKED (business owner confirmed):** wire this up for real, then derive
+`dispatch_status` = FULLY_DISPATCHED (dispatchedKg ≥ allocatedKg) / PARTIAL (0 <
+dispatchedKg < allocatedKg) / UNDISPATCHED (dispatchedKg = 0).
+
+**Finding 3 — SO Map's FO picker needs two new filters, both now unblocked by Finding 2's fix.**
+`listFoOptionsForSoHandler` (`so_map.handlers.ts`) currently only filters
+`plan_feed.status != 'CANCELLED'` and remaining-allocatable-qty > 0 — it does **not** filter by
+"has at least one Packing PO already allocated" (§83.18's `packing_po_count`, already computed
+elsewhere in `plan_feed.handlers.ts`, just never plumbed into this specific endpoint) nor by
+dispatch completeness. **✅ LOCKED:** once Finding 2's real `dispatch_status` exists, the FO picker
+excludes FOs that are dispatch-complete or cancelled, and only lists FOs with
+`packing_po_count > 0`; selecting an FO shows its mapped Packing PO(s)' material/pack/volume
+breakdown (straight off `packing_order`'s own `material_id`/`num_packs`/`fill_qty_per_pack`/
+`actual_qty_kg`) so the user can see what's actually available before committing the SO↔FO map.
+**Not yet implemented** — this is the immediate next backend+frontend task, before Dispatch-Reco
+itself can be built on top of a working link.
+
+**All 6 open sub-questions resolved same day (2026-08-28), immediately after the above findings
+were surfaced — business owner answered directly, no further design session needed for these:**
+
+1. **✅ LOCKED — multiple Packing PO per FO is a manual user choice, not FIFO.** When an FO maps
+   to more than one Packing PO, the user picks which Packing PO(s) and how much from each at
+   **DO creation time** (the existing DO01 item-picker drawer, `SourceItemsDrawer` in
+   `DO01CreatePage.jsx` — same UI pattern already built for RM/PM/INT multi-source picks, just
+   needs FO-linked FG/SFG lines to also expose a Packing PO choice + remaining-qty-per-PO, which
+   they don't yet). All of an FO's mapped Packing POs can legitimately be used together across
+   one or more DOs — no restriction. This replaces any FIFO assumption for this specific case
+   (§133.12's location-split FIFO rule stays as-is for storage-location splitting; this is a
+   separate, Packing-PO-level choice).
+2. **✅ LOCKED — PM's "packs dispatched" falls out of #1 for free.** Once the user has picked a
+   specific Packing PO and quantity at DO-line time, the pack count is directly known from that
+   same DO line (via the chosen Packing PO's own `fill_qty_per_pack`) — no separate derivation
+   step needed.
+3. **✅ LOCKED — "Bill-To = Asian Paints" is already fully determined by `dispatch_type`, nothing
+   new needed.** Direct/Depot/No-Inbound dispatch types already require a Parent Company + VDC at
+   SO creation (§133.8-B), and SO Map's own address resolution already flows from that same VDC —
+   this *is* the existing Asian-Paints-identification mechanism, just never named that
+   explicitly before. So: `dispatch_type` in {DEPENDENT_DIRECT, DEPENDENT_DEPOT,
+   DEPENDENT_NO_INBOUND, INDEPENDENT_PARTY_ASIAN_BILLED} = Bill-To is Asian Paints (RPS-Asian-billed
+   scope applies); plain `INDEPENDENT_PARTY` = it isn't (no Reco row for a plain RPS dispatch).
+4. Dispatch-Reco table schema — drafting now (see below), same round.
+5. Dispatch-Reco write slots into `postPgiInvoiceGroupsHandler` — building alongside the schema.
+6. **✅ LOCKED — an FO-linked Packing PO cannot be PR19/COR6-corrected directly.** It must first
+   be **unmapped from the FO** (releasing the `plan_feed_packing_order_allocation` row), and only
+   then can PR19 (partial reversal) or COR6 (correction) run against it. This structurally
+   prevents a Dispatch-Reco row from ever referencing a batch that gets corrected out from under
+   it after the fact — by the time a correction is even possible, the FO link (and therefore any
+   live Reco dependency on that specific mapping) is already gone.
+
+### Implementation round, same day (2026-08-28) — Dispatch-Reco write, Revoke-void, and Backfill all built
+
+Business owner asked for all 3 in one go, immediately after the pre-work (Findings 1-3 above) and
+the 6 sub-question answers landed. All 3 are now code-complete, verified.
+
+**1. Dispatch-Reco table + ratio computation + PGI-time write.** Migration
+`20260828160000_dispatch_reco.sql` — new `erp_production.dispatch_reco` table matching Section F's
+field list exactly. `do_unified.handlers.ts` gained `computeDispatchRecoRows(group)`: Shape 1 (any
+line carrying a resolved `packing_order_id` — the exact signal §133.18 established for "this is an
+MTO/HPS/MTEST FG/SFG dispatch with a real batch behind it") computes the full 2-level ratio chain
+(`packingPoRatio` = that Packing PO's own `actual_qty_kg` ÷ its Process PO's `actual_qty`;
+`invoiceRatio` = this dispatch's qty ÷ that Packing PO's own total, KG-basis for RM/INT via
+`process_order_line_reco`, pack-count-basis for PM via `packing_order_line_reco` — Standard/
+Actual/AP-Approved each independently multiplied through their own values, never one shared
+ratio). Shape 2 (a plain RM/PM/INT line with no `packing_order_id`, only when the group's SO has
+`dispatch_category='RPS'` AND `dispatch_type` identifies Asian Paints as Bill-To per the locked
+rule above) is a direct passthrough: `ap_approved_qty = dispatch_qty`, `standard_qty`/`actual_qty`
+left NULL. Wired into `postPgiInvoiceGroupsHandler`'s per-group loop; the computed rows travel in
+`p_context->'dispatch_reco_lines'` and are written by `complete_pgi_invoice_action()`
+(migration `20260828170000_dispatch_reco_write_and_revoke_void.sql`) in the exact same transaction
+as that group's own P601 posting (§8D) — all derivation stays in TypeScript, the SQL side is a
+pure `INSERT ... SELECT FROM jsonb_array_elements(...)`, no computation happens in the database.
+
+**2. §133.15 point 2 (Dispatch-Reco void on Revoke) — same migration.** The REVERSE branch of
+`complete_pgi_invoice_action()` now also runs `UPDATE erp_production.dispatch_reco SET
+is_voided=true, voided_at=..., voided_by=... WHERE invoice_id=... AND is_voided=false` — never
+deletes, matching this table's own PR19/COR6-style columns. A 0-row no-op for a legacy §113.15
+invoice or an RPS/STO dispatch that never had a Reco row to begin with, which is expected.
+
+**3. §133.16 Part B (Go-live Catch-up Backfill) — new isolated file
+`_shared/dispatchBackfillPosting.ts`.** All 3 calendar cutoffs (`PHASE_1_END`/`PHASE_2_END`, plus
+the MTEST random-window constants) and both Phase-1 resolution rules live in this one file only —
+deliberately kept out of the core posting logic so the entire mechanism can be deleted in a single
+place once Phase 3 becomes the business owner's confirmed permanent state (the file's own
+`isPastBackfillWindow()` says so in its doc-comment). Wired into `postPgiInvoiceGroupsHandler`,
+computed once per group before the movements loop: **Phase 1** (now through 7 Sept 2026)
+auto-resolves `posting_date` — RPS → Tally Invoice Date directly; MTEST (any line's Packing PO
+`po_type='PTEST'`) → a random day in 28-31 August; MTO/HPS (any line's Packing PO
+`po_type` in `PMTO`/`PHPS`) → that Packing PO's own `finalized_at` + 10 minutes, with the locked
+exception that a raw `finalized_at` date of 30 or 31 August collapses to 31 August specifically.
+**Phase 2** (8-15 Sept) uses today's real date, no enforcement yet. **Phase 3** (after 15 Sept)
+hard-blocks (`PGI_BACKFILL_WINDOW_CLOSED_DATE_MISMATCH`, 400) unless Tally Invoice Date already
+equals today. One real schema fact confirmed while building this: `posting_date` on both
+`stock_document` and `stock_ledger` is a plain `date` column with no time component — so the
+design's own "11:00PM-11:50PM" detail for the MTO/HPS exception has no separate storable effect
+beyond picking 31 August as the date; documented as such in the file's own comment rather than
+silently dropped without explanation.
+
+**Verified, same discipline as every other round this session:** `deno check` on every touched/new
+backend file (`do_unified.handlers.ts`, `dispatchBackfillPosting.ts`, `so_map.handlers.ts`,
+`plan_feed.handlers.ts`) — zero new errors each time, re-run after every individual edit, not just
+at the end (only the same pre-existing `.range()/.gt()/.or()` baseline noise already documented
+elsewhere in this codebase). All 9 CI guards exit 0 after this round. Both new migrations applied
+to dev and migration-integrity reconciled (`in_sync=true`, 484 files,
+md5 `c6b302b25c4908d5e5b10940548519fa`). **Not yet done:** live click-through in the deployed app
+(no dev login in this environment — same limitation noted throughout this whole session's
+Sales-chain work) and a Dispatch-Reco report/query UI (this table is write-only for now, exactly
+as this section's own original text said it would be — a separate future ask, not part of what was
+requested in this round).
