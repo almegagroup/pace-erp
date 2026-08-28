@@ -21,6 +21,9 @@
 const PHASE_1_END = "2026-09-07"; // Phase 1: automated posting-date resolution (this file's own rules)
 const PHASE_2_END = "2026-09-15"; // Phase 2: grace period, real-time posting expected but not enforced
 // Phase 3 (after PHASE_2_END): strict enforcement, this file's resolution logic no longer applies at all.
+// Only August invoices are historical catch-up. A new September dispatch must retain its
+// own invoice date even while Phase 1 remains open for August backfill.
+const HISTORICAL_BACKFILL_INVOICE_END = "2026-08-31";
 
 const MTEST_RANDOM_WINDOW_START = "2026-08-28"; // inclusive
 const MTEST_RANDOM_WINDOW_END_DAY = 31; // August only -- no confirmed reference date exists for MTEST, so any day in this window is equally valid per the locked design.
@@ -41,6 +44,10 @@ export function resolveBackfillPhase(todayIso: string): BackfillPhase {
 // "implementation note").
 export function isPastBackfillWindow(todayIso: string): boolean {
   return resolveBackfillPhase(todayIso) === "PHASE_3";
+}
+
+export function isHistoricalBackfillInvoiceDate(tallyInvoiceDate: string): boolean {
+  return tallyInvoiceDate <= HISTORICAL_BACKFILL_INVOICE_END;
 }
 
 function randomInt(maxExclusive: number): number {
@@ -83,10 +90,10 @@ export type BackfillClassification = {
   mtoHpsPackingPoFinalizedAtIso: string | null;
 };
 
-// Phase 1 -- resolve this invoice-group's own posting_date. Only ever
-// called when resolveBackfillPhase() says PHASE_1; Phase 2/3 callers use
-// today's real date (Phase 2) or hard-block on a Tally-Date mismatch
-// (Phase 3, see assertPhase3PostingDateMatch below) instead.
+// Phase 1 -- resolve an August historical invoice-group's own posting_date.
+// September-or-later invoices bypass this resolver and retain their Tally Invoice Date.
+// Phase 2/3 callers use today's real date (Phase 2) or hard-block on a
+// Tally-Date mismatch (Phase 3, see assertPhase3PostingDateMatch below).
 export function resolvePhase1PostingDate(classification: BackfillClassification, tallyInvoiceDate: string): string {
   if (classification.hasMtoHpsBatch && classification.mtoHpsPackingPoFinalizedAtIso) {
     return resolveMtoHpsPostingDate(classification.mtoHpsPackingPoFinalizedAtIso);

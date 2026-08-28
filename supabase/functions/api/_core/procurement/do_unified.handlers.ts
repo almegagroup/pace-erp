@@ -27,6 +27,7 @@ import { getAvailableQty, undoCsnDispatchForLines } from "./delivery_order.handl
 import { deriveSalesInvoiceGstType, getSnapshotForIssue, hasPhysicalInventoryBlock } from "./sales_order.handlers.ts";
 import {
   assertPhase3PostingDateMatch,
+  isHistoricalBackfillInvoiceDate,
   resolveBackfillPhase,
   resolvePhase1PostingDate,
   type BackfillClassification,
@@ -1707,13 +1708,14 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       // isolated entirely in dispatchBackfillPosting.ts -- delete that file
       // + this block once Phase 3 is the business owner's confirmed
       // permanent state). Phase 1 (now through 7 Sept 2026): auto-resolve
-      // posting_date per Dispatch Category. Phase 2 (8-15 Sept): today's
-      // real date, no enforcement yet. Phase 3 (after 15 Sept): hard-block
-      // unless Tally Invoice Date already equals today.
+      // posting_date per Dispatch Category for August historical invoices
+      // only; September-or-later invoices retain their Tally Invoice Date.
+      // Phase 2 (8-15 Sept): today's real date, no enforcement yet. Phase 3
+      // (after 15 Sept): hard-block unless Tally Invoice Date equals today.
       const today = todayIsoDate();
       const backfillPhase = resolveBackfillPhase(today);
       let resolvedPostingDate = today;
-      if (backfillPhase === "PHASE_1") {
+      if (backfillPhase === "PHASE_1" && isHistoricalBackfillInvoiceDate(tallyInvoiceDate)) {
         const batchPkoIds = [...new Set(group.lines.map((l) => l.packing_order_id).filter((id): id is string => Boolean(id)))];
         const { data: backfillPkoRows, error: backfillPkoError } = batchPkoIds.length
           ? await serviceRoleClient.schema("erp_production").from("packing_order").select("id, po_type, finalized_at").in("id", batchPkoIds)
@@ -1726,6 +1728,8 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
           mtoHpsPackingPoFinalizedAtIso: mtoHpsPko ? String(mtoHpsPko.finalized_at) : null,
         };
         resolvedPostingDate = resolvePhase1PostingDate(classification, tallyInvoiceDate);
+      } else if (backfillPhase === "PHASE_1") {
+        resolvedPostingDate = tallyInvoiceDate;
       } else if (backfillPhase === "PHASE_3") {
         try {
           assertPhase3PostingDateMatch(tallyInvoiceDate, today);
