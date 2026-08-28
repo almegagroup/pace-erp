@@ -151,7 +151,7 @@ function computeLinePreview(line, gstType) {
   let taxableValue;
   let gstAmount;
   if (line.line_material_type === "FG") {
-    qtyForAmount = line.rate_basis === "PACK_UOM" ? toNumber(line.pack_qty) : toNumber(line.base_qty);
+    qtyForAmount = line.rate_basis === "PACK_UOM" ? toNumber(line.pack_qty) : getLineBaseQty(line);
     if (line.fg_type === "MTEST" && line.rate_basis === "FIXED") {
       taxableValue = rate;
       gstAmount = (taxableValue * toNumber(line.gst_rate)) / 100;
