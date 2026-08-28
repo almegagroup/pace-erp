@@ -97,6 +97,10 @@ export function listSalesOrderFgSkuOptions(params) {
   return fetchProcurement("GET", "/api/procurement/sales-orders/fg-sku-options", undefined, params);
 }
 
+export function listSalesOrderAddressOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-orders/address-options", undefined, params);
+}
+
 export function listReferenceDateTypes(params) {
   return fetchProcurement("GET", "/api/procurement/reference-date-types", undefined, params);
 }
