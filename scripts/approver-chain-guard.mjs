@@ -75,6 +75,15 @@ const BASELINE = new Set([
   // unlike PO/STO. Self-approval is still explicitly blocked
   // (created_by === ctx.auth_user_id -> SSC_APPROVE_SELF_FORBIDDEN).
   "supabase/functions/api/_core/procurement/stock_status_change.handlers.ts",
+  // §133.8-E -- listAc06ApprovedMonthsHandler is a pure read/list query (no
+  // INSERT/UPDATE anywhere in the function): it returns which AC06 costing
+  // months already have every line VERIFIED, for SO01's Costing Rate Month
+  // dropdown. Matches this guard's naming regex purely by coincidence --
+  // "Approved" here is a descriptive adjective ("months that are already
+  // approved"), not a verb naming an approval action. There is no approve
+  // button, no status flip, and therefore no creator-vs-approver question
+  // to route in the first place.
+  "supabase/functions/api/_core/production/ac06_workspace.handlers.ts",
 ]);
 
 function walk(dir, out = []) {
