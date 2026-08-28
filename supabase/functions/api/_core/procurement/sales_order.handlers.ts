@@ -1905,7 +1905,9 @@ async function resolveBillToShipTo(body: JsonRecord, dispatchType: string): Prom
       billToVdcId: vdcId, billToName: toTrimmedString(parent.company_name) || null,
       billToAddress: toTrimmedString(parent.full_address) || null, billToState: toTrimmedString(parent.state) || null,
       billToGstNumber: toTrimmedString(parent.gst_number) || null, billingToDepot: null, customerId: null,
-      shipTo: null, // §133.5 — Ship-To/Party resolves later, on the separate SO Map page
+      // Direct's final customer/address remains a SO Map decision. The VDC is
+      // under this Parent Company, so the Parent state is sufficient for GST.
+      shipTo: null,
     };
   }
 
@@ -1932,74 +1934,31 @@ async function resolveBillToShipTo(body: JsonRecord, dispatchType: string): Prom
   if (effectiveType === "INDEPENDENT_PARTY") {
     const customerId = toTrimmedString(body.customer_id);
     if (!customerId) throw new Error("SO_CUSTOMER_REQUIRED");
-    const { data: customer, error } = await serviceRoleClient
-      .schema("erp_master").from("customer_master")
-      .select("customer_name, delivery_address, billing_address, billing_state, gst_number")
-      .eq("id", customerId).maybeSingle();
-    if (error || !customer) throw new Error("SO_CUSTOMER_LOOKUP_FAILED");
-    const shipTo = resolveShipTo(body, customer as JsonRecord);
+    const shipTo = await fetchResolvedCustomerAddress(toTrimmedString(body.ship_to_customer_address_id));
+    if (shipTo.customerId !== customerId) throw new Error("SO_ADDRESS_CUSTOMER_MISMATCH");
     return {
       billToType: "CUSTOMER", billToParentCompanyId: null, billToDepotCodeId: null, billToVdcId: null,
-      billToName: toTrimmedString((customer as JsonRecord).customer_name) || null,
-      billToAddress: toTrimmedString((customer as JsonRecord).billing_address) || null,
-      billToState: toTrimmedString((customer as JsonRecord).billing_state) || null,
-      billToGstNumber: toTrimmedString((customer as JsonRecord).gst_number) || null,
+      billToName: shipTo.ship_to_name, billToAddress: shipTo.ship_to_address, billToState: shipTo.ship_to_state,
+      billToGstNumber: shipTo.ship_to_gst_number,
       billingToDepot: null, customerId, shipTo,
     };
   }
 
   if (effectiveType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
     const customerId = toTrimmedString(body.customer_id);
-    if (!customerId) throw new Error("SO_CUSTOMER_REQUIRED");
-    const { data: customer, error } = await serviceRoleClient
-      .schema("erp_master").from("customer_master")
-      .select("customer_name, delivery_address, billing_address, billing_state, gst_number")
-      .eq("id", customerId).maybeSingle();
-    if (error || !customer) throw new Error("SO_CUSTOMER_LOOKUP_FAILED");
-    const customerState = toTrimmedString((customer as JsonRecord).billing_state);
-    if (!customerState) throw new Error("SO_CUSTOMER_STATE_REQUIRED");
-    const { data: parentRows, error: parentError } = await serviceRoleClient
-      .schema("erp_master").from("fg_parent_company")
-      .select("id, company_name, state, gst_number, full_address")
-      .eq("state", customerState).eq("status", "ACTIVE");
-    if (parentError) throw new Error("SO_PARENT_COMPANY_LOOKUP_FAILED");
-    const parent = ((parentRows ?? []) as JsonRecord[])[0];
-    if (!parent) throw new Error("SO_PARENT_COMPANY_NOT_FOUND_FOR_STATE");
-
-    const billingToDepot = Boolean(body.billing_to_depot);
-    let billToDepotCodeId: string | null = null;
-    let billToName = toTrimmedString(parent.company_name) || null;
-    let billToAddress = toTrimmedString(parent.full_address) || null;
-    let billToState = toTrimmedString(parent.state) || null;
-    let billToGstNumber = toTrimmedString(parent.gst_number) || null;
-    if (billingToDepot) {
-      const depotCodeId = toTrimmedString(body.depot_code_id);
-      if (!depotCodeId) throw new Error("SO_DEPOT_CODE_REQUIRED");
-      const depot = await fetchDepotCode(depotCodeId);
-      if (toTrimmedString(depot.parent_company_id) !== String(parent.id)) throw new Error("SO_DEPOT_PARENT_COMPANY_MISMATCH");
-      billToDepotCodeId = depotCodeId;
-      billToName = toTrimmedString(depot.description) || null;
-      billToAddress = toTrimmedString(depot.address_line) || null;
-      billToState = toTrimmedString(depot.state) || null;
-      billToGstNumber = toTrimmedString(depot.gst_number) || null;
-    }
-
-    // Ship-To is always the selected Independent Customer for this type (§133.8-B).
-    const shipTo: ResolvedShipTo = {
-      ship_to_same_as_customer: false, ship_to_type: null,
-      ship_to_gst_number: toTrimmedString((customer as JsonRecord).gst_number) || null,
-      ship_to_name: toTrimmedString((customer as JsonRecord).customer_name) || null,
-      ship_to_address: toTrimmedString((customer as JsonRecord).delivery_address)
-        || toTrimmedString((customer as JsonRecord).billing_address) || null,
-      ship_to_state: customerState,
-      delivery_address: toTrimmedString((customer as JsonRecord).delivery_address)
-        || toTrimmedString((customer as JsonRecord).billing_address) || null,
-    };
+    const parentCompanyId = toTrimmedString(body.parent_company_id);
+    if (!customerId || !parentCompanyId) throw new Error("SO_CUSTOMER_AND_PARENT_COMPANY_REQUIRED");
+    const shipTo = await fetchResolvedCustomerAddress(toTrimmedString(body.ship_to_customer_address_id));
+    if (shipTo.customerId !== customerId) throw new Error("SO_ADDRESS_CUSTOMER_MISMATCH");
+    const billTo = await fetchResolvedCustomerAddress(toTrimmedString(body.bill_to_customer_address_id));
+    const billToVdc = billTo.depotCodeId ? await fetchDepotCode(billTo.depotCodeId) : null;
+    if (!billToVdc || toTrimmedString(billToVdc.parent_company_id) !== parentCompanyId) throw new Error("SO_BILL_TO_ADDRESS_PARENT_COMPANY_MISMATCH");
 
     return {
-      billToType: billingToDepot ? "DEPOT" : "PARENT_COMPANY",
-      billToParentCompanyId: String(parent.id), billToDepotCodeId, billToVdcId: null,
-      billToName, billToAddress, billToState, billToGstNumber, billingToDepot, customerId, shipTo,
+      billToType: "PARENT_COMPANY",
+      billToParentCompanyId: parentCompanyId, billToDepotCodeId: null, billToVdcId: billTo.depotCodeId,
+      billToName: billTo.ship_to_name, billToAddress: billTo.ship_to_address, billToState: billTo.ship_to_state,
+      billToGstNumber: billTo.ship_to_gst_number, billingToDepot: null, customerId, shipTo,
     };
   }
 
@@ -2203,9 +2162,91 @@ async function prepareUnifiedSoLine(
   };
 }
 
+type ResolvedCustomerAddress = ResolvedShipTo & { customerId: string; depotCodeId: string | null };
+
+// MM04 is the source of truth for every customer-facing address used by SO01.
+// The address is reloaded here rather than trusting a browser-sent snapshot.
+async function fetchResolvedCustomerAddress(addressId: string): Promise<ResolvedCustomerAddress> {
+  const { data: address, error: addressError } = await serviceRoleClient
+    .schema("erp_master").from("customer_address")
+    .select("id, customer_id, depot_code_id, site_name, address_line, town, state, pin_code, status")
+    .eq("id", addressId).eq("status", "ACTIVE").maybeSingle();
+  if (addressError || !address) throw new Error("SO_CUSTOMER_ADDRESS_NOT_FOUND");
+
+  const customerId = toTrimmedString(address.customer_id);
+  const { data: customer, error: customerError } = await serviceRoleClient
+    .schema("erp_master").from("customer_master")
+    .select("customer_name, gst_number").eq("id", customerId).maybeSingle();
+  if (customerError || !customer) throw new Error("SO_CUSTOMER_LOOKUP_FAILED");
+
+  const addressText = [toTrimmedString(address.address_line), toTrimmedString(address.town), toTrimmedString(address.pin_code)]
+    .filter(Boolean).join(", ") || null;
+  return {
+    customerId,
+    depotCodeId: toTrimmedString(address.depot_code_id) || null,
+    ship_to_same_as_customer: true,
+    ship_to_type: null,
+    ship_to_gst_number: toTrimmedString(customer.gst_number) || null,
+    ship_to_name: toTrimmedString(customer.customer_name) || toTrimmedString(address.site_name) || null,
+    ship_to_address: addressText,
+    ship_to_state: toTrimmedString(address.state) || null,
+    delivery_address: addressText,
+  };
+}
+
 // SO01 cannot use the generic Material Master picker for FG rows: SKU eligibility
 // is defined by the approved stroke's PO type, while the pack UOM/conversion live
 // in production masters. Keep this read model server-side so the UI never guesses.
+export async function listSalesOrderAddressOptionsHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
+    const customerId = toTrimmedString(url.searchParams.get("customer_id"));
+    const vdcId = toTrimmedString(url.searchParams.get("vdc_id"));
+    const parentCompanyId = toTrimmedString(url.searchParams.get("parent_company_id"));
+    if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
+    if (!customerId && !vdcId && !parentCompanyId) {
+      return salesErrorResponse(req, ctx, "SO_ADDRESS_SCOPE_REQUIRED", 400, "An address scope is required.");
+    }
+
+    let vdcIds: string[] = vdcId ? [vdcId] : [];
+    if (parentCompanyId) {
+      const { data: vdcs, error: vdcError } = await serviceRoleClient
+        .schema("erp_master").from("fg_depot_code")
+        .select("id").eq("parent_company_id", parentCompanyId).eq("dispatch_type", "DIRECT").eq("status", "ACTIVE");
+      if (vdcError) throw new Error("SO_ADDRESS_VDC_LOOKUP_FAILED");
+      vdcIds = ((vdcs ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)).filter(Boolean);
+      if (vdcIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+    }
+
+    let query = serviceRoleClient.schema("erp_master").from("customer_address")
+      .select("id, customer_id, depot_code_id, site_name, address_line, town, state, pin_code")
+      .eq("status", "ACTIVE");
+    if (customerId) query = query.eq("customer_id", customerId);
+    if (vdcIds.length > 0) query = query.in("depot_code_id", vdcIds);
+    const { data: addresses, error: addressError } = await query.order("created_at", { ascending: true });
+    if (addressError) throw new Error("SO_ADDRESS_LIST_FAILED");
+
+    const customerIds = [...new Set(((addresses ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
+    const { data: customers, error: customerError } = customerIds.length > 0
+      ? await serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)
+      : { data: [], error: null };
+    if (customerError) throw new Error("SO_ADDRESS_CUSTOMER_LOOKUP_FAILED");
+    const customerById = new Map(((customers ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    return okResponse({ data: ((addresses ?? []) as JsonRecord[]).map((address) => ({
+      ...address,
+      customer: customerById.get(toTrimmedString(address.customer_id)) ?? null,
+    })) }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "SO_ADDRESS_LIST_FAILED";
+    return salesErrorResponse(req, ctx, code, 500, "SO address options could not be resolved.");
+  }
+}
+
 export async function listSalesOrderFgSkuOptionsHandler(
   req: Request,
   ctx: ProcurementHandlerContext,

@@ -144,6 +144,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // SO01's FG picker is a create-form prerequisite, so it shares the same
   // create authority rather than requiring a separate Production permission.
   "GET:/api/procurement/sales-orders/fg-sku-options": { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "WRITE" },
+  "GET:/api/procurement/sales-orders/address-options": { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
 
   // ── SO Map (SO01 Tab 2, feasibility §133.9) — same PROC_SO_LIST resource,
   // EDIT action so Create-SO's WRITE grant (Accounts-only) stays separate

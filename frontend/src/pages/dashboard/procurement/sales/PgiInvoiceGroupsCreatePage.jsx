@@ -161,7 +161,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
             <div><span className="text-slate-500">Dispatch Doc No / Dispatched Through</span><div>{dc?.transporter_display || "—"}</div></div>
             <div><span className="text-slate-500">Bill of Lading / LR-RR No + Dated</span><div>{dc?.lr_number ? `${dc.lr_number} / ${dc.lr_date || "—"}` : "—"}</div></div>
             <div><span className="text-slate-500">Reference No. &amp; Date / Buyer's Order No (FO)</span><div>{group.fo_number ? `${group.fo_number} / ${group.fo_date || "—"}` : "—"}</div></div>
-            <div><span className="text-slate-500">Other References (IBN)</span><div>{input.inbound_number || "—"}</div></div>
+            {group.ibn_required ? <div><span className="text-slate-500">Other References (IBN)</span><div>{input.inbound_number || "—"}</div></div> : null}
             <div><span className="text-slate-500">e-Way Bill No.</span><div>{input.e_way_bill_applicable ? (input.e_way_bill_number || "(pending entry)") : "—"}</div></div>
             <div><span className="text-slate-500">Mode/Terms of Payment</span><div>{paymentTermLabel || "—"}</div></div>
             <div><span className="text-slate-500">Motor Vehicle No.</span><div>{dc?.vehicle_number || "—"}</div></div>

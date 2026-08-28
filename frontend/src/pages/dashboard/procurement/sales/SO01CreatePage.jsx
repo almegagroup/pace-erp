@@ -28,7 +28,7 @@ import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcure
 import { listFgParentCompanies, listFgDepotCodes } from "../../om/omApi.js";
 import { listAc06ApprovedMonths } from "../../production/prodApi.js";
 import { amountToWordsIndian } from "../../../../utils/numberToWordsIndian.js";
-import { createSalesOrderUnified, listSalesOrderFgSkuOptions } from "../procurementApi.js";
+import { createSalesOrderUnified, listSalesOrderAddressOptions, listSalesOrderFgSkuOptions } from "../procurementApi.js";
 
 // §133.7 — 5 fixed dispatch types.
 const DISPATCH_TYPE_OPTIONS = [
@@ -130,6 +130,16 @@ function deriveGstTypeClientPreview(companyStateName, shipToStateName) {
   return company === shipTo ? "CGST_SGST" : "IGST";
 }
 
+// MTO/HPS/MTS base quantity is derived in the UI from the pack inputs. Keep
+// that derivation in one place so the displayed value, preview, and payload
+// can never disagree.
+function getLineBaseQty(line) {
+  if (line.line_material_type === "FG" && line.fg_type !== "MTEST") {
+    return toNumber(line.pack_qty) * toNumber(line.per_pack_qty);
+  }
+  return toNumber(line.base_qty || line.quantity);
+}
+
 // Mirrors the backend's per-line taxable/GST computation closely enough for
 // a live preview (final numbers are always computed server-side). gstType
 // (from deriveGstTypeClientPreview) drives the CGST+SGST-vs-IGST split;
@@ -137,7 +147,7 @@ function deriveGstTypeClientPreview(companyStateName, shipToStateName) {
 // the UI shows "—" instead of a wrong 0.
 function computeLinePreview(line, gstType) {
   const rate = toNumber(line.rate);
-  let qtyForAmount = toNumber(line.base_qty || line.quantity);
+  let qtyForAmount = getLineBaseQty(line);
   let taxableValue;
   let gstAmount;
   if (line.line_material_type === "FG") {
@@ -223,14 +233,9 @@ export default function SO01CreatePage() {
   const [vdcId, setVdcId] = useState("");
   const [depotCodeId, setDepotCodeId] = useState("");
   const [customerId, setCustomerId] = useState("");
-  const [billingToDepot, setBillingToDepot] = useState(false);
+  const [shipToCustomerAddressId, setShipToCustomerAddressId] = useState("");
+  const [billToCustomerAddressId, setBillToCustomerAddressId] = useState("");
   const [noInboundSubType, setNoInboundSubType] = useState("DIRECT");
-  const [shipToSameAsCustomer, setShipToSameAsCustomer] = useState(true);
-  const [shipToName, setShipToName] = useState("");
-  const [shipToAddress, setShipToAddress] = useState("");
-  const [shipToState, setShipToState] = useState("");
-  const [shipToType, setShipToType] = useState("REGISTERED");
-  const [shipToGstNumber, setShipToGstNumber] = useState("");
   const [paymentTermId, setPaymentTermId] = useState("");
   const [freightTerm, setFreightTerm] = useState("FOR");
   const [roundOffAmount, setRoundOffAmount] = useState("0");
@@ -273,6 +278,20 @@ export default function SO01CreatePage() {
     () => (customerQuery.customers ?? []).map((entry) => ({ value: entry.id, label: `${entry.customer_code || ""} — ${entry.customer_name || ""}`.trim() })),
     [customerQuery.customers]
   );
+  const customerAddressQuery = useQuery({
+    queryKey: ["so01-address-options", companyId, "customer", customerId],
+    queryFn: () => listSalesOrderAddressOptions({ company_id: companyId, customer_id: customerId }),
+    enabled: Boolean(companyId && customerId && (dispatchType === "INDEPENDENT_PARTY" || dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED")),
+  });
+  const parentAddressQuery = useQuery({
+    queryKey: ["so01-address-options", companyId, "parent", parentCompanyId],
+    queryFn: () => listSalesOrderAddressOptions({ company_id: companyId, parent_company_id: parentCompanyId }),
+    enabled: Boolean(companyId && parentCompanyId && dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED"),
+  });
+  const customerAddresses = Array.isArray(customerAddressQuery.data) ? customerAddressQuery.data : [];
+  const parentAddresses = Array.isArray(parentAddressQuery.data) ? parentAddressQuery.data : [];
+  const addressLabel = (address) => [address?.customer?.customer_name, address?.site_name, address?.town, address?.address_line].filter(Boolean).join(" | ");
+  const addressOptions = (addresses) => addresses.map((address) => ({ value: address.id, label: addressLabel(address) }));
 
   // §133.8-H — live GST-type preview for Page 2's per-row CGST/SGST/IGST
   // columns + footer breakup. Mirrors deriveSalesInvoiceGstType's own
@@ -280,20 +299,23 @@ export default function SO01CreatePage() {
   // save always recomputes this server-side from the actually-resolved
   // Bill-To/Ship-To (§133.8-B), this never overrides that.
   const companyStateName = availableCompanies.find((entry) => entry.id === companyId)?.state_name || null;
-  const selectedCustomer = (customerQuery.customers ?? []).find((entry) => entry.id === customerId);
   const resolvedShipToStateName = (() => {
-    if (effectiveNoInboundType === "DEPENDENT_DIRECT") return depotCodes.find((entry) => entry.id === vdcId)?.state || null;
+    // Direct's final Ship-To resolves in SO Map. VDC and every MM04 address
+    // mapped to it share the Parent Company's state, enough for GST preview.
+    if (effectiveNoInboundType === "DEPENDENT_DIRECT") return parentCompanies.find((entry) => entry.id === parentCompanyId)?.state || null;
     if (effectiveNoInboundType === "DEPENDENT_DEPOT") return depotCodes.find((entry) => entry.id === depotCodeId)?.state || null;
-    if (dispatchType === "INDEPENDENT_PARTY") return shipToSameAsCustomer ? (selectedCustomer?.billing_state || null) : (shipToState || null);
-    if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") return billingToDepot ? (depotCodes.find((entry) => entry.id === depotCodeId)?.state || null) : (selectedCustomer?.billing_state || null);
+    if (dispatchType === "INDEPENDENT_PARTY") return customerAddresses.find((entry) => entry.id === shipToCustomerAddressId)?.state || null;
+    // Asian-billed changes Bill-To only; its Ship-To is always the selected
+    // independent customer, so GST follows the customer's state.
+    if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") return customerAddresses.find((entry) => entry.id === shipToCustomerAddressId)?.state || null;
     return null;
   })();
   const gstTypePreview = deriveGstTypeClientPreview(companyStateName, resolvedShipToStateName);
 
   useEffect(() => {
-    if (effectiveNoInboundType !== "DEPENDENT_DIRECT" && effectiveNoInboundType !== "DEPENDENT_DEPOT") return;
+    if (effectiveNoInboundType !== "DEPENDENT_DIRECT" && effectiveNoInboundType !== "DEPENDENT_DEPOT" && dispatchType !== "INDEPENDENT_PARTY_ASIAN_BILLED") return;
     listFgParentCompanies({}).then((result) => setParentCompanies(Array.isArray(result?.data) ? result.data : [])).catch(() => setParentCompanies([]));
-  }, [effectiveNoInboundType]);
+  }, [dispatchType, effectiveNoInboundType]);
   // §133.8-E — Costing Rate Month dropdown source for FG/SFG MTO/HPS lines.
   // fetchProd's shape-dependent unwrap (bug pattern #15) — this handler's
   // okResponse({ data: [...] }) carries no `pagination` key, so fetchProd
@@ -429,6 +451,7 @@ export default function SO01CreatePage() {
           </select>
         ) },
         { key: "gst_rate", label: "GST %", width: "70px", render: (line) => numberInput(line.gst_rate, (value) => updateLine(line.__key, { gst_rate: value })) },
+        { key: "amount", label: "Amount", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).taxableValue.toFixed(2) },
         ...gstSplitColumns(gstTypePreview),
         { key: "total", label: "Total Value", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).totalValue.toFixed(2) },
         { key: "actions", label: "", width: "70px", render: (line) => (
@@ -454,6 +477,7 @@ export default function SO01CreatePage() {
         { key: "uom", label: "UOM", width: "70px", render: (line) => textInput(line.uom_code, (value) => updateLine(line.__key, { uom_code: value })) },
         { key: "rate", label: "Rate", width: "90px", render: (line) => numberInput(line.rate, (value) => updateLine(line.__key, { rate: value })) },
         { key: "gst_rate", label: "GST %", width: "70px", render: (line) => numberInput(line.gst_rate, (value) => updateLine(line.__key, { gst_rate: value })) },
+        { key: "amount", label: "Amount", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).taxableValue.toFixed(2) },
         ...gstSplitColumns(gstTypePreview),
         { key: "total", label: "Total Value", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).totalValue.toFixed(2) },
         { key: "actions", label: "", width: "70px", render: (line) => (
@@ -510,7 +534,7 @@ export default function SO01CreatePage() {
       { key: "base_qty", label: "Base Qty", width: "100px", render: (line) => (
         line.fg_type === "MTEST"
           ? numberInput(line.base_qty, (value) => updateLine(line.__key, { base_qty: value }))
-          : <input value={(toNumber(line.pack_qty) * toNumber(line.per_pack_qty)).toFixed(4)} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
+          : <input value={getLineBaseQty(line).toFixed(4)} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
       ) },
       { key: "base_uom", label: "Base UoM", width: "80px", render: (line) => (
         <input value={line.uom_code || "KG"} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
@@ -522,6 +546,7 @@ export default function SO01CreatePage() {
         </select>
       ) },
       { key: "gst_rate", label: "GST %", width: "70px", render: (line) => numberInput(line.gst_rate, (value) => updateLine(line.__key, { gst_rate: value })) },
+      { key: "amount", label: "Amount", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).taxableValue.toFixed(2) },
       ...gstSplitColumns(gstTypePreview),
       { key: "costing_month", label: "Costing Rate Month", width: "150px", render: (line) => costingMonthCell(line, line.__key) },
       { key: "total", label: "Total Value", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).totalValue.toFixed(2) },
@@ -555,18 +580,12 @@ export default function SO01CreatePage() {
       payload.depot_code_id = depotCodeId;
     } else if (dispatchType === "INDEPENDENT_PARTY") {
       payload.customer_id = customerId;
-      payload.ship_to_same_as_customer = shipToSameAsCustomer;
-      if (!shipToSameAsCustomer) {
-        payload.ship_to_name = shipToName;
-        payload.ship_to_address = shipToAddress;
-        payload.ship_to_state = shipToState;
-        payload.ship_to_type = shipToType;
-        payload.ship_to_gst_number = shipToType === "REGISTERED" ? shipToGstNumber : null;
-      }
+      payload.ship_to_customer_address_id = shipToCustomerAddressId;
     } else if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
       payload.customer_id = customerId;
-      payload.billing_to_depot = billingToDepot;
-      if (billingToDepot) payload.depot_code_id = depotCodeId;
+      payload.parent_company_id = parentCompanyId;
+      payload.ship_to_customer_address_id = shipToCustomerAddressId;
+      payload.bill_to_customer_address_id = billToCustomerAddressId;
     }
     if (dispatchType === "DEPENDENT_NO_INBOUND") payload.no_inbound_sub_type = noInboundSubType;
     return payload;
@@ -600,7 +619,9 @@ export default function SO01CreatePage() {
           manual_sku_name: line.__manualSku ? line.manual_sku_name.trim() : null,
           fg_type: line.fg_type || null,
           quantity: line.quantity === "" ? null : Number(line.quantity),
-          base_qty: line.base_qty === "" ? null : Number(line.base_qty),
+          base_qty: line.line_material_type === "FG" && line.fg_type !== "MTEST"
+            ? getLineBaseQty(line)
+            : (line.base_qty === "" ? null : Number(line.base_qty)),
           pack_uom_code: line.pack_uom_code || null,
           pack_qty: line.pack_qty === "" ? null : Number(line.pack_qty),
           per_pack_qty: line.per_pack_qty === "" ? null : Number(line.per_pack_qty),
@@ -693,7 +714,7 @@ export default function SO01CreatePage() {
       ) : (
         <div className="grid gap-4">
           <ErpSectionCard eyebrow="Page 2" title="Bill-To / Ship-To">
-            {effectiveNoInboundType === "DEPENDENT_DIRECT" ? (
+            {effectiveNoInboundType === "DEPENDENT_DIRECT" && dispatchType !== "DEPENDENT_NO_INBOUND" ? (
               <div className="grid gap-3 md:grid-cols-2">
                 <ErpDenseFormRow label="Parent Company" required>
                   <ErpComboboxField value={parentCompanyId} onChange={(value) => { setParentCompanyId(value); setVdcId(""); }} options={parentCompanyOptions} blankLabel="Select Parent Company" />
@@ -701,10 +722,10 @@ export default function SO01CreatePage() {
                 <ErpDenseFormRow label="VDC" required>
                   <ErpComboboxField value={vdcId} onChange={setVdcId} options={depotCodeOptions} blankLabel={parentCompanyId ? "Select VDC" : "Select Parent Company first"} />
                 </ErpDenseFormRow>
-                <p className="col-span-2 text-xs text-slate-500">Ship-To Party resolves later, on the separate SO Map page.</p>
+                <p className="col-span-2 text-xs text-slate-500">Bill-To resolves now. Final MM04 Ship-To address resolves in SO Map; its state is the selected Parent Company&apos;s state.</p>
               </div>
             ) : null}
-            {effectiveNoInboundType === "DEPENDENT_DEPOT" ? (
+            {effectiveNoInboundType === "DEPENDENT_DEPOT" && dispatchType !== "DEPENDENT_NO_INBOUND" ? (
               <div className="grid gap-3 md:grid-cols-2">
                 <ErpDenseFormRow label="Parent Company" required>
                   <ErpComboboxField value={parentCompanyId} onChange={(value) => { setParentCompanyId(value); setDepotCodeId(""); }} options={parentCompanyOptions} blankLabel="Select Parent Company" />
@@ -717,45 +738,27 @@ export default function SO01CreatePage() {
             {dispatchType === "INDEPENDENT_PARTY" ? (
               <div className="grid gap-3 md:grid-cols-2">
                 <ErpDenseFormRow label="Customer" required>
-                  <ErpComboboxField value={customerId} onChange={setCustomerId} options={customerOptions} blankLabel="Select Customer" />
+                  <ErpComboboxField value={customerId} onChange={(value) => { setCustomerId(value); setShipToCustomerAddressId(""); }} options={customerOptions} blankLabel="Select Customer" />
                 </ErpDenseFormRow>
-                <label className="flex items-center gap-2 self-end text-xs font-semibold text-slate-700">
-                  <input type="checkbox" checked={shipToSameAsCustomer} onChange={(event) => setShipToSameAsCustomer(event.target.checked)} />
-                  Ship To same as Bill To
-                </label>
-                {!shipToSameAsCustomer ? (
-                  <>
-                    <ErpDenseFormRow label="Ship-To Name" required>{textInput(shipToName, setShipToName)}</ErpDenseFormRow>
-                    <ErpDenseFormRow label="Ship-To Address" required>{textInput(shipToAddress, setShipToAddress)}</ErpDenseFormRow>
-                    <ErpDenseFormRow label="Ship-To State" required>{textInput(shipToState, setShipToState)}</ErpDenseFormRow>
-                    <ErpDenseFormRow label="Ship-To Type">
-                      <select value={shipToType} onChange={(event) => setShipToType(event.target.value)} className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
-                        <option value="REGISTERED">Registered</option>
-                        <option value="UNREGISTERED">Unregistered</option>
-                      </select>
-                    </ErpDenseFormRow>
-                    {shipToType === "REGISTERED" ? <ErpDenseFormRow label="Ship-To GST Number" required>{textInput(shipToGstNumber, setShipToGstNumber)}</ErpDenseFormRow> : null}
-                  </>
-                ) : null}
+                <ErpDenseFormRow label="Bill-To / Ship-To Address (MM04)" required>
+                  <ErpComboboxField value={shipToCustomerAddressId} onChange={setShipToCustomerAddressId} options={addressOptions(customerAddresses)} blankLabel={customerId ? "Select customer address" : "Select Customer first"} />
+                </ErpDenseFormRow>
               </div>
             ) : null}
             {dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED" ? (
               <div className="grid gap-3 md:grid-cols-2">
                 <ErpDenseFormRow label="Customer" required>
-                  <ErpComboboxField value={customerId} onChange={setCustomerId} options={customerOptions} blankLabel="Select Customer" />
+                  <ErpComboboxField value={customerId} onChange={(value) => { setCustomerId(value); setShipToCustomerAddressId(""); }} options={customerOptions} blankLabel="Select Customer" />
                 </ErpDenseFormRow>
-                <div className="grid gap-1 text-xs font-semibold text-slate-700">
-                  <span>Billing address to Depot?</span>
-                  <div className="flex gap-2">
-                    <button type="button" onClick={() => setBillingToDepot(true)} className={`flex-1 px-3 py-2 text-xs font-semibold ${billingToDepot ? "border border-emerald-700 bg-emerald-100 text-emerald-900" : "border border-slate-300 bg-white text-slate-700"}`}>Yes</button>
-                    <button type="button" onClick={() => setBillingToDepot(false)} className={`flex-1 px-3 py-2 text-xs font-semibold ${!billingToDepot ? "border border-slate-700 bg-slate-200 text-slate-950" : "border border-slate-300 bg-white text-slate-700"}`}>No</button>
-                  </div>
-                </div>
-                {billingToDepot ? (
-                  <ErpDenseFormRow label="Depot Code" required>
-                    <ErpComboboxField value={depotCodeId} onChange={setDepotCodeId} options={depotCodeOptions} blankLabel="Select Depot" />
-                  </ErpDenseFormRow>
-                ) : null}
+                <ErpDenseFormRow label="Ship-To Address (MM04)" required>
+                  <ErpComboboxField value={shipToCustomerAddressId} onChange={setShipToCustomerAddressId} options={addressOptions(customerAddresses)} blankLabel={customerId ? "Select customer address" : "Select Customer first"} />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Asian Parent Company" required>
+                  <ErpComboboxField value={parentCompanyId} onChange={(value) => { setParentCompanyId(value); setBillToCustomerAddressId(""); }} options={parentCompanyOptions} blankLabel="Select Parent Company" />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Bill-To Address (MM04)" required>
+                  <ErpComboboxField value={billToCustomerAddressId} onChange={setBillToCustomerAddressId} options={addressOptions(parentAddresses)} blankLabel={parentCompanyId ? "Select Parent-side address" : "Select Parent Company first"} />
+                </ErpDenseFormRow>
               </div>
             ) : null}
             {dispatchType === "DEPENDENT_NO_INBOUND" ? (
@@ -815,7 +818,7 @@ export default function SO01CreatePage() {
               {totalCgst > 0 ? <div className="flex justify-between"><span className="text-slate-500">CGST</span><span className="font-mono">{totalCgst.toFixed(2)}</span></div> : null}
               {totalSgst > 0 ? <div className="flex justify-between"><span className="text-slate-500">SGST</span><span className="font-mono">{totalSgst.toFixed(2)}</span></div> : null}
               {totalIgst > 0 ? <div className="flex justify-between"><span className="text-slate-500">IGST</span><span className="font-mono">{totalIgst.toFixed(2)}</span></div> : null}
-              {gstTypePreview === null && lines.length > 0 ? <div className="text-xs text-amber-700">GST split unresolved — complete Bill-To/Ship-To on Page 2 to preview CGST/SGST vs IGST.</div> : null}
+              {gstTypePreview === null && lines.length > 0 ? <div className="text-xs text-amber-700">GST split unavailable — the selected dispatch destination has no resolvable state.</div> : null}
               <label className="flex items-center justify-between gap-3"><span className="text-slate-500">Round Off</span>{numberInput(roundOffAmount, setRoundOffAmount, { step: "0.01", className: "h-8 w-28 border border-slate-300 bg-[#fffef7] px-2 text-right font-mono text-sm text-slate-900 outline-none focus:border-sky-500" })}</label>
               <div className="mt-1 flex justify-between border-t border-slate-300 pt-1 text-base font-bold"><span>Sales Order Value</span><span className="font-mono">{soValue.toFixed(2)}</span></div>
               <div className="mt-1 text-xs italic text-slate-500">{amountToWordsIndian(soValue)}</div>
