@@ -308,6 +308,7 @@ import {
 import {
   cancelSOHandler,
   createSalesInvoiceHandler,
+  createSalesOrderUnifiedHandler,
   createSOHandler,
   getSalesInvoiceHandler,
   getSOHandler,
@@ -318,7 +319,19 @@ import {
   postSalesInvoiceHandler,
   updateSOHandler,
   updateSOLinesHandler,
+  cancelSalesOrderUnifiedHandler,
+  closeSalesOrderUnifiedHandler,
+  updateSalesOrderUnifiedHandler,
 } from "../_core/procurement/sales_order.handlers.ts";
+import {
+  getSoMapStatusHandler,
+  listCustomerAddressesForSoHandler,
+  listFoOptionsForSoHandler,
+  listSoForMapHandler,
+  mapSoLineToCustomerAddressHandler,
+  mapSoLineToFoHandler,
+  unmapSoAllocationHandler,
+} from "../_core/procurement/so_map.handlers.ts";
 import {
   cancelDeliveryOrderHandler,
   createDeliveryOrderHandler,
@@ -330,6 +343,20 @@ import {
   listDOStorageLocationOptionsHandler,
   reverseSalesInvoiceHandler,
 } from "../_core/procurement/delivery_order.handlers.ts";
+import {
+  createDeliveryOrderUnifiedHandler,
+  getDeliveryOrderUnifiedHandler,
+  listDoAddSoOptionsHandler,
+  listDoAddStoOptionsHandler,
+  listDoStorageOptionsHandler,
+  postPgiInvoiceGroupsHandler,
+  previewInvoiceGroupsHandler,
+  updateDeliveryOrderUnifiedHandler,
+} from "../_core/procurement/do_unified.handlers.ts";
+import {
+  createAdditionalCostCategoryHandler,
+  listAdditionalCostCategoriesHandler,
+} from "../_core/procurement/additional_cost_category.handlers.ts";
 import {
   approveSTOHandler,
   approveSTOAmendmentHandler,
@@ -623,6 +650,20 @@ export async function dispatchProcurementRoutes(
       return await createSOHandler(req, ctx);
     case "GET:/api/procurement/sales-orders":
       return await listSOsHandler(req, ctx);
+    case "POST:/api/procurement/sales-orders-v2":
+      return await createSalesOrderUnifiedHandler(req, ctx);
+
+    // ── SO Map (SO01 Tab 2) — feasibility §133.9 ────────────────────────────
+    case "GET:/api/procurement/so-map/so-list":
+      return await listSoForMapHandler(req, ctx);
+    case "GET:/api/procurement/so-map/fo-options":
+      return await listFoOptionsForSoHandler(req, ctx);
+    case "GET:/api/procurement/so-map/address-options":
+      return await listCustomerAddressesForSoHandler(req, ctx);
+    case "POST:/api/procurement/so-map/map-fo":
+      return await mapSoLineToFoHandler(req, ctx);
+    case "POST:/api/procurement/so-map/map-address":
+      return await mapSoLineToCustomerAddressHandler(req, ctx);
 
     case "GET:/api/procurement/delivery-orders":
       return await listDeliveryOrdersHandler(req, ctx);
@@ -634,6 +675,23 @@ export async function dispatchProcurementRoutes(
       return await listDOSourceLinesHandler(req, ctx);
     case "GET:/api/procurement/delivery-orders/storage-locations":
       return await listDOStorageLocationOptionsHandler(req, ctx);
+
+    // ── DO §133.12 unified multi-source redesign ────────────────────────────
+    case "GET:/api/procurement/delivery-orders-v2/add-so-options":
+      return await listDoAddSoOptionsHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders-v2/add-sto-options":
+      return await listDoAddStoOptionsHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders-v2/storage-options":
+      return await listDoStorageOptionsHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2":
+      return await createDeliveryOrderUnifiedHandler(req, ctx);
+
+    // ── Additional Cost Category master — §133.13 ───────────────────────────
+    case "GET:/api/procurement/additional-cost-categories":
+      return await listAdditionalCostCategoriesHandler(req, ctx);
+    case "POST:/api/procurement/additional-cost-categories":
+      return await createAdditionalCostCategoryHandler(req, ctx);
+
     case "POST:/api/procurement/sales-invoices":
       return await createSalesInvoiceHandler(req, ctx);
     case "GET:/api/procurement/sales-invoices":
@@ -1116,6 +1174,21 @@ export async function dispatchProcurementRoutes(
     }
   }
 
+  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getDeliveryOrderUnifiedHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+$/.test(pathname) && req.method === "PUT") {
+    return await updateDeliveryOrderUnifiedHandler(req, ctx);
+  }
+
+  // §133.13 -- IBN-driven multi-invoice preview + post, per DO.
+  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/invoice-groups$/.test(pathname) && req.method === "GET") {
+    return await previewInvoiceGroupsHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/pgi-invoice-groups$/.test(pathname) && req.method === "POST") {
+    return await postPgiInvoiceGroupsHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/delivery-orders\/[^/]+$/.test(pathname) && req.method === "GET") {
     return await getDeliveryOrderHandler(req, ctx);
   }
@@ -1142,6 +1215,26 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/sales-invoices\/[^/]+$/.test(pathname) && req.method === "GET") {
     return await getSalesInvoiceHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/sales-orders-v2\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+    return await cancelSalesOrderUnifiedHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/sales-orders-v2\/[^/]+\/close$/.test(pathname) && req.method === "POST") {
+    return await closeSalesOrderUnifiedHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/sales-orders-v2\/[^/]+$/.test(pathname) && req.method === "PUT") {
+    return await updateSalesOrderUnifiedHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/so-map\/[^/]+\/status$/.test(pathname) && req.method === "GET") {
+    return await getSoMapStatusHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/so-map\/[^/]+\/unmap$/.test(pathname) && req.method === "POST") {
+    return await unmapSoAllocationHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/sales-invoices\/[^/]+\/post$/.test(pathname) && req.method === "POST") {

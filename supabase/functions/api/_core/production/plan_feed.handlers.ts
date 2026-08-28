@@ -746,6 +746,26 @@ export async function listFoAllocationsHandler(req: Request, ctx: ProdHandlerCon
 // block: unconfirmed mismatch returns 409 without writing; confirm_mismatch=true writes
 // anyway. The only hard rule: sum of allocations against one Packing PO (across every
 // FO) can never exceed that Packing PO's own qty.
+// §133.9 flagged gap (found 2026-08-28 while designing SO Map, fixed here
+// while building it): this FO<->Packing-PO allocation is one of SO Map's
+// two upstream sources (the other is the FO's own party/material). SO Map's
+// `sales_order_map_allocation` (erp_procurement schema) can consume part of
+// an FO's total Packing-PO-linked balance — unmapping or shrinking a
+// specific (FO, Packing PO) row here must never let that FO's TOTAL
+// Packing-PO-linked qty fall below what SO Map has already committed
+// against it, or an already-mapped SO line would silently point at stock
+// that no longer traces back to any Packing PO.
+async function getFoSoMapConsumedQty(planFeedId: string): Promise<number> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("sales_order_map_allocation")
+    .select("allocated_qty")
+    .eq("fo_id", planFeedId)
+    .eq("status", "ACTIVE");
+  if (error) throw new Error("PROD_PLAN_FEED_SO_MAP_CONSUMED_LOOKUP_FAILED");
+  return ((data ?? []) as JsonRecord[]).reduce((sum, row) => sum + (Number(row.allocated_qty) || 0), 0);
+}
+
 async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOnly: boolean): Promise<Response> {
   try {
     const planFeedId = getIdFromPath(req);
@@ -783,6 +803,27 @@ async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOn
     if (poErrRes || !po) return foErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing PO not found");
     if (["REVERSED", "CANCELLED"].includes(toUpperTrimmedString((po as JsonRecord).status))) {
       return foErr(req, ctx, "PROD_PACK_REVERSED", 422, "Cannot allocate a reversed/cancelled Packing PO");
+    }
+
+    // §133.9 floor check — this FO's total Packing-PO-linked qty (across
+    // every packing_order_id it's allocated to, not just this one row) must
+    // never drop below what SO Map has already committed against this FO.
+    const [{ data: foAllocRows, error: foAllocErr }, soMapConsumedQty] = await Promise.all([
+      serviceRoleClient
+        .schema("erp_production").from("plan_feed_packing_order_allocation")
+        .select("packing_order_id, allocated_qty_kg")
+        .eq("plan_feed_id", planFeedId),
+      getFoSoMapConsumedQty(planFeedId),
+    ]);
+    if (foAllocErr) throw new Error("PROD_PLAN_FEED_ALLOCATION_FETCH_FAILED");
+    const currentTotalForFo = ((foAllocRows ?? []) as JsonRecord[])
+      .reduce((sum, row) => sum + (Number(row.allocated_qty_kg) || 0), 0);
+    const currentRowQty = ((foAllocRows ?? []) as JsonRecord[])
+      .find((row) => String(row.packing_order_id) === packingOrderId)?.allocated_qty_kg ?? 0;
+    const newTotalForFo = currentTotalForFo - Number(currentRowQty) + Math.max(0, requestedQty);
+    if (newTotalForFo < soMapConsumedQty - QTY_TOL) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_ALLOCATION_BELOW_SO_MAP_CONSUMED", 422,
+        `This FO already has ${soMapConsumedQty} allocated in SO Map — cannot reduce its total Packing PO allocation below that (would leave ${newTotalForFo}). Unmap the excess in SO Map first.`);
     }
 
     // Full/partial unmap: qty <= 0 just deletes the row.
@@ -1234,6 +1275,39 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       allocByFo[foId].push(a);
     }
 
+    // §133.18 -- real dispatched qty per FO, now that SO/DO/Invoice exist
+    // (was a hardcoded 0 placeholder before -- §83.18-REVISED's own note).
+    // Traced SO Map allocation -> DO line -> POSTED Invoice line, never via
+    // Packing PO FINAL status (that would misreport "produced" as "shipped").
+    const { data: foAllocationRows, error: foAllocationRowsErr } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_order_map_allocation")
+      .select("id, fo_id")
+      .in("fo_id", foIds);
+    if (foAllocationRowsErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
+    const foByAllocationId = new Map(((foAllocationRows ?? []) as JsonRecord[]).map((row) => [String(row.id), String(row.fo_id)]));
+    const allocationIdsForDispatch = [...foByAllocationId.keys()];
+
+    const dispatchedByFo = new Map<string, number>();
+    if (allocationIdsForDispatch.length > 0) {
+      const dcLineRows = await fetchInChunks<JsonRecord>(allocationIdsForDispatch, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+          .select("id, so_map_allocation_id").in("so_map_allocation_id", chunk));
+      const foByDcLineId = new Map(dcLineRows.map((row) => [String(row.id), foByAllocationId.get(toTrimmedString(row.so_map_allocation_id)) ?? ""]));
+      const dcLineIds = [...foByDcLineId.keys()];
+      if (dcLineIds.length > 0) {
+        const invoiceLineRows = await fetchInChunks<JsonRecord>(dcLineIds, (chunk) =>
+          serviceRoleClient.schema("erp_procurement").from("sales_invoice_line")
+            .select("dc_line_id, quantity, sales_invoice:invoice_id(status)").in("dc_line_id", chunk));
+        for (const row of invoiceLineRows) {
+          const invoiceStatus = toUpperTrimmedString((row.sales_invoice as JsonRecord | null)?.status);
+          if (invoiceStatus !== "POSTED") continue;
+          const foId = foByDcLineId.get(toTrimmedString(row.dc_line_id));
+          if (!foId) continue;
+          dispatchedByFo.set(foId, (dispatchedByFo.get(foId) ?? 0) + Number(row.quantity ?? 0));
+        }
+      }
+    }
+
     const poIds = [...new Set(((allocs ?? []) as JsonRecord[]).map((row) => String(row.packing_order_id ?? "")).filter(Boolean))];
     type BatchInfo = { batch_number: string; prodshade_name: string | null; stroke_number: string | null };
     const batchByPoId = new Map<string, BatchInfo>();
@@ -1301,9 +1375,11 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       }
     }
 
-    // Dispatch (L5) does not exist yet -- dispatched_qty_kg/dispatch dates are
-    // placeholders until that module lands (§83.18-REVISED note). Never inferred from
-    // Packing PO FINAL status; that would misreport "produced" as "shipped."
+    // §133.18 -- dispatchedKg/dispatch_status now come from the real chain
+    // computed above (§83.18-REVISED's own placeholder note is now stale;
+    // wired up once SO/DO/Invoice actually existed). Still never inferred
+    // from Packing PO FINAL status -- that would misreport "produced" as
+    // "shipped".
     const summaryRows = (fos as JsonRecord[]).map(fo => {
       const foId = fo.id as string;
       const foAllocs = allocByFo[foId] ?? [];
@@ -1321,7 +1397,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         return { batch_number: batchNumber, prodshade_name: info?.prodshade_name ?? null, stroke_number: info?.stroke_number ?? null };
       });
       const orderedKg = Number(fo.ordered_qty_kg) || 0;
-      const dispatchedKg = 0;
+      const dispatchedKg = Number((dispatchedByFo.get(foId) ?? 0).toFixed(6));
       const strokeNumber = toTrimmedString(fo.ordered_stroke_number);
       const materialId = toTrimmedString(fo.material_id);
       const prodshadeId = materialId
@@ -1350,7 +1426,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         mapped_batch_details: mappedBatchDetails,
         production_status: computeProductionStatus(orderedKg, allocatedKg),
         dispatched_qty_kg: dispatchedKg,
-        dispatch_status: "UNDISPATCHED",
+        dispatch_status: dispatchedKg <= QTY_TOL ? "UNDISPATCHED" : dispatchedKg >= allocatedKg - QTY_TOL ? "FULLY_DISPATCHED" : "PARTIALLY_DISPATCHED",
         dispatch_dates: [] as string[],
         pending_dispatch_kg: Math.max(0, orderedKg - dispatchedKg),
       };

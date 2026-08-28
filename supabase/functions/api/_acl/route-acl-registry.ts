@@ -134,14 +134,39 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/sales-orders":                { skipAcl: false, resourceCode: "PROC_SO_LIST",   action: "VIEW"  },
   "POST:/api/procurement/sales-orders":               { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
 
+  // ── SO01 unified RM/PM/INT/SFG/FG redesign (feasibility §133.7-§133.11) ──
+  // SO01/SO02/SO03 are the SAME existing tx_codes/resources (PROC_SO_CREATE,
+  // PROC_INV_LIST, PROC_DO_CREATE) being fully redesigned in place, not new
+  // resources — confirmed 2026-08-28. CAP_PROC_ACCOUNTS now gates this (the
+  // old blanket CAP_PROC_SALES grant was removed from PROC_SO_CREATE, per
+  // the §133.11 Accounts-only lock — see the ACL restructuring note below).
+  "POST:/api/procurement/sales-orders-v2":            { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "WRITE" },
+
+  // ── SO Map (SO01 Tab 2, feasibility §133.9) — same PROC_SO_LIST resource,
+  // EDIT action so Create-SO's WRITE grant (Accounts-only) stays separate
+  // from Map's broader Stores/Accounts/Logistics access.
+  "GET:/api/procurement/so-map/so-list":              { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "VIEW" },
+  "GET:/api/procurement/so-map/fo-options":           { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "VIEW" },
+  "GET:/api/procurement/so-map/address-options":      { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "VIEW" },
+  "POST:/api/procurement/so-map/map-fo":              { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" },
+  "POST:/api/procurement/so-map/map-address":         { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" },
+
   // ── Sales: Delivery Order (§113 Stage 2, TX SO03, GRP_ACL_SALES) ──────────
   "GET:/api/procurement/delivery-orders":                       { skipAcl: false, resourceCode: "PROC_DO_LIST",   action: "VIEW"  },
   "POST:/api/procurement/delivery-orders":                      { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "WRITE" },
   "GET:/api/procurement/delivery-orders/source-documents":      { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "GET:/api/procurement/delivery-orders/source-lines":          { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "GET:/api/procurement/delivery-orders/storage-locations":     { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
+  "GET:/api/procurement/delivery-orders-v2/add-so-options":     { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
+  "GET:/api/procurement/delivery-orders-v2/add-sto-options":    { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
+  "GET:/api/procurement/delivery-orders-v2/storage-options":    { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
+  "POST:/api/procurement/delivery-orders-v2":                   { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "WRITE" },
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
+  // §133.13 -- Additional Cost Category master, scoped to the Invoice/PGI
+  // page's own drawer only (no separate master page/ACL resource).
+  "GET:/api/procurement/additional-cost-categories":  { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
+  "POST:/api/procurement/additional-cost-categories": { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
 
   // ── Procurement: Physical Inventory ──────────────────────────────────────
   // Group 9 (2026-08-06): PID header create is the "scope of what's being counted"
@@ -260,6 +285,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/production/ac06/close":                 { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_CLOSE", action: "WRITE" },
   "GET:/api/production/ac06/report":                 { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
   "GET:/api/production/ac06/history":                { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
+  "GET:/api/production/ac06/approved-months":        { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
   "GET:/api/procurement/chas":                        { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "VIEW"  },
   "POST:/api/procurement/chas":                       { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "WRITE" },
   "POST:/api/procurement/chas/toggle":                { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "EDIT"  },
@@ -1056,8 +1082,51 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     },
   },
   {
+    // §133.10 — Edit/Cancel/Close on the unified SO. Same PROC_SO_CREATE
+    // resource as Create (Accounts-only), EDIT action per the existing
+    // WRITE=create/EDIT=modify convention.
+    pattern: /^\/api\/procurement\/sales-orders-v2\/[^/]+\/cancel$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/sales-orders-v2\/[^/]+\/close$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/sales-orders-v2\/[^/]+$/,
+    methods: { PUT: { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/so-map\/[^/]+\/status$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/so-map\/[^/]+\/unmap$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" } },
+  },
+  {
     pattern: /^\/api\/procurement\/delivery-orders\/[^/]+$/,
     methods: { GET: { skipAcl: false, resourceCode: "PROC_DO_LIST", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/delivery-orders-v2\/[^/]+$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "PROC_DO_LIST", action: "VIEW" },
+      // §133.12 -- own EDIT action (not reusing Create's WRITE), same
+      // separation-of-duties shape as the legacy DO cancel action below.
+      PUT: { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
+    },
+  },
+  {
+    // §133.13 -- IBN-driven multi-invoice preview/post, own resource
+    // (PROC_INV_LIST, same as the legacy /sales-invoices/pgi route) since
+    // this supersedes that flow for §133.12 multi-source DOs.
+    pattern: /^\/api\/procurement\/delivery-orders-v2\/[^/]+\/invoice-groups$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/delivery-orders-v2\/[^/]+\/pgi-invoice-groups$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" } },
   },
   {
     // §113.15 -- deliberately its own action (EDIT, same shape as PO/STO's

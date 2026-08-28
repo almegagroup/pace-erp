@@ -645,3 +645,60 @@ export async function getAc06HistoryHandler(req: Request, ctx: ProdHandlerContex
     if (rowError) throw new Error("AC06_HISTORY_FAILED"); return okResponse({ data: { archive, rows: rows ?? [] } }, ctx.request_id, req);
   } catch (error) { const code = error instanceof Error ? error.message : "AC06_HISTORY_FAILED"; return ac06Error(req, ctx, code, 500, "Unable to load closed-month history."); }
 }
+
+// SO01 §133.8-E consumer — "Costing Rate Month" dropdown for FG(MTO/HPS)/SFG(MTO/HPS)
+// lines needs "months where every item's rate is already approved", company-wide (not
+// keyed by one material — the spec is an all-items gate, not a per-item one). A month
+// qualifies when every non-excluded line is VERIFIED, whether the month itself is still
+// OPEN or has already been CLOSED (closing never re-checks verification, so a closed
+// month is not automatically approved -- it is checked the same way as an open one, via
+// its own archive-line snapshot).
+export async function listAc06ApprovedMonthsHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const companyId = await companyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    if (!companyId) return ac06Error(req, ctx, "AC06_APPROVED_MONTHS_INVALID", 400, "company_id is required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_GROUP", "VIEW");
+    if (accessError) return accessError;
+
+    const db = serviceRoleClient.schema("erp_production");
+    const { data: months, error: monthsError } = await db.from("ac06_month")
+      .select("id, rate_month, status").eq("company_id", companyId).order("rate_month", { ascending: false });
+    if (monthsError) throw new Error("AC06_APPROVED_MONTHS_FAILED");
+
+    const openMonths = ((months ?? []) as Row[]).filter((m) => m.status !== "CLOSED");
+    const closedMonths = ((months ?? []) as Row[]).filter((m) => m.status === "CLOSED");
+    const approvedRateMonths: string[] = [];
+
+    if (openMonths.length) {
+      const openIds = openMonths.map((m) => m.id as string);
+      const { data: openLines, error: openLinesError } = await db.from("ac06_month_line")
+        .select("month_id, verification_status").eq("excluded_from_rate_input", false).in("month_id", openIds);
+      if (openLinesError) throw new Error("AC06_APPROVED_MONTHS_FAILED");
+      const pendingMonthIds = new Set(
+        ((openLines ?? []) as Row[]).filter((l) => l.verification_status !== "VERIFIED").map((l) => l.month_id as string),
+      );
+      for (const m of openMonths) if (!pendingMonthIds.has(m.id as string)) approvedRateMonths.push(m.rate_month as string);
+    }
+
+    if (closedMonths.length) {
+      const closedIds = closedMonths.map((m) => m.id as string);
+      const { data: archives, error: archiveError } = await db.from("ac06_month_archive")
+        .select("id, source_month_id, rate_month").in("source_month_id", closedIds);
+      if (archiveError) throw new Error("AC06_APPROVED_MONTHS_FAILED");
+      const archiveIds = ((archives ?? []) as Row[]).map((a) => a.id as string);
+      if (archiveIds.length) {
+        const { data: archiveLines, error: archiveLinesError } = await db.from("ac06_month_archive_line")
+          .select("archive_id, verification_status").eq("excluded_from_rate_input", false).in("archive_id", archiveIds);
+        if (archiveLinesError) throw new Error("AC06_APPROVED_MONTHS_FAILED");
+        const pendingArchiveIds = new Set(
+          ((archiveLines ?? []) as Row[]).filter((l) => l.verification_status !== "VERIFIED").map((l) => l.archive_id as string),
+        );
+        for (const a of (archives ?? []) as Row[]) if (!pendingArchiveIds.has(a.id as string)) approvedRateMonths.push(a.rate_month as string);
+      }
+    }
+
+    approvedRateMonths.sort((a, b) => (a < b ? 1 : -1));
+    return okResponse({ data: approvedRateMonths.map((rateMonth) => ({ rate_month: rateMonth })) }, ctx.request_id, req);
+  } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_APPROVED_MONTHS_FAILED", "Unable to load approved costing months."); }
+}

@@ -15,6 +15,7 @@ import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
+import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -493,7 +494,20 @@ async function hydrateSalesInvoice(
     assertInvoiceVisibleToContext(ctx, invoice);
   }
   const lines = await fetchSalesInvoiceLines(invoiceId);
-  return { ...invoice, lines };
+  // §133.13 -- additional cost lines live in their own table (a variable-
+  // length list, unlike the header's single freight_* set of columns).
+  const { data: additionalCostLines, error: additionalCostLinesError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("sales_invoice_additional_cost_line")
+    .select("id, category_id, amount, gst_included, gst_treatment, gst_rate, gst_amount, line_total, additional_cost_category:category_id(category_name)")
+    .eq("invoice_id", invoiceId);
+  if (additionalCostLinesError) throw new Error("SALES_INVOICE_ADDITIONAL_COST_FETCH_FAILED");
+  const additionalCostLineRows = ((additionalCostLines ?? []) as JsonRecord[]).map((row) => ({
+    ...row,
+    category_name: (row.additional_cost_category as JsonRecord | null)?.category_name ?? null,
+    additional_cost_category: undefined,
+  }));
+  return { ...invoice, lines, additional_cost_lines: additionalCostLineRows };
 }
 
 async function fetchDeliveryChallan(dcId: string): Promise<JsonRecord> {
@@ -1792,6 +1806,795 @@ export async function postSalesInvoiceHandler(
   } catch (error) {
     const code = error instanceof Error ? error.message : "SALES_INVOICE_POST_FAILED";
     const status = code === "SALES_INVOICE_NOT_FOUND" ? 404 : code === "SALES_INVOICE_SCOPE_VIOLATION" ? 403 : 500;
+    return salesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// ─── SO01 unified RM/PM/INT/SFG/FG redesign (feasibility §133.7-§133.11) ────
+// Replaces createSOHandler for new Sales Orders — that legacy handler stays
+// in place unmodified (still relied on for existing rows / other callers).
+
+const DISPATCH_TYPES = new Set([
+  "DEPENDENT_DIRECT", "DEPENDENT_DEPOT", "INDEPENDENT_PARTY",
+  "INDEPENDENT_PARTY_ASIAN_BILLED", "DEPENDENT_NO_INBOUND",
+]);
+const NO_INBOUND_SUB_TYPES = new Set(["DIRECT", "DEPOT"]);
+const LINE_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "SFG", "FG"]);
+const FG_TYPES = new Set(["MTO", "HPS", "MTEST", "MTS"]);
+const RATE_BASES = new Set(["PACK_UOM", "BASE_UOM", "FIXED"]);
+const GST_TREATMENTS = new Set(["INCLUSIVE", "EXCLUSIVE"]);
+
+// §133.7 — IBN Required is hardcoded per dispatch_type for 4 of 5 types;
+// INDEPENDENT_PARTY_ASIAN_BILLED is the sole exception (caller supplies it).
+function resolveIbnRequired(dispatchType: string, bodyIbnRequired: unknown): boolean {
+  if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
+    return Boolean(bodyIbnRequired);
+  }
+  if (dispatchType === "DEPENDENT_NO_INBOUND") {
+    return false;
+  }
+  return dispatchType === "DEPENDENT_DIRECT" || dispatchType === "DEPENDENT_DEPOT";
+}
+
+// §133.14 — compositional Dispatch Category: which of F(G)/S(FG) are present,
+// RPS as the RM/PM/INT base. FG present always outranks SFG-only in naming
+// (FRPS vs SRPS vs FSRPS when both present).
+function deriveDispatchCategory(materialTypes: string[]): string {
+  const hasFg = materialTypes.includes("FG");
+  const hasSfg = materialTypes.includes("SFG");
+  if (hasFg && hasSfg) return "FSRPS";
+  if (hasFg) return "FRPS";
+  if (hasSfg) return "SRPS";
+  return "RPS";
+}
+
+type ResolvedBillToShipTo = {
+  billToType: string | null;
+  billToParentCompanyId: string | null;
+  billToDepotCodeId: string | null;
+  billToVdcId: string | null;
+  billToName: string | null;
+  billToAddress: string | null;
+  billToState: string | null;
+  billToGstNumber: string | null;
+  billingToDepot: boolean | null;
+  customerId: string | null;
+  shipTo: ResolvedShipTo | null; // null = deferred to the SO Map / separate-page flow (§133.5)
+};
+
+async function fetchParentCompany(id: string): Promise<JsonRecord> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master").from("fg_parent_company")
+    .select("id, company_name, state, gst_number, full_address, pin_code, status")
+    .eq("id", id).maybeSingle();
+  if (error || !data) throw new Error("SO_PARENT_COMPANY_NOT_FOUND");
+  return data as JsonRecord;
+}
+
+async function fetchDepotCode(id: string): Promise<JsonRecord> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master").from("fg_depot_code")
+    .select("id, parent_company_id, dispatch_type, code, description, address_line, state, pin_code, gst_number, status")
+    .eq("id", id).maybeSingle();
+  if (error || !data) throw new Error("SO_DEPOT_CODE_NOT_FOUND");
+  return data as JsonRecord;
+}
+
+// §133.8-B — Bill-To/Ship-To resolution, one branch per Dispatch Type.
+// DEPENDENT_NO_INBOUND delegates to the DIRECT/DEPOT branch matching its
+// sub_type (§133.9's "Direct sub-case / Depot sub-case" lock).
+async function resolveBillToShipTo(body: JsonRecord, dispatchType: string): Promise<ResolvedBillToShipTo> {
+  const effectiveType = dispatchType === "DEPENDENT_NO_INBOUND"
+    ? (() => {
+        const subType = toUpperTrimmedString(body.no_inbound_sub_type);
+        if (!NO_INBOUND_SUB_TYPES.has(subType)) throw new Error("SO_NO_INBOUND_SUB_TYPE_INVALID");
+        return subType === "DIRECT" ? "DEPENDENT_DIRECT" : "DEPENDENT_DEPOT";
+      })()
+    : dispatchType;
+
+  if (effectiveType === "DEPENDENT_DIRECT") {
+    const parentCompanyId = toTrimmedString(body.parent_company_id);
+    const vdcId = toTrimmedString(body.vdc_id);
+    if (!parentCompanyId || !vdcId) throw new Error("SO_PARENT_COMPANY_AND_VDC_REQUIRED");
+    const parent = await fetchParentCompany(parentCompanyId);
+    const vdc = await fetchDepotCode(vdcId);
+    if (toUpperTrimmedString(vdc.dispatch_type) !== "DIRECT") throw new Error("SO_VDC_TYPE_INVALID");
+    if (toTrimmedString(vdc.parent_company_id) !== parentCompanyId) throw new Error("SO_VDC_PARENT_COMPANY_MISMATCH");
+    return {
+      billToType: "PARENT_COMPANY", billToParentCompanyId: parentCompanyId, billToDepotCodeId: null,
+      billToVdcId: vdcId, billToName: toTrimmedString(parent.company_name) || null,
+      billToAddress: toTrimmedString(parent.full_address) || null, billToState: toTrimmedString(parent.state) || null,
+      billToGstNumber: toTrimmedString(parent.gst_number) || null, billingToDepot: null, customerId: null,
+      shipTo: null, // §133.5 — Ship-To/Party resolves later, on the separate SO Map page
+    };
+  }
+
+  if (effectiveType === "DEPENDENT_DEPOT") {
+    const parentCompanyId = toTrimmedString(body.parent_company_id);
+    const depotCodeId = toTrimmedString(body.depot_code_id);
+    if (!parentCompanyId || !depotCodeId) throw new Error("SO_PARENT_COMPANY_AND_DEPOT_REQUIRED");
+    const depot = await fetchDepotCode(depotCodeId);
+    if (toUpperTrimmedString(depot.dispatch_type) !== "DEPOT") throw new Error("SO_DEPOT_TYPE_INVALID");
+    if (toTrimmedString(depot.parent_company_id) !== parentCompanyId) throw new Error("SO_DEPOT_PARENT_COMPANY_MISMATCH");
+    const depotAddress: ResolvedShipTo = {
+      ship_to_same_as_customer: false, ship_to_type: null, ship_to_gst_number: toTrimmedString(depot.gst_number) || null,
+      ship_to_name: toTrimmedString(depot.description) || null, ship_to_address: toTrimmedString(depot.address_line) || null,
+      ship_to_state: toTrimmedString(depot.state) || null, delivery_address: toTrimmedString(depot.address_line) || null,
+    };
+    return {
+      billToType: "DEPOT", billToParentCompanyId: parentCompanyId, billToDepotCodeId: depotCodeId, billToVdcId: null,
+      billToName: depotAddress.ship_to_name, billToAddress: depotAddress.ship_to_address, billToState: depotAddress.ship_to_state,
+      billToGstNumber: depotAddress.ship_to_gst_number, billingToDepot: null, customerId: null,
+      shipTo: depotAddress, // Bill-To = Ship-To, both the Depot's own address
+    };
+  }
+
+  if (effectiveType === "INDEPENDENT_PARTY") {
+    const customerId = toTrimmedString(body.customer_id);
+    if (!customerId) throw new Error("SO_CUSTOMER_REQUIRED");
+    const { data: customer, error } = await serviceRoleClient
+      .schema("erp_master").from("customer_master")
+      .select("customer_name, delivery_address, billing_address, billing_state, gst_number")
+      .eq("id", customerId).maybeSingle();
+    if (error || !customer) throw new Error("SO_CUSTOMER_LOOKUP_FAILED");
+    const shipTo = resolveShipTo(body, customer as JsonRecord);
+    return {
+      billToType: "CUSTOMER", billToParentCompanyId: null, billToDepotCodeId: null, billToVdcId: null,
+      billToName: toTrimmedString((customer as JsonRecord).customer_name) || null,
+      billToAddress: toTrimmedString((customer as JsonRecord).billing_address) || null,
+      billToState: toTrimmedString((customer as JsonRecord).billing_state) || null,
+      billToGstNumber: toTrimmedString((customer as JsonRecord).gst_number) || null,
+      billingToDepot: null, customerId, shipTo,
+    };
+  }
+
+  if (effectiveType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
+    const customerId = toTrimmedString(body.customer_id);
+    if (!customerId) throw new Error("SO_CUSTOMER_REQUIRED");
+    const { data: customer, error } = await serviceRoleClient
+      .schema("erp_master").from("customer_master")
+      .select("customer_name, delivery_address, billing_address, billing_state, gst_number")
+      .eq("id", customerId).maybeSingle();
+    if (error || !customer) throw new Error("SO_CUSTOMER_LOOKUP_FAILED");
+    const customerState = toTrimmedString((customer as JsonRecord).billing_state);
+    if (!customerState) throw new Error("SO_CUSTOMER_STATE_REQUIRED");
+    const { data: parentRows, error: parentError } = await serviceRoleClient
+      .schema("erp_master").from("fg_parent_company")
+      .select("id, company_name, state, gst_number, full_address")
+      .eq("state", customerState).eq("status", "ACTIVE");
+    if (parentError) throw new Error("SO_PARENT_COMPANY_LOOKUP_FAILED");
+    const parent = ((parentRows ?? []) as JsonRecord[])[0];
+    if (!parent) throw new Error("SO_PARENT_COMPANY_NOT_FOUND_FOR_STATE");
+
+    const billingToDepot = Boolean(body.billing_to_depot);
+    let billToDepotCodeId: string | null = null;
+    let billToName = toTrimmedString(parent.company_name) || null;
+    let billToAddress = toTrimmedString(parent.full_address) || null;
+    let billToState = toTrimmedString(parent.state) || null;
+    let billToGstNumber = toTrimmedString(parent.gst_number) || null;
+    if (billingToDepot) {
+      const depotCodeId = toTrimmedString(body.depot_code_id);
+      if (!depotCodeId) throw new Error("SO_DEPOT_CODE_REQUIRED");
+      const depot = await fetchDepotCode(depotCodeId);
+      if (toTrimmedString(depot.parent_company_id) !== String(parent.id)) throw new Error("SO_DEPOT_PARENT_COMPANY_MISMATCH");
+      billToDepotCodeId = depotCodeId;
+      billToName = toTrimmedString(depot.description) || null;
+      billToAddress = toTrimmedString(depot.address_line) || null;
+      billToState = toTrimmedString(depot.state) || null;
+      billToGstNumber = toTrimmedString(depot.gst_number) || null;
+    }
+
+    // Ship-To is always the selected Independent Customer for this type (§133.8-B).
+    const shipTo: ResolvedShipTo = {
+      ship_to_same_as_customer: false, ship_to_type: null,
+      ship_to_gst_number: toTrimmedString((customer as JsonRecord).gst_number) || null,
+      ship_to_name: toTrimmedString((customer as JsonRecord).customer_name) || null,
+      ship_to_address: toTrimmedString((customer as JsonRecord).delivery_address)
+        || toTrimmedString((customer as JsonRecord).billing_address) || null,
+      ship_to_state: customerState,
+      delivery_address: toTrimmedString((customer as JsonRecord).delivery_address)
+        || toTrimmedString((customer as JsonRecord).billing_address) || null,
+    };
+
+    return {
+      billToType: billingToDepot ? "DEPOT" : "PARENT_COMPANY",
+      billToParentCompanyId: String(parent.id), billToDepotCodeId, billToVdcId: null,
+      billToName, billToAddress, billToState, billToGstNumber, billingToDepot, customerId, shipTo,
+    };
+  }
+
+  throw new Error("SO_DISPATCH_TYPE_INVALID");
+}
+
+async function assertUnifiedSalesMaterial(materialId: string): Promise<JsonRecord> {
+  return fetchMaterial(materialId);
+}
+
+// company-scope-write-acl-guard.mjs pattern (see planning.handlers.ts's
+// canMaintainPlanning for the original template) — getCompanyScope/
+// assertCompanyScope only prove company MEMBERSHIP, not that the caller's
+// ACL grant at this SPECIFIC target company is WRITE for PROC_SO_CREATE
+// (SO01's real resource_code — confirmed 2026-08-28, not a new SO01_CREATE
+// code). A multi-company Accounts user with WRITE at their session's
+// company but only membership (or a lesser grant) at the body's target
+// company must not be able to write there.
+async function canMaintainSo01Create(
+  ctx: ProcurementHandlerContext,
+  companyId: string,
+  actionCode: "WRITE" | "EDIT" = "WRITE",
+): Promise<boolean> {
+  if (ctx.context.isAdmin) return true;
+  if (!companyId) return false;
+
+  let workContextIds: string[];
+  if (companyId === ctx.context.companyId) {
+    workContextIds =
+      ctx.context.workContextIds && ctx.context.workContextIds.length > 0
+        ? ctx.context.workContextIds
+        : ctx.context.workContextId
+          ? [ctx.context.workContextId]
+          : [];
+  } else {
+    const { data: workContextRows, error: workContextError } = await serviceRoleClient
+      .schema("erp_acl")
+      .from("user_work_contexts")
+      .select("work_context:work_context_id!inner(work_context_id, is_active)")
+      .eq("auth_user_id", ctx.auth_user_id)
+      .eq("company_id", companyId);
+    if (workContextError) return false;
+    workContextIds = ((workContextRows ?? []) as Array<{ work_context: unknown }>)
+      .map((row) => {
+        const wc = Array.isArray(row.work_context) ? row.work_context[0] : row.work_context;
+        return wc && typeof wc === "object" ? (wc as { work_context_id: string; is_active: boolean }) : null;
+      })
+      .filter((wc): wc is { work_context_id: string; is_active: boolean } => Boolean(wc && wc.is_active === true))
+      .map((wc) => wc.work_context_id);
+  }
+  if (workContextIds.length === 0) return false;
+
+  const { data: versionRow, error: versionError } = await serviceRoleClient
+    .schema("acl")
+    .from("acl_versions")
+    .select("acl_version_id")
+    .eq("company_id", companyId)
+    .eq("is_active", true)
+    .single();
+  if (versionError || !versionRow?.acl_version_id) return false;
+
+  const { data, error } = await readAclSnapshotDecisionAny({
+    db: serviceRoleClient,
+    aclVersionId: versionRow.acl_version_id as string,
+    authUserId: ctx.auth_user_id,
+    companyId,
+    workContextIds,
+    resourceCode: "PROC_SO_CREATE",
+    actionCode,
+  });
+  if (error || !data) return false;
+  return data.decision === "ALLOW";
+}
+
+// Shared by Create and Edit (Edit's "add a new line" path, §133.10) — throws
+// Error(code) on any validation failure, matching this file's other shared-
+// prep functions (e.g. do_unified.handlers.ts's prepareAndValidateDoLines).
+// Returns the line payload (minus so_id, added by the caller) plus an
+// optional HSN write-back entry.
+async function prepareUnifiedSoLine(
+  line: JsonRecord,
+  index: number,
+  materialTypes: string[],
+  companyStateName: string | null,
+  resolvedShipToOrBillState: string | null,
+): Promise<{ payload: JsonRecord; hsnWriteBack: { materialId: string; hsnCode: string } | null }> {
+  const lineMaterialType = toUpperTrimmedString(line.line_material_type);
+  const materialId = toTrimmedString(line.material_id);
+  const manualSkuName = lineMaterialType === "FG" && !materialId ? toTrimmedString(line.manual_sku_name) : "";
+  if (!LINE_MATERIAL_TYPES.has(lineMaterialType) || !materialTypes.includes(lineMaterialType)) {
+    throw new Error("SO_LINE_MATERIAL_TYPE_INVALID");
+  }
+  if (!materialId && !manualSkuName) throw new Error("SO_LINE_MATERIAL_REQUIRED");
+
+  const rate = parsePositiveNumber(line.rate);
+  if (!rate) throw new Error("SO_LINE_RATE_REQUIRED");
+  const gstTreatment = toUpperTrimmedString(line.gst_treatment) || "EXCLUSIVE";
+  if (!GST_TREATMENTS.has(gstTreatment)) throw new Error("SO_LINE_GST_TREATMENT_INVALID");
+  const gstRate = parseNullableNumber(line.gst_rate) ?? 0;
+  const currencyCode = toTrimmedString(line.currency_code) || "INR";
+  const hsnCode = toTrimmedString(line.hsn_code) || null;
+  const remarks = toTrimmedString(line.remarks) || null;
+
+  let baseQty: number | null = null;
+  let packUomCode: string | null = null;
+  let packQty: number | null = null;
+  let perPackQty: number | null = null;
+  let rateBasis: string | null = null;
+  let fgType: string | null = null;
+  let batchNumber: string | null = null;
+  let expiryDate: string | null = null;
+  let costingRateMonth: string | null = null;
+  let packingOrderId: string | null = null;
+
+  if (lineMaterialType === "RM" || lineMaterialType === "PM" || lineMaterialType === "INT") {
+    baseQty = parsePositiveNumber(line.quantity);
+    if (!baseQty) throw new Error("SO_LINE_QTY_REQUIRED");
+    batchNumber = toTrimmedString(line.batch_number) || null;
+    expiryDate = toTrimmedString(line.expiry_date) || null;
+  } else if (lineMaterialType === "SFG") {
+    baseQty = parsePositiveNumber(line.quantity);
+    if (!baseQty) throw new Error("SO_LINE_QTY_REQUIRED");
+    batchNumber = toTrimmedString(line.batch_number) || null;
+    fgType = toUpperTrimmedString(line.fg_type) || null;
+    if (fgType && !FG_TYPES.has(fgType)) throw new Error("SO_LINE_FG_TYPE_INVALID");
+    costingRateMonth = toTrimmedString(line.costing_rate_month) || null;
+    packingOrderId = toTrimmedString(line.packing_order_id) || null;
+  } else if (lineMaterialType === "FG") {
+    fgType = toUpperTrimmedString(line.fg_type);
+    if (!FG_TYPES.has(fgType)) throw new Error("SO_LINE_FG_TYPE_REQUIRED");
+    rateBasis = toUpperTrimmedString(line.rate_basis) || (fgType === "MTEST" ? "FIXED" : "BASE_UOM");
+    if (!RATE_BASES.has(rateBasis)) throw new Error("SO_LINE_RATE_BASIS_INVALID");
+    if (fgType === "MTEST") {
+      baseQty = parsePositiveNumber(line.base_qty);
+      if (!baseQty) throw new Error("SO_LINE_BASE_QTY_REQUIRED");
+      perPackQty = parsePositiveNumber(line.per_pack_qty);
+      packQty = perPackQty ? Number((baseQty / perPackQty).toFixed(6)) : null;
+      packUomCode = toTrimmedString(line.pack_uom_code) || "BBL";
+      costingRateMonth = null;
+    } else {
+      packQty = parsePositiveNumber(line.pack_qty);
+      perPackQty = parsePositiveNumber(line.per_pack_qty);
+      if (!packQty || !perPackQty) throw new Error("SO_LINE_PACK_QTY_REQUIRED");
+      baseQty = Number((packQty * perPackQty).toFixed(6));
+      packUomCode = toTrimmedString(line.pack_uom_code) || null;
+      costingRateMonth = toTrimmedString(line.costing_rate_month) || null;
+    }
+    batchNumber = toTrimmedString(line.batch_number) || null;
+    packingOrderId = toTrimmedString(line.packing_order_id) || null;
+  }
+
+  let hsnWriteBack: { materialId: string; hsnCode: string } | null = null;
+  if (materialId) {
+    const materialForHsn = await assertUnifiedSalesMaterial(materialId);
+    if (hsnCode && !toTrimmedString(materialForHsn.hsn_code)) {
+      hsnWriteBack = { materialId, hsnCode };
+    }
+  }
+
+  const qtyForAmount = rateBasis === "PACK_UOM" ? (packQty ?? 0) : (baseQty ?? 0);
+  const taxableValue = rateBasis === "FIXED" ? rate : Number((rate * qtyForAmount).toFixed(4));
+  const gstAmount = Number((taxableValue * gstRate / 100).toFixed(4));
+  const gstType = deriveSalesInvoiceGstType(companyStateName, resolvedShipToOrBillState);
+  const cgstAmount = gstType === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : 0;
+  const sgstAmount = gstType === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : 0;
+  const igstAmount = gstType === "IGST" ? gstAmount : 0;
+  const totalValue = Number((taxableValue + gstAmount).toFixed(4));
+
+  return {
+    payload: {
+      line_number: index + 1,
+      line_material_type: lineMaterialType,
+      material_id: materialId || null,
+      manual_sku_name: manualSkuName || null,
+      fg_type: fgType,
+      quantity: baseQty,
+      base_qty: baseQty,
+      pack_uom_code: packUomCode,
+      pack_qty: packQty,
+      per_pack_qty: perPackQty,
+      rate_basis: rateBasis,
+      uom_code: toTrimmedString(line.uom_code) || null,
+      rate,
+      currency_code: currencyCode,
+      gst_treatment: gstTreatment,
+      gst_rate: gstRate,
+      gst_amount: gstAmount,
+      cgst_amount: cgstAmount,
+      sgst_amount: sgstAmount,
+      igst_amount: igstAmount,
+      total_value: totalValue,
+      balance_qty: baseQty,
+      hsn_code: hsnCode,
+      batch_number: batchNumber,
+      expiry_date: expiryDate,
+      costing_rate_month: costingRateMonth,
+      packing_order_id: packingOrderId,
+      remarks,
+    },
+    hsnWriteBack,
+  };
+}
+
+export async function createSalesOrderUnifiedHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const body = await parseBody(req);
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    const dispatchType = toUpperTrimmedString(body.dispatch_type);
+    const materialTypes = Array.isArray(body.material_types)
+      ? Array.from(new Set((body.material_types as unknown[]).map((v) => toUpperTrimmedString(v))))
+      : [];
+    const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+
+    if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
+    if (!DISPATCH_TYPES.has(dispatchType)) return salesErrorResponse(req, ctx, "SO_DISPATCH_TYPE_INVALID", 400, "A valid dispatch_type is required.");
+    if (materialTypes.length === 0 || materialTypes.some((t) => !LINE_MATERIAL_TYPES.has(t))) {
+      return salesErrorResponse(req, ctx, "SO_MATERIAL_TYPES_INVALID", 400, "At least one valid Material Type must be selected.");
+    }
+    if (lines.length === 0) return salesErrorResponse(req, ctx, "SO_LINES_REQUIRED", 400, "At least one item line is required.");
+
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainSo01Create(ctx, companyId))) {
+      return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Create-SO access at this company.");
+    }
+
+    const { data: company, error: companyError } = await serviceRoleClient
+      .schema("erp_master").from("companies").select("state_name").eq("id", companyId).maybeSingle();
+    if (companyError || !company) return salesErrorResponse(req, ctx, "SO_COMPANY_LOOKUP_FAILED", 500, "Unable to load company for GST derivation.");
+    const companyStateName = toTrimmedString((company as JsonRecord).state_name) || null;
+
+    if (dispatchType === "INDEPENDENT_PARTY" || dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
+      const customerId = toTrimmedString(body.customer_id);
+      if (customerId) await assertCustomerMappedToCompany(customerId, companyId);
+    }
+
+    let resolved: ResolvedBillToShipTo;
+    try {
+      resolved = await resolveBillToShipTo(body, dispatchType);
+    } catch (resolveError) {
+      const code = resolveError instanceof Error ? resolveError.message : "SO_BILL_TO_RESOLUTION_FAILED";
+      return salesErrorResponse(req, ctx, code, 400, code);
+    }
+
+    if (resolved.shipTo) {
+      const shipToValidationError = validateResolvedShipTo(resolved.shipTo);
+      if (shipToValidationError) {
+        return salesErrorResponse(req, ctx, shipToValidationError, 400, "Ship-To details are incomplete.");
+      }
+    }
+
+    const ibnRequired = resolveIbnRequired(dispatchType, body.ibn_required);
+    const dispatchCategory = deriveDispatchCategory(materialTypes);
+    const freightTerm = toUpperTrimmedString(body.freight_term) || null;
+
+    const resolvedShipToOrBillState = resolved.shipTo?.ship_to_state ?? resolved.billToState ?? null;
+    const linePayload: JsonRecord[] = [];
+    const hsnWriteBacks: Array<{ materialId: string; hsnCode: string }> = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      let prepared: Awaited<ReturnType<typeof prepareUnifiedSoLine>>;
+      try {
+        prepared = await prepareUnifiedSoLine(lines[index], index, materialTypes, companyStateName, resolvedShipToOrBillState);
+      } catch (lineError) {
+        const code = lineError instanceof Error ? lineError.message : "SO_LINE_INVALID";
+        return salesErrorResponse(req, ctx, code, 400, `${code} (line ${index + 1}).`);
+      }
+      linePayload.push(prepared.payload);
+      if (prepared.hsnWriteBack) hsnWriteBacks.push(prepared.hsnWriteBack);
+    }
+
+    const soNumber = await generateProcurementDocNumber("SO");
+    const { data: so, error: soError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_order")
+      .insert({
+        so_number: soNumber,
+        so_date: toTrimmedString(body.so_date) || todayIsoDate(),
+        company_id: companyId,
+        customer_id: resolved.customerId,
+        dispatch_type: dispatchType,
+        ibn_required: ibnRequired,
+        dispatch_category: dispatchCategory,
+        material_types: materialTypes,
+        freight_term: freightTerm,
+        payment_term_id: toTrimmedString(body.payment_term_id) || null,
+        bill_to_type: resolved.billToType,
+        bill_to_parent_company_id: resolved.billToParentCompanyId,
+        bill_to_depot_code_id: resolved.billToDepotCodeId,
+        bill_to_vdc_id: resolved.billToVdcId,
+        bill_to_name: resolved.billToName,
+        bill_to_address: resolved.billToAddress,
+        bill_to_state: resolved.billToState,
+        bill_to_gst_number: resolved.billToGstNumber,
+        billing_to_depot: resolved.billingToDepot,
+        ship_to_same_as_customer: resolved.shipTo?.ship_to_same_as_customer ?? null,
+        ship_to_type: resolved.shipTo?.ship_to_type ?? null,
+        ship_to_gst_number: resolved.shipTo?.ship_to_gst_number ?? null,
+        ship_to_name: resolved.shipTo?.ship_to_name ?? null,
+        ship_to_address: resolved.shipTo?.ship_to_address ?? null,
+        ship_to_state: resolved.shipTo?.ship_to_state ?? null,
+        delivery_address: resolved.shipTo?.delivery_address ?? null,
+        remarks: toTrimmedString(body.remarks) || null,
+        created_by: ctx.auth_user_id,
+      })
+      .select("*")
+      .single();
+
+    if (soError || !so) {
+      return salesErrorResponse(req, ctx, "SO_CREATE_FAILED", 500, "Unable to create sales order.");
+    }
+
+    const lineInsertPayload = linePayload.map((line) => ({ ...line, so_id: so.id }));
+    const { error: lineError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_order_line")
+      .insert(lineInsertPayload);
+
+    if (lineError) {
+      return salesErrorResponse(req, ctx, "SO_LINE_CREATE_FAILED", 500, "Unable to create sales order lines.");
+    }
+
+    // §133.8-F — best-effort HSN write-back; never fails the SO create itself.
+    for (const writeBack of hsnWriteBacks) {
+      await serviceRoleClient
+        .schema("erp_master").from("material_master")
+        .update({ hsn_code: writeBack.hsnCode })
+        .eq("id", writeBack.materialId)
+        .is("hsn_code", null);
+    }
+
+    return okResponse(await hydrateSo(String(so.id), ctx), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_CREATE_FAILED";
+    const status = code === "MATERIAL_NOT_FOUND" ? 404
+      : code === "COMPANY_SCOPE_VIOLATION" ? 403
+      : code === "CUSTOMER_NOT_MAPPED_TO_COMPANY" ? 422
+      : code.startsWith("SO_") ? 400
+      : 500;
+    return salesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// ─── §133.10 — Edit / Cancel / Close SO (unified redesign) ─────────────────
+
+async function fetchUnifiedSoWithLines(soId: string): Promise<{ so: JsonRecord; lines: JsonRecord[] }> {
+  const { data: so, error: soError } = await serviceRoleClient
+    .schema("erp_procurement").from("sales_order").select("*").eq("id", soId).maybeSingle();
+  if (soError || !so) throw new Error("SO_NOT_FOUND");
+  const { data: lines, error: lineError } = await serviceRoleClient
+    .schema("erp_procurement").from("sales_order_line").select("*").eq("so_id", soId);
+  if (lineError) throw new Error("SO_LINE_FETCH_FAILED");
+  return { so: so as JsonRecord, lines: (lines ?? []) as JsonRecord[] };
+}
+
+async function fetchActiveMapAllocationsForSo(soId: string): Promise<JsonRecord[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement").from("sales_order_map_allocation")
+    .select("*").eq("so_id", soId).eq("status", "ACTIVE");
+  if (error) throw new Error("SO_MAP_ALLOCATION_FETCH_FAILED");
+  return (data ?? []) as JsonRecord[];
+}
+
+// §133.10 — top-to-bottom editable except Bill-To/Ship-To identity (never
+// read from body here — dispatch_type/bill_to_*/ship_to_* changes must go
+// through Cancel + a new SO). Per-line: Mapped qty can't be reduced below
+// its already-mapped amount, and a Mapped line can't be removed outright.
+// DO/Invoice-level locks will extend this once those stages exist for the
+// unified flow (today only the SO-Map allocation table exists to check).
+export async function updateSalesOrderUnifiedHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const soId = getIdFromPath(req);
+    if (!soId) return salesErrorResponse(req, ctx, "SO_ID_MISSING", 400, "SO id required.");
+    const body = await parseBody(req);
+    const { so, lines } = await fetchUnifiedSoWithLines(soId);
+    const soCompanyId = toTrimmedString(so.company_id);
+    try {
+      await assertCompanyScope(ctx, soCompanyId);
+    } catch {
+      return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainSo01Create(ctx, soCompanyId, "EDIT"))) {
+      return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Edit-SO access at this company.");
+    }
+    if (["CANCELLED", "CLOSED"].includes(toUpperTrimmedString(so.status))) {
+      return salesErrorResponse(req, ctx, "SO_EDIT_BLOCKED_TERMINAL_STATUS", 400, "This SO is Cancelled/Closed and cannot be edited.");
+    }
+
+    const allocations = await fetchActiveMapAllocationsForSo(soId);
+    const mappedByLine = new Map<string, number>();
+    for (const alloc of allocations) {
+      const lineId = toTrimmedString(alloc.so_line_id);
+      mappedByLine.set(lineId, (mappedByLine.get(lineId) ?? 0) + Number(alloc.allocated_qty ?? 0));
+    }
+
+    const submittedLines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    const submittedIds = new Set(submittedLines.map((line) => toTrimmedString(line.id)).filter(Boolean));
+
+    // A Mapped line missing from the submitted set = an attempted removal.
+    for (const line of lines) {
+      const lineId = toTrimmedString(line.id);
+      const mappedQty = mappedByLine.get(lineId) ?? 0;
+      if (mappedQty > QTY_TOL_SO_EDIT && !submittedIds.has(lineId)) {
+        return salesErrorResponse(req, ctx, "SO_EDIT_MAPPED_LINE_REMOVAL_BLOCKED", 422,
+          `Line is already Mapped (qty ${mappedQty}) — unmap it in SO Map first before removing it.`);
+      }
+    }
+
+    for (const submitted of submittedLines) {
+      const lineId = toTrimmedString(submitted.id);
+      if (!lineId) continue;
+      const mappedQty = mappedByLine.get(lineId) ?? 0;
+      const newQty = Number(submitted.base_qty ?? submitted.quantity);
+      if (mappedQty > QTY_TOL_SO_EDIT && Number.isFinite(newQty) && newQty < mappedQty - QTY_TOL_SO_EDIT) {
+        return salesErrorResponse(req, ctx, "SO_EDIT_QTY_BELOW_MAPPED", 422,
+          `Line's new qty (${newQty}) is below what is already Mapped (${mappedQty}) — unmap the excess in SO Map first.`);
+      }
+      const { error: updateError } = await serviceRoleClient
+        .schema("erp_procurement").from("sales_order_line")
+        .update({
+          rate: submitted.rate !== undefined ? Number(submitted.rate) : undefined,
+          base_qty: submitted.base_qty !== undefined ? Number(submitted.base_qty) : undefined,
+          quantity: submitted.base_qty !== undefined ? Number(submitted.base_qty) : undefined,
+          gst_rate: submitted.gst_rate !== undefined ? Number(submitted.gst_rate) : undefined,
+          hsn_code: submitted.hsn_code !== undefined ? toTrimmedString(submitted.hsn_code) || null : undefined,
+          batch_number: submitted.batch_number !== undefined ? toTrimmedString(submitted.batch_number) || null : undefined,
+          expiry_date: submitted.expiry_date !== undefined ? toTrimmedString(submitted.expiry_date) || null : undefined,
+          remarks: submitted.remarks !== undefined ? toTrimmedString(submitted.remarks) || null : undefined,
+          last_updated_at: new Date().toISOString(),
+        })
+        .eq("id", lineId).eq("so_id", soId);
+      if (updateError) return salesErrorResponse(req, ctx, "SO_EDIT_LINE_UPDATE_FAILED", 500, "Unable to update SO line.");
+    }
+
+    // §133.10 real gap closed (2026-08-28) — Edit previously only ever
+    // touched lines that already had an id; a kept-but-unmapped line
+    // omitted from submittedLines was never actually deleted (only
+    // MAPPED-line removal was blocked, nothing enforced the delete for the
+    // legitimate case), and a line with no id (newly added in the wizard)
+    // was silently ignored entirely. Both fixed here: unmapped lines
+    // missing from the submitted set are deleted; id-less submitted lines
+    // are validated via the same prepareUnifiedSoLine() Create uses and
+    // inserted, numbered to continue after the highest existing line_number
+    // (existing kept lines' own line_number is never touched).
+    const removableLineIds = lines
+      .map((line) => toTrimmedString(line.id))
+      .filter((lineId) => lineId && !submittedIds.has(lineId) && (mappedByLine.get(lineId) ?? 0) <= QTY_TOL_SO_EDIT);
+    if (removableLineIds.length > 0) {
+      const { error: deleteError } = await serviceRoleClient
+        .schema("erp_procurement").from("sales_order_line")
+        .delete().eq("so_id", soId).in("id", removableLineIds);
+      if (deleteError) return salesErrorResponse(req, ctx, "SO_EDIT_LINE_DELETE_FAILED", 500, "Unable to remove SO line.");
+    }
+
+    const newLines = submittedLines.filter((submitted) => !toTrimmedString(submitted.id));
+    if (newLines.length > 0) {
+      const { data: company, error: companyError } = await serviceRoleClient
+        .schema("erp_master").from("companies").select("state_name").eq("id", soCompanyId).maybeSingle();
+      if (companyError || !company) return salesErrorResponse(req, ctx, "SO_COMPANY_LOOKUP_FAILED", 500, "Unable to load company for GST derivation.");
+      const companyStateName = toTrimmedString((company as JsonRecord).state_name) || null;
+      const resolvedShipToOrBillState = toTrimmedString(so.ship_to_state) || toTrimmedString(so.bill_to_state) || null;
+      const materialTypes = Array.isArray(so.material_types) ? (so.material_types as string[]) : [];
+      const maxLineNumber = lines.reduce((max, line) => Math.max(max, Number(line.line_number ?? 0)), 0);
+
+      const newLinePayload: JsonRecord[] = [];
+      const hsnWriteBacks: Array<{ materialId: string; hsnCode: string }> = [];
+      for (let i = 0; i < newLines.length; i += 1) {
+        let prepared: Awaited<ReturnType<typeof prepareUnifiedSoLine>>;
+        try {
+          prepared = await prepareUnifiedSoLine(newLines[i], maxLineNumber + i, materialTypes, companyStateName, resolvedShipToOrBillState);
+        } catch (lineError) {
+          const code = lineError instanceof Error ? lineError.message : "SO_LINE_INVALID";
+          return salesErrorResponse(req, ctx, code, 400, `${code} (new line ${i + 1}).`);
+        }
+        newLinePayload.push({ ...prepared.payload, so_id: soId });
+        if (prepared.hsnWriteBack) hsnWriteBacks.push(prepared.hsnWriteBack);
+      }
+      const { error: insertError } = await serviceRoleClient
+        .schema("erp_procurement").from("sales_order_line").insert(newLinePayload);
+      if (insertError) return salesErrorResponse(req, ctx, "SO_EDIT_LINE_CREATE_FAILED", 500, "Unable to add new SO line.");
+      for (const writeBack of hsnWriteBacks) {
+        await serviceRoleClient
+          .schema("erp_master").from("material_master")
+          .update({ hsn_code: writeBack.hsnCode })
+          .eq("id", writeBack.materialId)
+          .is("hsn_code", null);
+      }
+    }
+
+    // Header fields — never dispatch_type/bill_to_*/ship_to_*/vdc (§133.10 identity lock).
+    const headerUpdate: JsonRecord = { last_updated_at: new Date().toISOString(), last_updated_by: ctx.auth_user_id };
+    if (body.so_date !== undefined) headerUpdate.so_date = toTrimmedString(body.so_date);
+    if (body.payment_term_id !== undefined) headerUpdate.payment_term_id = toTrimmedString(body.payment_term_id) || null;
+    if (body.freight_term !== undefined) headerUpdate.freight_term = toUpperTrimmedString(body.freight_term) || null;
+    const { error: headerError } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_order").update(headerUpdate).eq("id", soId);
+    if (headerError) return salesErrorResponse(req, ctx, "SO_EDIT_HEADER_UPDATE_FAILED", 500, "Unable to update SO header.");
+
+    return okResponse(await hydrateSo(soId, ctx), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_EDIT_FAILED";
+    const status = code === "SO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.startsWith("SO_") ? 422 : 500;
+    return salesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+const QTY_TOL_SO_EDIT = 0.0001;
+
+// §133.10 — Cancel cascades: release every ACTIVE SO-Map allocation, then
+// set status=CANCELLED. Once DO exists for the unified flow, an open
+// (non-invoiced) DO must be cancelled first — that check will extend here.
+export async function cancelSalesOrderUnifiedHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const soId = getIdFromPath(req);
+    if (!soId) return salesErrorResponse(req, ctx, "SO_ID_MISSING", 400, "SO id required.");
+    const body = await parseBody(req);
+    const { so } = await fetchUnifiedSoWithLines(soId);
+    const soCompanyId = toTrimmedString(so.company_id);
+    try {
+      await assertCompanyScope(ctx, soCompanyId);
+    } catch {
+      return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainSo01Create(ctx, soCompanyId, "EDIT"))) {
+      return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Edit-SO access at this company.");
+    }
+    if (["CANCELLED", "CLOSED"].includes(toUpperTrimmedString(so.status))) {
+      return salesErrorResponse(req, ctx, "SO_ALREADY_TERMINAL", 400, "This SO is already Cancelled/Closed.");
+    }
+
+    const { error: releaseError } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_order_map_allocation")
+      .update({ status: "RELEASED", last_updated_by: ctx.auth_user_id, last_updated_at: new Date().toISOString() })
+      .eq("so_id", soId).eq("status", "ACTIVE");
+    if (releaseError) return salesErrorResponse(req, ctx, "SO_CANCEL_RELEASE_FAILED", 500, "Unable to release SO Map allocations.");
+
+    const { error: cancelError } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_order")
+      .update({
+        status: "CANCELLED",
+        cancellation_reason: toTrimmedString(body.reason) || null,
+        cancelled_by: ctx.auth_user_id,
+        cancelled_at: new Date().toISOString(),
+      })
+      .eq("id", soId);
+    if (cancelError) return salesErrorResponse(req, ctx, "SO_CANCEL_FAILED", 500, "Unable to cancel SO.");
+
+    return okResponse(await hydrateSo(soId, ctx), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_CANCEL_FAILED";
+    const status = code === "SO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.startsWith("SO_") ? 422 : 500;
+    return salesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// §133.10 — Close: whatever balance is unmapped/undispatched is written off;
+// existing ACTIVE allocations (real commitments) are left untouched. Reason
+// is mandatory — this is a deliberate terminal action on the remainder.
+export async function closeSalesOrderUnifiedHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const soId = getIdFromPath(req);
+    if (!soId) return salesErrorResponse(req, ctx, "SO_ID_MISSING", 400, "SO id required.");
+    const body = await parseBody(req);
+    const reason = toTrimmedString(body.reason);
+    if (!reason) return salesErrorResponse(req, ctx, "SO_CLOSE_REASON_REQUIRED", 400, "A reason is required to Close an SO.");
+    const { so } = await fetchUnifiedSoWithLines(soId);
+    const soCompanyId = toTrimmedString(so.company_id);
+    try {
+      await assertCompanyScope(ctx, soCompanyId);
+    } catch {
+      return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainSo01Create(ctx, soCompanyId, "EDIT"))) {
+      return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Edit-SO access at this company.");
+    }
+    if (["CANCELLED", "CLOSED"].includes(toUpperTrimmedString(so.status))) {
+      return salesErrorResponse(req, ctx, "SO_ALREADY_TERMINAL", 400, "This SO is already Cancelled/Closed.");
+    }
+
+    const { error: closeError } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_order")
+      .update({ status: "CLOSED", closed_reason: reason, closed_by: ctx.auth_user_id, closed_at: new Date().toISOString() })
+      .eq("id", soId);
+    if (closeError) return salesErrorResponse(req, ctx, "SO_CLOSE_FAILED", 500, "Unable to close SO.");
+
+    return okResponse(await hydrateSo(soId, ctx), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_CLOSE_FAILED";
+    const status = code === "SO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.startsWith("SO_") ? 422 : 500;
     return salesErrorResponse(req, ctx, code, status, code);
   }
 }

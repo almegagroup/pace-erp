@@ -305,7 +305,10 @@ export async function listDOStorageLocationOptionsHandler(req: Request, ctx: Pro
   }
 }
 
-async function getAvailableQty(companyId: string, storageLocationId: string, materialId: string): Promise<number> {
+// Exported so delivery_order_map.handlers.ts's §133.12 Page 2 consolidation
+// preview can reuse the same Unrestricted-minus-open-reservation formula
+// instead of duplicating it.
+export async function getAvailableQty(companyId: string, storageLocationId: string, materialId: string): Promise<number> {
   const [snapshotResp, reservationResp] = await Promise.all([
     serviceRoleClient
       .schema("erp_inventory")
@@ -365,6 +368,53 @@ async function upsertCsnDispatch(stoId: string, materialId: string, dispatchQty:
     })
     .eq("id", String(csn.id));
   if (updateError) throw new Error("DO_CSN_DISPATCH_SYNC_FAILED");
+}
+
+// §133.12 -- shared by cancelDeliveryOrderHandler and do_unified.handlers.ts's
+// updateDeliveryOrderUnifiedHandler (Edit tears down its own old lines
+// before re-validating a fresh set, exactly like a cancel would). Resolved
+// PER LINE via sto_line_id -> its own sto_id, not a DO header's sto_id (a
+// §133.12 multi-source/MIXED DO never populates that column) -- works
+// identically for old and new-style DOs since every STO line still carries
+// its own sto_line_id regardless of how many other sources the same DO also
+// drew from. Throws Error(code) -- caller's own catch block maps it.
+export async function undoCsnDispatchForLines(lineRows: JsonRecord[], actionedBy: string, nowIso: string): Promise<void> {
+  const stoLineIds = [...new Set(lineRows.map((row) => toTrimmedString(row.sto_line_id)).filter(Boolean))];
+  if (stoLineIds.length === 0) return;
+
+  const { data: stoLineRows, error: stoLineLookupError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("stock_transfer_order_line")
+    .select("id, sto_id")
+    .in("id", stoLineIds);
+  if (stoLineLookupError) throw new Error("DO_STO_LINE_LOOKUP_FAILED");
+  const stoIdByLineId = new Map(((stoLineRows ?? []) as JsonRecord[]).map((row) => [String(row.id), toTrimmedString(row.sto_id)]));
+
+  for (const row of lineRows) {
+    const stoLineId = toTrimmedString(row.sto_line_id);
+    if (!stoLineId) continue;
+    const stoId = stoIdByLineId.get(stoLineId);
+    const materialId = toTrimmedString(row.material_id);
+    const quantity = Number(row.quantity ?? 0);
+    if (!stoId || !materialId || quantity <= 0) continue;
+    const { data: csn, error: csnError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("consignment_note")
+      .select("id, total_dispatch_qty")
+      .eq("sto_id", stoId)
+      .eq("material_id", materialId)
+      .in("status", ["ORD", "TRN", "GED"])
+      .maybeSingle();
+    if (csnError) throw new Error("DO_CSN_LOOKUP_FAILED");
+    if (!csn) continue;
+    const nextTotal = Math.max(0, Number(csn.total_dispatch_qty ?? 0) - quantity);
+    const { error: csnUpdateError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("consignment_note")
+      .update({ total_dispatch_qty: Number(nextTotal.toFixed(6)), last_updated_by: actionedBy, last_updated_at: nowIso })
+      .eq("id", String(csn.id));
+    if (csnUpdateError) throw new Error("DO_CSN_DISPATCH_UNDO_FAILED");
+  }
 }
 
 export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
@@ -566,7 +616,7 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
       const { sourceLine, quantity, storageLocationId } = preparedLines[index];
       const commercial = commercialByLine[index];
 
-      const { error: dcLineError } = await serviceRoleClient
+      const { data: dcLine, error: dcLineError } = await serviceRoleClient
         .schema("erp_procurement")
         .from("delivery_challan_line")
         .insert({
@@ -591,8 +641,10 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
           rebate_rate: sourceLine.has_rebate === true && sourceLine.rebate_rate != null ? Number(sourceLine.rebate_rate) : null,
           rebate_rate_uom_basis: sourceLine.has_rebate === true ? (sourceLine.rebate_rate_uom_basis as string | null) ?? null : null,
           rebate_remarks: sourceLine.has_rebate === true ? (sourceLine.rebate_remarks as string | null) ?? null : null,
-        });
-      if (dcLineError) {
+        })
+        .select("id")
+        .single();
+      if (dcLineError || !dcLine) {
         return doErrorResponse(req, ctx, "DO_LINE_CREATE_FAILED", 500, "Unable to create delivery order line.");
       }
 
@@ -600,6 +652,7 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
         .schema("erp_production")
         .from("reservation_document")
         .insert({
+          dc_line_id: dcLine.id,
           source_type: sourceType,
           source_id: sourceId,
           source_line_id: sourceLine.id,
@@ -671,10 +724,11 @@ export async function cancelDeliveryOrderHandler(req: Request, ctx: ProcurementH
     const { data: dcLines, error: dcLinesError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("delivery_challan_line")
-      .select("so_line_id, sto_line_id, material_id, quantity")
+      .select("id, so_line_id, sto_line_id, material_id, quantity")
       .eq("dc_id", dcId);
     if (dcLinesError) return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load delivery order lines.");
     const lineRows = (dcLines ?? []) as JsonRecord[];
+    const dcLineIds = lineRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
     const sourceLineIds = lineRows.map((row) => toTrimmedString(row.so_line_id) || toTrimmedString(row.sto_line_id)).filter(Boolean);
 
     const nowIso = new Date().toISOString();
@@ -690,50 +744,43 @@ export async function cancelDeliveryOrderHandler(req: Request, ctx: ProcurementH
       .eq("id", dcId);
     if (dcUpdateError) return doErrorResponse(req, ctx, "DO_CANCEL_FAILED", 500, "Unable to cancel delivery order.");
 
-    // Release the reservation so the SO/STO line becomes pickable by a new
-    // DO again (fetchLockedLineIds/fetchLockedSoLineIds both now exclude
-    // CANCELLED delivery_challan rows, so the line itself unlocks the
-    // moment this update lands -- this just frees the stock hold).
+    // Release the reservation so the SO/STO line's remaining balance frees
+    // up again. §133.12 fix -- release by dc_line_id (THIS DC's own lines
+    // only) first; only fall back to the old source_line_id-wide match for
+    // legacy rows with no dc_line_id (pre-migration, safe under the old
+    // model's exclusive per-line lock where a line never had more than one
+    // concurrent reservation). Doing this as two separate updates instead of
+    // one .or() avoids the OR-typing gap while staying precise: under
+    // §133.12's multi-source model, multiple DOs can legitimately hold
+    // separate OPEN reservations against the SAME source line at once, so a
+    // blanket source_line_id release would wrongly cancel another DO's hold.
+    if (dcLineIds.length > 0) {
+      const { error: reservationByDcLineError } = await serviceRoleClient
+        .schema("erp_production")
+        .from("reservation_document")
+        .update({ status: "CANCELLED", last_updated_by: ctx.auth_user_id, last_updated_at: nowIso })
+        .in("dc_line_id", dcLineIds)
+        .in("status", RESERVATION_OPEN_STATUSES);
+      if (reservationByDcLineError) return doErrorResponse(req, ctx, "DO_RESERVATION_RELEASE_FAILED", 500, "Unable to release reservation for cancelled delivery order.");
+    }
     if (sourceLineIds.length > 0) {
       const { error: reservationError } = await serviceRoleClient
         .schema("erp_production")
         .from("reservation_document")
         .update({ status: "CANCELLED", last_updated_by: ctx.auth_user_id, last_updated_at: nowIso })
+        .is("dc_line_id", null)
         .in("source_line_id", sourceLineIds)
         .in("status", RESERVATION_OPEN_STATUSES);
       if (reservationError) return doErrorResponse(req, ctx, "DO_RESERVATION_RELEASE_FAILED", 500, "Unable to release reservation for cancelled delivery order.");
     }
 
-    // STO-sourced: undo the CSN dispatch-qty sync this DO made at create
-    // time (upsertCsnDispatch) -- no real dispatch ever happened, cancel is
-    // strictly pre-PGI. Status (ORD->TRN) is deliberately left alone --
-    // other CSN activity may have happened since, and reverting it isn't
-    // safe to infer from this cancel alone.
-    if (toUpperTrimmedString(dc.dc_type) === "STO" && dc.sto_id) {
-      for (const row of lineRows) {
-        const materialId = toTrimmedString(row.material_id);
-        const quantity = Number(row.quantity ?? 0);
-        if (!materialId || quantity <= 0) continue;
-        const { data: csn, error: csnError } = await serviceRoleClient
-          .schema("erp_procurement")
-          .from("consignment_note")
-          .select("id, total_dispatch_qty")
-          .eq("sto_id", String(dc.sto_id))
-          .eq("material_id", materialId)
-          .in("status", ["ORD", "TRN", "GED"])
-          .maybeSingle();
-        if (csnError) return doErrorResponse(req, ctx, "DO_CSN_LOOKUP_FAILED", 500, "Unable to look up linked CSN.");
-        if (!csn) continue;
-        const nextTotal = Math.max(0, Number(csn.total_dispatch_qty ?? 0) - quantity);
-        const { error: csnUpdateError } = await serviceRoleClient
-          .schema("erp_procurement")
-          .from("consignment_note")
-          .update({ total_dispatch_qty: Number(nextTotal.toFixed(6)), last_updated_by: ctx.auth_user_id, last_updated_at: nowIso })
-          .eq("id", String(csn.id));
-        if (csnUpdateError) return doErrorResponse(req, ctx, "DO_CSN_DISPATCH_UNDO_FAILED", 500, "Unable to undo CSN dispatch-qty sync.");
-      }
-    }
+    await undoCsnDispatchForLines(lineRows, ctx.auth_user_id, nowIso);
 
+    // Legacy hydrator -- fine for old single-source DOs; for a §133.12
+    // multi-source DO this just shows blank customer/ship-to fields (no
+    // crash, since sourceResp/customerResp are conditional on dc.sales_
+    // order_id/dc.sto_id being set). The frontend re-fetches via the
+    // unified GET (getDeliveryOrderUnifiedHandler) for the real detail view.
     return okResponse(await hydrateDeliveryOrder(dcId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_CANCEL_FAILED";

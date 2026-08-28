@@ -64,6 +64,7 @@ import {
   getAc06HistoryHandler,
   getAc06ReportHandler,
   getAc06WorkspaceHandler,
+  listAc06ApprovedMonthsHandler,
   saveAc06RatesHandler,
   setAc06MaterialInclusionHandler,
   unassignAc06CostingGroupHandler,
@@ -257,6 +258,8 @@ export async function dispatchProductionRoutes(
       return await getAc06ReportHandler(req, ctx);
     case "GET:/api/production/ac06/history":
       return await getAc06HistoryHandler(req, ctx);
+    case "GET:/api/production/ac06/approved-months":
+      return await listAc06ApprovedMonthsHandler(req, ctx);
 
     // Opening Genealogy (§104.9) — PR22 Old Process PO + PR23 Old Packing PO (no stock movement)
     case "POST:/api/production/old-process-po":
