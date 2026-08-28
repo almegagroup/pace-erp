@@ -166,11 +166,17 @@ import StockStatusChangePage from "../pages/dashboard/procurement/reports/StockS
 import StockValuationPage from "../pages/dashboard/procurement/reports/StockValuationPage.jsx";
 import LandedCostDetailPage from "../pages/dashboard/procurement/accounts/LandedCostDetailPage.jsx";
 import SOListPage from "../pages/dashboard/procurement/sales/SOListPage.jsx";
-import SOCreatePage from "../pages/dashboard/procurement/sales/SOCreatePage.jsx";
+// SOCreatePage.jsx superseded by SO01Page's 3-tab shell (§133.7/§133.16) — kept
+// on disk as the pre-redesign reference until the old backend path is fully retired.
+import SO01Page from "../pages/dashboard/procurement/sales/SO01Page.jsx";
 import SODetailPage from "../pages/dashboard/procurement/sales/SODetailPage.jsx";
 import DOListPage from "../pages/dashboard/procurement/sales/DOListPage.jsx";
-import DOCreatePage from "../pages/dashboard/procurement/sales/DOCreatePage.jsx";
+// DOCreatePage.jsx (§113, single source per DO) superseded by DO01CreatePage
+// below (§133.12 multi-source redesign) — kept on disk as the pre-redesign
+// reference until the old backend path is fully retired.
+import DO01CreatePage from "../pages/dashboard/procurement/sales/DO01CreatePage.jsx";
 import PgiInvoiceCreatePage from "../pages/dashboard/procurement/sales/PgiInvoiceCreatePage.jsx";
+import PgiInvoiceGroupsCreatePage from "../pages/dashboard/procurement/sales/PgiInvoiceGroupsCreatePage.jsx";
 import DODetailPage from "../pages/dashboard/procurement/sales/DODetailPage.jsx";
 import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvoiceListPage.jsx";
 import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
@@ -767,7 +773,11 @@ export default function AppRouter() {
                   />
                   <Route
                     path="procurement/sales-orders/create"
-                    element={<SOCreatePage />}
+                    element={<SO01Page initialTab="create" />}
+                  />
+                  <Route
+                    path="procurement/sales-orders/map"
+                    element={<SO01Page initialTab="map" />}
                   />
                   <Route
                     path="procurement/sales-orders/:id"
@@ -779,7 +789,11 @@ export default function AppRouter() {
                   />
                   <Route
                     path="procurement/delivery-orders/create"
-                    element={<DOCreatePage />}
+                    element={<DO01CreatePage />}
+                  />
+                  <Route
+                    path="procurement/delivery-orders/:id/edit"
+                    element={<DO01CreatePage />}
                   />
                   <Route
                     path="procurement/delivery-orders/:id"
@@ -792,6 +806,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/sales-invoices/pgi/create"
                     element={<PgiInvoiceCreatePage />}
+                  />
+                  <Route
+                    path="procurement/sales-invoices/pgi-groups"
+                    element={<PgiInvoiceGroupsCreatePage />}
                   />
                   <Route
                     path="procurement/sales-invoices/:id"

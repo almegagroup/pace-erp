@@ -5540,6 +5540,76 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/sales/DO01CreatePage.jsx",
+    "dependencyCount": 8,
+    "deps": [
+      {
+        "fn": "listTransporters",
+        "method": "GET",
+        "path": "/api/procurement/transporters",
+        "resourceCode": "PROC_TRANSPORTER_MASTER",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listDOSourceDocuments",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders/source-documents",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listDoAddSoOptions",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/add-so-options",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listDoAddStoOptions",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/add-sto-options",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listDoStorageOptions",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/storage-options",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createDeliveryOrderUnified",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "getDeliveryOrderUnified",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/${id}",
+        "resourceCode": "PROC_DO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "updateDeliveryOrderUnified",
+        "method": "PUT",
+        "path": "/api/procurement/delivery-orders-v2/${id}",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "EDIT",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/sales/DODetailPage.jsx",
     "dependencyCount": 2,
     "deps": [
@@ -5677,6 +5747,124 @@
         "path": "/api/procurement/delivery-orders",
         "resourceCode": "PROC_DO_LIST",
         "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/SO01Page.jsx",
+    "dependencyCount": 14,
+    "deps": [
+      {
+        "fn": "listMaterials",
+        "method": "GET",
+        "path": "/api/om/materials",
+        "resourceCode": "OM_MATERIAL_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listCustomers",
+        "method": "GET",
+        "path": "/api/om/customer",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listPaymentTerms",
+        "method": "GET",
+        "path": "/api/procurement/payment-terms",
+        "resourceCode": "PROC_PAYMENT_TERMS_MASTER",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listFgParentCompanies",
+        "method": "GET",
+        "path": "/api/om/fg-parent-companies",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listFgDepotCodes",
+        "method": "GET",
+        "path": "/api/om/fg-depot-codes",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listAc06ApprovedMonths",
+        "method": "GET",
+        "path": "/api/production/ac06/approved-months",
+        "resourceCode": "ACC_SLOC_COSTING_GROUP",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createSalesOrderUnified",
+        "method": "POST",
+        "path": "/api/procurement/sales-orders-v2",
+        "resourceCode": "PROC_SO_CREATE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "listSoForMap",
+        "method": "GET",
+        "path": "/api/procurement/so-map/so-list",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "getSoMapStatus",
+        "method": "GET",
+        "path": "/api/procurement/so-map/${soId}/status",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listFoOptionsForSo",
+        "method": "GET",
+        "path": "/api/procurement/so-map/fo-options",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listCustomerAddressesForSo",
+        "method": "GET",
+        "path": "/api/procurement/so-map/address-options",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "mapSoLineToFo",
+        "method": "POST",
+        "path": "/api/procurement/so-map/map-fo",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "mapSoLineToCustomerAddress",
+        "method": "POST",
+        "path": "/api/procurement/so-map/map-address",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "unmapSoAllocation",
+        "method": "POST",
+        "path": "/api/procurement/so-map/${allocationId}/unmap",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "EDIT",
         "skipAcl": false
       }
     ]

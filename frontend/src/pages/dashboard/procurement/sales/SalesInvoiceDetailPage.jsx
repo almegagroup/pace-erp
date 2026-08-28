@@ -270,6 +270,7 @@ export default function SalesInvoiceDetailPage() {
 
           <ErpSectionCard eyebrow="Preview Lines" title="DC-driven invoice lines">
             <ErpDenseGrid
+              cellNavigate
               columns={[
                 {
                   key: "material_name",
@@ -319,12 +320,49 @@ export default function SalesInvoiceDetailPage() {
               <ErpFieldPreview label="GST Type" value={detail.gst_type} />
               <ErpFieldPreview label="Total Taxable" value={formatMoney(detail.total_taxable_value)} />
               <ErpFieldPreview label="Freight" value={detail.freight_included ? formatMoney(detail.freight_amount) : "—"} />
+              <ErpFieldPreview label="Round Off" value={formatMoney(detail.round_off_amount ?? 0)} />
               <ErpFieldPreview label="Total Invoice" value={formatMoney(detail.total_invoice_value)} />
               {detail.status === "CANCELLED" ? (
                 <ErpFieldPreview label="Cancellation Reason" value={detail.cancellation_reason || "—"} />
               ) : null}
             </div>
           </ErpSectionCard>
+
+          {/* §133.13 -- IBN/FO/e-Way Bill/Freight-detail/Additional-Cost only ever populated
+              for invoices created via the new IBN-driven multi-invoice engine
+              (PgiInvoiceGroupsCreatePage). A legacy §113.15 single-invoice-per-DO
+              invoice simply shows "—" for all of these, which is correct (they
+              never applied to it). */}
+          {(detail.inbound_number || detail.fo_number || detail.e_way_bill_applicable || detail.freight_mode || (detail.additional_cost_lines ?? []).length > 0) ? (
+            <ErpSectionCard eyebrow="§133.13" title="IBN / FO / e-Way Bill / Freight / Additional Cost">
+              <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                <ErpFieldPreview label="Inbound Number (IBN)" value={detail.inbound_number || "—"} />
+                <ErpFieldPreview label="FO Number" value={detail.fo_number ? `${detail.fo_number} / ${detail.fo_date || "—"}` : "—"} />
+                <ErpFieldPreview label="e-Way Bill" value={detail.e_way_bill_applicable ? (detail.e_way_bill_number || "(number pending)") : "No"} />
+                {detail.freight_mode ? (
+                  <>
+                    <ErpFieldPreview label="Freight Mode" value={detail.freight_mode === "RATE" ? `Rate (${formatMoney(detail.freight_rate)} × ${formatMoney(detail.freight_net_weight)})` : "Ad Hoc"} />
+                    <ErpFieldPreview label="Freight GST" value={detail.freight_gst_included ? `${detail.freight_gst_treatment} @ ${detail.freight_gst_rate}% = ${formatMoney(detail.freight_gst_amount)}` : "No GST"} />
+                  </>
+                ) : null}
+                <ErpFieldPreview label="Additional Cost Total" value={formatMoney(detail.additional_cost_total ?? 0)} />
+              </div>
+              {(detail.additional_cost_lines ?? []).length > 0 ? (
+                <ErpDenseGrid
+                  cellNavigate
+                  columns={[
+                    { key: "category_name", label: "Category", render: (row) => row.category_name || "—" },
+                    { key: "amount", label: "Amount", width: "100px", align: "right", render: (row) => formatMoney(row.amount) },
+                    { key: "gst_included", label: "GST", width: "160px", render: (row) => (row.gst_included ? `${row.gst_treatment} @ ${row.gst_rate}% = ${formatMoney(row.gst_amount)}` : "No") },
+                    { key: "line_total", label: "Line Total", width: "110px", align: "right", render: (row) => formatMoney(row.line_total) },
+                  ]}
+                  rows={detail.additional_cost_lines}
+                  rowKey={(row) => row.id}
+                  emptyMessage="No additional cost lines."
+                />
+              ) : null}
+            </ErpSectionCard>
+          ) : null}
 
           <ErpSectionCard eyebrow="Bill-To / Ship-To" title="Frozen at PGI time (§113.16-addendum)">
             <div className="grid gap-4 md:grid-cols-2">
@@ -347,6 +385,7 @@ export default function SalesInvoiceDetailPage() {
 
           <ErpSectionCard eyebrow="Lines" title="Invoice lines">
             <ErpDenseGrid
+              cellNavigate
               columns={[
                 {
                   key: "material_name",

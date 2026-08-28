@@ -15,11 +15,27 @@ import TransactionCompanySelector from "../../../../components/inputs/Transactio
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listDeliveryOrders } from "../procurementApi.js";
 
 const LIMIT = 50;
+
+// §133.16-A UI standard.
+const DO_EXPORT_COLUMNS = [
+  { key: "dc_number", label: "DO Number" },
+  { key: "source_display", label: "Source" },
+  { key: "source_document_number", label: "SO / STO Number" },
+  { key: "customer_display", label: "Customer" },
+  { key: "dc_date", label: "DO Date" },
+  { key: "vehicle_number", label: "Vehicle Number" },
+  { key: "transporter_display", label: "Transporter" },
+  { key: "lr_number", label: "LR Number" },
+  { key: "status", label: "Status" },
+  { key: "total_value", label: "Total Value" },
+];
 
 function doStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -57,6 +73,10 @@ export default function DOListPage() {
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
   const loading = doQuery.isLoading;
 
+  useErpScreenHotkeys({
+    refresh: { disabled: loading, perform: () => void doQuery.refetch() },
+  });
+
   function openCreateDO() {
     openScreen(OPERATION_SCREENS.PROC_DO_CREATE.screen_code);
     navigate("/dashboard/procurement/delivery-orders/create");
@@ -67,6 +87,15 @@ export default function DOListPage() {
     navigate(`/dashboard/procurement/delivery-orders/${encodeURIComponent(row.id)}`);
   }
 
+  function handleExport() {
+    if (rows.length === 0) return;
+    downloadCsvFile({
+      fileName: `delivery_orders_${effectiveCompanyId || "all"}_page${page}.csv`,
+      columns: DO_EXPORT_COLUMNS,
+      rows,
+    });
+  }
+
   return (
     <ErpMasterListTemplate
       eyebrow="Procurement"
@@ -74,6 +103,7 @@ export default function DOListPage() {
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => doQuery.refetch() },
         { key: "create", label: "Create DO", tone: "primary", onClick: openCreateDO },
+        { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: rows.length === 0 },
       ]}
       notices={doQuery.error ? [{ key: "do-list-error", tone: "error", message: doQuery.error instanceof Error ? doQuery.error.message : "PROCUREMENT_DO_LIST_FAILED" }] : []}
       filterSection={{
@@ -108,6 +138,7 @@ export default function DOListPage() {
               <p className="text-slate-400 text-sm py-6 text-center">Select a company to view delivery orders.</p>
             ) : (
               <ErpDenseGrid
+                cellNavigate
                 columns={[
                   { key: "dc_number", label: "DO Number", width: "140px" },
                   { key: "source_display", label: "Source", width: "100px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },

@@ -90,6 +90,8 @@ export const verifyAc06Rates = (body) => fetchProd("POST", "/api/production/ac06
 export const closeAc06Month = (body) => fetchProd("POST", "/api/production/ac06/close", body);
 export const getAc06Report = (p) => fetchProd("GET", "/api/production/ac06/report", undefined, p);
 export const getAc06History = (p) => fetchProd("GET", "/api/production/ac06/history", undefined, p);
+// SO01 §133.8-E "Costing Rate Month" dropdown source — months where every AC06 item is verified.
+export const listAc06ApprovedMonths = (p) => fetchProd("GET", "/api/production/ac06/approved-months", undefined, p);
 
 // ── Opening Genealogy (§104.9) — PR22 Old Process PO / PR23 Old Packing PO ────
 export const createOldProcessPo = (body) => fetchProd("POST", "/api/production/old-process-po", body);
@@ -132,6 +134,9 @@ export const checkOrderedStroke = (p) => fetchProd("GET", "/api/production/plan-
 export const listStrokeOptions = (p) => fetchProd("GET", "/api/production/plan-feed/stroke-options", undefined, p);
 export const findPlanFeedByNumber = (p) => fetchProd("GET", "/api/production/plan-feed/find", undefined, p);
 export const listMtestSkus = (p) => fetchProd("GET", "/api/production/plan-feed/mtest-skus", undefined, p);
+// Same 5 MTEST sample SKUs, same handler, reached via the Packing PO Create-scoped
+// route (PROD_PO_CREATE ACL, not PROD_PLAN_FEED) — see route-acl-registry.ts comment.
+export const listMtestSkusForPacking = (p) => fetchProd("GET", "/api/production/mtest-skus", undefined, p);
 export const getMtestPlanFeedCapability = (companyId) => fetchProd("GET", "/api/production/plan-feed/mtest-capability", undefined, { company_id: companyId });
 
 // ── Process Orders ────────────────────────────────────────────────────────────

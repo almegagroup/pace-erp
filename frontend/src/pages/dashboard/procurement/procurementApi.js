@@ -875,6 +875,43 @@ export function createSalesOrder(data) {
   return fetchProcurement("POST", "/api/procurement/sales-orders", data);
 }
 
+// SO01 unified RM/PM/INT/SFG/FG redesign — feasibility §133.7-§133.11.
+export function createSalesOrderUnified(data) {
+  return fetchProcurement("POST", "/api/procurement/sales-orders-v2", data);
+}
+export function updateSalesOrderUnified(id, data) {
+  return fetchProcurement("PUT", `/api/procurement/sales-orders-v2/${encodeURIComponent(id)}`, data);
+}
+export function cancelSalesOrderUnified(id, data) {
+  return fetchProcurement("POST", `/api/procurement/sales-orders-v2/${encodeURIComponent(id)}/cancel`, data);
+}
+export function closeSalesOrderUnified(id, data) {
+  return fetchProcurement("POST", `/api/procurement/sales-orders-v2/${encodeURIComponent(id)}/close`, data);
+}
+
+// SO Map (SO01 Tab 2) — feasibility §133.9.
+export function listSoForMap(params) {
+  return fetchProcurement("GET", "/api/procurement/so-map/so-list", undefined, params);
+}
+export function getSoMapStatus(soId) {
+  return fetchProcurement("GET", `/api/procurement/so-map/${encodeURIComponent(soId)}/status`);
+}
+export function listFoOptionsForSo(soId) {
+  return fetchProcurement("GET", "/api/procurement/so-map/fo-options", undefined, { so_id: soId });
+}
+export function listCustomerAddressesForSo(soId) {
+  return fetchProcurement("GET", "/api/procurement/so-map/address-options", undefined, { so_id: soId });
+}
+export function mapSoLineToFo(data) {
+  return fetchProcurement("POST", "/api/procurement/so-map/map-fo", data);
+}
+export function mapSoLineToCustomerAddress(data) {
+  return fetchProcurement("POST", "/api/procurement/so-map/map-address", data);
+}
+export function unmapSoAllocation(allocationId) {
+  return fetchProcurement("POST", `/api/procurement/so-map/${encodeURIComponent(allocationId)}/unmap`);
+}
+
 export function updateSalesOrder(id, data) {
   return fetchProcurement("PUT", `/api/procurement/sales-orders/${encodeURIComponent(id)}`, data);
 }
@@ -910,6 +947,40 @@ export function listDOSourceLines(params) {
 
 export function listDOStorageLocationOptions(params) {
   return fetchProcurement("GET", "/api/procurement/delivery-orders/storage-locations", undefined, params);
+}
+
+// §133.12 unified multi-source DO redesign.
+export function listDoAddSoOptions(soId) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/add-so-options", undefined, { so_id: soId });
+}
+export function listDoAddStoOptions(stoId) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/add-sto-options", undefined, { sto_id: stoId });
+}
+export function listDoStorageOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/storage-options", undefined, params);
+}
+export function createDeliveryOrderUnified(data) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2", data);
+}
+export function updateDeliveryOrderUnified(id, data) {
+  return fetchProcurement("PUT", `/api/procurement/delivery-orders-v2/${encodeURIComponent(id)}`, data);
+}
+export function getDeliveryOrderUnified(id) {
+  return fetchProcurement("GET", `/api/procurement/delivery-orders-v2/${encodeURIComponent(id)}`);
+}
+
+// §133.13 -- IBN-driven multi-invoice preview + post, per DO.
+export function previewInvoiceGroups(dcId) {
+  return fetchProcurement("GET", `/api/procurement/delivery-orders-v2/${encodeURIComponent(dcId)}/invoice-groups`);
+}
+export function postPgiInvoiceGroups(dcId, data) {
+  return fetchProcurement("POST", `/api/procurement/delivery-orders-v2/${encodeURIComponent(dcId)}/pgi-invoice-groups`, data);
+}
+export function listAdditionalCostCategories() {
+  return fetchProcurement("GET", "/api/procurement/additional-cost-categories");
+}
+export function createAdditionalCostCategory(data) {
+  return fetchProcurement("POST", "/api/procurement/additional-cost-categories", data);
 }
 
 export function cancelSalesOrder(id, data) {

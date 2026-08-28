@@ -241,6 +241,18 @@ export default function PlanFeedPage() {
     () => (mtestSkusQ.data ?? []).map((m) => ({ value: m.id, label: materialLabel(m) })),
     [mtestSkusQ.data],
   );
+  // materialsQ (all ACTIVE FG materials, no pack_type filter) otherwise leaked the 5
+  // MTEST sample SKUs into the MTO/HPS/MTS typeahead too -- same root cause as the
+  // Packing PO Create SKU-dropdown bug fixed the same day, found via the user's own
+  // report that both screens showed this mixing.
+  const mtestSkuIdSet = useMemo(
+    () => new Set((mtestSkusQ.data ?? []).map((m) => m.id)),
+    [mtestSkusQ.data],
+  );
+  const nonMtestMaterials = useMemo(
+    () => (materialsQ.data ?? []).filter((m) => !mtestSkuIdSet.has(m.id)),
+    [materialsQ.data, mtestSkuIdSet],
+  );
   const normalizedCustomers = useMemo(
     () => (customersQ.data ?? []).map((customer) => ({
       ...customer,
@@ -431,6 +443,11 @@ export default function PlanFeedPage() {
 
   // ── Edit tab state ────────────────────────────────────────────────────────
   const [editSearch, setEditSearch] = useState("");
+  const [debouncedEditSearch, setDebouncedEditSearch] = useState("");
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebouncedEditSearch(editSearch.trim()), 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [editSearch]);
   const [foNumberSearch, setFoNumberSearch] = useState("");
   const [foNumberMatches, setFoNumberMatches] = useState(null);
   const [foNumberSearching, setFoNumberSearching] = useState(false);
@@ -443,18 +460,18 @@ export default function PlanFeedPage() {
   const [allocNumPacks, setAllocNumPacks] = useState("");
   const [allocSearching, setAllocSearching] = useState(false);
 
+  // The search box only ever filtered whatever was already fetched (a fixed
+  // 50-row page, most-recent-first) -- a real match sitting outside that page
+  // silently looked like "not found" (found live 2026-08-27). Now the search
+  // term itself is sent to the backend, which filters across the whole
+  // company, not just the currently-loaded page.
   const listQ = useQuery({
-    queryKey: ["prod-plan-feed-list", effectiveCompanyId],
-    queryFn: () => listPlanFeed({ company_id: effectiveCompanyId || undefined, per_page: 50 }),
+    queryKey: ["prod-plan-feed-list", effectiveCompanyId, debouncedEditSearch],
+    queryFn: () => listPlanFeed({ company_id: effectiveCompanyId || undefined, search: debouncedEditSearch || undefined, per_page: 50 }),
     select: (d) => (typeof d === "object" && "data" in d) ? d.data : (Array.isArray(d) ? d : []),
     enabled: tab === "edit",
   });
-  const foListFiltered = useMemo(() => {
-    const foList = listQ.data ?? [];
-    const needle = editSearch.trim().toLowerCase();
-    if (!needle) return foList;
-    return foList.filter((fo) => [fo.fo_number, fo.party_name].filter(Boolean).join(" ").toLowerCase().includes(needle));
-  }, [listQ.data, editSearch]);
+  const foListFiltered = listQ.data ?? EMPTY_ARRAY;
 
   const skuLockedForEdit = Boolean(editData?.allocations?.length);
   // §131.5 -- the FO's type isn't stored on plan_feed itself, it's always derived from
@@ -911,7 +928,7 @@ export default function PlanFeedPage() {
                 <>
                   <SkuTypeaheadField
                     skuText={form.sku}
-                    materials={materialsQ.data ?? []}
+                    materials={nonMtestMaterials}
                     placeholder="Type SKU — pick a match, or keep typing for a new one"
                     onTextChange={(text) => setForm(f => ({ ...f, sku: text, material_id: "" }))}
                     onPickMaterial={(m) => setForm(f => ({
@@ -1138,7 +1155,7 @@ export default function PlanFeedPage() {
                     ) : (
                       <SkuTypeaheadField
                         skuText={editDraft.sku ?? ""}
-                        materials={materialsQ.data ?? []}
+                        materials={nonMtestMaterials}
                         placeholder="Type SKU — pick a match, or keep typing for a new one"
                         disabled={editData.status === "CANCELLED" || skuLockedForEdit}
                         onTextChange={(text) => setEditDraft(d => ({ ...d, sku: text, material_id: "" }))}

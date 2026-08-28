@@ -503,6 +503,15 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // SO01 Tab 2 — feasibility §133.9. Same PROC_SO_LIST resource, EDIT action.
+  PROC_SO_MAP: {
+    screen_code: "PROC_SO_MAP",
+    route: "/dashboard/procurement/sales-orders/map",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_DO_LIST: {
     screen_code: "PROC_DO_LIST",
     route: "/dashboard/procurement/delivery-orders",
