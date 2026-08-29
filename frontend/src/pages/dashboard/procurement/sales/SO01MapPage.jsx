@@ -23,6 +23,8 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
+import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
@@ -267,13 +269,14 @@ function MapDrawer({ so, onClose, onChanged }) {
 
 export default function SO01MapPage() {
   const { runtimeContext } = useMenu();
-  const defaultCompanyId = runtimeContext?.availableCompanies?.[0]?.id ?? "";
+  const [companyId, setCompanyId] = useState("");
   const [activeSo, setActiveSo] = useState(null);
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const listQuery = useQuery({
-    queryKey: ["procurement", "so-map-list", defaultCompanyId],
-    queryFn: () => listSoForMap({ company_id: defaultCompanyId }),
-    enabled: Boolean(defaultCompanyId),
+    queryKey: ["procurement", "so-map-list", effectiveCompanyId],
+    queryFn: () => listSoForMap({ company_id: effectiveCompanyId }),
+    enabled: Boolean(effectiveCompanyId),
   });
   // listSoForMapHandler returns a bare array via okResponse(array, ...) —
   // fetchProcurement's unwrap already resolves to it directly (see file
@@ -296,25 +299,38 @@ export default function SO01MapPage() {
         {loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">Loading...</div>
         ) : (
-          <ErpSectionCard eyebrow="Pending" title="SOs needing mapping (Dependent Direct/Depot/No-Inbound)">
-            <ErpDenseGrid
-              cellNavigate
-              columns={[
-                { key: "so_number", label: "SO Number", width: "140px", render: (row) => row.so_number },
-                { key: "so_date", label: "SO Date", width: "100px", render: (row) => row.so_date },
-                { key: "dispatch_type", label: "Dispatch Type", width: "180px", render: (row) => row.dispatch_type },
-                { key: "total", label: "Total Qty", width: "90px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
-                { key: "mapped", label: "Mapped Qty", width: "90px", align: "right", render: (row) => Number(row.mapped_qty ?? 0).toFixed(2) },
-                { key: "status", label: "Status", width: "120px", render: (row) => <StatusPill status={row.map_status} /> },
-                { key: "actions", label: "", width: "80px", render: (row) => (
-                  <button type="button" onClick={() => setActiveSo(row)} className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-950">Map</button>
-                ) },
-              ]}
-              rows={rows}
-              rowKey={(row) => row.id}
-              emptyMessage="No SOs pending mapping."
-            />
-          </ErpSectionCard>
+          <div className="grid gap-4">
+            <ErpSectionCard eyebrow="Scope" title="Company">
+              <div className="max-w-sm">
+                <TransactionCompanySelector
+                  runtimeContext={runtimeContext}
+                  value={companyId}
+                  onChange={(value) => { setCompanyId(value); setActiveSo(null); }}
+                  label="Company"
+                  hint="Select the company where the dependent SO was created."
+                />
+              </div>
+            </ErpSectionCard>
+            <ErpSectionCard eyebrow="Pending" title="SOs needing mapping (Dependent Direct/Depot/No-Inbound)">
+              <ErpDenseGrid
+                cellNavigate
+                columns={[
+                  { key: "so_number", label: "SO Number", width: "140px", render: (row) => row.so_number },
+                  { key: "so_date", label: "SO Date", width: "100px", render: (row) => row.so_date },
+                  { key: "dispatch_type", label: "Dispatch Type", width: "180px", render: (row) => row.dispatch_type },
+                  { key: "total", label: "Total Qty", width: "90px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
+                  { key: "mapped", label: "Mapped Qty", width: "90px", align: "right", render: (row) => Number(row.mapped_qty ?? 0).toFixed(2) },
+                  { key: "status", label: "Status", width: "120px", render: (row) => <StatusPill status={row.map_status} /> },
+                  { key: "actions", label: "", width: "80px", render: (row) => (
+                    <button type="button" onClick={() => setActiveSo(row)} className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-950">Map</button>
+                  ) },
+                ]}
+                rows={rows}
+                rowKey={(row) => row.id}
+                emptyMessage="No SOs pending mapping."
+              />
+            </ErpSectionCard>
+          </div>
         )}
       </ErpScreenScaffold>
       {activeSo ? (

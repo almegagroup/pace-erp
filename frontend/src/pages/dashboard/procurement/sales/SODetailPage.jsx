@@ -90,6 +90,10 @@ function toNumber(value) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function formatMoney(value) {
+  return toNumber(value).toFixed(2);
+}
+
 export default function SODetailPage() {
   const navigate = useNavigate();
   const { id: routeId = "" } = useParams();
@@ -137,6 +141,20 @@ export default function SODetailPage() {
     enabled: Boolean(id),
   });
   const detail = detailQuery.data?.detail ?? null;
+  const commercialTotals = useMemo(() => {
+    const lines = Array.isArray(detail?.lines) ? detail.lines : [];
+    return lines.reduce((totals, line) => {
+      const gstAmount = toNumber(line.gst_amount);
+      const lineTotal = toNumber(line.total_value);
+      return {
+        netAmount: totals.netAmount + (lineTotal - gstAmount),
+        cgstAmount: totals.cgstAmount + toNumber(line.cgst_amount),
+        sgstAmount: totals.sgstAmount + toNumber(line.sgst_amount),
+        igstAmount: totals.igstAmount + toNumber(line.igst_amount),
+        totalValue: totals.totalValue + lineTotal,
+      };
+    }, { netAmount: 0, cgstAmount: 0, sgstAmount: 0, igstAmount: 0, totalValue: 0 });
+  }, [detail?.lines]);
   const customers = customerQuery.customers;
   const materials = materialQuery.materials;
   const linkedInvoices = detailQuery.data?.linkedInvoices ?? [];
@@ -582,8 +600,11 @@ export default function SODetailPage() {
                       row.batch_number || "-"
                     ),
                 },
-                { key: "net_rate", label: "Net Rate", width: "100px" },
-                { key: "total_value", label: "Total", width: "110px" },
+                { key: "net_amount", label: "Net Amount", width: "110px", align: "right", render: (row) => formatMoney(toNumber(row.total_value) - toNumber(row.gst_amount)) },
+                { key: "cgst_amount", label: "CGST", width: "90px", align: "right", render: (row) => formatMoney(row.cgst_amount) },
+                { key: "sgst_amount", label: "SGST", width: "90px", align: "right", render: (row) => formatMoney(row.sgst_amount) },
+                { key: "igst_amount", label: "IGST", width: "90px", align: "right", render: (row) => formatMoney(row.igst_amount) },
+                { key: "total_value", label: "Total Value", width: "110px", align: "right", render: (row) => formatMoney(row.total_value) },
                 {
                   key: "knock_off",
                   label: "Knock Off",
@@ -680,6 +701,16 @@ export default function SODetailPage() {
                 </button>
               </div>
             ) : null}
+          </ErpSectionCard>
+
+          <ErpSectionCard eyebrow="Commercial Summary" title="Net amount, GST breakup and total value">
+            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+              <ErpFieldPreview label="Net Amount" value={formatMoney(commercialTotals.netAmount)} />
+              <ErpFieldPreview label="CGST" value={formatMoney(commercialTotals.cgstAmount)} />
+              <ErpFieldPreview label="SGST" value={formatMoney(commercialTotals.sgstAmount)} />
+              <ErpFieldPreview label="IGST" value={formatMoney(commercialTotals.igstAmount)} />
+              <ErpFieldPreview label="Total Value" value={formatMoney(commercialTotals.totalValue)} tone="sky" />
+            </div>
           </ErpSectionCard>
 
           {detail.status === "CREATED" || detail.status === "ISSUED" ? (
