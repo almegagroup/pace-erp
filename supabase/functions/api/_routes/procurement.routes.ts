@@ -333,6 +333,8 @@ import {
   mapSoLineToCustomerAddressHandler,
   mapSoLineToDepotHandler,
   mapSoLineToFoHandler,
+  releaseSoMapGroupHandler,
+  saveSoMapGroupHandler,
   unmapSoAllocationHandler,
 } from "../_core/procurement/so_map.handlers.ts";
 import {
@@ -673,6 +675,8 @@ export async function dispatchProcurementRoutes(
       return await mapSoLineToCustomerAddressHandler(req, ctx);
     case "POST:/api/procurement/so-map/map-depot":
       return await mapSoLineToDepotHandler(req, ctx);
+    case "POST:/api/procurement/so-map/save-group":
+      return await saveSoMapGroupHandler(req, ctx);
 
     case "GET:/api/procurement/delivery-orders":
       return await listDeliveryOrdersHandler(req, ctx);
@@ -1244,6 +1248,9 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/so-map\/[^/]+\/unmap$/.test(pathname) && req.method === "POST") {
     return await unmapSoAllocationHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/so-map\/groups\/[^/]+\/release$/.test(pathname) && req.method === "POST") {
+    return await releaseSoMapGroupHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/sales-invoices\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
