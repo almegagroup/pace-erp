@@ -856,20 +856,28 @@ export async function listSOsHandler(
     // Direct SOs acquire their consignee only when SO Map is completed. Read
     // both manual map addresses and FO-selected MM04 addresses so the register
     // always shows the latest resolved customer and Ship-To address.
-    const { data: allocationRows, error: allocationError } = soIds.length
+    const { data: allocationData, error: allocationError } = soIds.length
       ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
         .select("so_id, customer_address_id, fo_id").in("so_id", soIds).eq("status", "ACTIVE")
       : { data: [], error: null };
-    if (allocationError) return salesErrorResponse(req, ctx, "SO_LIST_ALLOCATION_LOOKUP_FAILED", 500, "Unable to load SO mapping details.");
+    // Mapping is display enrichment only. A temporarily unavailable map read
+    // must never hide an otherwise valid SO register or block its detail page.
+    if (allocationError) {
+      console.error("[listSOsHandler] SO Map display enrichment unavailable", {
+        request_id: ctx.request_id,
+        error: allocationError,
+      });
+    }
+    const allocationRows = allocationError ? [] as JsonRecord[] : (allocationData ?? []) as JsonRecord[];
 
-    const foIds = [...new Set(((allocationRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.fo_id)).filter(Boolean))];
+    const foIds = [...new Set(allocationRows.map((row) => toTrimmedString(row.fo_id)).filter(Boolean))];
     const { data: foRows, error: foError } = foIds.length
       ? await serviceRoleClient.schema("erp_production").from("plan_feed").select("id, customer_address_id").in("id", foIds)
       : { data: [], error: null };
     if (foError) return salesErrorResponse(req, ctx, "SO_LIST_FO_LOOKUP_FAILED", 500, "Unable to load SO mapping details.");
     const foAddressById = new Map(((foRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.customer_address_id)]));
 
-    const mappedAddressIds = ((allocationRows ?? []) as JsonRecord[]).map((row) =>
+    const mappedAddressIds = allocationRows.map((row) =>
       toTrimmedString(row.customer_address_id) || foAddressById.get(toTrimmedString(row.fo_id)) || "",
     ).filter(Boolean);
     const addressIds = [...new Set(mappedAddressIds)];
@@ -906,7 +914,7 @@ export async function listSOsHandler(
     const depotMap = new Map(((depotResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
     const addressMap = new Map(addressRows.map((row) => [toTrimmedString(row.id), row]));
     const mappedAddressesBySoId = new Map<string, JsonRecord[]>();
-    for (const allocation of (allocationRows ?? []) as JsonRecord[]) {
+    for (const allocation of allocationRows) {
       const addressId = toTrimmedString(allocation.customer_address_id) || foAddressById.get(toTrimmedString(allocation.fo_id)) || "";
       const address = addressMap.get(addressId);
       const soId = toTrimmedString(allocation.so_id);
