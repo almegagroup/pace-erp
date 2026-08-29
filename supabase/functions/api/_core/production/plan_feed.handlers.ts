@@ -449,6 +449,7 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
     const companyId = toTrimmedString(body.company_id);
     const foNumber = toTrimmedString(body.fo_number);
     const partyId = toTrimmedString(body.party_id) || null;
+    const customerAddressId = toTrimmedString(body.customer_address_id) || null;
     const partyName = toTrimmedString(body.party_name);
     const sku = toTrimmedString(body.sku);
     const materialId = toTrimmedString(body.material_id) || null;
@@ -468,6 +469,13 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
     } catch {
       return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (customerAddressId) {
+      const { data: address, error: addressError } = await serviceRoleClient
+        .schema("erp_master").from("customer_address").select("customer_id").eq("id", customerAddressId).eq("status", "ACTIVE").maybeSingle();
+      if (addressError || !address || toTrimmedString((address as JsonRecord).customer_id) !== partyId) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_ADDRESS_PARTY_MISMATCH", 422, "Selected address must be an active address of the selected party.");
+      }
+    }
 
     const { data, error } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
@@ -475,6 +483,7 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
         company_id: companyId,
         fo_number: foNumber,
         party_id: partyId,
+        customer_address_id: customerAddressId,
         party_name: partyName,
         sku: sku || null,
         material_id: materialId || null,
@@ -516,7 +525,7 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
 
     const { data: existing, error: fetchErr } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
-      .select("id, status, company_id, party_id").eq("id", id).maybeSingle();
+      .select("id, status, company_id, party_id, customer_address_id").eq("id", id).maybeSingle();
 
     if (fetchErr) throw new Error("PROD_PLAN_FEED_FETCH_FAILED");
     if (!existing) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
@@ -568,6 +577,9 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
         }
       }
       updates.party_id = newPartyId;
+      // An address belongs to exactly one party. Do not carry an old party's
+      // destination forward when the FO party changes.
+      if (body.customer_address_id === undefined) updates.customer_address_id = null;
       if (newPartyId) {
         const customerMap = await getCustomerMapByIds([newPartyId]);
         const resolvedName = toTrimmedString(customerMap.get(newPartyId)?.customer_name);
@@ -576,6 +588,18 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
     }
     if (body.party_name !== undefined && updates.party_name === undefined) {
       updates.party_name = toTrimmedString(body.party_name);
+    }
+    if (body.customer_address_id !== undefined) {
+      const customerAddressId = toTrimmedString(body.customer_address_id) || null;
+      const effectivePartyId = toTrimmedString(updates.party_id ?? (existing as JsonRecord).party_id);
+      if (customerAddressId) {
+        const { data: address, error: addressError } = await serviceRoleClient
+          .schema("erp_master").from("customer_address").select("customer_id").eq("id", customerAddressId).eq("status", "ACTIVE").maybeSingle();
+        if (addressError || !address || toTrimmedString((address as JsonRecord).customer_id) !== effectivePartyId) {
+          return foErr(req, ctx, "PROD_PLAN_FEED_ADDRESS_PARTY_MISMATCH", 422, "Selected address must be an active address of the selected party.");
+        }
+      }
+      updates.customer_address_id = customerAddressId;
     }
     if (body.sku !== undefined) updates.sku = toTrimmedString(body.sku) || null;
     if (body.material_id !== undefined) updates.material_id = toTrimmedString(body.material_id) || null;
