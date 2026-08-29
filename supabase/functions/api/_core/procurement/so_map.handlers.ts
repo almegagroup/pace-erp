@@ -37,6 +37,32 @@ function getMapDestinationMode(so: JsonRecord): "DIRECT" | "DEPOT" | null {
   return toTrimmedString(so.bill_to_depot_code_id) ? "DEPOT" : "DIRECT";
 }
 
+function getSoDestinationDepotId(so: JsonRecord): string {
+  return getMapDestinationMode(so) === "DEPOT"
+    ? toTrimmedString(so.bill_to_depot_code_id)
+    : toTrimmedString(so.bill_to_vdc_id);
+}
+
+// An FO is a customer/address commitment. It can be offered against an SO only
+// when that address resolves to the SO's already-resolved VDC/DC and Parent
+// Company. This prevents a same-company FO from leaking across destinations.
+async function foAddressMatchesSoDestination(so: JsonRecord, foAddressId: string): Promise<boolean> {
+  const destinationDepotId = getSoDestinationDepotId(so);
+  const parentCompanyId = toTrimmedString(so.bill_to_parent_company_id);
+  if (!destinationDepotId || !foAddressId) return false;
+  const [{ data: address, error: addressError }, { data: destination, error: destinationError }] = await Promise.all([
+    serviceRoleClient.schema("erp_master").from("customer_address")
+      .select("depot_code_id, status").eq("id", foAddressId).maybeSingle(),
+    serviceRoleClient.schema("erp_master").from("fg_depot_code")
+      .select("parent_company_id, status").eq("id", destinationDepotId).maybeSingle(),
+  ]);
+  if (addressError || destinationError || !address || !destination) return false;
+  return toUpperTrimmedString((address as JsonRecord).status) === "ACTIVE"
+    && toUpperTrimmedString((destination as JsonRecord).status) === "ACTIVE"
+    && toTrimmedString((address as JsonRecord).depot_code_id) === destinationDepotId
+    && (!parentCompanyId || toTrimmedString((destination as JsonRecord).parent_company_id) === parentCompanyId);
+}
+
 function getMapQuantityPresentation(line: JsonRecord): { mode: "ORDER_QTY" | "PACK_QTY" | "BASE_QTY"; uom: string; perPackQty: number | null } {
   const materialType = toUpperTrimmedString(line.line_material_type);
   const fgType = toUpperTrimmedString(line.fg_type);
@@ -300,15 +326,26 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
 
     const foAddressIds = [...new Set(((foRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.customer_address_id)).filter(Boolean))];
     const { data: foAddressRows, error: foAddressError } = foAddressIds.length
-      ? await serviceRoleClient.schema("erp_master").from("customer_address").select("id, depot_code_id, site_name, address_line, town, state").in("id", foAddressIds)
+      ? await serviceRoleClient.schema("erp_master").from("customer_address").select("id, depot_code_id, site_name, address_line, town, state, status").in("id", foAddressIds)
       : { data: [] as JsonRecord[], error: null };
     if (foAddressError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_ADDRESS_LOOKUP_FAILED", 500, "Unable to load FO destination details.");
     const foAddressById = new Map(((foAddressRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const destinationMode = getMapDestinationMode(so);
+    const destinationDepotId = getSoDestinationDepotId(so);
+    const destinationDepotIds = [...new Set([
+      destinationDepotId,
+      ...((foAddressRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.depot_code_id)),
+    ].filter(Boolean))];
+    const { data: destinationDepotRows, error: destinationDepotError } = destinationDepotIds.length
+      ? await serviceRoleClient.schema("erp_master").from("fg_depot_code").select("id, parent_company_id, status").in("id", destinationDepotIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (destinationDepotError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_DESTINATION_LOOKUP_FAILED", 500, "Unable to resolve FO destination scope.");
+    const destinationDepotById = new Map(((destinationDepotRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
 
     const foIds = ((foRows ?? []) as JsonRecord[]).map((row) => String(row.id));
     const [{ data: allocRows, error: allocError }, { data: soMapAllocRows, error: soMapAllocError }] = await Promise.all([
       foIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("fo_id, allocated_qty").in("fo_id", foIds).eq("status", "ACTIVE")
+        ? serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("fo_id, plan_feed_item_id, allocated_qty").in("fo_id", foIds).eq("status", "ACTIVE")
         : Promise.resolve({ data: [] as JsonRecord[], error: null }),
       foIds.length
         ? serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id, fo_id").in("fo_id", foIds)
@@ -328,11 +365,9 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
       : { data: [] as JsonRecord[], error: null };
     if (pkoAllocError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_PACKING_ALLOCATION_FETCH_FAILED", 500, "Unable to load FO Packing PO allocations.");
     const pkoCountByFo = new Map<string, number>();
-    const allocatedKgByFo = new Map<string, number>();
     for (const row of (pkoAllocRows ?? []) as JsonRecord[]) {
       const foId = toTrimmedString(row.plan_feed_id);
       pkoCountByFo.set(foId, (pkoCountByFo.get(foId) ?? 0) + 1);
-      allocatedKgByFo.set(foId, (allocatedKgByFo.get(foId) ?? 0) + Number(row.allocated_qty_kg ?? 0));
     }
 
     // Real dispatched qty per FO -- same chain as Plan Feed's own Total
@@ -361,10 +396,17 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
       }
     }
 
+    const { data: foItemRows, error: foItemError } = foIds.length
+      ? await serviceRoleClient.schema("erp_production").from("plan_feed_item").select("id, plan_feed_id, material_id, sku, description, ordered_qty_kg").in("plan_feed_id", foIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (foItemError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_ITEM_LOOKUP_FAILED", 500, "Unable to load FO items.");
     const allocatedByFo = new Map<string, number>();
+    const allocatedByItem = new Map<string, number>();
     for (const alloc of (allocRows ?? []) as JsonRecord[]) {
       const foId = String(alloc.fo_id);
       allocatedByFo.set(foId, (allocatedByFo.get(foId) ?? 0) + Number(alloc.allocated_qty ?? 0));
+      const itemId = toTrimmedString(alloc.plan_feed_item_id);
+      if (itemId) allocatedByItem.set(itemId, (allocatedByItem.get(itemId) ?? 0) + Number(alloc.allocated_qty ?? 0));
     }
 
     // §133.18 -- once the user picks an FO, they need to see what it
@@ -404,15 +446,13 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
       });
     }
 
-    const destinationMode = getMapDestinationMode(so);
-    const result = ((foRows ?? []) as JsonRecord[]).map((row) => {
+    const result: JsonRecord[] = ((foRows ?? []) as JsonRecord[]).map((row) => {
       const foId = String(row.id);
       const allocated = allocatedByFo.get(foId) ?? 0;
       const remaining = Number((Number(row.ordered_qty_kg ?? 0) - allocated).toFixed(6));
       const packingPoCount = pkoCountByFo.get(foId) ?? 0;
-      const allocatedPkoKg = allocatedKgByFo.get(foId) ?? 0;
       const dispatchedKg = Number((dispatchedByFo.get(foId) ?? 0).toFixed(6));
-      const dispatchComplete = packingPoCount > 0 && dispatchedKg >= allocatedPkoKg - QTY_TOL;
+      const dispatchComplete = dispatchedKg >= Number(row.ordered_qty_kg ?? 0) - QTY_TOL;
       return {
         ...row,
         customer_address: foAddressById.get(toTrimmedString(row.customer_address_id)) ?? null,
@@ -422,15 +462,30 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
         dispatched_qty_kg: dispatchedKg,
         dispatch_complete: dispatchComplete,
         packing_po_details: pkoDetailsByFo.get(foId) ?? [],
+        items: ((foItemRows ?? []) as JsonRecord[]).filter((item) => toTrimmedString(item.plan_feed_id) === foId).map((item) => {
+          const mappedQty = allocatedByItem.get(toTrimmedString(item.id)) ?? 0;
+          return { ...item, mapped_qty: mappedQty, available_qty: Math.max(0, Number(item.ordered_qty_kg ?? 0) - mappedQty) };
+        }),
       };
     }).filter((row) => {
-      const address = foAddressById.get(toTrimmedString(row.customer_address_id));
-      const inDirectVdcScope = destinationMode !== "DIRECT"
-        || (address && toTrimmedString(address.depot_code_id) === toTrimmedString(so.bill_to_vdc_id));
+      const address = foAddressById.get(toTrimmedString((row as JsonRecord).customer_address_id));
+      const addressDepot = address ? destinationDepotById.get(toTrimmedString(address.depot_code_id)) : null;
+      const destinationDepot = destinationDepotById.get(destinationDepotId);
+      const inDestinationScope = Boolean(
+        destinationMode
+        && address
+        && destinationDepot
+        && addressDepot
+        && toUpperTrimmedString(address.status) === "ACTIVE"
+        && toUpperTrimmedString(destinationDepot.status) === "ACTIVE"
+        && toTrimmedString(address.depot_code_id) === destinationDepotId
+        && (!toTrimmedString(so.bill_to_parent_company_id)
+          || toTrimmedString(destinationDepot.parent_company_id) === toTrimmedString(so.bill_to_parent_company_id)),
+      );
       // §133.9's FO picker is defined by company, non-cancelled status and
       // running FO balance. Packing-PO allocation is a later production/DO
       // concern, never a condition for selecting an FO on SO Map.
-      return inDirectVdcScope && row.remaining_qty > QTY_TOL;
+      return inDestinationScope && !row.dispatch_complete && row.remaining_qty > QTY_TOL;
     });
 
     return okResponse(result, ctx.request_id, req);
@@ -523,17 +578,22 @@ async function validateAndUpsertAllocation(
     if (toUpperTrimmedString((fo as JsonRecord).status) === "CANCELLED") {
       return soMapErrorResponse(req, ctx, "SO_MAP_FO_CANCELLED", 422, "This FO is cancelled.");
     }
-    if (getMapDestinationMode(so) === "DIRECT") {
-      const foAddressId = toTrimmedString((fo as JsonRecord).customer_address_id);
-      const { data: foAddress, error: foAddressError } = foAddressId
-        ? await serviceRoleClient.schema("erp_master").from("customer_address").select("id, depot_code_id, status").eq("id", foAddressId).maybeSingle()
-        : { data: null, error: null };
-      if (foAddressError || !foAddress || toUpperTrimmedString((foAddress as JsonRecord).status) !== "ACTIVE" || toTrimmedString((foAddress as JsonRecord).depot_code_id) !== toTrimmedString(so.bill_to_vdc_id)) {
-        return soMapErrorResponse(req, ctx, "SO_MAP_FO_SCOPE_VIOLATION", 422, "FO destination does not belong to this SO's VDC.");
-      }
+    const foAddressId = toTrimmedString((fo as JsonRecord).customer_address_id);
+    if (!(await foAddressMatchesSoDestination(so, foAddressId))) {
+      return soMapErrorResponse(req, ctx, "SO_MAP_FO_SCOPE_VIOLATION", 422,
+        "FO destination does not match this SO's resolved Parent Company and VDC/DC.");
     }
+    const { data: foItems, error: foItemsError } = await serviceRoleClient.schema("erp_production").from("plan_feed_item")
+      .select("id, material_id, ordered_qty_kg").eq("plan_feed_id", foId);
+    if (foItemsError || !(foItems ?? []).length) return soMapErrorResponse(req, ctx, "SO_MAP_FO_ITEM_NOT_FOUND", 422, "FO has no item lines.");
+    const requestedItemId = toTrimmedString(body.plan_feed_item_id);
+    const matchedItem = requestedItemId
+      ? ((foItems ?? []) as JsonRecord[]).find((item) => toTrimmedString(item.id) === requestedItemId)
+      : ((foItems ?? []) as JsonRecord[]).find((item) => toTrimmedString(item.material_id) === toTrimmedString(line.material_id))
+        ?? ((foItems ?? []) as JsonRecord[])[0];
+    if (!matchedItem) return soMapErrorResponse(req, ctx, "SO_MAP_FO_ITEM_NOT_FOUND", 422, "Select a valid FO item line.");
     // §133.9 — item mismatch: hard block, except FG MTO/HPS/MTEST (soft warning).
-    const materialMismatch = toTrimmedString((fo as JsonRecord).material_id) !== toTrimmedString(line.material_id);
+    const materialMismatch = toTrimmedString(matchedItem.material_id) !== toTrimmedString(line.material_id);
     if (materialMismatch) {
       const fgType = toUpperTrimmedString(line.fg_type);
       const isExempt = toTrimmedString(line.line_material_type) === "FG" && SKU_MISMATCH_EXEMPT_FG_TYPES.has(fgType);
@@ -545,15 +605,16 @@ async function validateAndUpsertAllocation(
       }
       insertPayload.sku_mismatch_confirmed = true;
     }
-    // §133.9 — FO capacity: sum of this FO's allocations (across every SO) must not exceed its own ordered_qty_kg.
+    // Item-level FO capacity: each material line has its own ordered balance.
     const { data: foAllocRows, error: foAllocError } = await serviceRoleClient
-      .schema("erp_procurement").from("sales_order_map_allocation").select("allocated_qty").eq("fo_id", foId).eq("status", "ACTIVE");
+      .schema("erp_procurement").from("sales_order_map_allocation").select("allocated_qty").eq("plan_feed_item_id", matchedItem.id).eq("status", "ACTIVE");
     if (foAllocError) return soMapErrorResponse(req, ctx, "SO_MAP_ALLOCATION_FETCH_FAILED", 500, "Unable to verify FO capacity.");
     const alreadyAllocatedForFo = ((foAllocRows ?? []) as JsonRecord[]).reduce((sum, entry) => sum + Number(entry.allocated_qty ?? 0), 0);
-    if (alreadyAllocatedForFo + qty > Number((fo as JsonRecord).ordered_qty_kg ?? 0) + QTY_TOL) {
-      return soMapErrorResponse(req, ctx, "SO_MAP_QTY_EXCEEDS_FO", 422, "Mapped quantity would exceed this FO's own ordered quantity.");
+    if (alreadyAllocatedForFo + qty > Number(matchedItem.ordered_qty_kg ?? 0) + QTY_TOL) {
+      return soMapErrorResponse(req, ctx, "SO_MAP_QTY_EXCEEDS_FO", 422, "Mapped quantity would exceed this FO item's ordered quantity.");
     }
     insertPayload.fo_id = foId;
+    insertPayload.plan_feed_item_id = matchedItem.id;
   } else if (source === "address") {
     if (getMapDestinationMode(so) !== "DIRECT") {
       return soMapErrorResponse(req, ctx, "SO_MAP_ADDRESS_NOT_ALLOWED", 422, "Customer-address mapping is only allowed for a Direct destination.");
@@ -628,7 +689,7 @@ export async function saveSoMapGroupHandler(req: Request, ctx: ProcurementHandle
       const { data: group, error } = await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").insert(groupPayload).select("id").single();
       if (error || !group) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_CREATE_FAILED", 500, "Unable to create Ship-To mapping group.");
       for (const item of items) {
-        const itemBody: JsonRecord = { so_id: soId, so_line_id: item.so_line_id, allocated_qty: item.allocated_qty, map_group_id: group.id, sku_mismatch_confirmed: body.sku_mismatch_confirmed };
+        const itemBody: JsonRecord = { so_id: soId, so_line_id: item.so_line_id, allocated_qty: item.allocated_qty, plan_feed_item_id: item.plan_feed_item_id, map_group_id: group.id, sku_mismatch_confirmed: body.sku_mismatch_confirmed };
         if (source === "fo") itemBody.fo_id = body.fo_id;
         if (source === "address") itemBody.customer_address_id = body.customer_address_id;
         const result = await validateAndUpsertAllocation(req, ctx, itemBody, source as "fo" | "address" | "depot");

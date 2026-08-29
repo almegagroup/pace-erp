@@ -49,6 +49,7 @@ function MapDrawer({ so, onClose, onChanged }) {
   const [selectedFoId, setSelectedFoId] = useState("");
   const [selectedAddressId, setSelectedAddressId] = useState("");
   const [draftQtyByLine, setDraftQtyByLine] = useState({});
+  const [foItemIdByLine, setFoItemIdByLine] = useState({});
   const [excludedLineIds, setExcludedLineIds] = useState([]);
   const [confirmMismatch, setConfirmMismatch] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -102,20 +103,35 @@ function MapDrawer({ so, onClose, onChanged }) {
     }
     if (source === "fo") {
       const selectedFo = foOptions.find((fo) => fo.id === selectedFoId);
-      const totalFoQty = allocations.reduce((sum, entry) => sum + entry.baseQty, 0);
-      if (totalFoQty > Number(selectedFo?.remaining_qty ?? 0) + 0.0001) {
-        setActionError("The selected item quantities exceed this FO's remaining balance."); return;
+      const selectedItems = selectedFo?.items ?? [];
+      const itemForLine = (line) => selectedItems.find((item) => item.id === foItemIdByLine[line.id])
+        ?? selectedItems.find((item) => item.material_id === line.material_id)
+        ?? selectedItems[0];
+      if (allocations.some(({ line }) => !itemForLine(line))) { setActionError("Select an FO item for every SO line."); return; }
+      const qtyByItem = allocations.reduce((totals, entry) => {
+        const item = itemForLine(entry.line);
+        totals[item.id] = (totals[item.id] ?? 0) + entry.baseQty;
+        return totals;
+      }, {});
+      if (Object.entries(qtyByItem).some(([itemId, qty]) => qty > Number(selectedItems.find((item) => item.id === itemId)?.available_qty ?? 0) + 0.0001)) {
+        setActionError("The selected item quantities exceed an FO item's remaining balance."); return;
       }
-      const strictMismatch = allocations.some(({ line }) => line.material_id !== selectedFo?.material_id
-        && !(line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type)));
+      const strictMismatch = allocations.some(({ line }) => {
+        const item = itemForLine(line);
+        return line.material_id !== item.material_id && !(line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type));
+      });
       if (strictMismatch) { setActionError("This FO material does not match one or more selected SO items."); return; }
-      const softMismatch = allocations.some(({ line }) => line.material_id !== selectedFo?.material_id);
+      const softMismatch = allocations.some(({ line }) => line.material_id !== itemForLine(line).material_id);
       if (softMismatch && !confirmMismatch) { setActionError("Confirm the permitted FG MTO/HPS/MTEST SKU mismatch before saving."); return; }
     }
     setSaving(true);
     setActionError("");
     try {
-      await saveSoMapGroup({ so_id: so.id, source, fo_id: selectedFoId || undefined, customer_address_id: selectedAddressId || undefined, sku_mismatch_confirmed: confirmMismatch, items: allocations.map(({ line, baseQty }) => ({ so_line_id: line.id, allocated_qty: baseQty })) });
+      const selectedItems = selectedFo?.items ?? [];
+      const itemForLine = (line) => selectedItems.find((item) => item.id === foItemIdByLine[line.id])
+        ?? selectedItems.find((item) => item.material_id === line.material_id)
+        ?? selectedItems[0];
+      await saveSoMapGroup({ so_id: so.id, source, fo_id: selectedFoId || undefined, customer_address_id: selectedAddressId || undefined, sku_mismatch_confirmed: confirmMismatch, items: allocations.map(({ line, baseQty }) => ({ so_line_id: line.id, allocated_qty: baseQty, plan_feed_item_id: source === "fo" ? itemForLine(line)?.id : undefined })) });
       setDraftQtyByLine({});
       setExcludedLineIds([]);
       setConfirmMismatch(false);
@@ -157,10 +173,10 @@ function MapDrawer({ so, onClose, onChanged }) {
     return line.map_quantity_mode === "PACK_QTY" ? enteredQty * Number(line.map_per_pack_qty || 0) : enteredQty;
   }
   function chooseFo(value) {
-    setSelectedFoId(value); setSelectedAddressId(""); setDraftQtyByLine({}); setExcludedLineIds([]);
+    setSelectedFoId(value); setSelectedAddressId(""); setDraftQtyByLine({}); setFoItemIdByLine({}); setExcludedLineIds([]);
   }
   function chooseAddress(value) {
-    setSelectedAddressId(value); setSelectedFoId(""); setDraftQtyByLine({}); setExcludedLineIds([]);
+    setSelectedAddressId(value); setSelectedFoId(""); setDraftQtyByLine({}); setFoItemIdByLine({}); setExcludedLineIds([]);
   }
   function toggleLine(lineId) {
     setExcludedLineIds((current) => current.includes(lineId) ? current.filter((id) => id !== lineId) : [...current, lineId]);
@@ -227,10 +243,11 @@ function MapDrawer({ so, onClose, onChanged }) {
 
           {(selectedFoId || selectedAddressId || destinationMode === "DEPOT") ? <ErpSectionCard eyebrow="Step 2" title={`Items for ${activeDestinationLabel}`}>
             <p className="mb-3 text-xs text-slate-600">All remaining SO items are shown. Untick an item if it will not go to this Ship-To, or change its quantity before saving.</p>
-            <div className="overflow-x-auto border border-slate-300"><table className="w-full text-xs"><thead className="bg-slate-800 text-white"><tr><th className="p-2 text-left">Map</th><th className="p-2 text-left">Item</th><th className="p-2 text-right">Remaining KG</th><th className="p-2 text-left">Quantity for this Ship-To</th></tr></thead><tbody>{lines.map((line) => {
+            <div className="overflow-x-auto border border-slate-300"><table className="w-full text-xs"><thead className="bg-slate-800 text-white"><tr><th className="p-2 text-left">Map</th><th className="p-2 text-left">SO Item</th>{selectedFoId ? <th className="p-2 text-left">FO Item / Available</th> : null}<th className="p-2 text-right">Remaining KG</th><th className="p-2 text-left">Quantity for this Ship-To</th></tr></thead><tbody>{lines.map((line) => {
               const excluded = excludedLineIds.includes(line.id);
               const displayQty = draftQtyByLine[line.id] ?? getDisplayQty(line);
-              return <tr key={line.id} className="border-t border-slate-200"><td className="p-2"><input type="checkbox" checked={!excluded} onChange={() => toggleLine(line.id)} /></td><td className="p-2">{line.material_display || line.line_material_type}<div className="text-[10px] text-slate-500">{line.map_quantity_mode === "PACK_QTY" ? `${line.map_uom}; ${Number(line.map_per_pack_qty || 0).toFixed(4)} KG per pack` : line.map_uom}</div></td><td className="p-2 text-right">{Number(line.remaining_qty ?? 0).toFixed(4)}</td><td className="p-2"><input disabled={excluded} type="number" min="0" step="0.0001" value={displayQty} onChange={(event) => setDraftQtyByLine((current) => ({ ...current, [line.id]: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 disabled:bg-slate-100" /></td></tr>;
+              const matchedFoItem = selectedFo?.items?.find((item) => item.id === foItemIdByLine[line.id]) ?? selectedFo?.items?.find((item) => item.material_id === line.material_id) ?? selectedFo?.items?.[0];
+              return <tr key={line.id} className="border-t border-slate-200"><td className="p-2"><input type="checkbox" checked={!excluded} onChange={() => toggleLine(line.id)} /></td><td className="p-2">{line.material_display || line.line_material_type}<div className="text-[10px] text-slate-500">{line.map_quantity_mode === "PACK_QTY" ? `${line.map_uom}; ${Number(line.map_per_pack_qty || 0).toFixed(4)} KG per pack` : line.map_uom}</div></td>{selectedFoId ? <td className="p-2"><select disabled={excluded} value={foItemIdByLine[line.id] ?? matchedFoItem?.id ?? ""} onChange={(event) => setFoItemIdByLine((current) => ({ ...current, [line.id]: event.target.value }))} className="h-8 w-full border border-slate-300 bg-white px-1"><option value="">Select FO item</option>{(selectedFo?.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.sku || item.description || "Item"} ({Number(item.available_qty ?? 0).toFixed(4)} KG)</option>)}</select></td> : null}<td className="p-2 text-right">{Number(line.remaining_qty ?? 0).toFixed(4)}</td><td className="p-2"><input disabled={excluded} type="number" min="0" step="0.0001" value={displayQty} onChange={(event) => setDraftQtyByLine((current) => ({ ...current, [line.id]: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 disabled:bg-slate-100" /></td></tr>;
             })}</tbody></table></div>
             {selectedFoId ? <label className="mt-3 flex items-center gap-2 text-[11px] font-semibold text-slate-600"><input type="checkbox" checked={confirmMismatch} onChange={(event) => setConfirmMismatch(event.target.checked)} />Confirm SKU mismatch only for FG MTO/HPS/MTEST.</label> : null}
             <button type="button" disabled={saving} onClick={() => void handleSaveDestination()} className="mt-3 border border-sky-700 bg-sky-100 px-4 py-2 text-xs font-semibold text-sky-950 disabled:opacity-50">Save {activeDestinationLabel} Mapping</button>
