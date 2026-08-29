@@ -36,7 +36,11 @@ const LIMIT = 50;
 const SO_EXPORT_COLUMNS = [
   { key: "so_number", label: "SO Number" },
   { key: "customer_display", label: "Customer" },
+  { key: "ship_to_display", label: "Ship-To Address" },
   { key: "customer_po_number", label: "Customer PO" },
+  { key: "dispatch_type", label: "Dispatch Type" },
+  { key: "parent_company_display", label: "Parent Company" },
+  { key: "depot_code_display", label: "VDC / DC" },
   { key: "so_date", label: "SO Date" },
   { key: "status", label: "Status" },
   { key: "company_display", label: "Company" },
@@ -184,7 +188,11 @@ export default function SOListPage() {
                 columns={[
                   { key: "so_number", label: "SO Number", width: "140px" },
                   { key: "customer_display", label: "Customer", render: (row) => row.customer_display || "—" },
+                  { key: "ship_to_display", label: "Ship-To Address", width: "280px", render: (row) => row.ship_to_display || "—" },
                   { key: "customer_po_number", label: "Customer PO", width: "140px" },
+                  { key: "dispatch_type", label: "Dispatch Type", width: "180px", render: (row) => row.dispatch_type || "—" },
+                  { key: "parent_company_display", label: "Parent Company", width: "220px", render: (row) => row.parent_company_display || "—" },
+                  { key: "depot_code_display", label: "VDC / DC", width: "180px", render: (row) => row.depot_code_display || "—" },
                   { key: "so_date", label: "SO Date", width: "110px" },
                   {
                     key: "status",
