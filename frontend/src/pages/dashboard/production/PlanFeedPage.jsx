@@ -61,6 +61,7 @@ const ERRORS = {
   PROD_PLAN_FEED_ITEM_QTY_BELOW_COMMITTED: "Item quantity cannot be reduced below its committed Packing PO or SO Map quantity.",
   PROD_PLAN_FEED_PACKING_PO_COMPANY_MISMATCH: "Packing PO must belong to the same company as this FO.",
   PROD_PLAN_FEED_PACKING_PO_NOT_FINAL: "Only a FINAL Packing PO can be allocated to an FO.",
+  PROD_PLAN_FEED_SHIP_TO_REQUIRED: "Select an active Ship-To address before saving this FO.",
   PROD_PLAN_FEED_CANCEL_BLOCKED_BY_DO: "Cancel the linked Delivery Order first, then cancel this FO.",
   PROD_PACK_NOT_FOUND: "Packing PO not found.",
   PROD_PACK_REVERSED: "Cannot allocate a reversed/cancelled Packing PO.",
@@ -434,6 +435,10 @@ export default function PlanFeedPage() {
   async function handleCreate(e) {
     e.preventDefault();
     if (!effectiveCompanyId) return;
+    if (!form.party_id || !selectedAddressId) {
+      toast("Select a party and its Ship-To address before creating this FO.", "error");
+      return;
+    }
     setSaving(true);
     try {
       await createPlanFeed({
@@ -560,6 +565,7 @@ export default function PlanFeedPage() {
       });
     } catch {
       toast("FO not found.", "error");
+      setEditDrawerOpen(false);
     } finally {
       setEditLoading(false);
     }
@@ -842,7 +848,7 @@ export default function PlanFeedPage() {
               )}
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs text-slate-600 font-medium">Party Address</label>
+              <label className="text-xs text-slate-600 font-medium">Party Address <span className="text-rose-500">*</span></label>
               <div className="border border-slate-200 bg-slate-50 rounded px-2 py-1.5 text-sm text-slate-600 min-h-[34px]">
                 {partyAddressesQ.isLoading ? "Loading addresses..." : selectedAddress
                   ? <><span className="font-medium text-slate-800">{addressLabel(selectedAddress)}</span><span className="text-slate-500"> - {addressFullText(selectedAddress)}</span></>
@@ -1045,11 +1051,30 @@ export default function PlanFeedPage() {
                 Search FO Register
                 <input className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" value={editSearch} onChange={(event) => setEditSearch(event.target.value)} placeholder="FO number, party, SKU, status..." />
               </label>
-              <span className="pb-1 text-xs text-slate-500">Press Enter or double-click a row to open its full details.</span>
+              <span className="inline-flex items-center gap-1.5 pb-1 text-xs text-slate-500">
+                <span className="h-2 w-2 rounded-full bg-rose-500" aria-hidden="true" />
+                Ship-To address not set. Press Enter or double-click a row to open its full details.
+              </span>
             </div>
             <ErpDenseGrid
               columns={[
-                { key: "fo_number", label: "FO #", width: "150px", render: (row) => <span className="font-mono font-semibold text-sky-700">{row.fo_number}</span> },
+                {
+                  key: "fo_number",
+                  label: "FO #",
+                  width: "150px",
+                  render: (row) => (
+                    <span className="inline-flex items-center gap-1.5 font-mono font-semibold text-sky-700">
+                      {row.fo_number}
+                      {!row.customer_address_id && (
+                        <span
+                          className="h-2 w-2 rounded-full bg-rose-500"
+                          title="Ship-To address not set"
+                          aria-label="Ship-To address not set"
+                        />
+                      )}
+                    </span>
+                  ),
+                },
                 { key: "party_name", label: "Party", width: "230px" },
                 { key: "sku", label: "SKU", width: "150px", render: (row) => <span className="font-mono">{row.sku || "--"}</span> },
                 { key: "ordered_qty_kg", label: "Ordered KG", width: "115px", align: "right", copyValue: (row) => fmt(row.ordered_qty_kg), render: (row) => <span className="font-mono">{fmt(row.ordered_qty_kg)}</span> },
@@ -1072,16 +1097,17 @@ export default function PlanFeedPage() {
 
           {editLoading && <p className="text-sm text-slate-400 py-2 text-center">Loading FO details...</p>}
 
-          {editData && (
+          {editDrawerOpen && (
             <DrawerBase
               visible={editDrawerOpen}
-              title={`Edit FO — ${editData.fo_number}`}
+              title={editData ? `Edit FO — ${editData.fo_number}` : "Loading FO..."}
               side="center"
               width="min(1480px, calc(100vw - 24px))"
               onClose={() => setEditDrawerOpen(false)}
               onEscape={() => setEditDrawerOpen(false)}
               actions={<button type="button" onClick={() => setEditDrawerOpen(false)} className="h-8 border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50">Close</button>}
             >
+              {editData ? (
               <div className="grid gap-3">
               <ErpSectionCard title={`Editing: ${editData.fo_number}`} tone={editData.status === "CANCELLED" ? "warning" : "default"}>
                 {editData.status === "CANCELLED" && (
@@ -1128,7 +1154,7 @@ export default function PlanFeedPage() {
                         </button>
                       )
                     )}
-                    <label className="mt-2 text-xs text-slate-600 font-medium">Ship-To Address</label>
+                    <label className="mt-2 text-xs text-slate-600 font-medium">Ship-To Address <span className="text-rose-500">*</span></label>
                     <select
                       value={editDraft.customer_address_id || ""}
                       onChange={(event) => setEditDraft((d) => ({ ...d, customer_address_id: event.target.value }))}
@@ -1142,6 +1168,9 @@ export default function PlanFeedPage() {
                         </option>
                       ))}
                     </select>
+                    {!editDraft.customer_address_id && !editPartyAddressesQ.isLoading && (
+                      <p className="text-[11px] text-rose-700">A Ship-To address is required before this FO can be saved.</p>
+                    )}
                     {editDraft.customer_address_id && (
                       <p className="text-[11px] text-slate-500">
                         {addressFullText(editPartyAddresses.find((address) => address.id === editDraft.customer_address_id))}
@@ -1440,6 +1469,7 @@ export default function PlanFeedPage() {
                 </ErpSectionCard>
               )}
               </div>
+              ) : <p className="py-8 text-center text-sm text-slate-500">Loading FO details...</p>}
             </DrawerBase>
           )}
         </>
