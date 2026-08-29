@@ -29,6 +29,33 @@ const MAPPABLE_DISPATCH_TYPES = new Set(["DEPENDENT_DIRECT", "DEPENDENT_DEPOT", 
 const SKU_MISMATCH_EXEMPT_FG_TYPES = new Set(["MTO", "HPS", "MTEST"]);
 const QTY_TOL = 0.0001;
 
+function getMapDestinationMode(so: JsonRecord): "DIRECT" | "DEPOT" | null {
+  const dispatchType = toUpperTrimmedString(so.dispatch_type);
+  if (dispatchType === "DEPENDENT_DIRECT") return "DIRECT";
+  if (dispatchType === "DEPENDENT_DEPOT") return "DEPOT";
+  if (dispatchType !== "DEPENDENT_NO_INBOUND") return null;
+  return toTrimmedString(so.bill_to_depot_code_id) ? "DEPOT" : "DIRECT";
+}
+
+function getMapQuantityPresentation(line: JsonRecord): { mode: "ORDER_QTY" | "PACK_QTY" | "BASE_QTY"; uom: string; perPackQty: number | null } {
+  const materialType = toUpperTrimmedString(line.line_material_type);
+  const fgType = toUpperTrimmedString(line.fg_type);
+  if (materialType === "FG" && ["MTO", "HPS", "MTS"].includes(fgType)) {
+    return { mode: "PACK_QTY", uom: toTrimmedString(line.pack_uom_code) || "PACK", perPackQty: parsePositiveNumber(line.per_pack_qty) };
+  }
+  if (materialType === "FG" && fgType === "MTEST") {
+    return { mode: "BASE_QTY", uom: toTrimmedString(line.uom_code) || "KG", perPackQty: null };
+  }
+  return { mode: "ORDER_QTY", uom: toTrimmedString(line.uom_code) || "KG", perPackQty: null };
+}
+
+async function hasDoForAllocation(allocationId: string): Promise<boolean> {
+  const { data, error } = await serviceRoleClient.schema("erp_procurement")
+    .from("delivery_challan_line").select("id").eq("so_map_allocation_id", allocationId).limit(1);
+  if (error) throw new Error("SO_MAP_DO_LOCK_LOOKUP_FAILED");
+  return (data ?? []).length > 0;
+}
+
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
 }
@@ -192,6 +219,37 @@ export async function getSoMapStatusHandler(req: Request, ctx: ProcurementHandle
       return soMapErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
     const allocations = await fetchActiveAllocationsForSo(soId);
+    const materialIds = [...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
+    const { data: materialRows, error: materialError } = materialIds.length
+      ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name").in("id", materialIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (materialError) return soMapErrorResponse(req, ctx, "SO_MAP_MATERIAL_LOOKUP_FAILED", 500, "Unable to load SO item details.");
+    const materialById = new Map(((materialRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const foIds = [...new Set(allocations.map((row) => toTrimmedString(row.fo_id)).filter(Boolean))];
+    const addressIds = [...new Set(allocations.map((row) => toTrimmedString(row.customer_address_id)).filter(Boolean))];
+    const depotIds = [...new Set(allocations.map((row) => toTrimmedString(row.depot_code_id)).filter(Boolean))];
+    const [{ data: mappedFoRows, error: mappedFoError }, { data: mappedAddressRows, error: mappedAddressError }, { data: mappedDepotRows, error: mappedDepotError }] = await Promise.all([
+      foIds.length ? serviceRoleClient.schema("erp_production").from("plan_feed").select("id, fo_number, party_name, customer_address_id").in("id", foIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      addressIds.length ? serviceRoleClient.schema("erp_master").from("customer_address").select("id, site_name, address_line, town, state").in("id", addressIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      depotIds.length ? serviceRoleClient.schema("erp_master").from("fg_depot_code").select("id, code, description").in("id", depotIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    ]);
+    if (mappedFoError || mappedAddressError || mappedDepotError) return soMapErrorResponse(req, ctx, "SO_MAP_DESTINATION_LOOKUP_FAILED", 500, "Unable to load mapping destinations.");
+    const mappedFoById = new Map(((mappedFoRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const mappedAddressById = new Map(((mappedAddressRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const mappedDepotById = new Map(((mappedDepotRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const enrichedAllocations = allocations.map((allocation) => {
+      if (toTrimmedString(allocation.fo_id)) {
+        const fo = mappedFoById.get(toTrimmedString(allocation.fo_id));
+        return { ...allocation, source_display: fo ? `FO ${toTrimmedString(fo.fo_number)} - ${toTrimmedString(fo.party_name)}` : "FO" };
+      }
+      if (toTrimmedString(allocation.depot_code_id)) {
+        const depot = mappedDepotById.get(toTrimmedString(allocation.depot_code_id));
+        return { ...allocation, source_display: depot ? `Fixed Depot ${toTrimmedString(depot.code)} - ${toTrimmedString(depot.description)}` : "Fixed Depot" };
+      }
+      const address = mappedAddressById.get(toTrimmedString(allocation.customer_address_id));
+      const addressLabel = address ? [address.site_name, address.address_line, address.town, address.state].map(toTrimmedString).filter(Boolean).join(", ") : "Customer address";
+      return { ...allocation, source_display: addressLabel };
+    });
     const mappedByLine = new Map<string, number>();
     for (const alloc of allocations) {
       const lineId = String(alloc.so_line_id);
@@ -200,9 +258,18 @@ export async function getSoMapStatusHandler(req: Request, ctx: ProcurementHandle
     const lineStatus = lines.map((line) => {
       const total = Number(line.base_qty ?? line.quantity ?? 0);
       const mapped = mappedByLine.get(String(line.id)) ?? 0;
-      return { ...line, total_qty: total, mapped_qty: mapped, remaining_qty: Number((total - mapped).toFixed(6)) };
+      const material = materialById.get(toTrimmedString(line.material_id));
+      const presentation = getMapQuantityPresentation(line);
+      return {
+        ...line,
+        material_display: material ? `${toTrimmedString(material.pace_code)} | ${toTrimmedString(material.material_name)}` : toTrimmedString(line.material_id),
+        map_quantity_mode: presentation.mode,
+        map_uom: presentation.uom,
+        map_per_pack_qty: presentation.perPackQty,
+        total_qty: total, mapped_qty: mapped, remaining_qty: Number((total - mapped).toFixed(6)),
+      };
     });
-    return okResponse({ so, lines: lineStatus, allocations }, ctx.request_id, req);
+    return okResponse({ so, destination_mode: getMapDestinationMode(so), lines: lineStatus, allocations: enrichedAllocations }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SO_MAP_STATUS_FAILED";
     return soMapErrorResponse(req, ctx, code, 500, code);
@@ -227,9 +294,16 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
 
     const { data: foRows, error: foError } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
-      .select("id, fo_number, party_id, party_name, material_id, ordered_qty_kg, status")
+      .select("id, fo_number, party_id, party_name, customer_address_id, material_id, ordered_qty_kg, status")
       .eq("company_id", so.company_id).neq("status", "CANCELLED");
     if (foError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_LIST_FAILED", 500, "Unable to list FO numbers.");
+
+    const foAddressIds = [...new Set(((foRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.customer_address_id)).filter(Boolean))];
+    const { data: foAddressRows, error: foAddressError } = foAddressIds.length
+      ? await serviceRoleClient.schema("erp_master").from("customer_address").select("id, depot_code_id").in("id", foAddressIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (foAddressError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_ADDRESS_LOOKUP_FAILED", 500, "Unable to load FO destination details.");
+    const foAddressById = new Map(((foAddressRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
 
     const foIds = ((foRows ?? []) as JsonRecord[]).map((row) => String(row.id));
     const [{ data: allocRows, error: allocError }, { data: soMapAllocRows, error: soMapAllocError }] = await Promise.all([
@@ -330,6 +404,7 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
       });
     }
 
+    const destinationMode = getMapDestinationMode(so);
     const result = ((foRows ?? []) as JsonRecord[]).map((row) => {
       const foId = String(row.id);
       const allocated = allocatedByFo.get(foId) ?? 0;
@@ -347,7 +422,12 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
         dispatch_complete: dispatchComplete,
         packing_po_details: pkoDetailsByFo.get(foId) ?? [],
       };
-    }).filter((row) => row.remaining_qty > QTY_TOL && row.packing_po_count > 0 && !row.dispatch_complete);
+    }).filter((row) => {
+      const address = foAddressById.get(toTrimmedString(row.customer_address_id));
+      const inDirectVdcScope = destinationMode !== "DIRECT"
+        || (address && toTrimmedString(address.depot_code_id) === toTrimmedString(so.bill_to_vdc_id));
+      return inDirectVdcScope && row.remaining_qty > QTY_TOL && row.packing_po_count > 0 && !row.dispatch_complete;
+    });
 
     return okResponse(result, ctx.request_id, req);
   } catch (error) {
@@ -386,7 +466,7 @@ export async function listCustomerAddressesForSoHandler(req: Request, ctx: Procu
 }
 
 async function validateAndUpsertAllocation(
-  req: Request, ctx: ProcurementHandlerContext, body: JsonRecord, source: "fo" | "address",
+  req: Request, ctx: ProcurementHandlerContext, body: JsonRecord, source: "fo" | "address" | "depot",
 ): Promise<Response> {
   const soId = toTrimmedString(body.so_id);
   const soLineId = toTrimmedString(body.so_line_id);
@@ -430,13 +510,22 @@ async function validateAndUpsertAllocation(
     const foId = toTrimmedString(body.fo_id);
     if (!foId) return soMapErrorResponse(req, ctx, "SO_MAP_FO_REQUIRED", 400, "fo_id is required.");
     const { data: fo, error: foError } = await serviceRoleClient
-      .schema("erp_production").from("plan_feed").select("id, company_id, material_id, ordered_qty_kg, status").eq("id", foId).maybeSingle();
+      .schema("erp_production").from("plan_feed").select("id, company_id, customer_address_id, material_id, ordered_qty_kg, status").eq("id", foId).maybeSingle();
     if (foError || !fo) return soMapErrorResponse(req, ctx, "SO_MAP_FO_NOT_FOUND", 404, "FO not found.");
     if (toTrimmedString((fo as JsonRecord).company_id) !== toTrimmedString(so.company_id)) {
       return soMapErrorResponse(req, ctx, "SO_MAP_FO_COMPANY_MISMATCH", 422, "FO belongs to a different company.");
     }
     if (toUpperTrimmedString((fo as JsonRecord).status) === "CANCELLED") {
       return soMapErrorResponse(req, ctx, "SO_MAP_FO_CANCELLED", 422, "This FO is cancelled.");
+    }
+    if (getMapDestinationMode(so) === "DIRECT") {
+      const foAddressId = toTrimmedString((fo as JsonRecord).customer_address_id);
+      const { data: foAddress, error: foAddressError } = foAddressId
+        ? await serviceRoleClient.schema("erp_master").from("customer_address").select("id, depot_code_id, status").eq("id", foAddressId).maybeSingle()
+        : { data: null, error: null };
+      if (foAddressError || !foAddress || toUpperTrimmedString((foAddress as JsonRecord).status) !== "ACTIVE" || toTrimmedString((foAddress as JsonRecord).depot_code_id) !== toTrimmedString(so.bill_to_vdc_id)) {
+        return soMapErrorResponse(req, ctx, "SO_MAP_FO_SCOPE_VIOLATION", 422, "FO destination does not belong to this SO's VDC.");
+      }
     }
     // §133.9 — item mismatch: hard block, except FG MTO/HPS/MTEST (soft warning).
     const materialMismatch = toTrimmedString((fo as JsonRecord).material_id) !== toTrimmedString(line.material_id);
@@ -460,10 +549,24 @@ async function validateAndUpsertAllocation(
       return soMapErrorResponse(req, ctx, "SO_MAP_QTY_EXCEEDS_FO", 422, "Mapped quantity would exceed this FO's own ordered quantity.");
     }
     insertPayload.fo_id = foId;
-  } else {
+  } else if (source === "address") {
+    if (getMapDestinationMode(so) !== "DIRECT") {
+      return soMapErrorResponse(req, ctx, "SO_MAP_ADDRESS_NOT_ALLOWED", 422, "Customer-address mapping is only allowed for a Direct destination.");
+    }
     const customerAddressId = toTrimmedString(body.customer_address_id);
     if (!customerAddressId) return soMapErrorResponse(req, ctx, "SO_MAP_ADDRESS_REQUIRED", 400, "customer_address_id is required.");
+    const { data: address, error: addressError } = await serviceRoleClient.schema("erp_master").from("customer_address")
+      .select("id, depot_code_id, status").eq("id", customerAddressId).maybeSingle();
+    if (addressError || !address) return soMapErrorResponse(req, ctx, "SO_MAP_ADDRESS_NOT_FOUND", 404, "Customer address not found.");
+    if (toUpperTrimmedString((address as JsonRecord).status) !== "ACTIVE" || toTrimmedString((address as JsonRecord).depot_code_id) !== toTrimmedString(so.bill_to_vdc_id)) {
+      return soMapErrorResponse(req, ctx, "SO_MAP_ADDRESS_SCOPE_VIOLATION", 422, "Customer address does not belong to this SO's VDC.");
+    }
     insertPayload.customer_address_id = customerAddressId;
+  } else {
+    if (getMapDestinationMode(so) !== "DEPOT" || !toTrimmedString(so.bill_to_depot_code_id)) {
+      return soMapErrorResponse(req, ctx, "SO_MAP_DEPOT_NOT_ALLOWED", 422, "This SO does not have a fixed Depot destination.");
+    }
+    insertPayload.depot_code_id = toTrimmedString(so.bill_to_depot_code_id);
   }
 
   const { data: created, error: insertError } = await serviceRoleClient
@@ -490,6 +593,15 @@ export async function mapSoLineToCustomerAddressHandler(req: Request, ctx: Procu
   }
 }
 
+export async function mapSoLineToDepotHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    return await validateAndUpsertAllocation(req, ctx, await parseBody(req), "depot");
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_MAP_ALLOCATION_CREATE_FAILED";
+    return soMapErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
 // §133.9 — unmap is append-on-reversal (status=RELEASED), never a hard
 // delete, matching PR19/COR6's established audit-preserving convention.
 export async function unmapSoAllocationHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
@@ -507,6 +619,9 @@ export async function unmapSoAllocationHandler(req: Request, ctx: ProcurementHan
     }
     if (!(await canMaintainSoMap(ctx, companyId))) {
       return soMapErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have SO Map access at this company.");
+    }
+    if (await hasDoForAllocation(allocationId)) {
+      return soMapErrorResponse(req, ctx, "SO_MAP_DO_LOCKED", 409, "This mapping has a Delivery Order and cannot be changed.");
     }
     const { error: updateError } = await serviceRoleClient
       .schema("erp_procurement").from("sales_order_map_allocation")

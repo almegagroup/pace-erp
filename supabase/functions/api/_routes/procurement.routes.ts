@@ -331,6 +331,7 @@ import {
   listFoOptionsForSoHandler,
   listSoForMapHandler,
   mapSoLineToCustomerAddressHandler,
+  mapSoLineToDepotHandler,
   mapSoLineToFoHandler,
   unmapSoAllocationHandler,
 } from "../_core/procurement/so_map.handlers.ts";
@@ -670,6 +671,8 @@ export async function dispatchProcurementRoutes(
       return await mapSoLineToFoHandler(req, ctx);
     case "POST:/api/procurement/so-map/map-address":
       return await mapSoLineToCustomerAddressHandler(req, ctx);
+    case "POST:/api/procurement/so-map/map-depot":
+      return await mapSoLineToDepotHandler(req, ctx);
 
     case "GET:/api/procurement/delivery-orders":
       return await listDeliveryOrdersHandler(req, ctx);
