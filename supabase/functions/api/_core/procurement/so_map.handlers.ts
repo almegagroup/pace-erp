@@ -300,7 +300,7 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
 
     const foAddressIds = [...new Set(((foRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.customer_address_id)).filter(Boolean))];
     const { data: foAddressRows, error: foAddressError } = foAddressIds.length
-      ? await serviceRoleClient.schema("erp_master").from("customer_address").select("id, depot_code_id").in("id", foAddressIds)
+      ? await serviceRoleClient.schema("erp_master").from("customer_address").select("id, depot_code_id, site_name, address_line, town, state").in("id", foAddressIds)
       : { data: [] as JsonRecord[], error: null };
     if (foAddressError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_ADDRESS_LOOKUP_FAILED", 500, "Unable to load FO destination details.");
     const foAddressById = new Map(((foAddressRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
@@ -415,6 +415,7 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
       const dispatchComplete = packingPoCount > 0 && dispatchedKg >= allocatedPkoKg - QTY_TOL;
       return {
         ...row,
+        customer_address: foAddressById.get(toTrimmedString(row.customer_address_id)) ?? null,
         allocated_qty: allocated,
         remaining_qty: remaining,
         packing_po_count: packingPoCount,
@@ -426,7 +427,10 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
       const address = foAddressById.get(toTrimmedString(row.customer_address_id));
       const inDirectVdcScope = destinationMode !== "DIRECT"
         || (address && toTrimmedString(address.depot_code_id) === toTrimmedString(so.bill_to_vdc_id));
-      return inDirectVdcScope && row.remaining_qty > QTY_TOL && row.packing_po_count > 0 && !row.dispatch_complete;
+      // §133.9's FO picker is defined by company, non-cancelled status and
+      // running FO balance. Packing-PO allocation is a later production/DO
+      // concern, never a condition for selecting an FO on SO Map.
+      return inDirectVdcScope && row.remaining_qty > QTY_TOL;
     });
 
     return okResponse(result, ctx.request_id, req);
@@ -505,6 +509,7 @@ async function validateAndUpsertAllocation(
     status: "ACTIVE",
     created_by: ctx.auth_user_id,
   };
+  if (toTrimmedString(body.map_group_id)) insertPayload.map_group_id = toTrimmedString(body.map_group_id);
 
   if (source === "fo") {
     const foId = toTrimmedString(body.fo_id);
@@ -600,6 +605,61 @@ export async function mapSoLineToDepotHandler(req: Request, ctx: ProcurementHand
     const code = error instanceof Error ? error.message : "SO_MAP_ALLOCATION_CREATE_FAILED";
     return soMapErrorResponse(req, ctx, code, 500, code);
   }
+}
+
+// §133.9 destination-first save: one user action creates a durable Ship-To
+// group and all of its item allocations. Individual endpoints remain for
+// backward compatibility; new SO01 uses this grouped endpoint.
+export async function saveSoMapGroupHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const soId = toTrimmedString(body.so_id);
+    const source = toTrimmedString(body.source);
+    const items = Array.isArray(body.items) ? body.items as JsonRecord[] : [];
+    if (!soId || !["fo", "address", "depot"].includes(source) || items.length === 0) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_INVALID", 400, "SO, destination and at least one item are required.");
+    const { so } = await fetchSoWithLines(soId);
+    await assertCompanyScope(ctx, toTrimmedString(so.company_id));
+    if (!(await canMaintainSoMap(ctx, toTrimmedString(so.company_id)))) return soMapErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have SO Map access at this company.");
+    const groupPayload: JsonRecord = { so_id: soId, created_by: ctx.auth_user_id, status: "ACTIVE" };
+    if (source === "fo") groupPayload.fo_id = toTrimmedString(body.fo_id);
+    if (source === "address") groupPayload.customer_address_id = toTrimmedString(body.customer_address_id);
+    if (source === "depot") groupPayload.depot_code_id = toTrimmedString(so.bill_to_depot_code_id);
+    if (!Object.values(groupPayload).some((value) => value === "")) {
+      const { data: group, error } = await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").insert(groupPayload).select("id").single();
+      if (error || !group) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_CREATE_FAILED", 500, "Unable to create Ship-To mapping group.");
+      for (const item of items) {
+        const itemBody: JsonRecord = { so_id: soId, so_line_id: item.so_line_id, allocated_qty: item.allocated_qty, map_group_id: group.id, sku_mismatch_confirmed: body.sku_mismatch_confirmed };
+        if (source === "fo") itemBody.fo_id = body.fo_id;
+        if (source === "address") itemBody.customer_address_id = body.customer_address_id;
+        const result = await validateAndUpsertAllocation(req, ctx, itemBody, source as "fo" | "address" | "depot");
+        if (!result.ok) {
+          await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").update({ status: "RELEASED" }).eq("map_group_id", group.id);
+          await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").update({ status: "RELEASED" }).eq("id", group.id);
+          return result;
+        }
+      }
+      return okResponse({ group_id: group.id }, ctx.request_id, req);
+    }
+    return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_INVALID", 400, "Destination is required.");
+  } catch (error) { return soMapErrorResponse(req, ctx, error instanceof Error ? error.message : "SO_MAP_GROUP_SAVE_FAILED", 500, "Unable to save Ship-To mapping."); }
+}
+
+export async function releaseSoMapGroupHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const groupId = getIdFromPath(req);
+    const { data: group, error } = await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").select("*, so:so_id(company_id)").eq("id", groupId).maybeSingle();
+    if (error || !group) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_NOT_FOUND", 404, "Mapping group not found.");
+    const companyId = toTrimmedString(((group as JsonRecord).so as JsonRecord | null)?.company_id);
+    await assertCompanyScope(ctx, companyId);
+    if (!(await canMaintainSoMap(ctx, companyId))) return soMapErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have SO Map access at this company.");
+    const { data: rows, error: rowError } = await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id").eq("map_group_id", groupId).eq("status", "ACTIVE");
+    if (rowError) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_FETCH_FAILED", 500, "Unable to load mapping items.");
+    for (const row of (rows ?? []) as JsonRecord[]) if (await hasDoForAllocation(toTrimmedString(row.id))) return soMapErrorResponse(req, ctx, "SO_MAP_DO_LOCKED", 409, "This mapping has a Delivery Order and cannot be changed.");
+    const now = new Date().toISOString();
+    await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").update({ status: "RELEASED", last_updated_by: ctx.auth_user_id, last_updated_at: now }).eq("map_group_id", groupId).eq("status", "ACTIVE");
+    await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").update({ status: "RELEASED", last_updated_by: ctx.auth_user_id, last_updated_at: now }).eq("id", groupId);
+    return okResponse({ id: groupId, status: "RELEASED" }, ctx.request_id, req);
+  } catch (error) { return soMapErrorResponse(req, ctx, error instanceof Error ? error.message : "SO_MAP_GROUP_RELEASE_FAILED", 500, "Unable to release mapping group."); }
 }
 
 // §133.9 — unmap is append-on-reversal (status=RELEASED), never a hard

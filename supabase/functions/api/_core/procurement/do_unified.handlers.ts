@@ -229,7 +229,8 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
       if (remaining <= QTY_TOL) continue;
       const foId = toTrimmedString(alloc.fo_id);
       const addressId = toTrimmedString(alloc.customer_address_id);
-      const groupKey = foId ? `fo:${foId}` : `addr:${addressId}`;
+      const depotId = toTrimmedString(alloc.depot_code_id);
+      const groupKey = foId ? `fo:${foId}` : depotId ? `depot:${depotId}` : `addr:${addressId}`;
       if (!groups.has(groupKey)) {
         if (foId) {
           const fo = foMap.get(foId);
@@ -238,6 +239,14 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
             label: fo ? `FO ${fo.fo_number}` : "FO",
             bill_to_display: fo ? toTrimmedString(fo.party_name) || null : null,
             ship_to_display: fo ? toTrimmedString(fo.party_name) || null : null,
+            lines: [],
+          });
+        } else if (depotId) {
+          groups.set(groupKey, {
+            key: groupKey,
+            label: "Fixed Depot",
+            bill_to_display: toTrimmedString((so as JsonRecord).bill_to_name) || null,
+            ship_to_display: toTrimmedString((so as JsonRecord).ship_to_name) || toTrimmedString((so as JsonRecord).bill_to_name) || null,
             lines: [],
           });
         } else {

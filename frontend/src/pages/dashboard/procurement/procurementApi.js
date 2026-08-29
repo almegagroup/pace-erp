@@ -921,6 +921,12 @@ export function mapSoLineToCustomerAddress(data) {
 export function mapSoLineToDepot(data) {
   return fetchProcurement("POST", "/api/procurement/so-map/map-depot", data);
 }
+export function saveSoMapGroup(data) {
+  return fetchProcurement("POST", "/api/procurement/so-map/save-group", data);
+}
+export function releaseSoMapGroup(groupId) {
+  return fetchProcurement("POST", `/api/procurement/so-map/groups/${encodeURIComponent(groupId)}/release`);
+}
 export function unmapSoAllocation(allocationId) {
   return fetchProcurement("POST", `/api/procurement/so-map/${encodeURIComponent(allocationId)}/unmap`);
 }

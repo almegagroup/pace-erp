@@ -155,6 +155,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/so-map/map-fo":              { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" },
   "POST:/api/procurement/so-map/map-address":         { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" },
   "POST:/api/procurement/so-map/map-depot":           { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" },
+  "POST:/api/procurement/so-map/save-group":          { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" },
 
   // ── Sales: Delivery Order (§113 Stage 2, TX SO03, GRP_ACL_SALES) ──────────
   "GET:/api/procurement/delivery-orders":                       { skipAcl: false, resourceCode: "PROC_DO_LIST",   action: "VIEW"  },
@@ -1107,6 +1108,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/procurement\/so-map\/[^/]+\/unmap$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/so-map\/groups\/[^/]+\/release$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" } },
   },
   {
