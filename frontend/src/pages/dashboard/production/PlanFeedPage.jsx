@@ -9,9 +9,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
@@ -24,8 +24,7 @@ import {
   cancelPlanFeed, reactivatePlanFeed, getPlanFeedSummary, upsertFoAllocation,
   upsertMtestFoAllocation, getMtestPlanFeedCapability,
   getUnmappedStock, checkOrderedStroke, listStrokeOptions, listPackingOrders,
-  findPlanFeedByNumber, listMtestSkus, addPlanFeedItem, updatePlanFeedItem, deletePlanFeedItem,
-  addMtestPlanFeedItem, updateMtestPlanFeedItem, deleteMtestPlanFeedItem,
+  listMtestSkus,
 } from "./prodApi.js";
 import { createCustomerAddress, listMaterials, listCustomers, updateCustomer, listCustomerAddresses } from "../om/omApi.js";
 
@@ -55,10 +54,13 @@ const ERRORS = {
   PROD_PLAN_FEED_ALLOCATION_EXCEEDS_STOCK: "Allocation exceeds this Packing PO's available qty.",
   PROD_PLAN_FEED_MATERIAL_MISMATCH: "Packing PO material differs from this FO's SKU.",
   PROD_PLAN_FEED_ITEM_MATERIAL_MISMATCH: "Packing PO material differs from the selected FO item.",
+  PROD_PLAN_FEED_ITEM_ALLOCATION_EXCEEDS_ORDERED: "Allocation exceeds the selected FO item's ordered quantity.",
   PROD_PLAN_FEED_ITEM_REQUIRED: "Select the FO item this Packing PO fulfills.",
   PROD_PLAN_FEED_ITEM_IN_USE: "Release the linked Packing PO and SO Map allocations before deleting this item.",
   PROD_PLAN_FEED_ITEM_LAST_DELETE_BLOCKED: "An FO must retain at least one item line.",
   PROD_PLAN_FEED_ITEM_QTY_BELOW_COMMITTED: "Item quantity cannot be reduced below its committed Packing PO or SO Map quantity.",
+  PROD_PLAN_FEED_PACKING_PO_COMPANY_MISMATCH: "Packing PO must belong to the same company as this FO.",
+  PROD_PLAN_FEED_PACKING_PO_NOT_FINAL: "Only a FINAL Packing PO can be allocated to an FO.",
   PROD_PLAN_FEED_CANCEL_BLOCKED_BY_DO: "Cancel the linked Delivery Order first, then cancel this FO.",
   PROD_PACK_NOT_FOUND: "Packing PO not found.",
   PROD_PACK_REVERSED: "Cannot allocate a reversed/cancelled Packing PO.",
@@ -195,6 +197,12 @@ function localIsoDate() {
   const now = new Date();
   const offsetMs = now.getTimezoneOffset() * 60 * 1000;
   return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
+}
+function summaryListText(values) {
+  return (values ?? []).filter(Boolean).join(" | ");
+}
+function gridCellValue(row, column) {
+  return String(typeof column.copyValue === "function" ? column.copyValue(row) : row?.[column.key] ?? "");
 }
 
 function emptyFo() {
@@ -463,19 +471,15 @@ export default function PlanFeedPage() {
     const timeoutId = window.setTimeout(() => setDebouncedEditSearch(editSearch.trim()), 300);
     return () => window.clearTimeout(timeoutId);
   }, [editSearch]);
-  const [foNumberSearch, setFoNumberSearch] = useState("");
-  const [foNumberMatches, setFoNumberMatches] = useState(null);
-  const [foNumberSearching, setFoNumberSearching] = useState(false);
   const [editData, setEditData] = useState(null);
   const [editDraft, setEditDraft] = useState({});
   const [editLoading, setEditLoading] = useState(false);
+  const [editDrawerOpen, setEditDrawerOpen] = useState(false);
   const [allocPoNumber, setAllocPoNumber] = useState("");
   const [allocCandidate, setAllocCandidate] = useState(null);
   const [allocQty, setAllocQty] = useState("");
   const [allocNumPacks, setAllocNumPacks] = useState("");
   const [allocSearching, setAllocSearching] = useState(false);
-  const [newFoItem, setNewFoItem] = useState({ material_id: "", sku: "", description: "", ordered_qty_kg: "", pack_qty: "" });
-  const [itemDrafts, setItemDrafts] = useState({});
   const [allocationItemId, setAllocationItemId] = useState("");
 
   // The search box only ever filtered whatever was already fetched (a fixed
@@ -535,11 +539,13 @@ export default function PlanFeedPage() {
   async function loadEditFo(foId) {
     if (!foId) return;
     setEditLoading(true);
+    setEditDrawerOpen(true);
     setEditData(null);
     try {
       const d = await getPlanFeed(foId);
       const row = d?.data ?? d;
       setEditData(row);
+      setAllocationItemId((row.items ?? []).length === 1 ? row.items[0].id : "");
       setEditDraft({
         party_id: row.party_id ?? "",
         customer_address_id: row.customer_address_id ?? "",
@@ -557,46 +563,6 @@ export default function PlanFeedPage() {
     } finally {
       setEditLoading(false);
     }
-  }
-
-  // Exact FO Number lookup, scoped to every company this user can see (not just the
-  // one currently selected) -- auto-resolves the company for multi-company users if
-  // the FO turns out to live in a different one of their own companies.
-  async function handleFindFoByNumber() {
-    const foNumber = foNumberSearch.trim();
-    if (!foNumber) return;
-    const companyIds = (runtimeContext?.availableCompanies ?? []).map((c) => c.id).filter(Boolean);
-    if (companyIds.length === 0) return;
-    setFoNumberSearching(true);
-    setFoNumberMatches(null);
-    try {
-      const res = await findPlanFeedByNumber({ fo_number: foNumber, company_ids: companyIds.join(",") });
-      // findPlanFeedByNumberHandler's response has no `pagination` key, so
-      // fetchProd already unwraps this down to the bare array -- `res.data`
-      // was reaching one level too deep (an array has no .data) and always
-      // silently produced []. Found live 2026-08-21: real match confirmed via
-      // direct API response, but the page still said "not found".
-      const matches = Array.isArray(res) ? res : (res?.data ?? []);
-      if (matches.length === 0) {
-        toast(`FO number "${foNumber}" not found.`, "error");
-      } else if (matches.length === 1) {
-        await handlePickFoMatch(matches[0]);
-      } else {
-        setFoNumberMatches(matches);
-      }
-    } catch (err) {
-      toast(err.message || "FO lookup failed.", "error");
-    } finally {
-      setFoNumberSearching(false);
-    }
-  }
-
-  async function handlePickFoMatch(match) {
-    if (match.company_id && match.company_id !== effectiveCompanyId) {
-      setCompanyId(match.company_id);
-    }
-    setFoNumberMatches(null);
-    await loadEditFo(match.id);
   }
 
   async function handleSaveEdit(e) {
@@ -617,50 +583,6 @@ export default function PlanFeedPage() {
       qc.invalidateQueries({ queryKey: ["prod-plan-feed-summary"] });
     } catch (err) { toast(friendlyErr(err.message), "error"); }
     finally { setSaving(false); }
-  }
-
-  async function handleAddFoItem() {
-    if (!editData) return;
-    try {
-      await (isMtestEdit ? addMtestPlanFeedItem : addPlanFeedItem)(editData.id, newFoItem);
-      setNewFoItem({ material_id: "", sku: "", description: "", ordered_qty_kg: "", pack_qty: "" });
-      await loadEditFo(editData.id);
-      toast("FO item added.");
-    } catch (err) { toast(friendlyErr(err.message), "error"); }
-  }
-
-  function getItemDraft(item) {
-    return itemDrafts[item.id] ?? {
-      description: item.description ?? "",
-      ordered_qty_kg: String(item.ordered_qty_kg ?? ""),
-      pack_qty: String(item.pack_qty ?? ""),
-      ordered_stroke_number: item.ordered_stroke_number ?? "",
-    };
-  }
-
-  async function handleSaveFoItem(item) {
-    if (!editData) return;
-    try {
-      await (isMtestEdit ? updateMtestPlanFeedItem : updatePlanFeedItem)(editData.id, item.id, getItemDraft(item));
-      await loadEditFo(editData.id);
-      toast("FO item updated.");
-    } catch (err) { toast(friendlyErr(err.message), "error"); }
-  }
-
-  async function handleDeleteFoItem(item) {
-    if (!editData) return;
-    const confirmed = await openActionConfirm({
-      eyebrow: "Plan Feed",
-      title: `Delete FO item ${item.sku || item.description || "line"}?`,
-      message: "This is only allowed when the item has no active Packing PO or SO Map allocation.",
-      confirmLabel: "Delete item",
-    });
-    if (!confirmed) return;
-    try {
-      await (isMtestEdit ? deleteMtestPlanFeedItem : deletePlanFeedItem)(editData.id, item.id);
-      await loadEditFo(editData.id);
-      toast("FO item deleted.");
-    } catch (err) { toast(friendlyErr(err.message), "error"); }
   }
 
   async function handleCancel() {
@@ -786,22 +708,64 @@ export default function PlanFeedPage() {
   });
   const summary = summaryQ.data ?? EMPTY_ARRAY;
   const [totalSearch, setTotalSearch] = useState("");
+  const [totalColumnFilters, setTotalColumnFilters] = useState({});
+  const [totalFiltersOpen, setTotalFiltersOpen] = useState(false);
+  const [exportingTotal, setExportingTotal] = useState(false);
+  const totalColumns = useMemo(() => [
+    { key: "fo_number", label: "FO #", width: "140px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.fo_number || "--"}</span> },
+    { key: "party_name", label: "Party", width: "200px" },
+    { key: "party_town", label: "Town", width: "120px" },
+    { key: "sku", label: "SKU", width: "135px", render: (r) => <span className="font-mono">{r.sku || "--"}</span> },
+    { key: "ordered_stroke_number", label: "Ordered Stroke", width: "135px", render: (r) => <span className="font-mono">{r.ordered_stroke_number || "--"}{r.ordered_stroke_missing ? " (Not in Stroke Master)" : ""}</span> },
+    { key: "ordered_qty_kg", label: "Ordered KG", width: "110px", align: "right", copyValue: (r) => fmt(r.ordered_qty_kg), render: (r) => <span className="font-mono">{fmt(r.ordered_qty_kg)}</span> },
+    { key: "pack_qty", label: "Pack Qty", width: "90px", align: "right", copyValue: (r) => r.pack_qty ?? "--", render: (r) => <span className="font-mono">{r.pack_qty ?? "--"}</span> },
+    { key: "allocated_qty_kg", label: "Mapped KG", width: "110px", align: "right", copyValue: (r) => fmt(r.allocated_qty_kg), render: (r) => <span className="font-mono">{fmt(r.allocated_qty_kg)}</span> },
+    { key: "mapped_batches", label: "Mapped Batch No(s)", width: "220px", copyValue: (r) => summaryListText(r.mapped_batch_numbers), render: (r) => <span className="font-mono">{summaryListText(r.mapped_batch_numbers) || "--"}</span> },
+    { key: "production_status", label: "Production", width: "140px", copyValue: (r) => r.production_status?.replaceAll("_", " ") ?? "--", render: (r) => <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${productionStatusTone(r.production_status)}`}>{r.production_status?.replaceAll("_", " ")}</span> },
+    { key: "dispatched_qty_kg", label: "Dispatched KG", width: "120px", align: "right", copyValue: (r) => fmt(r.dispatched_qty_kg), render: (r) => <span className="font-mono text-emerald-700">{fmt(r.dispatched_qty_kg)}</span> },
+    { key: "dispatch_status", label: "Dispatch", width: "150px", copyValue: (r) => r.dispatch_status?.replaceAll("_", " ") ?? "--", render: (r) => <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${dispatchStatusTone(r.dispatch_status)}`}>{r.dispatch_status?.replaceAll("_", " ")}</span> },
+    { key: "delivery_orders", label: "DO Number", width: "145px", copyValue: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_number)), render: (r) => <span className="font-mono">{summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_number)) || "--"}</span> },
+    { key: "delivery_order_dates", label: "DO Date", width: "115px", copyValue: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_date)), render: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_date)) || "--" },
+    { key: "tally_invoice_numbers", label: "Tally Invoice No.", width: "160px", copyValue: (r) => summaryListText(r.tally_invoice_numbers), render: (r) => <span className="font-mono">{summaryListText(r.tally_invoice_numbers) || "--"}</span> },
+    { key: "dispatch_dates", label: "Dispatch Date", width: "120px", copyValue: (r) => summaryListText(r.dispatch_dates), render: (r) => summaryListText(r.dispatch_dates) || "--" },
+    { key: "pending_dispatch_kg", label: "Pending KG", width: "110px", align: "right", copyValue: (r) => fmt(r.pending_dispatch_kg), render: (r) => <span className="font-mono text-amber-700">{fmt(r.pending_dispatch_kg)}</span> },
+    { key: "order_date", label: "Order Date", width: "110px" },
+    { key: "scheduled_delivery_date", label: "Del. Date", width: "110px" },
+  ], []);
+  const totalSuggestions = useMemo(() => [...new Set(summary.flatMap((row) => totalColumns.map((column) => gridCellValue(row, column)).filter(Boolean)))].sort((a, b) => a.localeCompare(b)).slice(0, 300), [summary, totalColumns]);
+  const totalSuggestionsByColumn = useMemo(() => Object.fromEntries(totalColumns.map((column) => [column.key, [...new Set(summary.map((row) => gridCellValue(row, column)).filter(Boolean))].sort((a, b) => a.localeCompare(b)).slice(0, 150)])), [summary, totalColumns]);
   const filteredSummary = useMemo(() => {
     const needle = totalSearch.trim().toLowerCase();
-    if (!needle) return summary;
-    return summary.filter((row) => [
-      row.fo_number, row.party_name, row.party_town, row.sku, row.ordered_stroke_number,
-      row.ordered_qty_kg, row.pack_qty, row.allocated_qty_kg,
-      ...(row.mapped_batch_numbers ?? []),
-      row.production_status, row.dispatched_qty_kg, row.dispatch_status,
-      row.pending_dispatch_kg, row.scheduled_delivery_date,
-    ].filter((v) => v !== null && v !== undefined).join(" ").toLowerCase().includes(needle));
-  }, [summary, totalSearch]);
+    return summary.filter((row) => {
+      const globalMatch = !needle || totalColumns.some((column) => gridCellValue(row, column).toLowerCase().includes(needle));
+      const columnMatch = Object.entries(totalColumnFilters).every(([key, value]) => {
+        if (!value?.trim()) return true;
+        const column = totalColumns.find((entry) => entry.key === key);
+        return column ? gridCellValue(row, column).toLowerCase().includes(value.trim().toLowerCase()) : true;
+      });
+      return globalMatch && columnMatch;
+    });
+  }, [summary, totalSearch, totalColumnFilters, totalColumns]);
+  async function handleExportTotalExcel() {
+    setExportingTotal(true);
+    try {
+      const { downloadColoredExcelFile } = await import("../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `plan_feed_total_${new Date().toISOString().slice(0, 10)}.xlsx`,
+        sheetName: "Plan Feed Total",
+        columns: totalColumns,
+        rows: filteredSummary,
+        getCellValue: (row, column) => gridCellValue(row, column),
+      });
+    } catch (err) { toast(err instanceof Error ? err.message : "PLAN_FEED_EXPORT_FAILED", "error"); }
+    finally { setExportingTotal(false); }
+  }
 
   return (
     <ErpScreenScaffold
       title="Plan Feed"
       subtitle="Firm Order visibility — what customers ordered, and its current production/dispatch state"
+      actions={tab === "total" ? [{ key: "plan-feed-total-columns", label: totalFiltersOpen ? "Hide Column Filters" : "Column Filters", onClick: () => setTotalFiltersOpen((open) => !open) }, { key: "plan-feed-total-export", label: exportingTotal ? "Exporting..." : "Export Excel", onClick: () => void handleExportTotalExcel(), disabled: exportingTotal || filteredSummary.length === 0 }] : []}
     >
       <ErpSectionCard>
         <div className="flex gap-3 items-end flex-wrap">
@@ -1075,66 +1039,50 @@ export default function PlanFeedPage() {
       {/* ── Tab: Edit ── */}
       {tab === "edit" && (
         <>
-          <ErpSectionCard title="Find FO by Number">
-            <div className="flex gap-2 items-end flex-wrap">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">FO Number</label>
-                <input
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-64"
-                  value={foNumberSearch}
-                  onChange={(e) => setFoNumberSearch(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") handleFindFoByNumber(); }}
-                  placeholder="Exact FO number"
-                />
-              </div>
-              <button type="button" onClick={handleFindFoByNumber} disabled={foNumberSearching || !foNumberSearch.trim()} className="px-3 py-1.5 bg-sky-600 text-white text-sm rounded hover:bg-sky-700 disabled:opacity-50">
-                {foNumberSearching ? "Searching..." : "Find"}
-              </button>
-              <span className="text-[11px] text-slate-400">Searches across every company you have access to.</span>
+          <ErpSectionCard title="FO Register">
+            <div className="mb-3 flex flex-wrap items-end gap-3">
+              <label className="grid min-w-[320px] flex-1 gap-1 text-xs font-medium text-slate-600">
+                Search FO Register
+                <input className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" value={editSearch} onChange={(event) => setEditSearch(event.target.value)} placeholder="FO number, party, SKU, status..." />
+              </label>
+              <span className="pb-1 text-xs text-slate-500">Press Enter or double-click a row to open its full details.</span>
             </div>
-            {foNumberMatches && foNumberMatches.length > 1 && (
-              <div className="mt-3 border border-amber-200 bg-amber-50 rounded p-2">
-                <p className="text-xs text-amber-800 mb-2">This FO number exists in more than one of your companies — pick one:</p>
-                <div className="flex flex-col divide-y divide-amber-100">
-                  {foNumberMatches.map((m) => {
-                    const company = (runtimeContext?.availableCompanies ?? []).find((c) => c.id === m.company_id);
-                    return (
-                      <button key={m.id} onClick={() => handlePickFoMatch(m)} className="flex items-center justify-between px-2 py-1.5 text-sm hover:bg-amber-100 text-left">
-                        <span className="text-slate-700">{company?.company_name || company?.company_code || m.company_id}</span>
-                        <span className="text-slate-500">{m.party_name}</span>
-                        <span className="text-slate-400 text-xs">{m.order_date}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4 border-t border-slate-200 pt-3">
-              <p className="text-xs text-slate-500 mb-2">Or browse recent FOs in this company:</p>
-              <input className="border border-slate-300 rounded px-2 py-1 text-sm w-80" value={editSearch} onChange={e => setEditSearch(e.target.value)} placeholder="Filter by FO number or party..." />
-              <div className="mt-2">
-                <div className="flex flex-col divide-y divide-slate-100 max-h-56 overflow-y-auto border border-slate-200 rounded">
-                  {foListFiltered.map(fo => (
-                    <button key={fo.id} onClick={() => loadEditFo(fo.id)}
-                      className="flex items-center justify-between px-3 py-2 text-sm hover:bg-sky-50 text-left">
-                      <span className="font-mono font-medium text-sky-700">{fo.fo_number}</span>
-                      <span className="text-slate-500">{fo.party_name}</span>
-                      <span className="text-slate-400 text-xs">{fo.order_date}</span>
-                    </button>
-                  ))}
-                  {foListFiltered.length === 0 && (
-                    <p className="px-3 py-4 text-center text-sm text-slate-400">{listQ.isLoading ? "Loading..." : "No FOs matched."}</p>
-                  )}
-                </div>
-              </div>
-            </div>
+            <ErpDenseGrid
+              columns={[
+                { key: "fo_number", label: "FO #", width: "150px", render: (row) => <span className="font-mono font-semibold text-sky-700">{row.fo_number}</span> },
+                { key: "party_name", label: "Party", width: "230px" },
+                { key: "sku", label: "SKU", width: "150px", render: (row) => <span className="font-mono">{row.sku || "--"}</span> },
+                { key: "ordered_qty_kg", label: "Ordered KG", width: "115px", align: "right", copyValue: (row) => fmt(row.ordered_qty_kg), render: (row) => <span className="font-mono">{fmt(row.ordered_qty_kg)}</span> },
+                { key: "status", label: "Status", width: "110px" },
+                { key: "order_date", label: "Order Date", width: "115px" },
+                { key: "scheduled_delivery_date", label: "Del. Date", width: "115px" },
+              ]}
+              rows={foListFiltered}
+              rowKey={(row) => row.id}
+              onRowActivate={(row) => void loadEditFo(row.id)}
+              getRowProps={(row) => ({ onDoubleClick: () => void loadEditFo(row.id) })}
+              cellNavigate
+              rangeSelect
+              virtualize
+              stickyFirstColumn
+              maxHeight="calc(100vh - 330px)"
+              emptyMessage={listQ.isLoading ? "Loading FOs..." : "No FOs matched the current search."}
+            />
           </ErpSectionCard>
 
-          {editLoading && <ErpSectionCard><p className="text-sm text-slate-400 py-4 text-center">Loading FO...</p></ErpSectionCard>}
+          {editLoading && <p className="text-sm text-slate-400 py-2 text-center">Loading FO details...</p>}
 
           {editData && (
-            <>
+            <DrawerBase
+              visible={editDrawerOpen}
+              title={`Edit FO — ${editData.fo_number}`}
+              side="center"
+              width="min(1480px, calc(100vw - 24px))"
+              onClose={() => setEditDrawerOpen(false)}
+              onEscape={() => setEditDrawerOpen(false)}
+              actions={<button type="button" onClick={() => setEditDrawerOpen(false)} className="h-8 border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50">Close</button>}
+            >
+              <div className="grid gap-3">
               <ErpSectionCard title={`Editing: ${editData.fo_number}`} tone={editData.status === "CANCELLED" ? "warning" : "default"}>
                 {editData.status === "CANCELLED" && (
                   <div className="mb-4 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-amber-800 text-sm">
@@ -1326,28 +1274,49 @@ export default function PlanFeedPage() {
                 </form>
               </ErpSectionCard>
 
-              <ErpSectionCard title="FO Item Lines">
-                <div className="mb-3 text-sm text-slate-600">Each item has its own SO Map capacity. SKU is immutable after creation; release allocations before deleting an item.</div>
-                <div className="space-y-2">
-                  {(editData.items ?? []).map((item) => {
-                    const draft = getItemDraft(item);
-                    const setDraft = (updates) => setItemDrafts((all) => ({ ...all, [item.id]: { ...draft, ...updates } }));
-                    return <div key={item.id} className="grid grid-cols-1 gap-2 border-t border-slate-100 py-3 sm:grid-cols-6">
-                      <div className="text-sm font-mono sm:col-span-2">{item.sku || "--"}<div className="font-sans text-xs text-slate-500">{item.description || "--"}</div></div>
-                      <input value={draft.ordered_qty_kg} type="number" min="0.0001" step="0.0001" onChange={(e) => setDraft({ ordered_qty_kg: e.target.value })} disabled={editData.status === "CANCELLED" || !canEditSelectedFo} className="border border-slate-300 px-2 py-1 text-sm font-mono" aria-label={`Quantity for ${item.sku || "FO item"}`} />
-                      <input value={draft.pack_qty} type="number" min="1" onChange={(e) => setDraft({ pack_qty: e.target.value })} disabled={editData.status === "CANCELLED" || !canEditSelectedFo} className="border border-slate-300 px-2 py-1 text-sm font-mono" aria-label={`Pack quantity for ${item.sku || "FO item"}`} />
-                      <input value={draft.ordered_stroke_number} onChange={(e) => setDraft({ ordered_stroke_number: e.target.value })} disabled={editData.status === "CANCELLED" || !canEditSelectedFo} className="border border-slate-300 px-2 py-1 text-sm font-mono" placeholder="Ordered stroke" aria-label={`Ordered stroke for ${item.sku || "FO item"}`} />
-                      <div className="flex gap-2"><button type="button" onClick={() => void handleSaveFoItem(item)} disabled={editData.status === "CANCELLED" || !canEditSelectedFo} className="text-xs font-semibold text-sky-700 underline disabled:opacity-50">Save</button><button type="button" onClick={() => void handleDeleteFoItem(item)} disabled={editData.status === "CANCELLED" || !canEditSelectedFo || (editData.items ?? []).length <= 1} className="text-xs font-semibold text-rose-700 underline disabled:opacity-50">Delete</button></div>
-                    </div>;
-                  })}
+              <ErpSectionCard title="Mapped Packing PO Details">
+                <p className="mb-3 text-sm text-slate-600">Read-only production traceability for the Packing POs mapped to this FO.</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[1260px] border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-xs uppercase text-slate-500">
+                        <th className="border-b px-3 py-2 text-left">Packing PO</th>
+                        <th className="border-b px-3 py-2 text-left">SKU</th>
+                        <th className="border-b px-3 py-2 text-left">Document Name</th>
+                        <th className="border-b px-3 py-2 text-left">Prodshade</th>
+                        <th className="border-b px-3 py-2 text-left">Actual Stroke</th>
+                        <th className="border-b px-3 py-2 text-left">Batch No.</th>
+                        <th className="border-b px-3 py-2 text-left">Status</th>
+                        <th className="border-b px-3 py-2 text-right">Per Pack (KG)</th>
+                        <th className="border-b px-3 py-2 text-right">No. of Packs</th>
+                        <th className="border-b px-3 py-2 text-right">PO Qty (KG)</th>
+                        <th className="border-b px-3 py-2 text-right">Mapped Qty (KG)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(editData.allocations ?? []).map((allocation) => {
+                        const po = allocation.packing_order ?? {};
+                        const material = po.material ?? {};
+                        return <tr key={allocation.id} className="border-b border-slate-100 hover:bg-sky-50">
+                          <td className="px-3 py-2 font-mono">{po.po_number || "--"}</td>
+                          <td className="px-3 py-2 font-mono">{material.external_code || material.pace_code || allocation.plan_feed_item?.sku || "--"}</td>
+                          <td className="px-3 py-2">{material.document_name || material.material_name || "--"}</td>
+                          <td className="px-3 py-2">{po.actual_stroke?.prodshade_name || "--"}</td>
+                          <td className="px-3 py-2 font-mono">{po.actual_stroke?.stroke_number || "--"}</td>
+                          <td className="px-3 py-2 font-mono">{po.batch_number || "--"}</td>
+                          <td className="px-3 py-2">{po.status || "--"}</td>
+                          <td className="px-3 py-2 text-right font-mono">{po.fill_qty_per_pack != null ? fmt(po.fill_qty_per_pack) : "--"}</td>
+                          <td className="px-3 py-2 text-right font-mono">{po.num_packs ?? "--"}</td>
+                          <td className="px-3 py-2 text-right font-mono">{fmt(po.actual_qty_kg || po.planned_qty_kg)}</td>
+                          <td className="px-3 py-2 text-right font-mono font-semibold text-sky-700">{fmt(allocation.allocated_qty_kg)}</td>
+                        </tr>;
+                      })}
+                      {(editData.allocations ?? []).length === 0 && (
+                        <tr><td colSpan={11} className="px-3 py-5 text-center text-sm text-slate-400">No Packing PO is mapped to this FO yet.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-                {editData.status !== "CANCELLED" && canEditSelectedFo && <div className="mt-3 grid grid-cols-1 gap-2 border-t border-slate-200 pt-3 sm:grid-cols-5">
-                  <select value={newFoItem.material_id} onChange={(e) => { const material = (isMtestEdit ? mtestSkusQ.data : nonMtestMaterials).find((row) => row.id === e.target.value); setNewFoItem((item) => ({ ...item, material_id: e.target.value, sku: material?.external_code || material?.pace_code || "", description: material?.document_name || material?.material_name || "" })); }} className="border border-slate-300 px-2 py-1 text-sm"><option value="">Select SKU</option>{(isMtestEdit ? mtestSkusQ.data ?? [] : nonMtestMaterials).map((m) => <option key={m.id} value={m.id}>{materialLabel(m)}</option>)}</select>
-                  <input value={newFoItem.description} readOnly className="border border-slate-200 bg-slate-50 px-2 py-1 text-sm" placeholder="Description" />
-                  <input type="number" min="0.0001" step="0.0001" value={newFoItem.ordered_qty_kg} onChange={(e) => setNewFoItem((item) => ({ ...item, ordered_qty_kg: e.target.value }))} className="border border-slate-300 px-2 py-1 text-sm" placeholder="KG" />
-                  <input type="number" min="1" value={newFoItem.pack_qty} onChange={(e) => setNewFoItem((item) => ({ ...item, pack_qty: e.target.value }))} className="border border-slate-300 px-2 py-1 text-sm" placeholder="Pack qty" />
-                  <button type="button" onClick={() => void handleAddFoItem()} className="border border-sky-700 bg-sky-100 px-2 py-1 text-sm font-semibold">Add Item</button>
-                </div>}
               </ErpSectionCard>
 
               {editData.status !== "CANCELLED" && (
@@ -1359,6 +1328,8 @@ export default function PlanFeedPage() {
                         <th className="text-left py-2 px-3 border-b">PO Number</th>
                         <th className="text-left py-2 px-3 border-b">Material</th>
                         <th className="text-left py-2 px-3 border-b">Status</th>
+                        <th className="text-left py-2 px-3 border-b">Batch No.</th>
+                        <th className="text-left py-2 px-3 border-b">Actual Stroke</th>
                         <th className="text-right py-2 px-3 border-b">Fill Qty/Pack</th>
                         <th className="text-right py-2 px-3 border-b">Num Packs</th>
                         <th className="text-right py-2 px-3 border-b">PO Qty</th>
@@ -1375,6 +1346,8 @@ export default function PlanFeedPage() {
                       <td className="py-2 px-3 font-mono">{po.po_number}</td>
                       <td className="py-2 px-3">{a.plan_feed_item?.sku || "Unassigned item"}<div className="text-xs text-slate-500">{materialLabel(po.material)}</div></td>
                             <td className="py-2 px-3">{po.status}</td>
+                            <td className="py-2 px-3 font-mono text-xs">{po.batch_number || "--"}</td>
+                            <td className="py-2 px-3 text-xs">{po.actual_stroke?.stroke_number || "--"}{po.actual_stroke?.prodshade_name ? <div className="text-slate-500">{po.actual_stroke.prodshade_name}</div> : null}</td>
                             <td className="py-2 px-3 text-right font-mono">{po.fill_qty_per_pack != null ? fmt(po.fill_qty_per_pack) : "—"}</td>
                             <td className="py-2 px-3 text-right font-mono">{po.num_packs ?? "—"}</td>
                             <td className="py-2 px-3 text-right font-mono">{fmt(po.actual_qty_kg || po.planned_qty_kg)}</td>
@@ -1400,16 +1373,23 @@ export default function PlanFeedPage() {
                         );
                       })}
                       {(editData.allocations ?? []).length === 0 && (
-                        <tr><td colSpan={9} className="py-4 text-center text-slate-400 text-sm">No Packing PO allocated yet.</td></tr>
+                        <tr><td colSpan={11} className="py-4 text-center text-slate-400 text-sm">No Packing PO allocated yet.</td></tr>
                       )}
                     </tbody>
                   </table>
 
                   <div className="flex flex-wrap gap-2 items-end border-t border-slate-200 pt-3">
-                    <div className="flex flex-col gap-1">
-                      <label className="text-xs text-slate-600 font-medium">FO Item</label>
-                      <select value={allocationItemId} onChange={(e) => setAllocationItemId(e.target.value)} className="border border-slate-300 rounded px-2 py-1.5 text-sm min-w-48"><option value="">Select FO item</option>{(editData.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.sku || item.description || item.id} ({fmt(item.ordered_qty_kg)} KG)</option>)}</select>
-                    </div>
+                    {(editData.items ?? []).length > 1 ? (
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-slate-600 font-medium">FO Item</label>
+                        <select value={allocationItemId} onChange={(e) => setAllocationItemId(e.target.value)} className="min-w-48 rounded border border-slate-300 px-2 py-1.5 text-sm"><option value="">Select FO item</option>{(editData.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.sku || item.description || item.id} ({fmt(item.ordered_qty_kg)} KG)</option>)}</select>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-slate-600">FO Item</span>
+                        <span className="min-w-48 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-mono text-slate-600">{editData.items?.[0]?.sku || "--"}</span>
+                      </div>
+                    )}
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-slate-600 font-medium">Packing PO Number</label>
                       <input className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-48" value={allocPoNumber} onChange={e => setAllocPoNumber(e.target.value)} />
@@ -1459,7 +1439,8 @@ export default function PlanFeedPage() {
                   </fieldset>
                 </ErpSectionCard>
               )}
-            </>
+              </div>
+            </DrawerBase>
           )}
         </>
       )}
@@ -1467,15 +1448,27 @@ export default function PlanFeedPage() {
       {/* ── Tab: Total Table ── */}
       {tab === "total" && (
         <ErpSectionCard title="Total Table — Order Summary">
-          <div className="mb-3 max-w-md">
-            <QuickFilterInput
-              label="Quick Search"
-              value={totalSearch}
-              onChange={setTotalSearch}
-              placeholder="Search FO #, party, SKU, stroke, batch, status..."
-              hint="Matches any column in this table."
-            />
+          <div className="mb-3 flex flex-wrap items-end gap-3 border-b border-slate-200 pb-3">
+            <label className="grid min-w-[300px] flex-1 gap-1 text-xs font-medium text-slate-600">
+              Search Any Column
+              <input value={totalSearch} onChange={(event) => setTotalSearch(event.target.value)} list="plan-feed-total-search-suggestions" placeholder="FO, party, SKU, batch, status, invoice..." className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+            </label>
+            <button type="button" onClick={() => { setTotalSearch(""); setTotalColumnFilters({}); }} disabled={!totalSearch && Object.values(totalColumnFilters).every((value) => !value)} className="h-8 border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Clear Filters</button>
+            <span className="pb-1 text-xs text-slate-500">{filteredSummary.length.toLocaleString()} of {summary.length.toLocaleString()} FOs</span>
+            <datalist id="plan-feed-total-search-suggestions">{totalSuggestions.map((value) => <option key={value} value={value} />)}</datalist>
           </div>
+          {totalFiltersOpen ? (
+            <div className="mb-3 grid gap-2 border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-4">
+              {totalColumns.map((column) => {
+                const listId = `plan-feed-total-${column.key}-suggestions`;
+                return <label key={column.key} className="grid gap-1 text-[11px] font-medium text-slate-600">
+                  {column.label}
+                  <input value={totalColumnFilters[column.key] ?? ""} onChange={(event) => setTotalColumnFilters((filters) => ({ ...filters, [column.key]: event.target.value }))} list={listId} placeholder={`Filter ${column.label}`} className="h-7 border border-slate-300 bg-white px-2 text-xs outline-none focus:border-sky-500" />
+                  <datalist id={listId}>{(totalSuggestionsByColumn[column.key] ?? []).map((value) => <option key={value} value={value} />)}</datalist>
+                </label>;
+              })}
+            </div>
+          ) : null}
           {summaryQ.isLoading ? (
             <p className="text-slate-400 text-sm py-6 text-center">Loading summary...</p>
           ) : summary.length === 0 ? (
@@ -1483,109 +1476,10 @@ export default function PlanFeedPage() {
           ) : filteredSummary.length === 0 ? (
             <p className="text-slate-400 text-sm py-6 text-center">No rows match this search.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse min-w-[1240px]">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-500 text-xs uppercase">
-                    <th className="text-left py-2 px-3 border-b">FO #</th>
-                    <th className="text-left py-2 px-3 border-b">Party</th>
-                    <th className="text-left py-2 px-3 border-b">Town</th>
-                    <th className="text-left py-2 px-3 border-b">SKU</th>
-                    <th className="text-left py-2 px-3 border-b">Ordered Stroke</th>
-                    <th className="text-right py-2 px-3 border-b">Ordered KG</th>
-                    <th className="text-right py-2 px-3 border-b">Pack Qty</th>
-                    <th className="text-right py-2 px-3 border-b">Mapped KG</th>
-                    <th className="text-left py-2 px-3 border-b">Mapped Batch No(s)</th>
-                    <th className="text-center py-2 px-3 border-b">Production</th>
-                    <th className="text-right py-2 px-3 border-b">Dispatched KG</th>
-                    <th className="text-center py-2 px-3 border-b">Dispatch</th>
-                    <th className="text-left py-2 px-3 border-b">DO Number</th>
-                    <th className="text-left py-2 px-3 border-b">DO Date</th>
-                    <th className="text-left py-2 px-3 border-b">Tally Invoice No.</th>
-                    <th className="text-left py-2 px-3 border-b">Dispatch Date</th>
-                    <th className="text-right py-2 px-3 border-b">Pending KG</th>
-                    <th className="text-left py-2 px-3 border-b">Order Date</th>
-                    <th className="text-left py-2 px-3 border-b">Del Date</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredSummary.map(row => (
-                    <tr key={row.id ?? row.fo_number} className="border-b border-slate-100 hover:bg-sky-50">
-                      <td className="py-2 px-3 font-mono font-semibold text-sky-700">{row.fo_number}</td>
-                      <td className="py-2 px-3">{row.party_name}</td>
-                      <td className="py-2 px-3 text-slate-500">{row.party_town || ""}</td>
-                      <td className="py-2 px-3 font-mono text-slate-600">{row.sku}</td>
-                      <td className="py-2 px-3 font-mono">
-                        {row.ordered_stroke_number || "--"}
-                        {row.ordered_stroke_missing && (
-                          <span className="ml-1 inline-flex rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-rose-800" title="Not in Stroke Master yet">
-                            Not in Stroke Master
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono">{fmt(row.ordered_qty_kg)}</td>
-                      <td className="py-2 px-3 text-right font-mono">{row.pack_qty ?? "--"}</td>
-                      <td className="py-2 px-3 text-right font-mono">{fmt(row.allocated_qty_kg)}</td>
-                      <td className="py-2 px-3 font-mono text-xs text-slate-600">
-                        {normalizeFoCustomerType(row.fo_customer_type) === "MTEST" ? (
-                          (row.mapped_batch_details ?? []).length > 0
-                            ? row.mapped_batch_details.map((info) => {
-                              const suffix = [info.prodshade_name, info.stroke_number].filter(Boolean).join(" — ");
-                              return (
-                                <div key={info.batch_number}>
-                                  {info.batch_number}
-                                  {suffix ? <span className="text-slate-400"> — {suffix}</span> : null}
-                                </div>
-                              );
-                            })
-                            : ""
-                        ) : (
-                          (row.mapped_batch_numbers ?? []).length > 0
-                            ? row.mapped_batch_numbers.map((batchNo) => (
-                              <div key={batchNo}>{batchNo}</div>
-                            ))
-                            : ""
-                        )}
-                      </td>
-                      <td className="py-2 px-3 text-center">
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${productionStatusTone(row.production_status)}`}>
-                          {row.production_status?.replace("_", " ")}
-                        </span>
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono text-emerald-700">{fmt(row.dispatched_qty_kg)}</td>
-                      <td className="py-2 px-3 text-center">
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${dispatchStatusTone(row.dispatch_status)}`}>
-                          {row.dispatch_status?.replace("_", " ")}
-                        </span>
-                      </td>
-                      <td className="py-2 px-3 font-mono text-xs text-slate-600">
-                        {(row.delivery_orders ?? []).length > 0
-                          ? row.delivery_orders.map((deliveryOrder) => <div key={deliveryOrder.dc_number}>{deliveryOrder.dc_number}</div>)
-                          : "--"}
-                      </td>
-                      <td className="py-2 px-3 text-xs text-slate-500">
-                        {(row.delivery_orders ?? []).length > 0
-                          ? row.delivery_orders.map((deliveryOrder) => <div key={deliveryOrder.dc_number}>{deliveryOrder.dc_date || "--"}</div>)
-                          : "--"}
-                      </td>
-                      <td className="py-2 px-3 font-mono text-xs text-slate-600">
-                        {(row.tally_invoice_numbers ?? []).length > 0
-                          ? row.tally_invoice_numbers.map((invoiceNumber) => <div key={invoiceNumber}>{invoiceNumber}</div>)
-                          : "--"}
-                      </td>
-                      <td className="py-2 px-3 text-xs text-slate-500">
-                        {(row.dispatch_dates ?? []).length > 0
-                          ? row.dispatch_dates.map((date) => <div key={date}>{date}</div>)
-                          : "--"}
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono text-amber-700">{fmt(row.pending_dispatch_kg)}</td>
-                      <td className="py-2 px-3 text-slate-500 text-xs">{row.order_date ?? "--"}</td>
-                      <td className="py-2 px-3 text-slate-400 text-xs">{row.scheduled_delivery_date ?? "--"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <p className="mb-2 text-xs text-slate-500">Arrow keys move cell-to-cell. Shift+Click, click-drag, or Shift+Arrow selects a range; Ctrl+C copies it like Excel.</p>
+              <ErpDenseGrid columns={totalColumns} rows={filteredSummary} rowKey={(row) => row.id ?? row.fo_number} virtualize rangeSelect stickyFirstColumn maxHeight="calc(100vh - 290px)" emptyMessage="No FOs matched the selected filters." />
+            </>
           )}
         </ErpSectionCard>
       )}

@@ -35,6 +35,7 @@ import {
   listSoForMap,
   saveSoMapGroup,
   releaseSoMapGroup,
+  unmapSoAllocation,
 } from "../procurementApi.js";
 
 function StatusPill({ status }) {
@@ -148,10 +149,9 @@ function MapDrawer({ so, onClose, onChanged }) {
   }
 
   async function handleEditGroup(group) {
-    if (!group.map_group_id) { setActionError("This legacy mapping can only be released row by row."); return; }
     setSaving(true); setActionError("");
     try {
-      await releaseSoMapGroup(group.map_group_id);
+      await releaseExistingMapping(group);
       if (group.fo_id) chooseFo(group.fo_id);
       else if (group.customer_address_id) chooseAddress(group.customer_address_id);
       setDraftQtyByLine(Object.fromEntries(group.rows.map((row) => [row.so_line_id, getDisplayQty({ ...lines.find((line) => line.id === row.so_line_id), remaining_qty: row.allocated_qty })])));
@@ -159,6 +159,31 @@ function MapDrawer({ so, onClose, onChanged }) {
       await refresh(); onChanged();
     } catch (editError) { setActionError(editError instanceof Error ? editError.message : "SO_MAP_GROUP_EDIT_FAILED"); }
     finally { setSaving(false); }
+  }
+
+  async function releaseExistingMapping(group) {
+    if (group.map_group_id) {
+      await releaseSoMapGroup(group.map_group_id);
+      return;
+    }
+    const allocationId = group.rows?.[0]?.id;
+    if (!allocationId) throw new Error("SO_MAP_ALLOCATION_NOT_FOUND");
+    await unmapSoAllocation(allocationId);
+  }
+
+  async function handleUnmapGroup(group) {
+    const itemCount = group.rows?.length ?? 0;
+    if (!window.confirm(`Unmap ${itemCount} item${itemCount === 1 ? "" : "s"} from ${group.source_display || "this destination"}? This is blocked if a Delivery Order already uses the mapping.`)) return;
+    setSaving(true); setActionError("");
+    try {
+      await releaseExistingMapping(group);
+      await refresh();
+      onChanged();
+    } catch (unmapError) {
+      setActionError(unmapError instanceof Error ? unmapError.message : "SO_MAP_UNMAP_FAILED");
+    } finally {
+      setSaving(false);
+    }
   }
 
   const lines = detail?.lines ?? [];
@@ -239,6 +264,7 @@ function MapDrawer({ so, onClose, onChanged }) {
               {destinationMode === "DIRECT" ? <select value={selectedAddressId} onChange={(event) => chooseAddress(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-xs"><option value="">No FO: select Customer Address</option>{addressOptions.map((address) => <option key={address.id} value={address.id}>{address.site_name} — {address.town}, {address.state}</option>)}</select> : <p className="self-center text-xs text-slate-600">No FO required: the Page 2 Depot is the fixed Ship-To.</p>}
             </div>
             {selectedFo ? <p className="mt-3 text-xs text-slate-600">FO Ship-To: {selectedFoAddress ? [selectedFoAddress.site_name, selectedFoAddress.address_line, selectedFoAddress.town, selectedFoAddress.state].filter(Boolean).join(", ") : "Address will resolve from this FO."}</p> : null}
+            {selectedFo ? <div className="mt-3 overflow-x-auto border border-slate-300"><table className="w-full text-xs"><thead className="bg-slate-800 text-white"><tr><th className="p-2 text-left">Packing PO</th><th className="p-2 text-left">Batch</th><th className="p-2 text-left">Material</th><th className="p-2 text-right">Packs</th><th className="p-2 text-right">Qty / Pack</th><th className="p-2 text-right">FO-linked Volume</th><th className="p-2 text-right">Base Volume</th></tr></thead><tbody>{(selectedFo.packing_po_details ?? []).map((packingPo) => <tr key={packingPo.packing_order_id} className="border-t border-slate-200"><td className="p-2 font-mono">{packingPo.po_number || "-"}</td><td className="p-2 font-mono">{packingPo.batch_number || "-"}</td><td className="p-2">{packingPo.material_display || "-"}</td><td className="p-2 text-right">{Number(packingPo.num_packs ?? 0).toFixed(0)}</td><td className="p-2 text-right">{Number(packingPo.fill_qty_per_pack ?? 0).toFixed(4)}</td><td className="p-2 text-right">{Number(packingPo.allocated_qty_kg ?? 0).toFixed(4)} KG</td><td className="p-2 text-right">{Number(packingPo.actual_qty_kg ?? 0).toFixed(4)} KG</td></tr>)}</tbody></table>{(selectedFo.packing_po_details ?? []).length === 0 ? <p className="px-3 py-2 text-xs text-slate-500">No FINAL Packing PO is linked to this FO yet.</p> : null}</div> : null}
           </ErpSectionCard>
 
           {(selectedFoId || selectedAddressId || destinationMode === "DEPOT") ? <ErpSectionCard eyebrow="Step 2" title={`Items for ${activeDestinationLabel}`}>
@@ -261,8 +287,11 @@ function MapDrawer({ so, onClose, onChanged }) {
               columns={[
                 { key: "source", label: "Destination", width: "280px", render: (group) => group.source_display || "Mapping destination" },
                 { key: "qty", label: "Items / Qty", width: "140px", align: "right", render: (group) => `${group.rows.length} / ${group.rows.reduce((sum, row) => sum + Number(row.allocated_qty ?? 0), 0).toFixed(4)}` },
-                { key: "actions", label: "", width: "90px", render: (row) => (
-                  <button type="button" disabled={saving} onClick={() => void handleEditGroup(row)} className="border border-sky-300 bg-white px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-50">Edit</button>
+                { key: "actions", label: "", width: "150px", render: (row) => (
+                  <div className="flex justify-end gap-1">
+                    <button type="button" disabled={saving} onClick={() => void handleEditGroup(row)} className="border border-sky-300 bg-white px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-50">Edit</button>
+                    <button type="button" disabled={saving} onClick={() => void handleUnmapGroup(row)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">Unmap</button>
+                  </div>
                 ) },
               ]}
               rows={mappingGroups}

@@ -333,6 +333,7 @@ import {
   mapSoLineToCustomerAddressHandler,
   mapSoLineToDepotHandler,
   mapSoLineToFoHandler,
+  releaseLegacySoMapMappingHandler,
   releaseSoMapGroupHandler,
   saveSoMapGroupHandler,
   unmapSoAllocationHandler,
@@ -1251,6 +1252,9 @@ export async function dispatchProcurementRoutes(
   }
   if (/^\/api\/procurement\/so-map\/groups\/[^/]+\/release$/.test(pathname) && req.method === "POST") {
     return await releaseSoMapGroupHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/so-map\/[^/]+\/release$/.test(pathname) && req.method === "POST") {
+    return await releaseLegacySoMapMappingHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/sales-invoices\/[^/]+\/post$/.test(pathname) && req.method === "POST") {

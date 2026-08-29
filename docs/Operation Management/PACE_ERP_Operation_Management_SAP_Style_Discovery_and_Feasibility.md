@@ -21788,6 +21788,15 @@ SO Map-এর FO Number dropdown সরাসরি **`erp_production.plan_feed`
 তাই FO-র একটা running **remaining/unmapped balance** track করতে হবে; SO Map-এর FO dropdown এই
 balance অনুযায়ী filter হবে (company + status ছাড়াও)।
 
+**✅ Clarification (2026-08-29): FO Ship-To immutable.** Plan Feed-এ FO তৈরি হওয়ার সময় যে customer
+address map করা আছে, সেই FO-র সব quantity শুধু সেই address-এই যাবে; SO Map-এ FO quantity-কে অন্য
+address-এ ভাগ বা remap করা যাবে না। FO select করলে তার Ship-To read-only দেখাবে এবং তার linked
+Packing PO breakdown (PO Number, Batch Number, Num Packs, Qty per Pack, FO-linked Volume, Base
+Volume) দেখাবে, যাতে user FO-level mapping quantity ঠিক করার আগে বাস্তব production capacity দেখতে
+পান। SO Map নিজে Packing-PO-wise allocation lock করে না। FO-র unused balance পরে Plan Feed-এ
+Packing-PO allocation reduce/unmap করে অন্য FO-তে ব্যবহার বা reversal করা যায়, তবে live SO Map
+consumption-এর নিচে নামানো যাবে না.
+
 **✅ FIXED (2026-08-28, caught while starting the DO §133.12 design — re-reading this section
 first, per this session's own discipline, surfaced that the fix had been missed at SO Map build
 time despite being flagged here).** `plan_feed.handlers.ts`-এর `upsertFoAllocation()` (FO ↔
