@@ -177,6 +177,27 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
       .select("*").eq("so_id", soId).eq("status", "ACTIVE");
     if (allocError) return doErrorResponse(req, ctx, "DO_SO_MAP_ALLOCATION_FETCH_FAILED", 500, "Unable to load SO Map allocations.");
     const allocationRows = (allocations ?? []) as JsonRecord[];
+    // §133.9 Depot / No-Inbound-Depot: without an FO there is one already
+    // resolved destination, so no customer-address mapping is required.
+    if (toUpperTrimmedString((so as JsonRecord).bill_to_type) === "DEPOT" && allocationRows.length === 0) {
+      const drawnByLine = await computeDrawnQtyByColumn("so_line_id", lineRows.map((row) => String(row.id)));
+      const withRemaining = lineRows.map((row) => {
+        const total = Number(row.base_qty ?? row.quantity ?? 0);
+        const drawn = drawnByLine.get(String(row.id)) ?? 0;
+        return { ...row, source_kind: "SO_LINE_DEPOT", remaining_qty: Number((total - drawn).toFixed(6)) };
+      }).filter((row) => row.remaining_qty > QTY_TOL);
+      return okResponse({
+        dispatch_type: dispatchType,
+        mapping_required: false,
+        groups: [{
+          key: "depot",
+          label: "Depot Ship-To fixed on this SO",
+          bill_to_display: toTrimmedString((so as JsonRecord).bill_to_name) || null,
+          ship_to_display: toTrimmedString((so as JsonRecord).ship_to_name) || null,
+          lines: await attachMaterialDisplay(withRemaining),
+        }],
+      }, ctx.request_id, req);
+    }
     const drawnByAllocation = await computeDrawnQtyByColumn("so_map_allocation_id", allocationRows.map((row) => String(row.id)));
 
     const foIds = [...new Set(allocationRows.map((row) => toTrimmedString(row.fo_id)).filter(Boolean))];
@@ -494,6 +515,14 @@ type PreparedDoLine = {
   expiryDate: string | null;
   packingOrderId: string | null;
   uomCode: string;
+  unitValue: number;
+  gstRate: number;
+  gstAmount: number;
+  shipToCustomerId: string | null;
+  shipToName: string | null;
+  shipToAddress: string | null;
+  shipToState: string | null;
+  shipToGstNumber: string | null;
   sourceType: "SALES_ORDER" | "STO";
   sourceId: string;
 };
@@ -593,6 +622,7 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       let batchNumber: string | null = toTrimmedString(raw.batch_number) || null;
       let expiryDate: string | null = toTrimmedString(raw.expiry_date) || null;
       let packingOrderId: string | null = toTrimmedString(raw.packing_order_id) || null;
+      let salesSourceLine: JsonRecord | null = null;
 
       if (soMapAllocationId) {
         const allocation = allocationMap.get(soMapAllocationId);
@@ -600,6 +630,7 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         const sourceLine = soLineMap.get(toTrimmedString(allocation.so_line_id));
         if (!sourceLine) throw new Error("DO_SOURCE_LINE_NOT_FOUND");
         materialId = toTrimmedString(sourceLine.material_id);
+        salesSourceLine = sourceLine;
         uomCode = toTrimmedString(sourceLine.uom_code);
         remaining = Number(allocation.allocated_qty ?? 0) - (drawnByAllocation.get(soMapAllocationId) ?? 0);
         sourceType = "SALES_ORDER";
@@ -627,6 +658,7 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         const sourceLine = soLineMap.get(soLineId);
         if (!sourceLine) throw new Error("DO_SOURCE_LINE_NOT_FOUND");
         materialId = toTrimmedString(sourceLine.material_id);
+        salesSourceLine = sourceLine;
         uomCode = toTrimmedString(sourceLine.uom_code);
         remaining = Number(sourceLine.base_qty ?? sourceLine.quantity ?? 0) - (drawnBySoLine.get(soLineId) ?? 0);
         sourceType = "SALES_ORDER";
@@ -654,12 +686,27 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       }
 
       if (sourceType === "SALES_ORDER") soIdsForSources.add(sourceId); else stoIdsForSources.add(sourceId);
+      const rawRate = Number(salesSourceLine?.rate ?? 0);
+      const rateBasis = toUpperTrimmedString(salesSourceLine?.rate_basis);
+      const sourceBaseQty = Number(salesSourceLine?.base_qty ?? salesSourceLine?.quantity ?? 0);
+      const perPackQty = Number(salesSourceLine?.per_pack_qty ?? 0);
+      // All DO/Invoice figures are base-quantity based. Convert a Pack or
+      // fixed SO price to its proportional value before freezing this slice.
+      const unitValue = rateBasis === "PACK_UOM" && perPackQty > 0
+        ? rawRate / perPackQty
+        : rateBasis === "FIXED" && sourceBaseQty > 0
+          ? rawRate / sourceBaseQty
+          : rawRate;
+      const gstRate = Number(salesSourceLine?.gst_rate ?? 0);
+      const gstAmount = Number((unitValue * quantity * gstRate / 100).toFixed(4));
       prepared.push({
         materialId, quantity, storageLocationId,
         soLineId: soLineId || (soMapAllocationId ? toTrimmedString(allocationMap.get(soMapAllocationId)?.so_line_id) : null) || null,
         stoLineId: stoLineId || null,
         soMapAllocationId: soMapAllocationId || null,
-        batchNumber, expiryDate, packingOrderId, uomCode, sourceType, sourceId,
+        batchNumber, expiryDate, packingOrderId, uomCode, unitValue, gstRate, gstAmount,
+        shipToCustomerId: null, shipToName: null, shipToAddress: null, shipToState: null, shipToGstNumber: null,
+        sourceType, sourceId,
       });
     }
 
@@ -685,6 +732,45 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
     return { prepared, soIdsForSources, stoIdsForSources, netWeight, dcType };
 }
 
+async function freezeDoSalesShipTo(prepared: PreparedDoLine[]): Promise<void> {
+  for (const line of prepared) {
+    if (line.sourceType !== "SALES_ORDER") continue;
+    const { data: so, error: soError } = await serviceRoleClient.schema("erp_procurement").from("sales_order")
+      .select("customer_id, ship_to_name, ship_to_address, ship_to_state, ship_to_gst_number").eq("id", line.sourceId).single();
+    if (soError || !so) throw new Error("DO_SOURCE_SO_FETCH_FAILED");
+    line.shipToCustomerId = toTrimmedString((so as JsonRecord).customer_id) || null;
+    line.shipToName = toTrimmedString((so as JsonRecord).ship_to_name) || null;
+    line.shipToAddress = toTrimmedString((so as JsonRecord).ship_to_address) || null;
+    line.shipToState = toTrimmedString((so as JsonRecord).ship_to_state) || null;
+    line.shipToGstNumber = toTrimmedString((so as JsonRecord).ship_to_gst_number) || null;
+    if (!line.soMapAllocationId) continue;
+    const { data: allocation, error: allocationError } = await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+      .select("fo_id, customer_address_id").eq("id", line.soMapAllocationId).single();
+    if (allocationError || !allocation) throw new Error("DO_SO_MAP_ALLOCATION_NOT_FOUND");
+    let addressId = toTrimmedString((allocation as JsonRecord).customer_address_id);
+    const foId = toTrimmedString((allocation as JsonRecord).fo_id);
+    if (!addressId && foId) {
+      const { data: fo, error: foError } = await serviceRoleClient.schema("erp_production").from("plan_feed")
+        .select("customer_address_id").eq("id", foId).single();
+      if (foError || !fo) throw new Error("DO_FO_SHIP_TO_LOOKUP_FAILED");
+      addressId = toTrimmedString((fo as JsonRecord).customer_address_id);
+    }
+    if (!addressId) continue;
+    const { data: address, error: addressError } = await serviceRoleClient.schema("erp_master").from("customer_address")
+      .select("customer_id, site_name, address_line, town, state, pin_code").eq("id", addressId).single();
+    if (addressError || !address) throw new Error("DO_SHIP_TO_ADDRESS_LOOKUP_FAILED");
+    const customerId = toTrimmedString((address as JsonRecord).customer_id);
+    const { data: customer, error: customerError } = await serviceRoleClient.schema("erp_master").from("customer_master")
+      .select("customer_name, gst_number").eq("id", customerId).single();
+    if (customerError || !customer) throw new Error("DO_SHIP_TO_CUSTOMER_LOOKUP_FAILED");
+    line.shipToCustomerId = customerId;
+    line.shipToName = toTrimmedString((customer as JsonRecord).customer_name) || toTrimmedString((address as JsonRecord).site_name) || null;
+    line.shipToAddress = ["address_line", "town", "pin_code"].map((key) => toTrimmedString((address as JsonRecord)[key])).filter(Boolean).join(", ") || null;
+    line.shipToState = toTrimmedString((address as JsonRecord).state) || null;
+    line.shipToGstNumber = toTrimmedString((customer as JsonRecord).gst_number) || null;
+  }
+}
+
 // §133.12 Page 3 — Save. Header is created here; line validation is shared
 // with Edit via prepareAndValidateDoLines above.
 export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
@@ -705,6 +791,7 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
     }
 
     const { prepared, soIdsForSources, stoIdsForSources, netWeight, dcType } = await prepareAndValidateDoLines(companyId, rawLines);
+    await freezeDoSalesShipTo(prepared);
 
     const dcNumber = await generateProcurementDocNumber("DC");
     const { data: dc, error: dcError } = await serviceRoleClient
@@ -760,6 +847,15 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
           batch_number: line.batchNumber,
           expiry_date: line.expiryDate,
           packing_order_id: line.packingOrderId,
+          unit_value: line.unitValue,
+          gst_rate: line.gstRate,
+          gst_amount: line.gstAmount,
+          line_total: Number((line.quantity * line.unitValue + line.gstAmount).toFixed(4)),
+          ship_to_customer_id: line.shipToCustomerId,
+          ship_to_name: line.shipToName,
+          ship_to_address: line.shipToAddress,
+          ship_to_state: line.shipToState,
+          ship_to_gst_number: line.shipToGstNumber,
         })
         .select("id")
         .single();
@@ -1180,11 +1276,35 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
   const [stoLineRows, soLineRows, mapAllocRows] = await Promise.all([
     stoLineIds.length ? fetchInChunks<JsonRecord>(stoLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line").select("id, sto_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     soLineIds.length ? fetchInChunks<JsonRecord>(soLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, so_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
-    soMapAllocationIds.length ? fetchInChunks<JsonRecord>(soMapAllocationIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id, so_id, fo_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
+    soMapAllocationIds.length ? fetchInChunks<JsonRecord>(soMapAllocationIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id, so_id, fo_id, customer_address_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
   ]);
   const stoLineToSto = new Map(stoLineRows.map((r) => [String(r.id), toTrimmedString(r.sto_id)]));
   const soLineToSo = new Map(soLineRows.map((r) => [String(r.id), toTrimmedString(r.so_id)]));
-  const mapAllocMap = new Map(mapAllocRows.map((r) => [String(r.id), { soId: toTrimmedString(r.so_id), foId: toTrimmedString(r.fo_id) || null }]));
+  const foIdsForShipTo = [...new Set(mapAllocRows.map((r) => toTrimmedString(r.fo_id)).filter(Boolean))];
+  const { data: foShipToRows, error: foShipToError } = foIdsForShipTo.length
+    ? await serviceRoleClient.schema("erp_production").from("plan_feed").select("id, customer_address_id").in("id", foIdsForShipTo)
+    : { data: [] as JsonRecord[], error: null };
+  if (foShipToError) throw new Error("DO_FO_SHIP_TO_LOOKUP_FAILED");
+  const addressIdByFo = new Map(((foShipToRows ?? []) as JsonRecord[]).map((r) => [String(r.id), toTrimmedString(r.customer_address_id)]));
+  const mapAllocMap = new Map(mapAllocRows.map((r) => {
+    const foId = toTrimmedString(r.fo_id) || null;
+    return [String(r.id), {
+      soId: toTrimmedString(r.so_id), foId,
+      customerAddressId: toTrimmedString(r.customer_address_id) || (foId ? addressIdByFo.get(foId) || null : null),
+    }];
+  }));
+  const shipToAddressIds = [...new Set([...mapAllocMap.values()].map((r) => r.customerAddressId).filter(Boolean))];
+  const { data: shipToAddressRows, error: shipToAddressError } = shipToAddressIds.length
+    ? await serviceRoleClient.schema("erp_master").from("customer_address").select("id, customer_id, site_name, address_line, town, state, pin_code").in("id", shipToAddressIds)
+    : { data: [] as JsonRecord[], error: null };
+  if (shipToAddressError) throw new Error("DO_SHIP_TO_ADDRESS_LOOKUP_FAILED");
+  const shipToAddressMap = new Map(((shipToAddressRows ?? []) as JsonRecord[]).map((r) => [String(r.id), r]));
+  const shipToCustomerIds = [...new Set(((shipToAddressRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.customer_id)).filter(Boolean))];
+  const { data: shipToCustomerRows, error: shipToCustomerError } = shipToCustomerIds.length
+    ? await serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_name, gst_number").in("id", shipToCustomerIds)
+    : { data: [] as JsonRecord[], error: null };
+  if (shipToCustomerError) throw new Error("DO_SHIP_TO_CUSTOMER_LOOKUP_FAILED");
+  const shipToCustomerMap = new Map(((shipToCustomerRows ?? []) as JsonRecord[]).map((r) => [String(r.id), r]));
 
   const soIds = new Set<string>();
   const stoIds = new Set<string>();
@@ -1335,6 +1455,31 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
         state: soRow ? (toTrimmedString(soRow.ship_to_state) || null) : null,
         gst_number: soRow ? (toTrimmedString(soRow.ship_to_gst_number) || null) : null,
       };
+      const allocationId = toTrimmedString(bucket.lines[0]?.so_map_allocation_id);
+      const mappedAddressId = allocationId ? mapAllocMap.get(allocationId)?.customerAddressId : null;
+      const mappedAddress = mappedAddressId ? shipToAddressMap.get(mappedAddressId) : null;
+      if (mappedAddress) {
+        const mappedCustomer = shipToCustomerMap.get(toTrimmedString(mappedAddress.customer_id));
+        const addressText = [mappedAddress.address_line, mappedAddress.town, mappedAddress.pin_code]
+          .map(toTrimmedString).filter(Boolean).join(", ") || null;
+        shipTo = {
+          name: toTrimmedString(mappedCustomer?.customer_name) || toTrimmedString(mappedAddress.site_name) || null,
+          address: addressText,
+          state: toTrimmedString(mappedAddress.state) || null,
+          gst_number: toTrimmedString(mappedCustomer?.gst_number) || null,
+        };
+      }
+      // The DO is the legal dispatch snapshot. Prefer its frozen consignee
+      // over any subsequently edited Plan Feed/MM04 address.
+      const dcShipTo = (bucket.lines[0] ?? {}) as JsonRecord;
+      if (toTrimmedString(dcShipTo.ship_to_state)) {
+        shipTo = {
+          name: toTrimmedString(dcShipTo.ship_to_name) || null,
+          address: toTrimmedString(dcShipTo.ship_to_address) || null,
+          state: toTrimmedString(dcShipTo.ship_to_state) || null,
+          gst_number: toTrimmedString(dcShipTo.ship_to_gst_number) || null,
+        };
+      }
     }
 
     const counterpartyStateName = shipTo.state;

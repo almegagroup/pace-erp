@@ -281,7 +281,7 @@ export default function PlanFeedPage() {
   const isMtestCreate = poTypeFilter === "MTEST";
 
   // A party can have multiple addresses/sites. The address is a Ship-To
-  // reference for the FO creator; Plan Feed itself does not store an address FK.
+  // reference for the FO creator and the final Direct-dispatch Ship-To.
   const [selectedAddressId, setSelectedAddressId] = useState("");
   const partyAddressesQ = useQuery({
     queryKey: ["plan-feed-party-addresses", form.party_id],
@@ -418,6 +418,7 @@ export default function PlanFeedPage() {
         company_id: effectiveCompanyId,
         fo_number: form.fo_number,
         party_id: form.party_id || undefined,
+        customer_address_id: selectedAddressId || undefined,
         party_name: selectedParty?.customer_name || form.party_name,
         material_id: form.material_id || undefined,
         sku: form.sku || undefined,

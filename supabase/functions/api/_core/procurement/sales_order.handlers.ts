@@ -2474,7 +2474,9 @@ export async function createSalesOrderUnifiedHandler(
         bill_to_state: resolved.billToState,
         bill_to_gst_number: resolved.billToGstNumber,
         billing_to_depot: resolved.billingToDepot,
-        ship_to_same_as_customer: resolved.shipTo?.ship_to_same_as_customer ?? null,
+        // Direct SOs resolve their final customer/Ship-To on SO Map. Until
+        // then they are explicitly not the same as a header customer.
+        ship_to_same_as_customer: resolved.shipTo?.ship_to_same_as_customer ?? false,
         ship_to_type: resolved.shipTo?.ship_to_type ?? null,
         ship_to_gst_number: resolved.shipTo?.ship_to_gst_number ?? null,
         ship_to_name: resolved.shipTo?.ship_to_name ?? null,
