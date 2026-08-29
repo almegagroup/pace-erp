@@ -338,11 +338,11 @@ async function fetchSo(soId: string): Promise<SoRow> {
   return data as SoRow;
 }
 
-function assertSoVisibleToContext(ctx: ProcurementHandlerContext, so: SoRow): void {
-  const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  if (scopedCompanyId && scopedCompanyId !== toTrimmedString(so.company_id)) {
-    throw new Error("SO_SCOPE_VIOLATION");
-  }
+async function assertSoVisibleToContext(ctx: ProcurementHandlerContext, so: SoRow): Promise<void> {
+  // An ACL-MASTER can hold active access to several companies. The old
+  // comparison only accepted the currently selected company, even though the
+  // shared scope guard correctly accepts every assigned company.
+  await assertCompanyScope(ctx, toTrimmedString(so.company_id));
 }
 
 async function fetchSoLines(soId: string): Promise<SoLineRow[]> {
@@ -363,7 +363,7 @@ async function fetchSoLines(soId: string): Promise<SoLineRow[]> {
 async function hydrateSo(soId: string, ctx?: ProcurementHandlerContext): Promise<JsonRecord> {
   const so = await fetchSo(soId);
   if (ctx) {
-    assertSoVisibleToContext(ctx, so);
+    await assertSoVisibleToContext(ctx, so);
   }
 
   const [linesResp, dcResp, gxoResp] = await Promise.all([
@@ -844,28 +844,101 @@ export async function listSOsHandler(
     }
 
     const rows = (data ?? []) as JsonRecord[];
-    const customerIds = [...new Set(rows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
+    const soIds = rows.map((row) => toTrimmedString(row.id)).filter(Boolean);
+    const headerCustomerIds = rows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean);
     const companyIds = [...new Set(rows.map((row) => toTrimmedString(row.company_id)).filter(Boolean))];
+    const parentCompanyIds = [...new Set(rows.map((row) => toTrimmedString(row.bill_to_parent_company_id)).filter(Boolean))];
+    const depotCodeIds = [...new Set(rows.flatMap((row) => [
+      toTrimmedString(row.bill_to_vdc_id),
+      toTrimmedString(row.bill_to_depot_code_id),
+    ]).filter(Boolean))];
 
-    const [customerResp, companyResp] = await Promise.all([
-      customerIds.length
-        ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)
+    // Direct SOs acquire their consignee only when SO Map is completed. Read
+    // both manual map addresses and FO-selected MM04 addresses so the register
+    // always shows the latest resolved customer and Ship-To address.
+    const { data: allocationRows, error: allocationError } = soIds.length
+      ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+        .select("so_id, customer_address_id, fo_id").in("so_id", soIds).eq("status", "ACTIVE")
+      : { data: [], error: null };
+    if (allocationError) return salesErrorResponse(req, ctx, "SO_LIST_ALLOCATION_LOOKUP_FAILED", 500, "Unable to load SO mapping details.");
+
+    const foIds = [...new Set(((allocationRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.fo_id)).filter(Boolean))];
+    const { data: foRows, error: foError } = foIds.length
+      ? await serviceRoleClient.schema("erp_production").from("plan_feed").select("id, customer_address_id").in("id", foIds)
+      : { data: [], error: null };
+    if (foError) return salesErrorResponse(req, ctx, "SO_LIST_FO_LOOKUP_FAILED", 500, "Unable to load SO mapping details.");
+    const foAddressById = new Map(((foRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.customer_address_id)]));
+
+    const mappedAddressIds = ((allocationRows ?? []) as JsonRecord[]).map((row) =>
+      toTrimmedString(row.customer_address_id) || foAddressById.get(toTrimmedString(row.fo_id)) || "",
+    ).filter(Boolean);
+    const addressIds = [...new Set(mappedAddressIds)];
+
+    const [addressResp, companyResp, parentResp, depotResp] = await Promise.all([
+      addressIds.length
+        ? serviceRoleClient.schema("erp_master").from("customer_address")
+          .select("id, customer_id, site_name, address_line, town, state, pin_code").in("id", addressIds)
         : Promise.resolve({ data: [] as JsonRecord[], error: null }),
       companyIds.length
         ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds)
         : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      parentCompanyIds.length
+        ? serviceRoleClient.schema("erp_master").from("fg_parent_company").select("id, company_name").in("id", parentCompanyIds)
+        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      depotCodeIds.length
+        ? serviceRoleClient.schema("erp_master").from("fg_depot_code").select("id, code, description, dispatch_type").in("id", depotCodeIds)
+        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
     ]);
+    if (addressResp.error || companyResp.error || parentResp.error || depotResp.error) {
+      return salesErrorResponse(req, ctx, "SO_LIST_DISPLAY_LOOKUP_FAILED", 500, "Unable to load SO register details.");
+    }
 
-    const customerMap = new Map(((customerResp.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
-    const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+    const addressRows = (addressResp.data ?? []) as JsonRecord[];
+    const customerIds = [...new Set([...headerCustomerIds, ...addressRows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean)])];
+    const { data: customerRows, error: customerError } = customerIds.length
+      ? await serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)
+      : { data: [], error: null };
+    if (customerError) return salesErrorResponse(req, ctx, "SO_LIST_CUSTOMER_LOOKUP_FAILED", 500, "Unable to load SO customer details.");
+
+    const customerMap = new Map(((customerRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const parentMap = new Map(((parentResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const depotMap = new Map(((depotResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const addressMap = new Map(addressRows.map((row) => [toTrimmedString(row.id), row]));
+    const mappedAddressesBySoId = new Map<string, JsonRecord[]>();
+    for (const allocation of (allocationRows ?? []) as JsonRecord[]) {
+      const addressId = toTrimmedString(allocation.customer_address_id) || foAddressById.get(toTrimmedString(allocation.fo_id)) || "";
+      const address = addressMap.get(addressId);
+      const soId = toTrimmedString(allocation.so_id);
+      if (address && soId) mappedAddressesBySoId.set(soId, [...(mappedAddressesBySoId.get(soId) ?? []), address]);
+    }
+
+    const formatAddress = (address: JsonRecord): string => [
+      toTrimmedString(address.site_name), toTrimmedString(address.address_line), toTrimmedString(address.town),
+      toTrimmedString(address.state), toTrimmedString(address.pin_code),
+    ].filter(Boolean).join(", ");
+    const formatCustomer = (customer: JsonRecord | undefined): string => customer
+      ? `${toTrimmedString(customer.customer_code)}${customer.customer_code ? " - " : ""}${toTrimmedString(customer.customer_name)}`.trim()
+      : "";
 
     const items = rows.map((row) => {
       const customer = customerMap.get(toTrimmedString(row.customer_id));
       const company = companyMap.get(toTrimmedString(row.company_id));
+      const mappedAddresses = mappedAddressesBySoId.get(toTrimmedString(row.id)) ?? [];
+      const mappedConsignees = [...new Set(mappedAddresses.map((address) => {
+        const mappedCustomer = customerMap.get(toTrimmedString(address.customer_id));
+        return [formatCustomer(mappedCustomer), formatAddress(address)].filter(Boolean).join(" | ");
+      }).filter(Boolean))];
+      const headerShipTo = [toTrimmedString(row.ship_to_name), toTrimmedString(row.ship_to_address)].filter(Boolean).join(" | ");
+      const parent = parentMap.get(toTrimmedString(row.bill_to_parent_company_id));
+      const depot = depotMap.get(toTrimmedString(row.bill_to_vdc_id)) ?? depotMap.get(toTrimmedString(row.bill_to_depot_code_id));
       return {
         ...row,
-        customer_display: customer ? `${customer.customer_code ?? ""} — ${customer.customer_name ?? ""}`.trim() : null,
+        customer_display: formatCustomer(customer) || (mappedConsignees.length === 1 ? mappedConsignees[0].split(" | ")[0] : null),
+        ship_to_display: headerShipTo || mappedConsignees.join("; ") || null,
         company_display: company ? String(company.company_name ?? company.company_code ?? "") : null,
+        parent_company_display: toTrimmedString(parent?.company_name) || toTrimmedString(row.bill_to_name) || null,
+        depot_code_display: depot ? [toTrimmedString(depot.code), toTrimmedString(depot.description)].filter(Boolean).join(" - ") : null,
       };
     });
 
@@ -2146,6 +2219,9 @@ async function prepareUnifiedSoLine(
       rate_basis: rateBasis,
       uom_code: toTrimmedString(line.uom_code) || null,
       rate,
+      // The legacy SO-line schema still requires net_rate. Unified SO01 has
+      // no line discount input, so its net rate is the entered rate.
+      net_rate: rate,
       currency_code: currencyCode,
       gst_treatment: gstTreatment,
       gst_rate: gstRate,
@@ -2504,6 +2580,10 @@ export async function createSalesOrderUnifiedHandler(
       .insert(lineInsertPayload);
 
     if (lineError) {
+      console.error("[createSalesOrderUnifiedHandler] sales order line insert failed", {
+        request_id: ctx.request_id,
+        error: lineError,
+      });
       return salesErrorResponse(req, ctx, "SO_LINE_CREATE_FAILED", 500, "Unable to create sales order lines.");
     }
 
