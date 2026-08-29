@@ -171,7 +171,9 @@ export async function listPlanFeedHandler(req: Request, ctx: ProdHandlerContext)
     // was already fetched (per_page: 50 from the frontend) -- a real match
     // outside that page silently looked like "not found" (found live
     // 2026-08-27). Now filters server-side, across the whole company.
-    if (search) query = (query as unknown as { or: (filters: string) => typeof query }).or(`fo_number.ilike.%${search}%,party_name.ilike.%${search}%`);
+    if (search) query = (query as unknown as { or: (filters: string) => typeof query }).or(
+      `fo_number.ilike.%${search}%,party_name.ilike.%${search}%,sku.ilike.%${search}%,description.ilike.%${search}%`,
+    );
 
     const { data, error, count } = await ((query as typeof query & {
       range: (from: number, to: number) => typeof query;
@@ -957,9 +959,13 @@ async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOn
 
     const { data: po, error: poErrRes } = await serviceRoleClient
       .schema("erp_production").from("packing_order")
-      .select("id, status, material_id, actual_qty_kg, planned_qty_kg")
+      .select("id, company_id, status, material_id, actual_qty_kg, planned_qty_kg")
       .eq("id", packingOrderId).maybeSingle();
     if (poErrRes || !po) return foErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing PO not found");
+    if (toTrimmedString((po as JsonRecord).company_id) !== toTrimmedString((fo as JsonRecord).company_id)) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_PACKING_PO_COMPANY_MISMATCH", 422,
+        "Packing PO must belong to the same company as this FO.");
+    }
     const requestedItemId = toTrimmedString(body.plan_feed_item_id);
     if (!requestedItemId && requestedQty > 0) {
       return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_REQUIRED", 400, "Select the FO item that this Packing PO fulfills.");
@@ -975,8 +981,25 @@ async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOn
       return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_MATERIAL_MISMATCH", 409,
         "Packing PO SKU differs from the selected FO item — confirm the mismatch to allocate.");
     }
-    if (["REVERSED", "CANCELLED"].includes(toUpperTrimmedString((po as JsonRecord).status))) {
-      return foErr(req, ctx, "PROD_PACK_REVERSED", 422, "Cannot allocate a reversed/cancelled Packing PO");
+    if (toUpperTrimmedString((po as JsonRecord).status) !== "FINAL") {
+      return foErr(req, ctx, "PROD_PLAN_FEED_PACKING_PO_NOT_FINAL", 422,
+        "Only a FINAL Packing PO can be allocated to an FO.");
+    }
+
+    if (selectedItem) {
+      const { data: itemAllocations, error: itemAllocationError } = await serviceRoleClient
+        .schema("erp_production").from("plan_feed_packing_order_allocation")
+        .select("packing_order_id, allocated_qty_kg")
+        .eq("plan_feed_item_id", requestedItemId);
+      if (itemAllocationError) throw new Error("PROD_PLAN_FEED_ALLOCATION_FETCH_FAILED");
+      const itemAllocatedElsewhere = ((itemAllocations ?? []) as JsonRecord[])
+        .filter((row) => String(row.packing_order_id) !== packingOrderId)
+        .reduce((sum, row) => sum + (Number(row.allocated_qty_kg) || 0), 0);
+      const itemOrderedQty = Number((selectedItem as JsonRecord).ordered_qty_kg) || 0;
+      if (itemAllocatedElsewhere + Math.max(0, requestedQty) > itemOrderedQty + QTY_TOL) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_ALLOCATION_EXCEEDS_ORDERED", 422,
+          `Allocation exceeds the selected FO item's ordered quantity (${itemOrderedQty} KG).`);
+      }
     }
 
     // §133.9 floor check — this FO's total Packing-PO-linked qty (across
