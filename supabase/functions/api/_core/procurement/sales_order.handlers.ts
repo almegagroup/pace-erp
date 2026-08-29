@@ -777,6 +777,10 @@ export async function createSOHandler(
       .single();
 
     if (soError || !so) {
+      console.error("[createSalesOrderHandler] sales order insert failed", {
+        request_id: ctx.request_id,
+        error: soError,
+      });
       return salesErrorResponse(req, ctx, "SO_CREATE_FAILED", 500, "Unable to create sales order.");
     }
 
@@ -2484,6 +2488,10 @@ export async function createSalesOrderUnifiedHandler(
       .single();
 
     if (soError || !so) {
+      console.error("[createSalesOrderUnifiedHandler] sales order insert failed", {
+        request_id: ctx.request_id,
+        error: soError,
+      });
       return salesErrorResponse(req, ctx, "SO_CREATE_FAILED", 500, "Unable to create sales order.");
     }
 
