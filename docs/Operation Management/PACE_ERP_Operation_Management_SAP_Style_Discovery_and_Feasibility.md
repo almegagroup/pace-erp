@@ -21907,8 +21907,11 @@ Click করলে ২টা বাটন: **Add SO** / **Add STO**
 4. **RM/PM/INT/SFG:** Batch Number (manual entry/blank), Expiry Date শুধু RM/PM/INT-এ
    (manual/blank), item remove/qty-adjust করা যায়। ভুল করে remove হলে "Add Item" দিয়ে সেই
    SO-Customer-এর mapped list থেকে আবার বেছে নেওয়া যায়, বাকি data auto আসে
-5. **FG (MTO/HPS/MTEST, FO-linked):** Batch Number + Packing PO Number auto দেখাবে (FO-এর সাথে
-   already linked বলে) — pack_code অনুযায়ী Num Packs/Volume editable, কিন্তু **Mapped-এর বেশি না**
+5. **FG (MTO/HPS/MTEST, FO-linked):** একাধিক Packing PO থাকলে user নিজে ঠিক করবেন এই Ship-To
+   line-এর জন্য কোন Packing PO(s) থেকে কত যাবে; নির্বাচিত Packing PO-এর **Batch Number read-only
+   auto-carry** হবে। অর্থাৎ system batch/PO FIFO বা address-wise auto-assign করবে না। pack_code
+   অনুযায়ী Num Packs/Volume editable, কিন্তু নির্বাচিত Packing PO এবং SO Map allocation-এর
+   balance-এর বেশি না
 6. আরও SO যোগ করা যায় একইভাবে, repeat
 
 **Add STO:** STO Number দিলে address/company details/item list আসে, একই remove/edit সুবিধা
