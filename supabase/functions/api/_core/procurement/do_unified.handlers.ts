@@ -592,7 +592,7 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         : Promise.resolve([] as JsonRecord[]),
       submittedPkoIds.length
         ? fetchInChunks<JsonRecord>(submittedPkoIds, (chunk) => serviceRoleClient.schema("erp_production").from("packing_order")
-            .select("id, material_id, batch_number, actual_qty_kg, status").in("id", chunk))
+            .select("id, actual_qty_kg, status").in("id", chunk))
         : Promise.resolve([] as JsonRecord[]),
       computeDrawnQtyByColumn("packing_order_id", submittedPkoIds),
     ]);
@@ -601,7 +601,6 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       String(row.id),
       toUpperTrimmedString(row.status) === "FINAL" ? Number(row.actual_qty_kg ?? 0) - (drawnByPko.get(String(row.id)) ?? 0) : 0,
     ]));
-    const pkoById = new Map(pkoRowsForValidation.map((row) => [String(row.id), row]));
     const pkoUsedInThisSubmission = new Map<string, number>();
 
     // SO ids referenced (directly or via an allocation) + STO ids, for the
@@ -657,21 +656,12 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
           if (!foId || !validFoPkoPairSet.has(`${foId}:${packingOrderId}`)) {
             throw new Error("DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO");
           }
-          const packingOrder = pkoById.get(packingOrderId);
-          if (!packingOrder || toTrimmedString(packingOrder.material_id) !== materialId) {
-            throw new Error("DO_PACKING_ORDER_MATERIAL_MISMATCH");
-          }
-          const packingOrderBatch = toTrimmedString(packingOrder.batch_number);
-          if (!packingOrderBatch) throw new Error("DO_PACKING_ORDER_BATCH_MISSING");
           const alreadyUsed = pkoUsedInThisSubmission.get(packingOrderId) ?? 0;
           const pkoRemaining = (pkoRemainingMap.get(packingOrderId) ?? 0) - alreadyUsed;
           if (pkoRemaining < quantity - QTY_TOL) {
             throw new Error("DO_PACKING_ORDER_INSUFFICIENT_BALANCE");
           }
           pkoUsedInThisSubmission.set(packingOrderId, alreadyUsed + quantity);
-          // The chosen Packing PO owns its Process-PO batch. Never accept a
-          // client-provided batch for an FO-linked dispatch line.
-          batchNumber = packingOrderBatch;
         }
       } else if (soLineId) {
         const sourceLine = soLineMap.get(soLineId);
@@ -906,7 +896,7 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_CREATE_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403
-      : ["DO_QTY_EXCEEDS_BALANCE", "INSUFFICIENT_STOCK", "DO_CREATE_INVALID", "DO_LINE_INVALID", "DO_LINE_SOURCE_MISSING", "DO_SOURCE_COMPANY_MISMATCH", "DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO", "DO_PACKING_ORDER_MATERIAL_MISMATCH", "DO_PACKING_ORDER_BATCH_MISSING", "DO_PACKING_ORDER_INSUFFICIENT_BALANCE"].includes(code) ? 400
+      : ["DO_QTY_EXCEEDS_BALANCE", "INSUFFICIENT_STOCK", "DO_CREATE_INVALID", "DO_LINE_INVALID", "DO_LINE_SOURCE_MISSING", "DO_SOURCE_COMPANY_MISMATCH", "DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO", "DO_PACKING_ORDER_INSUFFICIENT_BALANCE"].includes(code) ? 400
       : code.includes("NOT_FOUND") ? 404
       : 500;
     return doErrorResponse(req, ctx, code, status, code);
@@ -1052,7 +1042,7 @@ export async function updateDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
     const code = error instanceof Error ? error.message : "DO_EDIT_FAILED";
     const status = code === "DO_NOT_FOUND" ? 404
       : code === "COMPANY_SCOPE_VIOLATION" ? 403
-      : ["DO_QTY_EXCEEDS_BALANCE", "INSUFFICIENT_STOCK", "DO_EDIT_INVALID", "DO_LINE_INVALID", "DO_LINE_SOURCE_MISSING", "DO_SOURCE_COMPANY_MISMATCH", "DO_EDIT_BLOCKED", "DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO", "DO_PACKING_ORDER_MATERIAL_MISMATCH", "DO_PACKING_ORDER_BATCH_MISSING", "DO_PACKING_ORDER_INSUFFICIENT_BALANCE"].includes(code) ? 400
+      : ["DO_QTY_EXCEEDS_BALANCE", "INSUFFICIENT_STOCK", "DO_EDIT_INVALID", "DO_LINE_INVALID", "DO_LINE_SOURCE_MISSING", "DO_SOURCE_COMPANY_MISMATCH", "DO_EDIT_BLOCKED", "DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO", "DO_PACKING_ORDER_INSUFFICIENT_BALANCE"].includes(code) ? 400
       : code.includes("NOT_FOUND") ? 404
       : 500;
     return doErrorResponse(req, ctx, code, status, code);

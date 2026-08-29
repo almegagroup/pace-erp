@@ -275,12 +275,11 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, onClose, onAdd }) {
     const edit = editFor(line);
     const isFgWithPack = line.line_material_type === "FG" && toNumber(line.per_pack_qty) > 0;
     const packingPoOptions = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
-    let selectedPko = null;
     let qty = isFgWithPack ? Number((toNumber(edit.num_packs) * toNumber(line.per_pack_qty)).toFixed(6)) : toNumber(edit.qty);
     let maxQty = toNumber(line.remaining_qty);
     if (packingPoOptions.length > 0) {
       if (!edit.packing_order_id) return; // must pick a Packing PO before adding
-      selectedPko = packingPoOptions.find((option) => option.packing_order_id === edit.packing_order_id);
+      const selectedPko = packingPoOptions.find((option) => option.packing_order_id === edit.packing_order_id);
       if (!selectedPko) return;
       maxQty = Math.min(maxQty, toNumber(selectedPko.remaining_qty));
     }
@@ -298,9 +297,10 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, onClose, onAdd }) {
       material_display: line.material_display,
       line_material_type: line.line_material_type,
       fg_type: line.fg_type ?? null,
-      // FG/SFG batch traceability follows the PO deliberately chosen for
-      // this Ship-To line. RM/PM/INT remain manual/blank by design.
-      batch_number: selectedPko?.batch_number ?? (DO01_MERGEABLE_TYPES.has(line.line_material_type) ? (edit.batch_number || null) : (line.batch_number ?? null)),
+      // §133.12 point 4 — RM/PM/INT: whatever the user typed here (manual,
+      // blank allowed). FG/SFG: whatever the source line already carries
+      // (auto, FO-linked) — never user-editable for those types.
+      batch_number: DO01_MERGEABLE_TYPES.has(line.line_material_type) ? (edit.batch_number || null) : (line.batch_number ?? null),
       expiry_date: DO01_MERGEABLE_TYPES.has(line.line_material_type) ? (edit.expiry_date || null) : (line.expiry_date ?? null),
       // §133.18 — manual Packing PO choice when the FO has more than one;
       // falls back to whatever the source line already carried (STO/direct
@@ -363,11 +363,7 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, onClose, onAdd }) {
                       label: "Batch Number",
                       width: "130px",
                       render: (line) => {
-                        if (!DO01_MERGEABLE_TYPES.has(line.line_material_type)) {
-                          const options = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
-                          const selectedPko = options.find((option) => option.packing_order_id === editFor(line).packing_order_id);
-                          return selectedPko?.batch_number || (options.length > 1 ? "Select Packing PO" : line.batch_number || "-");
-                        }
+                        if (!DO01_MERGEABLE_TYPES.has(line.line_material_type)) return line.batch_number || "-";
                         return (
                           <input value={editFor(line).batch_number} onChange={(event) => updateEdit(line.id, { batch_number: event.target.value })} placeholder="Optional" className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
                         );
