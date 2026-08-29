@@ -96,6 +96,12 @@ import {
   listStrokeOptionsHandler,
   findPlanFeedByNumberHandler,
   listMtestSkusHandler,
+  addPlanFeedItemHandler,
+  updatePlanFeedItemHandler,
+  deletePlanFeedItemHandler,
+  addMtestPlanFeedItemHandler,
+  updateMtestPlanFeedItemHandler,
+  deleteMtestPlanFeedItemHandler,
 } from "../_core/production/plan_feed.handlers.ts";
 import {
   listProcessOrdersHandler,
@@ -442,6 +448,20 @@ export async function dispatchProductionRoutes(
   }
 
   // Plan Feed /:id actions
+  if (/^\/api\/production\/plan-feed\/[^/]+\/items-mtest$/.test(pathname) && req.method === "POST") {
+    return await addMtestPlanFeedItemHandler(req, ctx);
+  }
+  if (/^\/api\/production\/plan-feed\/[^/]+\/items-mtest\/[^/]+$/.test(pathname)) {
+    if (req.method === "PATCH") return await updateMtestPlanFeedItemHandler(req, ctx);
+    if (req.method === "DELETE") return await deleteMtestPlanFeedItemHandler(req, ctx);
+  }
+  if (/^\/api\/production\/plan-feed\/[^/]+\/items$/.test(pathname) && req.method === "POST") {
+    return await addPlanFeedItemHandler(req, ctx);
+  }
+  if (/^\/api\/production\/plan-feed\/[^/]+\/items\/[^/]+$/.test(pathname)) {
+    if (req.method === "PATCH") return await updatePlanFeedItemHandler(req, ctx);
+    if (req.method === "DELETE") return await deletePlanFeedItemHandler(req, ctx);
+  }
   if (/^\/api\/production\/plan-feed\/[^/]+$/.test(pathname)) {
     if (req.method === "GET") return await getPlanFeedHandler(req, ctx);
     if (req.method === "PATCH") return await updatePlanFeedHandler(req, ctx);

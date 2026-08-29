@@ -1444,6 +1444,28 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROD_STROKE_APPROVAL", action: "APPROVE" } },
   },
   {
+    pattern: /^\/api\/production\/plan-feed\/[^/]+\/items$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/plan-feed\/[^/]+\/items\/[^/]+$/,
+    methods: {
+      PATCH:  { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "EDIT" },
+      DELETE: { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/production\/plan-feed\/[^/]+\/items-mtest$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_MTEST_PLAN_FEED", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/plan-feed\/[^/]+\/items-mtest\/[^/]+$/,
+    methods: {
+      PATCH:  { skipAcl: false, resourceCode: "PROD_MTEST_PLAN_FEED", action: "EDIT" },
+      DELETE: { skipAcl: false, resourceCode: "PROD_MTEST_PLAN_FEED", action: "EDIT" },
+    },
+  },
+  {
     pattern: /^\/api\/production\/plan-feed\/[^/]+$/,
     methods: {
       GET:   { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },

@@ -24,7 +24,8 @@ import {
   cancelPlanFeed, reactivatePlanFeed, getPlanFeedSummary, upsertFoAllocation,
   upsertMtestFoAllocation, getMtestPlanFeedCapability,
   getUnmappedStock, checkOrderedStroke, listStrokeOptions, listPackingOrders,
-  findPlanFeedByNumber, listMtestSkus,
+  findPlanFeedByNumber, listMtestSkus, addPlanFeedItem, updatePlanFeedItem, deletePlanFeedItem,
+  addMtestPlanFeedItem, updateMtestPlanFeedItem, deleteMtestPlanFeedItem,
 } from "./prodApi.js";
 import { createCustomerAddress, listMaterials, listCustomers, updateCustomer, listCustomerAddresses } from "../om/omApi.js";
 
@@ -53,6 +54,11 @@ const ERRORS = {
   PROD_PLAN_FEED_CANCELLED: "Cancelled FO cannot be edited.",
   PROD_PLAN_FEED_ALLOCATION_EXCEEDS_STOCK: "Allocation exceeds this Packing PO's available qty.",
   PROD_PLAN_FEED_MATERIAL_MISMATCH: "Packing PO material differs from this FO's SKU.",
+  PROD_PLAN_FEED_ITEM_MATERIAL_MISMATCH: "Packing PO material differs from the selected FO item.",
+  PROD_PLAN_FEED_ITEM_REQUIRED: "Select the FO item this Packing PO fulfills.",
+  PROD_PLAN_FEED_ITEM_IN_USE: "Release the linked Packing PO and SO Map allocations before deleting this item.",
+  PROD_PLAN_FEED_ITEM_LAST_DELETE_BLOCKED: "An FO must retain at least one item line.",
+  PROD_PLAN_FEED_ITEM_QTY_BELOW_COMMITTED: "Item quantity cannot be reduced below its committed Packing PO or SO Map quantity.",
   PROD_PLAN_FEED_CANCEL_BLOCKED_BY_DO: "Cancel the linked Delivery Order first, then cancel this FO.",
   PROD_PACK_NOT_FOUND: "Packing PO not found.",
   PROD_PACK_REVERSED: "Cannot allocate a reversed/cancelled Packing PO.",
@@ -185,10 +191,18 @@ function dispatchStatusTone(status) {
   }
 }
 
-const EMPTY_FO = {
-  fo_number: "", party_id: "", party_name: "", material_id: "", sku: "", description: "",
-  ordered_qty_kg: "", pack_qty: "", order_date: "", scheduled_delivery_date: "", ordered_stroke_number: "",
-};
+function localIsoDate() {
+  const now = new Date();
+  const offsetMs = now.getTimezoneOffset() * 60 * 1000;
+  return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
+}
+
+function emptyFo() {
+  return {
+    fo_number: "", party_id: "", party_name: "", material_id: "", sku: "", description: "",
+    ordered_qty_kg: "", pack_qty: "", order_date: localIsoDate(), scheduled_delivery_date: "", ordered_stroke_number: "",
+  };
+}
 
 export default function PlanFeedPage() {
   const qc = useQueryClient();
@@ -267,7 +281,7 @@ export default function PlanFeedPage() {
   const customerMap = useMemo(() => new Map(normalizedCustomers.map((c) => [c.id, c])), [normalizedCustomers]);
 
   // ── Create tab state ──────────────────────────────────────────────────────
-  const [form, setForm] = useState({ ...EMPTY_FO });
+  const [form, setForm] = useState(emptyFo);
   const [newPartyOpen, setNewPartyOpen] = useState(false);
   const [editPartyOpen, setEditPartyOpen] = useState(false);
   const [addressPickerOpen, setAddressPickerOpen] = useState(false);
@@ -430,7 +444,7 @@ export default function PlanFeedPage() {
         ordered_stroke_number: form.ordered_stroke_number || undefined,
       });
       toast("FO created successfully.");
-      setForm({ ...EMPTY_FO });
+      setForm(emptyFo());
       // Every other mutation on this page invalidates these two -- this was
       // the one place that never did, so a freshly created FO stayed invisible
       // on the Edit FO list / Total Table until an unrelated refetch happened
@@ -460,6 +474,9 @@ export default function PlanFeedPage() {
   const [allocQty, setAllocQty] = useState("");
   const [allocNumPacks, setAllocNumPacks] = useState("");
   const [allocSearching, setAllocSearching] = useState(false);
+  const [newFoItem, setNewFoItem] = useState({ material_id: "", sku: "", description: "", ordered_qty_kg: "", pack_qty: "" });
+  const [itemDrafts, setItemDrafts] = useState({});
+  const [allocationItemId, setAllocationItemId] = useState("");
 
   // The search box only ever filtered whatever was already fetched (a fixed
   // 50-row page, most-recent-first) -- a real match sitting outside that page
@@ -492,6 +509,14 @@ export default function PlanFeedPage() {
   const canEditMtestPlanFeed = planFeedCapabilityQ.data?.mtest === true;
   const canEditSelectedFo = canEditStandardPlanFeed || (isMtestEdit && canEditMtestPlanFeed);
 
+  const editPartyAddressesQ = useQuery({
+    queryKey: ["plan-feed-edit-party-addresses", editDraft.party_id],
+    queryFn: () => listCustomerAddresses(editDraft.party_id),
+    enabled: Boolean(editDraft.party_id),
+    select: (d) => d?.data ?? d ?? [],
+  });
+  const editPartyAddresses = editPartyAddressesQ.data ?? EMPTY_ARRAY;
+
   const editStrokeOptionsQ = useQuery({
     queryKey: ["plan-feed-stroke-options", editData?.company_id, editDraft.material_id],
     queryFn: () => listStrokeOptions({ company_id: editData?.company_id, material_id: editDraft.material_id }),
@@ -517,6 +542,7 @@ export default function PlanFeedPage() {
       setEditData(row);
       setEditDraft({
         party_id: row.party_id ?? "",
+        customer_address_id: row.customer_address_id ?? "",
         material_id: row.material_id ?? "",
         sku: row.sku ?? "",
         description: row.description ?? "",
@@ -580,17 +606,10 @@ export default function PlanFeedPage() {
     try {
       const payload = {
         party_id: editDraft.party_id || null,
-        ordered_qty_kg: parseFloat(editDraft.ordered_qty_kg),
-        pack_qty: editDraft.pack_qty ? parseInt(editDraft.pack_qty, 10) : null,
+        customer_address_id: editDraft.customer_address_id || null,
         order_date: editDraft.order_date,
         scheduled_delivery_date: editDraft.scheduled_delivery_date || null,
-        ordered_stroke_number: editDraft.ordered_stroke_number || null,
       };
-      if (!skuLockedForEdit) {
-        payload.material_id = editDraft.material_id || null;
-        payload.sku = editDraft.sku || null;
-        payload.description = editDraft.description || null;
-      }
       await (isMtestEdit ? updateMtestPlanFeed : updatePlanFeed)(editData.id, payload);
       toast("FO updated.");
       await loadEditFo(editData.id);
@@ -598,6 +617,50 @@ export default function PlanFeedPage() {
       qc.invalidateQueries({ queryKey: ["prod-plan-feed-summary"] });
     } catch (err) { toast(friendlyErr(err.message), "error"); }
     finally { setSaving(false); }
+  }
+
+  async function handleAddFoItem() {
+    if (!editData) return;
+    try {
+      await (isMtestEdit ? addMtestPlanFeedItem : addPlanFeedItem)(editData.id, newFoItem);
+      setNewFoItem({ material_id: "", sku: "", description: "", ordered_qty_kg: "", pack_qty: "" });
+      await loadEditFo(editData.id);
+      toast("FO item added.");
+    } catch (err) { toast(friendlyErr(err.message), "error"); }
+  }
+
+  function getItemDraft(item) {
+    return itemDrafts[item.id] ?? {
+      description: item.description ?? "",
+      ordered_qty_kg: String(item.ordered_qty_kg ?? ""),
+      pack_qty: String(item.pack_qty ?? ""),
+      ordered_stroke_number: item.ordered_stroke_number ?? "",
+    };
+  }
+
+  async function handleSaveFoItem(item) {
+    if (!editData) return;
+    try {
+      await (isMtestEdit ? updateMtestPlanFeedItem : updatePlanFeedItem)(editData.id, item.id, getItemDraft(item));
+      await loadEditFo(editData.id);
+      toast("FO item updated.");
+    } catch (err) { toast(friendlyErr(err.message), "error"); }
+  }
+
+  async function handleDeleteFoItem(item) {
+    if (!editData) return;
+    const confirmed = await openActionConfirm({
+      eyebrow: "Plan Feed",
+      title: `Delete FO item ${item.sku || item.description || "line"}?`,
+      message: "This is only allowed when the item has no active Packing PO or SO Map allocation.",
+      confirmLabel: "Delete item",
+    });
+    if (!confirmed) return;
+    try {
+      await (isMtestEdit ? deleteMtestPlanFeedItem : deletePlanFeedItem)(editData.id, item.id);
+      await loadEditFo(editData.id);
+      toast("FO item deleted.");
+    } catch (err) { toast(friendlyErr(err.message), "error"); }
   }
 
   async function handleCancel() {
@@ -675,11 +738,12 @@ export default function PlanFeedPage() {
     try {
       await (isMtestEdit ? upsertMtestFoAllocation : upsertFoAllocation)(editData.id, {
         packing_order_id: allocCandidate.id,
+        plan_feed_item_id: allocationItemId,
         allocated_qty_kg: parseFloat(allocQty || "0"),
         confirm_mismatch: confirmMismatch === true,
       });
       toast("Allocation saved.");
-      setAllocPoNumber(""); setAllocCandidate(null); setAllocQty(""); setAllocNumPacks("");
+      setAllocPoNumber(""); setAllocCandidate(null); setAllocQty(""); setAllocNumPacks(""); setAllocationItemId("");
       await loadEditFo(editData.id);
     } catch (err) {
       if (err.message === "PROD_PLAN_FEED_MATERIAL_MISMATCH") {
@@ -703,6 +767,7 @@ export default function PlanFeedPage() {
     try {
       await (isMtestEdit ? upsertMtestFoAllocation : upsertFoAllocation)(editData.id, {
         packing_order_id: allocation.packing_order_id,
+        plan_feed_item_id: allocation.plan_feed_item_id,
         allocated_qty_kg: Number(newQty) || 0,
       });
       toast(Number(newQty) > 0 ? "Allocation updated." : "Allocation removed.");
@@ -999,7 +1064,7 @@ export default function PlanFeedPage() {
               <button type="submit" disabled={saving} className="px-5 py-2 bg-sky-600 text-white text-sm font-medium rounded hover:bg-sky-700 disabled:opacity-50">
                 Save FO
               </button>
-              <button type="button" onClick={() => setForm({ ...EMPTY_FO })} className="px-4 py-2 border border-slate-300 text-slate-700 text-sm rounded hover:bg-slate-50">
+              <button type="button" onClick={() => setForm(emptyFo())} className="px-4 py-2 border border-slate-300 text-slate-700 text-sm rounded hover:bg-slate-50">
                 Clear
               </button>
             </div>
@@ -1087,7 +1152,7 @@ export default function PlanFeedPage() {
                     <label className="text-xs text-slate-600 font-medium">Party</label>
                     <ErpComboboxField
                       value={editDraft.party_id}
-                      onChange={(v) => setEditDraft(d => ({ ...d, party_id: v }))}
+                      onChange={(v) => setEditDraft(d => ({ ...d, party_id: v, customer_address_id: "" }))}
                       options={customerOptions}
                       placeholder="-- Select party --"
                       disabled={editData.status === "CANCELLED"}
@@ -1114,6 +1179,28 @@ export default function PlanFeedPage() {
                           This party's FO Type: <strong>{customerMap.get(editDraft.party_id)?.fo_customer_type || "not set"}</strong> — change here
                         </button>
                       )
+                    )}
+                    <label className="mt-2 text-xs text-slate-600 font-medium">Ship-To Address</label>
+                    <select
+                      value={editDraft.customer_address_id || ""}
+                      onChange={(event) => setEditDraft((d) => ({ ...d, customer_address_id: event.target.value }))}
+                      disabled={editData.status === "CANCELLED" || !editDraft.party_id || editPartyAddressesQ.isLoading}
+                      className="border border-slate-300 rounded px-2 py-1.5 text-sm disabled:opacity-50"
+                    >
+                      <option value="">-- Select Ship-To address --</option>
+                      {editPartyAddresses.map((address) => (
+                        <option key={address.id} value={address.id}>
+                          {addressLabel(address)}{address.state ? `, ${address.state}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {editDraft.customer_address_id && (
+                      <p className="text-[11px] text-slate-500">
+                        {addressFullText(editPartyAddresses.find((address) => address.id === editDraft.customer_address_id))}
+                      </p>
+                    )}
+                    {!editPartyAddressesQ.isLoading && editDraft.party_id && editPartyAddresses.length === 0 && (
+                      <p className="text-[11px] text-amber-700">No active address exists for this party. Use Edit Customer to add one.</p>
                     )}
                   </div>
 
@@ -1151,14 +1238,14 @@ export default function PlanFeedPage() {
                         options={mtestSkuOptions}
                         placeholder="-- Select MTEST sample SKU --"
                         emptyStateLabel={mtestSkusQ.isLoading ? "Loading..." : "No MTEST sample SKUs mapped to this company"}
-                        disabled={editData.status === "CANCELLED" || skuLockedForEdit}
+                        disabled
                       />
                     ) : (
                       <SkuTypeaheadField
                         skuText={editDraft.sku ?? ""}
                         materials={nonMtestMaterials}
                         placeholder="Type SKU — pick a match, or keep typing for a new one"
-                        disabled={editData.status === "CANCELLED" || skuLockedForEdit}
+                        disabled
                         onTextChange={(text) => setEditDraft(d => ({ ...d, sku: text, material_id: "" }))}
                         onPickMaterial={(m) => setEditDraft(d => ({
                           ...d,
@@ -1173,15 +1260,15 @@ export default function PlanFeedPage() {
                     <label className="text-xs text-slate-600 font-medium">
                       Description {skuLockedForEdit ? <span className="text-amber-600">(locked)</span> : null}
                     </label>
-                    <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.description} onChange={e => setEditDraft(d => ({ ...d, description: e.target.value }))} disabled={editData.status === "CANCELLED" || skuLockedForEdit} />
+                    <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.description} disabled />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Ordered Qty (KG)</label>
-                    <input type="number" step="0.01" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.ordered_qty_kg} onChange={e => setEditDraft(d => ({ ...d, ordered_qty_kg: e.target.value }))} disabled={editData.status === "CANCELLED"} />
+                    <input type="number" step="0.01" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.ordered_qty_kg} disabled />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Pack Qty</label>
-                    <input type="number" step="1" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.pack_qty} onChange={e => setEditDraft(d => ({ ...d, pack_qty: e.target.value }))} disabled={editData.status === "CANCELLED"} />
+                    <input type="number" step="1" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.pack_qty} disabled />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Order Date</label>
@@ -1197,9 +1284,9 @@ export default function PlanFeedPage() {
                       strokeText={editDraft.ordered_stroke_number || ""}
                       strokeOptions={editStrokeOptionsQ.data ?? []}
                       placeholder="Type stroke number — pick an existing one, or a new one"
-                      disabled={editData.status === "CANCELLED"}
-                      onTextChange={(text) => setEditDraft(d => ({ ...d, ordered_stroke_number: text }))}
-                      onPickStroke={(s) => setEditDraft(d => ({ ...d, ordered_stroke_number: s.stroke_number }))}
+                        disabled
+                        onTextChange={() => {}}
+                        onPickStroke={() => {}}
                     />
                     {editStrokeCheckQ.data && (
                       editStrokeCheckQ.data.exists
@@ -1239,6 +1326,30 @@ export default function PlanFeedPage() {
                 </form>
               </ErpSectionCard>
 
+              <ErpSectionCard title="FO Item Lines">
+                <div className="mb-3 text-sm text-slate-600">Each item has its own SO Map capacity. SKU is immutable after creation; release allocations before deleting an item.</div>
+                <div className="space-y-2">
+                  {(editData.items ?? []).map((item) => {
+                    const draft = getItemDraft(item);
+                    const setDraft = (updates) => setItemDrafts((all) => ({ ...all, [item.id]: { ...draft, ...updates } }));
+                    return <div key={item.id} className="grid grid-cols-1 gap-2 border-t border-slate-100 py-3 sm:grid-cols-6">
+                      <div className="text-sm font-mono sm:col-span-2">{item.sku || "--"}<div className="font-sans text-xs text-slate-500">{item.description || "--"}</div></div>
+                      <input value={draft.ordered_qty_kg} type="number" min="0.0001" step="0.0001" onChange={(e) => setDraft({ ordered_qty_kg: e.target.value })} disabled={editData.status === "CANCELLED" || !canEditSelectedFo} className="border border-slate-300 px-2 py-1 text-sm font-mono" aria-label={`Quantity for ${item.sku || "FO item"}`} />
+                      <input value={draft.pack_qty} type="number" min="1" onChange={(e) => setDraft({ pack_qty: e.target.value })} disabled={editData.status === "CANCELLED" || !canEditSelectedFo} className="border border-slate-300 px-2 py-1 text-sm font-mono" aria-label={`Pack quantity for ${item.sku || "FO item"}`} />
+                      <input value={draft.ordered_stroke_number} onChange={(e) => setDraft({ ordered_stroke_number: e.target.value })} disabled={editData.status === "CANCELLED" || !canEditSelectedFo} className="border border-slate-300 px-2 py-1 text-sm font-mono" placeholder="Ordered stroke" aria-label={`Ordered stroke for ${item.sku || "FO item"}`} />
+                      <div className="flex gap-2"><button type="button" onClick={() => void handleSaveFoItem(item)} disabled={editData.status === "CANCELLED" || !canEditSelectedFo} className="text-xs font-semibold text-sky-700 underline disabled:opacity-50">Save</button><button type="button" onClick={() => void handleDeleteFoItem(item)} disabled={editData.status === "CANCELLED" || !canEditSelectedFo || (editData.items ?? []).length <= 1} className="text-xs font-semibold text-rose-700 underline disabled:opacity-50">Delete</button></div>
+                    </div>;
+                  })}
+                </div>
+                {editData.status !== "CANCELLED" && canEditSelectedFo && <div className="mt-3 grid grid-cols-1 gap-2 border-t border-slate-200 pt-3 sm:grid-cols-5">
+                  <select value={newFoItem.material_id} onChange={(e) => { const material = (isMtestEdit ? mtestSkusQ.data : nonMtestMaterials).find((row) => row.id === e.target.value); setNewFoItem((item) => ({ ...item, material_id: e.target.value, sku: material?.external_code || material?.pace_code || "", description: material?.document_name || material?.material_name || "" })); }} className="border border-slate-300 px-2 py-1 text-sm"><option value="">Select SKU</option>{(isMtestEdit ? mtestSkusQ.data ?? [] : nonMtestMaterials).map((m) => <option key={m.id} value={m.id}>{materialLabel(m)}</option>)}</select>
+                  <input value={newFoItem.description} readOnly className="border border-slate-200 bg-slate-50 px-2 py-1 text-sm" placeholder="Description" />
+                  <input type="number" min="0.0001" step="0.0001" value={newFoItem.ordered_qty_kg} onChange={(e) => setNewFoItem((item) => ({ ...item, ordered_qty_kg: e.target.value }))} className="border border-slate-300 px-2 py-1 text-sm" placeholder="KG" />
+                  <input type="number" min="1" value={newFoItem.pack_qty} onChange={(e) => setNewFoItem((item) => ({ ...item, pack_qty: e.target.value }))} className="border border-slate-300 px-2 py-1 text-sm" placeholder="Pack qty" />
+                  <button type="button" onClick={() => void handleAddFoItem()} className="border border-sky-700 bg-sky-100 px-2 py-1 text-sm font-semibold">Add Item</button>
+                </div>}
+              </ErpSectionCard>
+
               {editData.status !== "CANCELLED" && (
                 <ErpSectionCard title="Packing PO Allocation">
                   <fieldset disabled={!canEditSelectedFo} className="contents disabled:opacity-55">
@@ -1261,8 +1372,8 @@ export default function PlanFeedPage() {
                         const po = a.packing_order ?? {};
                         return (
                           <tr key={a.id} className="border-b border-slate-100">
-                            <td className="py-2 px-3 font-mono">{po.po_number}</td>
-                            <td className="py-2 px-3">{materialLabel(po.material)}</td>
+                      <td className="py-2 px-3 font-mono">{po.po_number}</td>
+                      <td className="py-2 px-3">{a.plan_feed_item?.sku || "Unassigned item"}<div className="text-xs text-slate-500">{materialLabel(po.material)}</div></td>
                             <td className="py-2 px-3">{po.status}</td>
                             <td className="py-2 px-3 text-right font-mono">{po.fill_qty_per_pack != null ? fmt(po.fill_qty_per_pack) : "—"}</td>
                             <td className="py-2 px-3 text-right font-mono">{po.num_packs ?? "—"}</td>
@@ -1295,6 +1406,10 @@ export default function PlanFeedPage() {
                   </table>
 
                   <div className="flex flex-wrap gap-2 items-end border-t border-slate-200 pt-3">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-slate-600 font-medium">FO Item</label>
+                      <select value={allocationItemId} onChange={(e) => setAllocationItemId(e.target.value)} className="border border-slate-300 rounded px-2 py-1.5 text-sm min-w-48"><option value="">Select FO item</option>{(editData.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.sku || item.description || item.id} ({fmt(item.ordered_qty_kg)} KG)</option>)}</select>
+                    </div>
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-slate-600 font-medium">Packing PO Number</label>
                       <input className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-48" value={allocPoNumber} onChange={e => setAllocPoNumber(e.target.value)} />
@@ -1334,7 +1449,7 @@ export default function PlanFeedPage() {
                               <span className="text-[11px] text-rose-600">Exceeds available quantity.</span>
                             )}
                           </div>
-                          <button type="button" disabled={saving || !allocQty} onClick={() => submitAllocation(false)} className="px-3 py-1.5 bg-sky-600 text-white text-sm rounded hover:bg-sky-700 disabled:opacity-50">
+                          <button type="button" disabled={saving || !allocQty || !allocationItemId} onClick={() => submitAllocation(false)} className="px-3 py-1.5 bg-sky-600 text-white text-sm rounded hover:bg-sky-700 disabled:opacity-50">
                             Allocate
                           </button>
                         </>
@@ -1384,7 +1499,12 @@ export default function PlanFeedPage() {
                     <th className="text-center py-2 px-3 border-b">Production</th>
                     <th className="text-right py-2 px-3 border-b">Dispatched KG</th>
                     <th className="text-center py-2 px-3 border-b">Dispatch</th>
+                    <th className="text-left py-2 px-3 border-b">DO Number</th>
+                    <th className="text-left py-2 px-3 border-b">DO Date</th>
+                    <th className="text-left py-2 px-3 border-b">Tally Invoice No.</th>
+                    <th className="text-left py-2 px-3 border-b">Dispatch Date</th>
                     <th className="text-right py-2 px-3 border-b">Pending KG</th>
+                    <th className="text-left py-2 px-3 border-b">Order Date</th>
                     <th className="text-left py-2 px-3 border-b">Del Date</th>
                   </tr>
                 </thead>
@@ -1438,7 +1558,28 @@ export default function PlanFeedPage() {
                           {row.dispatch_status?.replace("_", " ")}
                         </span>
                       </td>
+                      <td className="py-2 px-3 font-mono text-xs text-slate-600">
+                        {(row.delivery_orders ?? []).length > 0
+                          ? row.delivery_orders.map((deliveryOrder) => <div key={deliveryOrder.dc_number}>{deliveryOrder.dc_number}</div>)
+                          : "--"}
+                      </td>
+                      <td className="py-2 px-3 text-xs text-slate-500">
+                        {(row.delivery_orders ?? []).length > 0
+                          ? row.delivery_orders.map((deliveryOrder) => <div key={deliveryOrder.dc_number}>{deliveryOrder.dc_date || "--"}</div>)
+                          : "--"}
+                      </td>
+                      <td className="py-2 px-3 font-mono text-xs text-slate-600">
+                        {(row.tally_invoice_numbers ?? []).length > 0
+                          ? row.tally_invoice_numbers.map((invoiceNumber) => <div key={invoiceNumber}>{invoiceNumber}</div>)
+                          : "--"}
+                      </td>
+                      <td className="py-2 px-3 text-xs text-slate-500">
+                        {(row.dispatch_dates ?? []).length > 0
+                          ? row.dispatch_dates.map((date) => <div key={date}>{date}</div>)
+                          : "--"}
+                      </td>
                       <td className="py-2 px-3 text-right font-mono text-amber-700">{fmt(row.pending_dispatch_kg)}</td>
+                      <td className="py-2 px-3 text-slate-500 text-xs">{row.order_date ?? "--"}</td>
                       <td className="py-2 px-3 text-slate-400 text-xs">{row.scheduled_delivery_date ?? "--"}</td>
                     </tr>
                   ))}

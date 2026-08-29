@@ -171,7 +171,7 @@ export async function listPlanFeedHandler(req: Request, ctx: ProdHandlerContext)
     // was already fetched (per_page: 50 from the frontend) -- a real match
     // outside that page silently looked like "not found" (found live
     // 2026-08-27). Now filters server-side, across the whole company.
-    if (search) query = query.or(`fo_number.ilike.%${search}%,party_name.ilike.%${search}%`);
+    if (search) query = (query as unknown as { or: (filters: string) => typeof query }).or(`fo_number.ilike.%${search}%,party_name.ilike.%${search}%`);
 
     const { data, error, count } = await ((query as typeof query & {
       range: (from: number, to: number) => typeof query;
@@ -238,7 +238,7 @@ export async function findPlanFeedByNumberHandler(req: Request, ctx: ProdHandler
 async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> {
   const { data: allocations, error } = await serviceRoleClient
     .schema("erp_production").from("plan_feed_packing_order_allocation")
-    .select("id, plan_feed_id, packing_order_id, allocated_qty_kg, created_at, last_updated_at")
+    .select("id, plan_feed_id, plan_feed_item_id, packing_order_id, allocated_qty_kg, created_at, last_updated_at")
     .eq("plan_feed_id", planFeedId);
   if (error) {
     console.error("[plan_feed.fetchAllocationsForFo] query failed:", JSON.stringify(error));
@@ -246,6 +246,14 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
   }
   const rows = (allocations ?? []) as JsonRecord[];
   if (rows.length === 0) return [];
+
+  const itemIds = [...new Set(rows.map((row) => toTrimmedString(row.plan_feed_item_id)).filter(Boolean))];
+  const { data: itemRows, error: itemError } = itemIds.length
+    ? await serviceRoleClient.schema("erp_production").from("plan_feed_item")
+      .select("id, material_id, sku, description, ordered_qty_kg, pack_qty").in("id", itemIds)
+    : { data: [] as JsonRecord[], error: null };
+  if (itemError) throw new Error("PROD_PLAN_FEED_ITEM_FETCH_FAILED");
+  const itemById = new Map(((itemRows ?? []) as JsonRecord[]).map((item) => [toTrimmedString(item.id), item]));
 
   const poIds = [...new Set(rows.map((r) => String(r.packing_order_id)))];
   const { data: pos, error: poErr } = await serviceRoleClient
@@ -322,6 +330,7 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
     const otherAllocated = otherAllocatedByPo.get(String(row.packing_order_id)) ?? 0;
     return {
       ...row,
+      plan_feed_item: itemById.get(toTrimmedString(row.plan_feed_item_id)) ?? null,
       packing_order: po ? {
         ...(po as JsonRecord),
         material: materialMap.get(String((po as JsonRecord).material_id ?? "")) ?? null,
@@ -392,11 +401,15 @@ export async function getPlanFeedHandler(req: Request, ctx: ProdHandlerContext):
     if (!data) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
 
     const row = data as JsonRecord;
-    const [materialMap, customerMap, allocations] = await Promise.all([
+    const [materialMap, customerMap, allocations, itemResult] = await Promise.all([
       getMaterialMapByIds([String(row.material_id ?? "")]),
       getCustomerMapByIds([String(row.party_id ?? "")]),
       fetchAllocationsForFo(id),
+      serviceRoleClient.schema("erp_production").from("plan_feed_item")
+        .select("id, material_id, sku, description, ordered_qty_kg, pack_qty, ordered_stroke_number")
+        .eq("plan_feed_id", id).order("created_at"),
     ]);
+    if (itemResult.error) throw new Error("PROD_PLAN_FEED_ITEM_FETCH_FAILED");
 
     // Actual Stroke(s) -- one line per distinct Stroke actually used across allocated
     // Packing POs (never blended), so a formulation deviation from the Ordered Stroke
@@ -430,6 +443,7 @@ export async function getPlanFeedHandler(req: Request, ctx: ProdHandlerContext):
         ...row,
         material: materialMap.get(String(row.material_id ?? "")) ?? null,
         party: customerMap.get(String(row.party_id ?? "")) ?? null,
+        items: itemResult.data ?? [],
         allocations,
         actual_stroke_numbers: actualStrokeNumbers,
         actual_stroke_details: actualStrokeDetails,
@@ -440,6 +454,110 @@ export async function getPlanFeedHandler(req: Request, ctx: ProdHandlerContext):
     return foErr(req, ctx, code, 500, "Plan feed fetch failed");
   }
 }
+
+async function assertPlanFeedItemAccess(
+  req: Request,
+  ctx: ProdHandlerContext,
+  fo: JsonRecord,
+  mtestOnly: boolean,
+): Promise<Response | null> {
+  const companyId = toTrimmedString(fo.company_id);
+  try {
+    await assertCompanyScope(ctx, companyId);
+  } catch {
+    return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+  }
+  if (mtestOnly) return await assertMtestPlanFeed(req, ctx, fo);
+  if (!(await canMaintainCompanyResource(ctx, companyId, "PROD_PLAN_FEED", "EDIT"))) {
+    return foErr(req, ctx, "PROD_PLAN_FEED_ACCESS_DENIED", 403, "You do not have Plan Feed edit access for this company.");
+  }
+  return null;
+}
+
+// Item endpoints are deliberately split by route so QA's MTEST-only grant cannot
+// be used to mutate a normal FO through a direct API call.
+async function addPlanFeedItem(req: Request, ctx: ProdHandlerContext, mtestOnly: boolean): Promise<Response> {
+  try {
+    const planFeedId = getIdFromPath(req);
+    const body = await parseBody(req);
+    const { data: fo, error: foError } = await serviceRoleClient.schema("erp_production").from("plan_feed")
+      .select("id, company_id, party_id, status").eq("id", planFeedId).maybeSingle();
+    if (foError || !fo) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
+    const accessError = await assertPlanFeedItemAccess(req, ctx, fo as JsonRecord, mtestOnly);
+    if (accessError) return accessError;
+    if (toUpperTrimmedString((fo as JsonRecord).status) !== "ACTIVE") return foErr(req, ctx, "PROD_PLAN_FEED_NOT_ACTIVE", 422, "FO is not ACTIVE");
+    const materialId = toTrimmedString(body.material_id) || null;
+    const sku = toTrimmedString(body.sku);
+    const qty = parsePositiveNumber(body.ordered_qty_kg);
+    if ((!materialId && !sku) || !qty) return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_INVALID", 400, "Item SKU and ordered quantity are required");
+    const { data, error } = await serviceRoleClient.schema("erp_production").from("plan_feed_item").insert({
+      plan_feed_id: planFeedId, material_id: materialId, sku: sku || null, description: toTrimmedString(body.description) || null,
+      ordered_qty_kg: qty, pack_qty: parsePositiveInt(body.pack_qty), ordered_stroke_number: toTrimmedString(body.ordered_stroke_number) || null,
+      created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id,
+    }).select("*").single();
+    if (error || !data) throw new Error("PROD_PLAN_FEED_ITEM_CREATE_FAILED");
+    return createdOkResponse(data, ctx.request_id, req);
+  } catch (err) { return foErr(req, ctx, err instanceof Error ? err.message : "PROD_PLAN_FEED_ITEM_CREATE_FAILED", 500, "Unable to add FO item"); }
+}
+
+async function mutatePlanFeedItem(req: Request, ctx: ProdHandlerContext, remove: boolean, mtestOnly: boolean): Promise<Response> {
+  try {
+    const parts = new URL(req.url).pathname.split("/").filter(Boolean);
+    const planFeedId = parts[3] ?? "";
+    const itemId = parts[5] ?? "";
+    const { data: fo } = await serviceRoleClient.schema("erp_production").from("plan_feed").select("company_id, party_id, status").eq("id", planFeedId).maybeSingle();
+    if (!fo) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
+    const accessError = await assertPlanFeedItemAccess(req, ctx, fo as JsonRecord, mtestOnly);
+    if (accessError) return accessError;
+    if (toUpperTrimmedString((fo as JsonRecord).status) !== "ACTIVE") return foErr(req, ctx, "PROD_PLAN_FEED_NOT_ACTIVE", 422, "FO is not ACTIVE");
+    const { data: item } = await serviceRoleClient.schema("erp_production").from("plan_feed_item").select("id").eq("id", itemId).eq("plan_feed_id", planFeedId).maybeSingle();
+    if (!item) return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_NOT_FOUND", 404, "FO item not found");
+    if (remove) {
+      const itemCountResult = await serviceRoleClient.schema("erp_production").from("plan_feed_item")
+        .select("id", { count: "exact", head: true }).eq("plan_feed_id", planFeedId) as unknown as { count: number | null; error: unknown };
+      const { count: itemCount, error: itemCountError } = itemCountResult;
+      if (itemCountError) throw new Error("PROD_PLAN_FEED_ITEM_FETCH_FAILED");
+      if ((itemCount ?? 0) <= 1) return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_LAST_DELETE_BLOCKED", 422, "An FO must retain at least one item line.");
+      const [poCountResult, mapCountResult] = await Promise.all([
+        serviceRoleClient.schema("erp_production").from("plan_feed_packing_order_allocation").select("id", { count: "exact", head: true }).eq("plan_feed_item_id", itemId),
+        serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id", { count: "exact", head: true }).eq("plan_feed_item_id", itemId).eq("status", "ACTIVE"),
+      ]) as unknown as [{ count: number | null }, { count: number | null }];
+      const poCount = poCountResult.count;
+      const mapCount = mapCountResult.count;
+      if ((poCount ?? 0) || (mapCount ?? 0)) return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_IN_USE", 409, "Release Packing PO and SO Map allocations before deleting this FO item.");
+      await serviceRoleClient.schema("erp_production").from("plan_feed_item").delete().eq("id", itemId);
+      return okResponse({ id: itemId, deleted: true }, ctx.request_id, req);
+    }
+    const body = await parseBody(req);
+    const qty = parsePositiveNumber(body.ordered_qty_kg);
+    if (!qty) return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_INVALID", 400, "Ordered quantity must be positive");
+    const [{ data: soMapRows, error: soMapError }, { data: packingRows, error: packingError }] = await Promise.all([
+      serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+        .select("allocated_qty").eq("plan_feed_item_id", itemId).eq("status", "ACTIVE"),
+      serviceRoleClient.schema("erp_production").from("plan_feed_packing_order_allocation")
+        .select("allocated_qty_kg").eq("plan_feed_item_id", itemId),
+    ]);
+    if (soMapError || packingError) throw new Error("PROD_PLAN_FEED_ITEM_USAGE_LOOKUP_FAILED");
+    const committedQty = Math.max(
+      ((soMapRows ?? []) as JsonRecord[]).reduce((sum, row) => sum + Number(row.allocated_qty ?? 0), 0),
+      ((packingRows ?? []) as JsonRecord[]).reduce((sum, row) => sum + Number(row.allocated_qty_kg ?? 0), 0),
+    );
+    if (qty + QTY_TOL < committedQty) return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_QTY_BELOW_COMMITTED", 422,
+      `Item has ${committedQty} KG committed in Packing PO/SO Map and cannot be reduced below that.`);
+    const { error } = await serviceRoleClient.schema("erp_production").from("plan_feed_item").update({
+      description: toTrimmedString(body.description) || null, ordered_qty_kg: qty, pack_qty: parsePositiveInt(body.pack_qty),
+      ordered_stroke_number: toTrimmedString(body.ordered_stroke_number) || null, last_updated_by: ctx.auth_user_id, last_updated_at: new Date().toISOString(),
+    }).eq("id", itemId);
+    if (error) throw new Error("PROD_PLAN_FEED_ITEM_UPDATE_FAILED");
+    return okResponse({ id: itemId }, ctx.request_id, req);
+  } catch (err) { return foErr(req, ctx, err instanceof Error ? err.message : "PROD_PLAN_FEED_ITEM_MUTATE_FAILED", 500, "Unable to update FO item"); }
+}
+export const addPlanFeedItemHandler = (req: Request, ctx: ProdHandlerContext) => addPlanFeedItem(req, ctx, false);
+export const updatePlanFeedItemHandler = (req: Request, ctx: ProdHandlerContext) => mutatePlanFeedItem(req, ctx, false, false);
+export const deletePlanFeedItemHandler = (req: Request, ctx: ProdHandlerContext) => mutatePlanFeedItem(req, ctx, true, false);
+export const addMtestPlanFeedItemHandler = (req: Request, ctx: ProdHandlerContext) => addPlanFeedItem(req, ctx, true);
+export const updateMtestPlanFeedItemHandler = (req: Request, ctx: ProdHandlerContext) => mutatePlanFeedItem(req, ctx, false, true);
+export const deleteMtestPlanFeedItemHandler = (req: Request, ctx: ProdHandlerContext) => mutatePlanFeedItem(req, ctx, true, true);
 
 // POST /api/production/plan-feed
 export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -506,6 +624,21 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
       }
       throw error;
     }
+    // Keep the legacy header fields and the new item-line model in lockstep.
+    // A newly created FO always starts with its first item; later items are
+    // added through the FO item-line flow.
+    const { error: itemError } = await serviceRoleClient.schema("erp_production").from("plan_feed_item").insert({
+      plan_feed_id: (data as JsonRecord).id,
+      material_id: materialId,
+      sku: sku || null,
+      description: description || null,
+      ordered_qty_kg: orderedQtyKg,
+      pack_qty: packQty ?? null,
+      ordered_stroke_number: orderedStrokeNumber,
+      created_by: ctx.auth_user_id,
+      last_updated_by: ctx.auth_user_id,
+    });
+    if (itemError) throw new Error("PROD_PLAN_FEED_ITEM_CREATE_FAILED");
     return createdOkResponse({ id: (data as JsonRecord).id }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_CREATE_FAILED";
@@ -818,6 +951,8 @@ async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOn
     if (mtestOnly) {
       const accessError = await assertMtestPlanFeed(req, ctx, fo as JsonRecord);
       if (accessError) return accessError;
+    } else if (!(await canMaintainCompanyResource(ctx, toTrimmedString((fo as JsonRecord).company_id), "PROD_PLAN_FEED", "EDIT"))) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_ACCESS_DENIED", 403, "You do not have Plan Feed edit access for this company.");
     }
 
     const { data: po, error: poErrRes } = await serviceRoleClient
@@ -825,6 +960,21 @@ async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOn
       .select("id, status, material_id, actual_qty_kg, planned_qty_kg")
       .eq("id", packingOrderId).maybeSingle();
     if (poErrRes || !po) return foErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing PO not found");
+    const requestedItemId = toTrimmedString(body.plan_feed_item_id);
+    if (!requestedItemId && requestedQty > 0) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_REQUIRED", 400, "Select the FO item that this Packing PO fulfills.");
+    }
+    const { data: selectedItem, error: selectedItemError } = requestedItemId
+      ? await serviceRoleClient.schema("erp_production").from("plan_feed_item")
+        .select("id, material_id, sku, ordered_qty_kg").eq("id", requestedItemId).eq("plan_feed_id", planFeedId).maybeSingle()
+      : { data: null, error: null };
+    if (selectedItemError || (requestedItemId && !selectedItem)) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_NOT_FOUND", 422, "Selected FO item does not belong to this FO.");
+    }
+    if (selectedItem && toTrimmedString((selectedItem as JsonRecord).material_id) !== toTrimmedString((po as JsonRecord).material_id) && !confirmMismatch) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_MATERIAL_MISMATCH", 409,
+        "Packing PO SKU differs from the selected FO item — confirm the mismatch to allocate.");
+    }
     if (["REVERSED", "CANCELLED"].includes(toUpperTrimmedString((po as JsonRecord).status))) {
       return foErr(req, ctx, "PROD_PACK_REVERSED", 422, "Cannot allocate a reversed/cancelled Packing PO");
     }
@@ -859,7 +1009,7 @@ async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOn
       return okResponse({ plan_feed_id: planFeedId, packing_order_id: packingOrderId, allocated_qty_kg: 0 }, ctx.request_id, req);
     }
 
-    const foMaterialIdForSkuCheck = toTrimmedString((fo as JsonRecord).material_id);
+    const foMaterialIdForSkuCheck = toTrimmedString((selectedItem as JsonRecord | null)?.material_id);
     const poMaterialIdForSkuCheck = toTrimmedString((po as JsonRecord).material_id);
     const [foMaterialMapForSkuCheck, poMaterialMapForSkuCheck] = await Promise.all([
       getMaterialMapByIds([foMaterialIdForSkuCheck]),
@@ -901,6 +1051,7 @@ async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOn
       .schema("erp_production").from("plan_feed_packing_order_allocation")
       .upsert({
         plan_feed_id: planFeedId,
+        plan_feed_item_id: requestedItemId || null,
         packing_order_id: packingOrderId,
         allocated_qty_kg: requestedQty,
         created_by: ctx.auth_user_id,
@@ -1312,22 +1463,54 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     const allocationIdsForDispatch = [...foByAllocationId.keys()];
 
     const dispatchedByFo = new Map<string, number>();
+    const dispatchDatesByFo = new Map<string, Set<string>>();
+    const tallyInvoiceNumbersByFo = new Map<string, Set<string>>();
+    const deliveryOrdersByFo = new Map<string, Map<string, { dc_number: string; dc_date: string }>>();
     if (allocationIdsForDispatch.length > 0) {
       const dcLineRows = await fetchInChunks<JsonRecord>(allocationIdsForDispatch, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
-          .select("id, so_map_allocation_id").in("so_map_allocation_id", chunk));
+          .select("id, dc_id, so_map_allocation_id").in("so_map_allocation_id", chunk));
       const foByDcLineId = new Map(dcLineRows.map((row) => [String(row.id), foByAllocationId.get(toTrimmedString(row.so_map_allocation_id)) ?? ""]));
+      const dcIdByDcLineId = new Map(dcLineRows.map((row) => [String(row.id), toTrimmedString(row.dc_id)]));
       const dcLineIds = [...foByDcLineId.keys()];
       if (dcLineIds.length > 0) {
+        const dcIds = [...new Set([...dcIdByDcLineId.values()].filter(Boolean))];
+        const deliveryOrderById = new Map<string, JsonRecord>();
+        if (dcIds.length > 0) {
+          const deliveryOrders = await fetchInChunks<JsonRecord>(dcIds, (chunk) =>
+            serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+              .select("id, dc_number, dc_date").in("id", chunk));
+          for (const deliveryOrder of deliveryOrders) deliveryOrderById.set(String(deliveryOrder.id), deliveryOrder);
+        }
         const invoiceLineRows = await fetchInChunks<JsonRecord>(dcLineIds, (chunk) =>
           serviceRoleClient.schema("erp_procurement").from("sales_invoice_line")
-            .select("dc_line_id, quantity, sales_invoice:invoice_id(status)").in("dc_line_id", chunk));
+            .select("dc_line_id, quantity, sales_invoice:invoice_id(status, tally_invoice_number, tally_invoice_date)").in("dc_line_id", chunk));
         for (const row of invoiceLineRows) {
-          const invoiceStatus = toUpperTrimmedString((row.sales_invoice as JsonRecord | null)?.status);
+          const invoice = row.sales_invoice as JsonRecord | null;
+          const invoiceStatus = toUpperTrimmedString(invoice?.status);
           if (invoiceStatus !== "POSTED") continue;
           const foId = foByDcLineId.get(toTrimmedString(row.dc_line_id));
           if (!foId) continue;
           dispatchedByFo.set(foId, (dispatchedByFo.get(foId) ?? 0) + Number(row.quantity ?? 0));
+          const tallyInvoiceDate = toTrimmedString(invoice?.tally_invoice_date);
+          if (tallyInvoiceDate) {
+            if (!dispatchDatesByFo.has(foId)) dispatchDatesByFo.set(foId, new Set());
+            dispatchDatesByFo.get(foId)?.add(tallyInvoiceDate);
+          }
+          const tallyInvoiceNumber = toTrimmedString(invoice?.tally_invoice_number);
+          if (tallyInvoiceNumber) {
+            if (!tallyInvoiceNumbersByFo.has(foId)) tallyInvoiceNumbersByFo.set(foId, new Set());
+            tallyInvoiceNumbersByFo.get(foId)?.add(tallyInvoiceNumber);
+          }
+          const deliveryOrder = deliveryOrderById.get(dcIdByDcLineId.get(toTrimmedString(row.dc_line_id)) ?? "");
+          const dcNumber = toTrimmedString(deliveryOrder?.dc_number);
+          if (dcNumber) {
+            if (!deliveryOrdersByFo.has(foId)) deliveryOrdersByFo.set(foId, new Map());
+            deliveryOrdersByFo.get(foId)?.set(dcNumber, {
+              dc_number: dcNumber,
+              dc_date: toTrimmedString(deliveryOrder?.dc_date),
+            });
+          }
         }
       }
     }
@@ -1451,7 +1634,12 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         production_status: computeProductionStatus(orderedKg, allocatedKg),
         dispatched_qty_kg: dispatchedKg,
         dispatch_status: dispatchedKg <= QTY_TOL ? "UNDISPATCHED" : dispatchedKg >= allocatedKg - QTY_TOL ? "FULLY_DISPATCHED" : "PARTIALLY_DISPATCHED",
-        dispatch_dates: [] as string[],
+        // Business rule: a posted invoice's Tally Invoice Date is the actual
+        // dispatch date. An FO can be dispatched through multiple invoices.
+        dispatch_dates: [...(dispatchDatesByFo.get(foId) ?? new Set<string>())].sort((a, b) => b.localeCompare(a)),
+        tally_invoice_numbers: [...(tallyInvoiceNumbersByFo.get(foId) ?? new Set<string>())].sort(),
+        delivery_orders: Array.from((deliveryOrdersByFo.get(foId) ?? new Map<string, { dc_number: string; dc_date: string }>()).values())
+          .sort((a, b) => b.dc_date.localeCompare(a.dc_date)),
         pending_dispatch_kg: Math.max(0, orderedKg - dispatchedKg),
       };
     });

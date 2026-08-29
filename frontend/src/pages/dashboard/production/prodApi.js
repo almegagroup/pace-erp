@@ -121,6 +121,12 @@ export const reactivateStrokeMaster = (id) => fetchProd("POST", `/api/production
 export const listPlanFeed = (p) => fetchProd("GET", "/api/production/plan-feed", undefined, p);
 export const getPlanFeed = (id) => fetchProd("GET", `/api/production/plan-feed/${id}`);
 export const createPlanFeed = (body) => fetchProd("POST", "/api/production/plan-feed", body);
+export const addPlanFeedItem = (foId, body) => fetchProd("POST", `/api/production/plan-feed/${foId}/items`, body);
+export const updatePlanFeedItem = (foId, itemId, body) => fetchProd("PATCH", `/api/production/plan-feed/${foId}/items/${itemId}`, body);
+export const deletePlanFeedItem = (foId, itemId) => fetchProd("DELETE", `/api/production/plan-feed/${foId}/items/${itemId}`);
+export const addMtestPlanFeedItem = (foId, body) => fetchProd("POST", `/api/production/plan-feed/${foId}/items-mtest`, body);
+export const updateMtestPlanFeedItem = (foId, itemId, body) => fetchProd("PATCH", `/api/production/plan-feed/${foId}/items-mtest/${itemId}`, body);
+export const deleteMtestPlanFeedItem = (foId, itemId) => fetchProd("DELETE", `/api/production/plan-feed/${foId}/items-mtest/${itemId}`);
 export const updatePlanFeed = (id, body) => fetchProd("PATCH", `/api/production/plan-feed/${id}`, body);
 export const updateMtestPlanFeed = (id, body) => fetchProd("PATCH", `/api/production/plan-feed/${id}/edit-mtest`, body);
 export const cancelPlanFeed = (id) => fetchProd("POST", `/api/production/plan-feed/${id}/cancel`);
