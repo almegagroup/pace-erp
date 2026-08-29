@@ -918,6 +918,9 @@ export function mapSoLineToFo(data) {
 export function mapSoLineToCustomerAddress(data) {
   return fetchProcurement("POST", "/api/procurement/so-map/map-address", data);
 }
+export function mapSoLineToDepot(data) {
+  return fetchProcurement("POST", "/api/procurement/so-map/map-depot", data);
+}
 export function unmapSoAllocation(allocationId) {
   return fetchProcurement("POST", `/api/procurement/so-map/${encodeURIComponent(allocationId)}/unmap`);
 }

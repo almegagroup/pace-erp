@@ -34,6 +34,7 @@ import {
   listFoOptionsForSo,
   listSoForMap,
   mapSoLineToCustomerAddress,
+  mapSoLineToDepot,
   mapSoLineToFo,
   unmapSoAllocation,
 } from "../procurementApi.js";
@@ -95,7 +96,7 @@ function MapDrawer({ so, onClose, onChanged }) {
         so_id: so.id,
         so_line_id: selectedLineId,
         fo_id: selectedFoId,
-        allocated_qty: Number(qty),
+        allocated_qty: enteredBaseQty,
         sku_mismatch_confirmed: confirmMismatch,
       });
       setQty("");
@@ -123,8 +124,24 @@ function MapDrawer({ so, onClose, onChanged }) {
         so_id: so.id,
         so_line_id: selectedLineId,
         customer_address_id: selectedAddressId,
-        allocated_qty: Number(qty),
+        allocated_qty: enteredBaseQty,
       });
+      setQty("");
+      await refresh();
+      onChanged();
+    } catch (mapError) {
+      setActionError(mapError instanceof Error ? mapError.message : "SO_MAP_FAILED");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleMapToDepot() {
+    if (!selectedLineId || !qty) { setActionError("Select a line and quantity."); return; }
+    setSaving(true);
+    setActionError("");
+    try {
+      await mapSoLineToDepot({ so_id: so.id, so_line_id: selectedLineId, allocated_qty: enteredBaseQty });
       setQty("");
       await refresh();
       onChanged();
@@ -151,6 +168,15 @@ function MapDrawer({ so, onClose, onChanged }) {
 
   const lines = detail?.lines ?? [];
   const allocations = detail?.allocations ?? [];
+  const destinationMode = detail?.destination_mode ?? "DIRECT";
+  const selectedLine = lines.find((line) => line.id === selectedLineId) ?? null;
+  const quantityLabel = selectedLine?.map_quantity_mode === "PACK_QTY" ? `Pack Qty (${selectedLine.map_uom})`
+    : selectedLine?.map_quantity_mode === "BASE_QTY" ? `Base Qty (${selectedLine.map_uom})`
+      : `Order Qty (${selectedLine?.map_uom || "KG"})`;
+  const enteredBaseQty = selectedLine?.map_quantity_mode === "PACK_QTY"
+    ? Number(qty || 0) * Number(selectedLine.map_per_pack_qty || 0)
+    : Number(qty || 0);
+  const hasValidPackFactor = selectedLine?.map_quantity_mode !== "PACK_QTY" || Number(selectedLine.map_per_pack_qty || 0) > 0;
 
   return (
     <DrawerBase
@@ -176,7 +202,7 @@ function MapDrawer({ so, onClose, onChanged }) {
             <ErpDenseGrid
               cellNavigate
               columns={[
-                { key: "material", label: "Item", width: "160px", render: (line) => line.line_material_type },
+                { key: "material", label: "Item", width: "300px", render: (line) => `${line.line_material_type}${line.fg_type ? ` / ${line.fg_type}` : ""} — ${line.material_display || "—"}` },
                 { key: "total", label: "Total Qty", width: "90px", align: "right", render: (line) => Number(line.total_qty ?? 0).toFixed(4) },
                 { key: "mapped", label: "Mapped Qty", width: "90px", align: "right", render: (line) => Number(line.mapped_qty ?? 0).toFixed(4) },
                 { key: "remaining", label: "Remaining", width: "90px", align: "right", render: (line) => Number(line.remaining_qty ?? 0).toFixed(4) },
@@ -187,19 +213,20 @@ function MapDrawer({ so, onClose, onChanged }) {
             />
           </div>
 
-          <ErpSectionCard eyebrow="Map" title="Map an SO Line to an FO">
+          <ErpSectionCard eyebrow="Map" title={destinationMode === "DEPOT" ? "Map an SO Line to an Optional FO" : "Map an SO Line to an FO"}>
             <div className="grid gap-2 md:grid-cols-4">
               <select value={selectedLineId} onChange={(event) => setSelectedLineId(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-xs">
                 <option value="">Select SO Line</option>
-                {lines.map((line) => <option key={line.id} value={line.id}>{line.line_material_type} — remaining {Number(line.remaining_qty ?? 0).toFixed(2)}</option>)}
+                {lines.map((line) => <option key={line.id} value={line.id}>{line.material_display || line.line_material_type} — remaining {Number(line.remaining_qty ?? 0).toFixed(2)}</option>)}
               </select>
               <select value={selectedFoId} onChange={(event) => setSelectedFoId(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-xs">
                 <option value="">Select FO Number</option>
                 {foOptions.map((fo) => <option key={fo.id} value={fo.id}>{fo.fo_number} — {fo.party_name} (remaining {Number(fo.remaining_qty ?? 0).toFixed(2)})</option>)}
               </select>
-              <input type="number" step="0.0001" value={qty} onChange={(event) => setQty(event.target.value)} placeholder="Qty" className="h-9 border border-slate-300 bg-[#fffef7] px-2 text-xs" />
-              <button type="button" disabled={saving} onClick={() => void handleMapToFo()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold text-sky-950 disabled:opacity-50">Map to FO</button>
+              <input type="number" step="0.0001" value={qty} onChange={(event) => setQty(event.target.value)} placeholder={quantityLabel} className="h-9 border border-slate-300 bg-[#fffef7] px-2 text-xs" />
+              <button type="button" disabled={saving || !hasValidPackFactor} onClick={() => void handleMapToFo()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold text-sky-950 disabled:opacity-50">Map to FO</button>
             </div>
+            {selectedLine?.map_quantity_mode === "PACK_QTY" ? <p className="mt-2 text-[11px] text-slate-600">Per Pack: {Number(selectedLine.map_per_pack_qty ?? 0).toFixed(4)} KG. Base quantity to allocate: {enteredBaseQty.toFixed(4)} KG.{!hasValidPackFactor ? " This SKU has no valid per-pack factor, so it cannot be mapped yet." : ""}</p> : null}
             <label className="mt-2 flex items-center gap-2 text-[11px] font-semibold text-slate-600">
               <input type="checkbox" checked={confirmMismatch} onChange={(event) => setConfirmMismatch(event.target.checked)} />
               Confirm mismatch (FG MTO/HPS/MTEST only — Asian sometimes declares a different SKU than what actually ships)
@@ -228,19 +255,30 @@ function MapDrawer({ so, onClose, onChanged }) {
             })() : null}
           </ErpSectionCard>
 
-          {addressOptions.length > 0 ? (
-            <ErpSectionCard eyebrow="Map" title="Map an SO Line to a Customer Address (no FO)">
+          {destinationMode === "DEPOT" ? (
+            <ErpSectionCard eyebrow="Map" title="Map an SO Line to the Fixed Depot">
+              <div className="grid gap-2 md:grid-cols-3">
+                <select value={selectedLineId} onChange={(event) => setSelectedLineId(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-xs">
+                  <option value="">Select SO Line</option>
+                  {lines.map((line) => <option key={line.id} value={line.id}>{line.material_display || line.line_material_type} — remaining {Number(line.remaining_qty ?? 0).toFixed(2)}</option>)}
+                </select>
+                <input type="number" step="0.0001" value={qty} onChange={(event) => setQty(event.target.value)} placeholder={quantityLabel} className="h-9 border border-slate-300 bg-[#fffef7] px-2 text-xs" />
+                <button type="button" disabled={saving || !hasValidPackFactor} onClick={() => void handleMapToDepot()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold text-sky-950 disabled:opacity-50">Map to Fixed Depot</button>
+              </div>
+            </ErpSectionCard>
+          ) : addressOptions.length > 0 ? (
+            <ErpSectionCard eyebrow="No FO Fallback" title="Add Customer Address Mapping for the Remaining Quantity">
               <div className="grid gap-2 md:grid-cols-4">
                 <select value={selectedLineId} onChange={(event) => setSelectedLineId(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-xs">
                   <option value="">Select SO Line</option>
-                  {lines.map((line) => <option key={line.id} value={line.id}>{line.line_material_type} — remaining {Number(line.remaining_qty ?? 0).toFixed(2)}</option>)}
+                  {lines.map((line) => <option key={line.id} value={line.id}>{line.material_display || line.line_material_type} — remaining {Number(line.remaining_qty ?? 0).toFixed(2)}</option>)}
                 </select>
                 <select value={selectedAddressId} onChange={(event) => setSelectedAddressId(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-xs">
                   <option value="">Select Customer Address</option>
                   {addressOptions.map((address) => <option key={address.id} value={address.id}>{address.site_name} — {address.town}, {address.state}</option>)}
                 </select>
-                <input type="number" step="0.0001" value={qty} onChange={(event) => setQty(event.target.value)} placeholder="Qty" className="h-9 border border-slate-300 bg-[#fffef7] px-2 text-xs" />
-                <button type="button" disabled={saving} onClick={() => void handleMapToAddress()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold text-sky-950 disabled:opacity-50">Map to Address</button>
+                <input type="number" step="0.0001" value={qty} onChange={(event) => setQty(event.target.value)} placeholder={quantityLabel} className="h-9 border border-slate-300 bg-[#fffef7] px-2 text-xs" />
+                <button type="button" disabled={saving || !hasValidPackFactor} onClick={() => void handleMapToAddress()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold text-sky-950 disabled:opacity-50">Add Customer Mapping</button>
               </div>
             </ErpSectionCard>
           ) : null}
@@ -250,7 +288,7 @@ function MapDrawer({ so, onClose, onChanged }) {
             <ErpDenseGrid
               cellNavigate
               columns={[
-                { key: "source", label: "Source", width: "200px", render: (row) => (row.fo_id ? `FO: ${row.fo_id}` : `Address: ${row.customer_address_id}`) },
+                { key: "source", label: "Destination", width: "280px", render: (row) => row.source_display || "Mapping destination" },
                 { key: "qty", label: "Allocated Qty", width: "100px", align: "right", render: (row) => Number(row.allocated_qty ?? 0).toFixed(4) },
                 { key: "actions", label: "", width: "90px", render: (row) => (
                   <button type="button" disabled={saving} onClick={() => void handleUnmap(row.id)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">Unmap</button>
