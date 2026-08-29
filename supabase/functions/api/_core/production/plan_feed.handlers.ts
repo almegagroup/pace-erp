@@ -156,7 +156,7 @@ export async function listPlanFeedHandler(req: Request, ctx: ProdHandlerContext)
     let query = serviceRoleClient
       .schema("erp_production").from("plan_feed")
       .select(`
-        id, company_id, fo_number, party_id, party_name, sku, material_id,
+        id, company_id, fo_number, party_id, customer_address_id, party_name, sku, material_id,
         description, ordered_qty_kg, pack_qty, order_date,
         scheduled_delivery_date, status, ordered_stroke_number, cancelled_at,
         created_by, created_at, last_updated_at
@@ -580,21 +580,22 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
     const scheduledDeliveryDate = toTrimmedString(body.scheduled_delivery_date) || null;
     const orderedStrokeNumber = toTrimmedString(body.ordered_stroke_number) || null;
 
-    if (!companyId || !foNumber || !partyName || (!sku && !materialId) || !orderedQtyKg || !orderDate) {
+    if (!companyId || !foNumber || !partyId || !partyName || (!sku && !materialId) || !orderedQtyKg || !orderDate) {
       return foErr(req, ctx, "PROD_PLAN_FEED_INVALID", 400,
-        "company_id, fo_number, party_name, sku or material_id, ordered_qty_kg, order_date required");
+        "company_id, fo_number, party_id, party_name, sku or material_id, ordered_qty_kg, order_date required");
     }
     try {
       await assertCompanyScope(ctx, companyId);
     } catch {
       return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    if (customerAddressId) {
-      const { data: address, error: addressError } = await serviceRoleClient
-        .schema("erp_master").from("customer_address").select("customer_id").eq("id", customerAddressId).eq("status", "ACTIVE").maybeSingle();
-      if (addressError || !address || toTrimmedString((address as JsonRecord).customer_id) !== partyId) {
-        return foErr(req, ctx, "PROD_PLAN_FEED_ADDRESS_PARTY_MISMATCH", 422, "Selected address must be an active address of the selected party.");
-      }
+    if (!customerAddressId) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_SHIP_TO_REQUIRED", 422, "Select an active Ship-To address before creating this FO.");
+    }
+    const { data: address, error: addressError } = await serviceRoleClient
+      .schema("erp_master").from("customer_address").select("customer_id").eq("id", customerAddressId).eq("status", "ACTIVE").maybeSingle();
+    if (addressError || !address || toTrimmedString((address as JsonRecord).customer_id) !== partyId) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_ADDRESS_PARTY_MISMATCH", 422, "Selected address must be an active address of the selected party.");
     }
 
     const { data, error } = await serviceRoleClient
@@ -679,6 +680,9 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
     }
 
     const body = await parseBody(req);
+    if (body.customer_address_id === undefined && (body.party_id !== undefined || !(existing as JsonRecord).customer_address_id)) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_SHIP_TO_REQUIRED", 422, "Select an active Ship-To address before saving this FO.");
+    }
     const touchesSkuFields = body.sku !== undefined || body.material_id !== undefined || body.description !== undefined;
 
     if (touchesSkuFields) {
@@ -727,12 +731,13 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
     if (body.customer_address_id !== undefined) {
       const customerAddressId = toTrimmedString(body.customer_address_id) || null;
       const effectivePartyId = toTrimmedString(updates.party_id ?? (existing as JsonRecord).party_id);
-      if (customerAddressId) {
-        const { data: address, error: addressError } = await serviceRoleClient
-          .schema("erp_master").from("customer_address").select("customer_id").eq("id", customerAddressId).eq("status", "ACTIVE").maybeSingle();
-        if (addressError || !address || toTrimmedString((address as JsonRecord).customer_id) !== effectivePartyId) {
-          return foErr(req, ctx, "PROD_PLAN_FEED_ADDRESS_PARTY_MISMATCH", 422, "Selected address must be an active address of the selected party.");
-        }
+      if (!customerAddressId) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_SHIP_TO_REQUIRED", 422, "Select an active Ship-To address before saving this FO.");
+      }
+      const { data: address, error: addressError } = await serviceRoleClient
+        .schema("erp_master").from("customer_address").select("customer_id").eq("id", customerAddressId).eq("status", "ACTIVE").maybeSingle();
+      if (addressError || !address || toTrimmedString((address as JsonRecord).customer_id) !== effectivePartyId) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_ADDRESS_PARTY_MISMATCH", 422, "Selected address must be an active address of the selected party.");
       }
       updates.customer_address_id = customerAddressId;
     }

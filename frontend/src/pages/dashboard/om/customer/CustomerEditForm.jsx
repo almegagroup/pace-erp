@@ -21,6 +21,7 @@ import { INDIAN_STATES } from "../../../../data/indianStates.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import {
   MASTER_PICKER_FETCH_LIMIT,
   useVendorOptionsQuery,
@@ -729,8 +730,14 @@ export default function CustomerEditForm({ customerId, onSaved, onCancel, submit
                     <div className="flex items-center justify-between gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          if (window.confirm("Remove this address? It will be unmapped from any VDC/DC and hidden — this can't be undone from here, you'd need to add a fresh address instead.")) {
+                        onClick={async () => {
+                          const confirmed = await openActionConfirm({
+                            eyebrow: "Customer Address",
+                            title: "Remove this address?",
+                            message: "It will be unmapped from any VDC/DC and hidden. This cannot be undone here; add a new address if it is needed again.",
+                            confirmLabel: "Remove address",
+                          });
+                          if (confirmed) {
                             void handleRemoveAddress(address);
                           }
                         }}
