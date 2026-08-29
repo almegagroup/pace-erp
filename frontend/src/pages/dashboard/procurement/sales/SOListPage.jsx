@@ -44,6 +44,10 @@ const SO_EXPORT_COLUMNS = [
   { key: "so_date", label: "SO Date" },
   { key: "status", label: "Status" },
   { key: "company_display", label: "Company" },
+  { key: "net_amount", label: "Net Amount" },
+  { key: "cgst_amount", label: "CGST" },
+  { key: "sgst_amount", label: "SGST" },
+  { key: "igst_amount", label: "IGST" },
   { key: "total_value", label: "Total Value" },
 ];
 
@@ -205,7 +209,11 @@ export default function SOListPage() {
                     ),
                   },
                   { key: "company_display", label: "Company", render: (row) => row.company_display || "—" },
-                  { key: "total_value", label: "Total Value", width: "120px", render: (row) => formatMoney(row.total_invoice_value ?? row.total_value) },
+                  { key: "net_amount", label: "Net Amount", width: "120px", align: "right", render: (row) => formatMoney(row.net_amount) },
+                  { key: "cgst_amount", label: "CGST", width: "100px", align: "right", render: (row) => formatMoney(row.cgst_amount) },
+                  { key: "sgst_amount", label: "SGST", width: "100px", align: "right", render: (row) => formatMoney(row.sgst_amount) },
+                  { key: "igst_amount", label: "IGST", width: "100px", align: "right", render: (row) => formatMoney(row.igst_amount) },
+                  { key: "total_value", label: "Total Value", width: "120px", align: "right", render: (row) => formatMoney(row.total_value) },
                 ]}
                 rows={rows}
                 rowKey={(row) => row.id}
