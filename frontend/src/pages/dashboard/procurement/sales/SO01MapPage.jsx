@@ -35,6 +35,7 @@ import {
   listSoForMap,
   saveSoMapGroup,
   releaseSoMapGroup,
+  unmapSoAllocation,
 } from "../procurementApi.js";
 
 function StatusPill({ status }) {
@@ -148,10 +149,9 @@ function MapDrawer({ so, onClose, onChanged }) {
   }
 
   async function handleEditGroup(group) {
-    if (!group.map_group_id) { setActionError("This legacy mapping can only be released row by row."); return; }
     setSaving(true); setActionError("");
     try {
-      await releaseSoMapGroup(group.map_group_id);
+      await releaseExistingMapping(group);
       if (group.fo_id) chooseFo(group.fo_id);
       else if (group.customer_address_id) chooseAddress(group.customer_address_id);
       setDraftQtyByLine(Object.fromEntries(group.rows.map((row) => [row.so_line_id, getDisplayQty({ ...lines.find((line) => line.id === row.so_line_id), remaining_qty: row.allocated_qty })])));
@@ -159,6 +159,31 @@ function MapDrawer({ so, onClose, onChanged }) {
       await refresh(); onChanged();
     } catch (editError) { setActionError(editError instanceof Error ? editError.message : "SO_MAP_GROUP_EDIT_FAILED"); }
     finally { setSaving(false); }
+  }
+
+  async function releaseExistingMapping(group) {
+    if (group.map_group_id) {
+      await releaseSoMapGroup(group.map_group_id);
+      return;
+    }
+    const allocationId = group.rows?.[0]?.id;
+    if (!allocationId) throw new Error("SO_MAP_ALLOCATION_NOT_FOUND");
+    await unmapSoAllocation(allocationId);
+  }
+
+  async function handleUnmapGroup(group) {
+    const itemCount = group.rows?.length ?? 0;
+    if (!window.confirm(`Unmap ${itemCount} item${itemCount === 1 ? "" : "s"} from ${group.source_display || "this destination"}? This is blocked if a Delivery Order already uses the mapping.`)) return;
+    setSaving(true); setActionError("");
+    try {
+      await releaseExistingMapping(group);
+      await refresh();
+      onChanged();
+    } catch (unmapError) {
+      setActionError(unmapError instanceof Error ? unmapError.message : "SO_MAP_UNMAP_FAILED");
+    } finally {
+      setSaving(false);
+    }
   }
 
   const lines = detail?.lines ?? [];
@@ -261,8 +286,11 @@ function MapDrawer({ so, onClose, onChanged }) {
               columns={[
                 { key: "source", label: "Destination", width: "280px", render: (group) => group.source_display || "Mapping destination" },
                 { key: "qty", label: "Items / Qty", width: "140px", align: "right", render: (group) => `${group.rows.length} / ${group.rows.reduce((sum, row) => sum + Number(row.allocated_qty ?? 0), 0).toFixed(4)}` },
-                { key: "actions", label: "", width: "90px", render: (row) => (
-                  <button type="button" disabled={saving} onClick={() => void handleEditGroup(row)} className="border border-sky-300 bg-white px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-50">Edit</button>
+                { key: "actions", label: "", width: "150px", render: (row) => (
+                  <div className="flex justify-end gap-1">
+                    <button type="button" disabled={saving} onClick={() => void handleEditGroup(row)} className="border border-sky-300 bg-white px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-50">Edit</button>
+                    <button type="button" disabled={saving} onClick={() => void handleUnmapGroup(row)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">Unmap</button>
+                  </div>
                 ) },
               ]}
               rows={mappingGroups}

@@ -1115,6 +1115,12 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" } },
   },
   {
+    // Temporary compatibility for the already-deployed SO Map bundle. The
+    // canonical grouped route above remains the route used by current code.
+    pattern: /^\/api\/procurement\/so-map\/[^/]+\/release$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" } },
+  },
+  {
     pattern: /^\/api\/procurement\/delivery-orders\/[^/]+$/,
     methods: { GET: { skipAcl: false, resourceCode: "PROC_DO_LIST", action: "VIEW" } },
   },

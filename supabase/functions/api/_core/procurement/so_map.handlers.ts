@@ -101,6 +101,11 @@ function soMapErrorResponse(req: Request, ctx: ProcurementHandlerContext, code: 
 function getIdFromPath(req: Request): string {
   return new URL(req.url).pathname.split("/").filter(Boolean)[3] ?? "";
 }
+function getGroupIdFromPath(req: Request): string {
+  const segments = new URL(req.url).pathname.split("/").filter(Boolean);
+  const groupIndex = segments.indexOf("groups");
+  return groupIndex >= 0 ? (segments[groupIndex + 1] ?? "") : "";
+}
 
 async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
@@ -705,9 +710,9 @@ export async function saveSoMapGroupHandler(req: Request, ctx: ProcurementHandle
   } catch (error) { return soMapErrorResponse(req, ctx, error instanceof Error ? error.message : "SO_MAP_GROUP_SAVE_FAILED", 500, "Unable to save Ship-To mapping."); }
 }
 
-export async function releaseSoMapGroupHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+async function releaseSoMapGroupById(req: Request, ctx: ProcurementHandlerContext, groupId: string): Promise<Response> {
   try {
-    const groupId = getIdFromPath(req);
+    if (!groupId) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_ID_MISSING", 400, "Mapping group id is required.");
     const { data: group, error } = await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").select("*, so:so_id(company_id)").eq("id", groupId).maybeSingle();
     if (error || !group) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_NOT_FOUND", 404, "Mapping group not found.");
     const companyId = toTrimmedString(((group as JsonRecord).so as JsonRecord | null)?.company_id);
@@ -721,6 +726,25 @@ export async function releaseSoMapGroupHandler(req: Request, ctx: ProcurementHan
     await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").update({ status: "RELEASED", last_updated_by: ctx.auth_user_id, last_updated_at: now }).eq("id", groupId);
     return okResponse({ id: groupId, status: "RELEASED" }, ctx.request_id, req);
   } catch (error) { return soMapErrorResponse(req, ctx, error instanceof Error ? error.message : "SO_MAP_GROUP_RELEASE_FAILED", 500, "Unable to release mapping group."); }
+}
+
+export async function releaseSoMapGroupHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  return await releaseSoMapGroupById(req, ctx, getGroupIdFromPath(req));
+}
+
+// Compatibility for the already-deployed SO Map bundle. It used the old
+// /so-map/:id/release path, where :id could be either a Ship-To group or a
+// pre-grouping allocation row. Both paths retain the same ACL, scope, and DO
+// lock checks as their canonical endpoints.
+export async function releaseLegacySoMapMappingHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  const mappingId = getIdFromPath(req);
+  if (!mappingId) return soMapErrorResponse(req, ctx, "SO_MAP_ALLOCATION_ID_MISSING", 400, "Mapping id is required.");
+  const { data: group, error } = await serviceRoleClient.schema("erp_procurement")
+    .from("sales_order_map_group").select("id").eq("id", mappingId).maybeSingle();
+  if (error) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_LOOKUP_FAILED", 500, "Unable to find mapping group.");
+  return group
+    ? await releaseSoMapGroupById(req, ctx, mappingId)
+    : await unmapSoAllocationHandler(req, ctx);
 }
 
 // §133.9 — unmap is append-on-reversal (status=RELEASED), never a hard
