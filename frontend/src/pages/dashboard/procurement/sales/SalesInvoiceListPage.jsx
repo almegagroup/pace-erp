@@ -217,9 +217,11 @@ export default function SalesInvoiceListPage() {
                   key: "actions",
                   label: "",
                   width: "150px",
+                  focusActionControl: true,
                   render: (row) => row.status === "CREATED" ? (
                     <button
                       type="button"
+                      data-erp-grid-action-control="prepare-invoices"
                       onClick={(event) => { event.stopPropagation(); openPgiInvoice(row); }}
                       className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-950"
                     >
@@ -228,6 +230,7 @@ export default function SalesInvoiceListPage() {
                   ) : row.invoice_id ? (
                     <button
                       type="button"
+                      data-erp-grid-action-control="open-invoice"
                       onClick={(event) => { event.stopPropagation(); openInvoiceDetail(row); }}
                       className="border border-slate-400 bg-white px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-700"
                     >
