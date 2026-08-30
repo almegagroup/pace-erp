@@ -162,10 +162,24 @@ function computeGroupPreviewTotal(group, input) {
 // at final submit (allGroupsReady) -- kept as one function so "Save & Next"
 // can never advance a row that would later fail server-side validation.
 function groupInputIsValid(group, input) {
-  if (!input) return false;
-  if (!input.tally_invoice_number.trim() || !input.tally_invoice_date) return false;
-  if (group.ibn_required && !input.inbound_number.trim()) return false;
-  return true;
+  return !groupInputValidationMessage(group, input);
+}
+
+function groupInputValidationMessage(group, input) {
+  if (!input) return "Invoice group input is unavailable. Reload and try again.";
+  if (!input.tally_invoice_number.trim() || !input.tally_invoice_date) return "Tally Invoice Number and Date are required.";
+  if (group.ibn_required && !input.inbound_number.trim()) return "Inbound Number (IBN) is required for this invoice group.";
+
+  const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
+  if (freightEligible && input.freight?.included && !input.freight?.to_pay) {
+    const freightValue = input.freight.mode === "RATE" ? input.freight.rate : input.freight.amount;
+    if (!(toNumber(freightValue) > 0)) return input.freight.mode === "RATE" ? "Enter a positive freight rate before validating." : "Enter a positive freight amount before validating.";
+  }
+  if ((input.additional_costs || []).some((line) => !line.category_id || !(toNumber(line.amount) > 0))) {
+    return "Every additional-cost line needs a category and a positive amount.";
+  }
+  if (input.round_off_amount !== "" && !Number.isFinite(Number(input.round_off_amount))) return "Round Off must be a valid number.";
+  return "";
 }
 
 function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFreightChange, onAddAdditionalCost, onUpdateAdditionalCost, onRemoveAdditionalCost, categories, onCategoryCreated, onClose, onSaveNext, hasNext }) {
@@ -178,15 +192,24 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
   const taxRows = hsnTaxRows(group);
 
   function handleSaveNext() {
-    if (!groupInputIsValid(group, input)) {
-      setValidationError(group.ibn_required && !input.inbound_number.trim()
-        ? "Tally Invoice Number/Date and Inbound Number (IBN) are required before moving on."
-        : "Tally Invoice Number and Date are required before moving on.");
+    const message = groupInputValidationMessage(group, input);
+    if (message) {
+      setValidationError(message);
       return;
     }
     setValidationError("");
     onSaveNext();
   }
+
+  useEffect(() => {
+    function handleValidateShortcut(event) {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.key.toLowerCase() !== "v") return;
+      event.preventDefault();
+      handleSaveNext();
+    }
+    window.addEventListener("keydown", handleValidateShortcut);
+    return () => window.removeEventListener("keydown", handleValidateShortcut);
+  }, [group, input, onSaveNext]);
 
   async function handleCreateCategory() {
     const name = newCategoryName.trim();
@@ -230,8 +253,8 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
               <div>Dated<strong className="block">{formatDate(input.tally_invoice_date)}</strong></div>
               <div>Delivery Note<strong className="block">{dc?.lr_number || "—"}</strong></div>
               <div>Delivery Note Date<strong className="block">{formatDate(dc?.lr_date)}</strong></div>
-              <div>Buyer&apos;s Order No. (FO)<strong className="block">{group.fo_number || "—"}</strong></div>
-              <div>FO Date<strong className="block">{formatDate(group.fo_date)}</strong></div>
+              <div>Buyer&apos;s Order No.<strong className="block">{group.customer_po_number || "—"}</strong></div>
+              <div>Buyer&apos;s Order Date<strong className="block">{formatDate(group.customer_po_date)}</strong></div>
               {group.ibn_required ? <div>Inbound No. (IBN)<strong className="block">{input.inbound_number || "—"}</strong></div> : null}
               <div>Dispatched Through<strong className="block">{dc?.transporter_display || "—"}</strong></div>
               <div>Motor Vehicle No.<strong className="block">{dc?.vehicle_number || "—"}</strong></div>
@@ -397,7 +420,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
         <div className="flex gap-2">
           <button type="button" onClick={onClose} className="flex-1 border border-slate-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">Close</button>
           <button type="button" onClick={handleSaveNext} className="flex-1 border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-white">
-            {hasNext ? "Validate & Next Group →" : "Validate & Close"}
+            {hasNext ? "Validate & Next Group →" : "Validate & Close"} <span className="ml-1 text-[10px] text-slate-300">ALT+V</span>
           </button>
         </div>
       </div>
@@ -439,7 +462,7 @@ export default function PgiInvoiceGroupsCreatePage() {
   const categories = Array.isArray(categoriesQuery.data) ? categoriesQuery.data : [];
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const paymentTermMap = useMemo(
-    () => new Map((paymentTermQuery.paymentTerms ?? []).map((entry) => [entry.id, `${entry.code || entry.name} | ${entry.name}`])),
+    () => new Map((paymentTermQuery.paymentTerms ?? []).map((entry) => [entry.id, entry.name || entry.code || ""])),
     [paymentTermQuery.paymentTerms]
   );
 
@@ -688,7 +711,7 @@ export default function PgiInvoiceGroupsCreatePage() {
           group={activeGroup}
           input={groupInputs[activeGroup.group_key] || defaultGroupInput(activeGroup)}
           dc={dc}
-          paymentTermLabel={activeGroup.payment_term_id ? (paymentTermMap.get(activeGroup.payment_term_id) || "As per SO Payment Term") : null}
+          paymentTermLabel={activeGroup.payment_term_id ? (paymentTermMap.get(activeGroup.payment_term_id) || "As per Sales Order") : null}
           onChange={(patch) => updateGroupInput(activeGroup.group_key, patch)}
           onFreightChange={(patch) => updateGroupFreight(activeGroup.group_key, patch)}
           onAddAdditionalCost={() => addAdditionalCostLine(activeGroup.group_key)}
