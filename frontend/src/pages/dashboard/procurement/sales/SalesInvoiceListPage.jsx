@@ -1,14 +1,13 @@
 /*
  * File-Path: frontend/src/pages/dashboard/procurement/sales/SalesInvoiceListPage.jsx
  * Domain: PROCUREMENT / Sales
- * Purpose: §113.15 Stage 3 — SO02 rebuilt as the DO / PGI queue (business
+ * Purpose: §113.15 Stage 3 — SO02 DO-selection queue (business
  *          owner decision, 2026-07-31: reuse this same page/TX-code for
  *          both SO- and STO-sourced dispatches rather than a separate STO
  *          page). Lists Delivery Orders, not directly SO/STO -- DOs not
  *          yet PGI'd (status CREATED) sort to the top as action items;
- *          DISPATCHED ones sort below by date. "PGI & INVOICE" on a
- *          pending row opens PgiInvoiceGroupsCreatePage (§133.13,
- *          IBN-driven multi-invoice) for that DO.
+ *          DISPATCHED ones sort below by date. "Prepare Invoices" opens the
+ *          §133.13 invoice-group grid -- not a duplicate DO-detail page.
  * Authority: Frontend
  */
 
@@ -167,7 +166,7 @@ export default function SalesInvoiceListPage() {
   return (
     <ErpMasterListTemplate
       eyebrow="Procurement"
-      title="Delivery Order — PGI & Invoice Queue"
+      title="PGI & Invoice — Select Delivery Order"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setReloadTick((tick) => tick + 1) },
         { key: "do-list", label: "All DOs", tone: "neutral", onClick: () => { openScreen(OPERATION_SCREENS.PROC_DO_LIST.screen_code); navigate("/dashboard/procurement/delivery-orders"); } },
@@ -176,7 +175,7 @@ export default function SalesInvoiceListPage() {
       notices={error ? [{ key: "do-queue-error", tone: "error", message: error }] : []}
       filterSection={{
         eyebrow: "Search And Filter",
-        title: "Delivery orders awaiting PGI + Invoice (SO/STO)",
+        title: "Select a completed Delivery Order; invoice rows are calculated next",
         children: (
           <div className="grid gap-3 xl:grid-cols-[220px_minmax(0,1fr)]">
             <TransactionCompanySelector
@@ -190,7 +189,7 @@ export default function SalesInvoiceListPage() {
         ),
       }}
       listSection={{
-        eyebrow: "DO Queue",
+        eyebrow: "Delivery Orders",
         title: loading ? "Loading delivery orders" : `${pageTotal} delivery order row${pageTotal === 1 ? "" : "s"}`,
         children: (
           <div className="grid gap-3">
@@ -201,9 +200,7 @@ export default function SalesInvoiceListPage() {
                 { key: "dc_number", label: "DO Number", width: "140px" },
                 { key: "source_display", label: "Source", width: "100px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },
                 { key: "source_document_number", label: "SO / STO Number", width: "140px", render: (row) => row.source_document_number || "—" },
-                { key: "customer_display", label: "Customer / Counterparty", render: (row) => row.customer_display || "—" },
-                { key: "bill_to_display", label: "Bill-To", render: (row) => row.bill_to_display || "—" },
-                { key: "ship_to_display", label: "Ship-To", render: (row) => row.ship_to_display || "—" },
+                 { key: "customer_display", label: "Customer / Counterparty", render: (row) => row.customer_display || "—" },
                 { key: "vehicle_number", label: "Truck", width: "120px", render: (row) => row.vehicle_number || "—" },
                 { key: "transporter_display", label: "Transporter", render: (row) => row.transporter_display || "—" },
                 { key: "lr_number", label: "LR Number", width: "110px", render: (row) => row.lr_number || "—" },
@@ -215,12 +212,7 @@ export default function SalesInvoiceListPage() {
                   width: "130px",
                   render: (row) => <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getStatusTone(row.status)}`}>{row.status === "CREATED" ? "PENDING PGI" : row.status}</span>,
                 },
-                { key: "total_value", label: "Total Value", width: "120px", render: (row) => (Number.isFinite(Number(row.total_value)) ? Number(row.total_value).toFixed(2) : "-") },
-                { key: "invoice_number", label: "Invoice Number", width: "130px", render: (row) => row.invoice_number || "—" },
-                { key: "invoice_date", label: "Invoice Date", width: "110px", render: (row) => row.invoice_date || "—" },
-                { key: "tally_invoice_number", label: "Tally Invoice No.", width: "130px", render: (row) => row.tally_invoice_number || "—" },
-                { key: "tally_invoice_date", label: "Tally Invoice Date", width: "125px", render: (row) => row.tally_invoice_date || "—" },
-                { key: "inbound_number", label: "Inbound Number", width: "130px", render: (row) => row.ibn_required ? (row.inbound_number || "") : "" },
+                 { key: "total_value", label: "DO Value", width: "120px", render: (row) => (Number.isFinite(Number(row.total_value)) ? Number(row.total_value).toFixed(2) : "-") },
                 {
                   key: "actions",
                   label: "",
@@ -231,7 +223,7 @@ export default function SalesInvoiceListPage() {
                       onClick={(event) => { event.stopPropagation(); openPgiInvoice(row); }}
                       className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-950"
                     >
-                      PGI &amp; Invoice
+                      Prepare Invoices
                     </button>
                   ) : row.invoice_id ? (
                     <button

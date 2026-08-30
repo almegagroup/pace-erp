@@ -496,18 +496,35 @@ async function hydrateSalesInvoice(
   const lines = await fetchSalesInvoiceLines(invoiceId);
   // §133.13 -- additional cost lines live in their own table (a variable-
   // length list, unlike the header's single freight_* set of columns).
-  const { data: additionalCostLines, error: additionalCostLinesError } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("sales_invoice_additional_cost_line")
-    .select("id, category_id, amount, gst_included, gst_treatment, gst_rate, gst_amount, line_total, additional_cost_category:category_id(category_name)")
-    .eq("invoice_id", invoiceId);
+  // Dispatch Reco is generated in the same P601 posting transaction. It is
+  // read-only here: a user must reverse the invoice rather than alter audit rows.
+  const [additionalCostResult, dispatchRecoResult] = await Promise.all([
+    serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_invoice_additional_cost_line")
+      .select("id, category_id, amount, gst_included, gst_treatment, gst_rate, gst_amount, line_total, additional_cost_category:category_id(category_name)")
+      .eq("invoice_id", invoiceId),
+    serviceRoleClient
+      .schema("erp_production")
+      .from("dispatch_reco")
+      .select("id, invoice_number, tally_invoice_number, tally_invoice_date, inbound_number, dc_number, so_number, fo_number, dispatch_category, process_order_number, batch_number, packing_order_number, po_type, dispatch_qty_kg, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, is_voided, voided_at")
+      .eq("invoice_id", invoiceId)
+      .order("created_at", { ascending: true }),
+  ]);
+  const { data: additionalCostLines, error: additionalCostLinesError } = additionalCostResult;
   if (additionalCostLinesError) throw new Error("SALES_INVOICE_ADDITIONAL_COST_FETCH_FAILED");
+  if (dispatchRecoResult.error) throw new Error("SALES_INVOICE_DISPATCH_RECO_FETCH_FAILED");
   const additionalCostLineRows = ((additionalCostLines ?? []) as JsonRecord[]).map((row) => ({
     ...row,
     category_name: (row.additional_cost_category as JsonRecord | null)?.category_name ?? null,
     additional_cost_category: undefined,
   }));
-  return { ...invoice, lines, additional_cost_lines: additionalCostLineRows };
+  return {
+    ...invoice,
+    lines,
+    additional_cost_lines: additionalCostLineRows,
+    dispatch_reco_lines: (dispatchRecoResult.data ?? []) as JsonRecord[],
+  };
 }
 
 async function fetchDeliveryChallan(dcId: string): Promise<JsonRecord> {

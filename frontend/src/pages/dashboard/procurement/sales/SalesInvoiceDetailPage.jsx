@@ -128,7 +128,10 @@ export default function SalesInvoiceDetailPage() {
   }, [isCreateMode, salesOrder, selectedDcId]);
 
   const gstType = detail?.gst_type || "CGST_SGST";
-  const invoiceLines = isCreateMode ? draftLines : detail?.lines ?? [];
+  const invoiceLines = useMemo(
+    () => (isCreateMode ? draftLines : detail?.lines ?? []),
+    [detail?.lines, draftLines, isCreateMode]
+  );
   const totalTaxable = useMemo(
     () =>
       invoiceLines.reduce((sum, line) => {
@@ -319,7 +322,7 @@ export default function SalesInvoiceDetailPage() {
               <ErpFieldPreview label="Tally Invoice Date" value={detail.tally_invoice_date || "—"} />
               <ErpFieldPreview label="GST Type" value={detail.gst_type} />
               <ErpFieldPreview label="Total Taxable" value={formatMoney(detail.total_taxable_value)} />
-              <ErpFieldPreview label="Freight" value={detail.freight_included ? formatMoney(detail.freight_amount) : "—"} />
+              <ErpFieldPreview label="Freight" value={detail.freight_to_pay ? "TO PAY (Customer)" : (detail.freight_included ? formatMoney(detail.freight_amount) : "—")} />
               <ErpFieldPreview label="Round Off" value={formatMoney(detail.round_off_amount ?? 0)} />
               <ErpFieldPreview label="Total Invoice" value={formatMoney(detail.total_invoice_value)} />
               {detail.status === "CANCELLED" ? (
@@ -333,12 +336,13 @@ export default function SalesInvoiceDetailPage() {
               (PgiInvoiceGroupsCreatePage). A legacy §113.15 single-invoice-per-DO
               invoice simply shows "—" for all of these, which is correct (they
               never applied to it). */}
-          {(detail.inbound_number || detail.fo_number || detail.e_way_bill_applicable || detail.freight_mode || (detail.additional_cost_lines ?? []).length > 0) ? (
+          {(detail.inbound_number || detail.fo_number || detail.e_way_bill_applicable || detail.freight_to_pay || detail.freight_mode || (detail.additional_cost_lines ?? []).length > 0) ? (
             <ErpSectionCard eyebrow="§133.13" title="IBN / FO / e-Way Bill / Freight / Additional Cost">
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
                 <ErpFieldPreview label="Inbound Number (IBN)" value={detail.inbound_number || "—"} />
                 <ErpFieldPreview label="FO Number" value={detail.fo_number ? `${detail.fo_number} / ${detail.fo_date || "—"}` : "—"} />
                 <ErpFieldPreview label="e-Way Bill" value={detail.e_way_bill_applicable ? (detail.e_way_bill_number || "(number pending)") : "No"} />
+                {detail.freight_to_pay ? <ErpFieldPreview label="Freight Settlement" value="TO PAY — customer pays freight" /> : null}
                 {detail.freight_mode ? (
                   <>
                     <ErpFieldPreview label="Freight Mode" value={detail.freight_mode === "RATE" ? `Rate (${formatMoney(detail.freight_rate)} × ${formatMoney(detail.freight_net_weight)})` : "Ad Hoc"} />
@@ -404,6 +408,35 @@ export default function SalesInvoiceDetailPage() {
               emptyMessage="No invoice lines found."
             />
           </ErpSectionCard>
+
+          {detail.status === "POSTED" || detail.status === "CANCELLED" ? (
+            <ErpSectionCard eyebrow="§133.14" title="Dispatch Reconciliation">
+              <p className="mb-3 text-sm text-slate-600">
+                Generated with PGI and retained as an audit record. Reverse the invoice to void these rows; they cannot be edited here.
+              </p>
+              <ErpDenseGrid
+                cellNavigate
+                columns={[
+                  { key: "so_number", label: "SO", width: "120px", render: (row) => row.so_number || "—" },
+                  { key: "fo_number", label: "FO", width: "120px", render: (row) => row.fo_number || "—" },
+                  { key: "dispatch_category", label: "Category", width: "100px" },
+                  { key: "process_order_number", label: "Process PO", width: "130px", render: (row) => row.process_order_number || "—" },
+                  { key: "packing_order_number", label: "Packing PO", width: "130px", render: (row) => row.packing_order_number || "—" },
+                  { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number || "—" },
+                  { key: "material_name", label: "Material", width: "160px", render: (row) => materialMap.get(row.material_id)?.material_name || row.material_id || "—" },
+                  { key: "line_material_type", label: "Type", width: "80px" },
+                  { key: "dispatch_qty_kg", label: "Dispatch KG", width: "110px", align: "right", render: (row) => formatMoney(row.dispatch_qty_kg) },
+                  { key: "standard_qty", label: "Standard", width: "110px", align: "right", render: (row) => row.standard_qty == null ? "—" : formatMoney(row.standard_qty) },
+                  { key: "actual_qty", label: "Actual", width: "110px", align: "right", render: (row) => row.actual_qty == null ? "—" : formatMoney(row.actual_qty) },
+                  { key: "ap_approved_qty", label: "AP Approved", width: "120px", align: "right", render: (row) => row.ap_approved_qty == null ? "—" : formatMoney(row.ap_approved_qty) },
+                  { key: "is_voided", label: "Status", width: "100px", render: (row) => row.is_voided ? "VOIDED" : "ACTIVE" },
+                ]}
+                rows={detail.dispatch_reco_lines ?? []}
+                rowKey={(row) => row.id}
+                emptyMessage="No Dispatch Reco applies to this invoice (for example, STO, MTS, or a non-Asian RPS dispatch)."
+              />
+            </ErpSectionCard>
+          ) : null}
 
           <ErpSectionCard eyebrow="GST Breakdown" title="Derived GST summary">
             <div className="grid gap-3 md:grid-cols-4">

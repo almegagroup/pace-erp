@@ -23,7 +23,7 @@ import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
-import { getAvailableQty, undoCsnDispatchForLines } from "./delivery_order.handlers.ts";
+import { getAvailableQty } from "./delivery_order.handlers.ts";
 import { deriveSalesInvoiceGstType, getSnapshotForIssue, hasPhysicalInventoryBlock } from "./sales_order.handlers.ts";
 import {
   assertPhase3PostingDateMatch,
@@ -82,16 +82,19 @@ async function generateProcurementDocNumber(docType: string): Promise<string> {
 // delivery_order.handlers.ts's old fetchLockedLineIds (a boolean lock) into
 // a running sum, since one vehicle no longer has to take a line's entire
 // remaining balance at once (§133.12 Page 1 point 3).
-async function computeDrawnQtyByColumn(column: "so_line_id" | "sto_line_id" | "so_map_allocation_id" | "packing_order_id", ids: string[]): Promise<Map<string, number>> {
+async function computeDrawnQtyByColumn(column: "so_line_id" | "sto_line_id" | "so_map_allocation_id" | "packing_order_id", ids: string[], excludeDcId?: string): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   if (ids.length === 0) return map;
-  const rows = await fetchInChunks<JsonRecord>(ids, (chunk) =>
-    serviceRoleClient
+  const rows = await fetchInChunks<JsonRecord>(ids, (chunk) => {
+    let query = serviceRoleClient
       .schema("erp_procurement")
       .from("delivery_challan_line")
       .select(`${column}, quantity, delivery_challan!inner(status)`)
       .in(column, chunk)
-      .neq("delivery_challan.status", "CANCELLED"));
+      .neq("delivery_challan.status", "CANCELLED");
+    if (excludeDcId) query = query.neq("dc_id", excludeDcId);
+    return query;
+  });
   for (const row of rows) {
     const key = toTrimmedString(row[column]);
     if (!key) continue;
@@ -102,13 +105,16 @@ async function computeDrawnQtyByColumn(column: "so_line_id" | "sto_line_id" | "s
 
 // A Packing PO can be allocated to more than one FO. Keep the FO-specific
 // dispatched total separate from its overall production-output balance.
-async function computeDrawnQtyByFoPackingOrder(packingOrderIds: string[]): Promise<Map<string, number>> {
+async function computeDrawnQtyByFoPackingOrder(packingOrderIds: string[], excludeDcId?: string): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   if (packingOrderIds.length === 0) return map;
-  const lines = await fetchInChunks<JsonRecord>(packingOrderIds, (chunk) =>
-    serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+  const lines = await fetchInChunks<JsonRecord>(packingOrderIds, (chunk) => {
+    let query = serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
       .select("packing_order_id, so_map_allocation_id, quantity, delivery_challan!inner(status)")
-      .in("packing_order_id", chunk).neq("delivery_challan.status", "CANCELLED"));
+      .in("packing_order_id", chunk).neq("delivery_challan.status", "CANCELLED");
+    if (excludeDcId) query = query.neq("dc_id", excludeDcId);
+    return query;
+  });
   const allocationIds = [...new Set(lines.map((row) => toTrimmedString(row.so_map_allocation_id)).filter(Boolean))];
   const allocations = allocationIds.length
     ? await fetchInChunks<JsonRecord>(allocationIds, (chunk) => serviceRoleClient.schema("erp_procurement")
@@ -632,7 +638,7 @@ type PreparedDoLineSet = {
 // Edit calls this only AFTER tearing down its own old lines/reservations
 // (§133.12), so "remaining balance" here is never polluted by the very
 // lines this same DO is about to replace.
-async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord[]): Promise<PreparedDoLineSet> {
+async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord[], excludeDcId?: string): Promise<PreparedDoLineSet> {
   const soLineIds = [...new Set(rawLines.map((l) => toTrimmedString(l.so_line_id)).filter(Boolean))];
     const stoLineIds = [...new Set(rawLines.map((l) => toTrimmedString(l.sto_line_id)).filter(Boolean))];
     const allocationIds = [...new Set(rawLines.map((l) => toTrimmedString(l.so_map_allocation_id)).filter(Boolean))];
@@ -647,9 +653,9 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       allocationIds.length
         ? fetchInChunks<JsonRecord>(allocationIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("*").in("id", chunk))
         : Promise.resolve([] as JsonRecord[]),
-      computeDrawnQtyByColumn("so_line_id", soLineIds),
-      computeDrawnQtyByColumn("sto_line_id", stoLineIds),
-      computeDrawnQtyByColumn("so_map_allocation_id", allocationIds),
+      computeDrawnQtyByColumn("so_line_id", soLineIds, excludeDcId),
+      computeDrawnQtyByColumn("sto_line_id", stoLineIds, excludeDcId),
+      computeDrawnQtyByColumn("so_map_allocation_id", allocationIds, excludeDcId),
     ]);
     // SO Map submissions identify the allocation, not necessarily its underlying
     // SO line. Load those source lines too before validating the allocation.
@@ -687,8 +693,8 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         ? fetchInChunks<JsonRecord>(submittedPkoIds, (chunk) => serviceRoleClient.schema("erp_production").from("packing_order")
             .select("id, actual_qty_kg, status").in("id", chunk))
         : Promise.resolve([] as JsonRecord[]),
-      computeDrawnQtyByColumn("packing_order_id", submittedPkoIds),
-      computeDrawnQtyByFoPackingOrder(submittedPkoIds),
+      computeDrawnQtyByColumn("packing_order_id", submittedPkoIds, excludeDcId),
+      computeDrawnQtyByFoPackingOrder(submittedPkoIds, excludeDcId),
     ]);
     const validFoPkoPairSet = new Set(validFoPkoPairs.map((row) => `${toTrimmedString(row.plan_feed_id)}:${toTrimmedString(row.packing_order_id)}`));
     const allocatedByFoPko = new Map(validFoPkoPairs.map((row) => [
@@ -887,6 +893,64 @@ async function freezeDoSalesShipTo(prepared: PreparedDoLine[]): Promise<void> {
   }
 }
 
+function buildDoAtomicPayload(
+  companyId: string,
+  dcNumber: string | null,
+  body: JsonRecord,
+  prepared: PreparedDoLine[],
+  soIdsForSources: Set<string>,
+  stoIdsForSources: Set<string>,
+  netWeight: number,
+  dcType: "SALES" | "STO" | "MIXED",
+): JsonRecord {
+  return {
+    header: {
+      dc_number: dcNumber,
+      dc_date: todayIsoDate(),
+      dc_type: dcType,
+      selling_company_id: companyId,
+      vehicle_number: toTrimmedString(body.vehicle_number) || null,
+      transporter_id: toTrimmedString(body.transporter_id) || null,
+      transporter_name_freetext: toTrimmedString(body.transporter_name_freetext) || null,
+      lr_number: toTrimmedString(body.lr_number) || null,
+      lr_date: toTrimmedString(body.lr_date) || null,
+      gross_weight: parsePositiveNumber(body.gross_weight),
+      net_weight: netWeight,
+      driver_number: toTrimmedString(body.driver_number) || null,
+      driver_contact_number: toTrimmedString(body.driver_contact_number) || null,
+      remarks: toTrimmedString(body.remarks) || null,
+    },
+    sources: [
+      ...[...soIdsForSources].map((source_id) => ({ source_type: "SALES_ORDER", source_id })),
+      ...[...stoIdsForSources].map((source_id) => ({ source_type: "STO", source_id })),
+    ],
+    lines: prepared.map((line, index) => ({
+      line_number: index + 1,
+      material_id: line.materialId,
+      so_line_id: line.soLineId,
+      sto_line_id: line.stoLineId,
+      so_map_allocation_id: line.soMapAllocationId,
+      quantity: line.quantity,
+      uom_code: line.uomCode,
+      storage_location_id: line.storageLocationId,
+      batch_number: line.batchNumber,
+      expiry_date: line.expiryDate,
+      packing_order_id: line.packingOrderId,
+      unit_value: line.unitValue,
+      gst_rate: line.gstRate,
+      gst_amount: line.gstAmount,
+      line_total: Number((line.quantity * line.unitValue + line.gstAmount).toFixed(4)),
+      ship_to_customer_id: line.shipToCustomerId,
+      ship_to_name: line.shipToName,
+      ship_to_address: line.shipToAddress,
+      ship_to_state: line.shipToState,
+      ship_to_gst_number: line.shipToGstNumber,
+      source_type: line.sourceType,
+      source_id: line.sourceId,
+    })),
+  };
+}
+
 // §133.12 Page 3 — Save. Header is created here; line validation is shared
 // with Edit via prepareAndValidateDoLines above.
 export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
@@ -909,101 +973,12 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
     const { prepared, soIdsForSources, stoIdsForSources, netWeight, dcType } = await prepareAndValidateDoLines(companyId, rawLines);
     await freezeDoSalesShipTo(prepared);
 
-    const dcNumber = await generateProcurementDocNumber("DC");
-    const { data: dc, error: dcError } = await serviceRoleClient
-      .schema("erp_procurement").from("delivery_challan")
-      .insert({
-        dc_number: dcNumber,
-        dc_date: todayIsoDate(),
-        dc_type: dcType,
-        selling_company_id: companyId,
-        vehicle_number: toTrimmedString(body.vehicle_number) || null,
-        transporter_id: toTrimmedString(body.transporter_id) || null,
-        transporter_name_freetext: toTrimmedString(body.transporter_name_freetext) || null,
-        lr_number: toTrimmedString(body.lr_number) || null,
-        lr_date: toTrimmedString(body.lr_date) || null,
-        gross_weight: parsePositiveNumber(body.gross_weight),
-        net_weight: netWeight,
-        driver_number: toTrimmedString(body.driver_number) || null,
-        driver_contact_number: toTrimmedString(body.driver_contact_number) || null,
-        status: "CREATED",
-        remarks: toTrimmedString(body.remarks) || null,
-      })
-      .select("*").single();
-    if (dcError || !dc) return doErrorResponse(req, ctx, "DO_CREATE_FAILED", 500, "Unable to create delivery order.");
-
-    const sourceRows = [
-      ...[...soIdsForSources].map((id) => ({ dc_id: dc.id, source_type: "SALES_ORDER", source_id: id })),
-      ...[...stoIdsForSources].map((id) => ({ dc_id: dc.id, source_type: "STO", source_id: id })),
-    ];
-    if (sourceRows.length) {
-      const { error: sourceError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").insert(sourceRows);
-      if (sourceError) {
-        console.error("DO_SOURCE_LINK_FAILED", { code: sourceError.code, message: sourceError.message, details: sourceError.details });
-        await serviceRoleClient.schema("erp_procurement").from("delivery_challan").delete().eq("id", dc.id);
-        return doErrorResponse(req, ctx, "DO_SOURCE_LINK_FAILED", 500, "Unable to record DO source documents.");
-      }
-    }
-
-    const nowIso = new Date().toISOString();
-    // DEPENDENT: each line's reservation insert must land before the next
-    // iteration would recompute availability off pre-DO state — same
-    // ordering requirement §113's original createDeliveryOrderHandler
-    // documents for this exact loop shape.
-    for (let index = 0; index < prepared.length; index += 1) {
-      const line = prepared[index];
-      const { data: dcLine, error: dcLineError } = await serviceRoleClient
-        .schema("erp_procurement").from("delivery_challan_line")
-        .insert({
-          dc_id: dc.id,
-          line_number: index + 1,
-          material_id: line.materialId,
-          so_line_id: line.soLineId,
-          sto_line_id: line.stoLineId,
-          so_map_allocation_id: line.soMapAllocationId,
-          quantity: line.quantity,
-          uom_code: line.uomCode,
-          storage_location_id: line.storageLocationId,
-          batch_number: line.batchNumber,
-          expiry_date: line.expiryDate,
-          packing_order_id: line.packingOrderId,
-          unit_value: line.unitValue,
-          gst_rate: line.gstRate,
-          gst_amount: line.gstAmount,
-          line_total: Number((line.quantity * line.unitValue + line.gstAmount).toFixed(4)),
-          ship_to_customer_id: line.shipToCustomerId,
-          ship_to_name: line.shipToName,
-          ship_to_address: line.shipToAddress,
-          ship_to_state: line.shipToState,
-          ship_to_gst_number: line.shipToGstNumber,
-        })
-        .select("id")
-        .single();
-      if (dcLineError || !dcLine) return doErrorResponse(req, ctx, "DO_LINE_CREATE_FAILED", 500, "Unable to create delivery order line.");
-
-      const { error: reservationError } = await serviceRoleClient
-        .schema("erp_production").from("reservation_document")
-        .insert({
-          dc_line_id: dcLine.id,
-          source_type: line.sourceType,
-          source_id: line.sourceId,
-          source_line_id: line.soLineId || line.stoLineId,
-          company_id: companyId,
-          material_id: line.materialId,
-          storage_location_id: line.storageLocationId,
-          required_qty: line.quantity,
-          uom_code: line.uomCode,
-          issued_qty: 0,
-          status: "OPEN",
-          created_by: ctx.auth_user_id,
-          created_at: nowIso,
-          last_updated_by: ctx.auth_user_id,
-          last_updated_at: nowIso,
-        });
-      if (reservationError) return doErrorResponse(req, ctx, "DO_RESERVATION_CREATE_FAILED", 500, "Unable to reserve stock for delivery order line.");
-    }
-
-    return okResponse(await hydrateDeliveryOrderUnified(String(dc.id)), ctx.request_id, req);
+    const payload = buildDoAtomicPayload(companyId, await generateProcurementDocNumber("DC"), body, prepared, soIdsForSources, stoIdsForSources, netWeight, dcType);
+    const { data: dcId, error } = await serviceRoleClient.schema("erp_procurement").rpc("save_delivery_order_unified_atomic", {
+      p_action: "CREATE", p_dc_id: null, p_header: payload.header, p_sources: payload.sources, p_lines: payload.lines, p_actor: ctx.auth_user_id,
+    });
+    if (error || !dcId) return doErrorResponse(req, ctx, "DO_CREATE_FAILED", 500, "Unable to create delivery order.");
+    return okResponse(await hydrateDeliveryOrderUnified(String(dcId)), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_CREATE_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403
@@ -1048,106 +1023,15 @@ export async function updateDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
       return doErrorResponse(req, ctx, "DO_EDIT_BLOCKED", 400, "Only a DO that has not yet been PGI'd/invoiced or cancelled can be edited.");
     }
 
-    const { data: oldLines, error: oldLinesError } = await serviceRoleClient
-      .schema("erp_procurement").from("delivery_challan_line").select("*").eq("dc_id", dcId);
-    if (oldLinesError) return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load existing delivery order lines.");
-    const oldLineRows = (oldLines ?? []) as JsonRecord[];
-    const oldLineIds = oldLineRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
-    const nowIso = new Date().toISOString();
-
-    if (oldLineIds.length > 0) {
-      // Release this DO's OWN reservations only (dc_line_id-scoped — never
-      // another DO's, §133.12's multi-source correctness fix), then null the
-      // link so the old line rows can be deleted without violating the FK.
-      const { error: releaseError } = await serviceRoleClient
-        .schema("erp_production").from("reservation_document")
-        .update({ status: "CANCELLED", dc_line_id: null, last_updated_by: ctx.auth_user_id, last_updated_at: nowIso })
-        .in("dc_line_id", oldLineIds);
-      if (releaseError) return doErrorResponse(req, ctx, "DO_RESERVATION_RELEASE_FAILED", 500, "Unable to release existing reservations before edit.");
-
-      await undoCsnDispatchForLines(oldLineRows, ctx.auth_user_id, nowIso);
-
-      const { error: deleteLinesError } = await serviceRoleClient
-        .schema("erp_procurement").from("delivery_challan_line").delete().eq("dc_id", dcId);
-      if (deleteLinesError) return doErrorResponse(req, ctx, "DO_LINE_DELETE_FAILED", 500, "Unable to remove existing delivery order lines before edit.");
-    }
-    const { error: deleteSourcesError } = await serviceRoleClient
-      .schema("erp_procurement").from("delivery_challan_source").delete().eq("dc_id", dcId);
-    if (deleteSourcesError) return doErrorResponse(req, ctx, "DO_SOURCE_DELETE_FAILED", 500, "Unable to remove existing DO source links before edit.");
-
-    const { prepared, soIdsForSources, stoIdsForSources, netWeight, dcType } = await prepareAndValidateDoLines(companyId, rawLines);
-
-    const { error: dcUpdateError } = await serviceRoleClient
-      .schema("erp_procurement").from("delivery_challan")
-      .update({
-        dc_type: dcType,
-        vehicle_number: toTrimmedString(body.vehicle_number) || null,
-        transporter_id: toTrimmedString(body.transporter_id) || null,
-        transporter_name_freetext: toTrimmedString(body.transporter_name_freetext) || null,
-        lr_number: toTrimmedString(body.lr_number) || null,
-        lr_date: toTrimmedString(body.lr_date) || null,
-        gross_weight: parsePositiveNumber(body.gross_weight),
-        net_weight: netWeight,
-        driver_number: toTrimmedString(body.driver_number) || null,
-        driver_contact_number: toTrimmedString(body.driver_contact_number) || null,
-        remarks: toTrimmedString(body.remarks) || null,
-      })
-      .eq("id", dcId);
-    if (dcUpdateError) return doErrorResponse(req, ctx, "DO_EDIT_FAILED", 500, "Unable to update delivery order.");
-
-    const sourceRows = [
-      ...[...soIdsForSources].map((id) => ({ dc_id: dcId, source_type: "SALES_ORDER", source_id: id })),
-      ...[...stoIdsForSources].map((id) => ({ dc_id: dcId, source_type: "STO", source_id: id })),
-    ];
-    if (sourceRows.length) {
-      const { error: sourceError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").insert(sourceRows);
-      if (sourceError) return doErrorResponse(req, ctx, "DO_SOURCE_LINK_FAILED", 500, "Unable to record DO source documents.");
-    }
-
-    for (let index = 0; index < prepared.length; index += 1) {
-      const line = prepared[index];
-      const { data: dcLine, error: dcLineError } = await serviceRoleClient
-        .schema("erp_procurement").from("delivery_challan_line")
-        .insert({
-          dc_id: dcId,
-          line_number: index + 1,
-          material_id: line.materialId,
-          so_line_id: line.soLineId,
-          sto_line_id: line.stoLineId,
-          so_map_allocation_id: line.soMapAllocationId,
-          quantity: line.quantity,
-          uom_code: line.uomCode,
-          storage_location_id: line.storageLocationId,
-          batch_number: line.batchNumber,
-          expiry_date: line.expiryDate,
-          packing_order_id: line.packingOrderId,
-        })
-        .select("id")
-        .single();
-      if (dcLineError || !dcLine) return doErrorResponse(req, ctx, "DO_LINE_CREATE_FAILED", 500, "Unable to create delivery order line.");
-
-      const { error: reservationError } = await serviceRoleClient
-        .schema("erp_production").from("reservation_document")
-        .insert({
-          dc_line_id: dcLine.id,
-          source_type: line.sourceType,
-          source_id: line.sourceId,
-          source_line_id: line.soLineId || line.stoLineId,
-          company_id: companyId,
-          material_id: line.materialId,
-          storage_location_id: line.storageLocationId,
-          required_qty: line.quantity,
-          uom_code: line.uomCode,
-          issued_qty: 0,
-          status: "OPEN",
-          created_by: ctx.auth_user_id,
-          created_at: nowIso,
-          last_updated_by: ctx.auth_user_id,
-          last_updated_at: nowIso,
-        });
-      if (reservationError) return doErrorResponse(req, ctx, "DO_RESERVATION_CREATE_FAILED", 500, "Unable to reserve stock for delivery order line.");
-    }
-
+    // Validate against every other DO while excluding this editable DO's own
+    // lines; the transaction below then replaces its full line set safely.
+    const { prepared, soIdsForSources, stoIdsForSources, netWeight, dcType } = await prepareAndValidateDoLines(companyId, rawLines, dcId);
+    await freezeDoSalesShipTo(prepared);
+    const payload = buildDoAtomicPayload(companyId, null, body, prepared, soIdsForSources, stoIdsForSources, netWeight, dcType);
+    const { error } = await serviceRoleClient.schema("erp_procurement").rpc("save_delivery_order_unified_atomic", {
+      p_action: "UPDATE", p_dc_id: dcId, p_header: payload.header, p_sources: payload.sources, p_lines: payload.lines, p_actor: ctx.auth_user_id,
+    });
+    if (error) return doErrorResponse(req, ctx, "DO_EDIT_FAILED", 500, "Unable to update delivery order.");
     return okResponse(await hydrateDeliveryOrderUnified(dcId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_EDIT_FAILED";
@@ -1328,6 +1212,7 @@ type ProcInvoiceGroupLine = {
   dc_line_id: string;
   material_id: string;
   material_display: string | null;
+  document_name: string | null;
   line_material_type: string | null;
   quantity: number;
   uom_code: string;
@@ -1335,6 +1220,7 @@ type ProcInvoiceGroupLine = {
   gst_rate: number | null;
   gst_amount: number;
   line_total: number;
+  batch_number: string | null;
   storage_location_id: string;
   so_line_id: string | null;
   sto_line_id: string | null;
@@ -1523,6 +1409,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
         dc_line_id: String(line.id),
         material_id: toTrimmedString(line.material_id),
         material_display: (hydrated.material_display as string | null) ?? null,
+        document_name: (hydrated.document_name as string | null) ?? null,
         line_material_type: (hydrated.line_material_type as string | null) ?? null,
         quantity: Number(line.quantity ?? 0),
         uom_code: toTrimmedString(line.uom_code),
@@ -1530,6 +1417,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
         gst_rate: line.gst_rate != null ? Number(line.gst_rate) : null,
         gst_amount: Number(line.gst_amount ?? 0),
         line_total: Number(line.line_total ?? 0),
+        batch_number: toTrimmedString(line.batch_number) || null,
         storage_location_id: toTrimmedString(line.storage_location_id),
         so_line_id: toTrimmedString(line.so_line_id) || null,
         sto_line_id: toTrimmedString(line.sto_line_id) || null,
@@ -1848,6 +1736,7 @@ type InvoiceGroupInput = {
   e_way_bill_applicable?: boolean;
   e_way_bill_number?: string;
   freight?: {
+    to_pay?: boolean;
     included?: boolean;
     mode?: "AD_HOC" | "RATE";
     amount?: number;
@@ -1916,6 +1805,7 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
     }
 
     const results: JsonRecord[] = [];
+    const postGroups: JsonRecord[] = [];
     for (let index = 0; index < groups.length; index++) {
       const group = groups[index];
       const input = inputByKey.get(group.group_key)!;
@@ -1936,7 +1826,10 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
 
       const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
       const freightInput = input.freight ?? {};
-      const freightIncluded = freightEligible && freightInput.included === true;
+      // To-pay freight belongs to the customer/carrier settlement, never to
+      // this sales invoice. Ignore any attempted amount from a crafted payload.
+      const freightToPay = freightEligible && freightInput.to_pay === true;
+      const freightIncluded = freightEligible && !freightToPay && freightInput.included === true;
       let freightMode: "AD_HOC" | "RATE" | null = null;
       let freightRate: number | null = null;
       let freightAmount: number | null = null;
@@ -2130,6 +2023,7 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
           ship_to_gst_number: group.ship_to.gst_number,
           tally_invoice_number: tallyInvoiceNumber,
           tally_invoice_date: tallyInvoiceDate,
+          freight_to_pay: freightToPay,
           freight_included: freightIncluded,
           freight_amount: freightAmount,
           freight_mode: freightMode,
@@ -2163,20 +2057,15 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
         reservations: reservationsPayload,
       };
 
-      const { error: postDocumentError } = await serviceRoleClient
-        .schema("erp_inventory")
-        .rpc("post_document", {
-          p_reference_document_type: "SALES_INVOICE",
-          p_reference_document_id: invoiceId,
-          p_movements: movements,
-          p_posted_by: ctx.auth_user_id,
-          p_context: context,
-        });
-      if (postDocumentError) {
-        return doErrorResponse(req, ctx, "PGI_POST_FAILED", 500, `${postDocumentError.message || "Unable to post PGI and invoice."} (${group.document_number}).${alreadyPostedNote}`);
-      }
+      postGroups.push({ invoice_id: invoiceId, movements, context });
       results.push({ invoice_id: invoiceId, invoice_number: invoiceNumber, group_key: group.group_key, document_number: group.document_number });
     }
+
+    // One database call owns every group. A failure in any group's P601,
+    // invoice, reservation, or reconciliation write rolls all groups back.
+    const { error: postGroupsError } = await serviceRoleClient.schema("erp_inventory")
+      .rpc("post_sales_invoice_groups_atomic", { p_groups: postGroups, p_posted_by: ctx.auth_user_id });
+    if (postGroupsError) return doErrorResponse(req, ctx, "PGI_POST_FAILED", 500, postGroupsError.message || "Unable to post PGI and invoice.");
 
     return okResponse({ dc_id: dcId, invoices: results }, ctx.request_id, req);
   } catch (error) {

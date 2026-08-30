@@ -530,7 +530,7 @@ export async function listCustomerAddressesForSoHandler(req: Request, ctx: Procu
 }
 
 async function validateAndUpsertAllocation(
-  req: Request, ctx: ProcurementHandlerContext, body: JsonRecord, source: "fo" | "address" | "depot",
+  req: Request, ctx: ProcurementHandlerContext, body: JsonRecord, source: "fo" | "address" | "depot", persist = true,
 ): Promise<Response> {
   const soId = toTrimmedString(body.so_id);
   const soLineId = toTrimmedString(body.so_line_id);
@@ -640,6 +640,10 @@ async function validateAndUpsertAllocation(
     insertPayload.depot_code_id = toTrimmedString(so.bill_to_depot_code_id);
   }
 
+  // Group saves validate every item first, then persist the group and all
+  // allocations in one database transaction.
+  if (!persist) return okResponse({ allocation_payload: insertPayload }, ctx.request_id, req);
+
   const { data: created, error: insertError } = await serviceRoleClient
     .schema("erp_procurement").from("sales_order_map_allocation").insert(insertPayload).select("*").single();
   if (insertError || !created) return soMapErrorResponse(req, ctx, "SO_MAP_ALLOCATION_CREATE_FAILED", 500, "Unable to save mapping.");
@@ -691,20 +695,21 @@ export async function saveSoMapGroupHandler(req: Request, ctx: ProcurementHandle
     if (source === "address") groupPayload.customer_address_id = toTrimmedString(body.customer_address_id);
     if (source === "depot") groupPayload.depot_code_id = toTrimmedString(so.bill_to_depot_code_id);
     if (!Object.values(groupPayload).some((value) => value === "")) {
-      const { data: group, error } = await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").insert(groupPayload).select("id").single();
-      if (error || !group) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_CREATE_FAILED", 500, "Unable to create Ship-To mapping group.");
+      const allocations: JsonRecord[] = [];
       for (const item of items) {
-        const itemBody: JsonRecord = { so_id: soId, so_line_id: item.so_line_id, allocated_qty: item.allocated_qty, plan_feed_item_id: item.plan_feed_item_id, map_group_id: group.id, sku_mismatch_confirmed: body.sku_mismatch_confirmed };
+        const itemBody: JsonRecord = { so_id: soId, so_line_id: item.so_line_id, allocated_qty: item.allocated_qty, plan_feed_item_id: item.plan_feed_item_id, sku_mismatch_confirmed: body.sku_mismatch_confirmed };
         if (source === "fo") itemBody.fo_id = body.fo_id;
         if (source === "address") itemBody.customer_address_id = body.customer_address_id;
-        const result = await validateAndUpsertAllocation(req, ctx, itemBody, source as "fo" | "address" | "depot");
-        if (!result.ok) {
-          await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").update({ status: "RELEASED" }).eq("map_group_id", group.id);
-          await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").update({ status: "RELEASED" }).eq("id", group.id);
-          return result;
-        }
+        const result = await validateAndUpsertAllocation(req, ctx, itemBody, source as "fo" | "address" | "depot", false);
+        if (!result.ok) return result;
+        const envelope = await result.json() as { data?: { allocation_payload?: JsonRecord } };
+        if (!envelope.data?.allocation_payload) return soMapErrorResponse(req, ctx, "SO_MAP_ALLOCATION_CREATE_FAILED", 500, "Unable to prepare Ship-To mapping.");
+        allocations.push(envelope.data.allocation_payload);
       }
-      return okResponse({ group_id: group.id }, ctx.request_id, req);
+      const { data: groupId, error } = await serviceRoleClient.schema("erp_procurement")
+        .rpc("save_so_map_group_atomic", { p_group: groupPayload, p_allocations: allocations });
+      if (error || !groupId) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_CREATE_FAILED", 500, "Unable to create Ship-To mapping group.");
+      return okResponse({ group_id: groupId }, ctx.request_id, req);
     }
     return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_INVALID", 400, "Destination is required.");
   } catch (error) { return soMapErrorResponse(req, ctx, error instanceof Error ? error.message : "SO_MAP_GROUP_SAVE_FAILED", 500, "Unable to save Ship-To mapping."); }
@@ -721,9 +726,9 @@ async function releaseSoMapGroupById(req: Request, ctx: ProcurementHandlerContex
     const { data: rows, error: rowError } = await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id").eq("map_group_id", groupId).eq("status", "ACTIVE");
     if (rowError) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_FETCH_FAILED", 500, "Unable to load mapping items.");
     for (const row of (rows ?? []) as JsonRecord[]) if (await hasDoForAllocation(toTrimmedString(row.id))) return soMapErrorResponse(req, ctx, "SO_MAP_DO_LOCKED", 409, "This mapping has a Delivery Order and cannot be changed.");
-    const now = new Date().toISOString();
-    await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").update({ status: "RELEASED", last_updated_by: ctx.auth_user_id, last_updated_at: now }).eq("map_group_id", groupId).eq("status", "ACTIVE");
-    await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").update({ status: "RELEASED", last_updated_by: ctx.auth_user_id, last_updated_at: now }).eq("id", groupId);
+    const { error: releaseError } = await serviceRoleClient.schema("erp_procurement")
+      .rpc("release_so_map_group_atomic", { p_group_id: groupId, p_actor: ctx.auth_user_id });
+    if (releaseError) return soMapErrorResponse(req, ctx, releaseError.message.includes("SO_MAP_DO_LOCKED") ? "SO_MAP_DO_LOCKED" : "SO_MAP_GROUP_RELEASE_FAILED", releaseError.message.includes("SO_MAP_DO_LOCKED") ? 409 : 500, "Unable to release mapping group.");
     return okResponse({ id: groupId, status: "RELEASED" }, ctx.request_id, req);
   } catch (error) { return soMapErrorResponse(req, ctx, error instanceof Error ? error.message : "SO_MAP_GROUP_RELEASE_FAILED", 500, "Unable to release mapping group."); }
 }

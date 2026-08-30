@@ -21642,7 +21642,9 @@ Dropdown — সরাসরি Payment Terms Master থেকে list আসব
 **Invoice Creation-এর সময় (PGI+Invoice stage, `PgiInvoiceCreatePage.jsx`, §113.15):**
 - Freight Term দেখা যাবে (SO/DO থেকে carry হয়ে আসা)
 - **FOR** → কিছুই আসে না
-- **FREIGHT_SEPARATE / FREIGHT_AT_ACTUALS / EX_TRANSPORTER_GODOWN**-এর যেকোনোটা → নতুন প্রশ্ন: **"Other than Order Rate?" (Yes/No)**
+- **FREIGHT_SEPARATE / FREIGHT_AT_ACTUALS / EX_TRANSPORTER_GODOWN**-এর যেকোনোটা → আগে প্রশ্ন: **"To Pay?" (Yes/No)**। Yes মানে customer freight দেবে; invoice-এ freight/GST কিছুই যোগ হবে না।
+- `To Pay` decision-টি posted invoice header-এও থাকবে, যাতে freight amount শূন্য হওয়ার commercial reason audit করা যায়।
+- **To Pay = No** → নতুন প্রশ্ন: **"Other than Order Rate?" (Yes/No)**
   - No → কিছুই যোগ হবে না
   - Yes → Mode choose: **Ad Hoc** (সরাসরি Amount) বা **Rate** (Rate × Net Weight [DO থেকে already-derived] = Amount)
   - তারপর **GST on Freight (Yes/No)**
@@ -22171,7 +22173,8 @@ line item হিসেবে বসবে**, নিজের নিজের GST
 | **PACE-এর নিজস্ব Invoice Number** | নতুন, আলাদা field — Save/Post-এর আগ পর্যন্ত blank, Post করলে `SALES_INVOICE` global range (§8, 92xxxxxxxx) থেকে auto-generate, নিজের Date-সহ |
 
 **নিচের অংশ — Freight (✅ LOCKED, §133.8-D-এর সাথে সঙ্গতিপূর্ণ, একটা গুরুত্বপূর্ণ সংশোধন-সহ):**
-- SO-র Freight Term FOR না হলে → **"Other than Order Rate?" (Yes/No)**
+- SO-র Freight Term FOR না হলে → আগে **"To Pay?" (Yes/No)**। Yes হলে customer freight দেবে, তাই এই invoice-এ freight, freight-GST বা freight amount যোগ হবে না।
+- **To Pay = No** হলে → **"Other than Order Rate?" (Yes/No)**
   - No → কিছুই যোগ হবে না
   - Yes → Mode: **Ad Hoc** (flat Amount) বা **Rate** (Rate × Net Weight = Amount)
   - **⚠️ সংশোধন: এই Net Weight DO-র total না, বরং এই নির্দিষ্ট Invoice-এ থাকা item-গুলোর
