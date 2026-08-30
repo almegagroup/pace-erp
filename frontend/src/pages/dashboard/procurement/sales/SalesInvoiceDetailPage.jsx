@@ -4,7 +4,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
-import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   createSalesInvoice,
@@ -222,6 +222,11 @@ export default function SalesInvoiceDetailPage() {
     navigate(`/dashboard/procurement/sales-orders/${encodeURIComponent(targetSoId)}`);
   }
 
+  function openInvoicePrint() {
+    openScreenWithContext(OPERATION_SCREENS.PROC_INV_PRINT.screen_code, { id });
+    navigate(`/dashboard/procurement/sales-invoices/${encodeURIComponent(id)}/print`);
+  }
+
   return (
     <ErpScreenScaffold
       eyebrow="Procurement"
@@ -233,6 +238,7 @@ export default function SalesInvoiceDetailPage() {
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         ...(detail?.so_id || salesOrder?.id ? [{ key: "so", label: "Open SO", tone: "neutral", onClick: openSoDetail }] : []),
+        ...(detail?.status === "POSTED" ? [{ key: "print", label: "Print Invoice", tone: "neutral", onClick: openInvoicePrint }] : []),
         ...(isCreateMode
           ? [{ key: "create-post", label: saving ? "Posting..." : "Post Invoice", tone: "primary", onClick: () => void handleCreateAndPost(), disabled: saving || !selectedDcId }]
           : detail?.status === "DRAFT"

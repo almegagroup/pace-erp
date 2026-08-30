@@ -5800,6 +5800,20 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/sales/SalesInvoicePrintPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "getSalesInvoice",
+        "method": "GET",
+        "path": "/api/procurement/sales-invoices/${encodeURIComponent(id)}",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/sales/SalesInvoiceListPage.jsx",
     "dependencyCount": 1,
     "deps": [

@@ -32,7 +32,6 @@ import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
-import { amountToWordsIndian } from "../../../../utils/numberToWordsIndian.js";
 import { getActiveScreenContext, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
@@ -112,6 +111,7 @@ function defaultGroupInput(group) {
     e_way_bill_number: "",
     freight: { to_pay: false, included: false, mode: "AD_HOC", amount: "", rate: "", gst_included: false, gst_treatment: "EXCLUSIVE", gst_rate: "" },
     additional_costs: [],
+    round_off_amount: "",
     remarks: "",
     __groupSnapshot: group,
   };
@@ -153,8 +153,9 @@ function computeGroupPreviewTotal(group, input) {
     return sum + (ac.gst_treatment === "EXCLUSIVE" ? amount + gstAmt : amount);
   }, 0);
   const preRound = group.total_taxable_value + group.total_gst_amount + freightContribution + additionalTotal;
-  const total = Math.round(preRound * 100) / 100;
-  return { preRound, total, roundOff: Number((total - preRound).toFixed(4)), freightContribution, additionalTotal };
+  const roundOff = toNumber(input.round_off_amount);
+  const total = Number((preRound + roundOff).toFixed(2));
+  return { preRound, total, roundOff, freightContribution, additionalTotal };
 }
 
 // §133.13's per-row field mapping is validated the same way both here and
@@ -204,14 +205,10 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
   }
 
   return (
-    <DrawerBase visible side="center" title={`${group.document_number || "Invoice group"} — Tax Invoice`} onEscape={onClose} onClose={onClose} width="min(1120px, calc(100vw - 24px))">
+    <DrawerBase visible side="center" title={`${group.document_number || "Invoice group"} — Invoice Preparation`} onEscape={onClose} onClose={onClose} width="min(1120px, calc(100vw - 24px))">
       <div className="grid gap-4">
         <div className="grid gap-3 border border-slate-300 bg-white p-4 text-sm text-slate-900">
-          <div className="grid grid-cols-3 items-center border-b border-slate-400 pb-2 text-xs uppercase">
-            <div className="text-left text-lg font-bold">Tax Invoice</div>
-            <div className="text-center font-semibold italic">Original for Recipient</div>
-            <div className="text-right font-semibold">e-Invoice</div>
-          </div>
+          <div className="border-b border-slate-400 pb-2 text-center text-lg font-bold uppercase">Invoice Preparation</div>
           <div className="grid border border-slate-300 text-xs md:grid-cols-2">
             <div className="grid gap-2 border-b border-slate-300 p-3 md:border-b-0 md:border-r">
               <div className="font-bold uppercase">Supplier</div>
@@ -257,17 +254,9 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
             </table>
           </div>
 
-          <div className="border border-slate-300 px-3 py-2 text-xs"><span className="font-semibold">Amount Chargeable (in words): </span><strong>{amountToWordsIndian(totals.total)}</strong></div>
-
           <div className="overflow-x-auto border border-slate-300">
             <table className="min-w-full border-collapse text-xs"><thead className="bg-slate-100"><tr><th rowSpan="2" className="border border-slate-300 p-2">HSN/SAC</th><th rowSpan="2" className="border border-slate-300 p-2 text-right">Taxable Value</th>{group.gst_type === "CGST_SGST" ? <><th colSpan="2" className="border border-slate-300 p-2">CGST</th><th colSpan="2" className="border border-slate-300 p-2">SGST</th></> : <th colSpan="2" className="border border-slate-300 p-2">IGST</th>}<th rowSpan="2" className="border border-slate-300 p-2 text-right">Total Tax</th></tr><tr>{group.gst_type === "CGST_SGST" ? <><th className="border border-slate-300 p-1">Rate</th><th className="border border-slate-300 p-1 text-right">Amount</th><th className="border border-slate-300 p-1">Rate</th><th className="border border-slate-300 p-1 text-right">Amount</th></> : <><th className="border border-slate-300 p-1">Rate</th><th className="border border-slate-300 p-1 text-right">Amount</th></>}</tr></thead><tbody>{taxRows.map((tax) => <tr key={`${tax.hsn_code}-${tax.gst_rate}`}><td className="border border-slate-300 p-2">{tax.hsn_code}</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.taxable_value)}</td>{group.gst_type === "CGST_SGST" ? <><td className="border border-slate-300 p-2">{formatFixed(tax.gst_rate / 2, 2)}%</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.cgst_amount)}</td><td className="border border-slate-300 p-2">{formatFixed(tax.gst_rate / 2, 2)}%</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.sgst_amount)}</td></> : <><td className="border border-slate-300 p-2">{formatFixed(tax.gst_rate, 2)}%</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.igst_amount)}</td></>}<td className="border border-slate-300 p-2 text-right">{formatFixed(tax.cgst_amount + tax.sgst_amount + tax.igst_amount)}</td></tr>)}</tbody></table>
           </div>
-          <div className="border border-slate-300 px-3 py-2 text-xs"><span className="font-semibold">Tax Amount (in words): </span><strong>{amountToWordsIndian(group.total_gst_amount)}</strong></div>
-          <div className="grid border border-slate-300 text-xs md:grid-cols-2">
-            <div className="p-3"><div className="font-semibold">Declaration</div><p className="mt-1">We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.</p></div>
-            <div className="flex min-h-24 flex-col justify-between border-t border-slate-300 p-3 text-right md:border-l md:border-t-0"><div className="font-semibold">for {group.seller?.name || "Supplier"}</div><div>Authorised Signatory</div></div>
-          </div>
-          <div className="text-center text-xs">This is a Computer Generated Invoice</div>
         </div>
 
         <div className="grid gap-2 border border-slate-200 p-3">
@@ -389,25 +378,26 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
           </div>
         </div>
 
-        <div className="grid gap-1 text-sm text-slate-800 md:max-w-sm md:justify-self-end">
-          <div className="flex justify-between"><span className="text-slate-500">Taxable Value</span><span className="font-mono">{formatFixed(group.total_taxable_value)}</span></div>
+        <div className="grid gap-1 text-sm text-slate-800 md:w-[28rem] md:justify-self-end">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">Taxable Value</span><span className="font-mono">{formatFixed(group.total_taxable_value)}</span></div>
           {group.gst_type === "CGST_SGST" ? (
             <>
-              <div className="flex justify-between"><span className="text-slate-500">CGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_cgst_amount)}</span></div>
-              <div className="flex justify-between"><span className="text-slate-500">SGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_sgst_amount)}</span></div>
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">CGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_cgst_amount)}</span></div>
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">SGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_sgst_amount)}</span></div>
             </>
-          ) : <div className="flex justify-between"><span className="text-slate-500">IGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_igst_amount)}</span></div>}
-          <div className="flex justify-between"><span className="text-slate-500">Freight</span><span className="font-mono">{input.freight.to_pay ? "TO PAY (Customer)" : formatFixed(totals.freightContribution)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Other Invoice Adjustment</span><span className="font-mono">{formatFixed(totals.additionalTotal)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Round Off</span><span className="font-mono">{totals.roundOff >= 0 ? "+" : "-"}{formatFixed(Math.abs(totals.roundOff), 4)}</span></div>
-          <div className="mt-1 flex justify-between border-t border-slate-300 pt-1 text-base font-bold"><span>Invoice Total</span><span className="font-mono">{formatFixed(totals.total)}</span></div>
+          ) : <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">IGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_igst_amount)}</span></div>}
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">Freight</span><span className="font-mono">{input.freight.to_pay ? "TO PAY (Customer)" : formatFixed(totals.freightContribution)}</span></div>
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">Other Invoice Adjustment</span><span className="font-mono">{formatFixed(totals.additionalTotal)}</span></div>
+          <label className="grid grid-cols-[minmax(0,1fr)_9rem] items-center gap-x-8"><span className="min-w-0 text-slate-500">Round Off</span><input type="number" step="0.01" value={input.round_off_amount} onChange={(event) => onChange({ round_off_amount: event.target.value })} placeholder="0.00" className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-right font-mono text-xs text-slate-900 outline-none focus:border-sky-500" /></label>
+          <div className="mt-1 grid grid-cols-[minmax(0,1fr)_auto] gap-x-8 border-t border-slate-300 pt-1 text-base font-bold"><span>Invoice Total</span><span className="font-mono">{formatFixed(totals.total)}</span></div>
         </div>
 
         {validationError ? <div className="text-xs font-semibold text-rose-700">{validationError}</div> : null}
+        <div className="text-center text-xs text-slate-500">Validation only. PGI and invoice are created only by “Post Goods &amp; Create Invoice” after every group is ready.</div>
         <div className="flex gap-2">
-          <button type="button" onClick={onClose} className="flex-1 border border-slate-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">Close (without validating)</button>
+          <button type="button" onClick={onClose} className="flex-1 border border-slate-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">Close</button>
           <button type="button" onClick={handleSaveNext} className="flex-1 border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-white">
-            {hasNext ? "Save & Next Row →" : "Save & Close"}
+            {hasNext ? "Validate & Next Group →" : "Validate & Close"}
           </button>
         </div>
       </div>
@@ -541,6 +531,7 @@ export default function PgiInvoiceGroupsCreatePage() {
             gst_treatment: ac.gst_treatment,
             gst_rate: ac.gst_included ? Number(ac.gst_rate) : undefined,
           })),
+          round_off_amount: input.round_off_amount === "" ? undefined : Number(input.round_off_amount),
           remarks: input.remarks || undefined,
         };
       });

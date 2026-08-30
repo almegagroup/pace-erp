@@ -1285,11 +1285,12 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
 
   const [stoLineRows, soLineRows, mapAllocRows] = await Promise.all([
     stoLineIds.length ? fetchInChunks<JsonRecord>(stoLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line").select("id, sto_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
-    soLineIds.length ? fetchInChunks<JsonRecord>(soLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, so_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
+    soLineIds.length ? fetchInChunks<JsonRecord>(soLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, so_id, hsn_code").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     soMapAllocationIds.length ? fetchInChunks<JsonRecord>(soMapAllocationIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id, so_id, fo_id, customer_address_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
   ]);
   const stoLineToSto = new Map(stoLineRows.map((r) => [String(r.id), toTrimmedString(r.sto_id)]));
   const soLineToSo = new Map(soLineRows.map((r) => [String(r.id), toTrimmedString(r.so_id)]));
+  const soLineById = new Map(soLineRows.map((r) => [String(r.id), r]));
   const foIdsForShipTo = [...new Set(mapAllocRows.map((r) => toTrimmedString(r.fo_id)).filter(Boolean))];
   const { data: foShipToRows, error: foShipToError } = foIdsForShipTo.length
     ? await serviceRoleClient.schema("erp_production").from("plan_feed").select("id, customer_address_id").in("id", foIdsForShipTo)
@@ -1372,7 +1373,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
   const companyStateName = toTrimmedString(sellingCompany?.state_name) || null;
   if (!companyStateName) throw new Error("PGI_INVOICE_SELLING_COMPANY_STATE_MISSING");
   const seller: ProcPartyDetail = {
-    name: [toTrimmedString(sellingCompany?.company_code), toTrimmedString(sellingCompany?.company_name)].filter(Boolean).join(" - ") || null,
+    name: toTrimmedString(sellingCompany?.company_name) || null,
     address: toTrimmedString(sellingCompany?.full_address) || null,
     state: companyStateName,
     gst_number: toTrimmedString(sellingCompany?.gst_number) || null,
@@ -1419,7 +1420,9 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
         material_id: toTrimmedString(line.material_id),
         material_display: (hydrated.material_display as string | null) ?? null,
         document_name: (hydrated.document_name as string | null) ?? null,
-        hsn_code: toTrimmedString(hydrated.hsn_code) || null,
+        // SO01's saved line value is the sales document's HSN snapshot;
+        // Material Master is only the fallback for older/non-SO lines.
+        hsn_code: toTrimmedString(soLineById.get(toTrimmedString(line.so_line_id))?.hsn_code) || toTrimmedString(hydrated.hsn_code) || null,
         line_material_type: (hydrated.line_material_type as string | null) ?? null,
         quantity: Number(line.quantity ?? 0),
         uom_code: toTrimmedString(line.uom_code),
@@ -1891,8 +1894,8 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       const additionalCostTotal = Number(additionalCostLines.reduce((sum, ac) => sum + ac.line_total, 0).toFixed(4));
 
       const preRoundValue = group.total_taxable_value + group.total_gst_amount + freightInvoiceContribution + additionalCostTotal;
-      const totalInvoiceValue = Number(preRoundValue.toFixed(2));
-      const roundOffAmount = Number((totalInvoiceValue - preRoundValue).toFixed(4));
+      const roundOffAmount = Number((parseNullableNumber(input.round_off_amount) ?? 0).toFixed(4));
+      const totalInvoiceValue = Number((preRoundValue + roundOffAmount).toFixed(2));
 
       // §133.16 Part B -- Go-live Catch-up Backfill (TEMPORARY, time-boxed,
       // isolated entirely in dispatchBackfillPosting.ts -- delete that file

@@ -498,7 +498,9 @@ async function hydrateSalesInvoice(
   // length list, unlike the header's single freight_* set of columns).
   // Dispatch Reco is generated in the same P601 posting transaction. It is
   // read-only here: a user must reverse the invoice rather than alter audit rows.
-  const [additionalCostResult, dispatchRecoResult] = await Promise.all([
+  const soLineIds = [...new Set(lines.map((line) => toTrimmedString(line.so_line_id)).filter(Boolean))];
+  const materialIds = [...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
+  const [additionalCostResult, dispatchRecoResult, soLineResult, materialResult, sellerResult, dcResult] = await Promise.all([
     serviceRoleClient
       .schema("erp_procurement")
       .from("sales_invoice_additional_cost_line")
@@ -510,10 +512,38 @@ async function hydrateSalesInvoice(
       .select("id, invoice_number, tally_invoice_number, tally_invoice_date, inbound_number, dc_number, so_number, fo_number, dispatch_category, process_order_number, batch_number, packing_order_number, po_type, dispatch_qty_kg, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, is_voided, voided_at")
       .eq("invoice_id", invoiceId)
       .order("created_at", { ascending: true }),
+    soLineIds.length
+      ? serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, hsn_code").in("id", soLineIds)
+      : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    materialIds.length
+      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, document_name, hsn_code").in("id", materialIds)
+      : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    invoice.company_id
+      ? serviceRoleClient.schema("erp_master").from("companies").select("company_name, full_address, state_name, gst_number").eq("id", invoice.company_id).maybeSingle()
+      : Promise.resolve({ data: null as JsonRecord | null, error: null }),
+    invoice.dc_id
+      ? serviceRoleClient.schema("erp_procurement").from("delivery_challan").select("dc_number, dc_date, lr_number, lr_date, vehicle_number, transporter_id").eq("id", invoice.dc_id).maybeSingle()
+      : Promise.resolve({ data: null as JsonRecord | null, error: null }),
   ]);
   const { data: additionalCostLines, error: additionalCostLinesError } = additionalCostResult;
   if (additionalCostLinesError) throw new Error("SALES_INVOICE_ADDITIONAL_COST_FETCH_FAILED");
   if (dispatchRecoResult.error) throw new Error("SALES_INVOICE_DISPATCH_RECO_FETCH_FAILED");
+  if (soLineResult.error) throw new Error("SALES_INVOICE_SO_LINE_FETCH_FAILED");
+  if (materialResult.error) throw new Error("SALES_INVOICE_MATERIAL_FETCH_FAILED");
+  if (sellerResult.error) throw new Error("SALES_INVOICE_SELLER_FETCH_FAILED");
+  if (dcResult.error) throw new Error("SALES_INVOICE_DC_FETCH_FAILED");
+  const soLineMap = new Map(((soLineResult.data ?? []) as JsonRecord[]).map((line) => [String(line.id), line]));
+  const materialMap = new Map(((materialResult.data ?? []) as JsonRecord[]).map((material) => [String(material.id), material]));
+  const hydratedLines = lines.map((line) => {
+    const soLine = soLineMap.get(toTrimmedString(line.so_line_id));
+    const material = materialMap.get(toTrimmedString(line.material_id));
+    return {
+      ...line,
+      hsn_code: toTrimmedString(soLine?.hsn_code) || toTrimmedString(material?.hsn_code) || null,
+      material_name: toTrimmedString(material?.material_name) || null,
+      document_name: toTrimmedString(material?.document_name) || null,
+    };
+  });
   const additionalCostLineRows = ((additionalCostLines ?? []) as JsonRecord[]).map((row) => ({
     ...row,
     category_name: (row.additional_cost_category as JsonRecord | null)?.category_name ?? null,
@@ -521,9 +551,11 @@ async function hydrateSalesInvoice(
   }));
   return {
     ...invoice,
-    lines,
+    lines: hydratedLines,
     additional_cost_lines: additionalCostLineRows,
     dispatch_reco_lines: (dispatchRecoResult.data ?? []) as JsonRecord[],
+    seller: sellerResult.data ?? null,
+    delivery_challan: dcResult.data ?? null,
   };
 }
 
