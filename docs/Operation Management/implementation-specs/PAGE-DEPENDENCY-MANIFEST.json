@@ -5668,6 +5668,68 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/sales/PgiInvoiceGroupsCreatePage.jsx",
+    "dependencyCount": 7,
+    "deps": [
+      {
+        "fn": "getDeliveryOrderUnified",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/${encodeURIComponent(id)}",
+        "resourceCode": "PROC_DO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "previewInvoiceGroups",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/${encodeURIComponent(dcId)}/invoice-groups",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listAdditionalCostCategories",
+        "method": "GET",
+        "path": "/api/procurement/additional-cost-categories",
+        "resourceCode": null,
+        "action": null,
+        "skipAcl": true
+      },
+      {
+        "fn": "listPaymentTerms",
+        "method": "GET",
+        "path": "/api/procurement/payment-terms",
+        "resourceCode": "PROC_PAYMENT_TERMS_MASTER",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listDeliveryOrders",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders",
+        "resourceCode": "PROC_DO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createAdditionalCostCategory",
+        "method": "POST",
+        "path": "/api/procurement/additional-cost-categories",
+        "resourceCode": null,
+        "action": null,
+        "skipAcl": true
+      },
+      {
+        "fn": "postPgiInvoiceGroups",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2/${encodeURIComponent(dcId)}/pgi-invoice-groups",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx",
     "dependencyCount": 8,
     "deps": [
