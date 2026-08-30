@@ -14,7 +14,7 @@ RETURNS uuid
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = erp_procurement, erp_production, public
-AS $$
+AS $function$
 DECLARE
   v_dc_id uuid := p_dc_id;
   v_line jsonb;
@@ -96,7 +96,7 @@ BEGIN
 
   RETURN v_dc_id;
 END;
-$$;
+$function$;
 
 REVOKE ALL ON FUNCTION erp_procurement.save_delivery_order_unified_atomic(text, uuid, jsonb, jsonb, jsonb, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION erp_procurement.save_delivery_order_unified_atomic(text, uuid, jsonb, jsonb, jsonb, uuid) TO service_role;
@@ -109,7 +109,7 @@ RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = erp_inventory, erp_procurement, public
-AS $$
+AS $function$
 DECLARE
   v_group jsonb;
 BEGIN
@@ -123,7 +123,7 @@ BEGIN
     );
   END LOOP;
 END;
-$$;
+$function$;
 
 REVOKE ALL ON FUNCTION erp_inventory.post_sales_invoice_groups_atomic(jsonb, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION erp_inventory.post_sales_invoice_groups_atomic(jsonb, uuid) TO service_role;
@@ -136,7 +136,7 @@ RETURNS uuid
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = erp_procurement, erp_production, public
-AS $$
+AS $function$
 DECLARE
   v_group_id uuid;
 BEGIN
@@ -164,7 +164,7 @@ BEGIN
 
   RETURN v_group_id;
 END;
-$$;
+$function$;
 
 REVOKE ALL ON FUNCTION erp_procurement.save_so_map_group_atomic(jsonb, jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION erp_procurement.save_so_map_group_atomic(jsonb, jsonb) TO service_role;
@@ -177,7 +177,7 @@ RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = erp_procurement, public
-AS $$
+AS $function$
 BEGIN
   IF EXISTS (
     SELECT 1
@@ -195,7 +195,7 @@ BEGIN
   WHERE id = p_group_id AND status = 'ACTIVE';
   IF NOT FOUND THEN RAISE EXCEPTION 'SO_MAP_GROUP_NOT_FOUND'; END IF;
 END;
-$$;
+$function$;
 
 REVOKE ALL ON FUNCTION erp_procurement.release_so_map_group_atomic(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION erp_procurement.release_so_map_group_atomic(uuid, uuid) TO service_role;
