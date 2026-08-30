@@ -32,6 +32,7 @@ import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import { amountToWordsIndian } from "../../../../utils/numberToWordsIndian.js";
 import { getActiveScreenContext, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
@@ -206,9 +207,18 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
     <DrawerBase visible side="center" title={`${group.document_number || "Invoice group"} — Tax Invoice`} onEscape={onClose} onClose={onClose} width="min(1120px, calc(100vw - 24px))">
       <div className="grid gap-4">
         <div className="grid gap-3 border border-slate-300 bg-white p-4 text-sm text-slate-900">
-          <div className="border-b border-slate-400 pb-2 text-center text-lg font-bold uppercase">Tax Invoice</div>
+          <div className="grid grid-cols-3 items-center border-b border-slate-400 pb-2 text-xs uppercase">
+            <div className="text-left text-lg font-bold">Tax Invoice</div>
+            <div className="text-center font-semibold italic">Original for Recipient</div>
+            <div className="text-right font-semibold">e-Invoice</div>
+          </div>
           <div className="grid border border-slate-300 text-xs md:grid-cols-2">
             <div className="grid gap-2 border-b border-slate-300 p-3 md:border-b-0 md:border-r">
+              <div className="font-bold uppercase">Supplier</div>
+              <div className="font-semibold">{group.seller?.name || "—"}</div>
+              <div>{group.seller?.address || "—"}</div>
+              <div>{group.seller?.state || "—"}{group.seller?.gst_number ? ` | GSTIN: ${group.seller.gst_number}` : ""}</div>
+              <div className="my-1 border-t border-slate-200" />
               <div className="font-bold uppercase">Consignee (Ship To)</div>
               <div className="font-semibold">{group.ship_to?.name || "—"}</div>
               <div>{group.ship_to?.address || "—"}</div>
@@ -247,9 +257,17 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
             </table>
           </div>
 
+          <div className="border border-slate-300 px-3 py-2 text-xs"><span className="font-semibold">Amount Chargeable (in words): </span><strong>{amountToWordsIndian(totals.total)}</strong></div>
+
           <div className="overflow-x-auto border border-slate-300">
             <table className="min-w-full border-collapse text-xs"><thead className="bg-slate-100"><tr><th rowSpan="2" className="border border-slate-300 p-2">HSN/SAC</th><th rowSpan="2" className="border border-slate-300 p-2 text-right">Taxable Value</th>{group.gst_type === "CGST_SGST" ? <><th colSpan="2" className="border border-slate-300 p-2">CGST</th><th colSpan="2" className="border border-slate-300 p-2">SGST</th></> : <th colSpan="2" className="border border-slate-300 p-2">IGST</th>}<th rowSpan="2" className="border border-slate-300 p-2 text-right">Total Tax</th></tr><tr>{group.gst_type === "CGST_SGST" ? <><th className="border border-slate-300 p-1">Rate</th><th className="border border-slate-300 p-1 text-right">Amount</th><th className="border border-slate-300 p-1">Rate</th><th className="border border-slate-300 p-1 text-right">Amount</th></> : <><th className="border border-slate-300 p-1">Rate</th><th className="border border-slate-300 p-1 text-right">Amount</th></>}</tr></thead><tbody>{taxRows.map((tax) => <tr key={`${tax.hsn_code}-${tax.gst_rate}`}><td className="border border-slate-300 p-2">{tax.hsn_code}</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.taxable_value)}</td>{group.gst_type === "CGST_SGST" ? <><td className="border border-slate-300 p-2">{formatFixed(tax.gst_rate / 2, 2)}%</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.cgst_amount)}</td><td className="border border-slate-300 p-2">{formatFixed(tax.gst_rate / 2, 2)}%</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.sgst_amount)}</td></> : <><td className="border border-slate-300 p-2">{formatFixed(tax.gst_rate, 2)}%</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.igst_amount)}</td></>}<td className="border border-slate-300 p-2 text-right">{formatFixed(tax.cgst_amount + tax.sgst_amount + tax.igst_amount)}</td></tr>)}</tbody></table>
           </div>
+          <div className="border border-slate-300 px-3 py-2 text-xs"><span className="font-semibold">Tax Amount (in words): </span><strong>{amountToWordsIndian(group.total_gst_amount)}</strong></div>
+          <div className="grid border border-slate-300 text-xs md:grid-cols-2">
+            <div className="p-3"><div className="font-semibold">Declaration</div><p className="mt-1">We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.</p></div>
+            <div className="flex min-h-24 flex-col justify-between border-t border-slate-300 p-3 text-right md:border-l md:border-t-0"><div className="font-semibold">for {group.seller?.name || "Supplier"}</div><div>Authorised Signatory</div></div>
+          </div>
+          <div className="text-center text-xs">This is a Computer Generated Invoice</div>
         </div>
 
         <div className="grid gap-2 border border-slate-200 p-3">

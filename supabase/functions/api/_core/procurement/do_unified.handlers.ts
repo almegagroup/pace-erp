@@ -1251,6 +1251,7 @@ type ProcInvoiceGroup = {
   fo_date: string | null;
   parent_company_display: string | null;
   vdc_dc_display: string | null;
+  seller: ProcPartyDetail;
   bill_to: ProcPartyDetail;
   ship_to: ProcPartyDetail;
   lines: ProcInvoiceGroupLine[];
@@ -1366,10 +1367,16 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
 
   const companyId = toTrimmedString(dc.selling_company_id);
   const { data: sellingCompany, error: sellingCompanyError } = await serviceRoleClient
-    .schema("erp_master").from("companies").select("state_name").eq("id", companyId).maybeSingle();
+    .schema("erp_master").from("companies").select("company_code, company_name, full_address, state_name, gst_number").eq("id", companyId).maybeSingle();
   if (sellingCompanyError) throw new Error("PGI_INVOICE_TAX_CONTEXT_FAILED");
   const companyStateName = toTrimmedString(sellingCompany?.state_name) || null;
   if (!companyStateName) throw new Error("PGI_INVOICE_SELLING_COMPANY_STATE_MISSING");
+  const seller: ProcPartyDetail = {
+    name: [toTrimmedString(sellingCompany?.company_code), toTrimmedString(sellingCompany?.company_name)].filter(Boolean).join(" - ") || null,
+    address: toTrimmedString(sellingCompany?.full_address) || null,
+    state: companyStateName,
+    gst_number: toTrimmedString(sellingCompany?.gst_number) || null,
+  };
 
   const hydratedLines = await attachMaterialDisplay(lines);
   const hydratedByLineId = new Map(hydratedLines.map((r) => [String(r.id), r]));
@@ -1541,6 +1548,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       fo_date: foDate,
       parent_company_display: parentCompanyDisplay,
       vdc_dc_display: vdcDcDisplay,
+      seller,
       bill_to: billTo,
       ship_to: shipTo,
       lines: groupLines,
