@@ -337,7 +337,7 @@ export default function SalesInvoiceDetailPage() {
               invoice simply shows "—" for all of these, which is correct (they
               never applied to it). */}
           {(detail.inbound_number || detail.fo_number || detail.e_way_bill_applicable || detail.freight_to_pay || detail.freight_mode || (detail.additional_cost_lines ?? []).length > 0) ? (
-            <ErpSectionCard eyebrow="§133.13" title="IBN / FO / e-Way Bill / Freight / Additional Cost">
+            <ErpSectionCard eyebrow="§133.13" title="IBN / FO / e-Way Bill / Invoice Adjustments">
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
                 <ErpFieldPreview label="Inbound Number (IBN)" value={detail.inbound_number || "—"} />
                 <ErpFieldPreview label="FO Number" value={detail.fo_number ? `${detail.fo_number} / ${detail.fo_date || "—"}` : "—"} />
@@ -349,7 +349,7 @@ export default function SalesInvoiceDetailPage() {
                     <ErpFieldPreview label="Freight GST" value={detail.freight_gst_included ? `${detail.freight_gst_treatment} @ ${detail.freight_gst_rate}% = ${formatMoney(detail.freight_gst_amount)}` : "No GST"} />
                   </>
                 ) : null}
-                <ErpFieldPreview label="Additional Cost Total" value={formatMoney(detail.additional_cost_total ?? 0)} />
+                <ErpFieldPreview label="Other Invoice Adjustment" value={formatMoney(detail.additional_cost_total ?? 0)} />
               </div>
               {(detail.additional_cost_lines ?? []).length > 0 ? (
                 <ErpDenseGrid

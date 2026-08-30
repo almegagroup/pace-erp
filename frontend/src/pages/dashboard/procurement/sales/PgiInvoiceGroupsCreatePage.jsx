@@ -236,7 +236,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
             </div>
             {!input.freight.to_pay ? (
               <>
-                <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Other than Order Rate?</div>
+                <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Add Freight to Invoice?</div>
             <div className="flex gap-2">
               <button type="button" onClick={() => onFreightChange({ included: true })} className={`flex-1 px-3 py-2 text-xs font-semibold ${input.freight.included ? "border border-emerald-700 bg-emerald-100 text-emerald-900" : "border border-slate-300 bg-white text-slate-700"}`}>Yes</button>
               <button type="button" onClick={() => onFreightChange({ included: false })} className={`flex-1 px-3 py-2 text-xs font-semibold ${!input.freight.included ? "border border-slate-700 bg-slate-200 text-slate-950" : "border border-slate-300 bg-white text-slate-700"}`}>No</button>
@@ -268,13 +268,12 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
                 </div>
                 {input.freight.gst_included ? (
                   <>
-                    <div className="grid gap-1 text-xs font-semibold text-slate-700">
-                      <span>Treatment</span>
-                      <div className="flex gap-2">
-                        <button type="button" onClick={() => onFreightChange({ gst_treatment: "INCLUSIVE" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${input.freight.gst_treatment === "INCLUSIVE" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>Inclusive</button>
-                        <button type="button" onClick={() => onFreightChange({ gst_treatment: "EXCLUSIVE" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${input.freight.gst_treatment === "EXCLUSIVE" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>Exclusive</button>
-                      </div>
-                    </div>
+                    <ErpDenseFormRow label="GST Treatment">
+                      <select value={input.freight.gst_treatment} onChange={(e) => onFreightChange({ gst_treatment: e.target.value })} className="h-9 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500">
+                        <option value="EXCLUSIVE">Exclusive</option>
+                        <option value="INCLUSIVE">Inclusive</option>
+                      </select>
+                    </ErpDenseFormRow>
                     <ErpDenseFormRow label="GST Rate %">
                       <input type="number" step="0.01" value={input.freight.gst_rate} onChange={(e) => onFreightChange({ gst_rate: e.target.value })} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
                     </ErpDenseFormRow>
@@ -318,8 +317,8 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
         <div className="grid gap-1 text-sm text-slate-800 md:max-w-sm md:justify-self-end">
           <div className="flex justify-between"><span className="text-slate-500">Taxable Value</span><span className="font-mono">{formatFixed(group.total_taxable_value)}</span></div>
           <div className="flex justify-between"><span className="text-slate-500">GST (Items)</span><span className="font-mono">{formatFixed(group.total_gst_amount)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Freight</span><span className="font-mono">{formatFixed(totals.freightContribution)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Additional Cost</span><span className="font-mono">{formatFixed(totals.additionalTotal)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Freight</span><span className="font-mono">{input.freight.to_pay ? "TO PAY (Customer)" : formatFixed(totals.freightContribution)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Other Invoice Adjustment</span><span className="font-mono">{formatFixed(totals.additionalTotal)}</span></div>
           <div className="flex justify-between"><span className="text-slate-500">Round Off</span><span className="font-mono">{totals.roundOff >= 0 ? "+" : "-"}{formatFixed(Math.abs(totals.roundOff), 4)}</span></div>
           <div className="mt-1 flex justify-between border-t border-slate-300 pt-1 text-base font-bold"><span>Total (preview)</span><span className="font-mono">{formatFixed(totals.total)}</span></div>
         </div>
