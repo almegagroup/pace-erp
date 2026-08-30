@@ -100,17 +100,42 @@ async function computeDrawnQtyByColumn(column: "so_line_id" | "sto_line_id" | "s
   return map;
 }
 
+// A Packing PO can be allocated to more than one FO. Keep the FO-specific
+// dispatched total separate from its overall production-output balance.
+async function computeDrawnQtyByFoPackingOrder(packingOrderIds: string[]): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (packingOrderIds.length === 0) return map;
+  const lines = await fetchInChunks<JsonRecord>(packingOrderIds, (chunk) =>
+    serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+      .select("packing_order_id, so_map_allocation_id, quantity, delivery_challan!inner(status)")
+      .in("packing_order_id", chunk).neq("delivery_challan.status", "CANCELLED"));
+  const allocationIds = [...new Set(lines.map((row) => toTrimmedString(row.so_map_allocation_id)).filter(Boolean))];
+  const allocations = allocationIds.length
+    ? await fetchInChunks<JsonRecord>(allocationIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+      .from("sales_order_map_allocation").select("id, fo_id").in("id", chunk))
+    : [];
+  const foByAllocationId = new Map(allocations.map((row) => [toTrimmedString(row.id), toTrimmedString(row.fo_id)]));
+  for (const line of lines) {
+    const foId = foByAllocationId.get(toTrimmedString(line.so_map_allocation_id));
+    const packingOrderId = toTrimmedString(line.packing_order_id);
+    if (!foId || !packingOrderId) continue;
+    const key = `${foId}:${packingOrderId}`;
+    map.set(key, (map.get(key) ?? 0) + Number(line.quantity ?? 0));
+  }
+  return map;
+}
+
 async function attachMaterialDisplay(rows: JsonRecord[]): Promise<JsonRecord[]> {
   const materialIds = [...new Set(rows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   const { data } = materialIds.length
-    ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type").in("id", materialIds)
+    ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, material_type").in("id", materialIds)
     : { data: [] as JsonRecord[] };
   const map = new Map(((data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
   return rows.map((row) => {
     const material = map.get(toTrimmedString(row.material_id));
     return {
       ...row,
-      material_display: material ? `${material.pace_code ?? ""} ${material.material_name ?? ""}`.trim() : null,
+      material_display: material ? toTrimmedString(material.material_name) || null : null,
       line_material_type: material?.material_type ?? null,
     };
   });
@@ -147,6 +172,14 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
     const lineMap = new Map(lineRows.map((row) => [String(row.id), row]));
 
     const dispatchType = toTrimmedString((so as JsonRecord).dispatch_type).toUpperCase();
+    const billToDisplay = [
+      toTrimmedString((so as JsonRecord).bill_to_name),
+      toTrimmedString((so as JsonRecord).bill_to_address),
+    ].filter(Boolean).join(", ") || null;
+    const shipToDisplay = [
+      toTrimmedString((so as JsonRecord).ship_to_name),
+      toTrimmedString((so as JsonRecord).ship_to_address),
+    ].filter(Boolean).join(", ") || billToDisplay;
 
     if (!DEPENDENT_DISPATCH_TYPES.has(dispatchType)) {
       // INDEPENDENT_PARTY / INDEPENDENT_PARTY_ASIAN_BILLED — Ship-To already
@@ -163,8 +196,8 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
         groups: [{
           key: "direct",
           label: "Ship-To already fixed on this SO",
-          bill_to_display: toTrimmedString((so as JsonRecord).bill_to_name) || null,
-          ship_to_display: toTrimmedString((so as JsonRecord).ship_to_name) || toTrimmedString((so as JsonRecord).bill_to_name) || null,
+          bill_to_display: billToDisplay,
+          ship_to_display: shipToDisplay,
           lines: await attachMaterialDisplay(withRemaining),
         }],
       }, ctx.request_id, req);
@@ -192,8 +225,8 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
         groups: [{
           key: "depot",
           label: "Depot Ship-To fixed on this SO",
-          bill_to_display: toTrimmedString((so as JsonRecord).bill_to_name) || null,
-          ship_to_display: toTrimmedString((so as JsonRecord).ship_to_name) || null,
+          bill_to_display: billToDisplay,
+          ship_to_display: shipToDisplay,
           lines: await attachMaterialDisplay(withRemaining),
         }],
       }, ctx.request_id, req);
@@ -204,7 +237,7 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
     const addressIds = [...new Set(allocationRows.map((row) => toTrimmedString(row.customer_address_id)).filter(Boolean))];
     const [{ data: foRows, error: foError }, { data: addressRows, error: addressError }] = await Promise.all([
       foIds.length
-        ? serviceRoleClient.schema("erp_production").from("plan_feed").select("id, fo_number, party_id, party_name").in("id", foIds)
+        ? serviceRoleClient.schema("erp_production").from("plan_feed").select("id, fo_number, party_id, party_name, customer_address_id").in("id", foIds)
         : Promise.resolve({ data: [] as JsonRecord[], error: null }),
       addressIds.length
         ? serviceRoleClient.schema("erp_master").from("customer_address").select("id, customer_id, site_name, address_line, town, state").in("id", addressIds)
@@ -213,7 +246,12 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
     if (foError) return doErrorResponse(req, ctx, "DO_FO_LOOKUP_FAILED", 500, "Unable to load FO details.");
     if (addressError) return doErrorResponse(req, ctx, "DO_ADDRESS_LOOKUP_FAILED", 500, "Unable to load customer address details.");
     const foMap = new Map(((foRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
-    const addressRowsTyped = (addressRows ?? []) as JsonRecord[];
+    const foAddressIds = [...new Set(((foRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.customer_address_id)).filter(Boolean))];
+    const { data: foAddressRows, error: foAddressError } = foAddressIds.length
+      ? await serviceRoleClient.schema("erp_master").from("customer_address").select("id, customer_id, site_name, address_line, town, state").in("id", foAddressIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (foAddressError) return doErrorResponse(req, ctx, "DO_ADDRESS_LOOKUP_FAILED", 500, "Unable to load FO Ship-To address details.");
+    const addressRowsTyped = [...((addressRows ?? []) as JsonRecord[]), ...((foAddressRows ?? []) as JsonRecord[])];
     const addressMap = new Map(addressRowsTyped.map((row) => [String(row.id), row]));
     const addressCustomerIds = [...new Set(addressRowsTyped.map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
     const { data: addressCustomers, error: addressCustomerError } = addressCustomerIds.length
@@ -234,19 +272,20 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
       if (!groups.has(groupKey)) {
         if (foId) {
           const fo = foMap.get(foId);
+          const shipTo = fo ? addressMap.get(toTrimmedString(fo.customer_address_id)) : null;
           groups.set(groupKey, {
             key: groupKey,
             label: fo ? `FO ${fo.fo_number}` : "FO",
-            bill_to_display: fo ? toTrimmedString(fo.party_name) || null : null,
-            ship_to_display: fo ? toTrimmedString(fo.party_name) || null : null,
+            bill_to_display: billToDisplay,
+            ship_to_display: shipTo ? [shipTo.site_name, shipTo.address_line, shipTo.town, shipTo.state].filter(Boolean).join(", ") : null,
             lines: [],
           });
         } else if (depotId) {
           groups.set(groupKey, {
             key: groupKey,
             label: "Fixed Depot",
-            bill_to_display: toTrimmedString((so as JsonRecord).bill_to_name) || null,
-            ship_to_display: toTrimmedString((so as JsonRecord).ship_to_name) || toTrimmedString((so as JsonRecord).bill_to_name) || null,
+            bill_to_display: billToDisplay,
+            ship_to_display: shipToDisplay,
             lines: [],
           });
         } else {
@@ -255,7 +294,7 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
           groups.set(groupKey, {
             key: groupKey,
             label: address ? `${address.site_name || address.town || "Address"}` : "Customer Address",
-            bill_to_display: customer ? `${customer.customer_code ?? ""} — ${customer.customer_name ?? ""}`.trim() : null,
+            bill_to_display: billToDisplay || (customer ? `${customer.customer_code ?? ""} — ${customer.customer_name ?? ""}`.trim() : null),
             ship_to_display: address ? [address.site_name, address.address_line, address.town, address.state].filter(Boolean).join(", ") : null,
             lines: [],
           });
@@ -286,28 +325,56 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
         serviceRoleClient.schema("erp_production").from("plan_feed_packing_order_allocation")
           .select("plan_feed_id, packing_order_id, allocated_qty_kg").in("plan_feed_id", chunk));
       const pkoIds = [...new Set(foAllocRows.map((row) => toTrimmedString(row.packing_order_id)).filter(Boolean))];
-      const [pkoRows, drawnByPko] = await Promise.all([
+      const [pkoRows, drawnByPko, drawnByFoPko] = await Promise.all([
         pkoIds.length
           ? fetchInChunks<JsonRecord>(pkoIds, (chunk) => serviceRoleClient.schema("erp_production").from("packing_order")
-              .select("id, po_number, batch_number, material_id, actual_qty_kg, fill_qty_per_pack, status").in("id", chunk))
+              .select("id, po_number, process_order_id, batch_number, material_id, actual_qty_kg, fill_qty_per_pack, status").in("id", chunk))
           : Promise.resolve([] as JsonRecord[]),
         computeDrawnQtyByColumn("packing_order_id", pkoIds),
+        computeDrawnQtyByFoPackingOrder(pkoIds),
       ]);
       const pkoMap = new Map(pkoRows.map((row) => [String(row.id), row]));
+      const processOrderIds = [...new Set(pkoRows.map((row) => toTrimmedString(row.process_order_id)).filter(Boolean))];
+      const processOrderRows = processOrderIds.length
+        ? await fetchInChunks<JsonRecord>(processOrderIds, (chunk) => serviceRoleClient.schema("erp_production").from("process_order")
+          .select("id, po_number, stroke_master_id").in("id", chunk))
+        : [];
+      const processOrderMap = new Map(processOrderRows.map((row) => [String(row.id), row]));
+      const strokeMasterIds = [...new Set(processOrderRows.map((row) => toTrimmedString(row.stroke_master_id)).filter(Boolean))];
+      const strokeMasterRows = strokeMasterIds.length
+        ? await fetchInChunks<JsonRecord>(strokeMasterIds, (chunk) => serviceRoleClient.schema("erp_production").from("stroke_master")
+          .select("id, stroke_number, prodshade_material_id").in("id", chunk))
+        : [];
+      const strokeMasterMap = new Map(strokeMasterRows.map((row) => [String(row.id), row]));
+      const prodshadeMaterialIds = [...new Set(strokeMasterRows.map((row) => toTrimmedString(row.prodshade_material_id)).filter(Boolean))];
+      const { data: prodshadeMaterials } = prodshadeMaterialIds.length
+        ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name").in("id", prodshadeMaterialIds)
+        : { data: [] as JsonRecord[] };
+      const prodshadeMaterialMap = new Map(((prodshadeMaterials ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
       for (const alloc of foAllocRows) {
         const pko = pkoMap.get(toTrimmedString(alloc.packing_order_id));
         if (!pko || toUpperTrimmedString(pko.status) !== "FINAL") continue;
         const drawn = drawnByPko.get(String(pko.id)) ?? 0;
-        const remaining = Number((Number(pko.actual_qty_kg ?? 0) - drawn).toFixed(6));
+        const foAllocated = Number(alloc.allocated_qty_kg ?? 0);
+        const foDrawn = drawnByFoPko.get(`${toTrimmedString(alloc.plan_feed_id)}:${String(pko.id)}`) ?? 0;
+        const remaining = Number(Math.min(Number(pko.actual_qty_kg ?? 0) - drawn, foAllocated - foDrawn).toFixed(6));
         if (remaining <= QTY_TOL) continue;
         const key = `${toTrimmedString(alloc.plan_feed_id)}:${toTrimmedString(pko.material_id)}`;
         if (!packingPoOptionsByFoAndMaterial.has(key)) packingPoOptionsByFoAndMaterial.set(key, []);
+        const processOrder = processOrderMap.get(toTrimmedString(pko.process_order_id));
+        const strokeMaster = processOrder ? strokeMasterMap.get(toTrimmedString(processOrder.stroke_master_id)) : null;
+        const prodshade = strokeMaster ? prodshadeMaterialMap.get(toTrimmedString(strokeMaster.prodshade_material_id)) : null;
+        const fo = foMap.get(toTrimmedString(alloc.plan_feed_id));
         packingPoOptionsByFoAndMaterial.get(key)!.push({
           packing_order_id: pko.id,
           po_number: pko.po_number,
           batch_number: pko.batch_number,
           fill_qty_per_pack: pko.fill_qty_per_pack,
           remaining_qty: remaining,
+          document_name: fo ? toTrimmedString(fo.description) || null : null,
+          prodshade_display: prodshade ? toTrimmedString(prodshade.material_name) || null : null,
+          actual_stroke: strokeMaster ? toTrimmedString(strokeMaster.stroke_number) || null : null,
+          process_order_number: processOrder ? toTrimmedString(processOrder.po_number) || null : null,
         });
       }
     }
@@ -573,7 +640,22 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       computeDrawnQtyByColumn("sto_line_id", stoLineIds),
       computeDrawnQtyByColumn("so_map_allocation_id", allocationIds),
     ]);
-    const soLineMap = new Map(soLineRows.map((row) => [String(row.id), row]));
+    // SO Map submissions identify the allocation, not necessarily its underlying
+    // SO line. Load those source lines too before validating the allocation.
+    const directlyLoadedSoLineIds = new Set(soLineRows.map((row) => String(row.id)));
+    const allocationSoLineIds = [...new Set(
+      allocationRows.map((row) => toTrimmedString(row.so_line_id)).filter(Boolean),
+    )];
+    const missingAllocationSoLineIds = allocationSoLineIds.filter((id) => !directlyLoadedSoLineIds.has(id));
+    const allocationSourceLineRows = missingAllocationSoLineIds.length
+      ? await fetchInChunks<JsonRecord>(
+        missingAllocationSoLineIds,
+        (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("*").in("id", chunk),
+      )
+      : [];
+    const soLineMap = new Map(
+      [...soLineRows, ...allocationSourceLineRows].map((row) => [String(row.id), row]),
+    );
     const stoLineMap = new Map(stoLineRows.map((row) => [String(row.id), row]));
     const allocationMap = new Map(allocationRows.map((row) => [String(row.id), row]));
 
@@ -585,23 +667,29 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
     // drawing from the same Packing PO's own multiple SKUs -- rare but not
     // disallowed).
     const submittedPkoIds = [...new Set(rawLines.map((l) => toTrimmedString(l.packing_order_id)).filter(Boolean))];
-    const [validFoPkoPairs, pkoRowsForValidation, drawnByPko] = await Promise.all([
+    const [validFoPkoPairs, pkoRowsForValidation, drawnByPko, drawnByFoPko] = await Promise.all([
       submittedPkoIds.length
         ? fetchInChunks<JsonRecord>(submittedPkoIds, (chunk) => serviceRoleClient.schema("erp_production").from("plan_feed_packing_order_allocation")
-            .select("plan_feed_id, packing_order_id").in("packing_order_id", chunk))
+            .select("plan_feed_id, packing_order_id, allocated_qty_kg").in("packing_order_id", chunk))
         : Promise.resolve([] as JsonRecord[]),
       submittedPkoIds.length
         ? fetchInChunks<JsonRecord>(submittedPkoIds, (chunk) => serviceRoleClient.schema("erp_production").from("packing_order")
             .select("id, actual_qty_kg, status").in("id", chunk))
         : Promise.resolve([] as JsonRecord[]),
       computeDrawnQtyByColumn("packing_order_id", submittedPkoIds),
+      computeDrawnQtyByFoPackingOrder(submittedPkoIds),
     ]);
     const validFoPkoPairSet = new Set(validFoPkoPairs.map((row) => `${toTrimmedString(row.plan_feed_id)}:${toTrimmedString(row.packing_order_id)}`));
+    const allocatedByFoPko = new Map(validFoPkoPairs.map((row) => [
+      `${toTrimmedString(row.plan_feed_id)}:${toTrimmedString(row.packing_order_id)}`,
+      Number(row.allocated_qty_kg ?? 0),
+    ]));
     const pkoRemainingMap = new Map(pkoRowsForValidation.map((row) => [
       String(row.id),
       toUpperTrimmedString(row.status) === "FINAL" ? Number(row.actual_qty_kg ?? 0) - (drawnByPko.get(String(row.id)) ?? 0) : 0,
     ]));
     const pkoUsedInThisSubmission = new Map<string, number>();
+    const foPkoUsedInThisSubmission = new Map<string, number>();
 
     // SO ids referenced (directly or via an allocation) + STO ids, for the
     // new delivery_challan_source rows (§133.12) and company-scope re-check
@@ -661,7 +749,15 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
           if (pkoRemaining < quantity - QTY_TOL) {
             throw new Error("DO_PACKING_ORDER_INSUFFICIENT_BALANCE");
           }
+          const foPkoKey = `${foId}:${packingOrderId}`;
+          const foAlreadyUsed = foPkoUsedInThisSubmission.get(foPkoKey) ?? 0;
+          const foAllocationRemaining = (allocatedByFoPko.get(foPkoKey) ?? 0)
+            - (drawnByFoPko.get(foPkoKey) ?? 0) - foAlreadyUsed;
+          if (foAllocationRemaining < quantity - QTY_TOL) {
+            throw new Error("DO_PACKING_ORDER_ALLOCATION_EXCEEDED");
+          }
           pkoUsedInThisSubmission.set(packingOrderId, alreadyUsed + quantity);
+          foPkoUsedInThisSubmission.set(foPkoKey, foAlreadyUsed + quantity);
         }
       } else if (soLineId) {
         const sourceLine = soLineMap.get(soLineId);
@@ -896,7 +992,7 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_CREATE_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403
-      : ["DO_QTY_EXCEEDS_BALANCE", "INSUFFICIENT_STOCK", "DO_CREATE_INVALID", "DO_LINE_INVALID", "DO_LINE_SOURCE_MISSING", "DO_SOURCE_COMPANY_MISMATCH", "DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO", "DO_PACKING_ORDER_INSUFFICIENT_BALANCE"].includes(code) ? 400
+      : ["DO_QTY_EXCEEDS_BALANCE", "INSUFFICIENT_STOCK", "DO_CREATE_INVALID", "DO_LINE_INVALID", "DO_LINE_SOURCE_MISSING", "DO_SOURCE_COMPANY_MISMATCH", "DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO", "DO_PACKING_ORDER_INSUFFICIENT_BALANCE", "DO_PACKING_ORDER_ALLOCATION_EXCEEDED"].includes(code) ? 400
       : code.includes("NOT_FOUND") ? 404
       : 500;
     return doErrorResponse(req, ctx, code, status, code);
@@ -1042,7 +1138,7 @@ export async function updateDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
     const code = error instanceof Error ? error.message : "DO_EDIT_FAILED";
     const status = code === "DO_NOT_FOUND" ? 404
       : code === "COMPANY_SCOPE_VIOLATION" ? 403
-      : ["DO_QTY_EXCEEDS_BALANCE", "INSUFFICIENT_STOCK", "DO_EDIT_INVALID", "DO_LINE_INVALID", "DO_LINE_SOURCE_MISSING", "DO_SOURCE_COMPANY_MISMATCH", "DO_EDIT_BLOCKED", "DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO", "DO_PACKING_ORDER_INSUFFICIENT_BALANCE"].includes(code) ? 400
+      : ["DO_QTY_EXCEEDS_BALANCE", "INSUFFICIENT_STOCK", "DO_EDIT_INVALID", "DO_LINE_INVALID", "DO_LINE_SOURCE_MISSING", "DO_SOURCE_COMPANY_MISMATCH", "DO_EDIT_BLOCKED", "DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO", "DO_PACKING_ORDER_INSUFFICIENT_BALANCE", "DO_PACKING_ORDER_ALLOCATION_EXCEEDED"].includes(code) ? 400
       : code.includes("NOT_FOUND") ? 404
       : 500;
     return doErrorResponse(req, ctx, code, status, code);
