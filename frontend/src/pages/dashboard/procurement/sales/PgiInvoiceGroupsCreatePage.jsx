@@ -32,8 +32,7 @@ import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
-import { getActiveScreenContext, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
-import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   createAdditionalCostCategory,
   getDeliveryOrderUnified,
@@ -561,13 +560,11 @@ export default function PgiInvoiceGroupsCreatePage() {
       const result = await postPgiInvoiceGroups(dcId, { groups: payloadGroups });
       const invoices = Array.isArray(result?.invoices) ? result.invoices : [];
       setNotice(`Posted ${invoices.length} invoice(s).`);
-      const firstInvoiceId = invoices[0]?.invoice_id;
-      if (firstInvoiceId) {
-        openScreenWithContext(OPERATION_SCREENS.PROC_INV_DETAIL.screen_code, { id: firstInvoiceId, refreshOnReturn: true });
-        navigate(`/dashboard/procurement/sales-invoices/${encodeURIComponent(firstInvoiceId)}`);
-      } else {
-        navigate("/dashboard/procurement/sales-invoices");
-      }
+      // A posted DO is intentionally no longer eligible for invoice-group
+      // preview. Return to the queue instead of opening the legacy detail
+      // screen under a possibly different company context.
+      if (contextDcId) popScreen();
+      navigate("/dashboard/procurement/sales-invoices", { replace: true });
     } catch (postError) {
       setError(postError instanceof Error ? postError.message : "PGI_INVOICE_GROUPS_POST_FAILED");
     } finally {

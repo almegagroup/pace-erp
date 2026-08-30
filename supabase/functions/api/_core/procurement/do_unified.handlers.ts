@@ -21,7 +21,6 @@ import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
-import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { getAvailableQty } from "./delivery_order.handlers.ts";
 import { deriveSalesInvoiceGstType, getSnapshotForIssue, hasPhysicalInventoryBlock } from "./sales_order.handlers.ts";
@@ -1975,23 +1974,15 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
           unit_value: Number(snapshot.valuation_rate ?? 0),
           stock_type_code: "UNRESTRICTED",
           direction: "OUT",
+          // Preserve batch genealogy on the stock movement.  This is null for
+          // ordinary non-batch dispatches, which is an intentional distinction.
+          batch_number: line.batch_number,
           line_ref: line.dc_line_id,
         });
       }
 
-      const invoiceNumber = await generateProcurementDocNumber("SALES_INVOICE");
       const invoiceId = crypto.randomUUID();
       const invoiceDate = todayIsoDate();
-      for (const m of movements) {
-        m.document_number = invoiceNumber;
-        m.document_date = invoiceDate;
-        m.reference_document_number = invoiceNumber;
-      }
-      const matDoc = await generateMaterialDocNumber(companyId);
-      for (const m of movements) {
-        m.material_doc_number = matDoc.docNumber;
-        m.material_doc_year = matDoc.docYear;
-      }
 
       const invoiceLinesPayload = group.lines.map((line, lineIndex) => {
         const taxableValue = Number((line.quantity * line.unit_value).toFixed(4));
@@ -2036,7 +2027,9 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
         dc_id: dcId,
         is_final_group: isFinalGroup,
         invoice: {
-          invoice_number: invoiceNumber,
+          // The atomic database function allocates this only after every
+          // validation has passed, so a failed PGI cannot consume a serial.
+          invoice_number: null,
           invoice_date: invoiceDate,
           company_id: companyId,
           customer_id: group.customer_id,
@@ -2090,7 +2083,7 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       };
 
       postGroups.push({ invoice_id: invoiceId, movements, context });
-      results.push({ invoice_id: invoiceId, invoice_number: invoiceNumber, group_key: group.group_key, document_number: group.document_number });
+      results.push({ invoice_id: invoiceId, invoice_number: null, group_key: group.group_key, document_number: group.document_number });
     }
 
     // One database call owns every group. A failure in any group's P601,
