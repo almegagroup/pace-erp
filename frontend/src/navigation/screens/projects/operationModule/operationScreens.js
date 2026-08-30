@@ -562,6 +562,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_INV_PRINT: {
+    screen_code: "PROC_INV_PRINT",
+    route: "/dashboard/procurement/sales-invoices/:id/print",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   // §133.13 -- IBN-driven, multi-group SO02 PGI/Invoice flow. This must have
   // its own stack screen so its route and dcId context cannot be restored to
   // the legacy single-invoice PGI screen above.
