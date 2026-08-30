@@ -152,26 +152,6 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
     if (error) return doErrorResponse(req, ctx, "DO_SOURCE_LIST_FAILED", 500, "Unable to list source STOs.");
 
     const rows = (data ?? []) as JsonRecord[];
-    const dcIds = rows.map((row) => String(row.id));
-    // §133.12 DOs deliberately leave the old header source columns blank:
-    // their SO/STO sources live in delivery_challan_source and Ship-To is
-    // frozen per line.  Read those sources for the SO02 queue as well.
-    const [{ data: sourceLinks, error: sourceLinksError }, { data: dispatchLines, error: dispatchLinesError }] = await Promise.all([
-      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").select("dc_id, source_type, source_id").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_line").select("dc_id, ship_to_name, ship_to_address, ship_to_state, line_total").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-    ]);
-    if (sourceLinksError) return doErrorResponse(req, ctx, "DO_SOURCE_FETCH_FAILED", 500, "Unable to load delivery order sources.");
-    if (dispatchLinesError) return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load delivery order lines.");
-    const sourceByDc = new Map<string, JsonRecord[]>();
-    for (const link of (sourceLinks ?? []) as JsonRecord[]) {
-      const key = toTrimmedString(link.dc_id);
-      sourceByDc.set(key, [...(sourceByDc.get(key) ?? []), link]);
-    }
-    const linesByDc = new Map<string, JsonRecord[]>();
-    for (const line of (dispatchLines ?? []) as JsonRecord[]) {
-      const key = toTrimmedString(line.dc_id);
-      linesByDc.set(key, [...(linesByDc.get(key) ?? []), line]);
-    }
     const companyIds = [...new Set([
       ...rows.map((row) => toTrimmedString(row.sending_company_id)),
       ...rows.map((row) => toTrimmedString(row.receiving_company_id)),
@@ -1004,6 +984,17 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     if (error) return doErrorResponse(req, ctx, "DO_LIST_FAILED", 500, "Unable to list delivery orders.");
 
     const rows = (data ?? []) as JsonRecord[];
+    const dcIds = rows.map((row) => String(row.id));
+    const [{ data: sourceLinks, error: sourceLinksError }, { data: dispatchLines, error: dispatchLinesError }] = await Promise.all([
+      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").select("dc_id, source_type, source_id").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_line").select("dc_id, ship_to_name, ship_to_address, ship_to_state, line_total").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    ]);
+    if (sourceLinksError) return doErrorResponse(req, ctx, "DO_SOURCE_FETCH_FAILED", 500, "Unable to load delivery order sources.");
+    if (dispatchLinesError) return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load delivery order lines.");
+    const sourceByDc = new Map<string, JsonRecord[]>();
+    for (const link of (sourceLinks ?? []) as JsonRecord[]) sourceByDc.set(toTrimmedString(link.dc_id), [...(sourceByDc.get(toTrimmedString(link.dc_id)) ?? []), link]);
+    const linesByDc = new Map<string, JsonRecord[]>();
+    for (const line of (dispatchLines ?? []) as JsonRecord[]) linesByDc.set(toTrimmedString(line.dc_id), [...(linesByDc.get(toTrimmedString(line.dc_id)) ?? []), line]);
     const customerIds = [...new Set(rows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
     // STO-sourced DO rows have no customer_id at all (customer_id is only
     // ever set for dc_type SALES, per createDeliveryOrderHandler) -- the
