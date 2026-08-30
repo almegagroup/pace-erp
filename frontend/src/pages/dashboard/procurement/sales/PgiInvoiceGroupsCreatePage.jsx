@@ -53,6 +53,51 @@ function formatFixed(value, digits = 2) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toFixed(digits) : (0).toFixed(digits);
 }
+function formatDate(value) {
+  if (!value) return "—";
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("en-GB");
+}
+function itemTaxBreakup(line, gstType) {
+  const rate = toNumber(line.gst_rate);
+  const amount = toNumber(line.gst_amount);
+  if (gstType === "CGST_SGST") {
+    return [
+      { label: "CGST", rate: rate / 2, amount: amount / 2 },
+      { label: "SGST", rate: rate / 2, amount: amount / 2 },
+    ];
+  }
+  return [{ label: "IGST", rate, amount }];
+}
+function hsnTaxRows(group) {
+  const rows = new Map();
+  for (const line of group.lines || []) {
+    const rate = toNumber(line.gst_rate);
+    const key = `${line.hsn_code || "—"}:${rate}`;
+    const current = rows.get(key) || {
+      hsn_code: line.hsn_code || "—",
+      gst_rate: rate,
+      taxable_value: 0,
+      cgst_amount: 0,
+      sgst_amount: 0,
+      igst_amount: 0,
+    };
+    current.taxable_value += toNumber(line.quantity) * toNumber(line.unit_value);
+    if (group.gst_type === "CGST_SGST") {
+      current.cgst_amount += toNumber(line.gst_amount) / 2;
+      current.sgst_amount += toNumber(line.gst_amount) / 2;
+    } else {
+      current.igst_amount += toNumber(line.gst_amount);
+    }
+    rows.set(key, current);
+  }
+  return [...rows.values()];
+}
+function invoiceLineDescription(line) {
+  const name = line.document_name || line.material_display || line.material_id || "—";
+  const code = line.material_display || line.material_id;
+  return code && code !== name ? `${name} (${code})` : name;
+}
 function makeKey() {
   return Math.random().toString(36).slice(2);
 }
@@ -128,6 +173,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
   const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
   const totals = computeGroupPreviewTotal(group, input);
   const categoryOptions = categories.map((c) => ({ value: c.id, label: c.category_name }));
+  const taxRows = hsnTaxRows(group);
 
   function handleSaveNext() {
     if (!groupInputIsValid(group, input)) {
@@ -157,42 +203,53 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
   }
 
   return (
-    <DrawerBase visible side="center" title={`${group.document_number || "Invoice group"} — Invoice Preview`} onEscape={onClose} onClose={onClose} width="min(1120px, calc(100vw - 24px))">
+    <DrawerBase visible side="center" title={`${group.document_number || "Invoice group"} — Tax Invoice`} onEscape={onClose} onClose={onClose} width="min(1120px, calc(100vw - 24px))">
       <div className="grid gap-4">
-        <div className="grid gap-2 border border-slate-200 p-3 text-sm">
-          <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Invoice Preview (sample tax-invoice field mapping, §133.13 — print template design deferred to its own session)</div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-            <div><span className="text-slate-500">Invoice No. / Dated</span><div>{input.tally_invoice_number || "—"} / {input.tally_invoice_date || "—"}</div></div>
-            <div><span className="text-slate-500">PACE Invoice Number</span><div className="italic text-slate-400">Auto-generated on Post</div></div>
-            <div><span className="text-slate-500">Delivery Note / Date</span><div>{input.tally_invoice_number || "—"} / {input.tally_invoice_date || "—"}</div></div>
-            <div><span className="text-slate-500">Dispatch Doc No / Dispatched Through</span><div>{dc?.transporter_display || "—"}</div></div>
-            <div><span className="text-slate-500">Bill of Lading / LR-RR No + Dated</span><div>{dc?.lr_number ? `${dc.lr_number} / ${dc.lr_date || "—"}` : "—"}</div></div>
-            <div><span className="text-slate-500">Reference No. &amp; Date / Buyer's Order No (FO)</span><div>{group.fo_number ? `${group.fo_number} / ${group.fo_date || "—"}` : "—"}</div></div>
-            {group.ibn_required ? <div><span className="text-slate-500">Other References (IBN)</span><div>{input.inbound_number || "—"}</div></div> : null}
-            <div><span className="text-slate-500">e-Way Bill No.</span><div>{input.e_way_bill_applicable ? (input.e_way_bill_number || "(pending entry)") : "—"}</div></div>
-            <div><span className="text-slate-500">Mode/Terms of Payment</span><div>{paymentTermLabel || "—"}</div></div>
-            <div><span className="text-slate-500">Motor Vehicle No.</span><div>{dc?.vehicle_number || "—"}</div></div>
-            <div><span className="text-slate-500">Destination</span><div>{group.ship_to?.address || group.ship_to?.name || "—"}</div></div>
-            <div><span className="text-slate-500">GST Type</span><div>{group.gst_type === "CGST_SGST" ? "CGST + SGST" : "IGST"}</div></div>
-            <div><span className="text-slate-500">Bill-To</span><div>{group.bill_to?.name || "—"}<br />{group.bill_to?.address || ""}<br />{group.bill_to?.state || ""} {group.bill_to?.gst_number ? `(GST ${group.bill_to.gst_number})` : ""}</div></div>
-            <div><span className="text-slate-500">Ship-To</span><div>{group.ship_to?.name || "—"}<br />{group.ship_to?.address || ""}<br />{group.ship_to?.state || ""} {group.ship_to?.gst_number ? `(GST ${group.ship_to.gst_number})` : ""}</div></div>
+        <div className="grid gap-3 border border-slate-300 bg-white p-4 text-sm text-slate-900">
+          <div className="border-b border-slate-400 pb-2 text-center text-lg font-bold uppercase">Tax Invoice</div>
+          <div className="grid border border-slate-300 text-xs md:grid-cols-2">
+            <div className="grid gap-2 border-b border-slate-300 p-3 md:border-b-0 md:border-r">
+              <div className="font-bold uppercase">Consignee (Ship To)</div>
+              <div className="font-semibold">{group.ship_to?.name || "—"}</div>
+              <div>{group.ship_to?.address || "—"}</div>
+              <div>{group.ship_to?.state || "—"}{group.ship_to?.gst_number ? ` | GSTIN: ${group.ship_to.gst_number}` : ""}</div>
+              <div className="mt-2 font-bold uppercase">Buyer (Bill To)</div>
+              <div className="font-semibold">{group.bill_to?.name || "—"}</div>
+              <div>{group.bill_to?.address || "—"}</div>
+              <div>{group.bill_to?.state || "—"}{group.bill_to?.gst_number ? ` | GSTIN: ${group.bill_to.gst_number}` : ""}</div>
+            </div>
+            <div className="grid grid-cols-2 content-start text-xs [&>div]:border-b [&>div]:border-slate-200 [&>div]:p-2">
+              <div>Invoice No.<strong className="block">{input.tally_invoice_number || "—"}</strong></div>
+              <div>Dated<strong className="block">{formatDate(input.tally_invoice_date)}</strong></div>
+              <div>Delivery Note<strong className="block">{dc?.lr_number || "—"}</strong></div>
+              <div>Delivery Note Date<strong className="block">{formatDate(dc?.lr_date)}</strong></div>
+              <div>Buyer&apos;s Order No. (FO)<strong className="block">{group.fo_number || "—"}</strong></div>
+              <div>FO Date<strong className="block">{formatDate(group.fo_date)}</strong></div>
+              {group.ibn_required ? <div>Inbound No. (IBN)<strong className="block">{input.inbound_number || "—"}</strong></div> : null}
+              <div>Dispatched Through<strong className="block">{dc?.transporter_display || "—"}</strong></div>
+              <div>Motor Vehicle No.<strong className="block">{dc?.vehicle_number || "—"}</strong></div>
+              <div>Mode/Terms of Payment<strong className="block">{paymentTermLabel || "—"}</strong></div>
+              <div>e-Way Bill No.<strong className="block">{input.e_way_bill_applicable ? (input.e_way_bill_number || "Pending") : "Not applicable"}</strong></div>
+              <div>GST Type<strong className="block">{group.gst_type === "CGST_SGST" ? "CGST + SGST" : "IGST"}</strong></div>
+            </div>
           </div>
-          <div className="text-[10px] text-slate-400">IRN / Ack No. / Ack Date — out of scope (future GST e-invoice/Tally integration).</div>
-          <ErpDenseGrid
-            cellNavigate
-            columns={[
-              { key: "material_display", label: "Item", render: (l) => l.material_display || l.material_id },
-              { key: "document_name", label: "Document Name", render: (l) => l.document_name || "—" },
-              { key: "batch_number", label: "Batch", width: "110px", render: (l) => l.batch_number || "—" },
-              { key: "quantity", label: "Qty", width: "90px", align: "right", render: (l) => `${formatFixed(l.quantity, 3)} ${l.uom_code || ""}` },
-              { key: "unit_value", label: "Rate", width: "90px", align: "right", render: (l) => formatFixed(l.unit_value, 4) },
-              { key: "gst_amount", label: "GST", width: "90px", align: "right", render: (l) => formatFixed(l.gst_amount) },
-              { key: "line_total", label: "Line Total", width: "100px", align: "right", render: (l) => formatFixed(l.line_total) },
-            ]}
-            rows={group.lines}
-            rowKey={(l) => l.dc_line_id}
-            emptyMessage="No lines."
-          />
+
+          <div className="overflow-x-auto border border-slate-300">
+            <table className="min-w-full border-collapse text-xs">
+              <thead className="bg-slate-800 text-white"><tr><th className="border border-slate-500 p-2 text-left">Sl. No.</th><th className="border border-slate-500 p-2 text-left">Description of Goods</th><th className="border border-slate-500 p-2 text-left">HSN/SAC</th><th className="border border-slate-500 p-2 text-right">Quantity</th><th className="border border-slate-500 p-2 text-right">Rate</th><th className="border border-slate-500 p-2 text-left">Per</th><th className="border border-slate-500 p-2 text-right">Amount</th></tr></thead>
+              {group.lines.map((line, index) => (
+                <tbody key={line.dc_line_id}>
+                  <tr><td className="border border-slate-300 p-2 align-top">{index + 1}</td><td className="border border-slate-300 p-2 align-top"><strong>{invoiceLineDescription(line)}</strong>{line.batch_number ? <div className="mt-1 text-slate-500">Batch: {line.batch_number}</div> : null}</td><td className="border border-slate-300 p-2 align-top">{line.hsn_code || "—"}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(line.quantity, 3)}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(line.unit_value, 4)}</td><td className="border border-slate-300 p-2 align-top">{line.uom_code || "—"}</td><td className="border border-slate-300 p-2 text-right align-top font-semibold">{formatFixed(toNumber(line.quantity) * toNumber(line.unit_value))}</td></tr>
+                  {itemTaxBreakup(line, group.gst_type).map((tax) => <tr key={`${line.dc_line_id}-${tax.label}`}><td className="border-x border-slate-300" /><td colSpan="4" className="border-x border-slate-300 px-2 py-1 text-right italic">Output {tax.label} @ {formatFixed(tax.rate, 2)}%</td><td className="border-x border-slate-300 p-1">{tax.label}</td><td className="border-x border-slate-300 p-1 text-right font-semibold">{formatFixed(tax.amount)}</td></tr>)}
+                </tbody>
+              ))}
+              <tfoot><tr className="font-bold"><td colSpan="3" className="border border-slate-300 p-2 text-right">Total</td><td className="border border-slate-300 p-2 text-right">{formatFixed(group.net_weight, 3)}</td><td colSpan="2" className="border border-slate-300 p-2" /><td className="border border-slate-300 p-2 text-right">{formatFixed(totals.total)}</td></tr></tfoot>
+            </table>
+          </div>
+
+          <div className="overflow-x-auto border border-slate-300">
+            <table className="min-w-full border-collapse text-xs"><thead className="bg-slate-100"><tr><th rowSpan="2" className="border border-slate-300 p-2">HSN/SAC</th><th rowSpan="2" className="border border-slate-300 p-2 text-right">Taxable Value</th>{group.gst_type === "CGST_SGST" ? <><th colSpan="2" className="border border-slate-300 p-2">CGST</th><th colSpan="2" className="border border-slate-300 p-2">SGST</th></> : <th colSpan="2" className="border border-slate-300 p-2">IGST</th>}<th rowSpan="2" className="border border-slate-300 p-2 text-right">Total Tax</th></tr><tr>{group.gst_type === "CGST_SGST" ? <><th className="border border-slate-300 p-1">Rate</th><th className="border border-slate-300 p-1 text-right">Amount</th><th className="border border-slate-300 p-1">Rate</th><th className="border border-slate-300 p-1 text-right">Amount</th></> : <><th className="border border-slate-300 p-1">Rate</th><th className="border border-slate-300 p-1 text-right">Amount</th></>}</tr></thead><tbody>{taxRows.map((tax) => <tr key={`${tax.hsn_code}-${tax.gst_rate}`}><td className="border border-slate-300 p-2">{tax.hsn_code}</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.taxable_value)}</td>{group.gst_type === "CGST_SGST" ? <><td className="border border-slate-300 p-2">{formatFixed(tax.gst_rate / 2, 2)}%</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.cgst_amount)}</td><td className="border border-slate-300 p-2">{formatFixed(tax.gst_rate / 2, 2)}%</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.sgst_amount)}</td></> : <><td className="border border-slate-300 p-2">{formatFixed(tax.gst_rate, 2)}%</td><td className="border border-slate-300 p-2 text-right">{formatFixed(tax.igst_amount)}</td></>}<td className="border border-slate-300 p-2 text-right">{formatFixed(tax.cgst_amount + tax.sgst_amount + tax.igst_amount)}</td></tr>)}</tbody></table>
+          </div>
         </div>
 
         <div className="grid gap-2 border border-slate-200 p-3">
@@ -316,11 +373,16 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
 
         <div className="grid gap-1 text-sm text-slate-800 md:max-w-sm md:justify-self-end">
           <div className="flex justify-between"><span className="text-slate-500">Taxable Value</span><span className="font-mono">{formatFixed(group.total_taxable_value)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">GST (Items)</span><span className="font-mono">{formatFixed(group.total_gst_amount)}</span></div>
+          {group.gst_type === "CGST_SGST" ? (
+            <>
+              <div className="flex justify-between"><span className="text-slate-500">CGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_cgst_amount)}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">SGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_sgst_amount)}</span></div>
+            </>
+          ) : <div className="flex justify-between"><span className="text-slate-500">IGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_igst_amount)}</span></div>}
           <div className="flex justify-between"><span className="text-slate-500">Freight</span><span className="font-mono">{input.freight.to_pay ? "TO PAY (Customer)" : formatFixed(totals.freightContribution)}</span></div>
           <div className="flex justify-between"><span className="text-slate-500">Other Invoice Adjustment</span><span className="font-mono">{formatFixed(totals.additionalTotal)}</span></div>
           <div className="flex justify-between"><span className="text-slate-500">Round Off</span><span className="font-mono">{totals.roundOff >= 0 ? "+" : "-"}{formatFixed(Math.abs(totals.roundOff), 4)}</span></div>
-          <div className="mt-1 flex justify-between border-t border-slate-300 pt-1 text-base font-bold"><span>Total (preview)</span><span className="font-mono">{formatFixed(totals.total)}</span></div>
+          <div className="mt-1 flex justify-between border-t border-slate-300 pt-1 text-base font-bold"><span>Invoice Total</span><span className="font-mono">{formatFixed(totals.total)}</span></div>
         </div>
 
         {validationError ? <div className="text-xs font-semibold text-rose-700">{validationError}</div> : null}
@@ -572,7 +634,7 @@ export default function PgiInvoiceGroupsCreatePage() {
                     { key: "dc_number", label: "DO Number", width: "110px", render: () => dc?.dc_number || "—" },
                     { key: "bill_to", label: "Billing Address", render: (row) => <AddressCell party={row.bill_to} /> },
                     { key: "ship_to", label: "Ship-To Address", render: (row) => <AddressCell party={row.ship_to} /> },
-                    { key: "fo_number", label: "FO / IBN", width: "110px", render: (row) => row.fo_number || (row.ibn_required ? "(non-FO)" : "—") },
+                    { key: "fo_number", label: "FO / IBN", width: "110px", render: (row) => row.fo_number || "—" },
                     { key: "inbound_number", label: "Inbound Number", width: "120px", render: (row) => {
                       const input = groupInputs[row.group_key];
                       return <input
@@ -591,7 +653,7 @@ export default function PgiInvoiceGroupsCreatePage() {
                       const input = groupInputs[row.group_key];
                       return <input type="date" value={input?.tally_invoice_date || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500" />;
                     } },
-                    { key: "total", label: "Total (preview)", width: "120px", align: "right", render: (row) => {
+                    { key: "total", label: "Invoice Total", width: "120px", align: "right", render: (row) => {
                       const input = groupInputs[row.group_key] || defaultGroupInput(row);
                       return formatFixed(computeGroupPreviewTotal(row, input).total);
                     } },
