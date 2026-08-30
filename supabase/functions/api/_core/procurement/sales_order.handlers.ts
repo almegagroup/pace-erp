@@ -2266,7 +2266,10 @@ async function prepareUnifiedSoLine(
   }
 
   const qtyForAmount = rateBasis === "PACK_UOM" ? (packQty ?? 0) : (baseQty ?? 0);
-  const taxableValue = rateBasis === "FIXED" ? rate : Number((rate * qtyForAmount).toFixed(4));
+  const grossOrNetValue = rateBasis === "FIXED" ? rate : Number((rate * qtyForAmount).toFixed(4));
+  const taxableValue = gstTreatment === "INCLUSIVE"
+    ? Number((grossOrNetValue / (1 + gstRate / 100)).toFixed(4))
+    : grossOrNetValue;
   const gstAmount = Number((taxableValue * gstRate / 100).toFixed(4));
   const gstType = deriveSalesInvoiceGstType(companyStateName, resolvedShipToOrBillState);
   const cgstAmount = gstType === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : 0;
@@ -2289,9 +2292,10 @@ async function prepareUnifiedSoLine(
       rate_basis: rateBasis,
       uom_code: toTrimmedString(line.uom_code) || null,
       rate,
-      // The legacy SO-line schema still requires net_rate. Unified SO01 has
-      // no line discount input, so its net rate is the entered rate.
-      net_rate: rate,
+      // DO/invoice calculations consume net_rate. For an inclusive item rate,
+      // retain the entered gross rate above while persisting its GST-exclusive
+      // unit rate here.
+      net_rate: gstTreatment === "INCLUSIVE" ? Number((rate / (1 + gstRate / 100)).toFixed(4)) : rate,
       currency_code: currencyCode,
       gst_treatment: gstTreatment,
       gst_rate: gstRate,

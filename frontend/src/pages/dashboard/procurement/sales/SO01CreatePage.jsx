@@ -147,19 +147,21 @@ function getLineBaseQty(line) {
 // the UI shows "—" instead of a wrong 0.
 function computeLinePreview(line, gstType) {
   const rate = toNumber(line.rate);
+  const gstRate = toNumber(line.gst_rate);
   let qtyForAmount = getLineBaseQty(line);
   let taxableValue;
   let gstAmount;
   if (line.line_material_type === "FG") {
     qtyForAmount = line.rate_basis === "PACK_UOM" ? toNumber(line.pack_qty) : getLineBaseQty(line);
     if (line.fg_type === "MTEST" && line.rate_basis === "FIXED") {
-      taxableValue = rate;
-      gstAmount = (taxableValue * toNumber(line.gst_rate)) / 100;
+      taxableValue = line.gst_treatment === "INCLUSIVE" ? rate / (1 + gstRate / 100) : rate;
+      gstAmount = (taxableValue * gstRate) / 100;
     }
   }
   if (taxableValue === undefined) {
-    taxableValue = rate * qtyForAmount;
-    gstAmount = (taxableValue * toNumber(line.gst_rate)) / 100;
+    const grossOrNetValue = rate * qtyForAmount;
+    taxableValue = line.gst_treatment === "INCLUSIVE" ? grossOrNetValue / (1 + gstRate / 100) : grossOrNetValue;
+    gstAmount = (taxableValue * gstRate) / 100;
   }
   const cgstAmount = gstType === "CGST_SGST" ? gstAmount / 2 : gstType === "IGST" ? 0 : null;
   const sgstAmount = gstType === "CGST_SGST" ? gstAmount / 2 : gstType === "IGST" ? 0 : null;
@@ -477,6 +479,12 @@ export default function SO01CreatePage() {
         { key: "qty", label: "Order Qty", width: "90px", render: (line) => numberInput(line.base_qty, (value) => updateLine(line.__key, { base_qty: value, quantity: value })) },
         { key: "uom", label: "UOM", width: "70px", render: (line) => textInput(line.uom_code, (value) => updateLine(line.__key, { uom_code: value })) },
         { key: "rate", label: "Rate", width: "90px", render: (line) => numberInput(line.rate, (value) => updateLine(line.__key, { rate: value })) },
+        { key: "gst_treatment", label: "GST", width: "100px", render: (line) => (
+          <select value={line.gst_treatment} onChange={(event) => updateLine(line.__key, { gst_treatment: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
+            <option value="EXCLUSIVE">Exclusive</option>
+            <option value="INCLUSIVE">Inclusive</option>
+          </select>
+        ) },
         { key: "gst_rate", label: "GST %", width: "70px", render: (line) => numberInput(line.gst_rate, (value) => updateLine(line.__key, { gst_rate: value })) },
         { key: "amount", label: "Amount", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).taxableValue.toFixed(2) },
         ...gstSplitColumns(gstTypePreview),
@@ -544,6 +552,12 @@ export default function SO01CreatePage() {
       { key: "rate_basis", label: "Rate Basis / Type", width: "100px", render: (line) => (
         <select value={line.rate_basis || ""} onChange={(event) => updateLine(line.__key, { rate_basis: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
           {(line.fg_type === "MTEST" ? MTEST_RATE_TYPE_OPTIONS : RATE_BASIS_OPTIONS).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+      ) },
+      { key: "gst_treatment", label: "GST", width: "100px", render: (line) => (
+        <select value={line.gst_treatment} onChange={(event) => updateLine(line.__key, { gst_treatment: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
+          <option value="EXCLUSIVE">Exclusive</option>
+          <option value="INCLUSIVE">Inclusive</option>
         </select>
       ) },
       { key: "gst_rate", label: "GST %", width: "70px", render: (line) => numberInput(line.gst_rate, (value) => updateLine(line.__key, { gst_rate: value })) },

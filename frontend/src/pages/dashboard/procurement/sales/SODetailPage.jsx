@@ -48,6 +48,7 @@ function makeNewSoLine(lineMaterialType) {
     per_pack_qty: "",
     rate_basis: "",
     rate: "",
+    gst_treatment: "EXCLUSIVE",
     gst_rate: "",
     hsn_code: "",
     batch_number: "",
@@ -215,6 +216,7 @@ export default function SODetailPage() {
           {
             rate: line.rate ?? "",
             base_qty: line.base_qty ?? line.quantity ?? "",
+            gst_treatment: line.gst_treatment || "EXCLUSIVE",
             gst_rate: line.gst_rate ?? "",
             hsn_code: line.hsn_code || "",
             batch_number: line.batch_number || "",
@@ -308,6 +310,7 @@ export default function SODetailPage() {
           id: lineId,
           rate: edit.rate === "" ? undefined : Number(edit.rate),
           base_qty: edit.base_qty === "" ? undefined : Number(edit.base_qty),
+          gst_treatment: edit.gst_treatment || "EXCLUSIVE",
           gst_rate: edit.gst_rate === "" ? undefined : Number(edit.gst_rate),
           hsn_code: edit.hsn_code || null,
           batch_number: edit.batch_number || null,
@@ -327,6 +330,7 @@ export default function SODetailPage() {
         per_pack_qty: line.per_pack_qty === "" ? null : Number(line.per_pack_qty),
         rate_basis: line.rate_basis || null,
         rate: line.rate === "" ? null : Number(line.rate),
+        gst_treatment: line.gst_treatment || "EXCLUSIVE",
         gst_rate: line.gst_rate === "" ? null : Number(line.gst_rate),
         hsn_code: line.hsn_code || null,
         batch_number: line.batch_number || null,
@@ -568,6 +572,20 @@ export default function SODetailPage() {
                     ),
                 },
                 {
+                  key: "gst_treatment",
+                  label: "GST",
+                  width: "100px",
+                  render: (row) =>
+                    isEditable ? (
+                      <select value={lineEdits[row.id]?.gst_treatment ?? "EXCLUSIVE"} onChange={(event) => updateLineEdit(row.id, { gst_treatment: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
+                        <option value="EXCLUSIVE">Exclusive</option>
+                        <option value="INCLUSIVE">Inclusive</option>
+                      </select>
+                    ) : (
+                      row.gst_treatment || "EXCLUSIVE"
+                    ),
+                },
+                {
                   key: "gst_rate",
                   label: "GST %",
                   width: "80px",
@@ -661,7 +679,7 @@ export default function SODetailPage() {
                       // enters a plain qty directly into base_qty/quantity.
                       const isFgWithPack = line.line_material_type === "FG" && line.fg_type && line.fg_type !== "MTEST";
                       return (
-                        <div key={line.__key} className="grid grid-cols-[90px_1fr_90px_90px_90px_80px_90px_100px_80px] items-center gap-2 border border-sky-200 bg-sky-50 px-2 py-1.5">
+                        <div key={line.__key} className="grid grid-cols-[90px_1fr_90px_90px_90px_80px_100px_80px_90px_100px_80px] items-center gap-2 border border-sky-200 bg-sky-50 px-2 py-1.5">
                           <span className="text-[11px] font-semibold text-slate-600">{line.line_material_type}</span>
                           <select value={line.material_id} onChange={(event) => handleNewLineMaterialSelect(line.__key, event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
                             <option value="">Select item</option>
@@ -682,6 +700,10 @@ export default function SODetailPage() {
                             <input type="number" step="0.0001" placeholder="Qty" value={line.quantity} onChange={(event) => updateNewLine(line.__key, { quantity: event.target.value, base_qty: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500 col-span-2" />
                           )}
                           <input type="number" step="0.0001" placeholder="Rate" value={line.rate} onChange={(event) => updateNewLine(line.__key, { rate: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
+                          <select value={line.gst_treatment} onChange={(event) => updateNewLine(line.__key, { gst_treatment: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
+                            <option value="EXCLUSIVE">GST Exclusive</option>
+                            <option value="INCLUSIVE">GST Inclusive</option>
+                          </select>
                           <input type="number" step="0.01" placeholder="GST%" value={line.gst_rate} onChange={(event) => updateNewLine(line.__key, { gst_rate: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
                           <input placeholder="HSN" value={line.hsn_code} onChange={(event) => updateNewLine(line.__key, { hsn_code: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
                           <input placeholder="Batch" value={line.batch_number} onChange={(event) => updateNewLine(line.__key, { batch_number: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
