@@ -147,7 +147,56 @@ function validateRequiredDateRange(dateFrom: string, dateTo: string): "OK" | "MI
 }
 
 function resolveMaterialLabel(material: JsonRecord | undefined): string {
-  return toTrimmedString(material?.document_name) || toTrimmedString(material?.material_name);
+  // "Material" is the material-master name/code. Document name is a separate
+  // commercial description column and must never replace the material itself.
+  return toTrimmedString(material?.material_name) || toTrimmedString(material?.external_code) || toTrimmedString(material?.pace_code);
+}
+
+type SalesInvoicePackingDetail = {
+  batch_number: string | null;
+  po_number: string | null;
+  fill_qty_per_pack: number | null;
+};
+
+// A sales invoice line retains its DC line, which retains the Packing PO and
+// batch. This lets the ledger report accurately display both for older P601
+// entries posted before the movement itself started carrying batch_number.
+async function buildSalesInvoicePackingMap(docs: JsonRecord[]): Promise<Map<string, SalesInvoicePackingDetail>> {
+  const invoiceIds = [...new Set(docs
+    .filter((doc) => toTrimmedString(doc.reference_document_type).toUpperCase() === "SALES_INVOICE")
+    .map((doc) => toTrimmedString(doc.reference_document_id))
+    .filter(Boolean))];
+  if (invoiceIds.length === 0) return new Map();
+
+  const invoiceLines = await fetchInChunks<JsonRecord>(invoiceIds, (chunk) => serviceRoleClient
+    .schema("erp_procurement").from("sales_invoice_line")
+    .select("invoice_id, line_number, dc_line_id").in("invoice_id", chunk));
+  const dcLineIds = [...new Set(invoiceLines.map((line) => toTrimmedString(line.dc_line_id)).filter(Boolean))];
+  if (dcLineIds.length === 0) return new Map();
+
+  const dcLines = await fetchInChunks<JsonRecord>(dcLineIds, (chunk) => serviceRoleClient
+    .schema("erp_procurement").from("delivery_challan_line")
+    .select("id, batch_number, packing_order_id").in("id", chunk));
+  const pkoIds = [...new Set(dcLines.map((line) => toTrimmedString(line.packing_order_id)).filter(Boolean))];
+  const packingOrders = pkoIds.length > 0
+    ? await fetchInChunks<JsonRecord>(pkoIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("packing_order")
+      .select("id, po_number, fill_qty_per_pack").in("id", chunk))
+    : [];
+  const dcLineById = new Map(dcLines.map((line) => [toTrimmedString(line.id), line]));
+  const pkoById = new Map(packingOrders.map((row) => [toTrimmedString(row.id), row]));
+  const details = new Map<string, SalesInvoicePackingDetail>();
+  for (const line of invoiceLines) {
+    const dcLine = dcLineById.get(toTrimmedString(line.dc_line_id));
+    if (!dcLine) continue;
+    const pko = pkoById.get(toTrimmedString(dcLine.packing_order_id));
+    details.set(`${toTrimmedString(line.invoice_id)}:${toTrimmedString(line.line_number)}`, {
+      batch_number: toTrimmedString(dcLine.batch_number) || null,
+      po_number: toTrimmedString(pko?.po_number) || null,
+      fill_qty_per_pack: pko ? Number(pko.fill_qty_per_pack ?? 0) || null : null,
+    });
+  }
+  return details;
 }
 
 // Opening Stock (IN05) FG lines carry a real packing_order_id (the PR23
@@ -606,6 +655,7 @@ export async function getStockLedgerReportHandler(
       conversionsByMaterialId.get(materialId)?.push(row);
     }
     const openingLotMap = await buildOpeningStockLotMap(stockDocRows);
+    const salesInvoicePackingMap = await buildSalesInvoicePackingMap(stockDocRows);
 
     const userIds = new Set<string>();
     const fgPoNumbers = new Set<string>();
@@ -706,7 +756,8 @@ export async function getStockLedgerReportHandler(
     if ((referenceIdsByType.get("SALES_INVOICE")?.size ?? 0) > 0) {
       vendorCustomerFetches.push((async () => {
         const refIds = [...(referenceIdsByType.get("SALES_INVOICE") ?? new Set<string>())];
-        const invoiceResp = await serviceRoleClient.schema("erp_procurement").from("sales_invoice").select("id, customer_id").in("id", refIds);
+        const invoiceResp = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
+          .select("id, customer_id, bill_to_name").in("id", refIds);
         if (invoiceResp.error) throw new Error("STOCK_LEDGER_CUSTOMER_RESOLVE_FAILED");
         const customerIds = [...new Set(((invoiceResp.data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
         const customerResp = customerIds.length > 0
@@ -718,7 +769,9 @@ export async function getStockLedgerReportHandler(
           const customer = customerMap.get(toTrimmedString(row.customer_id));
           vendorCustomerLabelByRef.set(
             `SALES_INVOICE:${toTrimmedString(row.id)}`,
-            customer ? `${toTrimmedString(customer.customer_code) || "—"} — ${toTrimmedString(customer.customer_name)}` : null,
+            customer
+              ? `${toTrimmedString(customer.customer_code) || "—"} — ${toTrimmedString(customer.customer_name)}`
+              : toTrimmedString(row.bill_to_name) || null,
           );
         }
       })());
@@ -736,20 +789,27 @@ export async function getStockLedgerReportHandler(
       const materialType = toTrimmedString(material?.material_type);
       const materialLabel = resolveMaterialLabel(material) || "—";
       const documentName = toTrimmedString(material?.document_name) || null;
+      const refType = toTrimmedString(doc?.reference_document_type).toUpperCase();
+      const refId = toTrimmedString(doc?.reference_document_id);
+      const invoicePacking = refType === "SALES_INVOICE"
+        ? salesInvoicePackingMap.get(`${refId}:${toTrimmedString(doc?.item_number)}`)
+        : null;
       // Signed: negative for OUT, positive for IN (posted_quantity/posted_value are GENERATED
       // columns on stock_ledger -- see feasibility doc Section 124). pack_quantity below is a
       // straight division of baseQuantity, so it inherits the correct sign too.
       const baseQuantity = normalizeNumber(row.posted_quantity);
       const conversion = resolveAltUomConversion(material, conversionsByMaterialId.get(row.material_id) ?? []);
       const altFactor = Number(conversion?.conversion_factor ?? 0);
-      const fgPoNumber = materialType === "FG" ? resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap) : "";
+      const fgPoNumber = materialType === "FG"
+        ? invoicePacking?.po_number || resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap)
+        : "";
       const fgPo = fgPoNumber ? packingOrderMap.get(fgPoNumber) : null;
       const packUomCode = packCodeMap.get(toTrimmedString(material?.pack_code)) || null;
       let packQuantity: number | null = null;
       let resolvedPackUomCode: string | null = null;
 
       if (materialType === "FG") {
-        const fillQtyPerPack = Number(fgPo?.fill_qty_per_pack ?? 0);
+        const fillQtyPerPack = Number(invoicePacking?.fill_qty_per_pack ?? fgPo?.fill_qty_per_pack ?? 0);
         packQuantity = fillQtyPerPack > 0 ? normalizeNumber(baseQuantity / fillQtyPerPack) : null;
         resolvedPackUomCode = packUomCode;
       } else if (materialType !== "SFG" && conversion && altFactor > 0) {
@@ -757,8 +817,6 @@ export async function getStockLedgerReportHandler(
         resolvedPackUomCode = toTrimmedString(conversion.from_uom_code) || null;
       }
 
-      const refType = toTrimmedString(doc?.reference_document_type).toUpperCase();
-      const refId = toTrimmedString(doc?.reference_document_id);
       const postedBy = toTrimmedString(doc?.posted_by);
       const resolvedUserId = postedBy || row.created_by;
       const rawUserLabel = userDisplayMap.get(resolvedUserId) ?? "";
@@ -777,7 +835,7 @@ export async function getStockLedgerReportHandler(
         external_code: toTrimmedString(material?.external_code) || "—",
         document_name: documentName || "—",
         storage_location: toTrimmedString(sloc?.code) || "—",
-        batch_number: row.batch_number || "—",
+        batch_number: row.batch_number || invoicePacking?.batch_number || "—",
         movement_type: toTrimmedString(row.movement_type_code) || "—",
         base_quantity: baseQuantity,
         base_uom_code: row.base_uom_code || "—",
