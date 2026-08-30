@@ -139,6 +139,9 @@ export default function ErpDenseGrid({
   // sits past a horizontal scroll, and the material name (the only way to
   // tell which row you're about to act on) scrolls away with it.
   stickyFirstColumn = false,
+  // Opt-in for wide entry grids. Declared widths remain authoritative so
+  // input values stay visible; the viewport scrolls instead of squeezing.
+  fitColumnWidths = false,
 }) {
   const effectiveCellNavigate = cellNavigate || rangeSelect;
   const rowRefs = useRef([]);
@@ -415,7 +418,12 @@ export default function ErpDenseGrid({
   return (
     <div className="grid gap-0">
       <div className={viewportClassName} style={viewportStyle} ref={scrollElementRef}>
-        <table className="erp-grid-table min-w-full text-xs">
+        <table className={`erp-grid-table min-w-full text-xs ${fitColumnWidths ? "w-max table-fixed" : ""}`.trim()}>
+          {fitColumnWidths ? (
+            <colgroup>
+              {columns.map((column) => <col key={column.key} style={column.width ? { width: column.width, minWidth: column.width } : undefined} />)}
+            </colgroup>
+          ) : null}
           <thead className="bg-slate-800 text-white">
             <tr>
               {columns.map((column, colIndex) => {
@@ -424,7 +432,7 @@ export default function ErpDenseGrid({
                   <th
                     key={column.key}
                     className={`${stickyHeader ? "sticky top-0" : ""} ${isStickyFirst ? "sticky left-0 z-20" : stickyHeader ? "z-10" : ""} border-b border-slate-700 bg-slate-800 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white ${isStickyFirst ? "border-r border-slate-600" : ""} ${normalizeCellAlign(column.align)}`.trim()}
-                    style={column.width ? { width: column.width } : undefined}
+                    style={column.width ? { width: column.width, minWidth: column.width } : undefined}
                   >
                     {column.label}
                   </th>

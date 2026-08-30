@@ -601,6 +601,11 @@ export default function SO01CreatePage() {
       setError("Every line needs an item selected (or a manual SKU name entered).");
       return;
     }
+    const missingMonthLine = lines.find((line) => line.line_material_type === "FG" && ["MTO", "HPS"].includes(line.fg_type) && !line.costing_rate_month);
+    if (missingMonthLine) {
+      setError(`Costing Rate Month is required for FG ${missingMonthLine.fg_type}. Select a month before creating the SO.`);
+      return;
+    }
     setSaving(true);
     setError("");
     setNotice("");
@@ -658,6 +663,7 @@ export default function SO01CreatePage() {
   const companyOptions = availableCompanies.map((entry) => ({ value: entry.id, label: entry.company_name || entry.company_code || entry.id }));
   const parentCompanyOptions = parentCompanies.map((entry) => ({ value: entry.id, label: entry.company_name }));
   const depotCodeOptions = depotCodes.map((entry) => ({ value: entry.id, label: `${entry.code || ""} — ${entry.description || ""}`.trim() }));
+  const missingFgCostingRateMonth = lines.some((line) => line.line_material_type === "FG" && ["MTO", "HPS"].includes(line.fg_type) && !line.costing_rate_month);
 
   return (
     <ErpScreenScaffold
@@ -666,11 +672,12 @@ export default function SO01CreatePage() {
       actions={[
         { key: "back", label: page === 1 ? "Back" : "Previous", tone: "neutral", onClick: () => (page === 1 ? popScreen() : setPage(1)) },
         page === 2
-          ? { key: "save", label: saving ? "Saving..." : "Create SO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving }
+          ? { key: "save", label: saving ? "Saving..." : "Create SO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || missingFgCostingRateMonth }
           : { key: "next", label: "Next", tone: "primary", onClick: goToPage2 },
       ]}
       notices={[
         ...(error ? [{ key: "so01-error", tone: "error", message: error }] : []),
+        ...(missingFgCostingRateMonth ? [{ key: "so01-fg-month-required", tone: "warning", message: "Create SO is unavailable: select Costing Rate Month for every FG MTO/HPS line." }] : []),
         ...(notice ? [{ key: "so01-notice", tone: "success", message: notice }] : []),
       ]}
     >
@@ -813,6 +820,7 @@ export default function SO01CreatePage() {
                 rows={lines.filter((line) => line.line_material_type === materialType)}
                 rowKey={(line) => line.__key}
                 cellNavigate
+                fitColumnWidths
                 emptyMessage={`No ${materialType} lines yet.`}
               />
             </ErpSectionCard>

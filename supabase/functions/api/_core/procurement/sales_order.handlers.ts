@@ -2234,6 +2234,7 @@ async function prepareUnifiedSoLine(
       baseQty = Number((packQty * perPackQty).toFixed(6));
       packUomCode = toTrimmedString(line.pack_uom_code) || null;
       costingRateMonth = toTrimmedString(line.costing_rate_month) || null;
+      if ((fgType === "MTO" || fgType === "HPS") && !costingRateMonth) throw new Error("SO_LINE_COSTING_RATE_MONTH_REQUIRED");
     }
     batchNumber = toTrimmedString(line.batch_number) || null;
     packingOrderId = toTrimmedString(line.packing_order_id) || null;

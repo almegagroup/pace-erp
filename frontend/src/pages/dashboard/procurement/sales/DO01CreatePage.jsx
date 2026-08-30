@@ -345,8 +345,9 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, pickedSourceKeys, o
               ) : (
                 <ErpDenseGrid
                   cellNavigate
+                  fitColumnWidths
                   columns={[
-                    { key: "material", label: "Material", render: (line) => line.material_display || line.material_id },
+                    { key: "material", label: "Material", width: "180px", render: (line) => line.material_display || line.material_id },
                     {
                       key: "packing_po",
                       label: "Packing PO",
@@ -682,10 +683,10 @@ export default function DO01CreatePage() {
               </div>
             </ErpSectionCard>
             <ErpSectionCard eyebrow="Selected Documents" title={`${selectedSources.length} document${selectedSources.length === 1 ? "" : "s"} selected`}>
-              <ErpDenseGrid cellNavigate columns={[
-                { key: "document_number", label: "Document" },
+              <ErpDenseGrid cellNavigate fitColumnWidths columns={[
+                { key: "document_number", label: "Document", width: "140px" },
                 { key: "source_type", label: "Type", width: "100px", render: (row) => row.source_type === "SALES_ORDER" ? "SO" : "STO" },
-                { key: "counterparty_display", label: "Customer / Receiving Company" },
+                { key: "counterparty_display", label: "Customer / Receiving Company", width: "280px" },
                 { key: "status", label: "Status", width: "110px" },
                 { key: "remove", label: "", width: "90px", render: (row) => <button type="button" onClick={() => removeSource(row.source_type, row.id)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button> },
               ]} rows={selectedSources} rowKey={(row) => `${row.source_type}:${row.id}`} emptyMessage="Select one or more SO/STO above." />
@@ -706,7 +707,7 @@ export default function DO01CreatePage() {
                 <QuickFilterInput label="Search picked items" value={truckSearch} onChange={setTruckSearch} placeholder="FO, address, material, Packing PO, batch, shade or stroke" className="min-w-[280px] flex-1" />
                 <button type="button" onClick={() => void exportTruckRows()} disabled={exportingTruckRows || visiblePicks.length === 0} className="border border-emerald-700 bg-emerald-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-emerald-950 disabled:cursor-not-allowed disabled:opacity-50">{exportingTruckRows ? "Exporting..." : "Excel Download"}</button>
               </div>
-              <ErpDenseGrid cellNavigate rangeSelect stickyFirstColumn columns={[
+              <ErpDenseGrid cellNavigate rangeSelect stickyFirstColumn fitColumnWidths columns={[
                 { key: "group", label: "FO / Customer Address", width: "145px", wrap: true, className: "whitespace-normal leading-4", render: (row) => row.__groupLabel || "—" },
                 { key: "bill_to", label: "Bill-To", width: "260px", wrap: true, className: "whitespace-normal leading-4", render: (row) => <AddressCell value={row.__billTo} /> },
                 { key: "ship_to", label: "Ship-To", width: "280px", wrap: true, className: "whitespace-normal leading-4", render: (row) => <AddressCell value={row.__shipTo} /> },
