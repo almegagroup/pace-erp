@@ -139,6 +139,9 @@ export default function ErpDenseGrid({
   // sits past a horizontal scroll, and the material name (the only way to
   // tell which row you're about to act on) scrolls away with it.
   stickyFirstColumn = false,
+  // Opt-in for wide entry grids. Declared widths remain authoritative so
+  // input values stay visible; the viewport scrolls instead of squeezing.
+  fitColumnWidths = false,
 }) {
   const effectiveCellNavigate = cellNavigate || rangeSelect;
   const rowRefs = useRef([]);
@@ -351,7 +354,8 @@ export default function ErpDenseGrid({
                 // container already scrolls horizontally); a column that
                 // genuinely needs multi-line text (long remarks/notes) can
                 // opt back in with `wrap: true`.
-                className={`px-2 py-1 align-middle outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${selected ? "bg-sky-100" : stickyFirstColumn && colIndex === 0 ? "sticky left-0 z-[1] bg-white border-r border-slate-200" : ""}`}
+                style={column.width ? { width: column.width, minWidth: column.width } : undefined}
+                className={`px-2 py-1 align-middle outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${selected ? "bg-sky-100" : stickyFirstColumn && colIndex === 0 ? "sticky left-0 z-[1] bg-white border-r border-slate-200" : ""} ${column.className ?? ""}`}
               >
                 {typeof column.render === "function"
                   ? column.render(row, index)
@@ -392,7 +396,8 @@ export default function ErpDenseGrid({
         {columns.map((column, colIndex) => (
           <td
             key={column.key}
-            className={`px-2 py-1 align-middle ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${stickyFirstColumn && colIndex === 0 ? "sticky left-0 z-[1] bg-white border-r border-slate-200" : ""}`}
+            style={column.width ? { width: column.width, minWidth: column.width } : undefined}
+            className={`px-2 py-1 align-middle ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${stickyFirstColumn && colIndex === 0 ? "sticky left-0 z-[1] bg-white border-r border-slate-200" : ""} ${column.className ?? ""}`}
           >
             {typeof column.render === "function"
               ? column.render(row, index)
@@ -413,7 +418,12 @@ export default function ErpDenseGrid({
   return (
     <div className="grid gap-0">
       <div className={viewportClassName} style={viewportStyle} ref={scrollElementRef}>
-        <table className="erp-grid-table min-w-full text-xs">
+        <table className={`erp-grid-table min-w-full text-xs ${fitColumnWidths ? "w-max table-fixed" : ""}`.trim()}>
+          {fitColumnWidths ? (
+            <colgroup>
+              {columns.map((column) => <col key={column.key} style={column.width ? { width: column.width, minWidth: column.width } : undefined} />)}
+            </colgroup>
+          ) : null}
           <thead className="bg-slate-800 text-white">
             <tr>
               {columns.map((column, colIndex) => {
@@ -422,7 +432,7 @@ export default function ErpDenseGrid({
                   <th
                     key={column.key}
                     className={`${stickyHeader ? "sticky top-0" : ""} ${isStickyFirst ? "sticky left-0 z-20" : stickyHeader ? "z-10" : ""} border-b border-slate-700 bg-slate-800 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white ${isStickyFirst ? "border-r border-slate-600" : ""} ${normalizeCellAlign(column.align)}`.trim()}
-                    style={column.width ? { width: column.width } : undefined}
+                    style={column.width ? { width: column.width, minWidth: column.width } : undefined}
                   >
                     {column.label}
                   </th>

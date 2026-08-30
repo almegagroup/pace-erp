@@ -48,6 +48,7 @@ const TRUCK_EXPORT_COLUMNS = [
   { key: "document_name", label: "Document Name" },
   { key: "prodshade_display", label: "Prod Shade" },
   { key: "actual_stroke", label: "Actual Stroke" },
+  { key: "packing_code", label: "Pack Code" },
   { key: "batch_number", label: "Batch" },
   { key: "expiry_date", label: "Expiry" },
   { key: "pack_uom_code", label: "Pack UOM" },
@@ -68,6 +69,12 @@ function toNumber(value) {
 }
 function makeKey() {
   return Math.random().toString(36).slice(2);
+}
+
+function AddressCell({ value }) {
+  const parts = String(value || "").split(",").map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0) return "—";
+  return <span className="block whitespace-normal leading-4">{parts.map((part, index) => <span key={`${part}-${index}`}>{part}{index < parts.length - 1 ? <br /> : null}</span>)}</span>;
 }
 
 // Transporter search + "Add to Transporter Master" — copied from
@@ -305,6 +312,7 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, pickedSourceKeys, o
       prodshade_display: selectedPko?.prodshade_display || null,
       actual_stroke: selectedPko?.actual_stroke || null,
       process_order_number: selectedPko?.process_order_number || null,
+      packing_code: selectedPko?.packing_code || null,
       uom_code: line.uom_code,
       pack_uom_code: line.pack_uom_code || null,
       pack_qty: line.pack_qty ?? null,
@@ -337,8 +345,9 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, pickedSourceKeys, o
               ) : (
                 <ErpDenseGrid
                   cellNavigate
+                  fitColumnWidths
                   columns={[
-                    { key: "material", label: "Material", render: (line) => line.material_display || line.material_id },
+                    { key: "material", label: "Material", width: "180px", render: (line) => line.material_display || line.material_id },
                     {
                       key: "packing_po",
                       label: "Packing PO",
@@ -674,10 +683,10 @@ export default function DO01CreatePage() {
               </div>
             </ErpSectionCard>
             <ErpSectionCard eyebrow="Selected Documents" title={`${selectedSources.length} document${selectedSources.length === 1 ? "" : "s"} selected`}>
-              <ErpDenseGrid cellNavigate columns={[
-                { key: "document_number", label: "Document" },
+              <ErpDenseGrid cellNavigate fitColumnWidths columns={[
+                { key: "document_number", label: "Document", width: "140px" },
                 { key: "source_type", label: "Type", width: "100px", render: (row) => row.source_type === "SALES_ORDER" ? "SO" : "STO" },
-                { key: "counterparty_display", label: "Customer / Receiving Company" },
+                { key: "counterparty_display", label: "Customer / Receiving Company", width: "280px" },
                 { key: "status", label: "Status", width: "110px" },
                 { key: "remove", label: "", width: "90px", render: (row) => <button type="button" onClick={() => removeSource(row.source_type, row.id)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button> },
               ]} rows={selectedSources} rowKey={(row) => `${row.source_type}:${row.id}`} emptyMessage="Select one or more SO/STO above." />
@@ -698,17 +707,18 @@ export default function DO01CreatePage() {
                 <QuickFilterInput label="Search picked items" value={truckSearch} onChange={setTruckSearch} placeholder="FO, address, material, Packing PO, batch, shade or stroke" className="min-w-[280px] flex-1" />
                 <button type="button" onClick={() => void exportTruckRows()} disabled={exportingTruckRows || visiblePicks.length === 0} className="border border-emerald-700 bg-emerald-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-emerald-950 disabled:cursor-not-allowed disabled:opacity-50">{exportingTruckRows ? "Exporting..." : "Excel Download"}</button>
               </div>
-              <ErpDenseGrid cellNavigate rangeSelect stickyFirstColumn columns={[
-                { key: "group", label: "FO / Customer Address", render: (row) => row.__groupLabel || "—" },
-                { key: "bill_to", label: "Bill-To", render: (row) => row.__billTo || "—" },
-                { key: "ship_to", label: "Ship-To", render: (row) => row.__shipTo || "—" },
-                { key: "material_display", label: "Material", render: (row) => row.material_display || "—" },
+              <ErpDenseGrid cellNavigate rangeSelect stickyFirstColumn fitColumnWidths columns={[
+                { key: "group", label: "FO / Customer Address", width: "145px", wrap: true, className: "whitespace-normal leading-4", render: (row) => row.__groupLabel || "—" },
+                { key: "bill_to", label: "Bill-To", width: "260px", wrap: true, className: "whitespace-normal leading-4", render: (row) => <AddressCell value={row.__billTo} /> },
+                { key: "ship_to", label: "Ship-To", width: "280px", wrap: true, className: "whitespace-normal leading-4", render: (row) => <AddressCell value={row.__shipTo} /> },
+                { key: "material_display", label: "Material", width: "155px", wrap: true, className: "whitespace-normal leading-4", render: (row) => row.material_display || "—" },
                 { key: "packing_order", label: "Packing PO", width: "125px", render: (row) => row.packing_order_number || row.packing_order_id || "-" },
                 { key: "document_name", label: "Document Name", width: "155px", render: (row) => row.document_name || row.process_order_number || "-" },
                 { key: "prodshade", label: "Prod Shade", width: "135px", render: (row) => row.prodshade_display || "-" },
                 { key: "stroke", label: "Actual Stroke", width: "95px", render: (row) => row.actual_stroke || "-" },
                 { key: "batch_number", label: "Batch", width: "120px", render: (row) => <input value={row.batch_number || ""} placeholder="Optional" onChange={(event) => updatePick(row.__key, { batch_number: event.target.value })} className="h-7 w-full border border-slate-300 bg-[#fffef7] px-1 text-xs" /> },
                 { key: "expiry_date", label: "Expiry", width: "125px", render: (row) => <input type="date" value={row.expiry_date || ""} onChange={(event) => updatePick(row.__key, { expiry_date: event.target.value })} className="h-7 w-full border border-slate-300 bg-[#fffef7] px-1 text-xs" /> },
+                { key: "packing_code", label: "Pack Code", width: "85px", render: (row) => row.packing_code || "-" },
                 { key: "pack_uom", label: "Pack UOM", width: "80px", render: (row) => row.pack_uom_code || "-" },
                 { key: "pack_qty", label: "Pack Qty", width: "80px", align: "right", render: (row) => formatFixed(row.pack_qty) },
                 { key: "per_pack", label: "Per Pack", width: "85px", align: "right", render: (row) => formatFixed(row.per_pack_qty) },
@@ -762,7 +772,7 @@ function TruckItemLocation({ companyId, materialId, value, onChange }) {
 }
 
 function isPackDrivenFg(row) {
-  return row.line_material_type === "FG" && ["MTO", "HPS"].includes(String(row.fg_type || "").toUpperCase()) && String(row.pack_uom_code || "").trim() !== "000" && toNumber(row.per_pack_qty) > 0;
+  return row.line_material_type === "FG" && ["MTO", "HPS"].includes(String(row.fg_type || "").toUpperCase()) && String(row.packing_code || "").trim() !== "000" && toNumber(row.per_pack_qty) > 0;
 }
 
 function TruckPacksInput({ row, onChange }) {

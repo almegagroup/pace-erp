@@ -328,12 +328,17 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
       const [pkoRows, drawnByPko, drawnByFoPko] = await Promise.all([
         pkoIds.length
           ? fetchInChunks<JsonRecord>(pkoIds, (chunk) => serviceRoleClient.schema("erp_production").from("packing_order")
-              .select("id, po_number, process_order_id, batch_number, material_id, actual_qty_kg, fill_qty_per_pack, status").in("id", chunk))
+              .select("id, po_number, process_order_id, pack_code_id, batch_number, material_id, actual_qty_kg, fill_qty_per_pack, status").in("id", chunk))
           : Promise.resolve([] as JsonRecord[]),
         computeDrawnQtyByColumn("packing_order_id", pkoIds),
         computeDrawnQtyByFoPackingOrder(pkoIds),
       ]);
       const pkoMap = new Map(pkoRows.map((row) => [String(row.id), row]));
+      const packCodeIds = [...new Set(pkoRows.map((row) => toTrimmedString(row.pack_code_id)).filter(Boolean))];
+      const { data: packCodeRows } = packCodeIds.length
+        ? await serviceRoleClient.schema("erp_production").from("pack_code_master").select("id, pack_code").in("id", packCodeIds)
+        : { data: [] as JsonRecord[] };
+      const packCodeMap = new Map(((packCodeRows ?? []) as JsonRecord[]).map((row) => [String(row.id), toTrimmedString(row.pack_code)]));
       const processOrderIds = [...new Set(pkoRows.map((row) => toTrimmedString(row.process_order_id)).filter(Boolean))];
       const processOrderRows = processOrderIds.length
         ? await fetchInChunks<JsonRecord>(processOrderIds, (chunk) => serviceRoleClient.schema("erp_production").from("process_order")
@@ -375,6 +380,7 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
           prodshade_display: prodshade ? toTrimmedString(prodshade.material_name) || null : null,
           actual_stroke: strokeMaster ? toTrimmedString(strokeMaster.stroke_number) || null : null,
           process_order_number: processOrder ? toTrimmedString(processOrder.po_number) || null : null,
+          packing_code: packCodeMap.get(toTrimmedString(pko.pack_code_id)) || null,
         });
       }
     }
@@ -927,7 +933,11 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
     ];
     if (sourceRows.length) {
       const { error: sourceError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").insert(sourceRows);
-      if (sourceError) return doErrorResponse(req, ctx, "DO_SOURCE_LINK_FAILED", 500, "Unable to record DO source documents.");
+      if (sourceError) {
+        console.error("DO_SOURCE_LINK_FAILED", { code: sourceError.code, message: sourceError.message, details: sourceError.details });
+        await serviceRoleClient.schema("erp_procurement").from("delivery_challan").delete().eq("id", dc.id);
+        return doErrorResponse(req, ctx, "DO_SOURCE_LINK_FAILED", 500, "Unable to record DO source documents.");
+      }
     }
 
     const nowIso = new Date().toISOString();
