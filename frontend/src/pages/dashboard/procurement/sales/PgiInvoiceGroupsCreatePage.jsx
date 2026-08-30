@@ -9,13 +9,9 @@
  *          Reached from SalesInvoiceListPage.jsx's per-row "PGI & Invoice"
  *          action -- dcId arrives via screen-stack context. That queue page
  *          already fulfills the design's "SO02 -> Generate Invoice -> DO
- *          Number দিলে" entry step, so Page 1 here is DO review (not a
- *          second number-entry step); direct/refreshed access with no
- *          context shows a short notice pointing back to the queue instead
- *          of duplicating a DO search box.
- *          Page 1: DO review (header + lines, read-only, matches the
- *          design's "সেই DO-র সব details ... table আকারে").
- *          Page 2: Invoice-group table (one row per IBN/FO/SO/STO group,
+ *          Number দিলে" entry step. SO03 owns DO review; SO02 opens straight
+ *          into invoice preparation rather than duplicating a DO-detail page.
+ *          Invoice-group table: one row per IBN/FO/SO/STO group,
  *          per feasibility §133.13's locked IBN grouping rule) + per-row
  *          drawer -- Invoice preview mapping, Freight, Additional Cost,
  *          Round Off, live total. "Post Goods & Create Invoice" posts every
@@ -68,11 +64,22 @@ function defaultGroupInput(group) {
     inbound_number: "",
     e_way_bill_applicable: false,
     e_way_bill_number: "",
-    freight: { included: false, mode: "AD_HOC", amount: "", rate: "", gst_included: false, gst_treatment: "EXCLUSIVE", gst_rate: "" },
+    freight: { to_pay: false, included: false, mode: "AD_HOC", amount: "", rate: "", gst_included: false, gst_treatment: "EXCLUSIVE", gst_rate: "" },
     additional_costs: [],
     remarks: "",
     __groupSnapshot: group,
   };
+}
+
+function AddressCell({ party }) {
+  if (!party?.name && !party?.address && !party?.state) return "—";
+  return (
+    <div className="min-w-[180px] max-w-[260px] whitespace-normal leading-4">
+      {party?.name ? <div className="font-semibold text-slate-900">{party.name}</div> : null}
+      {party?.address ? <div className="text-slate-700">{party.address}</div> : null}
+      {party?.state ? <div className="text-slate-500">{party.state}</div> : null}
+    </div>
+  );
 }
 
 // Live client-side preview only -- the server always recomputes this
@@ -83,7 +90,7 @@ function computeGroupPreviewTotal(group, input) {
   const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
   const freight = input.freight || {};
   let freightContribution = 0;
-  if (freightEligible && freight.included) {
+  if (freightEligible && !freight.to_pay && freight.included) {
     const amount = freight.mode === "RATE" ? toNumber(freight.rate) * group.net_weight : toNumber(freight.amount);
     let gstAmt = 0;
     if (freight.gst_included) {
@@ -150,7 +157,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
   }
 
   return (
-    <DrawerBase visible title={`${group.document_number || "Invoice group"} — Preview, Freight & Additional Cost`} onEscape={onClose} onClose={onClose} width="min(760px, calc(100vw - 24px))">
+    <DrawerBase visible side="center" title={`${group.document_number || "Invoice group"} — Invoice Preview`} onEscape={onClose} onClose={onClose} width="min(1120px, calc(100vw - 24px))">
       <div className="grid gap-4">
         <div className="grid gap-2 border border-slate-200 p-3 text-sm">
           <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Invoice Preview (sample tax-invoice field mapping, §133.13 — print template design deferred to its own session)</div>
@@ -175,8 +182,11 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
             cellNavigate
             columns={[
               { key: "material_display", label: "Item", render: (l) => l.material_display || l.material_id },
+              { key: "document_name", label: "Document Name", render: (l) => l.document_name || "—" },
+              { key: "batch_number", label: "Batch", width: "110px", render: (l) => l.batch_number || "—" },
               { key: "quantity", label: "Qty", width: "90px", align: "right", render: (l) => `${formatFixed(l.quantity, 3)} ${l.uom_code || ""}` },
               { key: "unit_value", label: "Rate", width: "90px", align: "right", render: (l) => formatFixed(l.unit_value, 4) },
+              { key: "gst_amount", label: "GST", width: "90px", align: "right", render: (l) => formatFixed(l.gst_amount) },
               { key: "line_total", label: "Line Total", width: "100px", align: "right", render: (l) => formatFixed(l.line_total) },
             ]}
             rows={group.lines}
@@ -216,7 +226,17 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
 
         {freightEligible ? (
           <div className="grid gap-2 border border-slate-200 p-3">
-            <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Freight (Other than Order Rate?)</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Freight</div>
+            <div className="grid gap-1 text-xs font-semibold text-slate-700">
+              <span>To Pay? (Customer pays the freight)</span>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => onFreightChange({ to_pay: true, included: false, amount: "", rate: "", gst_included: false, gst_rate: "" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${input.freight.to_pay ? "border border-emerald-700 bg-emerald-100 text-emerald-900" : "border border-slate-300 bg-white text-slate-700"}`}>Yes</button>
+                <button type="button" onClick={() => onFreightChange({ to_pay: false })} className={`flex-1 px-3 py-2 text-xs font-semibold ${!input.freight.to_pay ? "border border-slate-700 bg-slate-200 text-slate-950" : "border border-slate-300 bg-white text-slate-700"}`}>No</button>
+              </div>
+            </div>
+            {!input.freight.to_pay ? (
+              <>
+                <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Add Freight to Invoice?</div>
             <div className="flex gap-2">
               <button type="button" onClick={() => onFreightChange({ included: true })} className={`flex-1 px-3 py-2 text-xs font-semibold ${input.freight.included ? "border border-emerald-700 bg-emerald-100 text-emerald-900" : "border border-slate-300 bg-white text-slate-700"}`}>Yes</button>
               <button type="button" onClick={() => onFreightChange({ included: false })} className={`flex-1 px-3 py-2 text-xs font-semibold ${!input.freight.included ? "border border-slate-700 bg-slate-200 text-slate-950" : "border border-slate-300 bg-white text-slate-700"}`}>No</button>
@@ -248,19 +268,20 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
                 </div>
                 {input.freight.gst_included ? (
                   <>
-                    <div className="grid gap-1 text-xs font-semibold text-slate-700">
-                      <span>Treatment</span>
-                      <div className="flex gap-2">
-                        <button type="button" onClick={() => onFreightChange({ gst_treatment: "INCLUSIVE" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${input.freight.gst_treatment === "INCLUSIVE" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>Inclusive</button>
-                        <button type="button" onClick={() => onFreightChange({ gst_treatment: "EXCLUSIVE" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${input.freight.gst_treatment === "EXCLUSIVE" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>Exclusive</button>
-                      </div>
-                    </div>
+                    <ErpDenseFormRow label="GST Treatment">
+                      <select value={input.freight.gst_treatment} onChange={(e) => onFreightChange({ gst_treatment: e.target.value })} className="h-9 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500">
+                        <option value="EXCLUSIVE">Exclusive</option>
+                        <option value="INCLUSIVE">Inclusive</option>
+                      </select>
+                    </ErpDenseFormRow>
                     <ErpDenseFormRow label="GST Rate %">
                       <input type="number" step="0.01" value={input.freight.gst_rate} onChange={(e) => onFreightChange({ gst_rate: e.target.value })} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
                     </ErpDenseFormRow>
                   </>
                 ) : null}
               </div>
+            ) : null}
+              </>
             ) : null}
           </div>
         ) : null}
@@ -296,8 +317,8 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
         <div className="grid gap-1 text-sm text-slate-800 md:max-w-sm md:justify-self-end">
           <div className="flex justify-between"><span className="text-slate-500">Taxable Value</span><span className="font-mono">{formatFixed(group.total_taxable_value)}</span></div>
           <div className="flex justify-between"><span className="text-slate-500">GST (Items)</span><span className="font-mono">{formatFixed(group.total_gst_amount)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Freight</span><span className="font-mono">{formatFixed(totals.freightContribution)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Additional Cost</span><span className="font-mono">{formatFixed(totals.additionalTotal)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Freight</span><span className="font-mono">{input.freight.to_pay ? "TO PAY (Customer)" : formatFixed(totals.freightContribution)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Other Invoice Adjustment</span><span className="font-mono">{formatFixed(totals.additionalTotal)}</span></div>
           <div className="flex justify-between"><span className="text-slate-500">Round Off</span><span className="font-mono">{totals.roundOff >= 0 ? "+" : "-"}{formatFixed(Math.abs(totals.roundOff), 4)}</span></div>
           <div className="mt-1 flex justify-between border-t border-slate-300 pt-1 text-base font-bold"><span>Total (preview)</span><span className="font-mono">{formatFixed(totals.total)}</span></div>
         </div>
@@ -319,13 +340,10 @@ export default function PgiInvoiceGroupsCreatePage() {
   const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
   const contextDcId = getActiveScreenContext()?.dcId || "";
-  // §133.13 Page 1 -- "SO02-তে ঢুকে Generate Invoice → DO Number দিলে". The
-  // normal path is via SalesInvoiceListPage's own row action (context
-  // already resolves dcId, page starts at 1/DO-review). This state also
-  // supports the design's literal manual-entry path (page 0) for a direct/
-  // bookmarked/refreshed open with no context.
+  // The queue resolves the DO. A direct/bookmarked open retains the picker,
+  // but both paths enter the invoice-group working screen immediately.
   const [dcId, setDcId] = useState(contextDcId);
-  const [page, setPage] = useState(contextDcId ? 1 : 0);
+  const [page, setPage] = useState(contextDcId ? 2 : 0);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
@@ -342,7 +360,7 @@ export default function PgiInvoiceGroupsCreatePage() {
   const groupsQuery = useQuery({
     queryKey: ["procurement", "pgi-groups-preview", dcId],
     queryFn: () => previewInvoiceGroups(dcId),
-    enabled: Boolean(dcId) && page >= 1,
+    enabled: Boolean(dcId),
   });
   const categoriesQuery = useQuery({
     queryKey: ["procurement", "additional-cost-categories"],
@@ -367,7 +385,10 @@ export default function PgiInvoiceGroupsCreatePage() {
     : doPickerRows;
 
   const dc = doQuery.data ?? null;
-  const groups = Array.isArray(groupsQuery.data?.groups) ? groupsQuery.data.groups : [];
+  const groups = useMemo(
+    () => (Array.isArray(groupsQuery.data?.groups) ? groupsQuery.data.groups : []),
+    [groupsQuery.data?.groups]
+  );
 
   useEffect(() => {
     if (groups.length === 0) return;
@@ -424,6 +445,7 @@ export default function PgiInvoiceGroupsCreatePage() {
           e_way_bill_applicable: input.e_way_bill_applicable,
           e_way_bill_number: input.e_way_bill_number || undefined,
           freight: (freightEligible && input.freight.included) ? {
+            to_pay: input.freight.to_pay === true,
             included: true,
             mode: input.freight.mode,
             amount: input.freight.mode === "AD_HOC" ? Number(input.freight.amount) : undefined,
@@ -431,7 +453,7 @@ export default function PgiInvoiceGroupsCreatePage() {
             gst_included: input.freight.gst_included,
             gst_treatment: input.freight.gst_treatment,
             gst_rate: input.freight.gst_included ? Number(input.freight.gst_rate) : undefined,
-          } : { included: false },
+          } : { to_pay: input.freight.to_pay === true, included: false },
           additional_costs: (input.additional_costs || []).map((ac) => ({
             category_id: ac.category_id,
             amount: Number(ac.amount),
@@ -470,7 +492,7 @@ export default function PgiInvoiceGroupsCreatePage() {
 
   function openDo(id) {
     setDcId(id);
-    setPage(1);
+    setPage(2);
   }
 
   // §133.13 Page 1 — literal "DO Number দিলে" manual entry, for a direct/
@@ -514,21 +536,18 @@ export default function PgiInvoiceGroupsCreatePage() {
     <>
       <ErpScreenScaffold
         eyebrow="Sales (SO02)"
-        title={page === 1 ? `PGI & Invoice — DO Review (${dc?.dc_number || "…"})` : `PGI & Invoice — Invoice Groups (${dc?.dc_number || "…"})`}
+        title={`PGI & Invoice — Invoice Groups (${dc?.dc_number || "…"})`}
         actions={[
           {
             key: "back",
-            label: page === 1 ? "Back" : "Previous",
+            label: "Back to Queue",
             tone: "neutral",
             onClick: () => {
-              if (page === 2) { setPage(1); return; }
               if (contextDcId) { popScreen(); return; }
               setDcId(""); setPage(0);
             },
           },
-          page === 2
-            ? { key: "post", label: saving ? "Posting..." : "Post Goods & Create Invoice", tone: "primary", onClick: () => void handlePostAll(), disabled: saving || !allGroupsReady }
-            : { key: "next", label: "Next — Invoice Groups", tone: "primary", onClick: () => setPage(2), disabled: doQuery.isLoading || !dc },
+          { key: "post", label: saving ? "Posting..." : "Post Goods & Create Invoice", tone: "primary", onClick: () => void handlePostAll(), disabled: saving || !allGroupsReady },
         ]}
         notices={[
           ...(doQuery.error ? [{ key: "do-error", tone: "error", message: doQuery.error instanceof Error ? doQuery.error.message : "DO_FETCH_FAILED" }] : []),
@@ -537,70 +556,7 @@ export default function PgiInvoiceGroupsCreatePage() {
           ...(notice ? [{ key: "post-notice", tone: "success", message: notice }] : []),
         ]}
       >
-        {page === 1 ? (
-          <div className="grid gap-4">
-            <ErpSectionCard eyebrow="Page 1" title="DO Review — details, rate/amount/GST breakup, storage location (per SO's own qty at this DO)">
-              {doQuery.isLoading || !dc ? (
-                <div className="px-2 py-6 text-sm text-slate-500">Loading delivery order...</div>
-              ) : (
-                <div className="grid gap-3">
-                  <div className="grid gap-3 md:grid-cols-4 text-sm">
-                    <div><span className="text-xs text-slate-500">DO Number</span><div className="font-mono font-semibold">{dc.dc_number}</div></div>
-                    <div><span className="text-xs text-slate-500">DO Date</span><div>{dc.dc_date}</div></div>
-                    <div><span className="text-xs text-slate-500">Vehicle</span><div>{dc.vehicle_number || "—"}</div></div>
-                    <div><span className="text-xs text-slate-500">Transporter</span><div>{dc.transporter_display || "—"}</div></div>
-                    <div><span className="text-xs text-slate-500">LR Number</span><div>{dc.lr_number || "—"}</div></div>
-                    <div><span className="text-xs text-slate-500">LR Date</span><div>{dc.lr_date || "—"}</div></div>
-                    <div><span className="text-xs text-slate-500">Driver</span><div>{dc.driver_number || "—"}</div></div>
-                    <div><span className="text-xs text-slate-500">Driver Contact</span><div>{dc.driver_contact_number || "—"}</div></div>
-                  </div>
-                  <ErpDenseGrid
-                    cellNavigate
-                    columns={[
-                      { key: "document_number", label: "SO/STO", width: "130px" },
-                      { key: "parent_company_display", label: "Parent Company", render: (row) => row.parent_company_display || "—" },
-                      { key: "vdc_dc_display", label: "VDC / DC", render: (row) => row.vdc_dc_display || "—" },
-                      { key: "bill_to", label: "Bill-To", render: (row) => [row.bill_to?.name, row.bill_to?.address, row.bill_to?.state].filter(Boolean).join(" — ") || "—" },
-                      { key: "ship_to", label: "Ship-To", render: (row) => [row.ship_to?.name, row.ship_to?.address, row.ship_to?.state].filter(Boolean).join(" — ") || "—" },
-                      { key: "fo_number", label: "FO", width: "110px", render: (row) => row.fo_number || "—" },
-                      { key: "ibn_required", label: "Inbound", width: "100px", render: (row) => row.ibn_required ? "Required" : "Not required" },
-                    ]}
-                    rows={groups}
-                    rowKey={(row) => row.group_key}
-                    emptyMessage={groupsQuery.isLoading ? "Resolving source details..." : "No invoice groups."}
-                  />
-                  <ErpDenseGrid
-                    cellNavigate
-                    columns={[
-                      { key: "source_type", label: "Type", width: "110px", render: (row) => (row.source_type === "SALES_ORDER" ? "Sales Order" : "STO") },
-                      { key: "document_number", label: "Document Number", width: "150px" },
-                      { key: "document_date", label: "Date", width: "110px" },
-                      { key: "party_display", label: "Party", render: (row) => row.party_display || "—" },
-                    ]}
-                    rows={Array.isArray(dc.sources) ? dc.sources : []}
-                    rowKey={(row) => `${row.source_type}:${row.source_id}`}
-                    emptyMessage="No source documents."
-                  />
-                  <ErpDenseGrid
-                    cellNavigate
-                    columns={[
-                      { key: "material_display", label: "Item", render: (row) => row.material_display || row.material_id },
-                      { key: "quantity", label: "Qty", width: "100px", align: "right", render: (row) => `${row.quantity} ${row.uom_code || ""}` },
-                      { key: "storage_location_display", label: "Storage Location", render: (row) => row.storage_location_display || "—" },
-                      { key: "unit_value", label: "Rate", width: "100px", align: "right", render: (row) => formatFixed(row.unit_value, 4) },
-                      { key: "gst_rate", label: "GST %", width: "80px", align: "right", render: (row) => (row.gst_rate != null ? formatFixed(row.gst_rate) : "—") },
-                      { key: "line_total", label: "Line Total", width: "110px", align: "right", render: (row) => formatFixed(row.line_total) },
-                    ]}
-                    rows={Array.isArray(dc.lines) ? dc.lines : []}
-                    rowKey={(row) => row.id}
-                    emptyMessage="No lines."
-                  />
-                </div>
-              )}
-            </ErpSectionCard>
-          </div>
-        ) : (
-          <div className="grid gap-4">
+        <div className="grid gap-4">
             <ErpSectionCard eyebrow="Page 2" title="Invoice groups — one row per resulting Invoice (§133.13 IBN grouping)">
               {groupsQuery.isLoading ? (
                 <div className="px-2 py-6 text-sm text-slate-500">Computing invoice groups...</div>
@@ -614,8 +570,8 @@ export default function PgiInvoiceGroupsCreatePage() {
                     { key: "parent_company_display", label: "Parent Company", render: (row) => row.parent_company_display || "—" },
                     { key: "vdc_dc_display", label: "VDC / DC", render: (row) => row.vdc_dc_display || "—" },
                     { key: "dc_number", label: "DO Number", width: "110px", render: () => dc?.dc_number || "—" },
-                    { key: "bill_to", label: "Billing Address", render: (row) => (row.bill_to?.name || row.bill_to?.address) ? <span>{row.bill_to?.name}{row.bill_to?.address ? ` — ${row.bill_to.address}` : ""}</span> : "—" },
-                    { key: "ship_to", label: "Ship-To Address", render: (row) => (row.ship_to?.name || row.ship_to?.address) ? <span>{row.ship_to?.name}{row.ship_to?.address ? ` — ${row.ship_to.address}` : ""}</span> : "—" },
+                    { key: "bill_to", label: "Billing Address", render: (row) => <AddressCell party={row.bill_to} /> },
+                    { key: "ship_to", label: "Ship-To Address", render: (row) => <AddressCell party={row.ship_to} /> },
                     { key: "fo_number", label: "FO / IBN", width: "110px", render: (row) => row.fo_number || (row.ibn_required ? "(non-FO)" : "—") },
                     { key: "inbound_number", label: "Inbound Number", width: "120px", render: (row) => {
                       const input = groupInputs[row.group_key];
@@ -653,8 +609,7 @@ export default function PgiInvoiceGroupsCreatePage() {
                 <div className="mt-2 text-xs text-amber-700">Open every row and fill in Tally Invoice Number/Date (and Inbound Number where required) before posting.</div>
               ) : null}
             </ErpSectionCard>
-          </div>
-        )}
+        </div>
       </ErpScreenScaffold>
 
       {activeGroup ? (

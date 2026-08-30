@@ -496,18 +496,35 @@ async function hydrateSalesInvoice(
   const lines = await fetchSalesInvoiceLines(invoiceId);
   // §133.13 -- additional cost lines live in their own table (a variable-
   // length list, unlike the header's single freight_* set of columns).
-  const { data: additionalCostLines, error: additionalCostLinesError } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("sales_invoice_additional_cost_line")
-    .select("id, category_id, amount, gst_included, gst_treatment, gst_rate, gst_amount, line_total, additional_cost_category:category_id(category_name)")
-    .eq("invoice_id", invoiceId);
+  // Dispatch Reco is generated in the same P601 posting transaction. It is
+  // read-only here: a user must reverse the invoice rather than alter audit rows.
+  const [additionalCostResult, dispatchRecoResult] = await Promise.all([
+    serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_invoice_additional_cost_line")
+      .select("id, category_id, amount, gst_included, gst_treatment, gst_rate, gst_amount, line_total, additional_cost_category:category_id(category_name)")
+      .eq("invoice_id", invoiceId),
+    serviceRoleClient
+      .schema("erp_production")
+      .from("dispatch_reco")
+      .select("id, invoice_number, tally_invoice_number, tally_invoice_date, inbound_number, dc_number, so_number, fo_number, dispatch_category, process_order_number, batch_number, packing_order_number, po_type, dispatch_qty_kg, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, is_voided, voided_at")
+      .eq("invoice_id", invoiceId)
+      .order("created_at", { ascending: true }),
+  ]);
+  const { data: additionalCostLines, error: additionalCostLinesError } = additionalCostResult;
   if (additionalCostLinesError) throw new Error("SALES_INVOICE_ADDITIONAL_COST_FETCH_FAILED");
+  if (dispatchRecoResult.error) throw new Error("SALES_INVOICE_DISPATCH_RECO_FETCH_FAILED");
   const additionalCostLineRows = ((additionalCostLines ?? []) as JsonRecord[]).map((row) => ({
     ...row,
     category_name: (row.additional_cost_category as JsonRecord | null)?.category_name ?? null,
     additional_cost_category: undefined,
   }));
-  return { ...invoice, lines, additional_cost_lines: additionalCostLineRows };
+  return {
+    ...invoice,
+    lines,
+    additional_cost_lines: additionalCostLineRows,
+    dispatch_reco_lines: (dispatchRecoResult.data ?? []) as JsonRecord[],
+  };
 }
 
 async function fetchDeliveryChallan(dcId: string): Promise<JsonRecord> {
@@ -2243,13 +2260,19 @@ async function prepareUnifiedSoLine(
   let hsnWriteBack: { materialId: string; hsnCode: string } | null = null;
   if (materialId) {
     const materialForHsn = await assertUnifiedSalesMaterial(materialId);
+    if (!hsnCode && !toTrimmedString(materialForHsn.hsn_code)) {
+      throw new Error("SO_LINE_HSN_REQUIRED");
+    }
     if (hsnCode && !toTrimmedString(materialForHsn.hsn_code)) {
       hsnWriteBack = { materialId, hsnCode };
     }
   }
 
   const qtyForAmount = rateBasis === "PACK_UOM" ? (packQty ?? 0) : (baseQty ?? 0);
-  const taxableValue = rateBasis === "FIXED" ? rate : Number((rate * qtyForAmount).toFixed(4));
+  const grossOrNetValue = rateBasis === "FIXED" ? rate : Number((rate * qtyForAmount).toFixed(4));
+  const taxableValue = gstTreatment === "INCLUSIVE"
+    ? Number((grossOrNetValue / (1 + gstRate / 100)).toFixed(4))
+    : grossOrNetValue;
   const gstAmount = Number((taxableValue * gstRate / 100).toFixed(4));
   const gstType = deriveSalesInvoiceGstType(companyStateName, resolvedShipToOrBillState);
   const cgstAmount = gstType === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : 0;
@@ -2272,9 +2295,10 @@ async function prepareUnifiedSoLine(
       rate_basis: rateBasis,
       uom_code: toTrimmedString(line.uom_code) || null,
       rate,
-      // The legacy SO-line schema still requires net_rate. Unified SO01 has
-      // no line discount input, so its net rate is the entered rate.
-      net_rate: rate,
+      // DO/invoice calculations consume net_rate. For an inclusive item rate,
+      // retain the entered gross rate above while persisting its GST-exclusive
+      // unit rate here.
+      net_rate: gstTreatment === "INCLUSIVE" ? Number((rate / (1 + gstRate / 100)).toFixed(4)) : rate,
       currency_code: currencyCode,
       gst_treatment: gstTreatment,
       gst_rate: gstRate,
@@ -2293,6 +2317,24 @@ async function prepareUnifiedSoLine(
     },
     hsnWriteBack,
   };
+}
+
+async function persistMissingMaterialHsns(writeBacks: Array<{ materialId: string; hsnCode: string }>): Promise<void> {
+  const hsnByMaterial = new Map<string, string>();
+  for (const writeBack of writeBacks) {
+    const existing = hsnByMaterial.get(writeBack.materialId);
+    if (existing && existing !== writeBack.hsnCode) throw new Error("SO_LINE_HSN_CONFLICT");
+    hsnByMaterial.set(writeBack.materialId, writeBack.hsnCode);
+  }
+  for (const [materialId, hsnCode] of hsnByMaterial) {
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master").from("material_master")
+      .update({ hsn_code: hsnCode })
+      .eq("id", materialId)
+      .is("hsn_code", null)
+      .select("id");
+    if (error || !data?.length) throw new Error("SO_HSN_MASTER_UPDATE_FAILED");
+  }
 }
 
 type ResolvedCustomerAddress = ResolvedShipTo & { customerId: string; depotCodeId: string | null };
@@ -2576,6 +2618,7 @@ export async function createSalesOrderUnifiedHandler(
       linePayload.push(prepared.payload);
       if (prepared.hsnWriteBack) hsnWriteBacks.push(prepared.hsnWriteBack);
     }
+    await persistMissingMaterialHsns(hsnWriteBacks);
 
     const soNumber = await generateProcurementDocNumber("SO");
     const { data: so, error: soError } = await serviceRoleClient
@@ -2638,15 +2681,6 @@ export async function createSalesOrderUnifiedHandler(
         error: lineError,
       });
       return salesErrorResponse(req, ctx, "SO_LINE_CREATE_FAILED", 500, "Unable to create sales order lines.");
-    }
-
-    // §133.8-F — best-effort HSN write-back; never fails the SO create itself.
-    for (const writeBack of hsnWriteBacks) {
-      await serviceRoleClient
-        .schema("erp_master").from("material_master")
-        .update({ hsn_code: writeBack.hsnCode })
-        .eq("id", writeBack.materialId)
-        .is("hsn_code", null);
     }
 
     return okResponse(await hydrateSo(String(so.id), ctx), ctx.request_id, req);
@@ -2795,16 +2829,10 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
         newLinePayload.push({ ...prepared.payload, so_id: soId });
         if (prepared.hsnWriteBack) hsnWriteBacks.push(prepared.hsnWriteBack);
       }
+      await persistMissingMaterialHsns(hsnWriteBacks);
       const { error: insertError } = await serviceRoleClient
         .schema("erp_procurement").from("sales_order_line").insert(newLinePayload);
       if (insertError) return salesErrorResponse(req, ctx, "SO_EDIT_LINE_CREATE_FAILED", 500, "Unable to add new SO line.");
-      for (const writeBack of hsnWriteBacks) {
-        await serviceRoleClient
-          .schema("erp_master").from("material_master")
-          .update({ hsn_code: writeBack.hsnCode })
-          .eq("id", writeBack.materialId)
-          .is("hsn_code", null);
-      }
     }
 
     // Header fields — never dispatch_type/bill_to_*/ship_to_*/vdc (§133.10 identity lock).

@@ -147,19 +147,21 @@ function getLineBaseQty(line) {
 // the UI shows "—" instead of a wrong 0.
 function computeLinePreview(line, gstType) {
   const rate = toNumber(line.rate);
+  const gstRate = toNumber(line.gst_rate);
   let qtyForAmount = getLineBaseQty(line);
   let taxableValue;
   let gstAmount;
   if (line.line_material_type === "FG") {
     qtyForAmount = line.rate_basis === "PACK_UOM" ? toNumber(line.pack_qty) : getLineBaseQty(line);
     if (line.fg_type === "MTEST" && line.rate_basis === "FIXED") {
-      taxableValue = rate;
-      gstAmount = (taxableValue * toNumber(line.gst_rate)) / 100;
+      taxableValue = line.gst_treatment === "INCLUSIVE" ? rate / (1 + gstRate / 100) : rate;
+      gstAmount = (taxableValue * gstRate) / 100;
     }
   }
   if (taxableValue === undefined) {
-    taxableValue = rate * qtyForAmount;
-    gstAmount = (taxableValue * toNumber(line.gst_rate)) / 100;
+    const grossOrNetValue = rate * qtyForAmount;
+    taxableValue = line.gst_treatment === "INCLUSIVE" ? grossOrNetValue / (1 + gstRate / 100) : grossOrNetValue;
+    gstAmount = (taxableValue * gstRate) / 100;
   }
   const cgstAmount = gstType === "CGST_SGST" ? gstAmount / 2 : gstType === "IGST" ? 0 : null;
   const sgstAmount = gstType === "CGST_SGST" ? gstAmount / 2 : gstType === "IGST" ? 0 : null;
@@ -431,13 +433,29 @@ export default function SO01CreatePage() {
     });
   }
 
+  function hsnInputForLine(line) {
+    const material = fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id);
+    const masterHsn = String(material?.hsn_code || "").trim();
+    const isMasterHsn = Boolean(masterHsn);
+    return textInput(
+      line.hsn_code,
+      (value) => updateLine(line.__key, { hsn_code: value }),
+      {
+        readOnly: isMasterHsn,
+        placeholder: isMasterHsn ? undefined : "Enter HSN",
+        title: isMasterHsn ? "From Material Master" : "Required: this will be saved to Material Master",
+        className: `h-8 w-full border px-2 text-xs outline-none ${isMasterHsn ? "border-slate-300 bg-slate-100 text-slate-500" : "border-amber-400 bg-[#fffef7] text-slate-900 focus:border-sky-500"}`,
+      },
+    );
+  }
+
   function columnsFor(materialType) {
     if (materialType === "RM" || materialType === "PM" || materialType === "INT") {
       return [
         { key: "material", label: "Item", width: "220px", render: (line) => (
           <ErpComboboxField value={line.material_id} onChange={(value) => handleMaterialSelect(line.__key, value)} options={materialOptionsFor(materialType)} blankLabel={`Select ${materialType}`} />
         ) },
-        { key: "hsn", label: "HSN Code", width: "100px", render: (line) => textInput(line.hsn_code, (value) => updateLine(line.__key, { hsn_code: value })) },
+        { key: "hsn", label: "HSN Code", width: "100px", render: hsnInputForLine },
         { key: "batch", label: "Batch No.", width: "110px", render: (line) => textInput(line.batch_number, (value) => updateLine(line.__key, { batch_number: value })) },
         { key: "expiry", label: "Expiry", width: "120px", render: (line) => (
           <input type="date" value={line.expiry_date || ""} onChange={(event) => updateLine(line.__key, { expiry_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
@@ -471,12 +489,18 @@ export default function SO01CreatePage() {
         { key: "material", label: "Item", width: "200px", render: (line) => (
           <ErpComboboxField value={line.material_id} onChange={(value) => handleMaterialSelect(line.__key, value)} options={materialOptionsFor("SFG")} blankLabel="Select SFG" />
         ) },
-        { key: "hsn", label: "HSN Code", width: "100px", render: (line) => textInput(line.hsn_code, (value) => updateLine(line.__key, { hsn_code: value })) },
+        { key: "hsn", label: "HSN Code", width: "100px", render: hsnInputForLine },
         { key: "batch", label: "Batch No.", width: "110px", render: (line) => textInput(line.batch_number, (value) => updateLine(line.__key, { batch_number: value })) },
         { key: "costing_month", label: "Costing Rate Month", width: "150px", render: (line) => costingMonthCell(line, line.__key) },
         { key: "qty", label: "Order Qty", width: "90px", render: (line) => numberInput(line.base_qty, (value) => updateLine(line.__key, { base_qty: value, quantity: value })) },
         { key: "uom", label: "UOM", width: "70px", render: (line) => textInput(line.uom_code, (value) => updateLine(line.__key, { uom_code: value })) },
         { key: "rate", label: "Rate", width: "90px", render: (line) => numberInput(line.rate, (value) => updateLine(line.__key, { rate: value })) },
+        { key: "gst_treatment", label: "GST", width: "100px", render: (line) => (
+          <select value={line.gst_treatment} onChange={(event) => updateLine(line.__key, { gst_treatment: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
+            <option value="EXCLUSIVE">Exclusive</option>
+            <option value="INCLUSIVE">Inclusive</option>
+          </select>
+        ) },
         { key: "gst_rate", label: "GST %", width: "70px", render: (line) => numberInput(line.gst_rate, (value) => updateLine(line.__key, { gst_rate: value })) },
         { key: "amount", label: "Amount", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).taxableValue.toFixed(2) },
         ...gstSplitColumns(gstTypePreview),
@@ -522,7 +546,7 @@ export default function SO01CreatePage() {
           ? (line.manual_sku_name.trim() || "—")
           : ((fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id))?.document_name || (fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id))?.material_name || "—")
       ) },
-      { key: "hsn", label: "HSN Code", width: "100px", render: (line) => textInput(line.hsn_code, (value) => updateLine(line.__key, { hsn_code: value })) },
+      { key: "hsn", label: "HSN Code", width: "100px", render: hsnInputForLine },
       { key: "pack_uom", label: "Pack UoM", width: "80px", render: (line) => (
         <input value={line.pack_uom_code || (line.fg_type === "MTEST" ? "BBL" : "")} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
       ) },
@@ -544,6 +568,12 @@ export default function SO01CreatePage() {
       { key: "rate_basis", label: "Rate Basis / Type", width: "100px", render: (line) => (
         <select value={line.rate_basis || ""} onChange={(event) => updateLine(line.__key, { rate_basis: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
           {(line.fg_type === "MTEST" ? MTEST_RATE_TYPE_OPTIONS : RATE_BASIS_OPTIONS).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+      ) },
+      { key: "gst_treatment", label: "GST", width: "100px", render: (line) => (
+        <select value={line.gst_treatment} onChange={(event) => updateLine(line.__key, { gst_treatment: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
+          <option value="EXCLUSIVE">Exclusive</option>
+          <option value="INCLUSIVE">Inclusive</option>
         </select>
       ) },
       { key: "gst_rate", label: "GST %", width: "70px", render: (line) => numberInput(line.gst_rate, (value) => updateLine(line.__key, { gst_rate: value })) },
@@ -599,6 +629,15 @@ export default function SO01CreatePage() {
     // carry a manual_sku_name instead. Every other line always needs a real item.
     if (lines.some((line) => !line.material_id && !(line.__manualSku && line.manual_sku_name.trim()))) {
       setError("Every line needs an item selected (or a manual SKU name entered).");
+      return;
+    }
+    const missingHsnLine = lines.find((line) => {
+      if (!line.material_id) return false;
+      const material = fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id);
+      return !String(material?.hsn_code || "").trim() && !line.hsn_code.trim();
+    });
+    if (missingHsnLine) {
+      setError("HSN Code is required for an item that has no HSN in Material Master.");
       return;
     }
     const missingMonthLine = lines.find((line) => line.line_material_type === "FG" && ["MTO", "HPS"].includes(line.fg_type) && !line.costing_rate_month);
