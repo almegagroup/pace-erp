@@ -4,13 +4,9 @@
  * Purpose: DO (Delivery Order, TX SO03) §133.12 unified redesign — 3-page
  *          wizard. Page 1: Add SO / Add STO (repeatable — a DO is per
  *          VEHICLE and can carry lines from multiple SO/STO documents,
- *          §133.12). Page 2: consolidated item list — RM/PM/INT lines
- *          sharing a material merge into one row; SFG/FG never merge
- *          (batch/Packing-PO committed). Merged rows can be split across
- *          multiple storage locations; which underlying source feeds which
- *          location is resolved FIFO (business-owner-confirmed rule,
- *          2026-08-28) in buildFinalLines() at submit time — never guessed
- *          per-row in the UI. Page 3: vehicle/transporter header, Save.
+ *          §133.12). Page 2: choose source documents. Page 3: choose only
+ *          SO Map-refined lines, then adjust every selected source line's
+ *          truck quantity and storage location directly in the dense grid.
  *          The pre-redesign DOCreatePage.jsx (single source per DO) is left
  *          on disk untouched, same additive pattern as SO01.
  * Authority: Frontend
@@ -24,6 +20,7 @@ import TransactionCompanySelector from "../../../../components/inputs/Transactio
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
@@ -41,8 +38,25 @@ import {
   updateDeliveryOrderUnified,
 } from "../procurementApi.js";
 
-const MERGEABLE_TYPES = new Set(["RM", "PM", "INT"]);
 const QTY_TOL = 0.0001;
+const TRUCK_EXPORT_COLUMNS = [
+  { key: "__groupLabel", label: "FO / Customer Address" },
+  { key: "__billTo", label: "Bill-To" },
+  { key: "__shipTo", label: "Ship-To" },
+  { key: "material_display", label: "Material" },
+  { key: "packing_order_number", label: "Packing PO" },
+  { key: "document_name", label: "Document Name" },
+  { key: "prodshade_display", label: "Prod Shade" },
+  { key: "actual_stroke", label: "Actual Stroke" },
+  { key: "batch_number", label: "Batch" },
+  { key: "expiry_date", label: "Expiry" },
+  { key: "pack_uom_code", label: "Pack UOM" },
+  { key: "pack_qty", label: "Pack Qty" },
+  { key: "per_pack_qty", label: "Per Pack" },
+  { key: "uom_code", label: "Base UOM" },
+  { key: "base_qty", label: "Base Volume" },
+  { key: "qty", label: "Truck Base Qty" },
+];
 
 function formatFixed(value, digits = 3) {
   const numeric = Number(value);
@@ -157,7 +171,7 @@ function TransporterPicker({ transporterId, transporterName, onSelect, onClear, 
 // through the list); typing a partial number just filters the list as
 // before. Both paths read the same already-fetched open-document list —
 // exact-match resolution is a pure client-side lookup, no extra round trip.
-function SourceDocumentDrawer({ visible, sourceType, companyId, onClose, onPick }) {
+function SourceDocumentDrawer({ visible, sourceType, companyId, selectedIds, onToggle, onConfirm, onClose }) {
   const [search, setSearch] = useState("");
   const [noExactMatch, setNoExactMatch] = useState(false);
   const query = useQuery({
@@ -176,7 +190,7 @@ function SourceDocumentDrawer({ visible, sourceType, companyId, onClose, onPick 
     const exact = allItems.find((item) => String(item.document_number || "").toLowerCase() === normalizedSearch);
     if (exact) {
       setNoExactMatch(false);
-      onPick(exact);
+      onToggle(exact);
       setSearch("");
     } else {
       setNoExactMatch(true);
@@ -184,7 +198,8 @@ function SourceDocumentDrawer({ visible, sourceType, companyId, onClose, onPick 
   }
 
   return (
-    <DrawerBase visible={visible} title={sourceType === "SALES_ORDER" ? "Select Sales Order" : "Select STO"} onEscape={onClose} onClose={onClose} width="min(560px, calc(100vw - 24px))">
+    <DrawerBase visible={visible} title={sourceType === "SALES_ORDER" ? "Select Sales Orders" : "Select STOs"} onEscape={onClose} onClose={onClose} width="min(620px, calc(100vw - 24px))"
+      actions={<button type="button" onClick={onConfirm} className="border border-sky-700 bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white">Use selected</button>}>
       <input
         type="text"
         value={search}
@@ -211,9 +226,10 @@ function SourceDocumentDrawer({ visible, sourceType, companyId, onClose, onPick 
             <button
               key={item.id}
               type="button"
-              onClick={() => onPick(item)}
-              className="grid grid-cols-[130px_1fr_90px] items-start gap-3 border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:border-sky-400 hover:bg-sky-50"
+              onClick={() => onToggle(item)}
+              className={`grid grid-cols-[24px_130px_1fr_90px] items-start gap-3 border px-3 py-2 text-left text-sm ${selectedIds.has(item.id) ? "border-sky-500 bg-sky-50" : "border-slate-200 bg-white hover:border-sky-400 hover:bg-sky-50"}`}
             >
+              <span className="mt-0.5 flex h-4 w-4 items-center justify-center border border-slate-400 text-[10px] text-sky-800">{selectedIds.has(item.id) ? "✓" : ""}</span>
               <span className="grid gap-0.5">
                 <span className="font-mono font-semibold text-slate-800">{item.document_number}</span>
                 <span className="text-xs text-slate-500">{item.document_date}</span>
@@ -231,16 +247,10 @@ function SourceDocumentDrawer({ visible, sourceType, companyId, onClose, onPick 
   );
 }
 
-const DO01_MERGEABLE_TYPES = new Set(["RM", "PM", "INT"]);
-
-// Step 2 — item selection within the chosen SO/STO, grouped by FO/address
-// (Dependent* dispatch types) or shown flat (Independent* / STO). Each line
-// editable up to its remaining_qty (§133.12 Page 1 point 3). §133.12 point 4
-// also requires RM/PM/INT to accept a manual Batch Number/Expiry Date here
-// (blank allowed) and FG to let Num Packs drive the qty (still capped at
-// remaining_qty) — both were missing in the first pass, fixed here.
-// ErpDenseGrid + cellNavigate per §133.16-A's keyboard-first UI standard.
-function SourceItemsDrawer({ visible, sourceType, sourceRef, onClose, onAdd }) {
+// Item selection only chooses an SO Map/STO source for the truck. Quantity,
+// storage, and optional manual batch details are intentionally decided in the
+// picked-items grid so the picker never changes the SO Map allocation.
+function SourceItemsDrawer({ visible, sourceType, sourceRef, pickedSourceKeys, onClose, onAdd }) {
   const isSo = sourceType === "SALES_ORDER";
   const query = useQuery({
     queryKey: ["procurement", "do01-add-options", sourceType, sourceRef?.id],
@@ -248,47 +258,37 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, onClose, onAdd }) {
     enabled: visible && Boolean(sourceRef?.id),
   });
   const groups = Array.isArray(query.data?.groups) ? query.data.groups : [];
-  const [editByLine, setEditByLine] = useState({});
+  const [packingOrderByLine, setPackingOrderByLine] = useState({});
 
-  function editFor(line) {
-    const isFgWithPack = line.line_material_type === "FG" && toNumber(line.per_pack_qty) > 0;
-    const defaultNumPacks = isFgWithPack ? Math.floor(toNumber(line.remaining_qty) / toNumber(line.per_pack_qty)) : "";
-    const packingPoOptions = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
-    return {
-      qty: String(line.remaining_qty ?? ""),
-      batch_number: line.batch_number ?? "",
-      expiry_date: line.expiry_date ?? "",
-      num_packs: String(defaultNumPacks || ""),
-      // §133.18 — an FO-linked FG/SFG line can have several Packing POs
-      // available; business owner locked (2026-08-28): manual pick, not
-      // FIFO. Auto-select when there's exactly one option, otherwise leave
-      // blank until the user actually picks.
-      packing_order_id: packingPoOptions.length === 1 ? packingPoOptions[0].packing_order_id : "",
-      ...editByLine[line.id],
-    };
+  function sourceKey(line) {
+    return line.source_kind === "SO_MAP_ALLOCATION"
+      ? `allocation:${line.so_map_allocation_id}`
+      : `${sourceType}:${line.id}`;
   }
-  function updateEdit(lineId, patch) {
-    setEditByLine((current) => ({ ...current, [lineId]: { ...current[lineId], ...patch } }));
+  function selectedPackingOrderId(line) {
+    const options = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
+    return packingOrderByLine[line.id] || (options.length === 1 ? options[0].packing_order_id : "");
   }
 
   function handleAdd(group, line) {
-    const edit = editFor(line);
-    const isFgWithPack = line.line_material_type === "FG" && toNumber(line.per_pack_qty) > 0;
     const packingPoOptions = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
-    let qty = isFgWithPack ? Number((toNumber(edit.num_packs) * toNumber(line.per_pack_qty)).toFixed(6)) : toNumber(edit.qty);
+    const packingOrderId = selectedPackingOrderId(line);
     let maxQty = toNumber(line.remaining_qty);
     if (packingPoOptions.length > 0) {
-      if (!edit.packing_order_id) return; // must pick a Packing PO before adding
-      const selectedPko = packingPoOptions.find((option) => option.packing_order_id === edit.packing_order_id);
+      if (!packingOrderId) return;
+      const selectedPko = packingPoOptions.find((option) => option.packing_order_id === packingOrderId);
       if (!selectedPko) return;
       maxQty = Math.min(maxQty, toNumber(selectedPko.remaining_qty));
     }
-    if (!qty || qty <= 0 || qty > maxQty + QTY_TOL) return;
+    if (maxQty <= QTY_TOL) return;
+    const selectedPko = packingPoOptions.find((option) => option.packing_order_id === packingOrderId);
     onAdd({
       __key: makeKey(),
       __groupLabel: group.label,
       __billTo: group.bill_to_display,
       __shipTo: group.ship_to_display,
+      __sourceId: sourceRef.id,
+      __sourceType: sourceType,
       source_kind: isSo ? (line.source_kind || "SO_LINE_DIRECT") : "STO_LINE_DIRECT",
       so_line_id: isSo ? (line.source_kind === "SO_MAP_ALLOCATION" ? null : line.id) : null,
       so_map_allocation_id: isSo && line.source_kind === "SO_MAP_ALLOCATION" ? line.so_map_allocation_id : null,
@@ -297,20 +297,22 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, onClose, onAdd }) {
       material_display: line.material_display,
       line_material_type: line.line_material_type,
       fg_type: line.fg_type ?? null,
-      // §133.12 point 4 — RM/PM/INT: whatever the user typed here (manual,
-      // blank allowed). FG/SFG: whatever the source line already carries
-      // (auto, FO-linked) — never user-editable for those types.
-      batch_number: DO01_MERGEABLE_TYPES.has(line.line_material_type) ? (edit.batch_number || null) : (line.batch_number ?? null),
-      expiry_date: DO01_MERGEABLE_TYPES.has(line.line_material_type) ? (edit.expiry_date || null) : (line.expiry_date ?? null),
-      // §133.18 — manual Packing PO choice when the FO has more than one;
-      // falls back to whatever the source line already carried (STO/direct
-      // cases never have packing_po_options at all).
-      packing_order_id: edit.packing_order_id || line.packing_order_id || null,
+      batch_number: selectedPko?.batch_number || line.batch_number || null,
+      expiry_date: null,
+      packing_order_id: packingOrderId || line.packing_order_id || null,
+      packing_order_number: selectedPko?.po_number || null,
+      document_name: selectedPko?.document_name || null,
+      prodshade_display: selectedPko?.prodshade_display || null,
+      actual_stroke: selectedPko?.actual_stroke || null,
+      process_order_number: selectedPko?.process_order_number || null,
       uom_code: line.uom_code,
+      pack_uom_code: line.pack_uom_code || null,
+      pack_qty: line.pack_qty ?? null,
+      per_pack_qty: line.per_pack_qty ?? null,
+      base_qty: line.base_qty ?? line.remaining_qty,
       maxQty,
-      qty,
+      qty: maxQty,
     });
-    setEditByLine((current) => { const next = { ...current }; delete next[line.id]; return next; });
   }
 
   return (
@@ -345,9 +347,8 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, onClose, onAdd }) {
                         const options = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
                         if (options.length === 0) return "-";
                         if (options.length === 1) return <span className="font-mono text-xs">{options[0].po_number} ({options[0].batch_number})</span>;
-                        const edit = editFor(line);
                         return (
-                          <select value={edit.packing_order_id} onChange={(event) => updateEdit(line.id, { packing_order_id: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-1 text-xs text-slate-900 outline-none focus:border-sky-500">
+                          <select value={selectedPackingOrderId(line)} onChange={(event) => setPackingOrderByLine((current) => ({ ...current, [line.id]: event.target.value }))} className="h-8 w-full border border-slate-300 bg-white px-1 text-xs text-slate-900 outline-none focus:border-sky-500">
                             <option value="">Select Packing PO</option>
                             {options.map((option) => (
                               <option key={option.packing_order_id} value={option.packing_order_id}>
@@ -358,60 +359,25 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, onClose, onAdd }) {
                         );
                       },
                     },
-                    {
-                      key: "batch",
-                      label: "Batch Number",
-                      width: "130px",
-                      render: (line) => {
-                        if (!DO01_MERGEABLE_TYPES.has(line.line_material_type)) return line.batch_number || "-";
-                        return (
-                          <input value={editFor(line).batch_number} onChange={(event) => updateEdit(line.id, { batch_number: event.target.value })} placeholder="Optional" className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
-                        );
-                      },
-                    },
-                    {
-                      key: "expiry",
-                      label: "Expiry Date",
-                      width: "140px",
-                      render: (line) => {
-                        if (!DO01_MERGEABLE_TYPES.has(line.line_material_type)) return "-";
-                        return (
-                          <input type="date" value={editFor(line).expiry_date} onChange={(event) => updateEdit(line.id, { expiry_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
-                        );
-                      },
-                    },
-                    {
-                      key: "qty",
-                      label: "Qty / Num Packs",
-                      width: "150px",
-                      render: (line) => {
-                        const isFgWithPack = line.line_material_type === "FG" && toNumber(line.per_pack_qty) > 0;
-                        const edit = editFor(line);
-                        if (isFgWithPack) {
-                          const derivedQty = Number((toNumber(edit.num_packs) * toNumber(line.per_pack_qty)).toFixed(4));
-                          return (
-                            <div className="grid gap-0.5">
-                              <input type="number" min="0" step="1" value={edit.num_packs} onChange={(event) => updateEdit(line.id, { num_packs: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
-                              <span className="font-mono text-[10px] text-slate-400">{formatFixed(derivedQty)} {line.uom_code} of {formatFixed(line.remaining_qty)}</span>
-                            </div>
-                          );
-                        }
-                        return (
-                          <input type="number" min="0" max={line.remaining_qty} step="0.0001" value={edit.qty} onChange={(event) => updateEdit(line.id, { qty: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
-                        );
-                      },
-                    },
-                    { key: "uom", label: "UOM", width: "70px", render: (line) => line.uom_code },
+                    { key: "batch", label: "Batch Number", width: "130px", render: (line) => line.batch_number || "-" },
+                    { key: "mapped_qty", label: "Mapped Qty", width: "110px", render: (line) => `${formatFixed(line.remaining_qty)} ${line.uom_code}` },
+                    { key: "pack_uom", label: "Pack UOM", width: "85px", render: (line) => line.pack_uom_code || "-" },
+                    { key: "pack_qty", label: "Pack Qty", width: "90px", render: (line) => formatFixed(line.pack_qty) },
+                    { key: "per_pack", label: "Per Pack", width: "90px", render: (line) => formatFixed(line.per_pack_qty) },
+                    { key: "base_qty", label: "Base Qty", width: "100px", render: (line) => `${formatFixed(line.base_qty ?? line.remaining_qty)} ${line.uom_code}` },
+                    { key: "prodshade", label: "Prod Shade", width: "130px", render: (line) => selectedPackingOrderId(line) ? (Array.isArray(line.packing_po_options) ? line.packing_po_options.find((option) => option.packing_order_id === selectedPackingOrderId(line))?.prodshade_display || "-" : "-") : "-" },
+                    { key: "stroke", label: "Stroke", width: "80px", render: (line) => selectedPackingOrderId(line) ? (Array.isArray(line.packing_po_options) ? line.packing_po_options.find((option) => option.packing_order_id === selectedPackingOrderId(line))?.actual_stroke || "-" : "-") : "-" },
                     {
                       key: "actions",
                       label: "",
                       width: "80px",
                       render: (line) => {
                         const options = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
-                        const needsChoice = options.length > 1 && !editFor(line).packing_order_id;
+                        const needsChoice = options.length > 1 && !selectedPackingOrderId(line);
+                        const alreadyPicked = pickedSourceKeys.has(sourceKey(line));
                         return (
-                          <button type="button" disabled={needsChoice} onClick={() => handleAdd(group, line)} className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
-                            Add
+                          <button type="button" disabled={needsChoice || alreadyPicked} onClick={() => handleAdd(group, line)} className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
+                            {alreadyPicked ? "Added" : "Add"}
                           </button>
                         );
                       },
@@ -432,14 +398,8 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, onClose, onAdd }) {
 
 // §133.12 Edit — a DO can be edited freely pre-PGI. Rather than a separate
 // UI, this reopens the exact same 3-page wizard pre-seeded from the DO's
-// own already-saved lines: each existing line becomes its own "pick"
-// (source_kind inferred from which id column is set), which Page 2's own
-// grouping (merge RM/PM/INT by material, never merge SFG/FG) then
-// re-derives identically to how it looked when first saved — no separate
-// reconstruction logic needed. Location splits are rebuilt the same way:
-// group existing lines by (group key, storage_location_id) and sum qty,
-// which is exactly the inverse of how Save originally flattened them via
-// FIFO, since every line still carries its own storage_location_id.
+// own already-saved lines: each existing line becomes its own picked row,
+// preserving its source, batch, Packing PO, quantity and storage location.
 function picksFromExistingDo(detail) {
   return (detail.lines ?? []).map((line) => ({
     __key: `existing-${line.id}`,
@@ -480,15 +440,17 @@ export default function DO01CreatePage() {
   const [page, setPage] = useState(1);
   const [companyId, setCompanyId] = useState(defaultCompanyId);
   const [picks, setPicks] = useState([]);
+  const [selectedSources, setSelectedSources] = useState([]);
   const [showSoDrawer, setShowSoDrawer] = useState(false);
   const [showStoDrawer, setShowStoDrawer] = useState(false);
   const [pickingSourceRef, setPickingSourceRef] = useState(null);
   const [pickingSourceType, setPickingSourceType] = useState(null);
-  const [locationSplitsByGroup, setLocationSplitsByGroup] = useState({});
   const [header, setHeader] = useState({ vehicle_number: "", lr_number: "", lr_date: "", gross_weight: "", driver_number: "", driver_contact_number: "", remarks: "" });
   const [transporterId, setTransporterId] = useState("");
   const [transporterName, setTransporterName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [truckSearch, setTruckSearch] = useState("");
+  const [exportingTruckRows, setExportingTruckRows] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editSeeded, setEditSeeded] = useState(false);
@@ -499,15 +461,15 @@ export default function DO01CreatePage() {
     setCompanyId(detail.selling_company_id || "");
     const reconstructedPicks = picksFromExistingDo(detail);
     setPicks(reconstructedPicks);
+    setSelectedSources((detail.sources ?? []).map((source) => ({
+      id: source.source_id,
+      document_number: source.document_number,
+      document_date: source.document_date,
+      counterparty_display: source.party_display,
+      status: "SELECTED",
+      source_type: source.source_type,
+    })));
 
-    const splitsByGroup = {};
-    for (const pick of reconstructedPicks) {
-      const mergeable = ["RM", "PM", "INT"].includes(pick.line_material_type);
-      const groupKey = mergeable ? `material:${pick.material_id}` : `pick:${pick.__key}`;
-      if (!splitsByGroup[groupKey]) splitsByGroup[groupKey] = [];
-      splitsByGroup[groupKey].push({ __key: makeKey(), storage_location_id: pick.__storageLocationId || "", qty: String(pick.qty) });
-    }
-    setLocationSplitsByGroup(splitsByGroup);
 
     setHeader({
       vehicle_number: detail.vehicle_number || "",
@@ -531,110 +493,96 @@ export default function DO01CreatePage() {
     setPicks((current) => current.filter((pick) => pick.__key !== key));
   }
 
-  const groups = useMemo(() => {
-    const map = new Map();
-    for (const pick of picks) {
-      const mergeable = MERGEABLE_TYPES.has(pick.line_material_type);
-      const key = mergeable ? `material:${pick.material_id}` : `pick:${pick.__key}`;
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          material_id: pick.material_id,
-          material_display: pick.material_display,
-          line_material_type: pick.line_material_type,
-          uom_code: pick.uom_code,
-          mergeable,
-          totalQty: 0,
-          picks: [],
-        });
-      }
-      const g = map.get(key);
-      g.totalQty = Number((g.totalQty + toNumber(pick.qty)).toFixed(6));
-      g.picks.push(pick);
-    }
-    return [...map.values()];
-  }, [picks]);
-
   const netWeight = useMemo(() => Number(picks.reduce((sum, pick) => sum + toNumber(pick.qty), 0).toFixed(4)), [picks]);
+  const visiblePicks = useMemo(() => {
+    const query = truckSearch.trim().toLowerCase();
+    if (!query) return picks;
+    return picks.filter((pick) => Object.values(pick).some((value) => String(value ?? "").toLowerCase().includes(query)));
+  }, [picks, truckSearch]);
 
-  function assignedQtyFor(group) {
-    return (locationSplitsByGroup[group.key] ?? []).reduce((sum, split) => sum + toNumber(split.qty), 0);
-  }
-  function addLocationSplit(group) {
-    setLocationSplitsByGroup((current) => ({
-      ...current,
-      [group.key]: [...(current[group.key] ?? []), { __key: makeKey(), storage_location_id: "", qty: "" }],
-    }));
-  }
-  function updateLocationSplit(groupKey, splitKey, patch) {
-    setLocationSplitsByGroup((current) => ({
-      ...current,
-      [groupKey]: (current[groupKey] ?? []).map((split) => (split.__key === splitKey ? { ...split, ...patch } : split)),
-    }));
-  }
-  function removeLocationSplit(groupKey, splitKey) {
-    setLocationSplitsByGroup((current) => ({
-      ...current,
-      [groupKey]: (current[groupKey] ?? []).filter((split) => split.__key !== splitKey),
-    }));
+  function updatePick(key, patch) {
+    setPicks((current) => current.map((pick) => (pick.__key === key ? { ...pick, ...patch } : pick)));
   }
 
   function goToPage2() {
-    if (picks.length === 0) { setError("Add at least one SO/STO item first."); return; }
+    if (!companyId) { setError("Select a company first."); return; }
     setError("");
     setPage(2);
   }
 
   function goToPage3() {
-    for (const group of groups) {
-      const assigned = assignedQtyFor(group);
-      if (Math.abs(assigned - group.totalQty) > QTY_TOL) {
-        setError(`${group.material_display || group.material_id}: assigned ${assigned} of ${group.totalQty} across locations — must match exactly.`);
-        return;
-      }
-      if ((locationSplitsByGroup[group.key] ?? []).some((split) => !split.storage_location_id)) {
-        setError(`${group.material_display || group.material_id}: every location row needs a storage location selected.`);
-        return;
-      }
-    }
+    if (selectedSources.length === 0) { setError("Select at least one SO or STO for this truck."); return; }
     setError("");
     setPage(3);
   }
 
-  // §133.12-confirmed FIFO rule (2026-08-28): a merged group's location
-  // splits are filled by consuming its underlying source picks IN THE ORDER
-  // THEY WERE ADDED, not proportionally or user-chosen per source. Simple,
-  // deterministic, and the business owner explicitly picked this over
-  // manual per-source/location control.
-  function buildFinalLines() {
-    const lines = [];
-    for (const group of groups) {
-      const queue = group.picks.map((pick) => ({ pick, remaining: toNumber(pick.qty) }));
-      for (const split of locationSplitsByGroup[group.key] ?? []) {
-        let need = toNumber(split.qty);
-        while (need > QTY_TOL) {
-          const source = queue.find((entry) => entry.remaining > QTY_TOL);
-          if (!source) break;
-          const take = Number(Math.min(need, source.remaining).toFixed(6));
-          lines.push({
-            so_line_id: source.pick.so_line_id,
-            sto_line_id: source.pick.sto_line_id,
-            so_map_allocation_id: source.pick.so_map_allocation_id,
-            quantity: take,
-            storage_location_id: split.storage_location_id,
-            batch_number: source.pick.batch_number,
-            expiry_date: source.pick.expiry_date,
-            packing_order_id: source.pick.packing_order_id,
-          });
-          source.remaining = Number((source.remaining - take).toFixed(6));
-          need = Number((need - take).toFixed(6));
-        }
+  function toggleSource(sourceType, source) {
+    const exists = selectedSources.some((item) => item.source_type === sourceType && item.id === source.id);
+    if (exists) {
+      removeSource(sourceType, source.id);
+      return;
+    }
+    setSelectedSources((current) => [...current, { ...source, source_type: sourceType }]);
+  }
+
+  function removeSource(sourceType, sourceId) {
+    setSelectedSources((current) => current.filter((source) => !(source.source_type === sourceType && source.id === sourceId)));
+    setPicks((current) => current.filter((pick) => !(pick.__sourceType === sourceType && pick.__sourceId === sourceId)));
+  }
+
+  function selectedIdsFor(sourceType) {
+    return new Set(selectedSources.filter((source) => source.source_type === sourceType).map((source) => source.id));
+  }
+
+  function validateFinalSelection() {
+    if (picks.length === 0) { setError("Choose at least one mapped SO/STO item for this truck."); return false; }
+    for (const pick of picks) {
+      const qty = toNumber(pick.qty);
+      if (qty <= QTY_TOL || qty > toNumber(pick.maxQty) + QTY_TOL) {
+        setError(`${pick.material_display || pick.material_id}: truck quantity must be greater than zero and cannot exceed ${formatFixed(pick.maxQty)} ${pick.uom_code}.`);
+        return false;
+      }
+      if (!pick.storage_location_id && !pick.__storageLocationId) {
+        setError(`${pick.material_display || pick.material_id}: select a storage location for every picked row.`);
+        return false;
       }
     }
-    return lines;
+    return true;
+  }
+
+  function buildFinalLines() {
+    return picks.map((pick) => ({
+      so_line_id: pick.so_line_id,
+      sto_line_id: pick.sto_line_id,
+      so_map_allocation_id: pick.so_map_allocation_id,
+      quantity: toNumber(pick.qty),
+      storage_location_id: pick.storage_location_id || pick.__storageLocationId,
+      batch_number: pick.batch_number || null,
+      expiry_date: pick.expiry_date || null,
+      packing_order_id: pick.packing_order_id || null,
+    }));
+  }
+
+  async function exportTruckRows() {
+    setExportingTruckRows(true);
+    try {
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `do_truck_items_${new Date().toISOString().slice(0, 10)}.xlsx`,
+        sheetName: "DO Truck Items",
+        columns: TRUCK_EXPORT_COLUMNS,
+        rows: visiblePicks,
+        getCellValue: (row, column) => row?.[column.key] ?? "",
+      });
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "DO_TRUCK_ITEMS_EXPORT_FAILED");
+    } finally {
+      setExportingTruckRows(false);
+    }
   }
 
   async function handleSubmit() {
+    if (!validateFinalSelection()) return;
     setSaving(true);
     setError("");
     setNotice("");
@@ -686,7 +634,7 @@ export default function DO01CreatePage() {
     <>
       <ErpScreenScaffold
         eyebrow="Sales (SO03)"
-        title={page === 1 ? `${pageLabel} — Page 1: Add SO / Add STO` : page === 2 ? `${pageLabel} — Page 2: Consolidated Items + Storage Location` : `${pageLabel} — Page 3: Vehicle & Transporter`}
+        title={page === 1 ? `${pageLabel} — Page 1: Delivery Details` : page === 2 ? `${pageLabel} — Page 2: Select SO / STO` : `${pageLabel} — Page 3: Truck Items`}
         actions={[
           { key: "back", label: page === 1 ? "Back" : "Previous", tone: "neutral", onClick: () => (page === 1 ? popScreen() : setPage(page - 1)) },
           page === 3
@@ -700,135 +648,134 @@ export default function DO01CreatePage() {
       >
         {page === 1 ? (
           <div className="grid gap-4">
-            <ErpSectionCard eyebrow="Page 1" title="Company + add SO/STO items — one vehicle can carry lines from multiple documents (§133.12)">
-              <div className="grid gap-3">
-                <div className="max-w-[280px]">
-                  <TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={(value) => { setCompanyId(value); setPicks([]); }} label="Company" />
-                </div>
-                <div className="flex gap-2">
-                  <button type="button" disabled={!companyId} onClick={() => setShowSoDrawer(true)} className="border border-sky-700 bg-sky-100 px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
-                    + Add SO
-                  </button>
-                  <button type="button" disabled={!companyId} onClick={() => setShowStoDrawer(true)} className="border border-sky-700 bg-sky-100 px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
-                    + Add STO
-                  </button>
-                </div>
+            <ErpSectionCard eyebrow="Page 1" title="Delivery Details — vehicle, transporter and weight">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="max-w-[280px]"><TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={(value) => { setCompanyId(value); setPicks([]); setSelectedSources([]); }} label="Company" /></div>
+                <ErpDenseFormRow label="Vehicle Number"><input value={header.vehicle_number} onChange={(event) => setHeader((current) => ({ ...current, vehicle_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
+                <ErpDenseFormRow label="Transporter"><TransporterPicker transporterId={transporterId} transporterName={transporterName} companyId={companyId} canManageTransporters={canManageTransporters} onSelect={(t) => { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); }} onClear={() => { setTransporterId(""); setTransporterName(""); }} onAddNew={handleAddTransporterToMaster} /></ErpDenseFormRow>
+                <ErpDenseFormRow label="LR Number"><input value={header.lr_number} onChange={(event) => setHeader((current) => ({ ...current, lr_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
+                <ErpDenseFormRow label="LR Date"><input type="date" value={header.lr_date} onChange={(event) => setHeader((current) => ({ ...current, lr_date: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
+                <ErpDenseFormRow label="Gross Weight"><input type="number" step="0.01" value={header.gross_weight} onChange={(event) => setHeader((current) => ({ ...current, gross_weight: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
+                <ErpDenseFormRow label="Driver Name"><input value={header.driver_number} onChange={(event) => setHeader((current) => ({ ...current, driver_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
+                <ErpDenseFormRow label="Driver Contact Number"><input value={header.driver_contact_number} onChange={(event) => setHeader((current) => ({ ...current, driver_contact_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
+                <ErpDenseFormRow label="Remarks"><input value={header.remarks} onChange={(event) => setHeader((current) => ({ ...current, remarks: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
               </div>
-            </ErpSectionCard>
-
-            <ErpSectionCard eyebrow="Picked Items" title={`${picks.length} item${picks.length === 1 ? "" : "s"} added`}>
-              <ErpDenseGrid
-                columns={[
-                  { key: "group", label: "From", render: (row) => row.__groupLabel || "—" },
-                  { key: "material_display", label: "Material", render: (row) => row.material_display || row.material_id },
-                  { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number || "-" },
-                  { key: "qty", label: "Qty", width: "100px", align: "right", render: (row) => `${formatFixed(row.qty)} ${row.uom_code || ""}` },
-                  { key: "actions", label: "", width: "80px", render: (row) => (
-                    <button type="button" onClick={() => removePick(row.__key)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button>
-                  ) },
-                ]}
-                rows={picks}
-                rowKey={(row) => row.__key}
-                emptyMessage="No items yet — click Add SO or Add STO."
-              />
             </ErpSectionCard>
           </div>
         ) : null}
 
         {page === 2 ? (
           <div className="grid gap-4">
-            {groups.map((group) => (
-              <ErpSectionCard key={group.key} eyebrow={group.mergeable ? "Merged (RM/PM/INT)" : "Not merged (SFG/FG — batch-committed)"} title={`${group.material_display || group.material_id} — ${formatFixed(group.totalQty)} ${group.uom_code}`}>
-                <div className="grid gap-2">
-                  {(locationSplitsByGroup[group.key] ?? []).map((split) => (
-                    <LocationSplitRow key={split.__key} companyId={companyId} materialId={group.material_id} split={split} onChange={(patch) => updateLocationSplit(group.key, split.__key, patch)} onRemove={() => removeLocationSplit(group.key, split.__key)} />
-                  ))}
-                  <div className="flex items-center justify-between">
-                    <span className={`text-xs font-semibold ${Math.abs(assignedQtyFor(group) - group.totalQty) > QTY_TOL ? "text-rose-700" : "text-emerald-700"}`}>
-                      Assigned {formatFixed(assignedQtyFor(group))} of {formatFixed(group.totalQty)} {group.uom_code}
-                    </span>
-                    <button type="button" onClick={() => addLocationSplit(group)} className="border border-sky-700 bg-sky-100 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-950">
-                      + Add Location
-                    </button>
-                  </div>
-                </div>
-              </ErpSectionCard>
-            ))}
+            <ErpSectionCard eyebrow="Page 2" title="Select SO / STO for this truck">
+              <p className="mb-3 text-sm text-slate-600">Choose one or more open or partially dispatched documents. Item quantities are selected only on the next page.</p>
+              <div className="flex gap-2">
+                <button type="button" disabled={!companyId} onClick={() => setShowSoDrawer(true)} className="border border-sky-700 bg-sky-100 px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">+ Select SO</button>
+                <button type="button" disabled={!companyId} onClick={() => setShowStoDrawer(true)} className="border border-sky-700 bg-sky-100 px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">+ Select STO</button>
+              </div>
+            </ErpSectionCard>
+            <ErpSectionCard eyebrow="Selected Documents" title={`${selectedSources.length} document${selectedSources.length === 1 ? "" : "s"} selected`}>
+              <ErpDenseGrid cellNavigate columns={[
+                { key: "document_number", label: "Document" },
+                { key: "source_type", label: "Type", width: "100px", render: (row) => row.source_type === "SALES_ORDER" ? "SO" : "STO" },
+                { key: "counterparty_display", label: "Customer / Receiving Company" },
+                { key: "status", label: "Status", width: "110px" },
+                { key: "remove", label: "", width: "90px", render: (row) => <button type="button" onClick={() => removeSource(row.source_type, row.id)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button> },
+              ]} rows={selectedSources} rowKey={(row) => `${row.source_type}:${row.id}`} emptyMessage="Select one or more SO/STO above." />
+            </ErpSectionCard>
           </div>
         ) : null}
 
         {page === 3 ? (
           <div className="grid gap-4">
-            <ErpSectionCard eyebrow="Page 3" title="Vehicle / Transporter / Weight">
-              <div className="grid gap-3 md:grid-cols-3">
-                <ErpDenseFormRow label="Vehicle Number">
-                  <input value={header.vehicle_number} onChange={(event) => setHeader((current) => ({ ...current, vehicle_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Transporter">
-                  <TransporterPicker transporterId={transporterId} transporterName={transporterName} companyId={companyId} canManageTransporters={canManageTransporters} onSelect={(t) => { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); }} onClear={() => { setTransporterId(""); setTransporterName(""); }} onAddNew={handleAddTransporterToMaster} />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="LR Number">
-                  <input value={header.lr_number} onChange={(event) => setHeader((current) => ({ ...current, lr_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="LR Date">
-                  <input type="date" value={header.lr_date} onChange={(event) => setHeader((current) => ({ ...current, lr_date: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Gross Weight">
-                  <input type="number" step="0.01" value={header.gross_weight} onChange={(event) => setHeader((current) => ({ ...current, gross_weight: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Net Weight (auto)">
-                  <input readOnly value={formatFixed(netWeight)} className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-sm text-slate-600 outline-none" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Driver Number">
-                  <input value={header.driver_number} onChange={(event) => setHeader((current) => ({ ...current, driver_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Driver Contact Number">
-                  <input value={header.driver_contact_number} onChange={(event) => setHeader((current) => ({ ...current, driver_contact_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Remarks">
-                  <input value={header.remarks} onChange={(event) => setHeader((current) => ({ ...current, remarks: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
+            <ErpSectionCard eyebrow="Page 3" title="Select mapped items for this truck">
+              <p className="mb-3 text-sm text-slate-600">Only SO Map-refined destination lines appear. Add a mapped line here; its truck quantity and storage location are decided in the picked-items grid below.</p>
+              <div className="flex flex-wrap gap-2">
+                {selectedSources.map((source) => <button key={`${source.source_type}:${source.id}`} type="button" onClick={() => openSourceItemsFor(source.source_type, source)} className="border border-sky-700 bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-950">Choose items: {source.document_number}</button>)}
               </div>
             </ErpSectionCard>
+            <ErpSectionCard eyebrow="Truck Items" title={`${picks.length} item${picks.length === 1 ? "" : "s"} selected`}>
+              <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+                <QuickFilterInput label="Search picked items" value={truckSearch} onChange={setTruckSearch} placeholder="FO, address, material, Packing PO, batch, shade or stroke" className="min-w-[280px] flex-1" />
+                <button type="button" onClick={() => void exportTruckRows()} disabled={exportingTruckRows || visiblePicks.length === 0} className="border border-emerald-700 bg-emerald-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-emerald-950 disabled:cursor-not-allowed disabled:opacity-50">{exportingTruckRows ? "Exporting..." : "Excel Download"}</button>
+              </div>
+              <ErpDenseGrid cellNavigate rangeSelect stickyFirstColumn columns={[
+                { key: "group", label: "FO / Customer Address", render: (row) => row.__groupLabel || "—" },
+                { key: "bill_to", label: "Bill-To", render: (row) => row.__billTo || "—" },
+                { key: "ship_to", label: "Ship-To", render: (row) => row.__shipTo || "—" },
+                { key: "material_display", label: "Material", render: (row) => row.material_display || "—" },
+                { key: "packing_order", label: "Packing PO", width: "125px", render: (row) => row.packing_order_number || row.packing_order_id || "-" },
+                { key: "document_name", label: "Document Name", width: "155px", render: (row) => row.document_name || row.process_order_number || "-" },
+                { key: "prodshade", label: "Prod Shade", width: "135px", render: (row) => row.prodshade_display || "-" },
+                { key: "stroke", label: "Actual Stroke", width: "95px", render: (row) => row.actual_stroke || "-" },
+                { key: "batch_number", label: "Batch", width: "120px", render: (row) => <input value={row.batch_number || ""} placeholder="Optional" onChange={(event) => updatePick(row.__key, { batch_number: event.target.value })} className="h-7 w-full border border-slate-300 bg-[#fffef7] px-1 text-xs" /> },
+                { key: "expiry_date", label: "Expiry", width: "125px", render: (row) => <input type="date" value={row.expiry_date || ""} onChange={(event) => updatePick(row.__key, { expiry_date: event.target.value })} className="h-7 w-full border border-slate-300 bg-[#fffef7] px-1 text-xs" /> },
+                { key: "pack_uom", label: "Pack UOM", width: "80px", render: (row) => row.pack_uom_code || "-" },
+                { key: "pack_qty", label: "Pack Qty", width: "80px", align: "right", render: (row) => formatFixed(row.pack_qty) },
+                { key: "per_pack", label: "Per Pack", width: "85px", align: "right", render: (row) => formatFixed(row.per_pack_qty) },
+                { key: "base_uom", label: "Base UOM", width: "80px", render: (row) => row.uom_code || "-" },
+                { key: "base_volume", label: "Base Volume", width: "100px", align: "right", render: (row) => formatFixed(row.base_qty) },
+                { key: "truck_packs", label: "Truck Packs", width: "105px", render: (row) => <TruckPacksInput row={row} onChange={(qty) => updatePick(row.__key, { qty })} /> },
+                { key: "qty", label: "Truck Base Qty", width: "125px", render: (row) => <TruckBaseQtyInput row={row} onChange={(qty) => updatePick(row.__key, { qty })} /> },
+                { key: "sloc", label: "Storage Location", width: "210px", render: (row) => <TruckItemLocation companyId={companyId} materialId={row.material_id} value={row.storage_location_id || row.__storageLocationId || ""} onChange={(storageLocationId) => updatePick(row.__key, { storage_location_id: storageLocationId })} /> },
+                { key: "remove", label: "", width: "80px", render: (row) => <button type="button" onClick={() => removePick(row.__key)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button> },
+              ]} rows={visiblePicks} rowKey={(row) => row.__key} emptyMessage="Choose items from a selected SO or STO." />
+            </ErpSectionCard>
+            <div className="text-right text-sm text-slate-600">Truck Net Weight (auto): <span className="font-mono font-semibold">{formatFixed(netWeight)}</span></div>
           </div>
         ) : null}
       </ErpScreenScaffold>
 
-      <SourceDocumentDrawer visible={showSoDrawer} sourceType="SALES_ORDER" companyId={companyId} onClose={() => setShowSoDrawer(false)} onPick={(item) => openSourceItemsFor("SALES_ORDER", item)} />
-      <SourceDocumentDrawer visible={showStoDrawer} sourceType="STO" companyId={companyId} onClose={() => setShowStoDrawer(false)} onPick={(item) => openSourceItemsFor("STO", item)} />
+      <SourceDocumentDrawer visible={showSoDrawer} sourceType="SALES_ORDER" companyId={companyId} selectedIds={selectedIdsFor("SALES_ORDER")} onClose={() => setShowSoDrawer(false)} onToggle={(item) => toggleSource("SALES_ORDER", item)} onConfirm={() => setShowSoDrawer(false)} />
+      <SourceDocumentDrawer visible={showStoDrawer} sourceType="STO" companyId={companyId} selectedIds={selectedIdsFor("STO")} onClose={() => setShowStoDrawer(false)} onToggle={(item) => toggleSource("STO", item)} onConfirm={() => setShowStoDrawer(false)} />
       <SourceItemsDrawer
         visible={Boolean(pickingSourceRef)}
         sourceType={pickingSourceType}
         sourceRef={pickingSourceRef}
+        pickedSourceKeys={new Set(picks.map((pick) => pick.so_map_allocation_id ? `allocation:${pick.so_map_allocation_id}` : `${pick.__sourceType}:${pick.so_line_id || pick.sto_line_id}`))}
         onClose={() => setPickingSourceRef(null)}
-        onAdd={(pick) => setPicks((current) => [...current, pick])}
+        onAdd={(pick) => {
+          setPicks((current) => [...current, pick]);
+        }}
       />
     </>
   );
 }
 
-// Page 2 — one storage-location row for a (possibly merged) item group.
-function LocationSplitRow({ companyId, materialId, split, onChange, onRemove }) {
+function TruckItemLocation({ companyId, materialId, value, onChange }) {
   const query = useQuery({
     queryKey: ["procurement", "do01-storage-options", companyId, materialId],
     queryFn: () => listDoStorageOptions({ company_id: companyId, material_id: materialId }),
+    enabled: Boolean(companyId && materialId),
   });
   const options = Array.isArray(query.data?.items) ? query.data.items : [];
-  const selected = options.find((option) => option.storage_location_id === split.storage_location_id);
 
   return (
-    <div className="grid grid-cols-[1fr_120px_100px_70px] items-center gap-2 border border-slate-200 bg-white px-2 py-1.5">
-      <select value={split.storage_location_id} onChange={(event) => onChange({ storage_location_id: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
-        <option value="">Select location</option>
-        {options.map((option) => (
-          <option key={option.storage_location_id} value={option.storage_location_id}>
-            {option.location_display}{option.is_default ? " (default)" : ""} — Avail {formatFixed(option.available_qty)}
-          </option>
-        ))}
-      </select>
-      <input type="number" min="0" step="0.0001" value={split.qty} onChange={(event) => onChange({ qty: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
-      <span className="text-[11px] text-slate-500">{selected ? `Avail ${formatFixed(selected.available_qty)}` : ""}</span>
-      <button type="button" onClick={onRemove} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button>
-    </div>
+    <select value={value} onChange={(event) => onChange(event.target.value)} className="h-7 w-full border border-slate-300 bg-white px-1 text-xs text-slate-900 outline-none focus:border-sky-500">
+      <option value="">Select location</option>
+      {options.map((option) => (
+        <option key={option.storage_location_id} value={option.storage_location_id}>
+          {option.location_display}{option.is_default ? " (default)" : ""} — Avail {formatFixed(option.available_qty)}
+        </option>
+      ))}
+    </select>
   );
+}
+
+function isPackDrivenFg(row) {
+  return row.line_material_type === "FG" && ["MTO", "HPS"].includes(String(row.fg_type || "").toUpperCase()) && String(row.pack_uom_code || "").trim() !== "000" && toNumber(row.per_pack_qty) > 0;
+}
+
+function TruckPacksInput({ row, onChange }) {
+  if (!isPackDrivenFg(row)) return "-";
+  const perPack = toNumber(row.per_pack_qty);
+  const maxPacks = Math.floor(toNumber(row.maxQty) / perPack);
+  const packs = toNumber(row.qty) / perPack;
+  return (
+    <input type="number" min="0" max={maxPacks} step="1" value={Number.isInteger(packs) ? packs : ""} onChange={(event) => onChange(Number((toNumber(event.target.value) * perPack).toFixed(6)))} className="h-7 w-full border border-slate-300 bg-[#fffef7] px-1 text-xs" />
+  );
+}
+
+function TruckBaseQtyInput({ row, onChange }) {
+  if (isPackDrivenFg(row)) return <span className="font-mono text-xs">{formatFixed(row.qty)}</span>;
+  return <input type="number" min="0" max={row.maxQty} step="0.0001" value={row.qty} onChange={(event) => onChange(event.target.value)} className="h-7 w-full border border-slate-300 bg-[#fffef7] px-1 text-xs" />;
 }
