@@ -156,6 +156,7 @@ export default function DODetailPage() {
               columns={[
                 { key: "line_number", label: "#", width: "50px" },
                 { key: "material_id", label: "Material", render: (row) => row.material_display || row.material_id },
+                { key: "document_name", label: "Document Name", width: "180px", render: (row) => row.document_name || "—" },
                 { key: "quantity", label: "Qty", width: "100px", render: (row) => `${row.quantity} ${row.uom_code || ""}` },
                 { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number || "-" },
                 { key: "storage_location_id", label: "Storage Location", render: (row) => row.storage_location_display || row.storage_location_id || "—" },
