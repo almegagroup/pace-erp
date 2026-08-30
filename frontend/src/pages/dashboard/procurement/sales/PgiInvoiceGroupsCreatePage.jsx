@@ -228,7 +228,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
   }
 
   return (
-    <DrawerBase visible side="center" title={`${group.document_number || "Invoice group"} — Invoice Preparation`} onEscape={onClose} onClose={onClose} width="min(1120px, calc(100vw - 24px))">
+    <DrawerBase visible side="center" title={`${group.source_display_number || group.document_number || "Invoice group"} — Invoice Preparation`} onEscape={onClose} onClose={onClose} width="min(1120px, calc(100vw - 24px))">
       <div className="grid gap-4">
         <div className="grid gap-3 border border-slate-300 bg-white p-4 text-sm text-slate-900">
           <div className="border-b border-slate-400 pb-2 text-center text-lg font-bold uppercase">Invoice Preparation</div>
@@ -254,7 +254,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
               <div>Delivery Note<strong className="block">{dc?.lr_number || "—"}</strong></div>
               <div>Delivery Note Date<strong className="block">{formatDate(dc?.lr_date)}</strong></div>
               <div>Buyer&apos;s Order No.<strong className="block">{group.customer_po_number || "—"}</strong></div>
-              <div>Buyer&apos;s Order Date<strong className="block">{formatDate(group.customer_po_date)}</strong></div>
+              <div>{group.source_type === "SALES_ORDER" ? "SO Date" : "STO Date"}<strong className="block">{formatDate(group.document_date)}</strong></div>
               {group.ibn_required ? <div>Inbound No. (IBN)<strong className="block">{input.inbound_number || "—"}</strong></div> : null}
               <div>Dispatched Through<strong className="block">{dc?.transporter_display || "—"}</strong></div>
               <div>Motor Vehicle No.<strong className="block">{dc?.vehicle_number || "—"}</strong></div>
@@ -659,14 +659,14 @@ export default function PgiInvoiceGroupsCreatePage() {
                   cellNavigate
                   columns={[
                     { key: "source_type", label: "Type", width: "80px", render: (row) => (row.source_type === "SALES_ORDER" ? "SO" : "STO") },
-                    { key: "document_number", label: "SO/STO Number", width: "120px" },
+                    { key: "source_display_number", label: "SO/STO Number", width: "120px", render: (row) => row.source_display_number || "—" },
                     { key: "document_date", label: "Date", width: "95px" },
                     { key: "parent_company_display", label: "Parent Company", render: (row) => row.parent_company_display || "—" },
                     { key: "vdc_dc_display", label: "VDC / DC", render: (row) => row.vdc_dc_display || "—" },
                     { key: "dc_number", label: "DO Number", width: "110px", render: () => dc?.dc_number || "—" },
                     { key: "bill_to", label: "Billing Address", render: (row) => <AddressCell party={row.bill_to} /> },
                     { key: "ship_to", label: "Ship-To Address", render: (row) => <AddressCell party={row.ship_to} /> },
-                    { key: "fo_number", label: "FO / IBN", width: "110px", render: (row) => row.fo_number || "—" },
+                    { key: "fo_number", label: "FO", width: "110px", render: (row) => row.fo_number || "—" },
                     { key: "inbound_number", label: "Inbound Number", width: "120px", render: (row) => {
                       const input = groupInputs[row.group_key];
                       return <input

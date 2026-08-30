@@ -59,6 +59,11 @@ function parsePositiveNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
+function parseNullableNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
 }
@@ -1242,6 +1247,7 @@ type ProcInvoiceGroup = {
   sto_id: string | null;
   document_number: string | null;
   document_date: string | null;
+  source_display_number: string | null;
   customer_po_number: string | null;
   customer_po_date: string | null;
   customer_id: string | null;
@@ -1442,6 +1448,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
 
     let documentNumber: string | null = null;
     let documentDate: string | null = null;
+    let sourceDisplayNumber: string | null = null;
     let customerPoNumber: string | null = null;
     let customerPoDate: string | null = null;
     let customerId: string | null = null;
@@ -1459,6 +1466,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       const stoRow = meta.sto_id ? stoMap.get(meta.sto_id) : null;
       documentNumber = (stoRow?.sto_number as string) ?? null;
       documentDate = (stoRow?.sto_date as string) ?? null;
+      sourceDisplayNumber = documentNumber;
       const company = stoRow ? receivingCompanyMap.get(toTrimmedString(stoRow.receiving_company_id)) : null;
       if (company) {
         const companyDetail: ProcPartyDetail = {
@@ -1480,6 +1488,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       documentDate = (soRow?.so_date as string) ?? null;
       customerPoNumber = soRow ? (toTrimmedString(soRow.customer_po_number) || null) : null;
       customerPoDate = soRow ? (toTrimmedString(soRow.customer_po_date) || null) : null;
+      sourceDisplayNumber = customerPoNumber || documentNumber;
       customerId = soRow ? (toTrimmedString(soRow.customer_id) || null) : null;
       paymentTermId = soRow ? (toTrimmedString(soRow.payment_term_id) || null) : null;
       freightTerm = soRow ? (toUpperTrimmedString(soRow.freight_term) || null) : null;
@@ -1548,6 +1557,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       sto_id: meta.sto_id || null,
       document_number: documentNumber,
       document_date: documentDate,
+      source_display_number: sourceDisplayNumber,
       customer_po_number: customerPoNumber,
       customer_po_date: customerPoDate,
       customer_id: customerId,
