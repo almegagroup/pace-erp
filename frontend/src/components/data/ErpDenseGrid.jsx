@@ -211,6 +211,14 @@ export default function ErpDenseGrid({
       const doFocus = () => {
         const target = cellRefs.current[clampedRow]?.[clampedCol];
         if (!target) return;
+        const actionControl = columns[clampedCol]?.focusActionControl
+          ? target.querySelector("[data-erp-grid-action-control]")
+          : null;
+        if (actionControl instanceof HTMLElement) {
+          target.tabIndex = -1;
+          actionControl.focus();
+          return;
+        }
         target.tabIndex = 0;
         target.focus();
       };
@@ -273,7 +281,12 @@ export default function ErpDenseGrid({
             const cellKeyboardHandler = (event) => {
               // Inputs and comboboxes own their keyboard interaction. Letting the
               // cell's Excel navigation intercept their keys steals focus/search.
-              if (event.target !== event.currentTarget) return;
+              const actionControlFocused = Boolean(
+                column.focusActionControl
+                && event.target instanceof Element
+                && event.target.closest("[data-erp-grid-action-control]"),
+              );
+              if (event.target !== event.currentTarget && !actionControlFocused) return;
               const isCopyShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c";
               if (rangeSelect && isCopyShortcut) {
                 event.preventDefault();
@@ -311,7 +324,7 @@ export default function ErpDenseGrid({
                 event.preventDefault();
                 if (rangeSelect) setSelection(null);
                 focusCell(index - 1, colIndex);
-              } else if (event.key === "Enter" && typeof onRowActivate === "function") {
+              } else if (event.key === "Enter" && !actionControlFocused && typeof onRowActivate === "function") {
                 event.preventDefault();
                 onRowActivate(row, index);
               }
@@ -323,7 +336,7 @@ export default function ErpDenseGrid({
               <td
                 key={column.key}
                 ref={(el) => { cellRefs.current[index][colIndex] = el; }}
-                tabIndex={isInitialActiveCell ? 0 : -1}
+                tabIndex={column.focusActionControl ? -1 : (isInitialActiveCell ? 0 : -1)}
                 onKeyDown={mergeHandlers(externalOnKeyDown, cellKeyboardHandler)}
                 onMouseDown={rangeSelect ? (event) => {
                   isDraggingRef.current = true;

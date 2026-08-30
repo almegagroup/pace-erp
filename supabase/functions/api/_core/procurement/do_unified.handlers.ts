@@ -134,7 +134,7 @@ async function computeDrawnQtyByFoPackingOrder(packingOrderIds: string[], exclud
 async function attachMaterialDisplay(rows: JsonRecord[]): Promise<JsonRecord[]> {
   const materialIds = [...new Set(rows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   const { data } = materialIds.length
-    ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, document_name, material_type").in("id", materialIds)
+    ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, document_name, material_type, hsn_code").in("id", materialIds)
     : { data: [] as JsonRecord[] };
   const map = new Map(((data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
   return rows.map((row) => {
@@ -1213,6 +1213,7 @@ type ProcInvoiceGroupLine = {
   material_id: string;
   material_display: string | null;
   document_name: string | null;
+  hsn_code: string | null;
   line_material_type: string | null;
   quantity: number;
   uom_code: string;
@@ -1250,6 +1251,7 @@ type ProcInvoiceGroup = {
   fo_date: string | null;
   parent_company_display: string | null;
   vdc_dc_display: string | null;
+  seller: ProcPartyDetail;
   bill_to: ProcPartyDetail;
   ship_to: ProcPartyDetail;
   lines: ProcInvoiceGroupLine[];
@@ -1329,7 +1331,8 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
     if (soLineId) {
       const soId = soLineToSo.get(soLineId);
       if (soId) soIds.add(soId);
-    } else if (soMapAllocationId) {
+    }
+    if (soMapAllocationId) {
       const alloc = mapAllocMap.get(soMapAllocationId);
       if (alloc) {
         soIds.add(alloc.soId);
@@ -1364,10 +1367,16 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
 
   const companyId = toTrimmedString(dc.selling_company_id);
   const { data: sellingCompany, error: sellingCompanyError } = await serviceRoleClient
-    .schema("erp_master").from("companies").select("state_name").eq("id", companyId).maybeSingle();
+    .schema("erp_master").from("companies").select("company_code, company_name, full_address, state_name, gst_number").eq("id", companyId).maybeSingle();
   if (sellingCompanyError) throw new Error("PGI_INVOICE_TAX_CONTEXT_FAILED");
   const companyStateName = toTrimmedString(sellingCompany?.state_name) || null;
   if (!companyStateName) throw new Error("PGI_INVOICE_SELLING_COMPANY_STATE_MISSING");
+  const seller: ProcPartyDetail = {
+    name: [toTrimmedString(sellingCompany?.company_code), toTrimmedString(sellingCompany?.company_name)].filter(Boolean).join(" - ") || null,
+    address: toTrimmedString(sellingCompany?.full_address) || null,
+    state: companyStateName,
+    gst_number: toTrimmedString(sellingCompany?.gst_number) || null,
+  };
 
   const hydratedLines = await attachMaterialDisplay(lines);
   const hydratedByLineId = new Map(hydratedLines.map((r) => [String(r.id), r]));
@@ -1410,6 +1419,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
         material_id: toTrimmedString(line.material_id),
         material_display: (hydrated.material_display as string | null) ?? null,
         document_name: (hydrated.document_name as string | null) ?? null,
+        hsn_code: toTrimmedString(hydrated.hsn_code) || null,
         line_material_type: (hydrated.line_material_type as string | null) ?? null,
         quantity: Number(line.quantity ?? 0),
         uom_code: toTrimmedString(line.uom_code),
@@ -1538,6 +1548,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       fo_date: foDate,
       parent_company_display: parentCompanyDisplay,
       vdc_dc_display: vdcDcDisplay,
+      seller,
       bill_to: billTo,
       ship_to: shipTo,
       lines: groupLines,
