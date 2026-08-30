@@ -2260,6 +2260,9 @@ async function prepareUnifiedSoLine(
   let hsnWriteBack: { materialId: string; hsnCode: string } | null = null;
   if (materialId) {
     const materialForHsn = await assertUnifiedSalesMaterial(materialId);
+    if (!hsnCode && !toTrimmedString(materialForHsn.hsn_code)) {
+      throw new Error("SO_LINE_HSN_REQUIRED");
+    }
     if (hsnCode && !toTrimmedString(materialForHsn.hsn_code)) {
       hsnWriteBack = { materialId, hsnCode };
     }
@@ -2314,6 +2317,24 @@ async function prepareUnifiedSoLine(
     },
     hsnWriteBack,
   };
+}
+
+async function persistMissingMaterialHsns(writeBacks: Array<{ materialId: string; hsnCode: string }>): Promise<void> {
+  const hsnByMaterial = new Map<string, string>();
+  for (const writeBack of writeBacks) {
+    const existing = hsnByMaterial.get(writeBack.materialId);
+    if (existing && existing !== writeBack.hsnCode) throw new Error("SO_LINE_HSN_CONFLICT");
+    hsnByMaterial.set(writeBack.materialId, writeBack.hsnCode);
+  }
+  for (const [materialId, hsnCode] of hsnByMaterial) {
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master").from("material_master")
+      .update({ hsn_code: hsnCode })
+      .eq("id", materialId)
+      .is("hsn_code", null)
+      .select("id");
+    if (error || !data?.length) throw new Error("SO_HSN_MASTER_UPDATE_FAILED");
+  }
 }
 
 type ResolvedCustomerAddress = ResolvedShipTo & { customerId: string; depotCodeId: string | null };
@@ -2597,6 +2618,7 @@ export async function createSalesOrderUnifiedHandler(
       linePayload.push(prepared.payload);
       if (prepared.hsnWriteBack) hsnWriteBacks.push(prepared.hsnWriteBack);
     }
+    await persistMissingMaterialHsns(hsnWriteBacks);
 
     const soNumber = await generateProcurementDocNumber("SO");
     const { data: so, error: soError } = await serviceRoleClient
@@ -2659,15 +2681,6 @@ export async function createSalesOrderUnifiedHandler(
         error: lineError,
       });
       return salesErrorResponse(req, ctx, "SO_LINE_CREATE_FAILED", 500, "Unable to create sales order lines.");
-    }
-
-    // §133.8-F — best-effort HSN write-back; never fails the SO create itself.
-    for (const writeBack of hsnWriteBacks) {
-      await serviceRoleClient
-        .schema("erp_master").from("material_master")
-        .update({ hsn_code: writeBack.hsnCode })
-        .eq("id", writeBack.materialId)
-        .is("hsn_code", null);
     }
 
     return okResponse(await hydrateSo(String(so.id), ctx), ctx.request_id, req);
@@ -2816,16 +2829,10 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
         newLinePayload.push({ ...prepared.payload, so_id: soId });
         if (prepared.hsnWriteBack) hsnWriteBacks.push(prepared.hsnWriteBack);
       }
+      await persistMissingMaterialHsns(hsnWriteBacks);
       const { error: insertError } = await serviceRoleClient
         .schema("erp_procurement").from("sales_order_line").insert(newLinePayload);
       if (insertError) return salesErrorResponse(req, ctx, "SO_EDIT_LINE_CREATE_FAILED", 500, "Unable to add new SO line.");
-      for (const writeBack of hsnWriteBacks) {
-        await serviceRoleClient
-          .schema("erp_master").from("material_master")
-          .update({ hsn_code: writeBack.hsnCode })
-          .eq("id", writeBack.materialId)
-          .is("hsn_code", null);
-      }
     }
 
     // Header fields — never dispatch_type/bill_to_*/ship_to_*/vdc (§133.10 identity lock).

@@ -433,13 +433,29 @@ export default function SO01CreatePage() {
     });
   }
 
+  function hsnInputForLine(line) {
+    const material = fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id);
+    const masterHsn = String(material?.hsn_code || "").trim();
+    const isMasterHsn = Boolean(masterHsn);
+    return textInput(
+      line.hsn_code,
+      (value) => updateLine(line.__key, { hsn_code: value }),
+      {
+        readOnly: isMasterHsn,
+        placeholder: isMasterHsn ? undefined : "Enter HSN",
+        title: isMasterHsn ? "From Material Master" : "Required: this will be saved to Material Master",
+        className: `h-8 w-full border px-2 text-xs outline-none ${isMasterHsn ? "border-slate-300 bg-slate-100 text-slate-500" : "border-amber-400 bg-[#fffef7] text-slate-900 focus:border-sky-500"}`,
+      },
+    );
+  }
+
   function columnsFor(materialType) {
     if (materialType === "RM" || materialType === "PM" || materialType === "INT") {
       return [
         { key: "material", label: "Item", width: "220px", render: (line) => (
           <ErpComboboxField value={line.material_id} onChange={(value) => handleMaterialSelect(line.__key, value)} options={materialOptionsFor(materialType)} blankLabel={`Select ${materialType}`} />
         ) },
-        { key: "hsn", label: "HSN Code", width: "100px", render: (line) => textInput(line.hsn_code, (value) => updateLine(line.__key, { hsn_code: value })) },
+        { key: "hsn", label: "HSN Code", width: "100px", render: hsnInputForLine },
         { key: "batch", label: "Batch No.", width: "110px", render: (line) => textInput(line.batch_number, (value) => updateLine(line.__key, { batch_number: value })) },
         { key: "expiry", label: "Expiry", width: "120px", render: (line) => (
           <input type="date" value={line.expiry_date || ""} onChange={(event) => updateLine(line.__key, { expiry_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
@@ -473,7 +489,7 @@ export default function SO01CreatePage() {
         { key: "material", label: "Item", width: "200px", render: (line) => (
           <ErpComboboxField value={line.material_id} onChange={(value) => handleMaterialSelect(line.__key, value)} options={materialOptionsFor("SFG")} blankLabel="Select SFG" />
         ) },
-        { key: "hsn", label: "HSN Code", width: "100px", render: (line) => textInput(line.hsn_code, (value) => updateLine(line.__key, { hsn_code: value })) },
+        { key: "hsn", label: "HSN Code", width: "100px", render: hsnInputForLine },
         { key: "batch", label: "Batch No.", width: "110px", render: (line) => textInput(line.batch_number, (value) => updateLine(line.__key, { batch_number: value })) },
         { key: "costing_month", label: "Costing Rate Month", width: "150px", render: (line) => costingMonthCell(line, line.__key) },
         { key: "qty", label: "Order Qty", width: "90px", render: (line) => numberInput(line.base_qty, (value) => updateLine(line.__key, { base_qty: value, quantity: value })) },
@@ -530,7 +546,7 @@ export default function SO01CreatePage() {
           ? (line.manual_sku_name.trim() || "—")
           : ((fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id))?.document_name || (fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id))?.material_name || "—")
       ) },
-      { key: "hsn", label: "HSN Code", width: "100px", render: (line) => textInput(line.hsn_code, (value) => updateLine(line.__key, { hsn_code: value })) },
+      { key: "hsn", label: "HSN Code", width: "100px", render: hsnInputForLine },
       { key: "pack_uom", label: "Pack UoM", width: "80px", render: (line) => (
         <input value={line.pack_uom_code || (line.fg_type === "MTEST" ? "BBL" : "")} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
       ) },
@@ -613,6 +629,15 @@ export default function SO01CreatePage() {
     // carry a manual_sku_name instead. Every other line always needs a real item.
     if (lines.some((line) => !line.material_id && !(line.__manualSku && line.manual_sku_name.trim()))) {
       setError("Every line needs an item selected (or a manual SKU name entered).");
+      return;
+    }
+    const missingHsnLine = lines.find((line) => {
+      if (!line.material_id) return false;
+      const material = fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id);
+      return !String(material?.hsn_code || "").trim() && !line.hsn_code.trim();
+    });
+    if (missingHsnLine) {
+      setError("HSN Code is required for an item that has no HSN in Material Master.");
       return;
     }
     const missingMonthLine = lines.find((line) => line.line_material_type === "FG" && ["MTO", "HPS"].includes(line.fg_type) && !line.costing_rate_month);
