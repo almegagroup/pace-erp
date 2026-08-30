@@ -562,6 +562,17 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // §133.13 -- IBN-driven, multi-group SO02 PGI/Invoice flow. This must have
+  // its own stack screen so its route and dcId context cannot be restored to
+  // the legacy single-invoice PGI screen above.
+  PROC_INV_PGI_GROUPS: {
+    screen_code: "PROC_INV_PGI_GROUPS",
+    route: "/dashboard/procurement/sales-invoices/pgi-groups",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_OPENING_STOCK_LIST: {
     screen_code: "PROC_OPENING_STOCK_LIST",
     route: "/dashboard/procurement/opening-stock",
