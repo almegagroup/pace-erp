@@ -128,7 +128,7 @@ async function computeDrawnQtyByFoPackingOrder(packingOrderIds: string[]): Promi
 async function attachMaterialDisplay(rows: JsonRecord[]): Promise<JsonRecord[]> {
   const materialIds = [...new Set(rows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   const { data } = materialIds.length
-    ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, material_type").in("id", materialIds)
+    ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, document_name, material_type").in("id", materialIds)
     : { data: [] as JsonRecord[] };
   const map = new Map(((data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
   return rows.map((row) => {
@@ -136,6 +136,7 @@ async function attachMaterialDisplay(rows: JsonRecord[]): Promise<JsonRecord[]> 
     return {
       ...row,
       material_display: material ? toTrimmedString(material.material_name) || null : null,
+      document_name: material ? toTrimmedString(material.document_name) || null : null,
       line_material_type: material?.material_type ?? null,
     };
   });
@@ -334,6 +335,11 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
         computeDrawnQtyByFoPackingOrder(pkoIds),
       ]);
       const pkoMap = new Map(pkoRows.map((row) => [String(row.id), row]));
+      const pkoMaterialIds = [...new Set(pkoRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+      const { data: pkoMaterials } = pkoMaterialIds.length
+        ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, document_name").in("id", pkoMaterialIds)
+        : { data: [] as JsonRecord[] };
+      const pkoMaterialMap = new Map(((pkoMaterials ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
       const packCodeIds = [...new Set(pkoRows.map((row) => toTrimmedString(row.pack_code_id)).filter(Boolean))];
       const { data: packCodeRows } = packCodeIds.length
         ? await serviceRoleClient.schema("erp_production").from("pack_code_master").select("id, pack_code").in("id", packCodeIds)
@@ -369,14 +375,13 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
         const processOrder = processOrderMap.get(toTrimmedString(pko.process_order_id));
         const strokeMaster = processOrder ? strokeMasterMap.get(toTrimmedString(processOrder.stroke_master_id)) : null;
         const prodshade = strokeMaster ? prodshadeMaterialMap.get(toTrimmedString(strokeMaster.prodshade_material_id)) : null;
-        const fo = foMap.get(toTrimmedString(alloc.plan_feed_id));
         packingPoOptionsByFoAndMaterial.get(key)!.push({
           packing_order_id: pko.id,
           po_number: pko.po_number,
           batch_number: pko.batch_number,
           fill_qty_per_pack: pko.fill_qty_per_pack,
           remaining_qty: remaining,
-          document_name: fo ? toTrimmedString(fo.description) || null : null,
+          document_name: toTrimmedString(pkoMaterialMap.get(toTrimmedString(pko.material_id))?.document_name) || null,
           prodshade_display: prodshade ? toTrimmedString(prodshade.material_name) || null : null,
           actual_stroke: strokeMaster ? toTrimmedString(strokeMaster.stroke_number) || null : null,
           process_order_number: processOrder ? toTrimmedString(processOrder.po_number) || null : null,

@@ -713,7 +713,7 @@ export default function DO01CreatePage() {
                 { key: "ship_to", label: "Ship-To", width: "280px", wrap: true, className: "whitespace-normal leading-4", render: (row) => <AddressCell value={row.__shipTo} /> },
                 { key: "material_display", label: "Material", width: "155px", wrap: true, className: "whitespace-normal leading-4", render: (row) => row.material_display || "—" },
                 { key: "packing_order", label: "Packing PO", width: "125px", render: (row) => row.packing_order_number || row.packing_order_id || "-" },
-                { key: "document_name", label: "Document Name", width: "155px", render: (row) => row.document_name || row.process_order_number || "-" },
+                { key: "document_name", label: "Document Name", width: "155px", render: (row) => row.document_name || "-" },
                 { key: "prodshade", label: "Prod Shade", width: "135px", render: (row) => row.prodshade_display || "-" },
                 { key: "stroke", label: "Actual Stroke", width: "95px", render: (row) => row.actual_stroke || "-" },
                 { key: "batch_number", label: "Batch", width: "120px", render: (row) => <input value={row.batch_number || ""} placeholder="Optional" onChange={(event) => updatePick(row.__key, { batch_number: event.target.value })} className="h-7 w-full border border-slate-300 bg-[#fffef7] px-1 text-xs" /> },
