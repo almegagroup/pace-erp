@@ -351,7 +351,8 @@ export default function ErpDenseGrid({
                 // container already scrolls horizontally); a column that
                 // genuinely needs multi-line text (long remarks/notes) can
                 // opt back in with `wrap: true`.
-                className={`px-2 py-1 align-middle outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${selected ? "bg-sky-100" : stickyFirstColumn && colIndex === 0 ? "sticky left-0 z-[1] bg-white border-r border-slate-200" : ""}`}
+                style={column.width ? { width: column.width, minWidth: column.width } : undefined}
+                className={`px-2 py-1 align-middle outline-none focus:bg-sky-50 focus:ring-1 focus:ring-inset focus:ring-sky-400 ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${selected ? "bg-sky-100" : stickyFirstColumn && colIndex === 0 ? "sticky left-0 z-[1] bg-white border-r border-slate-200" : ""} ${column.className ?? ""}`}
               >
                 {typeof column.render === "function"
                   ? column.render(row, index)
@@ -392,7 +393,8 @@ export default function ErpDenseGrid({
         {columns.map((column, colIndex) => (
           <td
             key={column.key}
-            className={`px-2 py-1 align-middle ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${stickyFirstColumn && colIndex === 0 ? "sticky left-0 z-[1] bg-white border-r border-slate-200" : ""}`}
+            style={column.width ? { width: column.width, minWidth: column.width } : undefined}
+            className={`px-2 py-1 align-middle ${column.wrap ? "" : "whitespace-nowrap"} ${normalizeCellAlign(column.align)} ${stickyFirstColumn && colIndex === 0 ? "sticky left-0 z-[1] bg-white border-r border-slate-200" : ""} ${column.className ?? ""}`}
           >
             {typeof column.render === "function"
               ? column.render(row, index)
