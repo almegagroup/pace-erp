@@ -144,7 +144,7 @@ export default function SalesInvoiceListPage() {
     // §133.13 -- routes to the new IBN-driven multi-invoice page, not the
     // legacy single-invoice PgiInvoiceCreatePage (still on disk, additive
     // pattern, reachable only via its own now-unlinked route).
-    openScreenWithContext(OPERATION_SCREENS.PROC_INV_PGI_CREATE.screen_code, { dcId: row.id, refreshOnReturn: true });
+    openScreenWithContext(OPERATION_SCREENS.PROC_INV_PGI_GROUPS.screen_code, { dcId: row.id, refreshOnReturn: true });
     navigate("/dashboard/procurement/sales-invoices/pgi-groups");
   }
 
