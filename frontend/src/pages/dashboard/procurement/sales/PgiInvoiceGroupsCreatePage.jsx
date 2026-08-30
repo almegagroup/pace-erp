@@ -342,7 +342,7 @@ export default function PgiInvoiceGroupsCreatePage() {
   const groupsQuery = useQuery({
     queryKey: ["procurement", "pgi-groups-preview", dcId],
     queryFn: () => previewInvoiceGroups(dcId),
-    enabled: Boolean(dcId) && page >= 2,
+    enabled: Boolean(dcId) && page >= 1,
   });
   const categoriesQuery = useQuery({
     queryKey: ["procurement", "additional-cost-categories"],
@@ -549,7 +549,26 @@ export default function PgiInvoiceGroupsCreatePage() {
                     <div><span className="text-xs text-slate-500">DO Date</span><div>{dc.dc_date}</div></div>
                     <div><span className="text-xs text-slate-500">Vehicle</span><div>{dc.vehicle_number || "—"}</div></div>
                     <div><span className="text-xs text-slate-500">Transporter</span><div>{dc.transporter_display || "—"}</div></div>
+                    <div><span className="text-xs text-slate-500">LR Number</span><div>{dc.lr_number || "—"}</div></div>
+                    <div><span className="text-xs text-slate-500">LR Date</span><div>{dc.lr_date || "—"}</div></div>
+                    <div><span className="text-xs text-slate-500">Driver</span><div>{dc.driver_number || "—"}</div></div>
+                    <div><span className="text-xs text-slate-500">Driver Contact</span><div>{dc.driver_contact_number || "—"}</div></div>
                   </div>
+                  <ErpDenseGrid
+                    cellNavigate
+                    columns={[
+                      { key: "document_number", label: "SO/STO", width: "130px" },
+                      { key: "parent_company_display", label: "Parent Company", render: (row) => row.parent_company_display || "—" },
+                      { key: "vdc_dc_display", label: "VDC / DC", render: (row) => row.vdc_dc_display || "—" },
+                      { key: "bill_to", label: "Bill-To", render: (row) => [row.bill_to?.name, row.bill_to?.address, row.bill_to?.state].filter(Boolean).join(" — ") || "—" },
+                      { key: "ship_to", label: "Ship-To", render: (row) => [row.ship_to?.name, row.ship_to?.address, row.ship_to?.state].filter(Boolean).join(" — ") || "—" },
+                      { key: "fo_number", label: "FO", width: "110px", render: (row) => row.fo_number || "—" },
+                      { key: "ibn_required", label: "Inbound", width: "100px", render: (row) => row.ibn_required ? "Required" : "Not required" },
+                    ]}
+                    rows={groups}
+                    rowKey={(row) => row.group_key}
+                    emptyMessage={groupsQuery.isLoading ? "Resolving source details..." : "No invoice groups."}
+                  />
                   <ErpDenseGrid
                     cellNavigate
                     columns={[
@@ -592,22 +611,29 @@ export default function PgiInvoiceGroupsCreatePage() {
                     { key: "source_type", label: "Type", width: "80px", render: (row) => (row.source_type === "SALES_ORDER" ? "SO" : "STO") },
                     { key: "document_number", label: "SO/STO Number", width: "120px" },
                     { key: "document_date", label: "Date", width: "95px" },
+                    { key: "parent_company_display", label: "Parent Company", render: (row) => row.parent_company_display || "—" },
+                    { key: "vdc_dc_display", label: "VDC / DC", render: (row) => row.vdc_dc_display || "—" },
                     { key: "dc_number", label: "DO Number", width: "110px", render: () => dc?.dc_number || "—" },
                     { key: "bill_to", label: "Billing Address", render: (row) => (row.bill_to?.name || row.bill_to?.address) ? <span>{row.bill_to?.name}{row.bill_to?.address ? ` — ${row.bill_to.address}` : ""}</span> : "—" },
                     { key: "ship_to", label: "Ship-To Address", render: (row) => (row.ship_to?.name || row.ship_to?.address) ? <span>{row.ship_to?.name}{row.ship_to?.address ? ` — ${row.ship_to.address}` : ""}</span> : "—" },
                     { key: "fo_number", label: "FO / IBN", width: "110px", render: (row) => row.fo_number || (row.ibn_required ? "(non-FO)" : "—") },
                     { key: "inbound_number", label: "Inbound Number", width: "120px", render: (row) => {
                       const input = groupInputs[row.group_key];
-                      if (!row.ibn_required) return "—";
-                      return input?.inbound_number ? input.inbound_number : <span className="text-rose-600">Required</span>;
+                      return <input
+                        value={row.ibn_required ? (input?.inbound_number || "") : ""}
+                        disabled={!row.ibn_required}
+                        onChange={(event) => updateGroupInput(row.group_key, { inbound_number: event.target.value })}
+                        placeholder={row.ibn_required ? "Required" : "Not applicable"}
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500 disabled:cursor-not-allowed disabled:bg-slate-100"
+                      />;
                     } },
                     { key: "tally_invoice_number", label: "Tally Invoice Number", width: "140px", render: (row) => {
                       const input = groupInputs[row.group_key];
-                      return input?.tally_invoice_number || <span className="text-rose-600">Required</span>;
+                      return <input value={input?.tally_invoice_number || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_number: event.target.value })} placeholder="Required" className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500" />;
                     } },
                     { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px", render: (row) => {
                       const input = groupInputs[row.group_key];
-                      return input?.tally_invoice_date || <span className="text-rose-600">Required</span>;
+                      return <input type="date" value={input?.tally_invoice_date || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500" />;
                     } },
                     { key: "total", label: "Total (preview)", width: "120px", align: "right", render: (row) => {
                       const input = groupInputs[row.group_key] || defaultGroupInput(row);

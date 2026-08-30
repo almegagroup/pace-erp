@@ -35,12 +35,16 @@ const DO_QUEUE_EXPORT_COLUMNS = [
   { key: "source_display", label: "Source" },
   { key: "source_document_number", label: "SO / STO Number" },
   { key: "customer_display", label: "Customer" },
+  { key: "bill_to_display", label: "Bill-To" },
+  { key: "ship_to_display", label: "Ship-To" },
   { key: "dc_date", label: "DO Date" },
   { key: "status", label: "Status" },
   { key: "total_value", label: "Total Value" },
   { key: "invoice_number", label: "Invoice Number" },
   { key: "invoice_date", label: "Invoice Date" },
   { key: "tally_invoice_number", label: "Tally Invoice No." },
+  { key: "tally_invoice_date", label: "Tally Invoice Date" },
+  { key: "inbound_number", label: "Inbound Number" },
 ];
 
 function getStatusTone(status) {
@@ -198,6 +202,12 @@ export default function SalesInvoiceListPage() {
                 { key: "source_display", label: "Source", width: "100px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },
                 { key: "source_document_number", label: "SO / STO Number", width: "140px", render: (row) => row.source_document_number || "—" },
                 { key: "customer_display", label: "Customer / Counterparty", render: (row) => row.customer_display || "—" },
+                { key: "bill_to_display", label: "Bill-To", render: (row) => row.bill_to_display || "—" },
+                { key: "ship_to_display", label: "Ship-To", render: (row) => row.ship_to_display || "—" },
+                { key: "vehicle_number", label: "Truck", width: "120px", render: (row) => row.vehicle_number || "—" },
+                { key: "transporter_display", label: "Transporter", render: (row) => row.transporter_display || "—" },
+                { key: "lr_number", label: "LR Number", width: "110px", render: (row) => row.lr_number || "—" },
+                { key: "lr_date", label: "LR Date", width: "110px", render: (row) => row.lr_date || "—" },
                 { key: "dc_date", label: "DO Date", width: "110px" },
                 {
                   key: "status",
@@ -209,6 +219,8 @@ export default function SalesInvoiceListPage() {
                 { key: "invoice_number", label: "Invoice Number", width: "130px", render: (row) => row.invoice_number || "—" },
                 { key: "invoice_date", label: "Invoice Date", width: "110px", render: (row) => row.invoice_date || "—" },
                 { key: "tally_invoice_number", label: "Tally Invoice No.", width: "130px", render: (row) => row.tally_invoice_number || "—" },
+                { key: "tally_invoice_date", label: "Tally Invoice Date", width: "125px", render: (row) => row.tally_invoice_date || "—" },
+                { key: "inbound_number", label: "Inbound Number", width: "130px", render: (row) => row.ibn_required ? (row.inbound_number || "") : "" },
                 {
                   key: "actions",
                   label: "",

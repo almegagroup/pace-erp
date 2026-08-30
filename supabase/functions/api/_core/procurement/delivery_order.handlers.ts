@@ -152,6 +152,26 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
     if (error) return doErrorResponse(req, ctx, "DO_SOURCE_LIST_FAILED", 500, "Unable to list source STOs.");
 
     const rows = (data ?? []) as JsonRecord[];
+    const dcIds = rows.map((row) => String(row.id));
+    // §133.12 DOs deliberately leave the old header source columns blank:
+    // their SO/STO sources live in delivery_challan_source and Ship-To is
+    // frozen per line.  Read those sources for the SO02 queue as well.
+    const [{ data: sourceLinks, error: sourceLinksError }, { data: dispatchLines, error: dispatchLinesError }] = await Promise.all([
+      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").select("dc_id, source_type, source_id").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_line").select("dc_id, ship_to_name, ship_to_address, ship_to_state, line_total").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    ]);
+    if (sourceLinksError) return doErrorResponse(req, ctx, "DO_SOURCE_FETCH_FAILED", 500, "Unable to load delivery order sources.");
+    if (dispatchLinesError) return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load delivery order lines.");
+    const sourceByDc = new Map<string, JsonRecord[]>();
+    for (const link of (sourceLinks ?? []) as JsonRecord[]) {
+      const key = toTrimmedString(link.dc_id);
+      sourceByDc.set(key, [...(sourceByDc.get(key) ?? []), link]);
+    }
+    const linesByDc = new Map<string, JsonRecord[]>();
+    for (const line of (dispatchLines ?? []) as JsonRecord[]) {
+      const key = toTrimmedString(line.dc_id);
+      linesByDc.set(key, [...(linesByDc.get(key) ?? []), line]);
+    }
     const companyIds = [...new Set([
       ...rows.map((row) => toTrimmedString(row.sending_company_id)),
       ...rows.map((row) => toTrimmedString(row.receiving_company_id)),
@@ -1005,12 +1025,12 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     // vehicle_number/lr_number are already raw columns on delivery_challan
     // (select("*") already carries them through untouched), but the source
     // document's own number and the transporter's name both need a join.
-    const soIds = [...new Set(rows.map((row) => toTrimmedString(row.sales_order_id)).filter(Boolean))];
-    const stoIds = [...new Set(rows.map((row) => toTrimmedString(row.sto_id)).filter(Boolean))];
+    const soIds = [...new Set([...rows.map((row) => toTrimmedString(row.sales_order_id)), ...(sourceLinks ?? []).filter((link: JsonRecord) => link.source_type === "SALES_ORDER").map((link: JsonRecord) => toTrimmedString(link.source_id))].filter(Boolean))];
+    const stoIds = [...new Set([...rows.map((row) => toTrimmedString(row.sto_id)), ...(sourceLinks ?? []).filter((link: JsonRecord) => link.source_type === "STO").map((link: JsonRecord) => toTrimmedString(link.source_id))].filter(Boolean))];
     const transporterIds = [...new Set(rows.map((row) => toTrimmedString(row.transporter_id)).filter(Boolean))];
     const [{ data: sos }, { data: stos }, { data: transporters }] = await Promise.all([
       soIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number").in("id", soIds)
+        ? serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, bill_to_name, bill_to_address, bill_to_parent_company_id, bill_to_vdc_id, ibn_required").in("id", soIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       stoIds.length
         ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number").in("id", stoIds)
@@ -1028,12 +1048,11 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     // dc_id can have more than one invoice row over time (reversal + a
     // fresh retry), so this keeps only the most recent per dc_id --
     // ordering desc then only setting on first-seen does that in one pass.
-    const dcIds = rows.map((row) => String(row.id));
     const { data: invoices, error: invoicesError } = dcIds.length
       ? await serviceRoleClient
           .schema("erp_procurement")
           .from("sales_invoice")
-          .select("id, dc_id, invoice_number, invoice_date, status, tally_invoice_number, tally_invoice_date")
+          .select("id, dc_id, invoice_number, invoice_date, status, tally_invoice_number, tally_invoice_date, inbound_number")
           .in("dc_id", dcIds)
           .order("created_at", { ascending: false })
       : { data: [] as JsonRecord[], error: null };
@@ -1052,15 +1071,28 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         : receivingCompany
           ? `To: ${receivingCompany.company_code ?? receivingCompany.company_name ?? ""}`.trim()
           : null;
+      const links = sourceByDc.get(String(row.id)) ?? [];
+      const sourceSos = links.filter((link) => link.source_type === "SALES_ORDER").map((link) => soMap.get(toTrimmedString(link.source_id))).filter(Boolean) as JsonRecord[];
+      const sourceStos = links.filter((link) => link.source_type === "STO").map((link) => stoMap.get(toTrimmedString(link.source_id))).filter(Boolean) as JsonRecord[];
       const so = soMap.get(toTrimmedString(row.sales_order_id));
       const sto = stoMap.get(toTrimmedString(row.sto_id));
+      const effectiveSos = sourceSos.length ? sourceSos : (so ? [so] : []);
+      const effectiveStos = sourceStos.length ? sourceStos : (sto ? [sto] : []);
+      const sourceDocuments = [...effectiveSos.map((entry) => String(entry.so_number ?? "")), ...effectiveStos.map((entry) => String(entry.sto_number ?? ""))].filter(Boolean);
+      const sourceTypes = [...new Set([...effectiveSos.map(() => "SALES_ORDER"), ...effectiveStos.map(() => "STO")])];
+      const billTo = [...new Set(effectiveSos.map((entry) => [entry.bill_to_name, entry.bill_to_address].filter(Boolean).join(" — ")).filter(Boolean))].join(" | ") || null;
+      const lineSnapshots = linesByDc.get(String(row.id)) ?? [];
+      const shipTo = [...new Set(lineSnapshots.map((line) => [line.ship_to_name, line.ship_to_address, line.ship_to_state].filter(Boolean).join(" — ")).filter(Boolean))].join(" | ") || null;
       const transporter = transporterMap.get(toTrimmedString(row.transporter_id));
       const invoice = invoiceMap.get(String(row.id));
       return {
         ...row,
-        source_display: row.sales_order_id ? "SALES_ORDER" : row.sto_id ? "STO" : null,
-        source_document_number: so ? so.so_number : sto ? sto.sto_number : null,
-        customer_display: customerDisplay,
+        source_display: sourceTypes.join(" + ") || (row.sales_order_id ? "SALES_ORDER" : row.sto_id ? "STO" : null),
+        source_document_number: sourceDocuments.join(" | ") || null,
+        customer_display: customerDisplay || billTo,
+        bill_to_display: billTo,
+        ship_to_display: shipTo,
+        ibn_required: effectiveSos.some((entry) => Boolean(entry.ibn_required)),
         transporter_display: transporter
           ? `${transporter.transporter_code ?? ""} — ${transporter.transporter_name ?? ""}`.trim()
           : (toTrimmedString(row.transporter_name_freetext) || null),
@@ -1070,6 +1102,8 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         invoice_status: invoice?.status ?? null,
         tally_invoice_number: invoice?.tally_invoice_number ?? null,
         tally_invoice_date: invoice?.tally_invoice_date ?? null,
+        inbound_number: invoice?.inbound_number ?? null,
+        total_value: row.total_value ?? lineSnapshots.reduce((sum, line) => sum + Number(line.line_total ?? 0), 0),
       };
     });
 

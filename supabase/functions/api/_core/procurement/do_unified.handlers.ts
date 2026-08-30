@@ -1362,6 +1362,8 @@ type ProcInvoiceGroup = {
   fo_id: string | null;
   fo_number: string | null;
   fo_date: string | null;
+  parent_company_display: string | null;
+  vdc_dc_display: string | null;
   bill_to: ProcPartyDetail;
   ship_to: ProcPartyDetail;
   lines: ProcInvoiceGroupLine[];
@@ -1451,13 +1453,21 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
   }
 
   const [soRows, stoRows, foRows] = await Promise.all([
-    soIds.size ? fetchInChunks<JsonRecord>([...soIds], (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, so_date, customer_id, bill_to_name, bill_to_address, bill_to_state, bill_to_gst_number, ship_to_name, ship_to_address, ship_to_state, ship_to_gst_number, freight_term, payment_term_id, ibn_required").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
+    soIds.size ? fetchInChunks<JsonRecord>([...soIds], (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, so_date, customer_id, bill_to_name, bill_to_address, bill_to_state, bill_to_gst_number, ship_to_name, ship_to_address, ship_to_state, ship_to_gst_number, bill_to_parent_company_id, bill_to_vdc_id, bill_to_depot_code_id, freight_term, payment_term_id, ibn_required").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     stoIds.size ? fetchInChunks<JsonRecord>([...stoIds], (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, sto_date, receiving_company_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     foIds.size ? fetchInChunks<JsonRecord>([...foIds], (chunk) => serviceRoleClient.schema("erp_production").from("plan_feed").select("id, fo_number, order_date").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
   ]);
   const soMap = new Map(soRows.map((r) => [String(r.id), r]));
   const stoMap = new Map(stoRows.map((r) => [String(r.id), r]));
   const foMap = new Map(foRows.map((r) => [String(r.id), r]));
+  const parentIds = [...new Set(soRows.map((r) => toTrimmedString(r.bill_to_parent_company_id)).filter(Boolean))];
+  const depotIds = [...new Set(soRows.flatMap((r) => [toTrimmedString(r.bill_to_vdc_id), toTrimmedString(r.bill_to_depot_code_id)]).filter(Boolean))];
+  const [{ data: parents }, { data: depots }] = await Promise.all([
+    parentIds.length ? serviceRoleClient.schema("erp_master").from("fg_parent_company").select("id, company_name").in("id", parentIds) : Promise.resolve({ data: [] as JsonRecord[] }),
+    depotIds.length ? serviceRoleClient.schema("erp_master").from("fg_depot_code").select("id, code, description").in("id", depotIds) : Promise.resolve({ data: [] as JsonRecord[] }),
+  ]);
+  const parentMap = new Map(((parents ?? []) as JsonRecord[]).map((r) => [String(r.id), r]));
+  const depotMap = new Map(((depots ?? []) as JsonRecord[]).map((r) => [String(r.id), r]));
 
   const receivingCompanyIds = [...new Set(stoRows.map((r) => toTrimmedString(r.receiving_company_id)).filter(Boolean))];
   const { data: receivingCompanies, error: receivingCompaniesError } = receivingCompanyIds.length
@@ -1494,7 +1504,10 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       const rawFoId = soMapAllocationId ? (mapAllocMap.get(soMapAllocationId)?.foId ?? null) : null;
       const ibnRequired = Boolean(soMap.get(soId)?.ibn_required);
       const foId = ibnRequired ? rawFoId : null;
-      key = ibnRequired ? (foId ? `SO:${soId}:FO:${foId}` : `SO:${soId}:NOFO`) : `SO:${soId}`;
+      // FO is the IBN bucket.  Without an FO, §133.13 requires one IBN
+      // and one invoice per frozen DO Ship-To location, never one per SO.
+      const shipToKey = [line.ship_to_customer_id, line.ship_to_name, line.ship_to_address, line.ship_to_state].map(toTrimmedString).filter(Boolean).join(":");
+      key = ibnRequired ? (foId ? `SO:${soId}:FO:${foId}` : `SO:${soId}:SHIP_TO:${shipToKey || String(line.id)}`) : `SO:${soId}`;
       meta = { source_type: "SALES_ORDER", so_id: soId, sto_id: "", fo_id: foId };
     }
     if (!buckets.has(key)) buckets.set(key, { meta, lines: [] });
@@ -1532,6 +1545,8 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
     let ibnRequired = false;
     let foNumber: string | null = null;
     let foDate: string | null = null;
+    let parentCompanyDisplay: string | null = null;
+    let vdcDcDisplay: string | null = null;
     let billTo: ProcPartyDetail = { name: null, address: null, state: null, gst_number: null };
     let shipTo: ProcPartyDetail = { name: null, address: null, state: null, gst_number: null };
 
@@ -1552,6 +1567,10 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       }
     } else {
       const soRow = meta.so_id ? soMap.get(meta.so_id) : null;
+      const parent = soRow ? parentMap.get(toTrimmedString(soRow.bill_to_parent_company_id)) : null;
+      const depot = soRow ? (depotMap.get(toTrimmedString(soRow.bill_to_vdc_id)) ?? depotMap.get(toTrimmedString(soRow.bill_to_depot_code_id))) : null;
+      parentCompanyDisplay = toTrimmedString(parent?.company_name) || null;
+      vdcDcDisplay = depot ? [toTrimmedString(depot.code), toTrimmedString(depot.description)].filter(Boolean).join(" - ") : null;
       documentNumber = (soRow?.so_number as string) ?? null;
       documentDate = (soRow?.so_date as string) ?? null;
       customerId = soRow ? (toTrimmedString(soRow.customer_id) || null) : null;
@@ -1629,6 +1648,8 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       fo_id: meta.fo_id,
       fo_number: foNumber,
       fo_date: foDate,
+      parent_company_display: parentCompanyDisplay,
+      vdc_dc_display: vdcDcDisplay,
       bill_to: billTo,
       ship_to: shipTo,
       lines: groupLines,
