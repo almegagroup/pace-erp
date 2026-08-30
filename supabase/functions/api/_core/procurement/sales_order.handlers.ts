@@ -2580,6 +2580,7 @@ export async function createSalesOrderUnifiedHandler(
     const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     const dispatchType = toUpperTrimmedString(body.dispatch_type);
     const customerPoNumber = toTrimmedString(body.customer_po_number);
+    const customerPoDate = toTrimmedString(body.customer_po_date) || null;
     const materialTypes = Array.isArray(body.material_types)
       ? Array.from(new Set((body.material_types as unknown[]).map((v) => toUpperTrimmedString(v))))
       : [];
@@ -2662,6 +2663,7 @@ export async function createSalesOrderUnifiedHandler(
         company_id: companyId,
         customer_id: resolved.customerId,
         customer_po_number: customerPoNumber,
+        customer_po_date: customerPoDate,
         dispatch_type: dispatchType,
         ibn_required: ibnRequired,
         dispatch_category: dispatchCategory,

@@ -1116,7 +1116,7 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
   return {
     ...dc,
     transporter_display: (transporter as JsonRecord | null)
-      ? `${(transporter as JsonRecord).transporter_code ?? ""} — ${(transporter as JsonRecord).transporter_name ?? ""}`.trim()
+      ? toTrimmedString((transporter as JsonRecord).transporter_name) || null
       : (toTrimmedString(dc.transporter_name_freetext) || null),
     sources: [
       ...soRows.map((row) => ({ source_type: "SALES_ORDER", source_id: row.id, document_number: row.so_number, document_date: row.so_date, party_display: soPartyDisplay(row) })),
@@ -1242,6 +1242,8 @@ type ProcInvoiceGroup = {
   sto_id: string | null;
   document_number: string | null;
   document_date: string | null;
+  customer_po_number: string | null;
+  customer_po_date: string | null;
   customer_id: string | null;
   payment_term_id: string | null;
   freight_term: string | null;
@@ -1343,7 +1345,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
   }
 
   const [soRows, stoRows, foRows] = await Promise.all([
-    soIds.size ? fetchInChunks<JsonRecord>([...soIds], (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, so_date, customer_id, bill_to_name, bill_to_address, bill_to_state, bill_to_gst_number, ship_to_name, ship_to_address, ship_to_state, ship_to_gst_number, bill_to_parent_company_id, bill_to_vdc_id, bill_to_depot_code_id, freight_term, payment_term_id, ibn_required").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
+    soIds.size ? fetchInChunks<JsonRecord>([...soIds], (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, so_date, customer_po_number, customer_po_date, customer_id, bill_to_name, bill_to_address, bill_to_state, bill_to_gst_number, ship_to_name, ship_to_address, ship_to_state, ship_to_gst_number, bill_to_parent_company_id, bill_to_vdc_id, bill_to_depot_code_id, freight_term, payment_term_id, ibn_required").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     stoIds.size ? fetchInChunks<JsonRecord>([...stoIds], (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, sto_date, receiving_company_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     foIds.size ? fetchInChunks<JsonRecord>([...foIds], (chunk) => serviceRoleClient.schema("erp_production").from("plan_feed").select("id, fo_number, order_date").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
   ]);
@@ -1440,6 +1442,8 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
 
     let documentNumber: string | null = null;
     let documentDate: string | null = null;
+    let customerPoNumber: string | null = null;
+    let customerPoDate: string | null = null;
     let customerId: string | null = null;
     let paymentTermId: string | null = null;
     let freightTerm: string | null = null;
@@ -1474,6 +1478,8 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       vdcDcDisplay = depot ? [toTrimmedString(depot.code), toTrimmedString(depot.description)].filter(Boolean).join(" - ") : null;
       documentNumber = (soRow?.so_number as string) ?? null;
       documentDate = (soRow?.so_date as string) ?? null;
+      customerPoNumber = soRow ? (toTrimmedString(soRow.customer_po_number) || null) : null;
+      customerPoDate = soRow ? (toTrimmedString(soRow.customer_po_date) || null) : null;
       customerId = soRow ? (toTrimmedString(soRow.customer_id) || null) : null;
       paymentTermId = soRow ? (toTrimmedString(soRow.payment_term_id) || null) : null;
       freightTerm = soRow ? (toUpperTrimmedString(soRow.freight_term) || null) : null;
@@ -1542,6 +1548,8 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       sto_id: meta.sto_id || null,
       document_number: documentNumber,
       document_date: documentDate,
+      customer_po_number: customerPoNumber,
+      customer_po_date: customerPoDate,
       customer_id: customerId,
       payment_term_id: paymentTermId,
       freight_term: freightTerm,

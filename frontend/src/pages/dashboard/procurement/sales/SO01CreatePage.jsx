@@ -240,6 +240,7 @@ export default function SO01CreatePage() {
   const [noInboundSubType, setNoInboundSubType] = useState("DIRECT");
   const [paymentTermId, setPaymentTermId] = useState("");
   const [externalSoNumber, setExternalSoNumber] = useState("");
+  const [externalSoDate, setExternalSoDate] = useState("");
   const [freightTerm, setFreightTerm] = useState("FOR");
   const [roundOffAmount, setRoundOffAmount] = useState("0");
   const [parentCompanies, setParentCompanies] = useState([]);
@@ -655,6 +656,7 @@ export default function SO01CreatePage() {
         material_types: materialTypes,
         dispatch_type: dispatchType,
         customer_po_number: externalSoNumber.trim(),
+        customer_po_date: externalSoDate || null,
         ibn_required: dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED" ? ibnRequiredManual : undefined,
         payment_term_id: paymentTermId || null,
         freight_term: freightTerm || null,
@@ -832,9 +834,12 @@ export default function SO01CreatePage() {
           </ErpSectionCard>
 
           <ErpSectionCard eyebrow="Page 2" title="Payment Terms & Freight">
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-4">
               <ErpDenseFormRow label="External SO Number" required>
                 {textInput(externalSoNumber, setExternalSoNumber, { placeholder: "Enter customer/external SO number" })}
+              </ErpDenseFormRow>
+              <ErpDenseFormRow label="External SO Date">
+                <input type="date" value={externalSoDate} onChange={(event) => setExternalSoDate(event.target.value)} className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
               </ErpDenseFormRow>
               <ErpDenseFormRow label="Payment Terms">
                 <ErpComboboxField value={paymentTermId} onChange={setPaymentTermId} options={paymentTermOptions} blankLabel="Select Payment Terms" />
