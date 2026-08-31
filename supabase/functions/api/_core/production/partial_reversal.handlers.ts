@@ -844,8 +844,9 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         .eq("batch_number", salvageBatchNumber)
         .maybeSingle();
       if (salvageErr) throw new Error("PR19_CREATE_FAILED");
-      if (!salvagePo || (salvagePo as JsonRecord).status !== "BATCH_STARTED") {
-        return prErr(req, ctx, "PR19_SALVAGE_BATCH_INVALID", 422, "Salvage batch must be BATCH_STARTED and not yet FINAL");
+      const salvageStatus = (salvagePo as JsonRecord | null)?.status;
+      if (!salvagePo || (salvageStatus !== "BATCH_STARTED" && salvageStatus !== "VERIFIED")) {
+        return prErr(req, ctx, "PR19_SALVAGE_BATCH_INVALID", 422, "Salvage batch must be BATCH_STARTED or VERIFIED");
       }
       salvageProcessOrderId = String((salvagePo as JsonRecord).id);
     }
