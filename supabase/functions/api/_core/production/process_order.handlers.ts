@@ -1060,24 +1060,34 @@ async function computeAvailabilityRows(
   const materialIds = [...new Set(needs.map((entry) => entry.materialId))];
   const locationIds = [...new Set(needs.map((entry) => entry.storageLocationId))];
 
-  const { data: ledgerRows, error: ledgerErr } = await serviceRoleClient
+  // Found live 2026-08-31 (CMP006, PROC_PO 9300000196 Finalize): summing raw
+  // stock_ledger rows client-side silently truncated at PostgREST's default
+  // 1000-row cap once a company's ledger history grew large enough -- a
+  // material whose rows fell outside that window showed as "0 available"
+  // even with hundreds of KG genuinely in stock (confirmed live via
+  // diagnostic logging: ledgerRows count=1000 exactly). stock_snapshot
+  // already maintains the current running balance per
+  // (company, material, location, stock_type) as ONE row -- reading it
+  // directly returns at most materialIds.length x locationIds.length rows,
+  // nowhere near the cap, and is the same source of truth the WAR/costing
+  // engine uses elsewhere (§104.6/104.8) instead of re-deriving it from history.
+  const { data: snapshotRows, error: snapshotErr } = await serviceRoleClient
     .schema("erp_inventory")
-    .from("stock_ledger")
-    .select("material_id, storage_location_id, direction, quantity")
+    .from("stock_snapshot")
+    .select("material_id, storage_location_id, quantity")
     .eq("company_id", companyId)
     .eq("stock_type_code", "UNRESTRICTED")
     .in("material_id", materialIds)
     .in("storage_location_id", locationIds);
-  if (ledgerErr) {
-    console.error("[process_order.checkStockAvailability] ledger query failed:", JSON.stringify(ledgerErr));
+  if (snapshotErr) {
+    console.error("[process_order.checkStockAvailability] snapshot query failed:", JSON.stringify(snapshotErr));
     throw new Error("PROD_PO_STOCK_CHECK_FAILED");
   }
 
   const available = new Map<string, number>();
-  for (const row of (ledgerRows ?? []) as JsonRecord[]) {
+  for (const row of (snapshotRows ?? []) as JsonRecord[]) {
     const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
-    const qty = Number(row.quantity ?? 0);
-    available.set(key, (available.get(key) ?? 0) + (String(row.direction) === "IN" ? qty : -qty));
+    available.set(key, (available.get(key) ?? 0) + Number(row.quantity ?? 0));
   }
 
   const { data: reservationRows, error: reservationErr } = await serviceRoleClient
@@ -1194,37 +1204,35 @@ async function computePhysicalAvailabilityRows(
   const materialIds = [...new Set(needs.map((entry) => entry.materialId))];
   const locationIds = [...new Set(needs.map((entry) => entry.storageLocationId))];
 
-  // TEMP DIAGNOSTIC (2026-08-31, remove once the live PROD_PO_INSUFFICIENT_STOCK
-  // mismatch on Finalize is root-caused) -- logs the exact runtime inputs/outputs
-  // of this check so Render's live logs can be compared against the DB-side
-  // replication that keeps showing healthy stock for the same query.
-  console.log("[DIAG computePhysicalAvailabilityRows] company=%s excludePoId=%s materialIds=%o locationIds=%o",
-    companyId, excludePoId, materialIds, locationIds);
-
-  const { data: ledgerRows, error: ledgerErr } = await serviceRoleClient
+  // Found live 2026-08-31 (CMP006, PROC_PO 9300000196 Finalize): summing raw
+  // stock_ledger rows client-side silently truncated at PostgREST's default
+  // 1000-row cap once a company's ledger history grew large enough -- a
+  // material whose rows fell outside that window showed as "0 available"
+  // even with hundreds of KG genuinely in stock (confirmed live via
+  // diagnostic logging: ledgerRows count=1000 exactly). stock_snapshot
+  // already maintains the current running balance per
+  // (company, material, location, stock_type) as ONE row -- reading it
+  // directly returns at most materialIds.length x locationIds.length rows,
+  // nowhere near the cap, and is the same source of truth the WAR/costing
+  // engine uses elsewhere (§104.6/104.8) instead of re-deriving it from history.
+  const { data: snapshotRows, error: snapshotErr } = await serviceRoleClient
     .schema("erp_inventory")
-    .from("stock_ledger")
-    .select("material_id, storage_location_id, direction, quantity")
+    .from("stock_snapshot")
+    .select("material_id, storage_location_id, quantity")
     .eq("company_id", companyId)
     .eq("stock_type_code", "UNRESTRICTED")
     .in("material_id", materialIds)
     .in("storage_location_id", locationIds);
-  if (ledgerErr) {
-    console.error("[process_order.computePhysicalAvailabilityRows] ledger query failed:", JSON.stringify(ledgerErr));
+  if (snapshotErr) {
+    console.error("[process_order.computePhysicalAvailabilityRows] snapshot query failed:", JSON.stringify(snapshotErr));
     throw new Error("PROD_PO_STOCK_CHECK_FAILED");
   }
 
-  console.log("[DIAG computePhysicalAvailabilityRows] ledgerRows count=%d sample=%o",
-    (ledgerRows ?? []).length, (ledgerRows ?? []).slice(0, 5));
-
   const available = new Map<string, number>();
-  for (const row of (ledgerRows ?? []) as JsonRecord[]) {
+  for (const row of (snapshotRows ?? []) as JsonRecord[]) {
     const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
-    const qty = Number(row.quantity ?? 0);
-    available.set(key, (available.get(key) ?? 0) + (String(row.direction) === "IN" ? qty : -qty));
+    available.set(key, (available.get(key) ?? 0) + Number(row.quantity ?? 0));
   }
-
-  console.log("[DIAG computePhysicalAvailabilityRows] available after ledger=%o", Object.fromEntries(available));
 
   const { data: reservationRows, error: reservationErr } = await serviceRoleClient
     .schema("erp_production")
@@ -1239,9 +1247,6 @@ async function computePhysicalAvailabilityRows(
     throw new Error("PROD_PO_STOCK_CHECK_FAILED");
   }
 
-  console.log("[DIAG computePhysicalAvailabilityRows] reservationRows count=%d rows=%o",
-    (reservationRows ?? []).length, reservationRows ?? []);
-
   for (const row of (reservationRows ?? []) as JsonRecord[]) {
     if (excludePoId && String(row.source_type) === "PROCESS_PO" && String(row.source_id) === excludePoId) continue;
     const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
@@ -1249,10 +1254,7 @@ async function computePhysicalAvailabilityRows(
     available.set(key, (available.get(key) ?? 0) - qty);
   }
 
-  console.log("[DIAG computePhysicalAvailabilityRows] available after reservations (excludePoId=%s)=%o",
-    excludePoId, Object.fromEntries(available));
-
-  const result = Array.from(needed.entries()).map(([, entry]) => {
+  return Array.from(needed.entries()).map(([, entry]) => {
     const key = buildAvailabilityKey(entry.materialId, entry.storageLocationId);
     const availableQty = Math.max(0, available.get(key) ?? 0);
     return {
@@ -1263,10 +1265,6 @@ async function computePhysicalAvailabilityRows(
       short: availableQty < entry.qty - EPSILON,
     };
   });
-
-  console.log("[DIAG computePhysicalAvailabilityRows] final result=%o", result);
-
-  return result;
 }
 
 async function checkStockAvailability(
@@ -2740,11 +2738,6 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
 
     const allLines = applyResult.lines ?? [];
     const stockNeeds = buildLineAvailabilityNeeds(allLines);
-    // TEMP DIAGNOSTIC (2026-08-31, remove once root-caused): the request-level
-    // context feeding into the stock check below.
-    console.log("[DIAG finalizeProcessOrderHandler] po.id=%s po.company_id=%s po.po_number=%s po_type=%s bodyLinesCount=%d allLinesCount=%d stockNeeds=%o",
-      id, po.company_id, po.po_number, po.po_type, (Array.isArray(body.lines) ? body.lines.length : 0), allLines.length,
-      Object.fromEntries(stockNeeds));
     const physicalRows = await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds, id);
     const shortRows = physicalRows.filter((row) => row.short);
 
