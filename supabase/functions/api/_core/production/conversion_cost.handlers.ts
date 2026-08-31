@@ -238,13 +238,14 @@ async function assertEligibleProdshade(companyId: string, segmentCode: string, m
     .eq("prodshade_material_id", materialId)
     .in("status", ["ACTIVE", "APPROVED"])
     .in("po_type", STROKE_TYPES_BY_SEGMENT[segmentCode])
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
   if (error) {
     console.error("[conversion_cost.assertEligibleProdshade] stroke query failed:", JSON.stringify(error));
     throw new Error("PROD_CONV_RATE_PRODSHADE_LOOKUP_FAILED");
   }
-  return !!data;
+  // A Prodshade can legitimately have more than one approved revision. This
+  // check is existential: any approved stroke makes it eligible for a rate.
+  return (data ?? []).length > 0;
 }
 
 // POST /api/production/conversion-rates
@@ -334,7 +335,9 @@ export async function updateConversionRateHandler(req: Request, ctx: ProdHandler
 
     const body = await parseBody(req);
     const segmentCode = toUpperTrimmedString(body.segment_code ?? current.segment_code);
-    const prodshadeMaterialId = toTrimmedString(body.prodshade_material_id) || null;
+    const prodshadeMaterialId = body.prodshade_material_id !== undefined
+      ? toTrimmedString(body.prodshade_material_id) || null
+      : toTrimmedString(current.prodshade_material_id) || null;
     const validFrom = toTrimmedString(body.valid_from ?? current.valid_from);
     const rateRaw = body.conversion_rate_per_kg ?? current.conversion_rate_per_kg;
     const rate = Number(rateRaw);
