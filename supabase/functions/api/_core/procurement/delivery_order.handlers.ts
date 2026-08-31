@@ -1021,7 +1021,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     const transporterIds = [...new Set(rows.map((row) => toTrimmedString(row.transporter_id)).filter(Boolean))];
     const [{ data: sos }, { data: stos }, { data: transporters }] = await Promise.all([
       soIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, bill_to_name, bill_to_address, bill_to_parent_company_id, bill_to_vdc_id, ibn_required").in("id", soIds)
+        ? serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, customer_po_number, bill_to_name, bill_to_address, bill_to_parent_company_id, bill_to_vdc_id, ibn_required").in("id", soIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       stoIds.length
         ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number").in("id", stoIds)
@@ -1069,7 +1069,13 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       const sto = stoMap.get(toTrimmedString(row.sto_id));
       const effectiveSos = sourceSos.length ? sourceSos : (so ? [so] : []);
       const effectiveStos = sourceStos.length ? sourceStos : (sto ? [sto] : []);
-      const sourceDocuments = [...effectiveSos.map((entry) => String(entry.so_number ?? "")), ...effectiveStos.map((entry) => String(entry.sto_number ?? ""))].filter(Boolean);
+      // SO01 stores the user-entered external SO number as customer_po_number.
+      // In operational dispatch lists that is the business-facing SO number;
+      // internal PACE so_number remains available in the source record.
+      const sourceDocuments = [
+        ...effectiveSos.map((entry) => String(entry.customer_po_number ?? entry.so_number ?? "")),
+        ...effectiveStos.map((entry) => String(entry.sto_number ?? "")),
+      ].filter(Boolean);
       const sourceTypes = [...new Set([...effectiveSos.map(() => "SALES_ORDER"), ...effectiveStos.map(() => "STO")])];
       const billTo = [...new Set(effectiveSos.map((entry) => [entry.bill_to_name, entry.bill_to_address].filter(Boolean).join(" — ")).filter(Boolean))].join(" | ") || null;
       const lineSnapshots = linesByDc.get(String(row.id)) ?? [];

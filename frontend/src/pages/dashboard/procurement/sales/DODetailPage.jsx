@@ -24,7 +24,7 @@ import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { getActiveScreenContext, openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
-import { cancelDeliveryOrder, getDeliveryOrderUnified } from "../procurementApi.js";
+import { amendDeliveryOrderDispatchDetails, cancelDeliveryOrder, getDeliveryOrderUnified, listTransporters } from "../procurementApi.js";
 
 export default function DODetailPage() {
   const navigate = useNavigate();
@@ -34,6 +34,8 @@ export default function DODetailPage() {
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
+  const [amendOpen, setAmendOpen] = useState(false);
+  const [amendment, setAmendment] = useState({ transporter_id: "", vehicle_number: "", lr_number: "", lr_date: "", reason: "" });
 
   const doQuery = useQuery({
     queryKey: ["procurement", "delivery-order-v2", id],
@@ -43,6 +45,12 @@ export default function DODetailPage() {
 
   const data = doQuery.data ?? {};
   const lines = Array.isArray(data.lines) ? data.lines : [];
+  const transporterQuery = useQuery({
+    queryKey: ["procurement", "transporters", data.selling_company_id],
+    queryFn: () => listTransporters({ company_id: data.selling_company_id, is_active: "true", limit: 500 }),
+    enabled: amendOpen && Boolean(data.selling_company_id),
+  });
+  const transporters = Array.isArray(transporterQuery.data) ? transporterQuery.data : (transporterQuery.data?.items ?? transporterQuery.data?.data ?? []);
 
   useErpScreenHotkeys({
     refresh: { disabled: doQuery.isLoading, perform: () => void doQuery.refetch() },
@@ -78,8 +86,33 @@ export default function DODetailPage() {
 
   function openInvoiceDetail() {
     if (!data.invoice_id) return;
-    openScreenWithContext(OPERATION_SCREENS.PROC_INV_DETAIL.screen_code, { id: data.invoice_id, refreshOnReturn: true });
-    navigate(`/dashboard/procurement/sales-invoices/${encodeURIComponent(data.invoice_id)}`);
+    openScreenWithContext(OPERATION_SCREENS.PROC_INV_PGI_GROUPS.screen_code, { dcId: id, refreshOnReturn: true });
+    navigate("/dashboard/procurement/sales-invoices/pgi-groups");
+  }
+
+  function openAmendment() {
+    setActionError("");
+    setAmendment({ transporter_id: data.transporter_id || "", vehicle_number: data.vehicle_number || "", lr_number: data.lr_number || "", lr_date: data.lr_date || "", reason: "" });
+    setAmendOpen(true);
+  }
+
+  async function saveAmendment() {
+    if (!amendment.reason.trim()) {
+      setActionError("Amendment reason is required.");
+      return;
+    }
+    setSaving(true);
+    setActionError("");
+    try {
+      await amendDeliveryOrderDispatchDetails(id, amendment);
+      setAmendOpen(false);
+      setNotice("Dispatch details amended. Stock, invoice amount and reconciliation were not changed.");
+      await doQuery.refetch();
+    } catch (amendmentError) {
+      setActionError(amendmentError instanceof Error ? amendmentError.message : "DISPATCH_AMENDMENT_FAILED");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -88,7 +121,8 @@ export default function DODetailPage() {
       title={data.dc_number ? `Delivery Order — ${data.dc_number}` : "Delivery Order"}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
-        ...(data.invoice_id ? [{ key: "open-invoice", label: "Open Invoice", tone: "neutral", onClick: openInvoiceDetail }] : []),
+        ...(data.invoice_id ? [{ key: "open-invoice", label: "View Invoice Groups", tone: "neutral", onClick: openInvoiceDetail }] : []),
+        ...(data.status === "DISPATCHED" ? [{ key: "amend-dispatch", label: "Amend Dispatch Details", tone: "neutral", onClick: openAmendment, disabled: saving }] : []),
         ...(canEdit ? [{ key: "edit", label: "Edit DO", tone: "neutral", onClick: openEdit, disabled: saving }] : []),
         ...(canCancel ? [{ key: "cancel", label: saving ? "Cancelling..." : "Cancel DO", tone: "danger", onClick: () => void handleCancel(), disabled: saving }] : []),
       ]}
@@ -122,6 +156,25 @@ export default function DODetailPage() {
               ) : null}
             </div>
           </ErpSectionCard>
+
+          {amendOpen ? (
+            <ErpSectionCard eyebrow="Post-PGI Amendment" title="Correct transporter / vehicle / LR details only">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">Transporter</span><select value={amendment.transporter_id} onChange={(event) => setAmendment((current) => ({ ...current, transporter_id: event.target.value }))} className="h-9 border border-slate-300 bg-white px-2"><option value="">No transporter</option>{transporters.map((transporter) => <option key={transporter.id} value={transporter.id}>{transporter.transporter_name}</option>)}</select></label>
+                <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">Vehicle Number</span><input value={amendment.vehicle_number} onChange={(event) => setAmendment((current) => ({ ...current, vehicle_number: event.target.value }))} className="h-9 border border-slate-300 px-2" /></label>
+                <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">LR Number</span><input value={amendment.lr_number} onChange={(event) => setAmendment((current) => ({ ...current, lr_number: event.target.value }))} className="h-9 border border-slate-300 px-2" /></label>
+                <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">LR Date</span><input type="date" value={amendment.lr_date} onChange={(event) => setAmendment((current) => ({ ...current, lr_date: event.target.value }))} className="h-9 border border-slate-300 px-2" /></label>
+                <label className="grid gap-1 text-sm md:col-span-2"><span className="text-xs text-slate-500">Reason</span><input value={amendment.reason} onChange={(event) => setAmendment((current) => ({ ...current, reason: event.target.value }))} className="h-9 border border-slate-300 px-2" placeholder="Why are these dispatch details changing?" /></label>
+                <div className="flex gap-2 md:col-span-2"><button type="button" onClick={() => setAmendOpen(false)} className="border border-slate-300 bg-white px-4 py-2 text-xs font-semibold">Close</button><button type="button" disabled={saving} onClick={() => void saveAmendment()} className="border border-slate-800 bg-slate-800 px-4 py-2 text-xs font-semibold text-white">Save Amendment</button></div>
+              </div>
+            </ErpSectionCard>
+          ) : null}
+
+          {Array.isArray(data.dispatch_amendments) && data.dispatch_amendments.length > 0 ? (
+            <ErpSectionCard eyebrow="Audit" title="Dispatch amendment history">
+              <ErpDenseGrid cellNavigate columns={[{ key: "amended_at", label: "When", width: "180px" }, { key: "amendment_reason", label: "Reason" }, { key: "old_lr_number", label: "Old LR", width: "120px" }, { key: "new_lr_number", label: "New LR", width: "120px" }, { key: "old_vehicle_number", label: "Old Vehicle", width: "130px" }, { key: "new_vehicle_number", label: "New Vehicle", width: "130px" }]} rows={data.dispatch_amendments} rowKey={(row) => row.id} />
+            </ErpSectionCard>
+          ) : null}
 
           {data.invoice_id ? (
             <ErpSectionCard eyebrow="PGI & Invoice" title="What this DO's goods issue posted">

@@ -1105,6 +1105,11 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
   ]);
   if (customersError) throw new Error("DO_CUSTOMER_LOOKUP_FAILED");
   if (receivingCompaniesError) throw new Error("DO_RECEIVING_COMPANY_LOOKUP_FAILED");
+  const { data: amendments, error: amendmentsError } = await serviceRoleClient.schema("erp_procurement")
+    .from("delivery_challan_dispatch_amendment")
+    .select("id, amendment_reason, old_transporter_id, new_transporter_id, old_vehicle_number, new_vehicle_number, old_lr_number, new_lr_number, old_lr_date, new_lr_date, amended_by, amended_at")
+    .eq("dc_id", dcId).order("amended_at", { ascending: false });
+  if (amendmentsError) throw new Error("DO_DISPATCH_AMENDMENT_FETCH_FAILED");
   const customerMap = new Map(((customers ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
   const receivingCompanyMap = new Map(((receivingCompanies ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
   function soPartyDisplay(row: JsonRecord): string | null {
@@ -1130,6 +1135,7 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
       const location = locationMap.get(toTrimmedString(row.storage_location_id));
       return { ...row, storage_location_display: location ? `${location.code ?? ""} — ${location.name ?? ""}`.trim() : null };
     }),
+    dispatch_amendments: (amendments ?? []) as JsonRecord[],
   };
 }
 
@@ -1170,7 +1176,7 @@ export async function getDeliveryOrderUnifiedHandler(req: Request, ctx: Procurem
 //     bucket here).
 //   - SO and STO never merge into the same invoice.
 
-async function canMaintainSalesInvoice(ctx: ProcurementHandlerContext, companyId: string, actionCode: "VIEW" | "WRITE" = "WRITE"): Promise<boolean> {
+async function canMaintainSalesInvoice(ctx: ProcurementHandlerContext, companyId: string, actionCode: "VIEW" | "WRITE" | "EDIT" = "WRITE"): Promise<boolean> {
   if (ctx.context.isAdmin) return true;
   if (!companyId) return false;
   let workContextIds: string[];
@@ -1745,10 +1751,36 @@ export async function previewInvoiceGroupsHandler(req: Request, ctx: Procurement
     if (!(await canMaintainSalesInvoice(ctx, companyId, "VIEW"))) {
       return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI view access at this company.");
     }
-    if (toUpperTrimmedString(dc.status) !== "CREATED") {
-      return doErrorResponse(req, ctx, "DO_NOT_READY_FOR_PGI", 400, "Only a CREATED delivery order (not yet PGI'd, not cancelled) can be invoiced.");
+    const dcStatus = toUpperTrimmedString(dc.status);
+    if (!new Set(["CREATED", "DISPATCHED"]).has(dcStatus)) {
+      return doErrorResponse(req, ctx, "DO_NOT_READY_FOR_PGI", 400, "Only a CREATED or DISPATCHED delivery order can be viewed here.");
     }
-    return okResponse({ dc_id: dcId, dc_number: dc.dc_number, dc_date: dc.dc_date, groups }, ctx.request_id, req);
+
+    // A dispatched DO is a read-only invoice-group view. Match its already
+    // posted invoice to the same SO/STO and FO bucket that generated it.
+    const { data: invoiceRows, error: invoiceError } = dcStatus === "DISPATCHED"
+      ? await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
+        .select("id, invoice_number, invoice_date, status, so_id, sto_id, fo_id, tally_invoice_number, tally_invoice_date, inbound_number, e_way_bill_applicable, e_way_bill_number, freight_to_pay, freight_included, freight_amount, freight_mode, freight_rate, freight_gst_included, freight_gst_treatment, freight_gst_rate, additional_cost_total, round_off_amount, total_invoice_value, remarks")
+        .eq("dc_id", dcId)
+      : { data: [] as JsonRecord[], error: null };
+    if (invoiceError) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUPS_FETCH_FAILED", 500, "Unable to load posted invoice groups.");
+    const invoiceHistory = (invoiceRows ?? []) as JsonRecord[];
+    const viewGroups = groups.map((group) => {
+      const matchingInvoices = invoiceHistory.filter((row) =>
+        toTrimmedString(row.so_id) === toTrimmedString(group.so_id)
+        && toTrimmedString(row.sto_id) === toTrimmedString(group.sto_id)
+        && toTrimmedString(row.fo_id) === toTrimmedString(group.fo_id));
+      const postedInvoice = matchingInvoices.find((row) => toUpperTrimmedString(row.status) === "POSTED") ?? null;
+      const cancelledInvoice = matchingInvoices.find((row) => toUpperTrimmedString(row.status) === "CANCELLED") ?? null;
+      return { ...group, posted_invoice: postedInvoice, cancelled_invoice: cancelledInvoice };
+    });
+    return okResponse({
+      dc_id: dcId,
+      dc_number: dc.dc_number,
+      dc_date: dc.dc_date,
+      view_only: dcStatus === "DISPATCHED",
+      groups: viewGroups,
+    }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PGI_INVOICE_GROUPS_PREVIEW_FAILED";
     const status = code === "DO_NOT_FOUND" ? 404
@@ -1786,6 +1818,132 @@ type InvoiceGroupInput = {
   remarks?: string;
 };
 
+// Cancelling is append-only: each original P601 receives a matching P602,
+// while invoice/reconciliation records retain their audit history.  The RPC
+// executes every selected group in one transaction, so a multi-select cancel
+// never leaves only some groups reversed.
+export async function cancelPgiInvoiceGroupsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const dcId = getIdFromPath(req);
+    if (!dcId) return doErrorResponse(req, ctx, "DO_ID_REQUIRED", 400, "Delivery order id is required.");
+    const body = await parseBody(req);
+    const reason = toTrimmedString(body.reason);
+    const invoiceIds = Array.isArray(body.invoice_ids)
+      ? [...new Set(body.invoice_ids.map((id) => toTrimmedString(id)).filter(Boolean))]
+      : [];
+    if (!reason) return doErrorResponse(req, ctx, "PGI_INVOICE_REVERSE_REASON_REQUIRED", 400, "Cancellation reason is required.");
+    if (invoiceIds.length === 0) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUPS_REQUIRED", 400, "Select at least one posted invoice group.");
+
+    const { data: dc, error: dcError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+      .select("id, selling_company_id, status").eq("id", dcId).single();
+    if (dcError || !dc) return doErrorResponse(req, ctx, "DO_NOT_FOUND", 404, "Delivery order not found.");
+    const companyId = toTrimmedString((dc as JsonRecord).selling_company_id);
+    try { await assertCompanyScope(ctx, companyId); } catch { return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company."); }
+    if (!(await canMaintainSalesInvoice(ctx, companyId, "EDIT"))) return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI cancellation access at this company.");
+
+    const { data: invoiceRows, error: invoiceError } = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
+      .select("id, invoice_number, invoice_date, company_id, dc_id, status")
+      .eq("dc_id", dcId).in("id", invoiceIds);
+    if (invoiceError) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUPS_FETCH_FAILED", 500, "Unable to load selected invoices.");
+    const invoices = (invoiceRows ?? []) as JsonRecord[];
+    if (invoices.length !== invoiceIds.length || invoices.some((invoice) => toUpperTrimmedString(invoice.status) !== "POSTED")) {
+      return doErrorResponse(req, ctx, "PGI_INVOICE_REVERSE_BLOCKED", 400, "Only posted invoice groups from this delivery order can be cancelled.");
+    }
+
+    const { data: sourceDocs, error: sourceDocError } = await serviceRoleClient.schema("erp_inventory").from("stock_document")
+      .select("id, reference_document_id, material_id, source_location_id, quantity, base_uom_code, valuation_rate, reversal_document_id")
+      .eq("reference_document_type", "SALES_INVOICE").eq("movement_type_code", "P601").in("reference_document_id", invoiceIds);
+    if (sourceDocError) return doErrorResponse(req, ctx, "PGI_INVOICE_LEDGER_LOOKUP_FAILED", 500, "Unable to load original stock postings.");
+    const originalDocs = ((sourceDocs ?? []) as JsonRecord[]).filter((row) => !row.reversal_document_id);
+    const sourceDocIds = originalDocs.map((row) => String(row.id));
+    const { data: ledgerRows, error: ledgerError } = sourceDocIds.length
+      ? await serviceRoleClient.schema("erp_inventory").from("stock_ledger").select("stock_document_id, batch_number").in("stock_document_id", sourceDocIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (ledgerError) return doErrorResponse(req, ctx, "PGI_INVOICE_LEDGER_LOOKUP_FAILED", 500, "Unable to load stock batch details.");
+    const batchByDocumentId = new Map(((ledgerRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.stock_document_id), row.batch_number ?? null]));
+
+    const payloadGroups = invoices.map((invoice) => {
+      const legs = originalDocs.filter((leg) => toTrimmedString(leg.reference_document_id) === toTrimmedString(invoice.id));
+      if (legs.length === 0) throw new Error("PGI_INVOICE_NO_POSTINGS_FOUND");
+      return {
+        invoice_id: invoice.id,
+        invoice_number: invoice.invoice_number,
+        invoice_date: invoice.invoice_date,
+        company_id: invoice.company_id,
+        dc_id: invoice.dc_id,
+        reason,
+        movements: legs.map((leg) => ({
+          storage_location_id: leg.source_location_id,
+          material_id: leg.material_id,
+          quantity: Number(leg.quantity ?? 0),
+          base_uom_code: leg.base_uom_code,
+          unit_value: Number(leg.valuation_rate ?? 0),
+          batch_number: batchByDocumentId.get(toTrimmedString(leg.id)) ?? null,
+          reversal_of_id: leg.id,
+          line_ref: leg.id,
+        })),
+      };
+    });
+
+    const { error: reversalError } = await serviceRoleClient.schema("erp_inventory")
+      .rpc("reverse_sales_invoice_groups_atomic", { p_groups: payloadGroups, p_posted_by: ctx.auth_user_id });
+    if (reversalError) return doErrorResponse(req, ctx, "PGI_REVERSAL_POST_FAILED", 500, reversalError.message || "Unable to reverse selected invoice groups.");
+    return okResponse({ dc_id: dcId, cancelled_invoice_ids: invoiceIds }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PGI_INVOICE_GROUPS_CANCEL_FAILED";
+    const status = code === "DO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") || code.includes("BLOCKED") || code.includes("NO_POSTINGS") ? 400 : 500;
+    return doErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// A posted DO may receive logistics-only corrections.  Freight, quantity,
+// stock and invoice values are intentionally absent from this payload.
+export async function amendDispatchDetailsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const dcId = getIdFromPath(req);
+    if (!dcId) return doErrorResponse(req, ctx, "DO_ID_REQUIRED", 400, "Delivery order id is required.");
+    const body = await parseBody(req);
+    const reason = toTrimmedString(body.reason);
+    if (!reason) return doErrorResponse(req, ctx, "DISPATCH_AMENDMENT_REASON_REQUIRED", 400, "Amendment reason is required.");
+    const { data: dc, error: dcError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+      .select("id, selling_company_id, status, transporter_id, vehicle_number, lr_number, lr_date").eq("id", dcId).single();
+    if (dcError || !dc) return doErrorResponse(req, ctx, "DO_NOT_FOUND", 404, "Delivery order not found.");
+    const current = dc as JsonRecord;
+    const companyId = toTrimmedString(current.selling_company_id);
+    try { await assertCompanyScope(ctx, companyId); } catch { return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company."); }
+    if (!(await canMaintainSalesInvoice(ctx, companyId, "EDIT"))) return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI amendment access at this company.");
+    if (toUpperTrimmedString(current.status) !== "DISPATCHED") return doErrorResponse(req, ctx, "DISPATCH_AMENDMENT_BLOCKED", 400, "Dispatch details can be amended only after PGI.");
+
+    const next = {
+      transporter_id: toTrimmedString(body.transporter_id) || null,
+      vehicle_number: toTrimmedString(body.vehicle_number) || null,
+      lr_number: toTrimmedString(body.lr_number) || null,
+      lr_date: toTrimmedString(body.lr_date) || null,
+    };
+    const changed = toTrimmedString(current.transporter_id) !== toTrimmedString(next.transporter_id)
+      || toTrimmedString(current.vehicle_number) !== toTrimmedString(next.vehicle_number)
+      || toTrimmedString(current.lr_number) !== toTrimmedString(next.lr_number)
+      || toTrimmedString(current.lr_date) !== toTrimmedString(next.lr_date);
+    if (!changed) return doErrorResponse(req, ctx, "DISPATCH_AMENDMENT_NO_CHANGE", 400, "Change at least one transport, vehicle, LR number, or LR date.");
+
+    const { error: amendmentError } = await serviceRoleClient.schema("erp_procurement").rpc("amend_delivery_challan_dispatch_details", {
+      p_dc_id: dcId,
+      p_transporter_id: next.transporter_id,
+      p_vehicle_number: next.vehicle_number,
+      p_lr_number: next.lr_number,
+      p_lr_date: next.lr_date,
+      p_reason: reason,
+      p_amended_by: ctx.auth_user_id,
+    });
+    if (amendmentError) return doErrorResponse(req, ctx, "DISPATCH_AMENDMENT_UPDATE_FAILED", 500, amendmentError.message || "Unable to amend dispatch details.");
+    return okResponse(await hydrateDeliveryOrderUnified(dcId), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "DISPATCH_AMENDMENT_FAILED";
+    const status = code === "DO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") || code.includes("BLOCKED") || code.includes("NO_CHANGE") ? 400 : 500;
+    return doErrorResponse(req, ctx, code, status, code);
+  }
+}
+
 // "Post Goods & Create Invoice" -- one click, whole DO. Re-derives groups
 // server-side (never trusts the client's own grouping), requires exact
 // coverage (every computed group must have matching input, no more no
@@ -1813,16 +1971,31 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
     if (!(await canMaintainSalesInvoice(ctx, companyId, "WRITE"))) {
       return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI create access at this company.");
     }
-    if (toUpperTrimmedString(dc.status) !== "CREATED") {
-      return doErrorResponse(req, ctx, "DO_NOT_READY_FOR_PGI", 400, "Only a CREATED delivery order (not yet PGI'd, not cancelled) can be invoiced.");
+    const dcStatus = toUpperTrimmedString(dc.status);
+    if (!new Set(["CREATED", "DISPATCHED"]).has(dcStatus)) {
+      return doErrorResponse(req, ctx, "DO_NOT_READY_FOR_PGI", 400, "Only a CREATED delivery order or a cancelled group on a DISPATCHED delivery order can be invoiced.");
     }
 
     const inputByKey = new Map(submittedGroups.map((g) => [toTrimmedString(g.group_key), g]));
     if (inputByKey.size !== submittedGroups.length) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUP_DUPLICATE_KEY", 400, "Duplicate group_key in submission.");
-    for (const group of groups) {
-      if (!inputByKey.has(group.group_key)) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUP_MISSING", 400, `Missing invoice details for group ${group.group_key}.`);
+    const selectedGroups = groups.filter((group) => inputByKey.has(group.group_key));
+    if (selectedGroups.length !== submittedGroups.length) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUP_MISMATCH", 400, "Submitted invoice groups do not match this delivery order's current lines -- reload and retry.");
+    if (dcStatus === "CREATED") {
+      if (selectedGroups.length !== groups.length) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUP_MISSING", 400, "Enter invoice details for every group before the first PGI posting.");
+    } else {
+      const { data: historicalInvoiceRows, error: historicalInvoiceError } = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
+        .select("so_id, sto_id, fo_id, status").eq("dc_id", dcId);
+      if (historicalInvoiceError) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUPS_FETCH_FAILED", 500, "Unable to verify cancelled invoice groups.");
+      const historicalInvoices = (historicalInvoiceRows ?? []) as JsonRecord[];
+      for (const group of selectedGroups) {
+        const matches = historicalInvoices.filter((invoice) => toTrimmedString(invoice.so_id) === toTrimmedString(group.so_id)
+          && toTrimmedString(invoice.sto_id) === toTrimmedString(group.sto_id)
+          && toTrimmedString(invoice.fo_id) === toTrimmedString(group.fo_id));
+        if (!matches.some((invoice) => toUpperTrimmedString(invoice.status) === "CANCELLED") || matches.some((invoice) => toUpperTrimmedString(invoice.status) === "POSTED")) {
+          return doErrorResponse(req, ctx, "PGI_INVOICE_GROUP_RECREATE_BLOCKED", 400, "Only a cancelled invoice group can be recreated.");
+        }
+      }
     }
-    if (submittedGroups.length !== groups.length) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUP_MISMATCH", 400, "Submitted invoice groups do not match this delivery order's current lines -- reload and retry.");
 
     const categoryIds = [...new Set(submittedGroups.flatMap((g) => (g.additional_costs ?? []).map((a) => toTrimmedString(a.category_id)).filter(Boolean)))];
     if (categoryIds.length) {
@@ -1837,10 +2010,10 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
 
     const results: JsonRecord[] = [];
     const postGroups: JsonRecord[] = [];
-    for (let index = 0; index < groups.length; index++) {
-      const group = groups[index];
+    for (let index = 0; index < selectedGroups.length; index++) {
+      const group = selectedGroups[index];
       const input = inputByKey.get(group.group_key)!;
-      const isFinalGroup = index === groups.length - 1;
+      const isFinalGroup = index === selectedGroups.length - 1;
       const alreadyPostedNote = results.length > 0 ? ` (${results.length} invoice(s) from this same action already posted -- reverse them individually if you need to undo, do not retry blindly.)` : "";
 
       const tallyInvoiceNumber = toTrimmedString(input.tally_invoice_number);

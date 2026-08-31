@@ -1145,6 +1145,18 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" } },
   },
   {
+    // Cancelling a posted group is the same separation-of-duties action as
+    // the legacy sales-invoice reversal route below.
+    pattern: /^\/api\/procurement\/delivery-orders-v2\/[^/]+\/cancel-invoice-groups$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "EDIT" } },
+  },
+  {
+    // A post-PGI transporter/LR correction changes logistics data only; it
+    // must not be granted through the normal invoice-create WRITE action.
+    pattern: /^\/api\/procurement\/delivery-orders-v2\/[^/]+\/amend-dispatch-details$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "EDIT" } },
+  },
+  {
     // §113.15 -- deliberately its own action (EDIT, same shape as PO/STO's
     // own cancel/knock-off) rather than reusing DO create's WRITE action, so
     // cancel authority can be granted to a different role than create
