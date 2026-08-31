@@ -983,25 +983,35 @@ export async function getCurrentStockHandler(
     }
 
     if (ledgerMaterialIds.length > 0) {
-      let ledgerQuery = serviceRoleClient
-        .schema("erp_inventory")
-        .from("stock_ledger")
-        .select("company_id, material_id, storage_location_id, stock_type_code, batch_number, quantity, direction, stock_document_id")
-        .in("material_id", ledgerMaterialIds)
-        .in("stock_type_code", requestedStockTypes)
-        .eq("company_id", companyId);
-      if (storageLocationIds.length > 0) {
-        ledgerQuery = ledgerQuery.in("storage_location_id", storageLocationIds);
-      }
-      if (batchNumbers.length > 0) {
-        ledgerQuery = ledgerQuery.in("batch_number", batchNumbers);
-      }
-      const { data: ledgerRows, error: ledgerError } = await ledgerQuery;
-      if (ledgerError) {
+      // Found live 2026-09-01 (CMP006, IN03 "SFG" filter): materialQuery above
+      // (line ~894) resolves scopedMaterials by material_type ONLY, never
+      // scoped to a company, so ledgerMaterialIds is every SFG/FG material
+      // system-wide -- 170 SFG + 355 FG in prod today. A plain .in() puts that
+      // whole id list in the GET URL (§8E, chunkedIn.ts) with no server-side
+      // trail when it's rejected before reaching Postgres, so this always hit
+      // whichever company happened to be checked when the filter grew past
+      // the URL-length cliff, not something tied to CMP006 specifically.
+      let typedLedgerRows: JsonRecord[];
+      try {
+        typedLedgerRows = await fetchInChunks<JsonRecord>(ledgerMaterialIds, (idChunk) => {
+          let ledgerQuery = serviceRoleClient
+            .schema("erp_inventory")
+            .from("stock_ledger")
+            .select("company_id, material_id, storage_location_id, stock_type_code, batch_number, quantity, direction, stock_document_id")
+            .in("material_id", idChunk)
+            .in("stock_type_code", requestedStockTypes)
+            .eq("company_id", companyId);
+          if (storageLocationIds.length > 0) {
+            ledgerQuery = ledgerQuery.in("storage_location_id", storageLocationIds);
+          }
+          if (batchNumbers.length > 0) {
+            ledgerQuery = ledgerQuery.in("batch_number", batchNumbers);
+          }
+          return ledgerQuery;
+        });
+      } catch {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
-
-      const typedLedgerRows = (ledgerRows ?? []) as JsonRecord[];
       const docIds = [...new Set(typedLedgerRows.map((row) => toTrimmedString(row.stock_document_id)).filter(Boolean))];
       const { data: docRows, error: docError } = docIds.length
         ? await serviceRoleClient
