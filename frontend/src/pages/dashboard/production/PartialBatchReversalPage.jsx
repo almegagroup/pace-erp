@@ -303,7 +303,7 @@ export default function PartialBatchReversalPage() {
                       <td className="py-2 px-3">
                         <input type="radio" readOnly checked={Boolean(selectedRow && rowKey(selectedRow) === rowKey(row))} />
                       </td>
-                      <td className="py-2 px-3">{row.storage_location?.location_code || row.storage_location_id}</td>
+                      <td className="py-2 px-3">{storageLocationLabel(row.storage_location)}</td>
                       <td className="py-2 px-3">{row.row_type === "SFG" ? "SFG" : "FG (SKU)"}</td>
                       <td className="py-2 px-3">{materialLabel(row.material)}</td>
                       <td className="py-2 px-3 font-mono">{row.po_number || "--"}</td>
@@ -405,8 +405,12 @@ export default function PartialBatchReversalPage() {
                       <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Line</th>
                       <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Material</th>
                       <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Returns To</th>
+                      <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Standard Qty</th>
+                      <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Standard Reversal</th>
                       <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Actual Qty</th>
-                      <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Proportional Reversal</th>
+                      <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Actual Reversal</th>
+                      <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">AP Approved Qty</th>
+                      <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">AP Approved Reversal</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -415,12 +419,21 @@ export default function PartialBatchReversalPage() {
                         <td className="py-2 px-3">{line.line_material_type}</td>
                         <td className="py-2 px-3">{materialLabel(line.material)}</td>
                         <td className="py-2 px-3 font-mono">{storageLocationLabel(line.storage_location)}</td>
+                        <td className="py-2 px-3 text-right font-mono">{fmt(line.standard_qty)}</td>
+                        <td className="py-2 px-3 text-right font-mono">{fmt(line.proportional_standard_qty)}</td>
                         <td className="py-2 px-3 text-right font-mono">{fmt(line.actual_qty)}</td>
                         <td className="py-2 px-3 text-right font-mono">{fmt(line.proportional_actual_qty)}</td>
+                        <td className="py-2 px-3 text-right font-mono">{fmt(line.ap_approved_qty)}</td>
+                        <td className="py-2 px-3 text-right font-mono">{fmt(line.proportional_ap_approved_qty)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                <p className="px-3 py-2 text-[11px] text-slate-500">
+                  All three Reversal columns post to the Reco/Costing layer on Reverse (the same
+                  Standard/Actual/AP Approved split Verify originally wrote, credited back
+                  proportionally); Actual Reversal is also what physically returns to stock.
+                </p>
               </div>
 
               {selectedRow.row_type === "SKU" && (detailQ.data.pm_lines ?? []).length > 0 ? (
