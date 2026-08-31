@@ -652,13 +652,14 @@ export async function getAc06HistoryHandler(req: Request, ctx: ProdHandlerContex
 // qualifies when every non-excluded line is VERIFIED, whether the month itself is still
 // OPEN or has already been CLOSED (closing never re-checks verification, so a closed
 // month is not automatically approved -- it is checked the same way as an open one, via
-// its own archive-line snapshot).
+// its own archive-line snapshot). This is a read-only SO-create dependency: it returns
+// month labels only, never AC06 material or rate data.
 export async function listAc06ApprovedMonthsHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     const url = new URL(req.url);
     const companyId = await companyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     if (!companyId) return ac06Error(req, ctx, "AC06_APPROVED_MONTHS_INVALID", 400, "company_id is required.");
-    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_GROUP", "VIEW");
+    const accessError = await requireAc06Action(req, ctx, companyId, "PROC_SO_CREATE", "WRITE");
     if (accessError) return accessError;
 
     const db = serviceRoleClient.schema("erp_production");

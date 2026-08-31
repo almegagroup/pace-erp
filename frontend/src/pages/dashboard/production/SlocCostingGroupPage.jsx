@@ -6,6 +6,7 @@ import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpSummaryChips from "../../../components/data/ErpSummaryChips.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import { pushToast } from "../../../store/uiToast.js";
+import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { listStorageLocations } from "../om/omApi.js";
@@ -623,18 +624,20 @@ export default function SlocCostingGroupPage() {
                 tone: "danger",
                 disabled:
                   busy || workspace.month?.status === "CLOSED" || !companyId,
-                onClick: () => {
-                  if (
-                    window.confirm(
-                      `Close ${month}? This creates an immutable archive.`,
-                    )
-                  )
-                    void withBusy(() =>
-                      closeAc06Month({
-                        company_id: companyId,
-                        rate_month: month,
-                      }),
-                    );
+                onClick: async () => {
+                  const confirmed = await openActionConfirm({
+                    eyebrow: "AC06 Month Close",
+                    title: `Close ${month}?`,
+                    message: "This creates an immutable archive. Rates for this month can no longer be changed.",
+                    confirmLabel: "Close Month",
+                  });
+                  if (!confirmed) return;
+                  void withBusy(() =>
+                    closeAc06Month({
+                      company_id: companyId,
+                      rate_month: month,
+                    }),
+                  );
                 },
               },
             ]
