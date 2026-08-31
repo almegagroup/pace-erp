@@ -33,6 +33,10 @@ function materialLabel(m) {
   if (!m) return "--";
   return [m.pace_code || m.external_code, m.material_name].filter(Boolean).join(" - ");
 }
+function storageLocationLabel(loc) {
+  if (!loc) return "--";
+  return loc.code || loc.name || "--";
+}
 function fmt(n) {
   const v = Number(n ?? 0);
   return Number.isFinite(v) ? v.toFixed(3) : "0.000";
@@ -371,9 +375,12 @@ export default function PartialBatchReversalPage() {
             <ErpComboboxField
               value={salvageBatchNumber}
               onChange={setSalvageBatchNumber}
-              options={(salvageBatchesQ.data ?? []).map((po) => ({ value: po.batch_number, label: `${po.batch_number} (${po.po_number})` }))}
+              options={(salvageBatchesQ.data ?? []).map((po) => ({
+                value: po.batch_number,
+                label: `${po.batch_number} (${po.po_number}, ${po.status})`,
+              }))}
               placeholder="-- None --"
-              emptyStateLabel={salvageBatchesQ.isLoading ? "Loading..." : "No BATCH_STARTED batches available"}
+              emptyStateLabel={salvageBatchesQ.isLoading ? "Loading..." : "No other batches for this prodshade yet"}
             />
           </div>
 
@@ -397,6 +404,7 @@ export default function PartialBatchReversalPage() {
                     <tr>
                       <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Line</th>
                       <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Material</th>
+                      <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Returns To</th>
                       <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Actual Qty</th>
                       <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Proportional Reversal</th>
                     </tr>
@@ -406,6 +414,7 @@ export default function PartialBatchReversalPage() {
                       <tr key={line.process_order_line_id} className="border-t">
                         <td className="py-2 px-3">{line.line_material_type}</td>
                         <td className="py-2 px-3">{materialLabel(line.material)}</td>
+                        <td className="py-2 px-3 font-mono">{storageLocationLabel(line.storage_location)}</td>
                         <td className="py-2 px-3 text-right font-mono">{fmt(line.actual_qty)}</td>
                         <td className="py-2 px-3 text-right font-mono">{fmt(line.proportional_actual_qty)}</td>
                       </tr>
@@ -421,6 +430,7 @@ export default function PartialBatchReversalPage() {
                       <tr>
                         <th className="py-2 px-3"></th>
                         <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">PM Material</th>
+                        <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Returns To</th>
                         <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Qty</th>
                         <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Proportional Reversal</th>
                       </tr>
@@ -436,6 +446,7 @@ export default function PartialBatchReversalPage() {
                             />
                           </td>
                           <td className="py-2 px-3">{materialLabel(line.material)}</td>
+                          <td className="py-2 px-3 font-mono">{storageLocationLabel(line.storage_location)}</td>
                           <td className="py-2 px-3 text-right font-mono">{fmt(line.qty)}</td>
                           <td className="py-2 px-3 text-right font-mono">{fmt(line.proportional_qty)}</td>
                         </tr>
