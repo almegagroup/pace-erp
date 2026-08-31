@@ -1194,6 +1194,13 @@ async function computePhysicalAvailabilityRows(
   const materialIds = [...new Set(needs.map((entry) => entry.materialId))];
   const locationIds = [...new Set(needs.map((entry) => entry.storageLocationId))];
 
+  // TEMP DIAGNOSTIC (2026-08-31, remove once the live PROD_PO_INSUFFICIENT_STOCK
+  // mismatch on Finalize is root-caused) -- logs the exact runtime inputs/outputs
+  // of this check so Render's live logs can be compared against the DB-side
+  // replication that keeps showing healthy stock for the same query.
+  console.log("[DIAG computePhysicalAvailabilityRows] company=%s excludePoId=%s materialIds=%o locationIds=%o",
+    companyId, excludePoId, materialIds, locationIds);
+
   const { data: ledgerRows, error: ledgerErr } = await serviceRoleClient
     .schema("erp_inventory")
     .from("stock_ledger")
@@ -1207,12 +1214,17 @@ async function computePhysicalAvailabilityRows(
     throw new Error("PROD_PO_STOCK_CHECK_FAILED");
   }
 
+  console.log("[DIAG computePhysicalAvailabilityRows] ledgerRows count=%d sample=%o",
+    (ledgerRows ?? []).length, (ledgerRows ?? []).slice(0, 5));
+
   const available = new Map<string, number>();
   for (const row of (ledgerRows ?? []) as JsonRecord[]) {
     const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
     const qty = Number(row.quantity ?? 0);
     available.set(key, (available.get(key) ?? 0) + (String(row.direction) === "IN" ? qty : -qty));
   }
+
+  console.log("[DIAG computePhysicalAvailabilityRows] available after ledger=%o", Object.fromEntries(available));
 
   const { data: reservationRows, error: reservationErr } = await serviceRoleClient
     .schema("erp_production")
@@ -1227,6 +1239,9 @@ async function computePhysicalAvailabilityRows(
     throw new Error("PROD_PO_STOCK_CHECK_FAILED");
   }
 
+  console.log("[DIAG computePhysicalAvailabilityRows] reservationRows count=%d rows=%o",
+    (reservationRows ?? []).length, reservationRows ?? []);
+
   for (const row of (reservationRows ?? []) as JsonRecord[]) {
     if (excludePoId && String(row.source_type) === "PROCESS_PO" && String(row.source_id) === excludePoId) continue;
     const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
@@ -1234,7 +1249,10 @@ async function computePhysicalAvailabilityRows(
     available.set(key, (available.get(key) ?? 0) - qty);
   }
 
-  return Array.from(needed.entries()).map(([, entry]) => {
+  console.log("[DIAG computePhysicalAvailabilityRows] available after reservations (excludePoId=%s)=%o",
+    excludePoId, Object.fromEntries(available));
+
+  const result = Array.from(needed.entries()).map(([, entry]) => {
     const key = buildAvailabilityKey(entry.materialId, entry.storageLocationId);
     const availableQty = Math.max(0, available.get(key) ?? 0);
     return {
@@ -1245,6 +1263,10 @@ async function computePhysicalAvailabilityRows(
       short: availableQty < entry.qty - EPSILON,
     };
   });
+
+  console.log("[DIAG computePhysicalAvailabilityRows] final result=%o", result);
+
+  return result;
 }
 
 async function checkStockAvailability(
@@ -2718,6 +2740,11 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
 
     const allLines = applyResult.lines ?? [];
     const stockNeeds = buildLineAvailabilityNeeds(allLines);
+    // TEMP DIAGNOSTIC (2026-08-31, remove once root-caused): the request-level
+    // context feeding into the stock check below.
+    console.log("[DIAG finalizeProcessOrderHandler] po.id=%s po.company_id=%s po.po_number=%s po_type=%s bodyLinesCount=%d allLinesCount=%d stockNeeds=%o",
+      id, po.company_id, po.po_number, po.po_type, (Array.isArray(body.lines) ? body.lines.length : 0), allLines.length,
+      Object.fromEntries(stockNeeds));
     const physicalRows = await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds, id);
     const shortRows = physicalRows.filter((row) => row.short);
 
