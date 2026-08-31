@@ -81,7 +81,7 @@ function ReversalDetailRows({ id }) {
                   <td className="py-1.5 px-3 text-right font-mono">{fmt(line.qty)} {line.uom_code}</td>
                   <td className="py-1.5 px-3 font-mono">{line.movement_type_code || "--"}</td>
                   <td className="py-1.5 px-3">{line.direction || "--"}</td>
-                  <td className="py-1.5 px-3">{line.storage_location?.location_code || "--"}</td>
+                  <td className="py-1.5 px-3">{line.storage_location?.code || line.storage_location?.name || "--"}</td>
                 </tr>
               ))}
             </tbody>

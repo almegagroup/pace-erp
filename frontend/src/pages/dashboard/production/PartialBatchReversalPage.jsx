@@ -303,7 +303,7 @@ export default function PartialBatchReversalPage() {
                       <td className="py-2 px-3">
                         <input type="radio" readOnly checked={Boolean(selectedRow && rowKey(selectedRow) === rowKey(row))} />
                       </td>
-                      <td className="py-2 px-3">{row.storage_location?.location_code || row.storage_location_id}</td>
+                      <td className="py-2 px-3">{storageLocationLabel(row.storage_location)}</td>
                       <td className="py-2 px-3">{row.row_type === "SFG" ? "SFG" : "FG (SKU)"}</td>
                       <td className="py-2 px-3">{materialLabel(row.material)}</td>
                       <td className="py-2 px-3 font-mono">{row.po_number || "--"}</td>
