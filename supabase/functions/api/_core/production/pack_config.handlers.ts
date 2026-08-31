@@ -31,17 +31,10 @@ function normalizeNullableString(value: unknown): string {
   return toTrimmedString(value ?? "");
 }
 
-function normalizeNullableNumber(value: unknown): string {
-  if (value == null || value === "") return "";
-  const n = Number(value);
-  return Number.isFinite(n) ? String(n) : "";
-}
-
-function buildFgSku(prodshadeCode: string, packCode: string, variant: string): string {
+function buildFgSku(prodshadeCode: string, packCode: string): string {
   return [
     normalizeNullableString(prodshadeCode),
     normalizeNullableString(packCode),
-    normalizeNullableString(variant),
   ].join("");
 }
 
@@ -73,7 +66,7 @@ async function resolveProdshadeRow(materialId: string): Promise<JsonRecord | nul
   return (data as JsonRecord | null) ?? null;
 }
 
-async function resolveFgMaterial(materialId: string, packCodeId: string, variant: string): Promise<{
+async function resolveFgMaterial(materialId: string, packCodeId: string): Promise<{
   fgMaterialId: string | null;
   fgPaceCode: string | null;
   skuString: string | null;
@@ -95,7 +88,7 @@ async function resolveFgMaterial(materialId: string, packCodeId: string, variant
     return { fgMaterialId: null, fgPaceCode: null, skuString: null, packCodeRow, prodshade };
   }
 
-  const skuString = buildFgSku(prodshadeCode, packCode, variant);
+  const skuString = buildFgSku(prodshadeCode, packCode);
   const { data: existingFg, error } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
@@ -124,7 +117,7 @@ async function ensureFgMaterialForConfig(
   variant: string,
   ctx: ProdHandlerContext,
 ): Promise<{ fgMaterialId: string | null; fgPaceCode: string | null }> {
-  const resolved = await resolveFgMaterial(materialId, packCodeId, variant);
+  const resolved = await resolveFgMaterial(materialId, packCodeId);
   if (!resolved.prodshade || !resolved.packCodeRow || !resolved.skuString) {
     return { fgMaterialId: null, fgPaceCode: null };
   }
@@ -514,7 +507,6 @@ export async function listPackConfigsHandler(req: Request, ctx: ProdHandlerConte
       const skuString = buildFgSku(
         normalizeNullableString(material.external_code),
         normalizeNullableString(packCode.pack_code),
-        normalizeNullableString(row.variant),
       );
       return {
         ...row,
@@ -558,17 +550,14 @@ export async function upsertPackConfigHandler(req: Request, ctx: ProdHandlerCont
 
     if (lookupErr) throw new Error("PROD_PACK_CONFIG_LOOKUP_FAILED");
 
-    const existing = ((existingRows ?? []) as JsonRecord[]).find((row) =>
-      normalizeNullableString(row.variant) === normalizeNullableString(variant) &&
-      normalizeNullableNumber(row.fill_qty) === normalizeNullableNumber(fillQty)
-    );
+    const existing = ((existingRows ?? []) as JsonRecord[])[0] ?? null;
 
     let configId = "";
     if (existing) {
       const { data: updated, error: updateErr } = await serviceRoleClient
         .schema("erp_production")
         .from("prodshade_pack_config")
-        .update({ fill_qty: fillQty, active: true })
+        .update({ variant: variant || null, fill_qty: fillQty, active: true })
         .eq("id", String(existing.id))
         .select("id")
         .single();
@@ -621,7 +610,6 @@ export async function deletePackConfigHandler(req: Request, ctx: ProdHandlerCont
     const resolved = await resolveFgMaterial(
       String((config as JsonRecord).material_id),
       String((config as JsonRecord).pack_code_id),
-      normalizeNullableString((config as JsonRecord).variant),
     );
 
     if (resolved.fgMaterialId) {

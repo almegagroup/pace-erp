@@ -4,13 +4,9 @@
  * Gate: 27.104 | Domain: PRODUCTION / COSTING (Accounts ACL)
  * Purpose: AC04 Conversion Cost Config (§104.8). ACCOUNTS-owned (not SA — SA can't know when a
  *          rate changes). Per-KG conversion cost keyed by company + segment + optional Prodshade
- *          override, dated by valid_from. Append-only: a rate change is a NEW dated row; old rows
- *          are kept (full history). valid_to is derived (next row's valid_from − 1), never stored.
- *          Company comes from the user's work company (dropdown if multi). Prodshade options are
- *          sourced from that company's Batch Number Series (real production Prodshades) — MTS needs
- *          per-Prodshade rates (different MTS products → different rates); MTO/HPS/MTEST use the
- *          company-level segment default. Process PO Verify resolves by posting date, hard-blocking
- *          when no rate is configured.
+ *          override, dated by valid_from. A mistaken scope or rate can be corrected in place with
+ *          an audit trail. Prodshade options come from approved strokes for the selected segment,
+ *          never from batch-series configuration. Process PO Verify resolves by posting date.
  * Authority: Frontend
  */
 
@@ -23,7 +19,7 @@ import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
-import { listConversionRates, createConversionRate, listBatchSeries } from "./prodApi.js";
+import { listConversionRates, createConversionRate, updateConversionRate, listConversionRateProdshades } from "./prodApi.js";
 
 const SEGMENTS = [
   { value: "ADMIX",  label: "ADMIX — Admix" },
@@ -38,6 +34,7 @@ const ERRORS = {
   PROD_CONV_RATE_DATE_INVALID:  "Valid-from must be a valid date.",
   PROD_CONV_RATE_VALUE_INVALID: "Rate must be a number ≥ 0.",
   PROD_CONV_RATE_EXISTS:        "A rate for this company/segment/prodshade already has that valid-from date. Pick a different date.",
+  PROD_CONV_RATE_PRODSHADE_INVALID: "Select an approved Prodshade for the selected company and segment.",
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 
@@ -46,14 +43,14 @@ function companyLabel(c) {
 }
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
-const emptyForm = () => ({ segment_code: "ADMIX", scope: "DEFAULT", prodshade_material_id: "", valid_from: todayIso(), conversion_rate_per_kg: "" });
+const emptyForm = () => ({ id: "", segment_code: "ADMIX", scope: "DEFAULT", prodshade_material_id: "", valid_from: todayIso(), conversion_rate_per_kg: "" });
 
 export default function ConversionCostPage() {
   const qc = useQueryClient();
   const [companyId, setCompanyId] = useState("");
   const [segmentFilter, setSegmentFilter] = useState("");
   const [saving, setSaving]     = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [form, setForm]         = useState(emptyForm());
 
   function toast(msg, tone = "success") {
@@ -65,24 +62,20 @@ export default function ConversionCostPage() {
   const companyOptions = companies.map((c) => ({ value: c.id, label: companyLabel(c) }));
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
-  // Prodshade options come from THIS company's batch series (real production Prodshades),
-  // not the full material master. MTS rows carry a Prodshade; company-level types don't.
-  const batchSeriesQ = useQuery({
-    queryKey: ["batch-series", effectiveCompanyId],
-    queryFn: () => listBatchSeries({ company_id: effectiveCompanyId }),
-    enabled: !!effectiveCompanyId,
+  // A company-level batch number series is deliberately not a Prodshade source: HPS and
+  // MTO use one such series but still have many approved output Prodshades.
+  const prodshadeQ = useQuery({
+    queryKey: ["conversion-rate-prodshades", effectiveCompanyId, form.segment_code],
+    queryFn: () => listConversionRateProdshades({ company_id: effectiveCompanyId, segment_code: form.segment_code }),
+    enabled: !!effectiveCompanyId && editorOpen && form.scope === "OVERRIDE",
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
   const prodshadeOptions = useMemo(() => {
-    const seen = new Map();
-    for (const row of batchSeriesQ.data ?? []) {
-      const mid = row.prodshade_material_id;
-      if (!mid || seen.has(mid)) continue;
-      const m = row.material ?? null;
-      seen.set(mid, { value: mid, label: m ? `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` : mid });
-    }
-    return [...seen.values()];
-  }, [batchSeriesQ.data]);
+    return (prodshadeQ.data ?? []).map((row) => ({
+      value: row.material_id,
+      label: [row.material_name, row.shade_code ? `Shade ${row.shade_code}` : ""].filter(Boolean).join(" — "),
+    }));
+  }, [prodshadeQ.data]);
 
   const listQ = useQuery({
     queryKey: ["conversion-rates", effectiveCompanyId, segmentFilter],
@@ -92,7 +85,7 @@ export default function ConversionCostPage() {
   });
   const rows = listQ.data ?? [];
 
-  async function handleCreate(e) {
+  async function handleSave(e) {
     e.preventDefault();
     if (!effectiveCompanyId || !form.segment_code || !form.valid_from) {
       toast("Company, segment, and valid-from date are required.", "error");
@@ -109,15 +102,21 @@ export default function ConversionCostPage() {
     }
     setSaving(true);
     try {
-      await createConversionRate({
+      const payload = {
         company_id: effectiveCompanyId,
         segment_code: form.segment_code,
         prodshade_material_id: form.scope === "OVERRIDE" ? form.prodshade_material_id : null,
         valid_from: form.valid_from,
         conversion_rate_per_kg: rateNum,
-      });
-      toast("Conversion rate added.");
-      setCreateOpen(false);
+      };
+      if (form.id) {
+        await updateConversionRate(form.id, payload);
+        toast("Conversion rate corrected.");
+      } else {
+        await createConversionRate(payload);
+        toast("Conversion rate added.");
+      }
+      setEditorOpen(false);
       setForm(emptyForm());
       qc.invalidateQueries({ queryKey: ["conversion-rates"] });
     } catch (err) { toast(friendly(err.code) || err.message, "error"); }
@@ -127,13 +126,13 @@ export default function ConversionCostPage() {
   return (
     <ErpScreenScaffold
       title="Conversion Cost Config"
-      subtitle="Accounts — per-KG conversion rate (§104.8). Segment default + optional Prodshade override, dated by Valid From. Append-only: a change is a new dated row. MTS can carry per-Prodshade rates; Process PO Verify hard-blocks with no rate."
+      subtitle="Accounts — per-KG conversion rate (§104.8). Every segment supports a default and Prodshade override. Approved strokes supply the relevant Prodshades; Process PO Verify uses the most specific rate valid on its posting date."
       actions={[{
         label: "New Rate",
         tone: "primary",
         mnemonic: "N",
         disabled: !companyId,
-        onClick: () => { setForm(emptyForm()); setCreateOpen(true); },
+        onClick: () => { setForm(emptyForm()); setEditorOpen(true); },
       }]}
     >
       <ErpSectionCard>
@@ -172,6 +171,7 @@ export default function ConversionCostPage() {
                 <th className="text-left py-2 px-3 border-b">Valid To</th>
                 <th className="text-right py-2 px-3 border-b">Rate / KG (₹)</th>
                 <th className="text-left py-2 px-3 border-b">Status</th>
+                <th className="text-right py-2 px-3 border-b">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -180,7 +180,7 @@ export default function ConversionCostPage() {
                   <td className="py-2 px-3"><span className="text-xs px-2 py-0.5 rounded bg-sky-50 text-sky-700 font-medium">{r.segment_code}</span></td>
                   <td className="py-2 px-3 text-slate-500">
                     {r.prodshade
-                      ? <span title="Prodshade override">{r.prodshade.pace_code ?? "—"} — {r.prodshade.material_name ?? ""}</span>
+                      ? <span title="Prodshade override">{r.prodshade.material_name ?? "—"}{r.prodshade.shade_code ? ` — Shade ${r.prodshade.shade_code}` : ""}</span>
                       : <span className="italic text-slate-400">Segment default</span>}
                   </td>
                   <td className="py-2 px-3 font-mono">{r.valid_from}</td>
@@ -191,6 +191,25 @@ export default function ConversionCostPage() {
                       ? <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Current</span>
                       : <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Superseded</span>}
                   </td>
+                  <td className="py-2 px-3 text-right">
+                    <button
+                      type="button"
+                      className="text-xs text-sky-700 hover:text-sky-900 font-medium"
+                      onClick={() => {
+                        setForm({
+                          id: r.id,
+                          segment_code: r.segment_code,
+                          scope: r.prodshade_material_id ? "OVERRIDE" : "DEFAULT",
+                          prodshade_material_id: r.prodshade_material_id ?? "",
+                          valid_from: r.valid_from,
+                          conversion_rate_per_kg: String(r.conversion_rate_per_kg ?? ""),
+                        });
+                        setEditorOpen(true);
+                      }}
+                    >
+                      Edit
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -198,15 +217,14 @@ export default function ConversionCostPage() {
         )}
       </ErpSectionCard>
 
-      {/* Create Drawer */}
-      <DrawerBase visible={createOpen} title="New Conversion Rate" onClose={() => setCreateOpen(false)}>
-        <form onSubmit={handleCreate} className="flex flex-col gap-4 p-4">
+      <DrawerBase visible={editorOpen} title={form.id ? "Edit Conversion Rate" : "New Conversion Rate"} onClose={() => setEditorOpen(false)}>
+        <form onSubmit={handleSave} className="flex flex-col gap-4 p-4">
           <div className="text-xs text-slate-500 bg-slate-50 rounded px-3 py-2">
             <span className="font-medium">Company:</span> {companyOptions.find((o) => o.value === effectiveCompanyId)?.label ?? "—"}
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Segment <span className="text-rose-500">*</span></label>
-            <select className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.segment_code} onChange={(e) => setForm((f) => ({ ...f, segment_code: e.target.value }))}>
+            <select className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.segment_code} onChange={(e) => setForm((f) => ({ ...f, segment_code: e.target.value, prodshade_material_id: "" }))}>
               {SEGMENTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
           </div>
@@ -220,8 +238,8 @@ export default function ConversionCostPage() {
           {form.scope === "OVERRIDE" && (
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-600">Prodshade <span className="text-rose-500">*</span></label>
-              <ErpComboboxField value={form.prodshade_material_id} onChange={(v) => setForm((f) => ({ ...f, prodshade_material_id: v }))} options={prodshadeOptions} emptyStateLabel="No Prodshades in this company's batch series" />
-              <p className="text-xs text-slate-400">From this company's Batch Number Series. MTS products can each carry a different rate.</p>
+              <ErpComboboxField value={form.prodshade_material_id} onChange={(v) => setForm((f) => ({ ...f, prodshade_material_id: v }))} options={prodshadeOptions} emptyStateLabel={prodshadeQ.isLoading ? "Loading approved Prodshades..." : "No approved Prodshades for this segment"} />
+              <p className="text-xs text-slate-400">Only Prodshades with an approved stroke for this company and segment are shown.</p>
             </div>
           )}
           <div className="flex flex-col gap-1">
@@ -233,9 +251,14 @@ export default function ConversionCostPage() {
             <label className="text-xs font-medium text-slate-600">Conversion Rate / KG (₹) <span className="text-rose-500">*</span></label>
             <input type="number" min="0" step="0.0001" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.conversion_rate_per_kg} onChange={(e) => setForm((f) => ({ ...f, conversion_rate_per_kg: e.target.value }))} required placeholder="e.g. 1.95" />
           </div>
+          {form.id && form.scope === "OVERRIDE" && (
+            <p className="text-xs text-amber-700 bg-amber-50 rounded px-3 py-2">
+              Changing a segment default into an override means the default no longer covers the other Prodshades. Add a separate default if they still need one.
+            </p>
+          )}
           <div className="flex gap-3 pt-2">
-            <button type="submit" disabled={saving} className="px-5 py-2 bg-sky-600 text-white text-sm rounded hover:bg-sky-700 disabled:opacity-50">Add Rate</button>
-            <button type="button" onClick={() => setCreateOpen(false)} className="px-4 py-2 border border-slate-300 text-slate-600 text-sm rounded">Cancel</button>
+            <button type="submit" disabled={saving} className="px-5 py-2 bg-sky-600 text-white text-sm rounded hover:bg-sky-700 disabled:opacity-50">{form.id ? "Save Correction" : "Add Rate"}</button>
+            <button type="button" onClick={() => setEditorOpen(false)} className="px-4 py-2 border border-slate-300 text-slate-600 text-sm rounded">Cancel</button>
           </div>
         </form>
       </DrawerBase>

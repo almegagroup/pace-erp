@@ -26,6 +26,7 @@ import {
   useMaterialOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
 
 const SO_TERMINAL_STATUSES = new Set(["CANCELLED", "CLOSED"]);
 const FREIGHT_TERM_OPTIONS = [
@@ -35,6 +36,7 @@ const FREIGHT_TERM_OPTIONS = [
   { value: "EX_TRANSPORTER_GODOWN", label: "Ex Transporter Godown" },
 ];
 const FG_TYPE_OPTIONS = ["MTO", "HPS", "MTEST", "MTS"];
+const MANUAL_DATE_BOUNDS = getManualDocumentDateBounds();
 
 function makeNewSoLine(lineMaterialType) {
   return {
@@ -274,6 +276,10 @@ export default function SODetailPage() {
   }
 
   async function handleSaveHeader() {
+    if (!isManualDocumentDateWithinWindow(headerEdit.so_date)) {
+      setError(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+      return;
+    }
     setSavingHeader(true);
     setError("");
     setNotice("");
@@ -477,7 +483,7 @@ export default function SODetailPage() {
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   SO Date
-                  <input type="date" value={headerEdit.so_date} onChange={(event) => setHeaderEdit((current) => ({ ...current, so_date: event.target.value }))} className="h-9 border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                  <input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={headerEdit.so_date} onChange={(event) => setHeaderEdit((current) => ({ ...current, so_date: event.target.value }))} className="h-9 border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
                 </label>
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Payment Terms

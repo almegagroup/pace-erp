@@ -712,7 +712,7 @@ export default function SAPackCodeMasterPage() {
 
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">
-              Variant <span className="font-normal text-slate-400">(optional)</span>
+              Variant <span className="font-normal text-slate-400">(optional - descriptive only; not part of SKU)</span>
             </label>
             <input
               className="rounded border border-slate-300 px-2 py-1.5 text-sm"
@@ -720,6 +720,7 @@ export default function SAPackCodeMasterPage() {
               onChange={(event) => setConfigForm((current) => ({ ...current, variant: event.target.value }))}
               placeholder="e.g. JAR, BAG"
             />
+            <p className="text-xs text-slate-500">SKU remains Prodshade Code + Pack Code. Variant is stored only on this configuration.</p>
           </div>
 
           <div className="flex flex-col gap-1">

@@ -26,6 +26,7 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templa
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreenWithContext, popScreen, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { isRouteAllowed } from "../../../../router/routeIndex.js";
+import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   createDeliveryOrderUnified,
@@ -39,6 +40,7 @@ import {
 } from "../procurementApi.js";
 
 const QTY_TOL = 0.0001;
+const MANUAL_DATE_BOUNDS = getManualDocumentDateBounds();
 const TRUCK_EXPORT_COLUMNS = [
   { key: "__groupLabel", label: "FO / Customer Address" },
   { key: "__billTo", label: "Bill-To" },
@@ -592,6 +594,10 @@ export default function DO01CreatePage() {
 
   async function handleSubmit() {
     if (!validateFinalSelection()) return;
+    if (header.lr_date && !isManualDocumentDateWithinWindow(header.lr_date)) {
+      setError(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+      return;
+    }
     setSaving(true);
     setError("");
     setNotice("");
@@ -663,7 +669,7 @@ export default function DO01CreatePage() {
                 <ErpDenseFormRow label="Vehicle Number"><input value={header.vehicle_number} onChange={(event) => setHeader((current) => ({ ...current, vehicle_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
                 <ErpDenseFormRow label="Transporter"><TransporterPicker transporterId={transporterId} transporterName={transporterName} companyId={companyId} canManageTransporters={canManageTransporters} onSelect={(t) => { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); }} onClear={() => { setTransporterId(""); setTransporterName(""); }} onAddNew={handleAddTransporterToMaster} /></ErpDenseFormRow>
                 <ErpDenseFormRow label="LR Number"><input value={header.lr_number} onChange={(event) => setHeader((current) => ({ ...current, lr_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
-                <ErpDenseFormRow label="LR Date"><input type="date" value={header.lr_date} onChange={(event) => setHeader((current) => ({ ...current, lr_date: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
+                <ErpDenseFormRow label="LR Date"><input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={header.lr_date} onChange={(event) => setHeader((current) => ({ ...current, lr_date: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
                 <ErpDenseFormRow label="Gross Weight"><input type="number" step="0.01" value={header.gross_weight} onChange={(event) => setHeader((current) => ({ ...current, gross_weight: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
                 <ErpDenseFormRow label="Driver Name"><input value={header.driver_number} onChange={(event) => setHeader((current) => ({ ...current, driver_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
                 <ErpDenseFormRow label="Driver Contact Number"><input value={header.driver_contact_number} onChange={(event) => setHeader((current) => ({ ...current, driver_contact_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>

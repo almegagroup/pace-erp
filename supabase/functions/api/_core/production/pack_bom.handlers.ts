@@ -192,7 +192,6 @@ async function resolveProdshadeForSku(sku: JsonRecord): Promise<JsonRecord | nul
       && buildSkuProdshadeKey(
         toTrimmedString(prod.external_code),
         toTrimmedString(pack.pack_code),
-        toTrimmedString(row.variant),
       ) === skuIdentity;
   });
   if (matches.length !== 1) return null;
@@ -257,8 +256,8 @@ async function resolveApprovedStroke(prodshadeMaterialId: string, companyId: str
   };
 }
 
-function buildSkuProdshadeKey(prodshadeCode: string, packCode: string, variant = ""): string {
-  return toUpperTrimmedString(`${toTrimmedString(prodshadeCode)}${toTrimmedString(packCode)}${toTrimmedString(variant)}`);
+function buildSkuProdshadeKey(prodshadeCode: string, packCode: string): string {
+  return toUpperTrimmedString(`${toTrimmedString(prodshadeCode)}${toTrimmedString(packCode)}`);
 }
 
 function normalizeLine(line: JsonRecord, idx: number): JsonRecord {
@@ -474,7 +473,7 @@ export async function listPackBomEligibleSkusHandler(
       const packCode = toTrimmedString(pack.pack_code);
       const prodshadeCode = toTrimmedString(prodshade?.external_code);
       if (!packCode || !prodshadeCode) continue;
-      const key = buildSkuProdshadeKey(prodshadeCode, packCode, toTrimmedString(row.variant));
+      const key = buildSkuProdshadeKey(prodshadeCode, packCode);
       // An exact SKU must resolve to one Prodshade config only. A duplicate is
       // deliberately treated as unusable instead of silently choosing first.
       prodshadeBySkuKey.set(

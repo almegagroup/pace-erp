@@ -34,6 +34,7 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
+import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
 import {
   cancelPgiInvoiceGroups,
   createAdditionalCostCategory,
@@ -45,6 +46,7 @@ import {
 } from "../procurementApi.js";
 
 const EXCLUSIVE_FREIGHT_TERMS = new Set(["FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS", "EX_TRANSPORTER_GODOWN"]);
+const MANUAL_DATE_BOUNDS = getManualDocumentDateBounds();
 
 function toNumber(value) {
   const numeric = Number(value);
@@ -170,6 +172,7 @@ function groupInputIsValid(group, input) {
 function groupInputValidationMessage(group, input) {
   if (!input) return "Invoice group input is unavailable. Reload and try again.";
   if (!input.tally_invoice_number.trim() || !input.tally_invoice_date) return "Tally Invoice Number and Date are required.";
+  if (!isManualDocumentDateWithinWindow(input.tally_invoice_date)) return MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE;
   if (group.ibn_required && !input.inbound_number.trim()) return "Inbound Number (IBN) is required for this invoice group.";
 
   const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
@@ -300,7 +303,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
               <input value={input.tally_invoice_number} onChange={(e) => onChange({ tally_invoice_number: e.target.value })} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
             </ErpDenseFormRow>
             <ErpDenseFormRow label="Tally Invoice Date" required>
-              <input type="date" value={input.tally_invoice_date} onChange={(e) => onChange({ tally_invoice_date: e.target.value })} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+              <input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={input.tally_invoice_date} onChange={(e) => onChange({ tally_invoice_date: e.target.value })} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
             </ErpDenseFormRow>
             {group.ibn_required ? (
               <ErpDenseFormRow label="Inbound Number (IBN)" required>
@@ -734,7 +737,7 @@ export default function PgiInvoiceGroupsCreatePage() {
                     } },
                     { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px", render: (row) => {
                       const input = groupInputs[row.group_key];
-                      return <input disabled={isViewMode && !row.cancelled_invoice} type="date" value={input?.tally_invoice_date || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-100" />;
+                      return <input disabled={isViewMode && !row.cancelled_invoice} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={input?.tally_invoice_date || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-100" />;
                     } },
                     { key: "total", label: "Invoice Total", width: "120px", align: "right", render: (row) => {
                       const input = groupInputs[row.group_key] || defaultGroupInput(row);
