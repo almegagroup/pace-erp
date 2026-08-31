@@ -427,7 +427,13 @@ export default function SlocCostingGroupPage() {
           { key: "source_sloc_group_name", label: "Source SLOC Group", width: "160px" },
           { key: "material_name", label: "Material Name", width: "220px" },
           { key: "material_external_code", label: "External Code", width: "120px" },
-          { key: "rate", label: "Rate", width: "110px", align: "right" },
+          // "0.##########" (not "0.00") -- Excel's default General format
+          // silently rounds the *displayed* decimals to fit the column, even
+          // though the cell's real value is untouched; found live 2026-08-31
+          // when a rate like 71.744 showed as 71.74 in the exported file.
+          // "#" placeholders never pad with trailing zeros, so a 2-decimal
+          // rate still shows as exactly "71.74", not "71.7400000000".
+          { key: "rate", label: "Rate", width: "110px", align: "right", numFmt: "0.##########" },
           { key: "verification_status", label: "Status", width: "110px" },
           { key: "lead", label: "Entry", width: "110px" },
         ],
