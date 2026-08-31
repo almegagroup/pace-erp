@@ -995,6 +995,12 @@ export function previewInvoiceGroups(dcId) {
 export function postPgiInvoiceGroups(dcId, data) {
   return fetchProcurement("POST", `/api/procurement/delivery-orders-v2/${encodeURIComponent(dcId)}/pgi-invoice-groups`, data);
 }
+export function cancelPgiInvoiceGroups(dcId, data) {
+  return fetchProcurement("POST", `/api/procurement/delivery-orders-v2/${encodeURIComponent(dcId)}/cancel-invoice-groups`, data);
+}
+export function amendDeliveryOrderDispatchDetails(dcId, data) {
+  return fetchProcurement("POST", `/api/procurement/delivery-orders-v2/${encodeURIComponent(dcId)}/amend-dispatch-details`, data);
+}
 export function listAdditionalCostCategories() {
   return fetchProcurement("GET", "/api/procurement/additional-cost-categories");
 }

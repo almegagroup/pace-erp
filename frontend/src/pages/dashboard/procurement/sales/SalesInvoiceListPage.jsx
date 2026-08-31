@@ -148,12 +148,6 @@ export default function SalesInvoiceListPage() {
     navigate("/dashboard/procurement/sales-invoices/pgi-groups");
   }
 
-  function openInvoiceDetail(row) {
-    if (!row.invoice_id) return;
-    openScreenWithContext(OPERATION_SCREENS.PROC_INV_DETAIL.screen_code, { id: row.invoice_id, refreshOnReturn: true });
-    navigate(`/dashboard/procurement/sales-invoices/${encodeURIComponent(row.invoice_id)}`);
-  }
-
   function handleExport() {
     if (pagedRows.length === 0) return;
     downloadCsvFile({
@@ -230,11 +224,11 @@ export default function SalesInvoiceListPage() {
                   ) : row.invoice_id ? (
                     <button
                       type="button"
-                      data-erp-grid-action-control="open-invoice"
-                      onClick={(event) => { event.stopPropagation(); openInvoiceDetail(row); }}
+                      data-erp-grid-action-control="view-invoice-groups"
+                      onClick={(event) => { event.stopPropagation(); openPgiInvoice(row); }}
                       className="border border-slate-400 bg-white px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-700"
                     >
-                      Open Invoice
+                      View Invoice Groups
                     </button>
                   ) : "—",
                 },

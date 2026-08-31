@@ -33,7 +33,9 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templa
 import { useMenu } from "../../../../context/useMenu.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
+  cancelPgiInvoiceGroups,
   createAdditionalCostCategory,
   getDeliveryOrderUnified,
   listAdditionalCostCategories,
@@ -102,16 +104,17 @@ function makeKey() {
 }
 
 function defaultGroupInput(group) {
+  const posted = group.posted_invoice || {};
   return {
-    tally_invoice_number: "",
-    tally_invoice_date: "",
-    inbound_number: "",
-    e_way_bill_applicable: false,
-    e_way_bill_number: "",
-    freight: { to_pay: false, included: false, mode: "AD_HOC", amount: "", rate: "", gst_included: false, gst_treatment: "EXCLUSIVE", gst_rate: "" },
+    tally_invoice_number: posted.tally_invoice_number || "",
+    tally_invoice_date: posted.tally_invoice_date || "",
+    inbound_number: posted.inbound_number || "",
+    e_way_bill_applicable: posted.e_way_bill_applicable === true,
+    e_way_bill_number: posted.e_way_bill_number || "",
+    freight: { to_pay: posted.freight_to_pay === true, included: posted.freight_included === true, mode: posted.freight_mode || "AD_HOC", amount: posted.freight_amount ?? "", rate: posted.freight_rate ?? "", gst_included: posted.freight_gst_included === true, gst_treatment: posted.freight_gst_treatment || "EXCLUSIVE", gst_rate: posted.freight_gst_rate ?? "" },
     additional_costs: [],
-    round_off_amount: "",
-    remarks: "",
+    round_off_amount: posted.round_off_amount ?? "",
+    remarks: posted.remarks || "",
     __groupSnapshot: group,
   };
 }
@@ -181,16 +184,23 @@ function groupInputValidationMessage(group, input) {
   return "";
 }
 
-function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFreightChange, onAddAdditionalCost, onUpdateAdditionalCost, onRemoveAdditionalCost, categories, onCategoryCreated, onClose, onSaveNext, hasNext }) {
+function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFreightChange, onAddAdditionalCost, onUpdateAdditionalCost, onRemoveAdditionalCost, categories, onCategoryCreated, onClose, onSaveNext, hasNext, readOnly }) {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [validationError, setValidationError] = useState("");
   const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
   const totals = computeGroupPreviewTotal(group, input);
+  const displayedTotal = readOnly && group.posted_invoice?.total_invoice_value != null
+    ? toNumber(group.posted_invoice.total_invoice_value)
+    : totals.total;
   const categoryOptions = categories.map((c) => ({ value: c.id, label: c.category_name }));
   const taxRows = hsnTaxRows(group);
 
   function handleSaveNext() {
+    if (readOnly) {
+      onClose();
+      return;
+    }
     const message = groupInputValidationMessage(group, input);
     if (message) {
       setValidationError(message);
@@ -201,6 +211,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
   }
 
   useEffect(() => {
+    if (readOnly) return undefined;
     function handleValidateShortcut(event) {
       if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.key.toLowerCase() !== "v") return;
       event.preventDefault();
@@ -208,7 +219,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
     }
     window.addEventListener("keydown", handleValidateShortcut);
     return () => window.removeEventListener("keydown", handleValidateShortcut);
-  }, [group, input, onSaveNext]);
+  }, [group, input, onSaveNext, readOnly]);
 
   async function handleCreateCategory() {
     const name = newCategoryName.trim();
@@ -227,7 +238,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
   }
 
   return (
-    <DrawerBase visible side="center" title={`${group.source_display_number || group.document_number || "Invoice group"} — Invoice Preparation`} onEscape={onClose} onClose={onClose} width="min(1120px, calc(100vw - 24px))">
+    <DrawerBase visible side="center" title={`${group.source_display_number || group.document_number || "Invoice group"} — ${readOnly ? "Posted Invoice View" : "Invoice Preparation"}`} onEscape={onClose} onClose={onClose} width="min(1120px, calc(100vw - 24px))">
       <div className="grid gap-4">
         <div className="grid gap-3 border border-slate-300 bg-white p-4 text-sm text-slate-900">
           <div className="border-b border-slate-400 pb-2 text-center text-lg font-bold uppercase">Invoice Preparation</div>
@@ -272,7 +283,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
                   {itemTaxBreakup(line, group.gst_type).map((tax) => <tr key={`${line.dc_line_id}-${tax.label}`}><td className="border-x border-slate-300" /><td colSpan="4" className="border-x border-slate-300 px-2 py-1 text-right italic">Output {tax.label} @ {formatFixed(tax.rate, 2)}%</td><td className="border-x border-slate-300 p-1">{tax.label}</td><td className="border-x border-slate-300 p-1 text-right font-semibold">{formatFixed(tax.amount)}</td></tr>)}
                 </tbody>
               ))}
-              <tfoot><tr className="font-bold"><td colSpan="3" className="border border-slate-300 p-2 text-right">Total</td><td className="border border-slate-300 p-2 text-right">{formatFixed(group.net_weight, 3)}</td><td colSpan="2" className="border border-slate-300 p-2" /><td className="border border-slate-300 p-2 text-right">{formatFixed(totals.total)}</td></tr></tfoot>
+              <tfoot><tr className="font-bold"><td colSpan="3" className="border border-slate-300 p-2 text-right">Total</td><td className="border border-slate-300 p-2 text-right">{formatFixed(group.net_weight, 3)}</td><td colSpan="2" className="border border-slate-300 p-2" /><td className="border border-slate-300 p-2 text-right">{formatFixed(displayedTotal)}</td></tr></tfoot>
             </table>
           </div>
 
@@ -281,6 +292,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
           </div>
         </div>
 
+        <fieldset disabled={readOnly} className="contents">
         <div className="grid gap-2 border border-slate-200 p-3">
           <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Tally / e-Way Bill</div>
           <div className="grid gap-3 md:grid-cols-2">
@@ -411,16 +423,17 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">Freight</span><span className="font-mono">{input.freight.to_pay ? "TO PAY (Customer)" : formatFixed(totals.freightContribution)}</span></div>
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">Other Invoice Adjustment</span><span className="font-mono">{formatFixed(totals.additionalTotal)}</span></div>
           <label className="grid grid-cols-[minmax(0,1fr)_9rem] items-center gap-x-8"><span className="min-w-0 text-slate-500">Round Off</span><input type="number" step="0.01" value={input.round_off_amount} onChange={(event) => onChange({ round_off_amount: event.target.value })} placeholder="0.00" className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-right font-mono text-xs text-slate-900 outline-none focus:border-sky-500" /></label>
-          <div className="mt-1 grid grid-cols-[minmax(0,1fr)_auto] gap-x-8 border-t border-slate-300 pt-1 text-base font-bold"><span>Invoice Total</span><span className="font-mono">{formatFixed(totals.total)}</span></div>
+          <div className="mt-1 grid grid-cols-[minmax(0,1fr)_auto] gap-x-8 border-t border-slate-300 pt-1 text-base font-bold"><span>Invoice Total</span><span className="font-mono">{formatFixed(displayedTotal)}</span></div>
         </div>
+        </fieldset>
 
-        {validationError ? <div className="text-xs font-semibold text-rose-700">{validationError}</div> : null}
-        <div className="text-center text-xs text-slate-500">Validation only. PGI and invoice are created only by “Post Goods &amp; Create Invoice” after every group is ready.</div>
+        {!readOnly && validationError ? <div className="text-xs font-semibold text-rose-700">{validationError}</div> : null}
+        <div className="text-center text-xs text-slate-500">{readOnly ? "Posted invoice. Values are locked; PGI and invoice creation cannot run again." : "Validation only. PGI and invoice are created only by “Post Goods &amp; Create Invoice” after every group is ready."}</div>
         <div className="flex gap-2">
           <button type="button" onClick={onClose} className="flex-1 border border-slate-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">Close</button>
-          <button type="button" onClick={handleSaveNext} className="flex-1 border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-white">
-            {hasNext ? "Validate & Next Group →" : "Validate & Close"} <span className="ml-1 text-[10px] text-slate-300">ALT+V</span>
-          </button>
+          {!readOnly ? <button type="button" onClick={handleSaveNext} className="flex-1 border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-white">
+            {group.cancelled_invoice ? "Recreate & Post" : hasNext ? "Validate & Next Group →" : "Validate & Close"} <span className="ml-1 text-[10px] text-slate-300">ALT+V</span>
+          </button> : null}
         </div>
       </div>
     </DrawerBase>
@@ -441,6 +454,7 @@ export default function PgiInvoiceGroupsCreatePage() {
   const [saving, setSaving] = useState(false);
   const [groupInputs, setGroupInputs] = useState({});
   const [activeGroupKey, setActiveGroupKey] = useState(null);
+  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState([]);
   const [doPickerCompanyId, setDoPickerCompanyId] = useState("");
   const [doPickerSearch, setDoPickerSearch] = useState("");
 
@@ -481,6 +495,7 @@ export default function PgiInvoiceGroupsCreatePage() {
     () => (Array.isArray(groupsQuery.data?.groups) ? groupsQuery.data.groups : []),
     [groupsQuery.data?.groups]
   );
+  const isViewMode = groupsQuery.data?.view_only === true;
 
   useEffect(() => {
     if (groups.length === 0) return;
@@ -521,12 +536,12 @@ export default function PgiInvoiceGroupsCreatePage() {
     queryClient.setQueryData(["procurement", "additional-cost-categories"], (current) => (Array.isArray(current) ? [...current, created] : [created]));
   }
 
-  async function handlePostAll() {
+  async function handlePostAll(groupKeys = null) {
     setSaving(true);
     setError("");
     setNotice("");
     try {
-      const payloadGroups = groups.map((group) => {
+      const payloadGroups = groups.filter((group) => !groupKeys || groupKeys.includes(group.group_key)).map((group) => {
         const input = groupInputs[group.group_key] || defaultGroupInput(group);
         const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
         return {
@@ -560,6 +575,11 @@ export default function PgiInvoiceGroupsCreatePage() {
       const result = await postPgiInvoiceGroups(dcId, { groups: payloadGroups });
       const invoices = Array.isArray(result?.invoices) ? result.invoices : [];
       setNotice(`Posted ${invoices.length} invoice(s).`);
+      if (isViewMode) {
+        setActiveGroupKey(null);
+        await Promise.all([groupsQuery.refetch(), doQuery.refetch()]);
+        return;
+      }
       // A posted DO is intentionally no longer eligible for invoice-group
       // preview. Return to the queue instead of opening the legacy detail
       // screen under a possibly different company context.
@@ -578,7 +598,38 @@ export default function PgiInvoiceGroupsCreatePage() {
   const nextGroup = activeGroupIndex >= 0 ? groups[activeGroupIndex + 1] : null;
 
   function handleSaveNextFromDrawer() {
+    if (activeGroup?.cancelled_invoice) {
+      void handlePostAll([activeGroup.group_key]);
+      return;
+    }
     setActiveGroupKey(nextGroup ? nextGroup.group_key : null);
+  }
+
+  async function handleCancelSelected() {
+    const reason = await openActionPrompt({ eyebrow: "Invoice Groups", title: `Cancel ${selectedInvoiceIds.length} posted invoice group(s)?`, label: "Cancellation reason", required: true });
+    if (!reason) return;
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await cancelPgiInvoiceGroups(dcId, { invoice_ids: selectedInvoiceIds, reason });
+      setSelectedInvoiceIds([]);
+      setNotice("Selected invoice group(s) cancelled. Stock was reversed with P602; audit history is retained.");
+      await Promise.all([groupsQuery.refetch(), doQuery.refetch()]);
+    } catch (cancelError) {
+      setError(cancelError instanceof Error ? cancelError.message : "PGI_INVOICE_GROUPS_CANCEL_FAILED");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function toggleInvoiceSelection(invoiceId) {
+    setSelectedInvoiceIds((current) => current.includes(invoiceId) ? current.filter((id) => id !== invoiceId) : [...current, invoiceId]);
+  }
+
+  function toggleSelectAllPosted() {
+    const postedIds = groups.map((group) => group.posted_invoice?.id).filter(Boolean);
+    setSelectedInvoiceIds((current) => current.length === postedIds.length ? [] : postedIds);
   }
 
   function openDo(id) {
@@ -627,7 +678,7 @@ export default function PgiInvoiceGroupsCreatePage() {
     <>
       <ErpScreenScaffold
         eyebrow="Sales (SO02)"
-        title={`PGI & Invoice — Invoice Groups (${dc?.dc_number || "…"})`}
+        title={`${isViewMode ? "Posted Invoice Groups" : "PGI & Invoice — Invoice Groups"} (${dc?.dc_number || "…"})`}
         actions={[
           {
             key: "back",
@@ -638,7 +689,8 @@ export default function PgiInvoiceGroupsCreatePage() {
               setDcId(""); setPage(0);
             },
           },
-          { key: "post", label: saving ? "Posting..." : "Post Goods & Create Invoice", tone: "primary", onClick: () => void handlePostAll(), disabled: saving || !allGroupsReady },
+          ...(!isViewMode ? [{ key: "post", label: saving ? "Posting..." : "Post Goods & Create Invoice", tone: "primary", onClick: () => void handlePostAll(), disabled: saving || !allGroupsReady }] : []),
+          ...(isViewMode ? [{ key: "cancel-selected", label: saving ? "Cancelling..." : `Cancel Selected (${selectedInvoiceIds.length})`, tone: "danger", onClick: () => void handleCancelSelected(), disabled: saving || selectedInvoiceIds.length === 0 }] : []),
         ]}
         notices={[
           ...(doQuery.error ? [{ key: "do-error", tone: "error", message: doQuery.error instanceof Error ? doQuery.error.message : "DO_FETCH_FAILED" }] : []),
@@ -655,6 +707,7 @@ export default function PgiInvoiceGroupsCreatePage() {
                 <ErpDenseGrid
                   cellNavigate
                   columns={[
+                    ...(isViewMode ? [{ key: "select", label: <input type="checkbox" aria-label="Select all posted invoices" checked={groups.filter((group) => group.posted_invoice?.id).length > 0 && selectedInvoiceIds.length === groups.filter((group) => group.posted_invoice?.id).length} onChange={toggleSelectAllPosted} />, width: "52px", render: (row) => row.posted_invoice?.id ? <input type="checkbox" aria-label={`Select invoice ${row.posted_invoice.invoice_number || ""}`} checked={selectedInvoiceIds.includes(row.posted_invoice.id)} onChange={() => toggleInvoiceSelection(row.posted_invoice.id)} /> : null }] : []),
                     { key: "source_type", label: "Type", width: "80px", render: (row) => (row.source_type === "SALES_ORDER" ? "SO" : "STO") },
                     { key: "source_display_number", label: "SO/STO Number", width: "120px", render: (row) => row.source_display_number || "—" },
                     { key: "document_date", label: "Date", width: "95px" },
@@ -664,11 +717,12 @@ export default function PgiInvoiceGroupsCreatePage() {
                     { key: "bill_to", label: "Billing Address", render: (row) => <AddressCell party={row.bill_to} /> },
                     { key: "ship_to", label: "Ship-To Address", render: (row) => <AddressCell party={row.ship_to} /> },
                     { key: "fo_number", label: "FO", width: "110px", render: (row) => row.fo_number || "—" },
+                    ...(isViewMode ? [{ key: "invoice_status", label: "Invoice Status", width: "120px", render: (row) => row.posted_invoice ? `POSTED (${row.posted_invoice.invoice_number})` : row.cancelled_invoice ? `CANCELLED (${row.cancelled_invoice.invoice_number})` : "—" }] : []),
                     { key: "inbound_number", label: "Inbound Number", width: "120px", render: (row) => {
                       const input = groupInputs[row.group_key];
                       return <input
                         value={row.ibn_required ? (input?.inbound_number || "") : ""}
-                        disabled={!row.ibn_required}
+                        disabled={(isViewMode && !row.cancelled_invoice) || !row.ibn_required}
                         onChange={(event) => updateGroupInput(row.group_key, { inbound_number: event.target.value })}
                         placeholder={row.ibn_required ? "Required" : "Not applicable"}
                         className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500 disabled:cursor-not-allowed disabled:bg-slate-100"
@@ -676,18 +730,18 @@ export default function PgiInvoiceGroupsCreatePage() {
                     } },
                     { key: "tally_invoice_number", label: "Tally Invoice Number", width: "140px", render: (row) => {
                       const input = groupInputs[row.group_key];
-                      return <input value={input?.tally_invoice_number || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_number: event.target.value })} placeholder="Required" className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500" />;
+                      return <input disabled={isViewMode && !row.cancelled_invoice} value={input?.tally_invoice_number || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_number: event.target.value })} placeholder="Required" className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-100" />;
                     } },
                     { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px", render: (row) => {
                       const input = groupInputs[row.group_key];
-                      return <input type="date" value={input?.tally_invoice_date || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500" />;
+                      return <input disabled={isViewMode && !row.cancelled_invoice} type="date" value={input?.tally_invoice_date || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-100" />;
                     } },
                     { key: "total", label: "Invoice Total", width: "120px", align: "right", render: (row) => {
                       const input = groupInputs[row.group_key] || defaultGroupInput(row);
-                      return formatFixed(computeGroupPreviewTotal(row, input).total);
+                      return formatFixed(isViewMode && row.posted_invoice?.total_invoice_value != null ? row.posted_invoice.total_invoice_value : computeGroupPreviewTotal(row, input).total);
                     } },
                     { key: "actions", label: "", width: "90px", render: (row) => (
-                      <button type="button" onClick={() => setActiveGroupKey(row.group_key)} className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-950">Open</button>
+                      <button type="button" onClick={() => setActiveGroupKey(row.group_key)} className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-950">{isViewMode && row.cancelled_invoice ? "Recreate" : isViewMode ? "View" : "Open"}</button>
                     ) },
                   ]}
                   rows={groups}
@@ -696,7 +750,7 @@ export default function PgiInvoiceGroupsCreatePage() {
                   emptyMessage="No invoice groups -- this DO may have no lines."
                 />
               )}
-              {!allGroupsReady && groups.length > 0 ? (
+              {!isViewMode && !allGroupsReady && groups.length > 0 ? (
                 <div className="mt-2 text-xs text-amber-700">Open every row and fill in Tally Invoice Number/Date (and Inbound Number where required) before posting.</div>
               ) : null}
             </ErpSectionCard>
@@ -719,6 +773,7 @@ export default function PgiInvoiceGroupsCreatePage() {
           onClose={() => setActiveGroupKey(null)}
           onSaveNext={handleSaveNextFromDrawer}
           hasNext={Boolean(nextGroup)}
+          readOnly={isViewMode && !activeGroup.cancelled_invoice}
         />
       ) : null}
     </>

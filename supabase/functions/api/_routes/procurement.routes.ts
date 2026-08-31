@@ -350,6 +350,8 @@ import {
   reverseSalesInvoiceHandler,
 } from "../_core/procurement/delivery_order.handlers.ts";
 import {
+  amendDispatchDetailsHandler,
+  cancelPgiInvoiceGroupsHandler,
   createDeliveryOrderUnifiedHandler,
   getDeliveryOrderUnifiedHandler,
   listDoAddSoOptionsHandler,
@@ -1201,6 +1203,12 @@ export async function dispatchProcurementRoutes(
   }
   if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/pgi-invoice-groups$/.test(pathname) && req.method === "POST") {
     return await postPgiInvoiceGroupsHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/cancel-invoice-groups$/.test(pathname) && req.method === "POST") {
+    return await cancelPgiInvoiceGroupsHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/amend-dispatch-details$/.test(pathname) && req.method === "POST") {
+    return await amendDispatchDetailsHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/delivery-orders\/[^/]+$/.test(pathname) && req.method === "GET") {
