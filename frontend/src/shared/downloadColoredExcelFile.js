@@ -20,7 +20,9 @@ function pxWidthToExcelWidth(width) {
  * @param {object} params
  * @param {string} params.fileName
  * @param {string} [params.sheetName]
- * @param {Array<{key:string,label:string,align?:string,width?:string}>} params.columns
+ * @param {Array<{key:string,label:string,align?:string,width?:string,numFmt?:string}>} params.columns
+ *   — `numFmt` is an Excel number format string (e.g. "0.##########") applied
+ *   to that column's cells; omit for Excel's default "General" format.
  * @param {Array<object>} params.rows
  * @param {(row:object, column:object) => (string|number)} [params.getCellValue] — defaults to row[column.key]
  * @param {(row:object, column:object) => ({fontArgb?:string, bold?:boolean}|null)} [params.getCellColor]
@@ -71,6 +73,15 @@ export async function downloadColoredExcelFile({
       const cell = excelRow.getCell(index + 1);
       if (column.align === "right") {
         cell.alignment = { horizontal: "right" };
+      }
+      // Optional per-column Excel number format (e.g. "0.##########" for a
+      // rate that must show its full stored precision, not Excel's default
+      // "General" format -- which silently rounds the *displayed* decimals
+      // to fit the column width, even though the underlying cell value is
+      // untouched). Column-level like `align`/`width`, so existing callers
+      // that never set it keep today's exact behavior.
+      if (column.numFmt) {
+        cell.numFmt = column.numFmt;
       }
       if (rowFillArgb) {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFillArgb } };
