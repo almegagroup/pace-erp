@@ -708,7 +708,7 @@ export default function PlanFeedPage() {
       setAllocPoNumber(""); setAllocCandidate(null); setAllocQty(""); setAllocNumPacks(""); setAllocationItemId("");
       await loadEditFo(editData.id);
     } catch (err) {
-      if (err.message === "PROD_PLAN_FEED_MATERIAL_MISMATCH") {
+      if (err.code === "PROD_PLAN_FEED_MATERIAL_MISMATCH" || err.code === "PROD_PLAN_FEED_ITEM_MATERIAL_MISMATCH") {
         const confirmed = await openActionConfirm({
           eyebrow: "Plan Feed",
           title: "Material differs from this FO's SKU",
@@ -718,24 +718,35 @@ export default function PlanFeedPage() {
         if (confirmed) await submitAllocation(true);
         return;
       }
-      toast(friendlyErr(err.message), "error");
+      toast(friendlyErr(err.code ?? err.message), "error");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleAllocationQtyChange(allocation, newQty) {
+  async function handleAllocationQtyChange(allocation, newQty, confirmMismatch) {
     if (!editData || !canEditSelectedFo) return;
     try {
       await (isMtestEdit ? upsertMtestFoAllocation : upsertFoAllocation)(editData.id, {
         packing_order_id: allocation.packing_order_id,
         plan_feed_item_id: allocation.plan_feed_item_id,
         allocated_qty_kg: Number(newQty) || 0,
+        confirm_mismatch: confirmMismatch === true,
       });
       toast(Number(newQty) > 0 ? "Allocation updated." : "Allocation removed.");
       await loadEditFo(editData.id);
     } catch (err) {
-      toast(friendlyErr(err.message), "error");
+      if (err.code === "PROD_PLAN_FEED_MATERIAL_MISMATCH" || err.code === "PROD_PLAN_FEED_ITEM_MATERIAL_MISMATCH") {
+        const confirmed = await openActionConfirm({
+          eyebrow: "Plan Feed",
+          title: "Material differs from this FO's SKU",
+          message: "This Packing PO's material does not match the FO's SKU. Allocate anyway?",
+          confirmLabel: "Allocate anyway",
+        });
+        if (confirmed) await handleAllocationQtyChange(allocation, newQty, true);
+        return;
+      }
+      toast(friendlyErr(err.code ?? err.message), "error");
     }
   }
 
