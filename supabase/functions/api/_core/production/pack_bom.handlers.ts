@@ -231,15 +231,33 @@ async function getCompanyFStorageLocations(companyId: string): Promise<JsonRecor
     .filter((location) => toTrimmedString(location.code).startsWith("F"));
 }
 
+async function getActiveStrokeIdsForPoType(poType: string): Promise<string[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("stroke_po_type_applicability")
+    .select("stroke_master_id")
+    .eq("target_po_type", poType)
+    .eq("is_active", true);
+  if (error) {
+    console.error("[pack_bom.getActiveStrokeIdsForPoType] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BOM_STROKE_LOOKUP_FAILED");
+  }
+  return [...new Set(((data ?? []) as JsonRecord[])
+    .map((row) => toTrimmedString(row.stroke_master_id))
+    .filter(Boolean))];
+}
+
 async function resolveApprovedStroke(prodshadeMaterialId: string, companyId: string, poType: string): Promise<JsonRecord | null> {
+  const applicableStrokeIds = await getActiveStrokeIdsForPoType(poType);
+  if (applicableStrokeIds.length === 0) return null;
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("stroke_master")
     .select("id, company_id, prodshade_material_id, stroke_number, default_storage_location_id, status")
     .eq("company_id", companyId)
     .eq("prodshade_material_id", prodshadeMaterialId)
-    .eq("po_type", poType)
     .eq("status", "APPROVED")
+    .in("id", applicableStrokeIds)
     .order("stroke_number", { ascending: true })
     .limit(1)
     .maybeSingle();
@@ -493,13 +511,16 @@ export async function listPackBomEligibleSkusHandler(
     )];
     if (matchedProdshadeIds.length === 0) return okResponse({ data: mtestOutput }, ctx.request_id, req);
 
+    const applicableStrokeIds = await getActiveStrokeIdsForPoType(poType);
+    if (applicableStrokeIds.length === 0) return okResponse({ data: mtestOutput }, ctx.request_id, req);
+
     const { data: strokeRows, error: strokeErr } = await serviceRoleClient
       .schema("erp_production")
       .from("stroke_master")
       .select("id, company_id, prodshade_material_id, stroke_number, default_storage_location_id, status")
       .eq("company_id", companyId)
-      .eq("po_type", poType)
       .eq("status", "APPROVED")
+      .in("id", applicableStrokeIds)
       .in("prodshade_material_id", matchedProdshadeIds)
       .order("stroke_number", { ascending: true });
     if (strokeErr) {
