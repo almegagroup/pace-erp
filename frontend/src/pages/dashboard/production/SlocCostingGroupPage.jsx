@@ -31,6 +31,10 @@ import {
 const EMPTY = [];
 const AC06_FIRST_MONTH = "2026-05";
 const AC06_BASE_ROUTE = "/dashboard/production/sloc-costing-group";
+// Matches the on-screen Group Lead row highlight (`!bg-sky-50`, rateRowProps
+// below) so the Excel export looks the same as the live grid -- same idiom
+// IN14's TOTAL_ROW_FILL_ARGB uses for its own Total row.
+const GROUP_LEAD_ROW_FILL_ARGB = "FFF0F9FF";
 const unwrap = (payload) => payload?.data ?? payload ?? {};
 
 // §35.18 (PO11, carried into AC06 by §114.23): Pace Code is never shown on
@@ -181,6 +185,7 @@ export default function SlocCostingGroupPage() {
   const [tab, setTab] = useState("dashboard");
   const [rateDraft, setRateDraft] = useState({});
   const [selectedForVerify, setSelectedForVerify] = useState([]);
+  const [exportingRates, setExportingRates] = useState(false);
   const [slocName, setSlocName] = useState("");
   const [slocLocations, setSlocLocations] = useState([]);
   const [editingSlocId, setEditingSlocId] = useState("");
@@ -400,6 +405,63 @@ export default function SlocCostingGroupPage() {
         ? list.filter((entry) => entry !== value)
         : [...list, value],
     );
+  }
+
+  // Excel export for whichever month's Monthly Costing Rate Input page is
+  // currently open -- same mechanism as IN14 (Stock History):
+  // downloadColoredExcelFile, dynamically imported so exceljs never enters
+  // this page's own bundle until Export is actually clicked. Exports exactly
+  // the rows currently visible on screen (respecting the search/Costing
+  // Group/standalone-only filters), with the same rate value shown in the
+  // grid (unsaved draft edits included, not just the last-saved rate) and the
+  // same light-blue Group Lead row highlight the grid itself uses.
+  async function handleExportRatesExcel() {
+    setExportingRates(true);
+    try {
+      const { downloadColoredExcelFile } = await import("../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `ac06_costing_rates_${month}.xlsx`,
+        sheetName: "Costing Rates",
+        columns: [
+          { key: "costing_group_name", label: "Group", width: "130px" },
+          { key: "source_sloc_group_name", label: "Source SLOC Group", width: "160px" },
+          { key: "material_name", label: "Material Name", width: "220px" },
+          { key: "material_external_code", label: "External Code", width: "120px" },
+          { key: "rate", label: "Rate", width: "110px", align: "right" },
+          { key: "verification_status", label: "Status", width: "110px" },
+          { key: "lead", label: "Entry", width: "110px" },
+        ],
+        rows: visibleRateRows,
+        getCellValue: (row, column) => {
+          switch (column.key) {
+            case "costing_group_name":
+              return row.costing_group_name || "Standalone";
+            case "source_sloc_group_name":
+              return slocGroupNameById.get(String(row.source_sloc_group_id)) || "-";
+            case "material_name":
+              return row.material_name || "-";
+            case "material_external_code":
+              return row.material_external_code || "-";
+            case "rate":
+              return Number(rateDraft[row.id] ?? row.rate ?? 0);
+            case "verification_status":
+              return row.verification_status || "-";
+            case "lead":
+              return row.is_standalone ? "Standalone" : row.is_group_lead ? "Group Lead" : "Auto-filled";
+            default:
+              return row?.[column.key] ?? "";
+          }
+        },
+        getRowFillArgb: (row) => (row.is_group_lead ? GROUP_LEAD_ROW_FILL_ARGB : null),
+      });
+    } catch (exportError) {
+      notice(
+        exportError instanceof Error ? exportError.message : "AC06_RATES_EXPORT_FAILED",
+        "error",
+      );
+    } finally {
+      setExportingRates(false);
+    }
   }
 
   function toggleSetMember(setter, id) {
@@ -843,6 +905,14 @@ export default function SlocCostingGroupPage() {
                         Save Rates
                       </button>
                     ) : null}
+                    <button
+                      type="button"
+                      disabled={exportingRates || !visibleRateRows.length}
+                      onClick={() => void handleExportRatesExcel()}
+                      className="border border-slate-400 bg-white px-3 py-1 text-xs font-semibold disabled:opacity-40"
+                    >
+                      {exportingRates ? "Exporting..." : "Export Excel"}
+                    </button>
                   </div>
                 </div>
                 <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_240px_auto]">
