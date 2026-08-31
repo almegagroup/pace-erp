@@ -1176,7 +1176,7 @@ export async function getDeliveryOrderUnifiedHandler(req: Request, ctx: Procurem
 //     bucket here).
 //   - SO and STO never merge into the same invoice.
 
-async function canMaintainSalesInvoice(ctx: ProcurementHandlerContext, companyId: string, actionCode: "VIEW" | "WRITE" = "WRITE"): Promise<boolean> {
+async function canMaintainSalesInvoice(ctx: ProcurementHandlerContext, companyId: string, actionCode: "VIEW" | "WRITE" | "EDIT" = "WRITE"): Promise<boolean> {
   if (ctx.context.isAdmin) return true;
   if (!companyId) return false;
   let workContextIds: string[];
@@ -1839,7 +1839,7 @@ export async function cancelPgiInvoiceGroupsHandler(req: Request, ctx: Procureme
     if (dcError || !dc) return doErrorResponse(req, ctx, "DO_NOT_FOUND", 404, "Delivery order not found.");
     const companyId = toTrimmedString((dc as JsonRecord).selling_company_id);
     try { await assertCompanyScope(ctx, companyId); } catch { return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company."); }
-    if (!(await canMaintainSalesInvoice(ctx, companyId, "WRITE"))) return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI write access at this company.");
+    if (!(await canMaintainSalesInvoice(ctx, companyId, "EDIT"))) return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI cancellation access at this company.");
 
     const { data: invoiceRows, error: invoiceError } = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
       .select("id, invoice_number, invoice_date, company_id, dc_id, status")
@@ -1911,7 +1911,7 @@ export async function amendDispatchDetailsHandler(req: Request, ctx: Procurement
     const current = dc as JsonRecord;
     const companyId = toTrimmedString(current.selling_company_id);
     try { await assertCompanyScope(ctx, companyId); } catch { return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company."); }
-    if (!(await canMaintainSalesInvoice(ctx, companyId, "WRITE"))) return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI write access at this company.");
+    if (!(await canMaintainSalesInvoice(ctx, companyId, "EDIT"))) return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI amendment access at this company.");
     if (toUpperTrimmedString(current.status) !== "DISPATCHED") return doErrorResponse(req, ctx, "DISPATCH_AMENDMENT_BLOCKED", 400, "Dispatch details can be amended only after PGI.");
 
     const next = {
