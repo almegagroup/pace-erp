@@ -49,6 +49,10 @@ const BASELINE = new Map([
   // PROC_PO_LIST before 2026-08-14, which silently 403'd it for any PID/Opening-Stock user without
   // PO List access — see inline comment at the route.
   ["OM_MATERIAL_LIST", "material_uom_conversion lookup is material-master data, intentionally shared by procurement pages (PID, Opening Stock) via OM's own resource — see inline comment at the route"],
+  // GET:/api/production/ac06/approved-months exposes only approved month labels
+  // to SO01's Costing Rate Month field. It deliberately uses SO Create authority:
+  // an SO creator may choose a verified month but cannot view AC06 rates or rows.
+  ["PROC_SO_CREATE", "approved AC06 month-label lookup is a read-only SO01 create-form dependency; it exposes no AC06 rates or material data — see inline comment at the route"],
 ]);
 
 const src = readFileSync(REGISTRY_FILE, "utf8");
