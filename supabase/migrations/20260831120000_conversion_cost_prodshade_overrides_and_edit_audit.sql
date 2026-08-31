@@ -7,4 +7,3 @@
 ALTER TABLE erp_production.conversion_cost_config
   ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(),
   ADD COLUMN IF NOT EXISTS updated_by uuid NULL;
-
