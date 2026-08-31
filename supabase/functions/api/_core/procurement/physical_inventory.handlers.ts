@@ -16,6 +16,7 @@ import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
+import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -388,16 +389,25 @@ async function getBookSnapshotsForMaterial(
   const materialType = toUpperTrimmedString(material.material_type);
   if (!PI_MATERIAL_TYPES.has(materialType)) return [];
 
-  const { data, error } = await serviceRoleClient
-    .schema("erp_inventory")
-    .from("stock_ledger")
-    .select("stock_type_code, base_uom_code, direction, quantity, batch_number, stock_document_id")
-    .eq("company_id", companyId)
-    .eq("storage_location_id", storageLocationId)
-    .eq("material_id", materialId);
-  if (error) throw new Error("PI_STOCK_LEDGER_LOOKUP_FAILED");
-
-  const rows = (data ?? []) as JsonRecord[];
+  // Paged via fetchAllRows, not a plain .select() -- this must aggregate
+  // EVERY ledger row for the material+location (batch/packing-order grouping
+  // below depends on seeing all of it), and a heavily-used location can hold
+  // well over PostgREST's 1000-row default cap in its history.
+  let rows: JsonRecord[];
+  try {
+    rows = await fetchAllRows<JsonRecord>((from, to) =>
+      serviceRoleClient
+        .schema("erp_inventory")
+        .from("stock_ledger")
+        .select("stock_type_code, base_uom_code, direction, quantity, batch_number, stock_document_id")
+        .eq("company_id", companyId)
+        .eq("storage_location_id", storageLocationId)
+        .eq("material_id", materialId)
+        .order("ledger_seq", { ascending: true })
+        .range(from, to));
+  } catch {
+    throw new Error("PI_STOCK_LEDGER_LOOKUP_FAILED");
+  }
   const isBlended = PI_BLENDED_MATERIAL_TYPES.has(materialType);
 
   // FG needs the packing_order_id per ledger row — resolved via stock_document once, batched.
@@ -502,14 +512,24 @@ type ItemCandidate = {
 // (only positive-book-qty combos); false includes net-zero combos too, so a full sweep can catch
 // phantom stock (system says 0, physically something's there) as well as confirm true zeros.
 async function getLocationWiseCandidates(companyId: string, storageLocationId: string, ignoreZeroStock = true): Promise<ItemCandidate[]> {
-  const { data: ledgerMaterialRows, error } = await serviceRoleClient
-    .schema("erp_inventory")
-    .from("stock_ledger")
-    .select("material_id")
-    .eq("company_id", companyId)
-    .eq("storage_location_id", storageLocationId);
-  if (error) throw new Error("PI_STOCK_LEDGER_LOOKUP_FAILED");
-  const materialIds = [...new Set(((ledgerMaterialRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.material_id)).filter(Boolean))];
+  // Paged -- a busy location's ledger history can exceed 1000 rows, and a
+  // plain .select() here would silently drop whichever materials' first
+  // ledger row happened to land past the cap out of the PID candidate list.
+  let ledgerMaterialRows: JsonRecord[];
+  try {
+    ledgerMaterialRows = await fetchAllRows<JsonRecord>((from, to) =>
+      serviceRoleClient
+        .schema("erp_inventory")
+        .from("stock_ledger")
+        .select("material_id")
+        .eq("company_id", companyId)
+        .eq("storage_location_id", storageLocationId)
+        .order("ledger_seq", { ascending: true })
+        .range(from, to));
+  } catch {
+    throw new Error("PI_STOCK_LEDGER_LOOKUP_FAILED");
+  }
+  const materialIds = [...new Set(ledgerMaterialRows.map((r) => toTrimmedString(r.material_id)).filter(Boolean))];
   const materialInfo = await getMaterialInfo(materialIds);
 
   const results: ItemCandidate[] = [];
@@ -2257,14 +2277,24 @@ export async function getMaterialLocationBreakdownHandler(
       return piErrorResponse(req, ctx, "PI_ITEM_MATERIAL_INVALID", 400, "Only RM, PM, Intermediate, SFG, and FG materials are allowed.");
     }
 
-    const { data: locRows, error: locError } = await serviceRoleClient
-      .schema("erp_inventory")
-      .from("stock_ledger")
-      .select("storage_location_id")
-      .eq("company_id", companyId)
-      .eq("material_id", materialId);
-    if (locError) throw new Error("PI_MATERIAL_LOCATIONS_FAILED");
-    const locationIds = [...new Set(((locRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.storage_location_id)).filter(Boolean))];
+    // Paged -- a heavily-produced/consumed material's ledger history can
+    // exceed 1000 rows, and a plain .select() here would silently drop
+    // whichever locations' first ledger row happened to land past the cap.
+    let locRows: JsonRecord[];
+    try {
+      locRows = await fetchAllRows<JsonRecord>((from, to) =>
+        serviceRoleClient
+          .schema("erp_inventory")
+          .from("stock_ledger")
+          .select("storage_location_id")
+          .eq("company_id", companyId)
+          .eq("material_id", materialId)
+          .order("ledger_seq", { ascending: true })
+          .range(from, to));
+    } catch {
+      throw new Error("PI_MATERIAL_LOCATIONS_FAILED");
+    }
+    const locationIds = [...new Set(locRows.map((r) => toTrimmedString(r.storage_location_id)).filter(Boolean))];
 
     const breakdown: JsonRecord[] = [];
     for (const locationId of locationIds) {

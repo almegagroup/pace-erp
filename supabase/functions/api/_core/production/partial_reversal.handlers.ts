@@ -27,6 +27,7 @@ import { generateGlobalDocNumber } from "./production.utils.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
+import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -240,21 +241,29 @@ async function sumUnrestrictedLedgerQty(
   storageLocationId: string,
   batchNumber?: string | null,
 ): Promise<number> {
-  let query = serviceRoleClient
-    .schema("erp_inventory")
-    .from("stock_ledger")
-    .select("direction, quantity")
-    .eq("company_id", companyId)
-    .eq("material_id", materialId)
-    .eq("storage_location_id", storageLocationId)
-    .eq("stock_type_code", "UNRESTRICTED");
-  if (batchNumber) query = query.eq("batch_number", batchNumber);
-  const { data, error } = await query;
-  if (error) {
-    console.error("[partial_reversal.sumUnrestrictedLedgerQty] query failed:", JSON.stringify(error));
+  // Paged via fetchAllRows -- batchNumber is optional here, so this can be a
+  // material-wide (non-batch) sum too, and either shape can exceed
+  // PostgREST's 1000-row default cap for a busy material+location.
+  let rows: JsonRecord[];
+  try {
+    rows = await fetchAllRows<JsonRecord>((from, to) => {
+      let query = serviceRoleClient
+        .schema("erp_inventory")
+        .from("stock_ledger")
+        .select("direction, quantity")
+        .eq("company_id", companyId)
+        .eq("material_id", materialId)
+        .eq("storage_location_id", storageLocationId)
+        .eq("stock_type_code", "UNRESTRICTED")
+        .order("ledger_seq", { ascending: true })
+        .range(from, to);
+      if (batchNumber) query = query.eq("batch_number", batchNumber);
+      return query;
+    });
+  } catch {
     throw new Error("PR19_STOCK_LOOKUP_FAILED");
   }
-  return ((data ?? []) as JsonRecord[]).reduce((sum, row) => {
+  return rows.reduce((sum, row) => {
     const qty = Number(row.quantity ?? 0);
     return sum + (String(row.direction) === "IN" ? qty : -qty);
   }, 0);
@@ -505,14 +514,25 @@ export async function listSalvageBatchOptionsHandler(req: Request, ctx: ProdHand
       return prErr(req, ctx, "PR19_INVALID", 400, "company_id, po_type and prodshade_material_id required");
     }
 
+    // Found live 2026-09-01 (business owner, batch EV02664): this is a
+    // reference tag only ("traceability only", never the actual stock
+    // routing target -- the reversal always returns material to each line's
+    // own original issue location, see createPartialBatchReversalHandler) so
+    // there's no reason to hide a batch just because it already finished.
+    // BATCH_STARTED-only meant that once every batch for a prodshade had
+    // been Verified (the normal end state), the list always went empty and
+    // there was no way to reference which batch the salvage was actually
+    // meant for. VERIFIED batches are now included alongside BATCH_STARTED.
     let query = serviceRoleClient
       .schema("erp_production")
       .from("process_order")
-      .select("id, po_number, batch_number, status")
+      .select("id, po_number, batch_number, status, created_at")
       .eq("company_id", companyId)
       .eq("po_type", poType)
       .eq("material_id", prodshadeMaterialId)
-      .eq("status", "BATCH_STARTED");
+      .in("status", ["BATCH_STARTED", "VERIFIED"])
+      .order("created_at", { ascending: false })
+      .limit(100);
     if (excludeProcessOrderId) query = query.neq("id", excludeProcessOrderId);
     const { data, error } = await query;
     if (error) throw new Error("PR19_SALVAGE_LOOKUP_FAILED");
@@ -534,6 +554,7 @@ type RmIntPreviewLine = {
   proportional_actual_qty: number;
   proportional_ap_approved_qty: number;
   proportional_variance_qty: number;
+  storage_location_id: string | null;
 };
 
 // Shared by the Page 3 preview and the Create handler — always recomputed
@@ -566,7 +587,35 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
     console.error("[partial_reversal.buildRmIntPreview] query failed:", JSON.stringify(recoErr));
     throw new Error("PR19_RECO_LOOKUP_FAILED");
   }
-  return ((recoRows ?? []) as JsonRecord[]).map((row) => {
+  const rows = (recoRows ?? []) as JsonRecord[];
+
+  // Found live 2026-09-01 (business owner, batch EV02664): Page 3's preview
+  // never showed which storage location each RM/INT/PM line's return posting
+  // actually targets -- it's auto-derived (see createPartialBatchReversalHandler
+  // below, "return proportionally to each material's own original 261 issue
+  // location"), never a free choice, but the reviewer had no way to SEE that
+  // destination before posting. process_order_line_reco doesn't carry a
+  // location itself (it's the costing record, not a stock-op one), so resolve
+  // it from process_order_line.issue_sloc_id -- the same source the actual
+  // posting step reads from.
+  const lineIds = [...new Set(rows.map((row) => String(row.process_order_line_id ?? "")).filter(Boolean))];
+  const slocByLineId = new Map<string, string | null>();
+  if (lineIds.length > 0) {
+    const { data: polRows, error: polErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("process_order_line")
+      .select("id, issue_sloc_id")
+      .in("id", lineIds);
+    if (polErr) {
+      console.error("[partial_reversal.buildRmIntPreview] line sloc lookup failed:", JSON.stringify(polErr));
+      throw new Error("PR19_RECO_LOOKUP_FAILED");
+    }
+    for (const pol of (polRows ?? []) as JsonRecord[]) {
+      slocByLineId.set(String(pol.id), toTrimmedString(pol.issue_sloc_id) || null);
+    }
+  }
+
+  return rows.map((row) => {
     const actualQty = Number(row.actual_qty ?? 0);
     const apApprovedQty = Number(row.ap_approved_qty ?? 0);
     const varianceQty = Number(row.variance_qty ?? 0);
@@ -580,6 +629,7 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
       proportional_actual_qty: actualQty * ratio,
       proportional_ap_approved_qty: apApprovedQty * ratio,
       proportional_variance_qty: varianceQty * ratio,
+      storage_location_id: slocByLineId.get(String(row.process_order_line_id ?? "")) ?? null,
     };
   });
 }
@@ -623,13 +673,18 @@ export async function getPartialReversalDetailHandler(req: Request, ctx: ProdHan
         rmIntLines.map((l) => l.material_id),
         "id, pace_code, material_name, external_code, base_uom_code",
       );
+      const slocMap = await getStorageLocationMapByIds(rmIntLines.map((l) => l.storage_location_id ?? ""));
       return okResponse({
         data: {
           row_type: "SFG",
           reverse_qty: reverseQty,
           actual_total_output: processOrderActualQty,
           reversal_ratio: ratio,
-          rm_int_lines: rmIntLines.map((l) => ({ ...l, material: materialMap.get(l.material_id) ?? null })),
+          rm_int_lines: rmIntLines.map((l) => ({
+            ...l,
+            material: materialMap.get(l.material_id) ?? null,
+            storage_location: l.storage_location_id ? slocMap.get(l.storage_location_id) ?? null : null,
+          })),
           pm_lines: [],
         },
       }, ctx.request_id, req);
@@ -676,11 +731,16 @@ export async function getPartialReversalDetailHandler(req: Request, ctx: ProdHan
         qty: baseQty,
         proportional_qty: baseQty * ratioPm,
         included: true,
+        storage_location_id: toTrimmedString(line.issue_sloc_id) || null,
       };
     });
 
     const materialIds = [...rmIntLines.map((l) => l.material_id), ...pmPreview.map((l) => l.material_id), String(pkData.material_id ?? "")];
     const materialMap = await getMaterialMapByIds(materialIds, "id, pace_code, material_name, external_code, base_uom_code");
+    const slocMap = await getStorageLocationMapByIds([
+      ...rmIntLines.map((l) => l.storage_location_id ?? ""),
+      ...pmPreview.map((l) => l.storage_location_id ?? ""),
+    ]);
 
     return okResponse({
       data: {
@@ -690,8 +750,16 @@ export async function getPartialReversalDetailHandler(req: Request, ctx: ProdHan
         actual_total_output: packingActualQty,
         reversal_ratio: ratioPm,
         reversal_ratio_rm: ratioRm,
-        rm_int_lines: rmIntLines.map((l) => ({ ...l, material: materialMap.get(l.material_id) ?? null })),
-        pm_lines: pmPreview.map((l) => ({ ...l, material: materialMap.get(l.material_id) ?? null })),
+        rm_int_lines: rmIntLines.map((l) => ({
+          ...l,
+          material: materialMap.get(l.material_id) ?? null,
+          storage_location: l.storage_location_id ? slocMap.get(l.storage_location_id) ?? null : null,
+        })),
+        pm_lines: pmPreview.map((l) => ({
+          ...l,
+          material: materialMap.get(l.material_id) ?? null,
+          storage_location: l.storage_location_id ? slocMap.get(l.storage_location_id) ?? null : null,
+        })),
       },
     }, ctx.request_id, req);
   } catch (err) {
