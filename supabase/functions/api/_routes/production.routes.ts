@@ -20,6 +20,7 @@ import {
   deactivateStrokeMasterHandler,
   reactivateStrokeMasterHandler,
   revertStrokeMasterHandler,
+  shareStrokeMasterHandler,
 } from "../_core/production/stroke_master.handlers.ts";
 import {
   listPackCodesHandler,
@@ -44,7 +45,9 @@ import {
 } from "../_core/production/segment_location.handlers.ts";
 import {
   listConversionRatesHandler,
+  listConversionRateProdshadesHandler,
   createConversionRateHandler,
+  updateConversionRateHandler,
   getDerivedOpeningRateHandler,
 } from "../_core/production/conversion_cost.handlers.ts";
 import {
@@ -229,6 +232,10 @@ export async function dispatchProductionRoutes(
       return await listConversionRatesHandler(req, ctx);
     case "POST:/api/production/conversion-rates":
       return await createConversionRateHandler(req, ctx);
+    case "GET:/api/production/conversion-rate-prodshades":
+      return await listConversionRateProdshadesHandler(req, ctx);
+    case "PATCH:/api/production/conversion-rates/:id":
+      return await updateConversionRateHandler(req, ctx);
     // §104.8 — suggested opening rate for a produced material (stroke-derived), used by IN05
     case "GET:/api/production/derived-opening-rate":
       return await getDerivedOpeningRateHandler(req, ctx);
@@ -282,6 +289,8 @@ export async function dispatchProductionRoutes(
       return await listStrokeMastersHandler(req, ctx);
     case "POST:/api/production/stroke-masters":
       return await createStrokeMasterHandler(req, ctx);
+    case "POST:/api/production/stroke-shares":
+      return await shareStrokeMasterHandler(req, ctx);
 
     // Plan Feed (FO management)
     case "GET:/api/production/plan-feed":

@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
@@ -694,6 +695,11 @@ export async function createSOHandler(
   try {
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
+    const soDate = toTrimmedString(body.so_date) || todayIsoDate();
+    const customerPoDate = toTrimmedString(body.customer_po_date);
+    if (!isManualDocumentDateWithinWindow(soDate) || (customerPoDate && !isManualDocumentDateWithinWindow(customerPoDate))) {
+      return salesErrorResponse(req, ctx, "SO_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+    }
     const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     const customerId = toTrimmedString(body.customer_id);
     const customerPoNumber = toTrimmedString(body.customer_po_number);
@@ -806,11 +812,11 @@ export async function createSOHandler(
       .from("sales_order")
       .insert({
         so_number: soNumber,
-        so_date: toTrimmedString(body.so_date) || todayIsoDate(),
+        so_date: soDate,
         company_id: companyId,
         customer_id: customerId,
         customer_po_number: customerPoNumber,
-        customer_po_date: toTrimmedString(body.customer_po_date) || null,
+        customer_po_date: customerPoDate || null,
         delivery_address: shipTo.delivery_address,
         payment_term_id: toTrimmedString(body.payment_term_id) || null,
         remarks: toTrimmedString(body.remarks) || null,
@@ -1105,7 +1111,12 @@ export async function updateSOHandler(
       patch.customer_id = customerId;
     }
     if (customerPoNumber) patch.customer_po_number = customerPoNumber;
-    if (customerPoDate) patch.customer_po_date = customerPoDate;
+    if (customerPoDate) {
+      if (!isManualDocumentDateWithinWindow(customerPoDate)) {
+        return salesErrorResponse(req, ctx, "SO_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+      }
+      patch.customer_po_date = customerPoDate;
+    }
     if (body.payment_term_id !== undefined) patch.payment_term_id = paymentTermId || null;
     if (body.remarks !== undefined) patch.remarks = remarks || null;
 
@@ -2581,6 +2592,7 @@ export async function createSalesOrderUnifiedHandler(
     const dispatchType = toUpperTrimmedString(body.dispatch_type);
     const customerPoNumber = toTrimmedString(body.customer_po_number);
     const customerPoDate = toTrimmedString(body.customer_po_date) || null;
+    const soDate = toTrimmedString(body.so_date) || todayIsoDate();
     const materialTypes = Array.isArray(body.material_types)
       ? Array.from(new Set((body.material_types as unknown[]).map((v) => toUpperTrimmedString(v))))
       : [];
@@ -2588,6 +2600,9 @@ export async function createSalesOrderUnifiedHandler(
 
     if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
     if (!customerPoNumber) return salesErrorResponse(req, ctx, "SO_CUSTOMER_PO_REQUIRED", 400, "External SO Number is required.");
+    if (!isManualDocumentDateWithinWindow(soDate) || (customerPoDate && !isManualDocumentDateWithinWindow(customerPoDate))) {
+      return salesErrorResponse(req, ctx, "SO_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+    }
     if (!DISPATCH_TYPES.has(dispatchType)) return salesErrorResponse(req, ctx, "SO_DISPATCH_TYPE_INVALID", 400, "A valid dispatch_type is required.");
     if (materialTypes.length === 0 || materialTypes.some((t) => !LINE_MATERIAL_TYPES.has(t))) {
       return salesErrorResponse(req, ctx, "SO_MATERIAL_TYPES_INVALID", 400, "At least one valid Material Type must be selected.");
@@ -2659,7 +2674,7 @@ export async function createSalesOrderUnifiedHandler(
       .from("sales_order")
       .insert({
         so_number: soNumber,
-        so_date: toTrimmedString(body.so_date) || todayIsoDate(),
+        so_date: soDate,
         company_id: companyId,
         customer_id: resolved.customerId,
         customer_po_number: customerPoNumber,
@@ -2871,7 +2886,13 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
 
     // Header fields — never dispatch_type/bill_to_*/ship_to_*/vdc (§133.10 identity lock).
     const headerUpdate: JsonRecord = { last_updated_at: new Date().toISOString(), last_updated_by: ctx.auth_user_id };
-    if (body.so_date !== undefined) headerUpdate.so_date = toTrimmedString(body.so_date);
+    if (body.so_date !== undefined) {
+      const soDate = toTrimmedString(body.so_date);
+      if (!isManualDocumentDateWithinWindow(soDate)) {
+        return salesErrorResponse(req, ctx, "SO_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+      }
+      headerUpdate.so_date = soDate;
+    }
     if (body.payment_term_id !== undefined) headerUpdate.payment_term_id = toTrimmedString(body.payment_term_id) || null;
     if (body.freight_term !== undefined) headerUpdate.freight_term = toUpperTrimmedString(body.freight_term) || null;
     if (body.round_off_amount !== undefined) {

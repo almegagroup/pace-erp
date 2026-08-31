@@ -3,9 +3,9 @@
  * File-Path: supabase/functions/api/_core/production/conversion_cost.handlers.ts
  * Gate: 27.104
  * Domain: PRODUCTION / COSTING
- * Purpose: SA config for the per-KG conversion-cost table (§104.8). Append-only, valid_from
- *          dated — a rate change inserts a new row; old rows are never edited/deleted, so the
- *          full rate history is preserved and back-dated postings pick the rate valid then.
+ * Purpose: Accounts config for the per-KG conversion-cost table (§104.8). A rate can be
+ *          corrected in place when it was configured against the wrong scope; every correction
+ *          carries an explicit last-edit audit trail.
  *          The resolver (erp_production.resolve_conversion_rate) is used by Process PO Verify.
  *          Ownership (CORRECTED 2026-07-18): this is an ACCOUNTS function, not SA — SA can't know
  *          when a rate changes. The page lives in the ACL universe under the Accounts menu
@@ -17,6 +17,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
@@ -28,9 +29,15 @@ import {
 type JsonRecord = Record<string, unknown>;
 
 // Segment codes the config recognises — must match VALID_SEGMENTS in process_order.handlers.ts /
-// segment_location.handlers.ts. INT is included for completeness; conversion is only actually
-// resolved for MTO/HPS/MTS output today, but the table can hold any segment default.
+// segment_location.handlers.ts.
 const VALID_SEGMENTS = new Set(["ADMIX", "HPS", "IWC", "POWDER", "INT"]);
+const STROKE_TYPES_BY_SEGMENT: Record<string, string[]> = {
+  ADMIX: ["MTO"],
+  HPS: ["HPS"],
+  IWC: ["MTS"],
+  POWDER: ["MTS"],
+  INT: ["INT"],
+};
 
 function convError(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
@@ -39,6 +46,11 @@ function convError(req: Request, ctx: ProdHandlerContext, code: string, status: 
 function createdOkResponse(data: unknown, requestId: string, req?: Request): Response {
   const response = okResponse(data, requestId, req);
   return new Response(response.body, { status: 201, headers: response.headers });
+}
+
+function getIdFromPath(req: Request): string {
+  const parts = new URL(req.url).pathname.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? "";
 }
 
 async function getCompanyMapByIds(companyIds: string[]): Promise<Map<string, JsonRecord>> {
@@ -110,7 +122,7 @@ export async function listConversionRatesHandler(req: Request, ctx: ProdHandlerC
 
     let query = serviceRoleClient
       .schema("erp_production").from("conversion_cost_config")
-      .select("id, company_id, segment_code, prodshade_material_id, valid_from, conversion_rate_per_kg, created_at, created_by")
+      .select("id, company_id, segment_code, prodshade_material_id, valid_from, conversion_rate_per_kg, created_at, created_by, updated_at, updated_by")
       .order("company_id").order("segment_code")
       .order("prodshade_material_id", { nullsFirst: true })
       .order("valid_from", { ascending: true });
@@ -172,6 +184,69 @@ export async function listConversionRatesHandler(req: Request, ctx: ProdHandlerC
   }
 }
 
+// GET /api/production/conversion-rate-prodshades?company_id=&segment_code=
+// Batch series are intentionally not used here: MTO and HPS batch numbering is company-level,
+// while their real eligible output Prodshades live on approved strokes.
+export async function listConversionRateProdshadesHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const segmentCode = toUpperTrimmedString(url.searchParams.get("segment_code") ?? "");
+    if (!companyId || !VALID_SEGMENTS.has(segmentCode)) {
+      return convError(req, ctx, "PROD_CONV_RATE_INVALID", 400, "company_id and a valid segment_code are required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return convError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+
+    const { data: strokes, error } = await serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("prodshade_material_id")
+      .eq("company_id", companyId)
+      .in("status", ["ACTIVE", "APPROVED"])
+      .in("po_type", STROKE_TYPES_BY_SEGMENT[segmentCode]);
+    if (error) {
+      console.error("[conversion_cost.prodshades] stroke query failed:", JSON.stringify(error));
+      throw new Error("PROD_CONV_RATE_PRODSHADE_LIST_FAILED");
+    }
+    const materialMap = await getMaterialMapByIds(
+      ((strokes ?? []) as JsonRecord[]).map((row) => String(row.prodshade_material_id ?? "")),
+    );
+    const data = [...materialMap.entries()]
+      .map(([material_id, material]) => ({
+        material_id,
+        pace_code: String(material.pace_code ?? ""),
+        material_name: String(material.material_name ?? ""),
+        shade_code: String(material.shade_code ?? ""),
+      }))
+      .sort((a, b) => `${a.pace_code} ${a.material_name}`.localeCompare(`${b.pace_code} ${b.material_name}`));
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_CONV_RATE_PRODSHADE_LIST_FAILED";
+    return convError(req, ctx, code, 500, "Conversion-rate Prodshade list failed");
+  }
+}
+
+async function assertEligibleProdshade(companyId: string, segmentCode: string, materialId: string): Promise<boolean> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production").from("stroke_master")
+    .select("id")
+    .eq("company_id", companyId)
+    .eq("prodshade_material_id", materialId)
+    .in("status", ["ACTIVE", "APPROVED"])
+    .in("po_type", STROKE_TYPES_BY_SEGMENT[segmentCode])
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("[conversion_cost.assertEligibleProdshade] stroke query failed:", JSON.stringify(error));
+    throw new Error("PROD_CONV_RATE_PRODSHADE_LOOKUP_FAILED");
+  }
+  return !!data;
+}
+
 // POST /api/production/conversion-rates
 // Accounts (ACL — resource ACC_CONVERSION_COST, enforced by the route registry). Append-only:
 // inserts a new (company, segment, nullable prodshade, valid_from) row. prodshade_material_id
@@ -201,6 +276,9 @@ export async function createConversionRateHandler(req: Request, ctx: ProdHandler
     if (rateRaw === undefined || rateRaw === null || rateRaw === "" || !Number.isFinite(rate) || rate < 0) {
       return convError(req, ctx, "PROD_CONV_RATE_VALUE_INVALID", 400, "conversion_rate_per_kg must be a number ≥ 0");
     }
+    if (prodshadeMaterialId && !await assertEligibleProdshade(companyId, segmentCode, prodshadeMaterialId)) {
+      return convError(req, ctx, "PROD_CONV_RATE_PRODSHADE_INVALID", 400, "The selected Prodshade is not approved for this company and segment.");
+    }
 
     const { data, error } = await serviceRoleClient
       .schema("erp_production").from("conversion_cost_config")
@@ -226,6 +304,73 @@ export async function createConversionRateHandler(req: Request, ctx: ProdHandler
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_CONV_RATE_CREATE_FAILED";
     return convError(req, ctx, code, 500, "Conversion rate create failed");
+  }
+}
+
+// PATCH /api/production/conversion-rates/:id
+// Used to correct an existing configuration, including changing a segment default to a
+// Prodshade-specific override. Verified PO postings retain their posted value; future Verify
+// resolves the corrected configuration by its posting date.
+export async function updateConversionRateHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const id = getIdFromPath(req);
+    if (!id) return convError(req, ctx, "PROD_CONV_RATE_INVALID", 400, "Conversion rate id is required");
+    const { data: existing, error: existingError } = await serviceRoleClient
+      .schema("erp_production").from("conversion_cost_config")
+      .select("id, company_id, segment_code, prodshade_material_id, valid_from, conversion_rate_per_kg")
+      .eq("id", id).maybeSingle();
+    if (existingError) throw new Error("PROD_CONV_RATE_UPDATE_FAILED");
+    if (!existing) return convError(req, ctx, "PROD_CONV_RATE_NOT_FOUND", 404, "Conversion rate not found");
+    const current = existing as JsonRecord;
+    try {
+      await assertCompanyScope(ctx, String(current.company_id));
+    } catch {
+      return convError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(current.company_id), "ACC_CONVERSION_COST", "EDIT"))) {
+      return convError(req, ctx, "PROD_CONV_RATE_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Conversion Cost for this company.");
+    }
+
+    const body = await parseBody(req);
+    const segmentCode = toUpperTrimmedString(body.segment_code ?? current.segment_code);
+    const prodshadeMaterialId = toTrimmedString(body.prodshade_material_id) || null;
+    const validFrom = toTrimmedString(body.valid_from ?? current.valid_from);
+    const rateRaw = body.conversion_rate_per_kg ?? current.conversion_rate_per_kg;
+    const rate = Number(rateRaw);
+    if (!VALID_SEGMENTS.has(segmentCode) || !validFrom || !/^\d{4}-\d{2}-\d{2}$/.test(validFrom)) {
+      return convError(req, ctx, "PROD_CONV_RATE_INVALID", 400, "A valid segment_code and valid_from date are required");
+    }
+    if (!Number.isFinite(rate) || rate < 0) {
+      return convError(req, ctx, "PROD_CONV_RATE_VALUE_INVALID", 400, "conversion_rate_per_kg must be a number ≥ 0");
+    }
+    if (prodshadeMaterialId && !await assertEligibleProdshade(String(current.company_id), segmentCode, prodshadeMaterialId)) {
+      return convError(req, ctx, "PROD_CONV_RATE_PRODSHADE_INVALID", 400, "The selected Prodshade is not approved for this company and segment.");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_production").from("conversion_cost_config")
+      .update({
+        segment_code: segmentCode,
+        prodshade_material_id: prodshadeMaterialId,
+        valid_from: validFrom,
+        conversion_rate_per_kg: rate,
+        updated_at: new Date().toISOString(),
+        updated_by: ctx.auth_user_id,
+      })
+      .eq("id", id);
+    if (error) {
+      if (error.code === "23505") {
+        return convError(req, ctx, "PROD_CONV_RATE_EXISTS", 409,
+          "A rate for this company/segment/prodshade already has that valid-from date.");
+      }
+      console.error("[conversion_cost.update] update failed:", JSON.stringify(error));
+      throw new Error("PROD_CONV_RATE_UPDATE_FAILED");
+    }
+    return okResponse({ id }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_CONV_RATE_UPDATE_FAILED";
+    return convError(req, ctx, code, 500, "Conversion rate update failed");
   }
 }
 

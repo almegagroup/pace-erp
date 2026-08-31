@@ -13,6 +13,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
@@ -35,6 +36,21 @@ const PO_TYPES_BY_MATERIAL_TYPE: Record<string, Set<string>> = {
   INT: new Set(["INT"]),
 };
 const LINE_MATERIAL_TYPES = new Set(["RM", "INT"]);
+const COMMUNICATION_TYPES = new Set(["EMAIL", "WHATSAPP", "VERBAL_COMMUNICATION"]);
+const SHAREABLE_SFG_PO_TYPES = new Set(["MTO", "HPS", "MTS", "MTEST"]);
+
+function validateCommunicationDetails(values: JsonRecord): string | null {
+  const communicationDate = toTrimmedString(values.communication_date);
+  const communicationType = toUpperTrimmedString(values.communication_type);
+  const communicatorName = toTrimmedString(values.communicator_name);
+  const communicationReference = toTrimmedString(values.communication_reference);
+  if (!communicationDate || !communicationType || !communicatorName || !communicationReference) {
+    return "PROD_STROKE_COMMUNICATION_REQUIRED";
+  }
+  if (!COMMUNICATION_TYPES.has(communicationType)) return "PROD_STROKE_COMMUNICATION_TYPE_INVALID";
+  if (!isManualDocumentDateWithinWindow(communicationDate)) return "PROD_STROKE_COMMUNICATION_DATE_OUTSIDE_ALLOWED_WINDOW";
+  return null;
+}
 
 function strokeError(
   req: Request,
@@ -151,6 +167,37 @@ async function getStrokeMaster(id: string): Promise<JsonRecord | null> {
     throw new Error("PROD_STROKE_LOOKUP_FAILED");
   }
   return (data as JsonRecord | null) ?? null;
+}
+
+async function getActiveApplicabilityStrokeIds(poType: string): Promise<string[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("stroke_po_type_applicability")
+    .select("stroke_master_id")
+    .eq("target_po_type", poType)
+    .eq("is_active", true);
+  if (error) throw new Error("PROD_STROKE_APPLICABILITY_LOOKUP_FAILED");
+  return [...new Set(((data ?? []) as JsonRecord[]).map((row) => String(row.stroke_master_id ?? "")).filter(Boolean))];
+}
+
+async function getApplicabilityByStrokeIds(strokeIds: string[]): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>();
+  const ids = [...new Set(strokeIds.filter(Boolean))];
+  if (ids.length === 0) return result;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("stroke_po_type_applicability")
+    .select("stroke_master_id, target_po_type")
+    .in("stroke_master_id", ids)
+    .eq("is_active", true);
+  if (error) throw new Error("PROD_STROKE_APPLICABILITY_LOOKUP_FAILED");
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const strokeId = String(row.stroke_master_id ?? "");
+    const targetPoType = String(row.target_po_type ?? "");
+    if (!strokeId || !targetPoType) continue;
+    result.set(strokeId, [...(result.get(strokeId) ?? []), targetPoType]);
+  }
+  return result;
 }
 
 interface ApproverMapRow {
@@ -364,6 +411,10 @@ export async function listStrokeMastersHandler(
     const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
     const materialId = toTrimmedString(url.searchParams.get("material_id") ?? "");
     const status = toUpperTrimmedString(url.searchParams.get("status") ?? "");
+    const usableForPoType = toUpperTrimmedString(url.searchParams.get("usable_for_po_type") ?? "");
+    if (usableForPoType && !SHAREABLE_SFG_PO_TYPES.has(usableForPoType)) {
+      return strokeError(req, ctx, "PROD_STROKE_SHARE_TYPE_INVALID", 400, "PO Type must be MTO, HPS, MTS, or MTEST");
+    }
 
     let query = serviceRoleClient
       .schema("erp_production")
@@ -371,7 +422,8 @@ export async function listStrokeMastersHandler(
       .select(`
         id, company_id, prodshade_material_id, prod_code, shade_code, stroke_number, description,
         material_type, po_type, base_uom_code, conversion_uom_code, conversion_factor,
-        default_storage_location_id,
+        default_storage_location_id, communication_date, communication_type, communicator_name, communication_reference,
+        revision_no, source_stroke_master_id,
         status, created_by, created_at, approved_by, approved_at,
         deactivated_by, deactivated_at, last_updated_at, last_updated_by
       `)
@@ -391,6 +443,11 @@ export async function listStrokeMastersHandler(
     }
     if (materialId) query = query.eq("prodshade_material_id", materialId);
     if (status) query = query.eq("status", status);
+    if (usableForPoType) {
+      const applicableStrokeIds = await getActiveApplicabilityStrokeIds(usableForPoType);
+      if (applicableStrokeIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+      query = query.in("id", applicableStrokeIds);
+    }
 
     const { data, error } = await query;
     if (error) {
@@ -399,18 +456,20 @@ export async function listStrokeMastersHandler(
     }
 
     const rows = (data ?? []) as JsonRecord[];
-    const [materialMap, slocMap, userDisplayMap] = await Promise.all([
+    const [materialMap, slocMap, userDisplayMap, applicabilityByStrokeId] = await Promise.all([
       getMaterialMapByIds(rows.map((r) => String(r.prodshade_material_id ?? ""))),
       getStorageLocationMapByIds(rows.map((r) => String(r.default_storage_location_id ?? ""))),
       resolveUserDisplayNames(rows.flatMap((r) => [
         String(r.created_by ?? ""), String(r.approved_by ?? ""), String(r.deactivated_by ?? ""),
       ])),
+      getApplicabilityByStrokeIds(rows.map((r) => String(r.id ?? ""))),
     ]);
 
     return okResponse({
       data: rows.map((row) => ({
         ...row,
         material: materialMap.get(String(row.prodshade_material_id ?? "")) ?? null,
+        applicable_po_types: applicabilityByStrokeId.get(String(row.id ?? "")) ?? [],
         default_storage_location: slocMap.get(String(row.default_storage_location_id ?? "")) ?? null,
         created_by_display: userDisplayMap.get(String(row.created_by ?? "")) ?? null,
         approved_by_display: userDisplayMap.get(String(row.approved_by ?? "")) ?? null,
@@ -422,6 +481,62 @@ export async function listStrokeMastersHandler(
     const code = err instanceof Error ? err.message : "PROD_STROKE_LIST_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return strokeError(req, ctx, code, status, "Stroke master list failed");
+  }
+}
+
+// POST /api/production/stroke-shares
+// Shares an approved SFG formulation across PO types, or creates a target-type
+// DRAFT revision when formulation changes must be considered separately.
+export async function shareStrokeMasterHandler(
+  req: Request,
+  ctx: ProdHandlerContext,
+): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const body = await parseBody(req);
+    const sourceStrokeMasterId = toTrimmedString(body.source_stroke_master_id);
+    const fromPoType = toUpperTrimmedString(body.from_po_type);
+    const toPoType = toUpperTrimmedString(body.to_po_type);
+    const considerFormulationChanges = body.consider_formulation_changes === true;
+    if (!sourceStrokeMasterId || !SHAREABLE_SFG_PO_TYPES.has(fromPoType) || !SHAREABLE_SFG_PO_TYPES.has(toPoType) || fromPoType === toPoType) {
+      return strokeError(req, ctx, "PROD_STROKE_SHARE_TYPE_INVALID", 400, "Select different source and target PO Types from MTO, HPS, MTS, or MTEST");
+    }
+
+    const source = await getStrokeMaster(sourceStrokeMasterId);
+    if (!source) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Source stroke master not found");
+    await assertCompanyScope(ctx, String(source.company_id ?? ""));
+    if (source.status !== "APPROVED" || source.material_type !== "SFG" || source.po_type !== fromPoType) {
+      return strokeError(req, ctx, "PROD_STROKE_SHARE_SOURCE_NOT_ACTIVE", 422, "Source must be an approved SFG stroke for the selected From PO Type");
+    }
+
+    const { data, error } = await serviceRoleClient.rpc("share_stroke_master", {
+      p_source_stroke_master_id: sourceStrokeMasterId,
+      p_to_po_type: toPoType,
+      p_consider_formulation_changes: considerFormulationChanges,
+      p_actor: ctx.auth_user_id,
+    });
+    if (error) {
+      const message = String(error.message ?? "");
+      if (message.includes("PROD_STROKE_SHARE_TARGET_ALREADY_ACTIVE")) {
+        return strokeError(req, ctx, "PROD_STROKE_SHARE_TARGET_ALREADY_ACTIVE", 409, "This stroke is already active for the selected To PO Type");
+      }
+      if (message.includes("PROD_STROKE_SHARE_") || message.includes("PROD_STROKE_NOT_FOUND")) {
+        return strokeError(req, ctx, message.match(/PROD_STROKE_[A-Z_]+/)?.[0] ?? "PROD_STROKE_SHARE_FAILED", 422, "Stroke share could not be completed");
+      }
+      console.error("[stroke_master.shareStrokeMaster] rpc failed:", JSON.stringify(error));
+      throw new Error("PROD_STROKE_SHARE_FAILED");
+    }
+    const row = Array.isArray(data) ? (data[0] as JsonRecord | undefined) : data as JsonRecord | null;
+    if (!row?.target_stroke_master_id) throw new Error("PROD_STROKE_SHARE_FAILED");
+    return okResponse({
+      target_stroke_master_id: row.target_stroke_master_id,
+      created_draft: row.created_draft === true,
+    }, ctx.request_id, req);
+  } catch (err) {
+    console.error("[stroke_master.shareStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
+    const code = err instanceof Error ? err.message : "PROD_STROKE_SHARE_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return strokeError(req, ctx, code, status, "Stroke share failed");
   }
 }
 
@@ -441,7 +556,8 @@ export async function getStrokeMasterHandler(
       .select(`
         id, company_id, prodshade_material_id, prod_code, shade_code, stroke_number, description,
         material_type, po_type, base_uom_code, conversion_uom_code, conversion_factor,
-        default_storage_location_id,
+        default_storage_location_id, communication_date, communication_type, communicator_name, communication_reference,
+        revision_no, source_stroke_master_id,
         status, created_by, created_at, approved_by, approved_at,
         deactivated_by, deactivated_at
       `)
@@ -470,7 +586,7 @@ export async function getStrokeMasterHandler(
 
     const groupIds = lines.map((l) => String(l.material_group_id ?? "")).filter(Boolean);
     const groupMembersMap = await getMaterialGroupMembersByGroupIds(groupIds);
-    const [materialMap, groupMap, slocMap, userDisplayMap] = await Promise.all([
+    const [materialMap, groupMap, slocMap, userDisplayMap, applicabilityByStrokeId] = await Promise.all([
       getMaterialMapByIds([
         String(stroke.prodshade_material_id ?? ""),
         ...lines.map((l) => String(l.material_id ?? "")),
@@ -485,11 +601,13 @@ export async function getStrokeMasterHandler(
       resolveUserDisplayNames([
         String(stroke.created_by ?? ""), String(stroke.approved_by ?? ""), String(stroke.deactivated_by ?? ""),
       ]),
+      getApplicabilityByStrokeIds([id]),
     ]);
 
     return okResponse({
       data: {
         ...stroke,
+        applicable_po_types: applicabilityByStrokeId.get(id) ?? [],
         material: materialMap.get(String(stroke.prodshade_material_id ?? "")) ?? null,
         default_storage_location: slocMap.get(String(stroke.default_storage_location_id ?? "")) ?? null,
         created_by_display: userDisplayMap.get(String(stroke.created_by ?? "")) ?? null,
@@ -551,10 +669,18 @@ export async function createStrokeMasterHandler(
       ? null
       : Number(body.conversion_factor);
     const defaultStorageLocationId = toTrimmedString(body.default_storage_location_id) || null;
+    const communicationDate = toTrimmedString(body.communication_date);
+    const communicationType = toUpperTrimmedString(body.communication_type);
+    const communicatorName = toTrimmedString(body.communicator_name);
+    const communicationReference = toTrimmedString(body.communication_reference);
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
 
     if (!companyId || !strokeNumber) {
       return strokeError(req, ctx, "PROD_STROKE_INVALID", 400, "company_id, stroke_number required");
+    }
+    const communicationError = validateCommunicationDetails({ communication_date: communicationDate, communication_type: communicationType, communicator_name: communicatorName, communication_reference: communicationReference });
+    if (communicationError) {
+      return strokeError(req, ctx, communicationError, 400, communicationError === "PROD_STROKE_COMMUNICATION_DATE_OUTSIDE_ALLOWED_WINDOW" ? MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE : "Communication Date, Type, Communicator Name, and Communication Reference are required.");
     }
     try {
       await assertCompanyScope(ctx, companyId);
@@ -642,6 +768,10 @@ export async function createStrokeMasterHandler(
         conversion_uom_code: conversionUomCode || null,
         conversion_factor: conversionFactor,
         default_storage_location_id: defaultStorageLocationId,
+        communication_date: communicationDate,
+        communication_type: communicationType,
+        communicator_name: communicatorName,
+        communication_reference: communicationReference,
         status: "DRAFT",
         created_by: ctx.auth_user_id,
       })
@@ -702,6 +832,16 @@ export async function updateStrokeMasterHandler(
       ? null
       : Number(body.conversion_factor);
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    const communicationDetails: JsonRecord = {
+      communication_date: body.communication_date !== undefined ? toTrimmedString(body.communication_date) : existing.communication_date,
+      communication_type: body.communication_type !== undefined ? toUpperTrimmedString(body.communication_type) : existing.communication_type,
+      communicator_name: body.communicator_name !== undefined ? toTrimmedString(body.communicator_name) : existing.communicator_name,
+      communication_reference: body.communication_reference !== undefined ? toTrimmedString(body.communication_reference) : existing.communication_reference,
+    };
+    const communicationError = validateCommunicationDetails(communicationDetails);
+    if (communicationError) {
+      return strokeError(req, ctx, communicationError, 400, communicationError === "PROD_STROKE_COMMUNICATION_DATE_OUTSIDE_ALLOWED_WINDOW" ? MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE : "Communication Date, Type, Communicator Name, and Communication Reference are required.");
+    }
 
     if (conversionFactor != null && !(conversionFactor > 0)) {
       return strokeError(req, ctx, "PROD_STROKE_CONVERSION_FACTOR_INVALID", 400, "conversion_factor must be > 0 when provided");
@@ -716,6 +856,10 @@ export async function updateStrokeMasterHandler(
       base_uom_code: baseUomCode || null,
       conversion_uom_code: conversionUomCode || null,
       conversion_factor: conversionFactor,
+      communication_date: communicationDetails.communication_date,
+      communication_type: communicationDetails.communication_type,
+      communicator_name: communicationDetails.communicator_name,
+      communication_reference: communicationDetails.communication_reference,
       last_updated_at: new Date().toISOString(),
       last_updated_by: ctx.auth_user_id,
     };
@@ -808,6 +952,10 @@ export async function approveStrokeMasterHandler(
     if (existing.status !== "DRAFT") {
       return strokeError(req, ctx, "PROD_STROKE_ALREADY_APPROVED", 409, "Only DRAFT strokes can be approved");
     }
+    const communicationError = validateCommunicationDetails(existing);
+    if (communicationError) {
+      return strokeError(req, ctx, communicationError, 422, communicationError === "PROD_STROKE_COMMUNICATION_DATE_OUTSIDE_ALLOWED_WINDOW" ? MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE : "Communication Date, Type, Communicator Name, and Communication Reference are required before approval.");
+    }
     await assertStrokeApproverRole(
       ctx,
       toTrimmedString(existing.company_id as string),
@@ -858,6 +1006,17 @@ export async function approveStrokeMasterHandler(
       }
       console.error("[stroke_master.approveStrokeMaster] update failed:", JSON.stringify(error));
       throw new Error("PROD_STROKE_APPROVE_FAILED");
+    }
+
+    // A newly approved shared revision replaces the prior active formulation for
+    // its own PO type. The database function performs the switch atomically.
+    const { error: activateError } = await serviceRoleClient.rpc("activate_stroke_po_type", {
+      p_stroke_master_id: id,
+      p_actor: ctx.auth_user_id,
+    });
+    if (activateError) {
+      console.error("[stroke_master.approveStrokeMaster] applicability activation failed:", JSON.stringify(activateError));
+      throw new Error("PROD_STROKE_APPLICABILITY_ACTIVATE_FAILED");
     }
 
     return okResponse({ id, status: "APPROVED", prodshade_material_id: materialId }, ctx.request_id, req);

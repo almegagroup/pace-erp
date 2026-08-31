@@ -27,8 +27,10 @@ import {
   listMtestSkus,
 } from "./prodApi.js";
 import { createCustomerAddress, listMaterials, listCustomers, updateCustomer, listCustomerAddresses } from "../om/omApi.js";
+import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
 
 const EMPTY_ARRAY = [];
+const MANUAL_DATE_BOUNDS = getManualDocumentDateBounds();
 
 const TABS = [
   { key: "create", label: "Create FO" },
@@ -63,6 +65,7 @@ const ERRORS = {
   PROD_PLAN_FEED_PACKING_PO_NOT_FINAL: "Only a FINAL Packing PO can be allocated to an FO.",
   PROD_PLAN_FEED_SHIP_TO_REQUIRED: "Select an active Ship-To address before saving this FO.",
   PROD_PLAN_FEED_CANCEL_BLOCKED_BY_DO: "Cancel the linked Delivery Order first, then cancel this FO.",
+  PROD_PLAN_FEED_DATE_OUTSIDE_ALLOWED_WINDOW: "Date must be within three calendar months before or after today.",
   PROD_PACK_NOT_FOUND: "Packing PO not found.",
   PROD_PACK_REVERSED: "Cannot allocate a reversed/cancelled Packing PO.",
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
@@ -201,6 +204,9 @@ function localIsoDate() {
 }
 function summaryListText(values) {
   return (values ?? []).filter(Boolean).join(" | ");
+}
+function summaryDateLines(values) {
+  return (values ?? []).filter(Boolean).map((value) => <div key={value}>{value}</div>);
 }
 function gridCellValue(row, column) {
   return String(typeof column.copyValue === "function" ? column.copyValue(row) : row?.[column.key] ?? "");
@@ -435,6 +441,10 @@ export default function PlanFeedPage() {
   async function handleCreate(e) {
     e.preventDefault();
     if (!effectiveCompanyId) return;
+    if (!isManualDocumentDateWithinWindow(form.order_date) || (form.scheduled_delivery_date && !isManualDocumentDateWithinWindow(form.scheduled_delivery_date))) {
+      toast(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
+      return;
+    }
     if (!form.party_id || !selectedAddressId) {
       toast("Select a party and its Ship-To address before creating this FO.", "error");
       return;
@@ -574,6 +584,10 @@ export default function PlanFeedPage() {
   async function handleSaveEdit(e) {
     e.preventDefault();
     if (!editData || !canEditSelectedFo) return;
+    if (!isManualDocumentDateWithinWindow(editDraft.order_date) || (editDraft.scheduled_delivery_date && !isManualDocumentDateWithinWindow(editDraft.scheduled_delivery_date))) {
+      toast(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -733,7 +747,7 @@ export default function PlanFeedPage() {
     { key: "delivery_orders", label: "DO Number", width: "145px", copyValue: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_number)), render: (r) => <span className="font-mono">{summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_number)) || "--"}</span> },
     { key: "delivery_order_dates", label: "DO Date", width: "115px", copyValue: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_date)), render: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_date)) || "--" },
     { key: "tally_invoice_numbers", label: "Tally Invoice No.", width: "160px", copyValue: (r) => summaryListText(r.tally_invoice_numbers), render: (r) => <span className="font-mono">{summaryListText(r.tally_invoice_numbers) || "--"}</span> },
-    { key: "dispatch_dates", label: "Dispatch Date", width: "120px", copyValue: (r) => summaryListText(r.dispatch_dates), render: (r) => summaryListText(r.dispatch_dates) || "--" },
+    { key: "dispatch_dates", label: "Dispatch Date", width: "120px", copyValue: (r) => summaryListText(r.dispatch_dates), render: (r) => r.dispatch_dates?.length ? <span className="font-mono leading-5">{summaryDateLines(r.dispatch_dates)}</span> : "--" },
     { key: "pending_dispatch_kg", label: "Pending KG", width: "110px", align: "right", copyValue: (r) => fmt(r.pending_dispatch_kg), render: (r) => <span className="font-mono text-amber-700">{fmt(r.pending_dispatch_kg)}</span> },
     { key: "order_date", label: "Order Date", width: "110px" },
     { key: "scheduled_delivery_date", label: "Del. Date", width: "110px" },
@@ -1007,11 +1021,11 @@ export default function PlanFeedPage() {
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">Order Date <span className="text-rose-500">*</span></label>
-              <input type="date" className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.order_date} onChange={e => setForm(f => ({ ...f, order_date: e.target.value }))} required />
+              <input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.order_date} onChange={e => setForm(f => ({ ...f, order_date: e.target.value }))} required />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">Scheduled Delivery</label>
-              <input type="date" className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.scheduled_delivery_date} onChange={e => setForm(f => ({ ...f, scheduled_delivery_date: e.target.value }))} />
+              <input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.scheduled_delivery_date} onChange={e => setForm(f => ({ ...f, scheduled_delivery_date: e.target.value }))} />
             </div>
 
             <div className="flex flex-col gap-1 col-span-2">
@@ -1248,12 +1262,12 @@ export default function PlanFeedPage() {
                     <input type="number" step="1" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.pack_qty} disabled />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-slate-600 font-medium">Order Date</label>
-                    <input type="date" className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.order_date} onChange={e => setEditDraft(d => ({ ...d, order_date: e.target.value }))} disabled={editData.status === "CANCELLED"} />
+                    <label className="text-xs text-slate-600 font-medium">FO Order Date</label>
+                    <input key={`${editData.id}-order-date`} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.order_date} onChange={e => setEditDraft(d => ({ ...d, order_date: e.target.value }))} disabled={editData.status === "CANCELLED"} />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-slate-600 font-medium">Scheduled Delivery</label>
-                    <input type="date" className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.scheduled_delivery_date} onChange={e => setEditDraft(d => ({ ...d, scheduled_delivery_date: e.target.value }))} disabled={editData.status === "CANCELLED"} />
+                    <label className="text-xs text-slate-600 font-medium">FO Delivery Date (Proposed Dispatch)</label>
+                    <input key={`${editData.id}-delivery-date`} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.scheduled_delivery_date} onChange={e => setEditDraft(d => ({ ...d, scheduled_delivery_date: e.target.value }))} disabled={editData.status === "CANCELLED"} />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Ordered Stroke</label>

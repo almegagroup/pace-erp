@@ -20,6 +20,7 @@ import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
@@ -589,6 +590,9 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
     } catch {
       return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (!isManualDocumentDateWithinWindow(orderDate) || (scheduledDeliveryDate && !isManualDocumentDateWithinWindow(scheduledDeliveryDate))) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+    }
     if (!customerAddressId) {
       return foErr(req, ctx, "PROD_PLAN_FEED_SHIP_TO_REQUIRED", 422, "Select an active Ship-To address before creating this FO.");
     }
@@ -746,9 +750,19 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
     if (body.description !== undefined) updates.description = toTrimmedString(body.description) || null;
     if (body.ordered_qty_kg !== undefined) updates.ordered_qty_kg = parsePositiveNumber(body.ordered_qty_kg);
     if (body.pack_qty !== undefined) updates.pack_qty = parsePositiveInt(body.pack_qty);
-    if (body.order_date !== undefined) updates.order_date = toTrimmedString(body.order_date);
+    if (body.order_date !== undefined) {
+      const orderDate = toTrimmedString(body.order_date);
+      if (!isManualDocumentDateWithinWindow(orderDate)) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+      }
+      updates.order_date = orderDate;
+    }
     if (body.scheduled_delivery_date !== undefined) {
-      updates.scheduled_delivery_date = toTrimmedString(body.scheduled_delivery_date) || null;
+      const scheduledDeliveryDate = toTrimmedString(body.scheduled_delivery_date);
+      if (scheduledDeliveryDate && !isManualDocumentDateWithinWindow(scheduledDeliveryDate)) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+      }
+      updates.scheduled_delivery_date = scheduledDeliveryDate || null;
     }
     if (body.ordered_stroke_number !== undefined) {
       updates.ordered_stroke_number = toTrimmedString(body.ordered_stroke_number) || null;

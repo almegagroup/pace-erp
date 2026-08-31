@@ -21,6 +21,7 @@ import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { getAvailableQty } from "./delivery_order.handlers.ts";
 import { deriveSalesInvoiceGstType, getSnapshotForIssue, hasPhysicalInventoryBlock } from "./sales_order.handlers.ts";
@@ -965,6 +966,10 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
     if (!companyId || rawLines.length === 0) {
       return doErrorResponse(req, ctx, "DO_CREATE_INVALID", 400, "company_id and at least one line are required.");
     }
+    const lrDate = toTrimmedString(body.lr_date);
+    if (lrDate && !isManualDocumentDateWithinWindow(lrDate)) {
+      return doErrorResponse(req, ctx, "DO_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+    }
     try {
       await assertCompanyScope(ctx, companyId);
     } catch {
@@ -1010,6 +1015,10 @@ export async function updateDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
     const body = await parseBody(req);
     const rawLines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
     if (rawLines.length === 0) return doErrorResponse(req, ctx, "DO_EDIT_INVALID", 400, "At least one line is required.");
+    const lrDate = toTrimmedString(body.lr_date);
+    if (lrDate && !isManualDocumentDateWithinWindow(lrDate)) {
+      return doErrorResponse(req, ctx, "DO_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+    }
 
     const { data: dc, error: dcError } = await serviceRoleClient
       .schema("erp_procurement").from("delivery_challan").select("*").eq("id", dcId).maybeSingle();
@@ -1920,6 +1929,9 @@ export async function amendDispatchDetailsHandler(req: Request, ctx: Procurement
       lr_number: toTrimmedString(body.lr_number) || null,
       lr_date: toTrimmedString(body.lr_date) || null,
     };
+    if (next.lr_date && !isManualDocumentDateWithinWindow(next.lr_date)) {
+      return doErrorResponse(req, ctx, "DO_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+    }
     const changed = toTrimmedString(current.transporter_id) !== toTrimmedString(next.transporter_id)
       || toTrimmedString(current.vehicle_number) !== toTrimmedString(next.vehicle_number)
       || toTrimmedString(current.lr_number) !== toTrimmedString(next.lr_number)
@@ -2020,6 +2032,9 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       const tallyInvoiceDate = toTrimmedString(input.tally_invoice_date);
       if (!tallyInvoiceNumber || !tallyInvoiceDate) {
         return doErrorResponse(req, ctx, "PGI_INVOICE_TALLY_FIELDS_REQUIRED", 400, `Tally Invoice Number and Date are required for ${group.document_number}.${alreadyPostedNote}`);
+      }
+      if (!isManualDocumentDateWithinWindow(tallyInvoiceDate)) {
+        return doErrorResponse(req, ctx, "PGI_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
       }
       const inboundNumber = toTrimmedString(input.inbound_number);
       if (group.ibn_required && !inboundNumber) {

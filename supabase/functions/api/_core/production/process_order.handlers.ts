@@ -12,6 +12,7 @@
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { isManualDocumentDateWithinPastWindow, MANUAL_PAST_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
 import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
@@ -172,7 +173,7 @@ async function fetchMachine(companyId: string, machineId: string): Promise<JsonR
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("machine_master")
-    .select("id, company_id, machine_code, machine_name, active")
+    .select("id, company_id, machine_code, machine_name, active, capacity_per_batch, capacity_uom_code")
     .eq("id", machineId)
     .eq("company_id", companyId)
     .maybeSingle();
@@ -181,6 +182,22 @@ async function fetchMachine(companyId: string, machineId: string): Promise<JsonR
     throw new Error("PROD_PO_MACHINE_INVALID");
   }
   return (data as JsonRecord | null) ?? null;
+}
+
+const KG_UOM_CODES = new Set(["KG", "KGS", "KILOGRAM", "KILOGRAMS"]);
+const LITRE_UOM_CODES = new Set(["L", "LT", "LTR", "LITRE", "LITRES"]);
+const MACHINE_CAPACITY_TOLERANCE = 1.1;
+
+function resolveMachineCapacityKg(machine: JsonRecord, stroke: JsonRecord): number | null {
+  const capacity = Number(machine.capacity_per_batch ?? 0);
+  const capacityUom = toUpperTrimmedString(machine.capacity_uom_code);
+  if (!Number.isFinite(capacity) || capacity <= 0 || !capacityUom) return null;
+  if (KG_UOM_CODES.has(capacityUom)) return capacity;
+  if (LITRE_UOM_CODES.has(capacityUom)) {
+    const factor = Number(stroke.conversion_factor ?? 0);
+    return Number.isFinite(factor) && factor > 0 ? capacity * factor : null;
+  }
+  return null;
 }
 
 async function validateRequiredMachine(
@@ -1707,6 +1724,9 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     if (!companyId || !VALID_PO_TYPES.has(poType) || !VALID_SEGMENTS.has(segmentCode) || !materialId || !plannedQty) {
       return poErr(req, ctx, "PROD_PO_INVALID", 400, "company_id, po_type, segment_code, material_id, planned_qty required");
     }
+    if (plannedStartDate && !isManualDocumentDateWithinPastWindow(plannedStartDate)) {
+      return poErr(req, ctx, "PROD_PO_PLANNED_START_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_PAST_DATE_WINDOW_MESSAGE);
+    }
 
     try {
       await assertCompanyScope(ctx, companyId);
@@ -1733,7 +1753,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const { data: stroke, error: strokeErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_master")
-        .select("status")
+        .select("status, company_id, prodshade_material_id, material_type, conversion_factor")
         .eq("id", strokeId)
         .maybeSingle();
       if (strokeErr) {
@@ -1742,6 +1762,38 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       }
       if (!stroke || (stroke as JsonRecord).status !== "APPROVED") {
         return poErr(req, ctx, "PROD_PO_STROKE_NOT_APPROVED", 422, "Stroke master must be APPROVED");
+      }
+      const strokeRow = stroke as JsonRecord;
+      if (String(strokeRow.company_id ?? "") !== companyId || String(strokeRow.prodshade_material_id ?? "") !== materialId) {
+        return poErr(req, ctx, "PROD_PO_STROKE_MATERIAL_MISMATCH", 422, "Stroke master must belong to the selected company and Prodshade");
+      }
+      if (poType !== "INT") {
+        const { data: applicability, error: applicabilityErr } = await serviceRoleClient
+          .schema("erp_production")
+          .from("stroke_po_type_applicability")
+          .select("id")
+          .eq("stroke_master_id", strokeId)
+          .eq("target_po_type", poType)
+          .eq("is_active", true)
+          .maybeSingle();
+        if (applicabilityErr) {
+          console.error("[process_order.createProcessOrder] stroke applicability query failed:", JSON.stringify(applicabilityErr));
+          throw new Error("PROD_PO_CREATE_FAILED");
+        }
+        if (!applicability) {
+          return poErr(req, ctx, "PROD_PO_STROKE_NOT_ELIGIBLE_FOR_TYPE", 422, "Stroke master is not active for the selected Process PO Type");
+        }
+      }
+      if (REQUIRED_MACHINE_TYPES.has(poType)) {
+        const machine = await fetchMachine(companyId, machineId as string);
+        const capacityKg = machine ? resolveMachineCapacityKg(machine, strokeRow) : null;
+        if (!capacityKg) {
+          return poErr(req, ctx, "PROD_PO_MACHINE_CAPACITY_NOT_CONFIGURED", 422, "Selected machine must have a positive KG capacity, or a Litre capacity with a valid Stroke conversion factor");
+        }
+        const maxPlannedQty = capacityKg * MACHINE_CAPACITY_TOLERANCE;
+        if (plannedQty > maxPlannedQty + 0.000001) {
+          return poErr(req, ctx, "PROD_PO_MACHINE_CAPACITY_EXCEEDED", 422, `Planned batch quantity cannot exceed ${maxPlannedQty.toFixed(3)} KG (110% of selected machine capacity)`);
+        }
       }
     }
 

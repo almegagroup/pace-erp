@@ -67,6 +67,8 @@ export const upsertSegmentLocation = (body) => fetchProd("POST", "/api/productio
 // ── Conversion Cost Config (Accounts ACL — §104.8) ────────────────────────────
 export const listConversionRates = (p) => fetchProd("GET", "/api/production/conversion-rates", undefined, p);
 export const createConversionRate = (body) => fetchProd("POST", "/api/production/conversion-rates", body);
+export const updateConversionRate = (id, body) => fetchProd("PATCH", `/api/production/conversion-rates/${id}`, body);
+export const listConversionRateProdshades = (p) => fetchProd("GET", "/api/production/conversion-rate-prodshades", undefined, p);
 // §104.8 — stroke-derived opening-rate suggestion, consumed by IN05 Opening Stock
 export const getDerivedOpeningRate = (p) => fetchProd("GET", "/api/production/derived-opening-rate", undefined, p);
 export const listMtsSkuRates = (p) => fetchProd("GET", "/api/production/mts-sku-rates", undefined, p);
@@ -110,6 +112,7 @@ export const getBatchVarianceDetail = (id) => fetchProd("GET", `/api/production/
 export const listStrokeMasters = (p) => fetchProd("GET", "/api/production/stroke-masters", undefined, p);
 export const getStrokeMaster = (id) => fetchProd("GET", `/api/production/stroke-masters/${id}`);
 export const createStrokeMaster = (body) => fetchProd("POST", "/api/production/stroke-masters", body);
+export const shareStrokeMaster = (body) => fetchProd("POST", "/api/production/stroke-shares", body);
 export const updateStrokeMaster = (id, body) => fetchProd("PATCH", `/api/production/stroke-masters/${id}`, body);
 export const approveStrokeMaster = (id) => fetchProd("POST", `/api/production/stroke-masters/${id}/approve`);
 export const revertStrokeMaster = (id) => fetchProd("POST", `/api/production/stroke-masters/${id}/revert`);

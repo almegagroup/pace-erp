@@ -44,12 +44,17 @@ import {
 import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
 import { GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 import { formatPreciseNumber, multiplyPreciseValues, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
+import { getManualPastDateBounds, isManualDocumentDateWithinPastWindow, MANUAL_PAST_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
 const MTS_SEGMENTS = ["IWC", "POWDER"];
 const MTEST_SEGMENTS = ["ADMIX", "HPS", "IWC", "POWDER"];
 const PACKING_SOURCE_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
 const TABS = ["Process PO", "Packing PO"];
+const PROCESS_PO_DATE_BOUNDS = getManualPastDateBounds();
+const KG_UOM_CODES = new Set(["KG", "KGS", "KILOGRAM", "KILOGRAMS"]);
+const LITRE_UOM_CODES = new Set(["L", "LT", "LTR", "LITRE", "LITRES"]);
+const MACHINE_CAPACITY_TOLERANCE = 1.1;
 
 const EMPTY_PROCESS = {
   company_id: "",
@@ -210,10 +215,11 @@ export default function ProductionPOCreatePage() {
     [canCreateMtest, canCreateStandardType],
   );
   const approvedStrokesQ = useQuery({
-    queryKey: ["production-create-approved-strokes", effectiveCompanyId],
+    queryKey: ["production-create-approved-strokes", effectiveCompanyId, processForm.po_type],
     queryFn: () => listStrokeMasters({
       company_id: effectiveCompanyId || undefined,
       status: "APPROVED",
+      usable_for_po_type: processForm.po_type || undefined,
     }),
     enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
@@ -229,14 +235,9 @@ export default function ProductionPOCreatePage() {
   );
 
   const prodshadeOptions = useMemo(() => {
-    const approvedRows = approvedStrokes.filter((stroke) => {
-      const strokePoType = String(stroke.po_type || "").toUpperCase();
-      return strokePoType === String(processForm.po_type || "").toUpperCase();
-    });
-
     const seenApproved = new Set();
     const approvedOptions = [];
-    approvedRows.forEach((item) => {
+    approvedStrokes.forEach((item) => {
       const materialId = String(item.material_id || "");
       if (!materialId || seenApproved.has(materialId)) return;
       seenApproved.add(materialId);
@@ -244,7 +245,7 @@ export default function ProductionPOCreatePage() {
     });
 
     return approvedOptions;
-  }, [approvedStrokes, processForm.po_type]);
+  }, [approvedStrokes]);
 
   const selectedMaterial = materialById.get(processForm.prodshade_material_id) ?? null;
   const derivedSegmentCode = deriveSegmentCode(
@@ -255,20 +256,20 @@ export default function ProductionPOCreatePage() {
   const machineRequired = ["MTO", "HPS", "MTS", "INT"].includes(processForm.po_type);
 
   const strokesQ = useQuery({
-    queryKey: ["production-create-strokes", effectiveCompanyId, processForm.prodshade_material_id],
+    queryKey: ["production-create-strokes", effectiveCompanyId, processForm.po_type, processForm.prodshade_material_id],
     queryFn: () => listStrokeMasters({
       company_id: effectiveCompanyId || undefined,
       material_id: processForm.prodshade_material_id || undefined,
       status: "APPROVED",
+      usable_for_po_type: processForm.po_type || undefined,
     }),
     enabled: Boolean(effectiveCompanyId && processForm.prodshade_material_id),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
   const strokeOptions = useMemo(
     () => (strokesQ.data ?? [])
-      .filter((stroke) => String(stroke.po_type || "").toUpperCase() === String(processForm.po_type || "").toUpperCase())
       .map((stroke) => ({ value: stroke.id, label: strokeLabel(stroke) })),
-    [processForm.po_type, strokesQ.data],
+    [strokesQ.data],
   );
 
   const strokeDetailQ = useQuery({
@@ -304,6 +305,30 @@ export default function ProductionPOCreatePage() {
     () => (machinesQ.data ?? []).map((machine) => ({ value: machine.id, label: machineLabel(machine) || "Machine" })),
     [machinesQ.data],
   );
+  const selectedMachine = useMemo(
+    () => (machinesQ.data ?? []).find((machine) => machine.id === processForm.machine_id) ?? null,
+    [machinesQ.data, processForm.machine_id],
+  );
+  const machineCapacityCheck = useMemo(() => {
+    if (!machineRequired || !processForm.machine_id) return { blocked: false, message: "" };
+    const capacity = Number(selectedMachine?.capacity_per_batch ?? 0);
+    const uom = String(selectedMachine?.capacity_uom_code ?? "").trim().toUpperCase();
+    if (!Number.isFinite(capacity) || capacity <= 0 || !uom) {
+      return { blocked: true, message: "Selected machine has no valid batch capacity. Configure Capacity and UOM in Machine Master." };
+    }
+    let capacityKg = null;
+    if (KG_UOM_CODES.has(uom)) capacityKg = capacity;
+    if (LITRE_UOM_CODES.has(uom) && literToKgFactor) capacityKg = capacity * literToKgFactor;
+    if (!capacityKg) {
+      return { blocked: true, message: "Machine capacity UOM must be KG, or Litre with a valid Stroke conversion factor." };
+    }
+    const maximumKg = capacityKg * MACHINE_CAPACITY_TOLERANCE;
+    const plannedKg = Number(processForm.planned_qty_kg || 0);
+    if (plannedKg > maximumKg + 0.000001) {
+      return { blocked: true, message: `Batch Size ${formatPreciseNumber(plannedKg, "0.###")} KG exceeds the allowed maximum ${formatPreciseNumber(maximumKg, "0.###")} KG (Machine Capacity ${capacity} ${uom} + 10%).` };
+    }
+    return { blocked: false, message: `Maximum allowed: ${formatPreciseNumber(maximumKg, "0.###")} KG (Machine Capacity ${capacity} ${uom} + 10%).` };
+  }, [literToKgFactor, machineRequired, processForm.machine_id, processForm.planned_qty_kg, selectedMachine]);
 
   const storageLocationQ = useStorageLocationOptionsQuery(
     { company_id: effectiveCompanyId || undefined },
@@ -885,6 +910,14 @@ export default function ProductionPOCreatePage() {
       toast("Stroke is required for this Process PO type.", "error");
       return;
     }
+    if (machineCapacityCheck.blocked) {
+      toast(machineCapacityCheck.message, "error");
+      return;
+    }
+    if (processForm.planned_start_date && !isManualDocumentDateWithinPastWindow(processForm.planned_start_date)) {
+      toast(MANUAL_PAST_DATE_WINDOW_MESSAGE, "error");
+      return;
+    }
     setProcessStep(3);
   }
 
@@ -1223,7 +1256,7 @@ export default function ProductionPOCreatePage() {
                           type="number"
                           min="0.01"
                           step={PRODUCTION_DECIMAL_STEP}
-                          className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
+                          className={`rounded border px-2 py-1.5 text-sm font-mono ${machineCapacityCheck.blocked ? "border-rose-500 bg-rose-50 text-rose-900" : "border-slate-300"}`}
                           value={batchQtyLiter}
                           disabled={!processForm.stroke_master_id || literConversionMissing || strokeDetailQ.isLoading}
                           onChange={(event) => {
@@ -1246,7 +1279,7 @@ export default function ProductionPOCreatePage() {
                       </div>
                       <div className="flex flex-col gap-1">
                         <label className="text-xs font-medium text-slate-600">= Batch Size (KG, derived)</label>
-                        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-900">
+                        <div className={`rounded border px-3 py-2 text-sm font-mono ${machineCapacityCheck.blocked ? "border-rose-500 bg-rose-50 text-rose-900" : "border-slate-200 bg-slate-50 text-slate-900"}`}>
                           {processForm.planned_qty_kg || "--"}
                         </div>
                       </div>
@@ -1258,7 +1291,7 @@ export default function ProductionPOCreatePage() {
                         type="number"
                         min="0.01"
                         step={PRODUCTION_DECIMAL_STEP}
-                        className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
+                        className={`rounded border px-2 py-1.5 text-sm font-mono ${machineCapacityCheck.blocked ? "border-rose-500 bg-rose-50 text-rose-900" : "border-slate-300"}`}
                         value={processForm.planned_qty_kg}
                         onChange={(event) => updateProcess("planned_qty_kg", event.target.value)}
                         required
@@ -1266,10 +1299,18 @@ export default function ProductionPOCreatePage() {
                     </div>
                   )}
 
+                  {machineRequired && processForm.machine_id && machineCapacityCheck.message && (
+                    <div className={`-mt-2 text-xs ${machineCapacityCheck.blocked ? "font-medium text-rose-600" : "text-slate-500"}`}>
+                      {machineCapacityCheck.message}
+                    </div>
+                  )}
+
                   <div className="flex flex-col gap-1">
                     <label className="text-xs font-medium text-slate-600">Planned Start Date</label>
                     <input
                       type="date"
+                      min={PROCESS_PO_DATE_BOUNDS.min}
+                      max={PROCESS_PO_DATE_BOUNDS.max}
                       className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                       value={processForm.planned_start_date}
                       onChange={(event) => updateProcess("planned_start_date", event.target.value)}
@@ -1405,7 +1446,7 @@ export default function ProductionPOCreatePage() {
                     </button>
                     <button
                       type="submit"
-                      disabled={saving || shortLineNumbers.length > 0}
+                      disabled={saving || shortLineNumbers.length > 0 || machineCapacityCheck.blocked}
                       className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
                     >
                       {saving ? "Creating..." : "Create Process PO"}

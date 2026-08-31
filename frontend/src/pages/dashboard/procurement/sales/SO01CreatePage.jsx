@@ -28,6 +28,7 @@ import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcure
 import { listFgParentCompanies, listFgDepotCodes } from "../../om/omApi.js";
 import { listAc06ApprovedMonths } from "../../production/prodApi.js";
 import { amountToWordsIndian } from "../../../../utils/numberToWordsIndian.js";
+import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
 import { createSalesOrderUnified, listSalesOrderAddressOptions, listSalesOrderFgSkuOptions } from "../procurementApi.js";
 
 // §133.7 — 5 fixed dispatch types.
@@ -64,6 +65,7 @@ const FG_TYPE_OPTIONS = [
   { value: "MTEST", label: "MTEST" },
   { value: "MTS", label: "MTS" },
 ];
+const MANUAL_DATE_BOUNDS = getManualDocumentDateBounds();
 const RATE_BASIS_OPTIONS = [
   { value: "PACK_UOM", label: "Pack UoM" },
   { value: "BASE_UOM", label: "Base UoM" },
@@ -626,6 +628,10 @@ export default function SO01CreatePage() {
   async function handleSubmit() {
     if (lines.length === 0) { setError("At least one item line is required."); return; }
     if (!externalSoNumber.trim()) { setError("External SO Number is required."); return; }
+    if (!isManualDocumentDateWithinWindow(soDate) || (externalSoDate && !isManualDocumentDateWithinWindow(externalSoDate))) {
+      setError(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+      return;
+    }
     // §133.9-G — a manual-SKU FG line has no material_id by design; it must
     // carry a manual_sku_name instead. Every other line always needs a real item.
     if (lines.some((line) => !line.material_id && !(line.__manualSku && line.manual_sku_name.trim()))) {
@@ -731,7 +737,7 @@ export default function SO01CreatePage() {
               </select>
             </ErpDenseFormRow>
             <ErpDenseFormRow label="SO Date" required>
-              <input type="date" value={soDate} onChange={(event) => setSoDate(event.target.value)} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+              <input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={soDate} onChange={(event) => setSoDate(event.target.value)} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
             </ErpDenseFormRow>
             <ErpDenseFormRow label="Dispatch Type" required>
               <select value={dispatchType} onChange={(event) => setDispatchType(event.target.value)} className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
@@ -839,7 +845,7 @@ export default function SO01CreatePage() {
                 {textInput(externalSoNumber, setExternalSoNumber, { placeholder: "Enter customer/external SO number" })}
               </ErpDenseFormRow>
               <ErpDenseFormRow label="External SO Date">
-                <input type="date" value={externalSoDate} onChange={(event) => setExternalSoDate(event.target.value)} className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                <input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={externalSoDate} onChange={(event) => setExternalSoDate(event.target.value)} className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
               </ErpDenseFormRow>
               <ErpDenseFormRow label="Payment Terms">
                 <ErpComboboxField value={paymentTermId} onChange={setPaymentTermId} options={paymentTermOptions} blankLabel="Select Payment Terms" />
