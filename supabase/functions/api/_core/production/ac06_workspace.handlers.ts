@@ -13,6 +13,7 @@ import { assertProdReadRole, parseBody, toTrimmedString } from "./production.sha
 
 type Row = Record<string, unknown>;
 const AC06_FIRST_MONTH = "2026-05-01";
+const AC06_EXCLUDED_MATERIAL_TYPES = new Set(["FG", "SFG"]);
 
 const ac06Error = (req: Request, ctx: ProdHandlerContext, code: string, status: number, message: string) =>
   errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
@@ -46,6 +47,10 @@ function previousMonthOf(rateMonth: string): string {
 
 function ids(input: unknown): string[] {
   return [...new Set((Array.isArray(input) ? input : []).map(toTrimmedString).filter(Boolean))];
+}
+
+function isAc06EligibleMaterial(material: Row | undefined): boolean {
+  return !AC06_EXCLUDED_MATERIAL_TYPES.has(toTrimmedString(material?.material_type).toUpperCase());
 }
 
 function rateValue(value: unknown): string | null {
@@ -137,15 +142,24 @@ async function getMonth(ctx: ProdHandlerContext, companyId: string, rateMonth: s
       db.from("ac06_month_group_config").select("source_sloc_group_id, costing_group_id, material_id, source_sloc_group_name_snapshot, costing_group_name_snapshot").eq("month_id", prior.id),
     ]);
     if (linesError || configsError) throw new Error("AC06_CARRY_FORWARD_READ_FAILED");
-    if ((priorLines ?? []).length) {
-      const { error } = await db.from("ac06_month_line").insert((priorLines as Row[]).map((line) => ({
+    const priorLineMaterialIds = ids((priorLines ?? []).map((line: Row) => line.material_id));
+    const priorMaterials = await materialMap(priorLineMaterialIds);
+    const eligiblePriorLines = (priorLines as Row[]).filter((line) =>
+      isAc06EligibleMaterial(priorMaterials.get(toTrimmedString(line.material_id))),
+    );
+    const eligiblePriorMaterialIds = new Set(ids(eligiblePriorLines.map((line) => line.material_id)));
+    if (eligiblePriorLines.length) {
+      const { error } = await db.from("ac06_month_line").insert(eligiblePriorLines.map((line) => ({
         ...line, month_id: created.id, company_id: companyId, verification_status: "PENDING", rate_changed_at: now,
         rate_changed_by: ctx.auth_user_id, created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, last_updated_at: now,
       })));
       if (error) throw new Error("AC06_CARRY_FORWARD_WRITE_FAILED");
     }
-    if ((priorConfigs ?? []).length) {
-      const { error } = await db.from("ac06_month_group_config").insert((priorConfigs as Row[]).map((config) => ({
+    const eligiblePriorConfigs = (priorConfigs as Row[]).filter((config) =>
+      eligiblePriorMaterialIds.has(toTrimmedString(config.material_id)),
+    );
+    if (eligiblePriorConfigs.length) {
+      const { error } = await db.from("ac06_month_group_config").insert(eligiblePriorConfigs.map((config) => ({
         ...config, month_id: created.id, company_id: companyId, created_by: ctx.auth_user_id,
         last_updated_by: ctx.auth_user_id, last_updated_at: now,
       })));
@@ -184,7 +198,11 @@ async function eligibleMaterialIds(companyId: string, slocGroupId: string): Prom
   if (!locationIds.length) return [];
   const snapshots = await fetchInChunks<Row>(locationIds, (chunk) => serviceRoleClient.schema("erp_inventory").from("stock_snapshot")
     .select("material_id").eq("company_id", companyId).in("storage_location_id", chunk));
-  return ids(snapshots.map((row) => row.material_id));
+  const materialIds = ids(snapshots.map((row) => row.material_id));
+  const materials = await materialMap(materialIds);
+  // AC06 prices material inputs only. FG/SFG can share an inventory SLOC with
+  // RM/PM/INT, but must never enter this rate scope or its carry-forward chain.
+  return materialIds.filter((materialId) => isAc06EligibleMaterial(materials.get(materialId)));
 }
 
 async function materialMap(materialIds: string[]): Promise<Map<string, Row>> {
@@ -652,13 +670,14 @@ export async function getAc06HistoryHandler(req: Request, ctx: ProdHandlerContex
 // qualifies when every non-excluded line is VERIFIED, whether the month itself is still
 // OPEN or has already been CLOSED (closing never re-checks verification, so a closed
 // month is not automatically approved -- it is checked the same way as an open one, via
-// its own archive-line snapshot).
+// its own archive-line snapshot). This is a read-only SO-create dependency: it returns
+// month labels only, never AC06 material or rate data.
 export async function listAc06ApprovedMonthsHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     const url = new URL(req.url);
     const companyId = await companyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     if (!companyId) return ac06Error(req, ctx, "AC06_APPROVED_MONTHS_INVALID", 400, "company_id is required.");
-    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_GROUP", "VIEW");
+    const accessError = await requireAc06Action(req, ctx, companyId, "PROC_SO_CREATE", "WRITE");
     if (accessError) return accessError;
 
     const db = serviceRoleClient.schema("erp_production");

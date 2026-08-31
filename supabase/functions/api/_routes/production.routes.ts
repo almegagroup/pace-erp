@@ -234,8 +234,6 @@ export async function dispatchProductionRoutes(
       return await createConversionRateHandler(req, ctx);
     case "GET:/api/production/conversion-rate-prodshades":
       return await listConversionRateProdshadesHandler(req, ctx);
-    case "PATCH:/api/production/conversion-rates/:id":
-      return await updateConversionRateHandler(req, ctx);
     // §104.8 — suggested opening rate for a produced material (stroke-derived), used by IN05
     case "GET:/api/production/derived-opening-rate":
       return await getDerivedOpeningRateHandler(req, ctx);
@@ -433,6 +431,11 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/batch-numbers\/[^/]+\/release$/.test(pathname) && req.method === "POST") {
     return await releaseBatchNumberHandler(req, ctx);
+  }
+
+  // Conversion Cost Config /:id
+  if (/^\/api\/production\/conversion-rates\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateConversionRateHandler(req, ctx);
   }
 
   // Stroke Masters /:id
