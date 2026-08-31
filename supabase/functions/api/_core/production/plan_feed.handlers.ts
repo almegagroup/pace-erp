@@ -1498,8 +1498,40 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     // Town from MM04 or Plan Feed's own "Edit Customer" button shows up in
     // this table immediately, no extra sync step.
     const partyIds = [...new Set((fos as JsonRecord[]).map((f) => toTrimmedString(f.party_id)).filter(Boolean))];
-    const townRows = await fetchInChunks<JsonRecord>(partyIds, (idChunk) =>
-      serviceRoleClient.schema("erp_master").from("customer_master").select("id, town, fo_customer_type").in("id", idChunk));
+
+    // §83.18-REVISED: flag rows whose Ordered Stroke isn't (yet) in Stroke Master --
+    // live check, so the flag clears itself the moment someone creates that Stroke,
+    // no manual update needed here.
+    const rowsWithStroke = (fos as JsonRecord[]).filter((f) => toTrimmedString(f.ordered_stroke_number));
+    const materialIdsWithStroke = rowsWithStroke.map((f) => String(f.material_id ?? ""));
+    const skusWithStrokeNoMaterial = rowsWithStroke
+      .filter((f) => !toTrimmedString(f.material_id) && toTrimmedString(f.sku))
+      .map((f) => String(f.sku));
+
+    // Found live 2026-09-01 (CMP006's Total Table load noticeably slower than
+    // CMP003's on first fetch/company switch): these four lookups each depend
+    // only on foIds/partyIds/fos -- already available from the header fetch
+    // above, not on each other's results -- §8B INDEPENDENT, but ran as four
+    // separate sequential round-trip groups. Batched into one parallel round;
+    // the more FOs/parties a company has (CMP006 far more than CMP003), the
+    // more round trips this collapses.
+    const [townRows, [prodshadeMap, skuProdshadeMap], allocsResult, foAllocationResult] = await Promise.all([
+      fetchInChunks<JsonRecord>(partyIds, (idChunk) =>
+        serviceRoleClient.schema("erp_master").from("customer_master").select("id, town, fo_customer_type").in("id", idChunk)),
+      Promise.all([
+        resolveProdshadeMapForMaterials(materialIdsWithStroke),
+        resolveProdshadeIdsFromSkuText(skusWithStrokeNoMaterial),
+      ]),
+      serviceRoleClient
+        .schema("erp_production").from("plan_feed_packing_order_allocation")
+        .select("plan_feed_id, packing_order_id, allocated_qty_kg")
+        .in("plan_feed_id", foIds),
+      serviceRoleClient
+        .schema("erp_procurement").from("sales_order_map_allocation")
+        .select("id, fo_id")
+        .in("fo_id", foIds),
+    ]);
+
     const townByPartyId = new Map<string, string | null>();
     // §131.5 item #4 -- the FO's PO Type isn't stored on plan_feed itself, it's always
     // derived from the party's own fo_customer_type (same convention the page's "PO Type
@@ -1512,18 +1544,6 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       foTypeByPartyId.set(String(row.id), rawType === "ZTEST" ? "MTEST" : (rawType || null));
     }
 
-    // §83.18-REVISED: flag rows whose Ordered Stroke isn't (yet) in Stroke Master --
-    // live check, so the flag clears itself the moment someone creates that Stroke,
-    // no manual update needed here.
-    const rowsWithStroke = (fos as JsonRecord[]).filter((f) => toTrimmedString(f.ordered_stroke_number));
-    const materialIdsWithStroke = rowsWithStroke.map((f) => String(f.material_id ?? ""));
-    const skusWithStrokeNoMaterial = rowsWithStroke
-      .filter((f) => !toTrimmedString(f.material_id) && toTrimmedString(f.sku))
-      .map((f) => String(f.sku));
-    const [prodshadeMap, skuProdshadeMap] = await Promise.all([
-      resolveProdshadeMapForMaterials(materialIdsWithStroke),
-      resolveProdshadeIdsFromSkuText(skusWithStrokeNoMaterial),
-    ]);
     const prodshadeIds = [...new Set([...prodshadeMap.values(), ...skuProdshadeMap.values()])];
     const existingStrokePairs = new Set<string>();
     if (prodshadeIds.length > 0) {
@@ -1537,10 +1557,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       }
     }
 
-    const { data: allocs, error: allocErr } = await serviceRoleClient
-      .schema("erp_production").from("plan_feed_packing_order_allocation")
-      .select("plan_feed_id, packing_order_id, allocated_qty_kg")
-      .in("plan_feed_id", foIds);
+    const { data: allocs, error: allocErr } = allocsResult;
     if (allocErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
 
     const allocByFo: Record<string, JsonRecord[]> = {};
@@ -1554,10 +1571,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     // (was a hardcoded 0 placeholder before -- §83.18-REVISED's own note).
     // Traced SO Map allocation -> DO line -> POSTED Invoice line, never via
     // Packing PO FINAL status (that would misreport "produced" as "shipped").
-    const { data: foAllocationRows, error: foAllocationRowsErr } = await serviceRoleClient
-      .schema("erp_procurement").from("sales_order_map_allocation")
-      .select("id, fo_id")
-      .in("fo_id", foIds);
+    const { data: foAllocationRows, error: foAllocationRowsErr } = foAllocationResult;
     if (foAllocationRowsErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
     const foByAllocationId = new Map(((foAllocationRows ?? []) as JsonRecord[]).map((row) => [String(row.id), String(row.fo_id)]));
     const allocationIdsForDispatch = [...foByAllocationId.keys()];
