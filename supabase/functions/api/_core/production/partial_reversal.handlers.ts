@@ -548,9 +548,11 @@ type RmIntPreviewLine = {
   process_order_line_id: string;
   material_id: string;
   line_material_type: string;
+  standard_qty: number;
   actual_qty: number;
   ap_approved_qty: number;
   variance_qty: number;
+  proportional_standard_qty: number;
   proportional_actual_qty: number;
   proportional_ap_approved_qty: number;
   proportional_variance_qty: number;
@@ -578,7 +580,7 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
   const { data: recoRows, error: recoErr } = await serviceRoleClient
     .schema("erp_production")
     .from("process_order_line_reco")
-    .select("process_order_line_id, material_id, line_material_type, actual_qty, ap_approved_qty, variance_qty")
+    .select("process_order_line_id, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, variance_qty")
     .eq("process_order_id", processOrderId)
     .eq("is_voided", false)
     .in("source_txn_type", ["PRODUCTION", "OPENING", "PID_ADJUSTMENT"])
@@ -616,6 +618,7 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
   }
 
   return rows.map((row) => {
+    const standardQty = Number(row.standard_qty ?? 0);
     const actualQty = Number(row.actual_qty ?? 0);
     const apApprovedQty = Number(row.ap_approved_qty ?? 0);
     const varianceQty = Number(row.variance_qty ?? 0);
@@ -623,9 +626,11 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
       process_order_line_id: String(row.process_order_line_id ?? ""),
       material_id: String(row.material_id ?? ""),
       line_material_type: String(row.line_material_type ?? ""),
+      standard_qty: standardQty,
       actual_qty: actualQty,
       ap_approved_qty: apApprovedQty,
       variance_qty: varianceQty,
+      proportional_standard_qty: standardQty * ratio,
       proportional_actual_qty: actualQty * ratio,
       proportional_ap_approved_qty: apApprovedQty * ratio,
       proportional_variance_qty: varianceQty * ratio,
@@ -1256,6 +1261,13 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         process_order_line_id: line.process_order_line_id,
         material_id: line.material_id,
         line_material_type: line.line_material_type,
+        // Found live 2026-09-01: this row previously omitted standard_qty
+        // entirely (left NULL) -- process_order_line_reco's SUM()-reconciles
+        // design (see comment above) applies to every numeric column
+        // uniformly, so a partial reversal's credit row needs the same
+        // negative-proportional treatment here as actual_qty/ap_approved_qty,
+        // or SUM(standard_qty) for the batch stays wrong after any reversal.
+        standard_qty: -line.proportional_standard_qty,
         actual_qty: -line.proportional_actual_qty,
         ap_approved_qty: -line.proportional_ap_approved_qty,
         variance_qty: -line.proportional_variance_qty,

@@ -405,6 +405,8 @@ export default function PartialBatchReversalPage() {
                       <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Line</th>
                       <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Material</th>
                       <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Returns To</th>
+                      <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Standard Qty</th>
+                      <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Standard Reversal</th>
                       <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Actual Qty</th>
                       <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Actual Reversal</th>
                       <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">AP Approved Qty</th>
@@ -417,6 +419,8 @@ export default function PartialBatchReversalPage() {
                         <td className="py-2 px-3">{line.line_material_type}</td>
                         <td className="py-2 px-3">{materialLabel(line.material)}</td>
                         <td className="py-2 px-3 font-mono">{storageLocationLabel(line.storage_location)}</td>
+                        <td className="py-2 px-3 text-right font-mono">{fmt(line.standard_qty)}</td>
+                        <td className="py-2 px-3 text-right font-mono">{fmt(line.proportional_standard_qty)}</td>
                         <td className="py-2 px-3 text-right font-mono">{fmt(line.actual_qty)}</td>
                         <td className="py-2 px-3 text-right font-mono">{fmt(line.proportional_actual_qty)}</td>
                         <td className="py-2 px-3 text-right font-mono">{fmt(line.ap_approved_qty)}</td>
@@ -426,10 +430,9 @@ export default function PartialBatchReversalPage() {
                   </tbody>
                 </table>
                 <p className="px-3 py-2 text-[11px] text-slate-500">
-                  Both columns post on Reverse: Actual Reversal physically returns stock at that
-                  qty; AP Approved Reversal credits the Reco/Costing layer (what APL gets billed
-                  for) by the same proportion — matching how the original Verify posting split
-                  the two.
+                  All three Reversal columns post to the Reco/Costing layer on Reverse (the same
+                  Standard/Actual/AP Approved split Verify originally wrote, credited back
+                  proportionally); Actual Reversal is also what physically returns to stock.
                 </p>
               </div>
 
