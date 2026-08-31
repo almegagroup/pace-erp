@@ -231,24 +231,29 @@ async function getCompanyFStorageLocations(companyId: string): Promise<JsonRecor
     .filter((location) => toTrimmedString(location.code).startsWith("F"));
 }
 
-async function getActiveStrokeIdsForPoType(poType: string): Promise<string[]> {
+async function getActiveStrokeLocationsForPoType(poType: string): Promise<Map<string, string>> {
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("stroke_po_type_applicability")
-    .select("stroke_master_id")
+    .select("stroke_master_id, default_storage_location_id")
     .eq("target_po_type", poType)
     .eq("is_active", true);
   if (error) {
     console.error("[pack_bom.getActiveStrokeIdsForPoType] query failed:", JSON.stringify(error));
     throw new Error("PROD_BOM_STROKE_LOOKUP_FAILED");
   }
-  return [...new Set(((data ?? []) as JsonRecord[])
-    .map((row) => toTrimmedString(row.stroke_master_id))
-    .filter(Boolean))];
+  const locations = new Map<string, string>();
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const strokeId = toTrimmedString(row.stroke_master_id);
+    const storageLocationId = toTrimmedString(row.default_storage_location_id);
+    if (strokeId && storageLocationId) locations.set(strokeId, storageLocationId);
+  }
+  return locations;
 }
 
 async function resolveApprovedStroke(prodshadeMaterialId: string, companyId: string, poType: string): Promise<JsonRecord | null> {
-  const applicableStrokeIds = await getActiveStrokeIdsForPoType(poType);
+  const applicableStrokeLocations = await getActiveStrokeLocationsForPoType(poType);
+  const applicableStrokeIds = [...applicableStrokeLocations.keys()];
   if (applicableStrokeIds.length === 0) return null;
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
@@ -267,10 +272,13 @@ async function resolveApprovedStroke(prodshadeMaterialId: string, companyId: str
   }
   const stroke = (data as JsonRecord | null) ?? null;
   if (!stroke) return null;
-  const slocMap = await getStorageLocationMapByIds([String(stroke.default_storage_location_id ?? "")]);
+  const effectiveStorageLocationId = applicableStrokeLocations.get(String(stroke.id))
+    ?? toTrimmedString(stroke.default_storage_location_id);
+  const slocMap = await getStorageLocationMapByIds([effectiveStorageLocationId]);
   return {
     ...stroke,
-    default_storage_location: slocMap.get(String(stroke.default_storage_location_id ?? "")) ?? null,
+    default_storage_location_id: effectiveStorageLocationId,
+    default_storage_location: slocMap.get(effectiveStorageLocationId) ?? null,
   };
 }
 
@@ -511,7 +519,8 @@ export async function listPackBomEligibleSkusHandler(
     )];
     if (matchedProdshadeIds.length === 0) return okResponse({ data: mtestOutput }, ctx.request_id, req);
 
-    const applicableStrokeIds = await getActiveStrokeIdsForPoType(poType);
+    const applicableStrokeLocations = await getActiveStrokeLocationsForPoType(poType);
+    const applicableStrokeIds = [...applicableStrokeLocations.keys()];
     if (applicableStrokeIds.length === 0) return okResponse({ data: mtestOutput }, ctx.request_id, req);
 
     const { data: strokeRows, error: strokeErr } = await serviceRoleClient
@@ -535,9 +544,10 @@ export async function listPackBomEligibleSkusHandler(
       if (!prodshadeMaterialId || strokeByProdshadeId.has(prodshadeMaterialId)) continue;
       strokeByProdshadeId.set(prodshadeMaterialId, stroke);
     }
-    const slocMap = await getStorageLocationMapByIds(
-      strokeList.map((stroke) => String(stroke.default_storage_location_id ?? "")),
-    );
+    const slocMap = await getStorageLocationMapByIds(strokeList.map((stroke) =>
+      applicableStrokeLocations.get(String(stroke.id))
+        ?? String(stroke.default_storage_location_id ?? ""),
+    ));
 
     const output: JsonRecord[] = [];
     for (const sku of nonMtestSkus) {
@@ -549,6 +559,8 @@ export async function listPackBomEligibleSkusHandler(
       if (!prodshade) continue;
       const stroke = strokeByProdshadeId.get(String(prodshade.id));
       if (!stroke) continue;
+      const effectiveStorageLocationId = applicableStrokeLocations.get(String(stroke.id))
+        ?? toTrimmedString(stroke.default_storage_location_id);
       output.push({
         ...sku,
         company_id: companyId,
@@ -558,7 +570,8 @@ export async function listPackBomEligibleSkusHandler(
         pack_code_row: packCode,
         stroke_master: {
           ...stroke,
-          default_storage_location: slocMap.get(String(stroke.default_storage_location_id ?? "")) ?? null,
+          default_storage_location_id: effectiveStorageLocationId,
+          default_storage_location: slocMap.get(effectiveStorageLocationId) ?? null,
         },
       });
     }

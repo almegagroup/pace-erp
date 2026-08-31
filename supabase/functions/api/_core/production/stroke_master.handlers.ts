@@ -170,15 +170,21 @@ async function getStrokeMaster(id: string): Promise<JsonRecord | null> {
   return (data as JsonRecord | null) ?? null;
 }
 
-async function getActiveApplicabilityStrokeIds(poType: string): Promise<string[]> {
+async function getActiveApplicabilityByPoType(poType: string): Promise<Map<string, string>> {
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("stroke_po_type_applicability")
-    .select("stroke_master_id")
+    .select("stroke_master_id, default_storage_location_id")
     .eq("target_po_type", poType)
     .eq("is_active", true);
   if (error) throw new Error("PROD_STROKE_APPLICABILITY_LOOKUP_FAILED");
-  return [...new Set(((data ?? []) as JsonRecord[]).map((row) => String(row.stroke_master_id ?? "")).filter(Boolean))];
+  const result = new Map<string, string>();
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const strokeId = toTrimmedString(row.stroke_master_id);
+    const storageLocationId = toTrimmedString(row.default_storage_location_id);
+    if (strokeId && storageLocationId) result.set(strokeId, storageLocationId);
+  }
+  return result;
 }
 
 async function getApplicabilityByStrokeIds(strokeIds: string[]): Promise<Map<string, string[]>> {
@@ -417,6 +423,7 @@ export async function listStrokeMastersHandler(
       return strokeError(req, ctx, "PROD_STROKE_SHARE_TYPE_INVALID", 400, "PO Type must be MTO, HPS, MTS, MTEST, or INT");
     }
 
+    let usableStorageLocationsByStrokeId = new Map<string, string>();
     let query = serviceRoleClient
       .schema("erp_production")
       .from("stroke_master")
@@ -449,7 +456,8 @@ export async function listStrokeMastersHandler(
         // INT strokes do not use the SFG share/applicability workflow.
         query = query.eq("po_type", "INT").eq("material_type", "INT");
       } else {
-        const applicableStrokeIds = await getActiveApplicabilityStrokeIds(usableForPoType);
+        usableStorageLocationsByStrokeId = await getActiveApplicabilityByPoType(usableForPoType);
+        const applicableStrokeIds = [...usableStorageLocationsByStrokeId.keys()];
         if (applicableStrokeIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
         query = query.in("id", applicableStrokeIds);
       }
@@ -464,7 +472,10 @@ export async function listStrokeMastersHandler(
     const rows = (data ?? []) as JsonRecord[];
     const [materialMap, slocMap, userDisplayMap, applicabilityByStrokeId] = await Promise.all([
       getMaterialMapByIds(rows.map((r) => String(r.prodshade_material_id ?? ""))),
-      getStorageLocationMapByIds(rows.map((r) => String(r.default_storage_location_id ?? ""))),
+      getStorageLocationMapByIds(rows.map((r) =>
+        usableStorageLocationsByStrokeId.get(String(r.id ?? ""))
+          ?? String(r.default_storage_location_id ?? ""),
+      )),
       resolveUserDisplayNames(rows.flatMap((r) => [
         String(r.created_by ?? ""), String(r.approved_by ?? ""), String(r.deactivated_by ?? ""),
       ])),
@@ -472,15 +483,20 @@ export async function listStrokeMastersHandler(
     ]);
 
     return okResponse({
-      data: rows.map((row) => ({
+      data: rows.map((row) => {
+        const effectiveStorageLocationId = usableStorageLocationsByStrokeId.get(String(row.id ?? ""))
+          ?? toTrimmedString(row.default_storage_location_id);
+        return {
         ...row,
+        default_storage_location_id: effectiveStorageLocationId,
         material: materialMap.get(String(row.prodshade_material_id ?? "")) ?? null,
         applicable_po_types: applicabilityByStrokeId.get(String(row.id ?? "")) ?? [],
-        default_storage_location: slocMap.get(String(row.default_storage_location_id ?? "")) ?? null,
+        default_storage_location: slocMap.get(effectiveStorageLocationId) ?? null,
         created_by_display: userDisplayMap.get(String(row.created_by ?? "")) ?? null,
         approved_by_display: userDisplayMap.get(String(row.approved_by ?? "")) ?? null,
         deactivated_by_display: userDisplayMap.get(String(row.deactivated_by ?? "")) ?? null,
-      })),
+      };
+      }),
     }, ctx.request_id, req);
   } catch (err) {
     console.error("[stroke_master.listStrokeMasters] request_id:", ctx.request_id, "error:", err);

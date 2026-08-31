@@ -423,8 +423,25 @@ async function cancelReservationsForProcessOrder(id: string, userId: string, now
   }
 }
 
-async function resolveOutputStorageLocationId(strokeMasterId: string | null): Promise<string | null> {
+async function resolveOutputStorageLocationId(strokeMasterId: string | null, poType: string | null): Promise<string | null> {
   if (!strokeMasterId) return null;
+  const targetPoType = toUpperTrimmedString(poType);
+  if (["MTO", "HPS", "MTS", "MTEST"].includes(targetPoType)) {
+    const { data: applicability, error: applicabilityError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("stroke_po_type_applicability")
+      .select("default_storage_location_id")
+      .eq("stroke_master_id", strokeMasterId)
+      .eq("target_po_type", targetPoType)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (applicabilityError) {
+      console.error("[process_order.resolveOutputStorageLocationId] applicability query failed:", JSON.stringify(applicabilityError));
+      throw new Error("PROD_PO_FETCH_FAILED");
+    }
+    const targetStorageLocationId = toTrimmedString((applicability as JsonRecord | null)?.default_storage_location_id);
+    if (targetStorageLocationId) return targetStorageLocationId;
+  }
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("stroke_master")
@@ -2756,7 +2773,7 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
     // (runProcessOrderVerify, called separately further below) — not this branch.
     const postsAtFinal = po.po_type === "INT";
     if (postsAtFinal) {
-      const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
+      const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, toTrimmedString(po.po_type) || null);
       if (!shopfloorSlocId) {
         return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
       }
@@ -3012,7 +3029,7 @@ async function runProcessOrderVerify(
       );
     }
 
-    const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
+    const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, toTrimmedString(po.po_type) || null);
     if (!shopfloorSlocId) {
       return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
     }
@@ -3550,7 +3567,7 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
     if (outputMagnitude > 0) {
       const isIncrease = outputMovementType === "P101";
       const outputDelta = isIncrease ? outputMagnitude : -outputMagnitude;
-      const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
+      const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, toTrimmedString(po.po_type) || null);
       if (!shopfloorSlocId) return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
       const fgLedgerRef = ledgerRefByLedgerId.get(toTrimmedString(po.fg_stock_ledger_id)) ?? null;
@@ -3718,7 +3735,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
         ledgerEntries.push({ line_id: line.id, movement: "P262", direction: "IN", ...posting });
       }
 
-      const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
+      const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, toTrimmedString(po.po_type) || null);
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
 
       const qiReleaseRef = stockLedgerRefById.get(toTrimmedString(po.qi_release_stock_ledger_id)) ?? null;
