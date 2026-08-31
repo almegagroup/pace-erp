@@ -369,6 +369,14 @@ export default function SlocCostingGroupPage() {
         .toLowerCase()
         .includes(rateSearch.toLowerCase()),
   );
+  // "Select all" header checkbox for the Verify column -- only the rows
+  // currently visible (search/filter applied) AND actually checkable
+  // (matches each row checkbox's own disabled condition below), so it never
+  // silently selects a row the user can't see or couldn't check by hand.
+  const eligibleVisibleVerifyIds =
+    canVerify && workspace.month?.status !== "CLOSED"
+      ? visibleRateRows.filter((row) => pendingIds.has(row.id)).map((row) => row.id)
+      : [];
 
   useEffect(() => {
     setRateDraft((current) => {
@@ -874,7 +882,28 @@ export default function SlocCostingGroupPage() {
                   columns={[
                     {
                       key: "verify",
-                      label: "Verify",
+                      label: (
+                        <input
+                          type="checkbox"
+                          disabled={eligibleVisibleVerifyIds.length === 0}
+                          checked={
+                            eligibleVisibleVerifyIds.length > 0 &&
+                            eligibleVisibleVerifyIds.every((id) =>
+                              selectedForVerify.includes(id),
+                            )
+                          }
+                          onChange={(event) =>
+                            setSelectedForVerify((prev) =>
+                              event.target.checked
+                                ? [...new Set([...prev, ...eligibleVisibleVerifyIds])]
+                                : prev.filter(
+                                    (id) => !eligibleVisibleVerifyIds.includes(id),
+                                  ),
+                            )
+                          }
+                          aria-label="Select all eligible rows"
+                        />
+                      ),
                       width: "70px",
                       render: (row) => (
                         <input
