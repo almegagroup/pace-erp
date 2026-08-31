@@ -441,6 +441,11 @@ export default function PlanFeedPage() {
   async function handleCreate(e) {
     e.preventDefault();
     if (!effectiveCompanyId) return;
+    if (!form.fo_number.trim() || !form.party_id || !selectedAddressId || !form.sku.trim() || !form.description.trim()
+      || !form.ordered_qty_kg || !form.pack_qty || !form.order_date || !form.scheduled_delivery_date) {
+      toast("Complete every FO field except Ordered Stroke before saving.", "error");
+      return;
+    }
     if (!isManualDocumentDateWithinWindow(form.order_date) || (form.scheduled_delivery_date && !isManualDocumentDateWithinWindow(form.scheduled_delivery_date))) {
       toast(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
       return;
@@ -461,9 +466,9 @@ export default function PlanFeedPage() {
         sku: form.sku || undefined,
         description: form.description,
         ordered_qty_kg: parseFloat(form.ordered_qty_kg),
-        pack_qty: form.pack_qty ? parseInt(form.pack_qty, 10) : null,
+        pack_qty: parseInt(form.pack_qty, 10),
         order_date: form.order_date,
-        scheduled_delivery_date: form.scheduled_delivery_date || undefined,
+        scheduled_delivery_date: form.scheduled_delivery_date,
         ordered_stroke_number: form.ordered_stroke_number || undefined,
       });
       toast("FO created successfully.");
@@ -584,7 +589,12 @@ export default function PlanFeedPage() {
   async function handleSaveEdit(e) {
     e.preventDefault();
     if (!editData || !canEditSelectedFo) return;
-    if (!isManualDocumentDateWithinWindow(editDraft.order_date) || (editDraft.scheduled_delivery_date && !isManualDocumentDateWithinWindow(editDraft.scheduled_delivery_date))) {
+    if (!editDraft.party_id || !editDraft.customer_address_id || !editDraft.sku?.trim() || !editDraft.description?.trim()
+      || !editDraft.ordered_qty_kg || !editDraft.pack_qty || !editDraft.order_date || !editDraft.scheduled_delivery_date) {
+      toast("Complete every FO field except Ordered Stroke before saving.", "error");
+      return;
+    }
+    if (!isManualDocumentDateWithinWindow(editDraft.order_date) || !isManualDocumentDateWithinWindow(editDraft.scheduled_delivery_date)) {
       toast(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
       return;
     }
@@ -593,9 +603,19 @@ export default function PlanFeedPage() {
       const payload = {
         party_id: editDraft.party_id || null,
         customer_address_id: editDraft.customer_address_id || null,
+        ordered_qty_kg: parseFloat(editDraft.ordered_qty_kg),
+        pack_qty: parseInt(editDraft.pack_qty, 10),
         order_date: editDraft.order_date,
-        scheduled_delivery_date: editDraft.scheduled_delivery_date || null,
+        scheduled_delivery_date: editDraft.scheduled_delivery_date,
+        ordered_stroke_number: editDraft.ordered_stroke_number?.trim() || null,
       };
+      if (!skuLockedForEdit) {
+        Object.assign(payload, {
+          material_id: editDraft.material_id || null,
+          sku: editDraft.sku,
+          description: editDraft.description,
+        });
+      }
       await (isMtestEdit ? updateMtestPlanFeed : updatePlanFeed)(editData.id, payload);
       toast("FO updated.");
       await loadEditFo(editData.id);
@@ -995,8 +1015,8 @@ export default function PlanFeedPage() {
               )}
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs text-slate-600 font-medium">Description</label>
-              <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+              <label className="text-xs text-slate-600 font-medium">Description <span className="text-rose-500">*</span></label>
+              <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} required />
             </div>
 
             {form.material_id && unmappedQ.data?.total_free_qty_kg > 0 && (
@@ -1016,16 +1036,16 @@ export default function PlanFeedPage() {
               <input type="number" step="0.01" min="0.01" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.ordered_qty_kg} onChange={e => setForm(f => ({ ...f, ordered_qty_kg: e.target.value }))} required />
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs text-slate-600 font-medium">Pack Qty</label>
-              <input type="number" step="1" min="1" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.pack_qty} onChange={e => setForm(f => ({ ...f, pack_qty: e.target.value }))} placeholder="# of packs" />
+              <label className="text-xs text-slate-600 font-medium">Pack Qty <span className="text-rose-500">*</span></label>
+              <input type="number" step="1" min="1" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.pack_qty} onChange={e => setForm(f => ({ ...f, pack_qty: e.target.value }))} placeholder="# of packs" required />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">Order Date <span className="text-rose-500">*</span></label>
               <input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.order_date} onChange={e => setForm(f => ({ ...f, order_date: e.target.value }))} required />
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs text-slate-600 font-medium">Scheduled Delivery</label>
-              <input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.scheduled_delivery_date} onChange={e => setForm(f => ({ ...f, scheduled_delivery_date: e.target.value }))} />
+              <label className="text-xs text-slate-600 font-medium">Scheduled Delivery <span className="text-rose-500">*</span></label>
+              <input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.scheduled_delivery_date} onChange={e => setForm(f => ({ ...f, scheduled_delivery_date: e.target.value }))} required />
             </div>
 
             <div className="flex flex-col gap-1 col-span-2">
@@ -1229,14 +1249,14 @@ export default function PlanFeedPage() {
                         options={mtestSkuOptions}
                         placeholder="-- Select MTEST sample SKU --"
                         emptyStateLabel={mtestSkusQ.isLoading ? "Loading..." : "No MTEST sample SKUs mapped to this company"}
-                        disabled
+                        disabled={skuLockedForEdit || editData.status === "CANCELLED"}
                       />
                     ) : (
                       <SkuTypeaheadField
                         skuText={editDraft.sku ?? ""}
                         materials={nonMtestMaterials}
                         placeholder="Type SKU — pick a match, or keep typing for a new one"
-                        disabled
+                        disabled={skuLockedForEdit || editData.status === "CANCELLED"}
                         onTextChange={(text) => setEditDraft(d => ({ ...d, sku: text, material_id: "" }))}
                         onPickMaterial={(m) => setEditDraft(d => ({
                           ...d,
@@ -1251,23 +1271,23 @@ export default function PlanFeedPage() {
                     <label className="text-xs text-slate-600 font-medium">
                       Description {skuLockedForEdit ? <span className="text-amber-600">(locked)</span> : null}
                     </label>
-                    <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.description} disabled />
+                    <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.description} onChange={e => setEditDraft(d => ({ ...d, description: e.target.value }))} disabled={skuLockedForEdit || editData.status === "CANCELLED"} required />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Ordered Qty (KG)</label>
-                    <input type="number" step="0.01" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.ordered_qty_kg} disabled />
+                    <input type="number" step="0.01" min="0.01" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.ordered_qty_kg} onChange={e => setEditDraft(d => ({ ...d, ordered_qty_kg: e.target.value }))} disabled={skuLockedForEdit || editData.status === "CANCELLED"} required />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Pack Qty</label>
-                    <input type="number" step="1" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.pack_qty} disabled />
+                    <input type="number" step="1" min="1" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.pack_qty} onChange={e => setEditDraft(d => ({ ...d, pack_qty: e.target.value }))} disabled={skuLockedForEdit || editData.status === "CANCELLED"} required />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">FO Order Date</label>
-                    <input key={`${editData.id}-order-date`} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.order_date} onChange={e => setEditDraft(d => ({ ...d, order_date: e.target.value }))} disabled={editData.status === "CANCELLED"} />
+                    <input key={`${editData.id}-order-date`} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.order_date} onChange={e => setEditDraft(d => ({ ...d, order_date: e.target.value }))} disabled={editData.status === "CANCELLED"} required />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">FO Delivery Date (Proposed Dispatch)</label>
-                    <input key={`${editData.id}-delivery-date`} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.scheduled_delivery_date} onChange={e => setEditDraft(d => ({ ...d, scheduled_delivery_date: e.target.value }))} disabled={editData.status === "CANCELLED"} />
+                    <input key={`${editData.id}-delivery-date`} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.scheduled_delivery_date} onChange={e => setEditDraft(d => ({ ...d, scheduled_delivery_date: e.target.value }))} disabled={editData.status === "CANCELLED"} required />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Ordered Stroke</label>
@@ -1275,9 +1295,9 @@ export default function PlanFeedPage() {
                       strokeText={editDraft.ordered_stroke_number || ""}
                       strokeOptions={editStrokeOptionsQ.data ?? []}
                       placeholder="Type stroke number — pick an existing one, or a new one"
-                        disabled
-                        onTextChange={() => {}}
-                        onPickStroke={() => {}}
+                      disabled={editData.status === "CANCELLED"}
+                      onTextChange={(text) => setEditDraft(d => ({ ...d, ordered_stroke_number: text }))}
+                      onPickStroke={(stroke) => setEditDraft(d => ({ ...d, ordered_stroke_number: stroke.stroke_number }))}
                     />
                     {editStrokeCheckQ.data && (
                       editStrokeCheckQ.data.exists

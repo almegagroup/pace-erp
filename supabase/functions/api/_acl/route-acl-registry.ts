@@ -453,7 +453,6 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/conversion-rates":            { skipAcl: false, resourceCode: "ACC_CONVERSION_COST", action: "VIEW" },
   "POST:/api/production/conversion-rates":           { skipAcl: false, resourceCode: "ACC_CONVERSION_COST", action: "WRITE" },
   "GET:/api/production/conversion-rate-prodshades":  { skipAcl: false, resourceCode: "ACC_CONVERSION_COST", action: "VIEW" },
-  "PATCH:/api/production/conversion-rates/:id":      { skipAcl: false, resourceCode: "ACC_CONVERSION_COST", action: "WRITE" },
   // §104.8 stroke-derived opening-rate suggestion — consumed by IN05 Opening Stock, so it rides
   // that page's own resource rather than the Accounts one.
   "GET:/api/production/derived-opening-rate":        { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW" },
@@ -645,6 +644,14 @@ type PatternAclEntry = {
 };
 
 const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
+
+  // ── Conversion Cost Config ──────────────────────────────────────────────
+  // A rate id is a runtime UUID, so this must be pattern-matched rather than
+  // listed in EXACT_ROUTE_ACL with the literal ':id' placeholder.
+  {
+    pattern: /^\/api\/production\/conversion-rates\/[^/]+$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "ACC_CONVERSION_COST", action: "WRITE" } },
+  },
 
   // ── AC06 monthly costing workspace ──────────────────────────────────────
   {
