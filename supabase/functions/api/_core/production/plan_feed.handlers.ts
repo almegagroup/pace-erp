@@ -492,10 +492,14 @@ async function addPlanFeedItem(req: Request, ctx: ProdHandlerContext, mtestOnly:
     const materialId = toTrimmedString(body.material_id) || null;
     const sku = toTrimmedString(body.sku);
     const qty = parsePositiveNumber(body.ordered_qty_kg);
-    if ((!materialId && !sku) || !qty) return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_INVALID", 400, "Item SKU and ordered quantity are required");
+    const description = toTrimmedString(body.description);
+    const packQty = parsePositiveInt(body.pack_qty);
+    if ((!materialId && !sku) || !description || !qty || !packQty) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_INVALID", 400, "Complete every FO item field except ordered_stroke_number");
+    }
     const { data, error } = await serviceRoleClient.schema("erp_production").from("plan_feed_item").insert({
-      plan_feed_id: planFeedId, material_id: materialId, sku: sku || null, description: toTrimmedString(body.description) || null,
-      ordered_qty_kg: qty, pack_qty: parsePositiveInt(body.pack_qty), ordered_stroke_number: toTrimmedString(body.ordered_stroke_number) || null,
+      plan_feed_id: planFeedId, material_id: materialId, sku: sku || null, description,
+      ordered_qty_kg: qty, pack_qty: packQty, ordered_stroke_number: toTrimmedString(body.ordered_stroke_number) || null,
       created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id,
     }).select("*").single();
     if (error || !data) throw new Error("PROD_PLAN_FEED_ITEM_CREATE_FAILED");
@@ -533,7 +537,11 @@ async function mutatePlanFeedItem(req: Request, ctx: ProdHandlerContext, remove:
     }
     const body = await parseBody(req);
     const qty = parsePositiveNumber(body.ordered_qty_kg);
-    if (!qty) return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_INVALID", 400, "Ordered quantity must be positive");
+    const description = toTrimmedString(body.description);
+    const packQty = parsePositiveInt(body.pack_qty);
+    if (!description || !qty || !packQty) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_INVALID", 400, "Complete every FO item field except ordered_stroke_number");
+    }
     const [{ data: soMapRows, error: soMapError }, { data: packingRows, error: packingError }] = await Promise.all([
       serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
         .select("allocated_qty").eq("plan_feed_item_id", itemId).eq("status", "ACTIVE"),
@@ -548,7 +556,7 @@ async function mutatePlanFeedItem(req: Request, ctx: ProdHandlerContext, remove:
     if (qty + QTY_TOL < committedQty) return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_QTY_BELOW_COMMITTED", 422,
       `Item has ${committedQty} KG committed in Packing PO/SO Map and cannot be reduced below that.`);
     const { error } = await serviceRoleClient.schema("erp_production").from("plan_feed_item").update({
-      description: toTrimmedString(body.description) || null, ordered_qty_kg: qty, pack_qty: parsePositiveInt(body.pack_qty),
+      description, ordered_qty_kg: qty, pack_qty: packQty,
       ordered_stroke_number: toTrimmedString(body.ordered_stroke_number) || null, last_updated_by: ctx.auth_user_id, last_updated_at: new Date().toISOString(),
     }).eq("id", itemId);
     if (error) throw new Error("PROD_PLAN_FEED_ITEM_UPDATE_FAILED");
@@ -581,9 +589,10 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
     const scheduledDeliveryDate = toTrimmedString(body.scheduled_delivery_date) || null;
     const orderedStrokeNumber = toTrimmedString(body.ordered_stroke_number) || null;
 
-    if (!companyId || !foNumber || !partyId || !partyName || (!sku && !materialId) || !orderedQtyKg || !orderDate) {
+    if (!companyId || !foNumber || !partyId || !partyName || (!sku && !materialId) || !description
+      || !orderedQtyKg || !packQty || !orderDate || !scheduledDeliveryDate) {
       return foErr(req, ctx, "PROD_PLAN_FEED_INVALID", 400,
-        "company_id, fo_number, party_id, party_name, sku or material_id, ordered_qty_kg, order_date required");
+        "Complete every FO field except ordered_stroke_number");
     }
     try {
       await assertCompanyScope(ctx, companyId);
@@ -665,7 +674,7 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
 
     const { data: existing, error: fetchErr } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
-      .select("id, status, company_id, party_id, customer_address_id").eq("id", id).maybeSingle();
+      .select("id, status, company_id, party_id, customer_address_id, sku, material_id, description, ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date").eq("id", id).maybeSingle();
 
     if (fetchErr) throw new Error("PROD_PLAN_FEED_FETCH_FAILED");
     if (!existing) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
@@ -684,19 +693,34 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
     }
 
     const body = await parseBody(req);
+    const current = existing as JsonRecord;
+    const effectiveSku = body.sku !== undefined ? toTrimmedString(body.sku) : toTrimmedString(current.sku);
+    const effectiveMaterialId = body.material_id !== undefined ? toTrimmedString(body.material_id) : toTrimmedString(current.material_id);
+    const effectiveDescription = body.description !== undefined ? toTrimmedString(body.description) : toTrimmedString(current.description);
+    const effectiveOrderedQty = body.ordered_qty_kg !== undefined ? parsePositiveNumber(body.ordered_qty_kg) : parsePositiveNumber(current.ordered_qty_kg);
+    const effectivePackQty = body.pack_qty !== undefined ? parsePositiveInt(body.pack_qty) : parsePositiveInt(current.pack_qty);
+    const effectiveOrderDate = body.order_date !== undefined ? toTrimmedString(body.order_date) : toTrimmedString(current.order_date);
+    const effectiveDeliveryDate = body.scheduled_delivery_date !== undefined
+      ? toTrimmedString(body.scheduled_delivery_date)
+      : toTrimmedString(current.scheduled_delivery_date);
+    if ((!effectiveSku && !effectiveMaterialId) || !effectiveDescription || !effectiveOrderedQty || !effectivePackQty
+      || !effectiveOrderDate || !effectiveDeliveryDate) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_INVALID", 422, "Complete every FO field except ordered_stroke_number");
+    }
     if (body.customer_address_id === undefined && (body.party_id !== undefined || !(existing as JsonRecord).customer_address_id)) {
       return foErr(req, ctx, "PROD_PLAN_FEED_SHIP_TO_REQUIRED", 422, "Select an active Ship-To address before saving this FO.");
     }
-    const touchesSkuFields = body.sku !== undefined || body.material_id !== undefined || body.description !== undefined;
+    const touchesItemFields = body.sku !== undefined || body.material_id !== undefined || body.description !== undefined
+      || body.ordered_qty_kg !== undefined || body.pack_qty !== undefined;
 
-    if (touchesSkuFields) {
+    if (touchesItemFields) {
       const { count } = await serviceRoleClient
         .schema("erp_production").from("plan_feed_packing_order_allocation")
         .select("id", { count: "exact", head: true })
         .eq("plan_feed_id", id) as { count?: number };
       if ((count ?? 0) > 0) {
-        return foErr(req, ctx, "PROD_PLAN_FEED_SKU_LOCKED", 422,
-          "SKU/Description locked — Packing PO(s) already allocated to this FO");
+        return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_LOCKED", 422,
+          "SKU, description, ordered quantity and pack quantity are locked — Packing PO(s) already allocated to this FO");
       }
     }
 
@@ -771,6 +795,32 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
     const { error } = await serviceRoleClient.schema("erp_production").from("plan_feed")
       .update(updates).eq("id", id);
     if (error) throw new Error("PROD_PLAN_FEED_UPDATE_FAILED");
+
+    // The original FO create form produces one header and one item line.
+    // Keep that legacy single-line model aligned after Edit FO, while leaving
+    // multi-line FOs to their dedicated item-line editor.
+    const { data: foItems, error: foItemsError } = await serviceRoleClient
+      .schema("erp_production").from("plan_feed_item")
+      .select("id").eq("plan_feed_id", id).limit(2);
+    if (foItemsError) throw new Error("PROD_PLAN_FEED_ITEM_FETCH_FAILED");
+    if ((foItems ?? []).length === 1) {
+      const itemUpdates: JsonRecord = {
+        description: effectiveDescription,
+        ordered_qty_kg: effectiveOrderedQty,
+        pack_qty: effectivePackQty,
+        last_updated_at: new Date().toISOString(),
+        last_updated_by: ctx.auth_user_id,
+      };
+      if (body.sku !== undefined) itemUpdates.sku = effectiveSku || null;
+      if (body.material_id !== undefined) itemUpdates.material_id = effectiveMaterialId || null;
+      if (body.ordered_stroke_number !== undefined) {
+        itemUpdates.ordered_stroke_number = toTrimmedString(body.ordered_stroke_number) || null;
+      }
+      const { error: itemUpdateError } = await serviceRoleClient
+        .schema("erp_production").from("plan_feed_item")
+        .update(itemUpdates).eq("id", (foItems![0] as JsonRecord).id);
+      if (itemUpdateError) throw new Error("PROD_PLAN_FEED_ITEM_UPDATE_FAILED");
+    }
     return okResponse({ id }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_UPDATE_FAILED";
