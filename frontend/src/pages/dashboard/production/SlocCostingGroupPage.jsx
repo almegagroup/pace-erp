@@ -1114,8 +1114,9 @@ export default function SlocCostingGroupPage() {
                                 Manage Materials -- {group.group_name}
                               </h4>
                               <p className="text-xs text-slate-500">
-                                New materials that land in this group&apos;s storage
-                                locations auto-include here. Exclude a material to
+                                New RM, PM and INT materials that land in this group&apos;s
+                                storage locations auto-include here. FG and SFG never
+                                enter AC06. Exclude a material to
                                 drop it from this month&apos;s rate scope -- it can
                                 be included again anytime. Grouped or standalone
                                 doesn&apos;t matter here.
