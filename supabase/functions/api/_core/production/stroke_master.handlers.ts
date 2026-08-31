@@ -515,7 +515,7 @@ export async function shareStrokeMasterHandler(
       return strokeError(req, ctx, "PROD_STROKE_SHARE_SOURCE_NOT_ACTIVE", 422, "Source must be an approved SFG stroke for the selected From PO Type");
     }
 
-    const { data, error } = await serviceRoleClient.rpc("share_stroke_master", {
+    const { data, error } = await serviceRoleClient.schema("erp_production").rpc("share_stroke_master", {
       p_source_stroke_master_id: sourceStrokeMasterId,
       p_to_po_type: toPoType,
       p_consider_formulation_changes: considerFormulationChanges,
