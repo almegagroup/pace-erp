@@ -244,7 +244,11 @@ export default function StrokeMasterPage() {
     }
     setShareSaving(true);
     try {
-      const result = await shareStrokeMaster(shareForm);
+      const { stroke_master_id, ...shareRequest } = shareForm;
+      const result = await shareStrokeMaster({
+        ...shareRequest,
+        source_stroke_master_id: stroke_master_id,
+      });
       const data = result?.data ?? result;
       await qc.invalidateQueries({ queryKey: ["prod-stroke-masters"] });
       setShareOpen(false);
