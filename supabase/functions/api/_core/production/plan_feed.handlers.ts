@@ -710,8 +710,16 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
     if (body.customer_address_id === undefined && (body.party_id !== undefined || !(existing as JsonRecord).customer_address_id)) {
       return foErr(req, ctx, "PROD_PLAN_FEED_SHIP_TO_REQUIRED", 422, "Select an active Ship-To address before saving this FO.");
     }
-    const touchesItemFields = body.sku !== undefined || body.material_id !== undefined || body.description !== undefined
-      || body.ordered_qty_kg !== undefined || body.pack_qty !== undefined;
+    // Found live 2026-08-31: this used to also fire on ordered_qty_kg/pack_qty,
+    // contradicting the design comment above ("Party, Ordered Qty, Pack Qty,
+    // dates, Ordered Stroke) is always editable") -- and the frontend's save
+    // payload always includes both fields on every save regardless of what the
+    // user actually changed, so ANY edit (even just Party/Ship-To) on an
+    // allocated FO was silently blocked with PROD_PLAN_FEED_ITEM_LOCKED. Only
+    // SKU/material/Description identify WHAT is being produced, which is the
+    // only thing that can't change once Packing PO(s) are physically
+    // allocated against it -- qty/dates/stroke are decoupled from that.
+    const touchesItemFields = body.sku !== undefined || body.material_id !== undefined || body.description !== undefined;
 
     if (touchesItemFields) {
       const { count } = await serviceRoleClient
