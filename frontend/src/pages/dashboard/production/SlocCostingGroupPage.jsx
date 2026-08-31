@@ -442,6 +442,21 @@ export default function SlocCostingGroupPage() {
     });
   }
 
+  function handleRatePaste(event, row) {
+    const rawValue = event.clipboardData?.getData("text") ?? "";
+    // Spreadsheet/accounting exports commonly include commas, the rupee sign,
+    // or surrounding whitespace. Normalize one copied rate before applying the
+    // same validation used for typed input.
+    const value = rawValue.trim().replace(/[\s,₹]/g, "");
+    if (!/^\d*\.?\d*$/.test(value) || value === "") {
+      event.preventDefault();
+      notice("Paste one non-negative numeric rate, for example 3.50.", "error");
+      return;
+    }
+    event.preventDefault();
+    setGroupRate(row, value);
+  }
+
   // In-place full-report toggle, same mechanism as PO11 (feasibility §35.18
   // / ProcurementPlanningPage.jsx): flips local state and pushes a dedicated
   // /report URL via navigate({replace:true}) -- never window.open. This is
@@ -900,6 +915,7 @@ export default function SlocCostingGroupPage() {
                             onChange={(event) =>
                               setGroupRate(row, event.target.value)
                             }
+                            onPaste={(event) => handleRatePaste(event, row)}
                             inputMode="decimal"
                             className="h-8 w-32 border border-slate-300 px-2 font-mono"
                           />
