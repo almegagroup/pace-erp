@@ -11,6 +11,7 @@
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
@@ -327,15 +328,26 @@ async function resolvePackingSfgBatchOptions(
 ): Promise<PackingSfgBatchOption[]> {
   if (!companyId || !materialId || !storageLocationId) return [];
 
-  const [ledgerResult, reservationResult] = await Promise.all([
-    serviceRoleClient
-      .schema("erp_inventory")
-      .from("stock_ledger")
-      .select("material_id, storage_location_id, batch_number, direction, quantity")
-      .eq("company_id", companyId)
-      .eq("stock_type_code", "UNRESTRICTED")
-      .eq("material_id", materialId)
-      .eq("storage_location_id", storageLocationId),
+  // Ledger side paged via fetchAllRows -- this groups by batch_number, so it
+  // genuinely needs every row for the material+location (no stock_snapshot
+  // equivalent exists at batch granularity), and a busy SFG material can
+  // exceed PostgREST's 1000-row default cap in its ledger history there.
+  const [ledgerRows, reservationResult] = await Promise.all([
+    fetchAllRows<JsonRecord>((from, to) =>
+      serviceRoleClient
+        .schema("erp_inventory")
+        .from("stock_ledger")
+        .select("material_id, storage_location_id, batch_number, direction, quantity")
+        .eq("company_id", companyId)
+        .eq("stock_type_code", "UNRESTRICTED")
+        .eq("material_id", materialId)
+        .eq("storage_location_id", storageLocationId)
+        .order("ledger_seq", { ascending: true })
+        .range(from, to))
+      .catch((err) => {
+        console.error("[packing_order.resolvePackingSfgBatchOptions] ledger query failed:", err);
+        throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
+      }),
     serviceRoleClient
       .schema("erp_production")
       .from("reservation_document")
@@ -345,17 +357,13 @@ async function resolvePackingSfgBatchOptions(
       .eq("storage_location_id", storageLocationId)
       .in("status", RESERVATION_OPEN_STATUSES),
   ]);
-  if (ledgerResult.error) {
-    console.error("[packing_order.resolvePackingSfgBatchOptions] ledger query failed:", JSON.stringify(ledgerResult.error));
-    throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
-  }
   if (reservationResult.error) {
     console.error("[packing_order.resolvePackingSfgBatchOptions] reservation query failed:", JSON.stringify(reservationResult.error));
     throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
   }
 
   const ledgerByBatch = new Map<string, number>();
-  for (const row of (ledgerResult.data ?? []) as JsonRecord[]) {
+  for (const row of ledgerRows) {
     const batchNumber = toTrimmedString(row.batch_number);
     if (!batchNumber) continue;
     const qty = Number(row.quantity ?? 0);
@@ -521,14 +529,23 @@ async function resolveMtestSfgProdshadeOptions(companyId: string): Promise<JsonR
   const l003Id = await resolveL003StorageLocationId(companyId);
   if (!l003Id) return [];
 
-  const [ledgerResult, reservationResult] = await Promise.all([
-    serviceRoleClient
-      .schema("erp_inventory")
-      .from("stock_ledger")
-      .select("batch_number, direction, quantity")
-      .eq("company_id", companyId)
-      .eq("stock_type_code", "UNRESTRICTED")
-      .eq("storage_location_id", l003Id),
+  // Ledger side paged via fetchAllRows -- ALL materials sitting in L003,
+  // grouped by batch, can easily exceed PostgREST's 1000-row default cap.
+  const [ledgerRows, reservationResult] = await Promise.all([
+    fetchAllRows<JsonRecord>((from, to) =>
+      serviceRoleClient
+        .schema("erp_inventory")
+        .from("stock_ledger")
+        .select("batch_number, direction, quantity")
+        .eq("company_id", companyId)
+        .eq("stock_type_code", "UNRESTRICTED")
+        .eq("storage_location_id", l003Id)
+        .order("ledger_seq", { ascending: true })
+        .range(from, to))
+      .catch((err) => {
+        console.error("[packing_order.resolveMtestSfgProdshadeOptions] ledger query failed:", err);
+        throw new Error("PROD_PACK_MTEST_SFG_LOOKUP_FAILED");
+      }),
     serviceRoleClient
       .schema("erp_production")
       .from("reservation_document")
@@ -537,17 +554,13 @@ async function resolveMtestSfgProdshadeOptions(companyId: string): Promise<JsonR
       .eq("storage_location_id", l003Id)
       .in("status", RESERVATION_OPEN_STATUSES),
   ]);
-  if (ledgerResult.error) {
-    console.error("[packing_order.resolveMtestSfgProdshadeOptions] ledger query failed:", JSON.stringify(ledgerResult.error));
-    throw new Error("PROD_PACK_MTEST_SFG_LOOKUP_FAILED");
-  }
   if (reservationResult.error) {
     console.error("[packing_order.resolveMtestSfgProdshadeOptions] reservation query failed:", JSON.stringify(reservationResult.error));
     throw new Error("PROD_PACK_MTEST_SFG_LOOKUP_FAILED");
   }
 
   const ledgerByBatch = new Map<string, number>();
-  for (const row of (ledgerResult.data ?? []) as JsonRecord[]) {
+  for (const row of ledgerRows) {
     const batchNumber = toTrimmedString(row.batch_number);
     if (!batchNumber) continue;
     const qty = Number(row.quantity ?? 0);
@@ -701,9 +714,15 @@ async function computeSfgTotalFree(
   sfgMaterialId: string,
   neededQty: number,
 ): Promise<{ free: number; short: number }> {
-  const [ledgerResult, reservationResult] = await Promise.all([
-    serviceRoleClient.schema("erp_inventory").from("stock_ledger")
-      .select("direction, quantity")
+  // This is deliberately blended across every batch and location (see doc
+  // comment above), so -- unlike the batch-specific SFG lookups elsewhere in
+  // this file -- it's safe to read stock_snapshot's own maintained running
+  // balance directly instead of re-summing potentially 1000+ stock_ledger
+  // history rows client-side (same fix as process_order.handlers.ts's
+  // computeAvailabilityRows, found live 2026-08-31/09-01).
+  const [snapshotResult, reservationResult] = await Promise.all([
+    serviceRoleClient.schema("erp_inventory").from("stock_snapshot")
+      .select("quantity")
       .eq("company_id", companyId)
       .eq("material_id", sfgMaterialId)
       .eq("stock_type_code", "UNRESTRICTED"),
@@ -713,14 +732,14 @@ async function computeSfgTotalFree(
       .eq("material_id", sfgMaterialId)
       .in("status", RESERVATION_OPEN_STATUSES),
   ]);
-  if (ledgerResult.error || reservationResult.error) {
+  if (snapshotResult.error || reservationResult.error) {
     console.error("[packing_order.computeSfgTotalFree] query failed:",
-      JSON.stringify(ledgerResult.error ?? reservationResult.error));
+      JSON.stringify(snapshotResult.error ?? reservationResult.error));
     throw new Error("PROD_PACK_SFG_AVAILABILITY_FAILED");
   }
   let onHand = 0;
-  for (const row of (ledgerResult.data ?? []) as JsonRecord[]) {
-    onHand += String(row.direction) === "IN" ? Number(row.quantity ?? 0) : -Number(row.quantity ?? 0);
+  for (const row of (snapshotResult.data ?? []) as JsonRecord[]) {
+    onHand += Number(row.quantity ?? 0);
   }
   let reserved = 0;
   for (const row of (reservationResult.data ?? []) as JsonRecord[]) {
@@ -763,15 +782,27 @@ async function computePackingAvailability(
     ...cleanPmNeeds.map((need) => need.storageLocationId),
   ])];
 
-  const [ledgerResult, reservationResult] = await Promise.all([
-    serviceRoleClient
-      .schema("erp_inventory")
-      .from("stock_ledger")
-      .select("material_id, storage_location_id, batch_number, direction, quantity")
-      .eq("company_id", companyId)
-      .eq("stock_type_code", "UNRESTRICTED")
-      .in("material_id", materialIds)
-      .in("storage_location_id", locationIds),
+  // Ledger side paged via fetchAllRows -- the SFG half of this needs
+  // batch-level detail (no stock_snapshot equivalent exists there), so the
+  // whole query stays raw-ledger rather than mixing fetch strategies; a
+  // multi-material/multi-location scan for a busy company can otherwise
+  // exceed PostgREST's 1000-row default cap.
+  const [ledgerRows, reservationResult] = await Promise.all([
+    fetchAllRows<JsonRecord>((from, to) =>
+      serviceRoleClient
+        .schema("erp_inventory")
+        .from("stock_ledger")
+        .select("material_id, storage_location_id, batch_number, direction, quantity")
+        .eq("company_id", companyId)
+        .eq("stock_type_code", "UNRESTRICTED")
+        .in("material_id", materialIds)
+        .in("storage_location_id", locationIds)
+        .order("ledger_seq", { ascending: true })
+        .range(from, to))
+      .catch((err) => {
+        console.error("[packing_order.computePackingAvailability] ledger query failed:", err);
+        throw new Error("PROD_PACK_STOCK_CHECK_FAILED");
+      }),
     serviceRoleClient
       .schema("erp_production")
       .from("reservation_document")
@@ -781,10 +812,6 @@ async function computePackingAvailability(
       .in("storage_location_id", locationIds)
       .in("status", RESERVATION_OPEN_STATUSES),
   ]);
-  if (ledgerResult.error) {
-    console.error("[packing_order.computePackingAvailability] ledger query failed:", JSON.stringify(ledgerResult.error));
-    throw new Error("PROD_PACK_STOCK_CHECK_FAILED");
-  }
   if (reservationResult.error) {
     console.error("[packing_order.computePackingAvailability] reservation query failed:", JSON.stringify(reservationResult.error));
     throw new Error("PROD_PACK_STOCK_CHECK_FAILED");
@@ -796,7 +823,7 @@ async function computePackingAvailability(
     ? buildBatchAvailabilityKey(cleanSfgNeed.materialId, cleanSfgNeed.storageLocationId, cleanSfgNeed.batchNumber)
     : "";
 
-  for (const row of (ledgerResult.data ?? []) as JsonRecord[]) {
+  for (const row of ledgerRows) {
     const qty = Number(row.quantity ?? 0);
     const signedQty = String(row.direction) === "IN" ? qty : -qty;
     const genericKey = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));

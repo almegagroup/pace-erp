@@ -27,6 +27,7 @@ import { generateGlobalDocNumber } from "./production.utils.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
+import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -240,21 +241,29 @@ async function sumUnrestrictedLedgerQty(
   storageLocationId: string,
   batchNumber?: string | null,
 ): Promise<number> {
-  let query = serviceRoleClient
-    .schema("erp_inventory")
-    .from("stock_ledger")
-    .select("direction, quantity")
-    .eq("company_id", companyId)
-    .eq("material_id", materialId)
-    .eq("storage_location_id", storageLocationId)
-    .eq("stock_type_code", "UNRESTRICTED");
-  if (batchNumber) query = query.eq("batch_number", batchNumber);
-  const { data, error } = await query;
-  if (error) {
-    console.error("[partial_reversal.sumUnrestrictedLedgerQty] query failed:", JSON.stringify(error));
+  // Paged via fetchAllRows -- batchNumber is optional here, so this can be a
+  // material-wide (non-batch) sum too, and either shape can exceed
+  // PostgREST's 1000-row default cap for a busy material+location.
+  let rows: JsonRecord[];
+  try {
+    rows = await fetchAllRows<JsonRecord>((from, to) => {
+      let query = serviceRoleClient
+        .schema("erp_inventory")
+        .from("stock_ledger")
+        .select("direction, quantity")
+        .eq("company_id", companyId)
+        .eq("material_id", materialId)
+        .eq("storage_location_id", storageLocationId)
+        .eq("stock_type_code", "UNRESTRICTED")
+        .order("ledger_seq", { ascending: true })
+        .range(from, to);
+      if (batchNumber) query = query.eq("batch_number", batchNumber);
+      return query;
+    });
+  } catch {
     throw new Error("PR19_STOCK_LOOKUP_FAILED");
   }
-  return ((data ?? []) as JsonRecord[]).reduce((sum, row) => {
+  return rows.reduce((sum, row) => {
     const qty = Number(row.quantity ?? 0);
     return sum + (String(row.direction) === "IN" ? qty : -qty);
   }, 0);

@@ -11,6 +11,7 @@ import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -243,25 +244,38 @@ async function getLiveStockBalance(params: {
   batchNumber?: string | null;
   sourceLotRef?: string | null;
 }): Promise<{ quantity: number; valuationRate: number }> {
-  let query = serviceRoleClient
-    .schema("erp_inventory")
-    .from("stock_ledger")
-    .select("direction, quantity, valuation_rate")
-    .eq("company_id", params.companyId)
-    .eq("storage_location_id", params.storageLocationId)
-    .eq("material_id", params.materialId)
-    .eq("stock_type_code", params.stockTypeCode);
   const batchNumber = toTrimmedString(params.batchNumber);
   const sourceLotRef = toTrimmedString(params.sourceLotRef);
-  query = batchNumber ? query.eq("batch_number", batchNumber) : query.is("batch_number", null);
-  if (sourceLotRef) {
-    query = query.eq("source_lot_ref", sourceLotRef);
+  // Paged via fetchAllRows, not a plain .select() -- a busy material+location
+  // can accumulate well over PostgREST's 1000-row default cap in its ledger
+  // history, and this balance is batch-specific (or explicitly NULL-batch),
+  // so it can't be swapped for stock_snapshot the way a non-batch check can
+  // (stock_snapshot deliberately blends every batch into one running total).
+  let data: JsonRecord[];
+  try {
+    data = await fetchAllRows<JsonRecord>((from, to) => {
+      let query = serviceRoleClient
+        .schema("erp_inventory")
+        .from("stock_ledger")
+        .select("direction, quantity, valuation_rate")
+        .eq("company_id", params.companyId)
+        .eq("storage_location_id", params.storageLocationId)
+        .eq("material_id", params.materialId)
+        .eq("stock_type_code", params.stockTypeCode)
+        .order("ledger_seq", { ascending: true })
+        .range(from, to);
+      query = batchNumber ? query.eq("batch_number", batchNumber) : query.is("batch_number", null);
+      if (sourceLotRef) {
+        query = query.eq("source_lot_ref", sourceLotRef);
+      }
+      return query;
+    });
+  } catch {
+    throw new Error("LTR_STOCK_LOOKUP_FAILED");
   }
-  const { data, error } = await query;
-  if (error) throw new Error("LTR_STOCK_LOOKUP_FAILED");
   let quantity = 0;
   let lastRate = 0;
-  for (const row of (data ?? []) as JsonRecord[]) {
+  for (const row of data) {
     const sign = toUpperTrimmedString(row.direction) === "OUT" ? -1 : 1;
     quantity += Number(parseNullableNumber(row.quantity) ?? 0) * sign;
     if (parseNullableNumber(row.valuation_rate) !== null) {

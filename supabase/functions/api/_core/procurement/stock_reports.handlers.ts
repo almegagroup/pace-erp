@@ -14,6 +14,7 @@ import { formatDateTimeInKolkata } from "../../_shared/dateUtils.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -537,35 +538,45 @@ export async function getStockLedgerReportHandler(
     const movementTypeCodes = parseMultiValueParams(url, "movement_type_codes", "movement_type_code", (value) => value.toUpperCase());
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
 
-    let query = serviceRoleClient
-      .schema("erp_inventory")
-      .from("stock_ledger")
-      .select("id, ledger_seq, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at, created_by")
-      .eq("company_id", companyId)
-      .order("posting_date", { ascending: true })
-      .order("ledger_seq", { ascending: true });
-    query = (query as unknown as { gte: (column: string, value: string) => typeof query }).gte("posting_date", dateFrom);
-    query = (query as unknown as { lte: (column: string, value: string) => typeof query }).lte("posting_date", dateTo);
-
-    if (materialIds.length > 0) {
-      query = query.in("material_id", materialIds);
-    }
-    if (storageLocationIds.length > 0) {
-      query = query.in("storage_location_id", storageLocationIds);
-    }
-    if (batchNumbers.length > 0) {
-      query = query.in("batch_number", batchNumbers);
-    }
-    if (movementTypeCodes.length > 0) {
-      query = query.in("movement_type_code", movementTypeCodes);
-    }
-
-    const { data, error } = await query;
-    if (error) {
+    // Paged via fetchAllRows -- the §117 "endless fetch" design (a mandatory
+    // date range instead of pagination, so the client-side Excel export
+    // always has the full filtered set) only works if the server side
+    // actually returns every matching row. A plain .select() here silently
+    // capped at PostgREST's 1000-row default the moment an active company's
+    // date range crossed that many postings -- exactly the bug class this
+    // report was designed to avoid, just not actually wired up that way.
+    let ledgerData: JsonRecord[];
+    try {
+      ledgerData = await fetchAllRows<JsonRecord>((from, to) => {
+        let query = serviceRoleClient
+          .schema("erp_inventory")
+          .from("stock_ledger")
+          .select("id, ledger_seq, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at, created_by")
+          .eq("company_id", companyId)
+          .order("posting_date", { ascending: true })
+          .order("ledger_seq", { ascending: true })
+          .range(from, to);
+        query = (query as unknown as { gte: (column: string, value: string) => typeof query }).gte("posting_date", dateFrom);
+        query = (query as unknown as { lte: (column: string, value: string) => typeof query }).lte("posting_date", dateTo);
+        if (materialIds.length > 0) {
+          query = query.in("material_id", materialIds);
+        }
+        if (storageLocationIds.length > 0) {
+          query = query.in("storage_location_id", storageLocationIds);
+        }
+        if (batchNumbers.length > 0) {
+          query = query.in("batch_number", batchNumbers);
+        }
+        if (movementTypeCodes.length > 0) {
+          query = query.in("movement_type_code", movementTypeCodes);
+        }
+        return query;
+      });
+    } catch {
       return reportErrorResponse(req, ctx, "STOCK_LEDGER_FETCH_FAILED", 500, "Unable to fetch stock ledger report.");
     }
 
-    const ledgerRows = ((data ?? []) as JsonRecord[]).map((row) => ({
+    const ledgerRows = ledgerData.map((row) => ({
       id: toTrimmedString(row.id),
       ledger_seq: Number(row.ledger_seq ?? 0),
       stock_document_id: toTrimmedString(row.stock_document_id),

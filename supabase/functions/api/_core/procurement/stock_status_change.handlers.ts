@@ -16,6 +16,7 @@ import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -122,25 +123,37 @@ async function getStockTypeBalances(params: {
   materialId: string;
   batchNumber?: string | null;
 }): Promise<Record<string, { quantity: number; valuationRate: number }>> {
-  let query = serviceRoleClient
-    .schema("erp_inventory")
-    .from("stock_ledger")
-    .select("stock_type_code, direction, quantity, valuation_rate")
-    .eq("company_id", params.companyId)
-    .eq("storage_location_id", params.storageLocationId)
-    .eq("material_id", params.materialId);
+  // Paged via fetchAllRows -- batchNumber is optional here (material-wide
+  // sum when absent), and either shape can exceed PostgREST's 1000-row
+  // default cap for a busy material+location. The explicit ledger_seq order
+  // is also what makes "last posted rate wins" below actually mean
+  // chronologically last, across every page.
   const batchNumber = toTrimmedString(params.batchNumber);
-  query = batchNumber ? query.eq("batch_number", batchNumber) : query.is("batch_number", null);
-
-  const { data, error } = await query;
-  if (error) throw new Error("SSC_STOCK_LOOKUP_FAILED");
+  let rows: JsonRecord[];
+  try {
+    rows = await fetchAllRows<JsonRecord>((from, to) => {
+      let query = serviceRoleClient
+        .schema("erp_inventory")
+        .from("stock_ledger")
+        .select("stock_type_code, direction, quantity, valuation_rate")
+        .eq("company_id", params.companyId)
+        .eq("storage_location_id", params.storageLocationId)
+        .eq("material_id", params.materialId)
+        .order("ledger_seq", { ascending: true })
+        .range(from, to);
+      query = batchNumber ? query.eq("batch_number", batchNumber) : query.is("batch_number", null);
+      return query;
+    });
+  } catch {
+    throw new Error("SSC_STOCK_LOOKUP_FAILED");
+  }
 
   const result: Record<string, { quantity: number; valuationRate: number }> = {
     UNRESTRICTED: { quantity: 0, valuationRate: 0 },
     QUALITY_INSPECTION: { quantity: 0, valuationRate: 0 },
     BLOCKED: { quantity: 0, valuationRate: 0 },
   };
-  for (const row of (data ?? []) as JsonRecord[]) {
+  for (const row of rows) {
     const stockType = toUpperTrimmedString(row.stock_type_code);
     if (!STOCK_TYPES.has(stockType)) continue;
     const sign = toUpperTrimmedString(row.direction) === "OUT" ? -1 : 1;
