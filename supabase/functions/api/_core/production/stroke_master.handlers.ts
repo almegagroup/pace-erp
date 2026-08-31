@@ -38,6 +38,7 @@ const PO_TYPES_BY_MATERIAL_TYPE: Record<string, Set<string>> = {
 const LINE_MATERIAL_TYPES = new Set(["RM", "INT"]);
 const COMMUNICATION_TYPES = new Set(["EMAIL", "WHATSAPP", "VERBAL_COMMUNICATION"]);
 const SHAREABLE_SFG_PO_TYPES = new Set(["MTO", "HPS", "MTS", "MTEST"]);
+const USABLE_PO_TYPES = new Set([...SHAREABLE_SFG_PO_TYPES, "INT"]);
 
 function validateCommunicationDetails(values: JsonRecord): string | null {
   const communicationDate = toTrimmedString(values.communication_date);
@@ -412,8 +413,8 @@ export async function listStrokeMastersHandler(
     const materialId = toTrimmedString(url.searchParams.get("material_id") ?? "");
     const status = toUpperTrimmedString(url.searchParams.get("status") ?? "");
     const usableForPoType = toUpperTrimmedString(url.searchParams.get("usable_for_po_type") ?? "");
-    if (usableForPoType && !SHAREABLE_SFG_PO_TYPES.has(usableForPoType)) {
-      return strokeError(req, ctx, "PROD_STROKE_SHARE_TYPE_INVALID", 400, "PO Type must be MTO, HPS, MTS, or MTEST");
+    if (usableForPoType && !USABLE_PO_TYPES.has(usableForPoType)) {
+      return strokeError(req, ctx, "PROD_STROKE_SHARE_TYPE_INVALID", 400, "PO Type must be MTO, HPS, MTS, MTEST, or INT");
     }
 
     let query = serviceRoleClient
@@ -444,9 +445,14 @@ export async function listStrokeMastersHandler(
     if (materialId) query = query.eq("prodshade_material_id", materialId);
     if (status) query = query.eq("status", status);
     if (usableForPoType) {
-      const applicableStrokeIds = await getActiveApplicabilityStrokeIds(usableForPoType);
-      if (applicableStrokeIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
-      query = query.in("id", applicableStrokeIds);
+      if (usableForPoType === "INT") {
+        // INT strokes do not use the SFG share/applicability workflow.
+        query = query.eq("po_type", "INT").eq("material_type", "INT");
+      } else {
+        const applicableStrokeIds = await getActiveApplicabilityStrokeIds(usableForPoType);
+        if (applicableStrokeIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+        query = query.in("id", applicableStrokeIds);
+      }
     }
 
     const { data, error } = await query;
