@@ -71,6 +71,25 @@ function headersForAction(action: Action): HeadersInit {
   }
 }
 
+// SESSION_CLUSTER_* codes that mean "this particular window/admission attempt
+// didn't go through" (a transient, per-window hiccup the caller already
+// handles gracefully -- see AuthBootstrap.jsx's ensureWindowAdmission, which
+// explicitly does NOT treat these as the user being logged out). They are
+// NOT evidence the underlying session/cluster is actually dead, so they must
+// not force a hard logout the way a real SESSION_EXPIRED/SESSION_REVOKED
+// does. This is the complete set of public codes admitSessionClusterWindowHandler
+// and issueSessionClusterJoinTicketHandler (session.cluster.handler.ts) can
+// ever return -- every internal error in session.cluster.ts collapses into
+// one of these at the handler boundary.
+const SESSION_CLUSTER_NON_FATAL_CODES = new Set([
+  "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED",
+  "SESSION_CLUSTER_MISSING",
+  "SESSION_CLUSTER_WINDOW_INSTANCE_REQUIRED",
+  "SESSION_CLUSTER_ADMISSION_BLOCKED",
+  "SESSION_CLUSTER_WINDOW_NOT_ADMITTED",
+  "SESSION_CLUSTER_OPEN_WINDOW_BLOCKED",
+]);
+
 /**
  * Normalize internal error codes to Gate-2 compliant public codes
  */
@@ -155,7 +174,7 @@ export function errorResponse(
 
   const action: Action =
     publicCode.startsWith("SESSION_") &&
-    publicCode !== "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED"
+    !SESSION_CLUSTER_NON_FATAL_CODES.has(publicCode)
       ? "LOGOUT"
       : "NONE";
 

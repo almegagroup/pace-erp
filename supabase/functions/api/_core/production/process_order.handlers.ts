@@ -1982,29 +1982,43 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     }
 
     if (insertedLines.length > 0) {
-      const reservationRows = insertedLines.map((line) => ({
-        source_type: "PROCESS_PO",
-        source_id: poId,
-        source_line_id: line.id,
-        company_id: companyId,
-        material_id: toTrimmedString(line.actual_material_id) || line.material_id,
-        storage_location_id: line.issue_sloc_id ?? null,
-        required_qty: line.planned_qty,
-        uom_code: toTrimmedString(line.uom_code) || "KG",
-        required_by_date: plannedStartDate,
-        status: "OPEN",
-        created_by: ctx.auth_user_id,
-        created_at: now,
-        last_updated_by: ctx.auth_user_id,
-        last_updated_at: now,
-      }));
-      const { error: reservationErr } = await serviceRoleClient
+      // Found live 2026-08-31 (CMP006): the old code re-checked availability
+      // BEFORE this insert (line ~1865) and then blindly inserted reservations
+      // here with no lock spanning the two -- two Process POs created close
+      // together could both pass the earlier check and both reserve,
+      // over-committing the same physical stock. reserve_process_order_materials()
+      // (§8D-style, migration 20260831121606) recomputes availability AND
+      // inserts the reservation rows in one Postgres transaction, serialized
+      // per (company, material, location) via advisory lock, so this is the
+      // authoritative check -- the earlier one is now just a fast-fail for the
+      // common non-racing case.
+      const { data: reserveResult, error: reserveErr } = await serviceRoleClient
         .schema("erp_production")
-        .from("reservation_document")
-        .insert(reservationRows);
-      if (reservationErr) {
-        console.error("[process_order.createProcessOrder] reservation insert failed:", JSON.stringify(reservationErr));
+        .rpc("reserve_process_order_materials", {
+          p_process_order_id: poId,
+          p_company_id: companyId,
+          p_required_by_date: plannedStartDate,
+          p_created_by: ctx.auth_user_id,
+        });
+      if (reserveErr) {
+        console.error("[process_order.createProcessOrder] reserve rpc failed:", JSON.stringify(reserveErr));
         throw new Error("PROD_PO_CREATE_FAILED");
+      }
+      const result = reserveResult as { ok: boolean; shortages?: AvailabilityRow[] } | null;
+      if (!result?.ok) {
+        // Stock genuinely unavailable at lock time -- undo the metadata-only
+        // PO/lines just inserted (cascade deletes the lines) and surface the
+        // same error shape the old up-front check produced.
+        await serviceRoleClient.schema("erp_production").from("process_order").delete().eq("id", poId);
+        const shortages = result?.shortages ?? [];
+        const detail = await formatShortageDetail(shortages.map((row) => ({
+          material_id: String(row.material_id),
+          storage_location_id: String(row.storage_location_id),
+          needed_qty: Number(row.needed_qty),
+          available_qty: Number(row.available_qty),
+          short: true,
+        })));
+        return poErr(req, ctx, "PROD_PO_INSUFFICIENT_STOCK", 422, `Insufficient UNRESTRICTED stock for ${shortages.length} material(s): ${detail}`);
       }
     }
 

@@ -307,6 +307,7 @@ export default function MenuShell() {
   const drawerButtonRefs = useRef([]);
   const actionButtonRefs = useRef([]);
   const contentRegionRef = useRef(null);
+  const openWindowInFlightRef = useRef(false);
   const workContextSelectRef = useRef(null);
   const lastNetworkToastRef = useRef({
     completedAt: 0,
@@ -1187,27 +1188,41 @@ export default function MenuShell() {
   }
 
   const handleOpenNewWindow = useCallback(async () => {
-    const homePath = location.pathname.startsWith("/sa")
-      ? "/sa/home"
-      : location.pathname.startsWith("/ga")
-        ? "/ga/home"
-        : "/dashboard";
-
-    const pendingWindow = openPendingClusterWindow();
-
-    if (!pendingWindow) {
-      setClusterWindowMessage(
-        getClusterWindowErrorMessage("SESSION_CLUSTER_WINDOW_POPUP_BLOCKED")
-      );
+    // Guard against a second concurrent trigger (double-click on the
+    // "Shift+F8 / Window" button, or a stray duplicate key event) firing
+    // while the first open-window round trip is still in flight -- two
+    // concurrent calls race two popups/join-tickets against each other and
+    // can surface a spurious admission failure on the second one.
+    if (openWindowInFlightRef.current) {
       return;
     }
+    openWindowInFlightRef.current = true;
 
-    const result = await requestOpenClusterWindow(homePath, {
-      openedWindow: pendingWindow,
-    });
+    try {
+      const homePath = location.pathname.startsWith("/sa")
+        ? "/sa/home"
+        : location.pathname.startsWith("/ga")
+          ? "/ga/home"
+          : "/dashboard";
 
-    if (!result.ok) {
-      setClusterWindowMessage(getClusterWindowErrorMessage(result.code));
+      const pendingWindow = openPendingClusterWindow();
+
+      if (!pendingWindow) {
+        setClusterWindowMessage(
+          getClusterWindowErrorMessage("SESSION_CLUSTER_WINDOW_POPUP_BLOCKED")
+        );
+        return;
+      }
+
+      const result = await requestOpenClusterWindow(homePath, {
+        openedWindow: pendingWindow,
+      });
+
+      if (!result.ok) {
+        setClusterWindowMessage(getClusterWindowErrorMessage(result.code));
+      }
+    } finally {
+      openWindowInFlightRef.current = false;
     }
   }, [location.pathname]);
 

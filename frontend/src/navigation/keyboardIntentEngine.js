@@ -25,7 +25,16 @@ function onKeyDown(event) {
   const intent = normalizeKeyEvent(event);
   if (!intent) return;
 
+  // Still suppress the browser's own default action on repeat (e.g. a
+  // held Ctrl+S shouldn't fall through to the native save-page dialog),
+  // but never dispatch twice: OS key-repeat re-fires keydown with
+  // repeat:true while a key is held, and dispatching on every repeat let
+  // a held Shift+F8 fire INTENT_OPEN_NEW_WINDOW multiple times, racing
+  // concurrent popup/open-window calls against each other (see
+  // CLAUDE.md's session-cluster "new window logout" investigation).
   event.preventDefault();
+  if (event.repeat) return;
+
   handleKeyboardIntent(intent);
 }
 
