@@ -311,6 +311,7 @@ import {
   createSalesOrderUnifiedHandler,
   listSalesOrderAddressOptionsHandler,
   listSalesOrderFgSkuOptionsHandler,
+  listSalesOrderStrokeCheckOptionsHandler,
   createSOHandler,
   getSalesInvoiceHandler,
   getSOHandler,
@@ -662,6 +663,8 @@ export async function dispatchProcurementRoutes(
       return await createSalesOrderUnifiedHandler(req, ctx);
     case "GET:/api/procurement/sales-orders/fg-sku-options":
       return await listSalesOrderFgSkuOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-orders/stroke-check-options":
+      return await listSalesOrderStrokeCheckOptionsHandler(req, ctx);
     case "GET:/api/procurement/sales-orders/address-options":
       return await listSalesOrderAddressOptionsHandler(req, ctx);
 

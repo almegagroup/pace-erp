@@ -22772,8 +22772,8 @@ widens `sales_order.bill_to_type`'s CHECK constraint to add `'VDC'` alongside th
 (`in_sync=true`, 518 files).
 
 **2. "External VDC Code" (`fg_depot_code.code`) is the field that becomes Bill-To Party Name**
-when VDC is chosen as Bill-To — already existed in the UI as "External VDC/DC Code", nothing new to
-build there, just newly load-bearing.
+when VDC is chosen — already existed in the UI as "External VDC/DC Code", nothing new to build
+there, just newly load-bearing.
 
 **Backend (`fg_parent_company.handlers.ts`):** `createOrGetDepotCodeHandler`/`updateDepotCodeHandler`
 no longer force-null `address_line`/`state`/`pin_code` for DIRECT rows — both handlers now store
@@ -22784,7 +22784,9 @@ can never raise it again).
 **Frontend (`VdcParentCompanyMasterPage.jsx`, MM04's VDC/DC tab):** the DEPOT-only address block
 (State/Address/Pin/GST-check-with-auto-fill) is now shown identically for both DIRECT and DEPOT —
 removed the old "a VDC has no separate address of its own" branch and its dispatch-type-switch
-field-clearing side effect (no longer needed once both types share the same fields).
+field-clearing side effect (no longer needed once both types share the same fields). The list
+grid's State column falls back to the Parent Company's state for pre-existing VDC rows that
+haven't been edited since this change (their own `state` is still NULL until then).
 
 **3-5. SO01 Page 2 — new "Bill-To Party?" choice for Dependent(Direct)** (`sales_order.handlers.ts`'s
 `resolveBillToShipTo()`, `DEPENDENT_DIRECT` branch): after Parent Company + VDC are selected, a new
@@ -22831,3 +22833,80 @@ errors (same 2 pre-existing `.range()` baseline). `eslint` clean on `SO01CreateP
 **prod deploy still needs the same migration run** (pure schema change, travels with the next
 `supabase db push`/PR merge per CLAUDE.md §8A's MCP-vs-migration rule, no separate MCP data step
 needed here since this is DDL, not business/ACL data).
+
+### 133.21 — Same-day follow-ups: MM04/VDC search, DO source-picker + Ship-To fix, SO01 declared Stroke Number (✅ LOCKED + IMPLEMENTED — 2026-09-01)
+
+**A. MM04/VDC Master search + autosuggest.** With VDC now carrying a real address (§133.20),
+volume is expected to grow past a plain scroll list. Added a client-side search box above both
+grids (Parent Company: name/state/GST; VDC/DC: code/description/state/Parent Company name),
+`virtualize` on the Parent Company grid to match VDC/DC's. Both "Parent Company" pickers used when
+creating/remapping a VDC/DC (previously plain `<select>`) replaced with `ErpComboboxField` (the
+same type-to-filter combobox primitive SO01 already uses everywhere) — no backend change needed,
+purely a frontend list-scaling fix.
+
+**B. DO create's "Add SO" picker showed fully-dispatched SOs.** `listDOSourceDocumentsHandler`'s
+own docstring always said "still have at least one unlocked line", but the actual query only ever
+filtered `status IN (CREATED, ISSUED)` — a SO whose every line was already fully drawn into
+non-cancelled DOs stays CREATED/ISSUED until someone runs an explicit SO Close (§133.10), so it
+kept appearing in the picker with nothing left to add. Fixed: after the status filter, sums each
+candidate SO's `sales_order_line.base_qty` against drawn quantity from
+`delivery_challan_line.so_line_id` (confirmed via `do_unified.handlers.ts`'s own `soLineId`
+derivation that every dc_line carries `so_line_id` regardless of source path — direct or via
+`so_map_allocation_id` — so one column check covers every dispatch type uniformly), excludes SOs
+with nothing remaining. Scoped to SALES_ORDER only (not STO) — not reported, not touched.
+
+**C. DO List never showed Ship-To Party name.** `listDeliveryOrdersHandler` already computed a
+correct `ship_to_display` per DO (from each line's own frozen `ship_to_name`/`ship_to_address`/
+`ship_to_state`, resolved via FO/customer-address at DO-create time — verified via
+`freezeDoSalesShipTo()`) — it was simply never rendered in `DOListPage.jsx`'s grid. Added a
+"Ship-To" column; renamed the existing ambiguous "Customer" column (which mixes `customer_id` and
+Bill-To fallback) to "Bill-To" so the two sit side by side with clear meaning.
+
+**D. SO01 — new "Stroke Number" field on MTO/HPS FG lines (manual, informational, red-dot check).**
+Business rationale: Asian Paints sometimes references an Item+Stroke combination PACE hasn't
+created yet, discovered only later at reconciliation. The real production chain (FO → Batch →
+Process PO) already carries a real Stroke, but only once production exists — this field captures
+what Asian *declared* at SO time, independent of that, for Reco to compare against later. Never
+required, never blocks Create SO or dispatch (business owner's explicit instruction) — MTEST is
+exempt (its batch's own formulation already carries everywhere it's needed); MTS is out of scope
+(not yet dispatching).
+
+- **Schema:** `sales_order_line.declared_stroke_number` (text, nullable). Migration
+  `20260901120000_so01_declared_stroke_number.sql`, applied to dev, integrity reconciled
+  (`in_sync=true`, 519 files), `NOTIFY pgrst, 'reload schema'` run.
+- **Prodshade derivation — reuses the existing SKU→Prodshade mechanism, no new logic.**
+  `listSalesOrderFgSkuOptionsHandler` already computed each SKU's derived `prodshade_material_id`
+  internally (via `prodshade_pack_config`, for its own stroke-eligibility filter) but never
+  returned it — now included in the response, free for the frontend to use.
+- **New Sales-owned endpoint, deliberately not reusing the two existing Production ones.**
+  `GET /api/procurement/sales-orders/stroke-check-options?company_id=` (new
+  `listSalesOrderStrokeCheckOptionsHandler`) returns every APPROVED MTO/HPS
+  `{prodshade_material_id, po_type, stroke_number}` for the company, once. Both
+  `plan_feed.handlers.ts`'s `listStrokeOptionsHandler` and `stroke_master.handlers.ts`'s
+  `listStrokeMastersHandler` already do something close to this, but both are gated by Production
+  ACL resources (`PROD_PLAN_FEED` / `PROD_STROKE_MASTER`) — SO01's own Accounts role has no reason
+  to hold either, and granting it would be a cross-module ACL leak for a read-only reference
+  lookup. New route registered under the page's own `PROC_SO_CREATE` resource instead. Frontend
+  fetches this once per company (small reference set, `staleTime` cached — same pattern as this
+  page's own AC06-approved-months fetch), builds a `Set` client-side, and checks
+  `${prodshade_material_id}|${fg_type}|${declared_stroke_number}` per line live — no per-keystroke
+  round trip.
+- **Red-dot logic:** red when the line has no real `material_id` (manual/unresolved SKU — can
+  never derive a Prodshade at all), when the SKU's own derived Prodshade doesn't resolve, or when
+  no APPROVED `stroke_master` row matches `(that Prodshade, this exact typed Stroke Number, this
+  line's own fg_type)`. Green otherwise. Field renders for every MTO/HPS FG line regardless of
+  whether the SKU came from the dropdown or manual entry (business owner's explicit choice — a
+  real, dropdown-picked SKU can still carry an Asian-declared Stroke that turns out wrong).
+- **Backend write:** `prepareUnifiedSoLine()` (shared by Create and Edit) stores
+  `declared_stroke_number` for FG lines with `fg_type` in `{MTO, HPS}` only; no required-check.
+- **Deliberately out of scope this round:** `SODetailPage.jsx` (Edit SO) does not yet surface this
+  field — matches the pre-existing precedent that `costing_rate_month` itself isn't shown there
+  either, not a new gap introduced by this feature.
+
+**Verified:** `deno check` (baseline-matched, zero new errors — confirmed via git-stash diff, not
+just an absolute count, since `sales_order.handlers.ts`'s full import graph pulls in ~130
+pre-existing baseline errors across unrelated procurement files). `eslint` clean on
+`SO01CreatePage.jsx`/`DOListPage.jsx`/`VdcParentCompanyMasterPage.jsx`/`procurementApi.js`. All 10
+CI guards + `dependency-provisioning-check.mjs --strict-manifest` exit 0 (manifest also backfilled
+two pre-existing gaps for `SO01Page.jsx` — `listSalesOrderFgSkuOptions` was missing too, not just
+the new stroke-check endpoint).

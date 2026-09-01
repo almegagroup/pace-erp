@@ -29,7 +29,7 @@ import { listFgParentCompanies, listFgDepotCodes } from "../../om/omApi.js";
 import { listAc06ApprovedMonths } from "../../production/prodApi.js";
 import { amountToWordsIndian } from "../../../../utils/numberToWordsIndian.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
-import { createSalesOrderUnified, listSalesOrderAddressOptions, listSalesOrderFgSkuOptions } from "../procurementApi.js";
+import { createSalesOrderUnified, listSalesOrderAddressOptions, listSalesOrderFgSkuOptions, listSalesOrderStrokeCheckOptions } from "../procurementApi.js";
 
 // §133.7 — 5 fixed dispatch types.
 const DISPATCH_TYPE_OPTIONS = [
@@ -111,6 +111,7 @@ function makeLine(lineMaterialType) {
     batch_number: "",
     expiry_date: "",
     costing_rate_month: "",
+    declared_stroke_number: "",
     round_off_amount: "",
     remarks: "",
   };
@@ -290,6 +291,27 @@ export default function SO01CreatePage() {
   const fgSkuMap = useMemo(() => new Map(
     Object.values(fgSkusByType).flat().map((entry) => [entry.id, entry]),
   ), [fgSkusByType]);
+  // §133.21 — SO01 MTO/HPS FG-line Stroke Number red-dot check. Fetched once
+  // per company (small reference set), checked client-side per line —
+  // mirrors this file's own AC06-approved-months pattern.
+  const strokeCheckQuery = useQuery({
+    queryKey: ["so01-stroke-check-options", companyId],
+    queryFn: () => listSalesOrderStrokeCheckOptions({ company_id: companyId }),
+    enabled: Boolean(companyId && materialTypes.includes("FG")),
+    staleTime: 60_000,
+  });
+  const validStrokeKeys = useMemo(() => new Set(
+    (strokeCheckQuery.data ?? []).map((entry) => `${entry.prodshade_material_id}|${entry.po_type}|${entry.stroke_number}`),
+  ), [strokeCheckQuery.data]);
+  // true = resolved (green), false = red dot, null = not applicable (not an
+  // MTO/HPS FG line, or no item selected yet).
+  function strokeCheckStatus(line) {
+    if (line.line_material_type !== "FG" || !["MTO", "HPS"].includes(line.fg_type)) return null;
+    if (!line.material_id || !line.declared_stroke_number?.trim()) return false;
+    const prodshadeId = fgSkuMap.get(line.material_id)?.prodshade_material_id;
+    if (!prodshadeId) return false;
+    return validStrokeKeys.has(`${prodshadeId}|${line.fg_type}|${line.declared_stroke_number.trim()}`);
+  }
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const paymentTermOptions = useMemo(
     () => (paymentTermQuery.paymentTerms ?? []).map((entry) => ({ value: entry.id, label: `${entry.code || entry.name} | ${entry.name}` })),
@@ -573,6 +595,30 @@ export default function SO01CreatePage() {
           ) : null}
         </div>
       ) },
+      // §133.21 (2026-09-01) — MTO/HPS only. What Asian Paints itself
+      // declared as the Stroke for this Item — independent of whatever the
+      // real production batch later carries (FO->Batch->Process PO already
+      // gives that, separately, once production exists). Manual, purely
+      // informational (never blocks Create SO or dispatch) — Asian
+      // sometimes references an Item+Stroke combination PACE hasn't created
+      // yet; the dot flags that for later Reco reconciliation rather than
+      // hiding it. Red = Prodshade (derived from this SKU) + this exact
+      // Stroke Number don't resolve to a real APPROVED stroke_master row —
+      // always red for a manual/not-yet-real SKU, since no Prodshade can be
+      // derived at all. Green = resolved.
+      { key: "declared_stroke", label: "Stroke Number", width: "150px", render: (line) => {
+        if (!["MTO", "HPS"].includes(line.fg_type)) return <span className="text-xs text-slate-400">—</span>;
+        const status = strokeCheckStatus(line);
+        return (
+          <div className="flex items-center gap-1.5">
+            <span
+              title={status ? "Resolves to an approved Stroke Master row" : "Not found in Stroke Master for this Item's Prodshade — reconcile later"}
+              className={`inline-block h-2 w-2 shrink-0 rounded-full ${status ? "bg-emerald-500" : "bg-rose-500"}`}
+            />
+            {textInput(line.declared_stroke_number, (value) => updateLine(line.__key, { declared_stroke_number: value }), { placeholder: "Stroke No." })}
+          </div>
+        );
+      } },
       // §133.8-D — Document Name is distinct from External Code. A manual SKU line shows the
       // typed name here too, since that IS the document name until the SKU
       // gets added to Material Master.
@@ -735,6 +781,7 @@ export default function SO01CreatePage() {
           // value yet; MTO/HPS/MTEST send whatever the dropdown/Manual holds
           // (MTEST corrected 2026-08-28 — user-chosen now, not auto-derived).
           costing_rate_month: line.fg_type === "MTS" ? null : (line.costing_rate_month || null),
+          declared_stroke_number: line.declared_stroke_number?.trim() || null,
           remarks: line.remarks || null,
         })),
       });

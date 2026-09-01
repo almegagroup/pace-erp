@@ -19,6 +19,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { INDIAN_STATES } from "../../../../data/indianStates.js";
@@ -116,6 +117,21 @@ export default function VdcParentCompanyMasterPage() {
     for (const p of parentCompanies) map.set(p.id, p);
     return map;
   }, [parentCompanies]);
+  // §133.20-followup (2026-09-01) — many Parent Company/VDC/DC rows now
+  // expected; a plain scroll-through list no longer scales. Search filters
+  // the grid client-side; the combobox pickers below get their own
+  // type-to-filter search built in (ErpComboboxField).
+  const [parentSearch, setParentSearch] = useState("");
+  const filteredParentCompanies = useMemo(() => {
+    const q = parentSearch.trim().toLowerCase();
+    if (!q) return parentCompanies;
+    return parentCompanies.filter((p) =>
+      [p.company_name, p.state, p.gst_number].some((field) => String(field || "").toLowerCase().includes(q)));
+  }, [parentCompanies, parentSearch]);
+  const parentCompanyOptions = useMemo(
+    () => parentCompanies.map((p) => ({ value: p.id, label: `${p.company_name || ""} (${p.state || ""})` })),
+    [parentCompanies],
+  );
 
   const [selectedParentId, setSelectedParentId] = useState("");
   const [parentForm, setParentForm] = useState(EMPTY_PARENT_FORM);
@@ -219,6 +235,14 @@ export default function VdcParentCompanyMasterPage() {
     select: (data) => data?.data ?? [],
   });
   const vdcs = useMemo(() => vdcQuery.data ?? [], [vdcQuery.data]);
+  const [vdcSearch, setVdcSearch] = useState("");
+  const filteredVdcs = useMemo(() => {
+    const q = vdcSearch.trim().toLowerCase();
+    if (!q) return vdcs;
+    return vdcs.filter((v) =>
+      [v.code, v.description, v.state, parentById.get(v.parent_company_id)?.company_name]
+        .some((field) => String(field || "").toLowerCase().includes(q)));
+  }, [vdcs, vdcSearch, parentById]);
 
   const [selectedVdcId, setSelectedVdcId] = useState("");
   const [vdcForm, setVdcForm] = useState(EMPTY_VDC_FORM);
@@ -383,16 +407,23 @@ export default function VdcParentCompanyMasterPage() {
                     + New Parent Company
                   </button>
                 </div>
+                <input
+                  value={parentSearch}
+                  onChange={(event) => setParentSearch(event.target.value)}
+                  placeholder="Search by name, state, or GST..."
+                  className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                />
                 <ErpDenseGrid
                   columns={[
                     { key: "company_name", label: "Name", render: (row) => row.company_name || "-" },
                     { key: "state", label: "State", render: (row) => row.state || "-" },
                     { key: "gst_number", label: "GST", render: (row) => row.gst_number || "-" },
                   ]}
-                  rows={parentCompanies}
+                  rows={filteredParentCompanies}
                   rowKey={(row) => row.id}
                   onRowActivate={openParentRow}
                   cellNavigate
+                  virtualize
                   getRowProps={(row) => ({ onDoubleClick: () => openParentRow(row), className: "cursor-pointer hover:bg-sky-50" })}
                   emptyMessage={parentQuery.isLoading ? "Loading..." : "No Parent Company yet for this company."}
                 />
@@ -503,6 +534,12 @@ export default function VdcParentCompanyMasterPage() {
                     + New VDC / DC
                   </button>
                 </div>
+                <input
+                  value={vdcSearch}
+                  onChange={(event) => setVdcSearch(event.target.value)}
+                  placeholder="Search by code, description, state, or Parent Company..."
+                  className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                />
                 <ErpDenseGrid
                   columns={[
                     { key: "type", label: "VDC / DC", render: (row) => (row.dispatch_type === "DEPOT" ? "DC" : "VDC") },
@@ -510,14 +547,15 @@ export default function VdcParentCompanyMasterPage() {
                     {
                       key: "state",
                       label: "State",
-                      render: (row) => (row.dispatch_type === "DEPOT"
-                        ? (row.state || "-")
-                        : (parentById.get(row.parent_company_id)?.state || "-")),
+                      // §133.20 -- VDC now stores its own state too; fall
+                      // back to the Parent Company's for pre-existing VDC
+                      // rows that haven't been edited since this change.
+                      render: (row) => row.state || parentById.get(row.parent_company_id)?.state || "-",
                     },
                     { key: "gst_number", label: "GST", render: (row) => row.gst_number || "-" },
                     { key: "parent", label: "Parent Company", render: (row) => parentById.get(row.parent_company_id)?.company_name || "-" },
                   ]}
-                  rows={vdcs}
+                  rows={filteredVdcs}
                   rowKey={(row) => row.id}
                   onRowActivate={openVdcRow}
                   cellNavigate
@@ -533,16 +571,7 @@ export default function VdcParentCompanyMasterPage() {
 
                   {creatingVdcNew ? (
                     <ErpDenseFormRow label="Parent Company" required>
-                      <select
-                        value={vdcParentId}
-                        onChange={(event) => setVdcParentId(event.target.value)}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      >
-                        <option value="">Select Parent Company</option>
-                        {parentCompanies.map((p) => (
-                          <option key={p.id} value={p.id}>{p.company_name} ({p.state})</option>
-                        ))}
-                      </select>
+                      <ErpComboboxField value={vdcParentId} onChange={setVdcParentId} options={parentCompanyOptions} blankLabel="Select Parent Company" />
                       <p className="mt-1 text-xs text-slate-500">No Parent Company here? Create it on the "Parent Company" tab first.</p>
                     </ErpDenseFormRow>
                   ) : (
@@ -558,16 +587,12 @@ export default function VdcParentCompanyMasterPage() {
                       ) : (
                         <div className="grid gap-2">
                           <p className="text-xs text-amber-700">Unmapped from {parentById.get(vdcParentId)?.company_name || "current parent"}. Pick a new Parent Company and click Map to commit.</p>
-                          <select
+                          <ErpComboboxField
                             value={newVdcParentId}
-                            onChange={(event) => setNewVdcParentId(event.target.value)}
-                            className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                          >
-                            <option value="">Select new Parent Company</option>
-                            {parentCompanies.filter((p) => p.id !== vdcParentId).map((p) => (
-                              <option key={p.id} value={p.id}>{p.company_name} ({p.state})</option>
-                            ))}
-                          </select>
+                            onChange={setNewVdcParentId}
+                            options={parentCompanyOptions.filter((entry) => entry.value !== vdcParentId)}
+                            blankLabel="Select new Parent Company"
+                          />
                           <div className="flex justify-end gap-2">
                             <button type="button" onClick={() => { setChangingVdcParent(false); setNewVdcParentId(""); }} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
                             <button type="button" onClick={() => void handleMapVdcParent()} disabled={savingVdc} className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50">

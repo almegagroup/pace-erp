@@ -2307,6 +2307,14 @@ async function prepareUnifiedSoLine(
   const currencyCode = toTrimmedString(line.currency_code) || "INR";
   const hsnCode = toTrimmedString(line.hsn_code) || null;
   const remarks = toTrimmedString(line.remarks) || null;
+  // §133.21 (2026-09-01) — MTO/HPS FG lines only, purely informational (no
+  // required-check, no dispatch block): what Asian Paints itself declared as
+  // the Stroke for this Item, independent of whatever real Stroke the actual
+  // production batch later carries. Captured for later Reco reconciliation
+  // when Asian's reference turns out to be wrong/nonexistent in PACE.
+  const declaredStrokeNumber = lineMaterialType === "FG" && ["MTO", "HPS"].includes(toUpperTrimmedString(line.fg_type))
+    ? (toTrimmedString(line.declared_stroke_number) || null)
+    : null;
   // Round Off is entered per item line (business owner, 2026-09-01) — a pure
   // post-tax adjustment to match what Tally ultimately shows, never part of
   // the taxable/GST computation itself.
@@ -2425,6 +2433,7 @@ async function prepareUnifiedSoLine(
       batch_number: batchNumber,
       expiry_date: expiryDate,
       costing_rate_month: costingRateMonth,
+      declared_stroke_number: declaredStrokeNumber,
       packing_order_id: packingOrderId,
       remarks,
     },
@@ -2639,6 +2648,9 @@ export async function listSalesOrderFgSkuOptionsHandler(
           per_pack_qty: conversion?.conversion_factor ?? null,
           variable_conversion: Boolean(conversion?.variable_conversion),
           own_company_mapping: ownMaterialIds.has(toTrimmedString(sku.id)),
+          // §133.21 — SO01's Stroke Number red-dot check needs this SKU's own
+          // derived Prodshade, already computed above for stroke eligibility.
+          prodshade_material_id: prodshadeId || null,
         });
       }
     }
@@ -2648,6 +2660,37 @@ export async function listSalesOrderFgSkuOptionsHandler(
   } catch (err) {
     const code = err instanceof Error ? err.message : "SO_FG_SKU_OPTIONS_FAILED";
     return salesErrorResponse(req, ctx, code, 500, "FG SKU options could not be resolved.");
+  }
+}
+
+// §133.21 (2026-09-01) — SO01's MTO/HPS FG-line "Stroke Number" red-dot
+// check. Deliberately a NEW, Sales-owned endpoint rather than reusing
+// production/plan-feed's listStrokeOptionsHandler or stroke_master.handlers.ts's
+// listStrokeMastersHandler — both are gated by Production ACL resources
+// (PROD_PLAN_FEED / PROD_STROKE_MASTER) that SO01's own Accounts role has no
+// reason to hold. Returns every APPROVED MTO/HPS stroke's (prodshade, po_type,
+// stroke_number) once per company — frontend builds a Set client-side and
+// checks it live per line, same "fetch small reference set once" pattern
+// this file already uses for AC06 approved months.
+export async function listSalesOrderStrokeCheckOptionsHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const companyId = await getCompanyScope(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
+    if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("prodshade_material_id, po_type, stroke_number")
+      .eq("company_id", companyId).eq("status", "APPROVED")
+      .in("po_type", ["MTO", "HPS"]);
+    if (error) throw new Error("SO_FG_STROKE_CHECK_OPTIONS_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "SO_FG_STROKE_CHECK_OPTIONS_FAILED";
+    return salesErrorResponse(req, ctx, code, 500, "Stroke check options could not be resolved.");
   }
 }
 

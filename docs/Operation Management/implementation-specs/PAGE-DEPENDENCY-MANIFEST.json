@@ -5829,8 +5829,24 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/sales/SO01Page.jsx",
-    "dependencyCount": 14,
+    "dependencyCount": 16,
     "deps": [
+      {
+        "fn": "listSalesOrderFgSkuOptions",
+        "method": "GET",
+        "path": "/api/procurement/sales-orders/fg-sku-options",
+        "resourceCode": "PROC_SO_CREATE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "listSalesOrderStrokeCheckOptions",
+        "method": "GET",
+        "path": "/api/procurement/sales-orders/stroke-check-options",
+        "resourceCode": "PROC_SO_CREATE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
       {
         "fn": "listMaterials",
         "method": "GET",
