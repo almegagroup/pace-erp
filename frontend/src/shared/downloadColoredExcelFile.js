@@ -24,7 +24,12 @@ function pxWidthToExcelWidth(width) {
  *   — `numFmt` is an Excel number format string (e.g. "0.##########") applied
  *   to that column's cells; omit for Excel's default "General" format.
  * @param {Array<object>} params.rows
- * @param {(row:object, column:object) => (string|number)} [params.getCellValue] — defaults to row[column.key]
+ * @param {(row:object, column:object) => (string|number)} [params.getCellValue] — defaults to row[column.key].
+ *   MUST return a JS `number` (not a formatted string) for any column meant to be calculable in
+ *   Excel — ExcelJS writes a cell as text whenever the value it's given is a string, even one that
+ *   looks like "1,234.50". A column's on-screen/clipboard display string (with thousand separators,
+ *   a trailing unit, a +/- sign glyph, etc.) is the wrong thing to hand this callback; pass the raw
+ *   number and use `numFmt` to control how it displays inside Excel instead.
  * @param {(row:object, column:object) => ({fontArgb?:string, bold?:boolean}|null)} [params.getCellColor]
  * @param {(row:object) => (string|null)} [params.getRowFillArgb] — whole-row fill, e.g. a Total row
  * @param {(row:object, column:object) => (Array<{text:string,fontArgb?:string}>|null)} [params.getCellRichText]

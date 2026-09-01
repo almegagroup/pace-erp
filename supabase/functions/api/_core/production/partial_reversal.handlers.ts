@@ -995,7 +995,12 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
           movementTypeCode: "P262", companyId, storageLocationId: slocId,
           materialId: effectiveMaterialId, quantity: rmLine.proportional_actual_qty, baseUomCode: baseUom, unitValue: rmRef.rate,
           stockTypeCode: "UNRESTRICTED", direction: "IN", reversalOfId: rmRef.docId,
-          batchNumber: null,
+          // Same batch tag the original Verify-time P261 issue carried (process_order.handlers.ts
+          // stamps the SFG's own batch_number onto every RM/INT/PM ledger row it posts) -- purely
+          // a traceability stamp (stock_snapshot always hardcodes batch_id IS NULL per CLAUDE.md,
+          // so this never splits the balance), left null here by mistake since PR19 was first
+          // built, which is why these ledger rows were invisible to "which batch" filtering.
+          batchNumber: String(poData.batch_number ?? ""),
           matDoc,
         }, rmLine.process_order_line_id));
         lineInserts.push({
@@ -1166,7 +1171,8 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
           movementTypeCode: "P262", companyId, storageLocationId: slocId,
           materialId: effectiveMaterialId, quantity: rmLine.proportional_actual_qty, baseUomCode: baseUom, unitValue: rmRef.rate,
           stockTypeCode: "UNRESTRICTED", direction: "IN", reversalOfId: rmRef.docId,
-          batchNumber: null,
+          // Same batch tag Verify's own P261 issue carries on RM/INT lines -- traceability only.
+          batchNumber: String(poData.batch_number ?? ""),
           matDoc,
         }, rmLine.process_order_line_id));
         lineInserts.push({
