@@ -611,6 +611,7 @@ export default function StockLedgerReportPage() {
             rowKey={(row) => row.row_key || row.id}
             emptyMessage={reportQuery.isFetching ? "Loading stock ledger..." : "No stock ledger rows matched the selected filters."}
             virtualize
+            rangeSelect
           />
         </ErpSectionCard>
       </div>
