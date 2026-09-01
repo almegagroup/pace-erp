@@ -2138,9 +2138,25 @@ export async function amendPOHandler(
         const previousOrderedQty = Number(targetLine?.ordered_qty ?? 0);
         const openQty = Number(targetLine?.open_qty ?? previousOrderedQty);
         const alreadyReceivedQty = Math.max(previousOrderedQty - openQty, 0);
+        const nextOpenQty = Number(Math.max(orderedQty - alreadyReceivedQty, 0).toFixed(6));
         lineUpdates.ordered_qty = orderedQty;
-        lineUpdates.open_qty = Number(Math.max(orderedQty - alreadyReceivedQty, 0).toFixed(6));
+        lineUpdates.open_qty = nextOpenQty;
         lineUpdates.total_value = Number((orderedQty * Number(targetLine?.unit_rate ?? 0)).toFixed(4));
+        // Found live 2026-09-01 (PO ACPL/AD94/2026-27, business owner): open_qty was already
+        // being recomputed correctly above, but line_status was left untouched, so an ordered_qty
+        // increase after the line had already reached FULLY_RECEIVED left it permanently stuck
+        // showing FULLY_RECEIVED even though a real balance had reopened. Same OPEN/
+        // PARTIALLY_RECEIVED/FULLY_RECEIVED derivation grn.handlers.ts already uses from its own
+        // nextOpenQty. Left alone for a line already at a terminal KNOCKED_OFF/CANCELLED status --
+        // that's a different, deliberate state this amendment path doesn't attempt to reopen.
+        const currentLineStatus = toUpperTrimmedString(targetLine?.line_status);
+        if (currentLineStatus !== "KNOCKED_OFF" && currentLineStatus !== "CANCELLED") {
+          lineUpdates.line_status = nextOpenQty <= 0
+            ? "FULLY_RECEIVED"
+            : nextOpenQty < orderedQty
+            ? "PARTIALLY_RECEIVED"
+            : "OPEN";
+        }
       } else if (fieldName === "unit_rate") {
         const unitRate = parsePositiveNumber(normalizedValue);
         if (!unitRate) {
