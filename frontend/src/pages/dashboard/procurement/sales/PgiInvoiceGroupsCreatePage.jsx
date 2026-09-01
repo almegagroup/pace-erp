@@ -101,6 +101,19 @@ function invoiceLineDescription(line) {
   const code = line.material_display || line.material_id;
   return code && code !== name ? `${name} (${code})` : name;
 }
+// §133.21 -- show Rate/Per exactly as chosen at SO creation (Fixed/Pack
+// UoM/Base UoM) instead of always converting to the per-base-UOM value
+// used underneath for Amount. Falls back to the base-UOM figures for DO
+// lines saved before this existed (display_rate_basis null, e.g. STO).
+function invoiceLineRateDisplay(line) {
+  if (line.display_rate_basis === "FIXED") {
+    return { rate: line.display_rate, per: "Fixed" };
+  }
+  if (line.display_rate_basis && line.display_uom_code) {
+    return { rate: line.display_rate, per: line.display_uom_code };
+  }
+  return { rate: line.unit_value, per: line.uom_code || "—" };
+}
 function makeKey() {
   return Math.random().toString(36).slice(2);
 }
@@ -280,12 +293,15 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
           <div className="overflow-x-auto border border-slate-300">
             <table className="min-w-full border-collapse text-xs">
               <thead className="bg-slate-800 text-white"><tr><th className="border border-slate-500 p-2 text-left">Sl. No.</th><th className="border border-slate-500 p-2 text-left">Description of Goods</th><th className="border border-slate-500 p-2 text-left">HSN/SAC</th><th className="border border-slate-500 p-2 text-right">Quantity</th><th className="border border-slate-500 p-2 text-right">Rate</th><th className="border border-slate-500 p-2 text-left">Per</th><th className="border border-slate-500 p-2 text-right">Amount</th></tr></thead>
-              {group.lines.map((line, index) => (
+              {group.lines.map((line, index) => {
+                const rateDisplay = invoiceLineRateDisplay(line);
+                return (
                 <tbody key={line.dc_line_id}>
-                  <tr><td className="border border-slate-300 p-2 align-top">{index + 1}</td><td className="border border-slate-300 p-2 align-top"><strong>{invoiceLineDescription(line)}</strong>{line.batch_number ? <div className="mt-1 text-slate-500">Batch: {line.batch_number}</div> : null}</td><td className="border border-slate-300 p-2 align-top">{line.hsn_code || "—"}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(line.quantity, 3)}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(line.unit_value, 4)}</td><td className="border border-slate-300 p-2 align-top">{line.uom_code || "—"}</td><td className="border border-slate-300 p-2 text-right align-top font-semibold">{formatFixed(toNumber(line.quantity) * toNumber(line.unit_value))}</td></tr>
+                  <tr><td className="border border-slate-300 p-2 align-top">{index + 1}</td><td className="border border-slate-300 p-2 align-top"><strong>{invoiceLineDescription(line)}</strong>{line.batch_number ? <div className="mt-1 text-slate-500">Batch: {line.batch_number}</div> : null}</td><td className="border border-slate-300 p-2 align-top">{line.hsn_code || "—"}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(line.quantity, 3)}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(rateDisplay.rate, 4)}</td><td className="border border-slate-300 p-2 align-top">{rateDisplay.per}</td><td className="border border-slate-300 p-2 text-right align-top font-semibold">{formatFixed(toNumber(line.quantity) * toNumber(line.unit_value))}</td></tr>
                   {itemTaxBreakup(line, group.gst_type).map((tax) => <tr key={`${line.dc_line_id}-${tax.label}`}><td className="border-x border-slate-300" /><td colSpan="4" className="border-x border-slate-300 px-2 py-1 text-right italic">Output {tax.label} @ {formatFixed(tax.rate, 2)}%</td><td className="border-x border-slate-300 p-1">{tax.label}</td><td className="border-x border-slate-300 p-1 text-right font-semibold">{formatFixed(tax.amount)}</td></tr>)}
                 </tbody>
-              ))}
+                );
+              })}
               <tfoot><tr className="font-bold"><td colSpan="3" className="border border-slate-300 p-2 text-right">Total</td><td className="border border-slate-300 p-2 text-right">{formatFixed(group.net_weight, 3)}</td><td colSpan="2" className="border border-slate-300 p-2" /><td className="border border-slate-300 p-2 text-right">{formatFixed(displayedTotal)}</td></tr></tfoot>
             </table>
           </div>

@@ -403,8 +403,26 @@ export default function SalesInvoiceDetailPage() {
                   render: (row) => materialMap.get(row.material_id)?.material_name || row.material_id || "-",
                 },
                 { key: "quantity", label: "Qty", width: "90px" },
-                { key: "uom_code", label: "UOM", width: "90px" },
-                { key: "rate", label: "Rate", width: "90px" },
+                {
+                  key: "uom_code",
+                  label: "Per",
+                  width: "90px",
+                  // §133.21 -- show the SO-time UOM choice (Pack UoM/Base
+                  // UoM/Fixed), not the per-base-UOM figure used for Amount.
+                  render: (row) =>
+                    row.display_rate_basis === "FIXED"
+                      ? "Fixed"
+                      : row.display_rate_basis && row.display_uom_code
+                        ? row.display_uom_code
+                        : row.uom_code || "-",
+                },
+                {
+                  key: "rate",
+                  label: "Rate",
+                  width: "90px",
+                  render: (row) =>
+                    row.display_rate_basis ? row.display_rate : row.rate,
+                },
                 { key: "taxable_value", label: "Taxable", width: "110px" },
                 { key: "gst_rate", label: "GST %", width: "90px" },
                 { key: "line_total", label: "Line Total", width: "110px" },
