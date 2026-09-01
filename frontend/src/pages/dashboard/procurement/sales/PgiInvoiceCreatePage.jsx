@@ -33,7 +33,7 @@ export default function PgiInvoiceCreatePage() {
   const navigate = useNavigate();
   const dcId = getActiveScreenContext()?.dcId || "";
   const [step, setStep] = useState("form");
-  const [form, setForm] = useState({ tally_invoice_number: "", tally_invoice_date: "", freight_included: false, freight_amount: "", round_off_amount: "", remarks: "" });
+  const [form, setForm] = useState({ tally_invoice_number: "", tally_invoice_date: "", freight_included: false, freight_amount: "", remarks: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -62,9 +62,8 @@ export default function PgiInvoiceCreatePage() {
     const taxable = lines.reduce((sum, line) => sum + Number(line.quantity ?? 0) * Number(line.unit_value ?? 0), 0);
     const gst = lines.reduce((sum, line) => sum + Number(line.gst_amount ?? 0), 0);
     const freight = form.freight_included && form.freight_amount ? Number(form.freight_amount) : 0;
-    const roundOff = form.round_off_amount ? Number(form.round_off_amount) : 0;
-    return { taxable, gst, freight, roundOff, grandTotal: taxable + gst + freight + roundOff };
-  }, [lines, form.freight_included, form.freight_amount, form.round_off_amount]);
+    return { taxable, gst, freight, grandTotal: taxable + gst + freight };
+  }, [lines, form.freight_included, form.freight_amount]);
 
   function handleContinueToReview() {
     setError("");
@@ -89,7 +88,6 @@ export default function PgiInvoiceCreatePage() {
         tally_invoice_date: form.tally_invoice_date,
         freight_included: form.freight_included,
         freight_amount: form.freight_included ? Number(form.freight_amount) : null,
-        round_off_amount: form.round_off_amount ? Number(form.round_off_amount) : 0,
         remarks: form.remarks.trim() || null,
       });
       openScreenWithContext(OPERATION_SCREENS.PROC_INV_DETAIL.screen_code, { id: created?.id, refreshOnReturn: true });
@@ -262,25 +260,11 @@ export default function PgiInvoiceCreatePage() {
             />
           </ErpSectionCard>
 
-          <ErpSectionCard eyebrow="Totals" title="Invoice is actually created in Tally — enter the Round Off needed to match Tally's total">
-            <div className="grid gap-3 md:grid-cols-5 text-sm items-end">
+          <ErpSectionCard eyebrow="Totals" title="Preview — actual invoice totals compute fresh on submit">
+            <div className="grid gap-3 md:grid-cols-4 text-sm">
               <ErpFieldPreview label="Taxable Value" value={formatFixed(previewTotals.taxable)} />
               <ErpFieldPreview label="GST" value={formatFixed(previewTotals.gst)} />
               <ErpFieldPreview label="Freight" value={formatFixed(previewTotals.freight)} />
-              {step === "form" ? (
-                <ErpDenseFormRow label="Round Off">
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={form.round_off_amount}
-                    onChange={(event) => updateField("round_off_amount", event.target.value)}
-                    placeholder="0.00"
-                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                  />
-                </ErpDenseFormRow>
-              ) : (
-                <ErpFieldPreview label="Round Off" value={formatFixed(previewTotals.roundOff)} />
-              )}
               <ErpFieldPreview label="Grand Total" value={formatFixed(previewTotals.grandTotal)} />
             </div>
           </ErpSectionCard>
