@@ -2110,6 +2110,10 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       // only; September-or-later invoices retain their Tally Invoice Date.
       // Phase 2 (8-15 Sept): today's real date, no enforcement yet. Phase 3
       // (after 15 Sept): hard-block unless Tally Invoice Date equals today.
+      // MTEST resolves to the SO's own `so_date` (group.document_date for a
+      // SALES_ORDER group) -- corrected 2026-08-28, was a random day in
+      // 28-31 August unconditionally, which mis-dated a genuine same-day
+      // MTEST dispatch entered for real.
       const today = todayIsoDate();
       const backfillPhase = resolveBackfillPhase(today);
       let resolvedPostingDate = today;
@@ -2124,6 +2128,7 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
           hasMtoHpsBatch: Boolean(mtoHpsPko),
           hasMtestBatch: ((backfillPkoRows ?? []) as JsonRecord[]).some((row) => toUpperTrimmedString(row.po_type) === "PTEST"),
           mtoHpsPackingPoFinalizedAtIso: mtoHpsPko ? String(mtoHpsPko.finalized_at) : null,
+          mtestSoDate: group.document_date,
         };
         resolvedPostingDate = resolvePhase1PostingDate(classification, tallyInvoiceDate);
       } else if (backfillPhase === "PHASE_1") {

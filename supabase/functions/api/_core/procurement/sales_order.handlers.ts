@@ -2294,7 +2294,11 @@ async function prepareUnifiedSoLine(
       perPackQty = parsePositiveNumber(line.per_pack_qty);
       packQty = perPackQty ? Number((baseQty / perPackQty).toFixed(6)) : null;
       packUomCode = toTrimmedString(line.pack_uom_code) || "BBL";
-      costingRateMonth = null;
+      // Corrected 2026-08-28 (business owner): MTEST used to hardcode this
+      // to NULL (auto-derived from SO Date client-side instead) -- now a
+      // user-chosen value, same dropdown+required-check as MTO/HPS.
+      costingRateMonth = toTrimmedString(line.costing_rate_month) || null;
+      if (!costingRateMonth) throw new Error("SO_LINE_COSTING_RATE_MONTH_REQUIRED");
     } else {
       packQty = parsePositiveNumber(line.pack_qty);
       perPackQty = parsePositiveNumber(line.per_pack_qty);

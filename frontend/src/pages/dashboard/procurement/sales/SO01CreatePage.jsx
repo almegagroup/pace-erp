@@ -81,11 +81,6 @@ function toNumber(value) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
-// §133.8-E — SO Date's own month/year, used as the MTEST auto-value (no dropdown, no manual entry).
-function monthStartFromDate(dateStr) {
-  const value = String(dateStr || "").slice(0, 7);
-  return /^\d{4}-\d{2}$/.test(value) ? `${value}-01` : "";
-}
 function formatMonthLabel(rateMonth) {
   const value = String(rateMonth || "");
   if (!/^\d{4}-\d{2}/.test(value)) return value || "-";
@@ -379,22 +374,15 @@ export default function SO01CreatePage() {
     setLines((current) => current.filter((line) => line.__key !== key));
   }
 
-  // §133.8-E — Costing Rate Month cell, shared by SFG and FG rows. MTEST = SO
-  // Date's own month/year (read-only, no selection). MTS = deferred/spec-only,
-  // PACE isn't dispatching MTS yet — placeholder only, never sent as a real
-  // value. MTO/HPS = dropdown of AC06 months where every item is approved,
-  // plus a fixed "Manual" entry.
+  // §133.8-E — Costing Rate Month cell, shared by SFG and FG rows. MTS =
+  // deferred/spec-only, PACE isn't dispatching MTS yet — placeholder only,
+  // never sent as a real value. MTO/HPS/MTEST = dropdown of AC06 months
+  // where every item is approved, plus a fixed "Manual" entry — user picks.
+  // MTEST corrected 2026-08-28 (business owner): was auto = SO Date's
+  // month/year with no selection; now the same user-chosen dropdown as
+  // MTO/HPS, since relying on pure auto-derivation gave no way to correct
+  // a wrong/approximate SO Date without also changing the SO's own header.
   function costingMonthCell(line, key) {
-    if (line.fg_type === "MTEST") {
-      return (
-        <input
-          value={soDate ? formatMonthLabel(monthStartFromDate(soDate)) : "—"}
-          readOnly
-          className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none"
-          title="Auto = SO Date's month/year"
-        />
-      );
-    }
     if (line.fg_type === "MTS") {
       return (
         <input
@@ -669,7 +657,7 @@ export default function SO01CreatePage() {
       setError("HSN Code is required for an item that has no HSN in Material Master.");
       return;
     }
-    const missingMonthLine = lines.find((line) => line.line_material_type === "FG" && ["MTO", "HPS"].includes(line.fg_type) && !line.costing_rate_month);
+    const missingMonthLine = lines.find((line) => line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type) && !line.costing_rate_month);
     if (missingMonthLine) {
       setError(`Costing Rate Month is required for FG ${missingMonthLine.fg_type}. Select a month before creating the SO.`);
       return;
@@ -712,12 +700,10 @@ export default function SO01CreatePage() {
           batch_number: line.batch_number || null,
           expiry_date: line.expiry_date || null,
           round_off_amount: line.round_off_amount === "" ? 0 : Number(line.round_off_amount),
-          // §133.8-E: MTEST always auto-derives from SO Date (no dropdown to
-          // read from); MTS is deferred/spec-only and must never carry a real
-          // value yet; MTO/HPS send whatever the dropdown/Manual holds.
-          costing_rate_month: line.fg_type === "MTEST"
-            ? monthStartFromDate(soDate)
-            : line.fg_type === "MTS" ? null : (line.costing_rate_month || null),
+          // §133.8-E: MTS is deferred/spec-only and must never carry a real
+          // value yet; MTO/HPS/MTEST send whatever the dropdown/Manual holds
+          // (MTEST corrected 2026-08-28 — user-chosen now, not auto-derived).
+          costing_rate_month: line.fg_type === "MTS" ? null : (line.costing_rate_month || null),
           remarks: line.remarks || null,
         })),
       });
@@ -733,7 +719,7 @@ export default function SO01CreatePage() {
   const companyOptions = availableCompanies.map((entry) => ({ value: entry.id, label: entry.company_name || entry.company_code || entry.id }));
   const parentCompanyOptions = parentCompanies.map((entry) => ({ value: entry.id, label: entry.company_name }));
   const depotCodeOptions = depotCodes.map((entry) => ({ value: entry.id, label: `${entry.code || ""} — ${entry.description || ""}`.trim() }));
-  const missingFgCostingRateMonth = lines.some((line) => line.line_material_type === "FG" && ["MTO", "HPS"].includes(line.fg_type) && !line.costing_rate_month);
+  const missingFgCostingRateMonth = lines.some((line) => line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type) && !line.costing_rate_month);
 
   return (
     <ErpScreenScaffold
@@ -747,7 +733,7 @@ export default function SO01CreatePage() {
       ]}
       notices={[
         ...(error ? [{ key: "so01-error", tone: "error", message: error }] : []),
-        ...(missingFgCostingRateMonth ? [{ key: "so01-fg-month-required", tone: "warning", message: "Create SO is unavailable: select Costing Rate Month for every FG MTO/HPS line." }] : []),
+        ...(missingFgCostingRateMonth ? [{ key: "so01-fg-month-required", tone: "warning", message: "Create SO is unavailable: select Costing Rate Month for every FG MTO/HPS/MTEST line." }] : []),
         ...(notice ? [{ key: "so01-notice", tone: "success", message: notice }] : []),
       ]}
     >

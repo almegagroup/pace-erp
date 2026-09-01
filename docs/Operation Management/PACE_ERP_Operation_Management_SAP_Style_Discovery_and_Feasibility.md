@@ -21675,8 +21675,8 @@ Item Type (auto, uneditable) → Item (উপরের filter অনুযায
 **FG — MTO / HPS / MTS মোড (✅ LOCKED, prod data দিয়ে verified — §133.8-এর নিচে দ্রষ্টব্য):**
 Item Type (auto "FG") → FG Type (MTO/HPS/MTEST/MTS) → SKU (উপরের filter) → Document Name (Material Master থেকে auto, manual SKU হলে manual) → **HSN Code** → Pack UoM (SKU-র pack_code থেকে auto-resolve, read-only) → Pack Qty (manual entry) → Per Pack in KG (SKU-র `material_uom_conversion`-এ fixed factor থাকলে auto/read-only; `variable_conversion=true` হলে manual entry) → Base UoM Qty (auto-derive = Pack Qty × Per Pack) → Rate → Rate Basis dropdown (Pack UoM / Base UoM) → Currency → GST Exclusive default → GST % → Amount → CGST | SGST | IGST → Total Value → **Costing Rate Month/Year** (dropdown — AC06-এ যে যে month-এ সব item-এর rate approved হয়ে গেছে, শুধু সেগুলো, **+ একটা অতিরিক্ত fixed entry "Manual"** — এই "Manual"-এর নিজস্ব ব্যবহার আছে, পরে বিস্তারিত আসবে)
 
-**FG — MTEST মোড (✅ LOCKED):**
-Item Type → FG Type ("MTEST") → SKU → Document Name → HSN Code → Pack UoM (auto **BBL**, fixed) → Pack Qty (**uneditable**, নিজে থেকে বসে না) → Per Pack (auto, SKU-র fixed conversion থেকে) → Base UoM (read-only, KG) → **Base Qty** (**এখানেই user quantity বসায়**, এখান থেকে Pack Qty উল্টো দিকে derive হয়: Base Qty ÷ Per Pack) → Rate → **Rate Type** dropdown (**Fixed** [default] / Pack UoM / Base UoM — Fixed মানে entered Rate-ই সরাসরি flat Amount, qty দিয়ে multiply হয় না) → Currency → GST % → Amount → CGST | SGST | IGST → Total Value → **Costing Rate Month/Year** (auto = SO Date-এর month/year, dropdown/selection লাগে না)
+**FG — MTEST মোড (✅ LOCKED, Costing Rate Month সংশোধিত 2026-08-28):**
+Item Type → FG Type ("MTEST") → SKU → Document Name → HSN Code → Pack UoM (auto **BBL**, fixed) → Pack Qty (**uneditable**, নিজে থেকে বসে না) → Per Pack (auto, SKU-র fixed conversion থেকে) → Base UoM (read-only, KG) → **Base Qty** (**এখানেই user quantity বসায়**, এখান থেকে Pack Qty উল্টো দিকে derive হয়: Base Qty ÷ Per Pack) → Rate → **Rate Type** dropdown (**Fixed** [default] / Pack UoM / Base UoM — Fixed মানে entered Rate-ই সরাসরি flat Amount, qty দিয়ে multiply হয় না) → Currency → GST % → Amount → CGST | SGST | IGST → Total Value → **Costing Rate Month/Year** — ~~auto = SO Date-এর month/year, dropdown/selection লাগে না~~ **সংশোধিত: MTO/HPS-এর মতোই user-chosen dropdown (AC06 approved months + "Manual")**, auto-derive সরানো হয়েছে — pure auto-derivation-এ ভুল/আনুমানিক SO Date হলে সংশোধনের কোনো উপায় ছিল না SO-র নিজের header না বদলে। §133.19 দেখো।
 
 **FG — MTS মোড:** MTO/HPS-এর কাঠামোই (Per Pack সবসময় auto/fixed, কখনো manual লাগে না)। **Costing Rate Month/Year এখনো deferred/spec-only** — AC05 বর্তমানে monthly (`mts_sku_monthly_rate`), September 2026-এ quarterly-তে redesign হবে; তখন AC05-এর approved-quarter dropdown এই column-এ বসবে। PACE এখনো MTS dispatch করছে না, তাই এখন শুধু জায়গা রাখা হচ্ছে, implement করা হবে না।
 
@@ -22463,7 +22463,7 @@ special ripple-recalculation লাগে না।
 | Dispatch Category | Posting Date/Time resolution |
 |---|---|
 | **RPS** | সরাসরি **Tally Invoice Date** |
-| **MTEST** | **28–31 August-এর মধ্যে random date** (কোনো নির্দিষ্ট reference date নেই বলে) |
+| **MTEST** | ~~28–31 August-এর মধ্যে random date~~ **সংশোধিত 2026-08-28: সেই SO-র নিজের manually-entered SO Date সরাসরি** — কারণ random date-এ একটা সত্যিকারের 1 September-এর real dispatch-ও ভুল করে আগস্টের এলোমেলো তারিখ পেয়ে যেত (business owner ধরেছেন)। SO Date-ই এখন real, user-owned reference — real September dispatch-এর SO-ও September-এই dated থাকবে, তাই এখন আর কোনো ভুল date বসবে না। §133.19 দেখো। |
 | **MTO/HPS** | সেই dispatch-এর Packing PO-র **Final timestamp + 10 মিনিট** (নিশ্চিত করে dispatch/issue posting সবসময় production/receipt posting-এর পরে বসে) — **ব্যতিক্রম:** Packing PO Final date 30 বা 31 August হলে, posting time জোর করে **31 August রাত 11:00PM–11:50PM**-এর মধ্যে নেওয়া হবে |
 
 **Phase 2 — 8 September থেকে 15 September 2026:** স্বাভাবিক real-time posting আশা করা হয়, কিন্তু
@@ -22708,3 +22708,47 @@ md5 `c6b302b25c4908d5e5b10940548519fa`). **Not yet done:** live click-through in
 Sales-chain work) and a Dispatch-Reco report/query UI (this table is write-only for now, exactly
 as this section's own original text said it would be — a separate future ask, not part of what was
 requested in this round).
+
+### 133.19 — MTEST corrections: Backfill posting-date + Costing Rate Month (✅ LOCKED + IMPLEMENTED — 2026-08-28)
+
+Business owner caught a real bug in §133.16-B while it was being explained: MTEST's backfill
+posting-date rule (random day in 28-31 August, unconditional) would mis-date a **genuine, real-time
+MTEST dispatch** too — a real 1 September MTEST dispatch entered on 1 September would still land
+on some random August date, since the rule never checked whether the dispatch was actually part of
+the August backlog or a brand-new event. Two changes, both implemented same session:
+
+**1. Backfill posting-date (`_shared/dispatchBackfillPosting.ts`) — MTEST now uses the SO's own
+`so_date` directly**, not a random day. `BackfillClassification` gained a `mtestSoDate: string | null`
+field; `do_unified.handlers.ts`'s backfill block passes `group.document_date` (already the SO's
+`so_date` for a SALES_ORDER-sourced invoice group, verified against `computeInvoiceGroups()`'s own
+line `documentDate = soRow?.so_date`) straight through. `resolveMtestPostingDate()`/`randomInt()`/
+the `MTEST_RANDOM_WINDOW_*` constants are deleted — dead code, no longer reachable. A real September
+dispatch's SO is dated in September, so it resolves correctly; a genuine August backlog entry's SO
+is dated in August (by the person doing the backfill), so it also resolves correctly. No special
+validation was added tying SO Date to the underlying batch's own production date — this mirrors the
+same trust-the-user's-entered-date pattern RPS already has for Tally Invoice Date, not a new class
+of risk.
+
+**2. Costing Rate Month (SO01 MTEST FG line) — now a user-chosen dropdown, not auto-derived.**
+§133.8-E originally locked MTEST's Costing Rate Month as "auto = SO Date's month/year, no
+selection needed" — this meant a wrong/approximate SO Date on a backfill entry could never be
+corrected without also changing the SO's own header date. Business owner's fix: apply the exact
+same mechanism MTO/HPS already has — a dropdown of AC06 months where every line is VERIFIED, plus a
+fixed "Manual" entry, user picks explicitly. Real backend gap found while making this change:
+`prepareUnifiedSoLine()` in `sales_order.handlers.ts` **hardcoded `costingRateMonth = null` for
+every MTEST line**, discarding whatever value the frontend sent — even if the frontend had already
+been sending a real value, the backend would have silently thrown it away. Fixed: MTEST now runs
+the identical `costingRateMonth = toTrimmedString(line.costing_rate_month) || null` +
+`SO_LINE_COSTING_RATE_MONTH_REQUIRED` guard MTO/HPS already had, inside the same shared
+`prepareUnifiedSoLine()` (used by both Create and Edit — no separate fix needed for Edit).
+Frontend (`SO01CreatePage.jsx`): `costingMonthCell()`'s MTEST-specific read-only branch removed
+(MTEST now falls through to the same dropdown branch as MTO/HPS); the now-dead
+`monthStartFromDate()` helper deleted; `missingMonthLine`/`missingFgCostingRateMonth` validation
+and the submit payload's `costing_rate_month` derivation all extended from `["MTO","HPS"]` to
+`["MTO","HPS","MTEST"]`.
+
+**Verified:** `deno check` on `dispatchBackfillPosting.ts`/`do_unified.handlers.ts`/
+`sales_order.handlers.ts` — zero new errors (same pre-existing `.range()`/`.gt()` baseline noise).
+`eslint` clean on `SO01CreatePage.jsx`. All 10 CI guards (`stock-posting`, `company-scope` ×2,
+`hardcoded-role-check`, `wrong-company-source`, `route-acl-registry`, `approver-chain`,
+`resource-code-domain`, `frontend-payload`, `jsx-no-undef`) exit 0.
