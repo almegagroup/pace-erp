@@ -601,6 +601,13 @@ async function validateAndUpsertAllocation(
     allocated_qty: qty,
     status: "ACTIVE",
     created_by: ctx.auth_user_id,
+    // sales_order_map_allocation.sku_mismatch_confirmed is NOT NULL — the
+    // mismatch branch below overrides this to true when it applies; every
+    // normal (non-mismatched) line needs an explicit false here, otherwise
+    // this key is simply absent and both the direct insert below and the
+    // grouped/atomic RPC's jsonb_to_recordset produce a real NULL, violating
+    // the NOT NULL constraint (found live 2026-09-01).
+    sku_mismatch_confirmed: false,
   };
   if (toTrimmedString(body.map_group_id)) insertPayload.map_group_id = toTrimmedString(body.map_group_id);
 
