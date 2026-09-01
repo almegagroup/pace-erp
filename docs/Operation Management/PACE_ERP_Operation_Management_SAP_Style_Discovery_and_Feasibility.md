@@ -21621,11 +21621,11 @@ generate হয় না — এটাই **Dependent (No Inbound)**, নিচ
 
 | Dispatch Type | Selection flow | Bill-To | Ship-To |
 |---|---|---|---|
-| **Dependent (Direct)** | Parent Company select → সেই Parent Company-র under-এ VDC list (side drawer) → VDC select | Parent Company (এখনই resolve) | **পরে, আলাদা page-এ** নির্দিষ্ট Party select হলে সেটাই Ship-To (§133.5-এর VDC-first, Party-later insight-এর সাথে সঙ্গতিপূর্ণ) |
+| **Dependent (Direct)** | Parent Company select → সেই Parent Company-র under-এ VDC list (side drawer) → VDC select | ~~Parent Company (এখনই resolve)~~ **সংশোধিত §133.20 (2026-09-01): user-choice "Bill-To Party? Parent Company / VDC"** — VDC বাছলে VDC-র নিজের External Code (নাম) + VDC-র নিজের address; Parent Company বাছলে আগের behavior | **পরে, আলাদা page-এ** নির্দিষ্ট Party select হলে সেটাই Ship-To (§133.5-এর VDC-first, Party-later insight-এর সাথে সঙ্গতিপূর্ণ) |
 | **Dependent (Depot)** | Parent Company select → তার under-এ Depot list (side drawer) → Depot select | Depot-এর নিজের GST/Address | Depot-এর নিজের GST/Address (Bill-To = Ship-To, দুটোই Depot) |
 | **Independent Party** | Independent Customer list থেকে সরাসরি select, সব details চলে আসে | Customer-এর নিজের details | Default = Bill-To-র same (checkbox "Ship To same as Bill To", default checked)। Uncheck করলে Page 2-এই manual Ship-To Name → Address → State — এটা Customer Master-এ যায় না, শুধু সেই SO-তে manually বসে থাকে (record থাকে, master-এ save হয় না) |
-| **Independent Party (Asian-billed)** | Independent Customer list থেকে select। System customer-এর নিজের state দেখে সেই state-এর Asian Parent Company auto-resolve করে (না থাকলে error — "নেই, create করতে হবে")। তারপর প্রশ্ন: "Billing address to Depot?" (Yes/No) | Yes হলে সেই Parent Company-র under-এর Depot select করে তার address/GST; No হলে সরাসরি Parent Company-র address/GST | সবসময় সেই selected Independent Customer |
-| **Dependent (No Inbound)** | Parent Company select → তারপর sub-choice **Depot** না **Direct**। **Depot** হলে Depot Code drawer থেকে select। **Direct** হলে সেই Parent Company-র under-এর VDC select | **Depot** sub-case: Depot-এর নিজের address (Bill-To=Ship-To, Dependent(Depot)-এর মতোই)। **Direct** sub-case: Parent Company-র address | **Depot** sub-case: Depot-এর নিজের address। **Direct** sub-case: **সবসময় পরে, আলাদা page-এ** — VDC শুধু intermediate ধাপ, actual destination address পরের step-এ decide হয় (regular Dependent(Direct)-এর সাথে সঙ্গতিপূর্ণ) |
+| **Independent Party (Asian-billed)** | Independent Customer list থেকে select। System customer-এর নিজের state দেখে সেই state-এর Asian Parent Company auto-resolve করে (না থাকলে error — "নেই, create করতে হবে")। তারপর ~~প্রশ্ন: "Billing address to Depot?" (Yes/No)~~ **সংশোধিত §133.20: "VDC / DC / No" ৩-way choice** সেই Parent Company-র under-এর সব VDC/DC থেকে | **DC** বাছলে DC-র নিজের address/GST (Dependent(Depot)-এর একই resolution)। **No** বাছলে সরাসরি Parent Company-র address/GST। **VDC** বাছলে আবার Dependent(Direct)-এর একই "Bill-To Party: Parent Company/VDC" sub-choice — সেই অনুযায়ী resolve | সবসময় সেই selected Independent Customer (অপরিবর্তিত — Bill-To choice এটাকে touch করে না) |
+| **Dependent (No Inbound)** | Parent Company select → তারপর sub-choice **Depot** না **Direct**। **Depot** হলে Depot Code drawer থেকে select। **Direct** হলে সেই Parent Company-র under-এর VDC select | **Depot** sub-case: Depot-এর নিজের address (Bill-To=Ship-To, Dependent(Depot)-এর মতোই), অপরিবর্তিত। **Direct** sub-case: ~~Parent Company-র address~~ **সংশোধিত §133.20: Dependent(Direct)-এর একই "Bill-To Party" choice প্রযোজ্য** | **Depot** sub-case: Depot-এর নিজের address। **Direct** sub-case: **সবসময় পরে, আলাদা page-এ** — VDC শুধু intermediate ধাপ, actual destination address পরের step-এ decide হয় (regular Dependent(Direct)-এর সাথে সঙ্গতিপূর্ণ) |
 
 #### C. Payment Terms
 Dropdown — সরাসরি Payment Terms Master থেকে list আসবে।
@@ -21675,8 +21675,8 @@ Item Type (auto, uneditable) → Item (উপরের filter অনুযায
 **FG — MTO / HPS / MTS মোড (✅ LOCKED, prod data দিয়ে verified — §133.8-এর নিচে দ্রষ্টব্য):**
 Item Type (auto "FG") → FG Type (MTO/HPS/MTEST/MTS) → SKU (উপরের filter) → Document Name (Material Master থেকে auto, manual SKU হলে manual) → **HSN Code** → Pack UoM (SKU-র pack_code থেকে auto-resolve, read-only) → Pack Qty (manual entry) → Per Pack in KG (SKU-র `material_uom_conversion`-এ fixed factor থাকলে auto/read-only; `variable_conversion=true` হলে manual entry) → Base UoM Qty (auto-derive = Pack Qty × Per Pack) → Rate → Rate Basis dropdown (Pack UoM / Base UoM) → Currency → GST Exclusive default → GST % → Amount → CGST | SGST | IGST → Total Value → **Costing Rate Month/Year** (dropdown — AC06-এ যে যে month-এ সব item-এর rate approved হয়ে গেছে, শুধু সেগুলো, **+ একটা অতিরিক্ত fixed entry "Manual"** — এই "Manual"-এর নিজস্ব ব্যবহার আছে, পরে বিস্তারিত আসবে)
 
-**FG — MTEST মোড (✅ LOCKED):**
-Item Type → FG Type ("MTEST") → SKU → Document Name → HSN Code → Pack UoM (auto **BBL**, fixed) → Pack Qty (**uneditable**, নিজে থেকে বসে না) → Per Pack (auto, SKU-র fixed conversion থেকে) → Base UoM (read-only, KG) → **Base Qty** (**এখানেই user quantity বসায়**, এখান থেকে Pack Qty উল্টো দিকে derive হয়: Base Qty ÷ Per Pack) → Rate → **Rate Type** dropdown (**Fixed** [default] / Pack UoM / Base UoM — Fixed মানে entered Rate-ই সরাসরি flat Amount, qty দিয়ে multiply হয় না) → Currency → GST % → Amount → CGST | SGST | IGST → Total Value → **Costing Rate Month/Year** (auto = SO Date-এর month/year, dropdown/selection লাগে না)
+**FG — MTEST মোড (✅ LOCKED, Costing Rate Month সংশোধিত 2026-08-28):**
+Item Type → FG Type ("MTEST") → SKU → Document Name → HSN Code → Pack UoM (auto **BBL**, fixed) → Pack Qty (**uneditable**, নিজে থেকে বসে না) → Per Pack (auto, SKU-র fixed conversion থেকে) → Base UoM (read-only, KG) → **Base Qty** (**এখানেই user quantity বসায়**, এখান থেকে Pack Qty উল্টো দিকে derive হয়: Base Qty ÷ Per Pack) → Rate → **Rate Type** dropdown (**Fixed** [default] / Pack UoM / Base UoM — Fixed মানে entered Rate-ই সরাসরি flat Amount, qty দিয়ে multiply হয় না) → Currency → GST % → Amount → CGST | SGST | IGST → Total Value → **Costing Rate Month/Year** — ~~auto = SO Date-এর month/year, dropdown/selection লাগে না~~ **সংশোধিত: MTO/HPS-এর মতোই user-chosen dropdown (AC06 approved months + "Manual")**, auto-derive সরানো হয়েছে — pure auto-derivation-এ ভুল/আনুমানিক SO Date হলে সংশোধনের কোনো উপায় ছিল না SO-র নিজের header না বদলে। §133.19 দেখো।
 
 **FG — MTS মোড:** MTO/HPS-এর কাঠামোই (Per Pack সবসময় auto/fixed, কখনো manual লাগে না)। **Costing Rate Month/Year এখনো deferred/spec-only** — AC05 বর্তমানে monthly (`mts_sku_monthly_rate`), September 2026-এ quarterly-তে redesign হবে; তখন AC05-এর approved-quarter dropdown এই column-এ বসবে। PACE এখনো MTS dispatch করছে না, তাই এখন শুধু জায়গা রাখা হচ্ছে, implement করা হবে না।
 
@@ -22463,7 +22463,7 @@ special ripple-recalculation লাগে না।
 | Dispatch Category | Posting Date/Time resolution |
 |---|---|
 | **RPS** | সরাসরি **Tally Invoice Date** |
-| **MTEST** | **28–31 August-এর মধ্যে random date** (কোনো নির্দিষ্ট reference date নেই বলে) |
+| **MTEST** | ~~28–31 August-এর মধ্যে random date~~ **সংশোধিত 2026-08-28: সেই SO-র নিজের manually-entered SO Date সরাসরি** — কারণ random date-এ একটা সত্যিকারের 1 September-এর real dispatch-ও ভুল করে আগস্টের এলোমেলো তারিখ পেয়ে যেত (business owner ধরেছেন)। SO Date-ই এখন real, user-owned reference — real September dispatch-এর SO-ও September-এই dated থাকবে, তাই এখন আর কোনো ভুল date বসবে না। §133.19 দেখো। |
 | **MTO/HPS** | সেই dispatch-এর Packing PO-র **Final timestamp + 10 মিনিট** (নিশ্চিত করে dispatch/issue posting সবসময় production/receipt posting-এর পরে বসে) — **ব্যতিক্রম:** Packing PO Final date 30 বা 31 August হলে, posting time জোর করে **31 August রাত 11:00PM–11:50PM**-এর মধ্যে নেওয়া হবে |
 
 **Phase 2 — 8 September থেকে 15 September 2026:** স্বাভাবিক real-time posting আশা করা হয়, কিন্তু
@@ -22708,3 +22708,205 @@ md5 `c6b302b25c4908d5e5b10940548519fa`). **Not yet done:** live click-through in
 Sales-chain work) and a Dispatch-Reco report/query UI (this table is write-only for now, exactly
 as this section's own original text said it would be — a separate future ask, not part of what was
 requested in this round).
+
+### 133.19 — MTEST corrections: Backfill posting-date + Costing Rate Month (✅ LOCKED + IMPLEMENTED — 2026-08-28)
+
+Business owner caught a real bug in §133.16-B while it was being explained: MTEST's backfill
+posting-date rule (random day in 28-31 August, unconditional) would mis-date a **genuine, real-time
+MTEST dispatch** too — a real 1 September MTEST dispatch entered on 1 September would still land
+on some random August date, since the rule never checked whether the dispatch was actually part of
+the August backlog or a brand-new event. Two changes, both implemented same session:
+
+**1. Backfill posting-date (`_shared/dispatchBackfillPosting.ts`) — MTEST now uses the SO's own
+`so_date` directly**, not a random day. `BackfillClassification` gained a `mtestSoDate: string | null`
+field; `do_unified.handlers.ts`'s backfill block passes `group.document_date` (already the SO's
+`so_date` for a SALES_ORDER-sourced invoice group, verified against `computeInvoiceGroups()`'s own
+line `documentDate = soRow?.so_date`) straight through. `resolveMtestPostingDate()`/`randomInt()`/
+the `MTEST_RANDOM_WINDOW_*` constants are deleted — dead code, no longer reachable. A real September
+dispatch's SO is dated in September, so it resolves correctly; a genuine August backlog entry's SO
+is dated in August (by the person doing the backfill), so it also resolves correctly. No special
+validation was added tying SO Date to the underlying batch's own production date — this mirrors the
+same trust-the-user's-entered-date pattern RPS already has for Tally Invoice Date, not a new class
+of risk.
+
+**2. Costing Rate Month (SO01 MTEST FG line) — now a user-chosen dropdown, not auto-derived.**
+§133.8-E originally locked MTEST's Costing Rate Month as "auto = SO Date's month/year, no
+selection needed" — this meant a wrong/approximate SO Date on a backfill entry could never be
+corrected without also changing the SO's own header date. Business owner's fix: apply the exact
+same mechanism MTO/HPS already has — a dropdown of AC06 months where every line is VERIFIED, plus a
+fixed "Manual" entry, user picks explicitly. Real backend gap found while making this change:
+`prepareUnifiedSoLine()` in `sales_order.handlers.ts` **hardcoded `costingRateMonth = null` for
+every MTEST line**, discarding whatever value the frontend sent — even if the frontend had already
+been sending a real value, the backend would have silently thrown it away. Fixed: MTEST now runs
+the identical `costingRateMonth = toTrimmedString(line.costing_rate_month) || null` +
+`SO_LINE_COSTING_RATE_MONTH_REQUIRED` guard MTO/HPS already had, inside the same shared
+`prepareUnifiedSoLine()` (used by both Create and Edit — no separate fix needed for Edit).
+Frontend (`SO01CreatePage.jsx`): `costingMonthCell()`'s MTEST-specific read-only branch removed
+(MTEST now falls through to the same dropdown branch as MTO/HPS); the now-dead
+`monthStartFromDate()` helper deleted; `missingMonthLine`/`missingFgCostingRateMonth` validation
+and the submit payload's `costing_rate_month` derivation all extended from `["MTO","HPS"]` to
+`["MTO","HPS","MTEST"]`.
+
+**Verified:** `deno check` on `dispatchBackfillPosting.ts`/`do_unified.handlers.ts`/
+`sales_order.handlers.ts` — zero new errors (same pre-existing `.range()`/`.gt()` baseline noise).
+`eslint` clean on `SO01CreatePage.jsx`. All 10 CI guards (`stock-posting`, `company-scope` ×2,
+`hardcoded-role-check`, `wrong-company-source`, `route-acl-registry`, `approver-chain`,
+`resource-code-domain`, `frontend-payload`, `jsx-no-undef`) exit 0.
+
+### 133.20 — VDC gets its own address; Bill-To Party choice (Parent Company/VDC); Independent Party (Asian-billed) restructured to VDC/DC/No (✅ LOCKED + IMPLEMENTED — 2026-09-01)
+
+Business owner-directed change to Dependent(Direct)'s Bill-To resolution — previously it was
+**always** the Parent Company, no choice. A VDC's own identity (its External Code) needed to be
+usable as the real Bill-To in its own right.
+
+**1. VDC now carries its own address (`erp_master.fg_depot_code`, `dispatch_type='DIRECT'`).**
+Previously a DB trigger (`validate_fg_depot_code_row()`) **forbade** a DIRECT row from carrying
+`address_line`/`state`/`pin_code` at all (`MM05_DIRECT_DEPOT_INLINE_ADDRESS_FORBIDDEN`) — a VDC
+only ever inherited the Parent Company's state, no separate identity. **Business owner confirmed
+both:** address is now **mandatory** for VDC (same as DC) and VDC's **state must match its Parent
+Company's state** (same as DC) — no new relaxed rule, VDC and DC now share one identical
+validation path. Migration `20260901110000_vdc_own_address_bill_to_choice.sql` rewrites the
+trigger to drop the DEPOT-vs-DIRECT branching entirely (both types validated identically) and
+widens `sales_order.bill_to_type`'s CHECK constraint to add `'VDC'` alongside the existing
+`PARENT_COMPANY`/`DEPOT`/`CUSTOMER` values. Applied to dev, migration-integrity reconciled
+(`in_sync=true`, 518 files).
+
+**2. "External VDC Code" (`fg_depot_code.code`) is the field that becomes Bill-To Party Name**
+when VDC is chosen — already existed in the UI as "External VDC/DC Code", nothing new to build
+there, just newly load-bearing.
+
+**Backend (`fg_parent_company.handlers.ts`):** `createOrGetDepotCodeHandler`/`updateDepotCodeHandler`
+no longer force-null `address_line`/`state`/`pin_code` for DIRECT rows — both handlers now store
+whatever the caller sends, for both dispatch types uniformly. The now-unreachable
+`MM05_DIRECT_DEPOT_INLINE_ADDRESS_FORBIDDEN` error-code handling removed (dead code, the trigger
+can never raise it again).
+
+**Frontend (`VdcParentCompanyMasterPage.jsx`, MM04's VDC/DC tab):** the DEPOT-only address block
+(State/Address/Pin/GST-check-with-auto-fill) is now shown identically for both DIRECT and DEPOT —
+removed the old "a VDC has no separate address of its own" branch and its dispatch-type-switch
+field-clearing side effect (no longer needed once both types share the same fields). The list
+grid's State column falls back to the Parent Company's state for pre-existing VDC rows that
+haven't been edited since this change (their own `state` is still NULL until then).
+
+**3-5. SO01 Page 2 — new "Bill-To Party?" choice for Dependent(Direct)** (`sales_order.handlers.ts`'s
+`resolveBillToShipTo()`, `DEPENDENT_DIRECT` branch): after Parent Company + VDC are selected, a new
+required `bill_to_party` choice (`PARENT_COMPANY` | `VDC`, `BILL_TO_PARTY_CHOICES` Set) resolves
+Bill-To Name/Address/State/GST — VDC choice uses the VDC's own `code`/`address_line`/`state`/
+`gst_number`; Parent Company choice is the original, unchanged behavior. `billToVdcId` is always
+set to the selected VDC regardless of which is chosen as Bill-To (still needed for SO Map's own
+VDC-linkage, a separate concern from Bill-To identity). New `bill_to_type` value `'VDC'` stored
+when applicable.
+
+**6. Independent Party (Asian-billed) restructured** — the old "Billing address to Depot? Yes/No"
+(routed through a `customer_address.depot_code_id` mapping via `bill_to_customer_address_id`) is
+**replaced entirely** with an explicit 3-way choice under the resolved Asian Parent Company:
+**VDC** / **DC** / **No** (`ASIAN_BILLED_CHOICES` Set, new `asian_billed_choice` + conditional
+`asian_billed_vdc_dc_id` inputs). `NONE` → Bill-To = Parent Company directly (same resolution as
+Dependent(Direct)'s Parent Company branch). `DC` → Bill-To = that specific Depot's own name
+(`description`)/address (same resolution as Dependent(Depot)). `VDC` → validates the picked row is
+actually `dispatch_type='DIRECT'` under that parent, then applies the **same** `bill_to_party`
+sub-choice as point 3-5 (Parent Company vs this specific VDC). Ship-To is untouched throughout —
+always the selected Independent Customer's own address, per the pre-existing locked rule; the old
+`bill_to_customer_address_id`/`fetchResolvedCustomerAddress()`-for-Bill-To mechanism is fully
+retired for this dispatch type (still used for Ship-To resolution, unchanged).
+
+**7. Dependent (No Inbound) — Direct sub-case inherits automatically, no separate code.**
+`resolveBillToShipTo()` already collapses `DEPENDENT_NO_INBOUND`'s `Direct` sub-type into the same
+`DEPENDENT_DIRECT` branch (pre-existing `effectiveType` resolution) — so once that branch requires
+`bill_to_party`, both real Dependent(Direct) SOs and No-Inbound-Direct SOs get the new choice
+automatically. Depot sub-case is untouched (delegates to `DEPENDENT_DEPOT`, unaffected by this
+change).
+
+**Frontend (`SO01CreatePage.jsx`):** new shared `billToPartyToggle()` (two-button Parent
+Company/VDC choice, mirrors the existing IBN Yes/No and Direct/Depot sub-type button patterns) —
+rendered in the Dependent(Direct) block, the No-Inbound block (only when `noInboundSubType ===
+"DIRECT"`), and the Asian-billed block (only when its own VDC/DC choice resolves to `VDC`). The
+`depotCodes` fetch effect now fetches both VDC and DC (no `dispatch_type` filter) specifically for
+Asian-billed, since the user picks between them; a new `asianBilledVdcDcOptions` filters that
+combined list client-side by whichever sub-choice is active. The old `billToCustomerAddressId`
+state + its `listSalesOrderAddressOptions({parent_company_id})` query are removed entirely
+(replaced by the VDC/DC dropdown + `fetchDepotCode()` resolution server-side).
+
+**Verified:** `deno check` on `sales_order.handlers.ts`/`fg_parent_company.handlers.ts` — zero new
+errors (same 2 pre-existing `.range()` baseline). `eslint` clean on `SO01CreatePage.jsx`/
+`VdcParentCompanyMasterPage.jsx`. All 10 CI guards exit 0. Migration applied to dev only —
+**prod deploy still needs the same migration run** (pure schema change, travels with the next
+`supabase db push`/PR merge per CLAUDE.md §8A's MCP-vs-migration rule, no separate MCP data step
+needed here since this is DDL, not business/ACL data).
+
+### 133.21 — Same-day follow-ups: MM04/VDC search, DO source-picker + Ship-To fix, SO01 declared Stroke Number (✅ LOCKED + IMPLEMENTED — 2026-09-01)
+
+**A. MM04/VDC Master search + autosuggest.** With VDC now carrying a real address (§133.20),
+volume is expected to grow past a plain scroll list. Added a client-side search box above both
+grids (Parent Company: name/state/GST; VDC/DC: code/description/state/Parent Company name),
+`virtualize` on the Parent Company grid to match VDC/DC's. Both "Parent Company" pickers used when
+creating/remapping a VDC/DC (previously plain `<select>`) replaced with `ErpComboboxField` (the
+same type-to-filter combobox primitive SO01 already uses everywhere) — no backend change needed,
+purely a frontend list-scaling fix.
+
+**B. DO create's "Add SO" picker showed fully-dispatched SOs.** `listDOSourceDocumentsHandler`'s
+own docstring always said "still have at least one unlocked line", but the actual query only ever
+filtered `status IN (CREATED, ISSUED)` — a SO whose every line was already fully drawn into
+non-cancelled DOs stays CREATED/ISSUED until someone runs an explicit SO Close (§133.10), so it
+kept appearing in the picker with nothing left to add. Fixed: after the status filter, sums each
+candidate SO's `sales_order_line.base_qty` against drawn quantity from
+`delivery_challan_line.so_line_id` (confirmed via `do_unified.handlers.ts`'s own `soLineId`
+derivation that every dc_line carries `so_line_id` regardless of source path — direct or via
+`so_map_allocation_id` — so one column check covers every dispatch type uniformly), excludes SOs
+with nothing remaining. Scoped to SALES_ORDER only (not STO) — not reported, not touched.
+
+**C. DO List never showed Ship-To Party name.** `listDeliveryOrdersHandler` already computed a
+correct `ship_to_display` per DO (from each line's own frozen `ship_to_name`/`ship_to_address`/
+`ship_to_state`, resolved via FO/customer-address at DO-create time — verified via
+`freezeDoSalesShipTo()`) — it was simply never rendered in `DOListPage.jsx`'s grid. Added a
+"Ship-To" column; renamed the existing ambiguous "Customer" column (which mixes `customer_id` and
+Bill-To fallback) to "Bill-To" so the two sit side by side with clear meaning.
+
+**D. SO01 — new "Stroke Number" field on MTO/HPS FG lines (manual, informational, red-dot check).**
+Business rationale: Asian Paints sometimes references an Item+Stroke combination PACE hasn't
+created yet, discovered only later at reconciliation. The real production chain (FO → Batch →
+Process PO) already carries a real Stroke, but only once production exists — this field captures
+what Asian *declared* at SO time, independent of that, for Reco to compare against later. Never
+required, never blocks Create SO or dispatch (business owner's explicit instruction) — MTEST is
+exempt (its batch's own formulation already carries everywhere it's needed); MTS is out of scope
+(not yet dispatching).
+
+- **Schema:** `sales_order_line.declared_stroke_number` (text, nullable). Migration
+  `20260901120000_so01_declared_stroke_number.sql`, applied to dev, integrity reconciled
+  (`in_sync=true`, 519 files), `NOTIFY pgrst, 'reload schema'` run.
+- **Prodshade derivation — reuses the existing SKU→Prodshade mechanism, no new logic.**
+  `listSalesOrderFgSkuOptionsHandler` already computed each SKU's derived `prodshade_material_id`
+  internally (via `prodshade_pack_config`, for its own stroke-eligibility filter) but never
+  returned it — now included in the response, free for the frontend to use.
+- **New Sales-owned endpoint, deliberately not reusing the two existing Production ones.**
+  `GET /api/procurement/sales-orders/stroke-check-options?company_id=` (new
+  `listSalesOrderStrokeCheckOptionsHandler`) returns every APPROVED MTO/HPS
+  `{prodshade_material_id, po_type, stroke_number}` for the company, once. Both
+  `plan_feed.handlers.ts`'s `listStrokeOptionsHandler` and `stroke_master.handlers.ts`'s
+  `listStrokeMastersHandler` already do something close to this, but both are gated by Production
+  ACL resources (`PROD_PLAN_FEED` / `PROD_STROKE_MASTER`) — SO01's own Accounts role has no reason
+  to hold either, and granting it would be a cross-module ACL leak for a read-only reference
+  lookup. New route registered under the page's own `PROC_SO_CREATE` resource instead. Frontend
+  fetches this once per company (small reference set, `staleTime` cached — same pattern as this
+  page's own AC06-approved-months fetch), builds a `Set` client-side, and checks
+  `${prodshade_material_id}|${fg_type}|${declared_stroke_number}` per line live — no per-keystroke
+  round trip.
+- **Red-dot logic:** red when the line has no real `material_id` (manual/unresolved SKU — can
+  never derive a Prodshade at all), when the SKU's own derived Prodshade doesn't resolve, or when
+  no APPROVED `stroke_master` row matches `(that Prodshade, this exact typed Stroke Number, this
+  line's own fg_type)`. Green otherwise. Field renders for every MTO/HPS FG line regardless of
+  whether the SKU came from the dropdown or manual entry (business owner's explicit choice — a
+  real, dropdown-picked SKU can still carry an Asian-declared Stroke that turns out wrong).
+- **Backend write:** `prepareUnifiedSoLine()` (shared by Create and Edit) stores
+  `declared_stroke_number` for FG lines with `fg_type` in `{MTO, HPS}` only; no required-check.
+- **Deliberately out of scope this round:** `SODetailPage.jsx` (Edit SO) does not yet surface this
+  field — matches the pre-existing precedent that `costing_rate_month` itself isn't shown there
+  either, not a new gap introduced by this feature.
+
+**Verified:** `deno check` (baseline-matched, zero new errors — confirmed via git-stash diff, not
+just an absolute count, since `sales_order.handlers.ts`'s full import graph pulls in ~130
+pre-existing baseline errors across unrelated procurement files). `eslint` clean on
+`SO01CreatePage.jsx`/`DOListPage.jsx`/`VdcParentCompanyMasterPage.jsx`/`procurementApi.js`. All 10
+CI guards + `dependency-provisioning-check.mjs --strict-manifest` exit 0 (manifest also backfilled
+two pre-existing gaps for `SO01Page.jsx` — `listSalesOrderFgSkuOptions` was missing too, not just
+the new stroke-check endpoint).

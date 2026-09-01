@@ -25,9 +25,6 @@ const PHASE_2_END = "2026-09-15"; // Phase 2: grace period, real-time posting ex
 // own invoice date even while Phase 1 remains open for August backfill.
 const HISTORICAL_BACKFILL_INVOICE_END = "2026-08-31";
 
-const MTEST_RANDOM_WINDOW_START = "2026-08-28"; // inclusive
-const MTEST_RANDOM_WINDOW_END_DAY = 31; // August only -- no confirmed reference date exists for MTEST, so any day in this window is equally valid per the locked design.
-
 export type BackfillPhase = "PHASE_1" | "PHASE_2" | "PHASE_3";
 
 export function resolveBackfillPhase(todayIso: string): BackfillPhase {
@@ -48,10 +45,6 @@ export function isPastBackfillWindow(todayIso: string): boolean {
 
 export function isHistoricalBackfillInvoiceDate(tallyInvoiceDate: string): boolean {
   return tallyInvoiceDate <= HISTORICAL_BACKFILL_INVOICE_END;
-}
-
-function randomInt(maxExclusive: number): number {
-  return Math.floor(Math.random() * maxExclusive);
 }
 
 // Phase 1, MTO/HPS rule -- Packing PO's own Final timestamp + 10 minutes,
@@ -77,17 +70,20 @@ function resolveMtoHpsPostingDate(packingPoFinalizedAtIso: string): string {
   return shifted.toISOString().slice(0, 10);
 }
 
-// Phase 1, MTEST rule -- no confirmed reference date exists for a test
-// batch's dispatch, so any date in the locked window is equally valid.
-function resolveMtestPostingDate(): string {
-  const day = 28 + randomInt(MTEST_RANDOM_WINDOW_END_DAY - 28 + 1); // 28..31
-  return `${MTEST_RANDOM_WINDOW_START.slice(0, 7)}-${String(day).padStart(2, "0")}`;
-}
-
 export type BackfillClassification = {
   hasMtoHpsBatch: boolean;
   hasMtestBatch: boolean;
   mtoHpsPackingPoFinalizedAtIso: string | null;
+  // Corrected 2026-08-28 (business owner) -- MTEST used to get a random day
+  // in 28-31 August unconditionally, which would mis-date a genuine
+  // same-day MTEST dispatch entered for real (e.g. on 1 September) as an
+  // August backlog entry. MTEST now uses the SO's own manually-entered
+  // "SO Date" directly instead -- a real, user-owned reference date, so a
+  // real September dispatch (whose SO is dated in September) resolves
+  // correctly, and a genuine August backlog entry (whose SO is dated in
+  // August) also resolves correctly. No randomization needed once a real
+  // date exists to anchor to.
+  mtestSoDate: string | null;
 };
 
 // Phase 1 -- resolve an August historical invoice-group's own posting_date.
@@ -99,7 +95,7 @@ export function resolvePhase1PostingDate(classification: BackfillClassification,
     return resolveMtoHpsPostingDate(classification.mtoHpsPackingPoFinalizedAtIso);
   }
   if (classification.hasMtestBatch) {
-    return resolveMtestPostingDate();
+    return classification.mtestSoDate ?? tallyInvoiceDate;
   }
   // RPS (no batch at all) -- Tally Invoice Date directly.
   return tallyInvoiceDate;

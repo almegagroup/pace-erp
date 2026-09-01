@@ -105,7 +105,6 @@ function mapMutationError(req: Request, ctx: OmHandlerContext, code: string, fal
     case "MM05_INVALID_STATE":
     case "MM05_INVALID_INPUT":
     case "MM05_DEPOT_ADDRESS_REQUIRED":
-    case "MM05_DIRECT_DEPOT_INLINE_ADDRESS_FORBIDDEN":
       return mm05Error(req, ctx, code, 400, fallbackMessage);
     case "MM05_STATE_MISMATCH":
       return mm05Error(req, ctx, code, 400, "Address state must match the linked parent company's state.");
@@ -250,9 +249,12 @@ export async function createOrGetDepotCodeHandler(req: Request, ctx: OmHandlerCo
         dispatch_type: dispatchType,
         code,
         description: toTrimmedString(body.description) || null,
-        address_line: dispatchType === "DEPOT" ? (toTrimmedString(body.address_line) || null) : null,
-        state: dispatchType === "DEPOT" ? (stateValue || null) : null,
-        pin_code: dispatchType === "DEPOT" ? (toTrimmedString(body.pin_code) || null) : null,
+        // §133.20 (2026-09-01): VDC (DIRECT) now carries its own address too,
+        // same as DC (DEPOT) -- the trigger enforces both mandatory + state-
+        // must-match-parent uniformly, no more type-branching here.
+        address_line: toTrimmedString(body.address_line) || null,
+        state: stateValue || null,
+        pin_code: toTrimmedString(body.pin_code) || null,
         // §129.5 — VDC's own optional GST, checked via the same generic
         // lookupCustomerGstProfileHandler endpoint the frontend already uses
         // for Customer/Parent Company; this handler just stores whatever the
@@ -268,10 +270,7 @@ export async function createOrGetDepotCodeHandler(req: Request, ctx: OmHandlerCo
         return mm05Error(req, ctx, "MM05_DUPLICATE_DEPOT_CODE", 409, "This depot code already exists under the selected parent company.");
       }
       if (String((error as { message?: unknown })?.message ?? "").includes("MM05_DEPOT_ADDRESS_REQUIRED")) {
-        return mm05Error(req, ctx, "MM05_DEPOT_ADDRESS_REQUIRED", 400, "Depot-type code requires address and state.");
-      }
-      if (String((error as { message?: unknown })?.message ?? "").includes("MM05_DIRECT_DEPOT_INLINE_ADDRESS_FORBIDDEN")) {
-        return mm05Error(req, ctx, "MM05_DIRECT_DEPOT_INLINE_ADDRESS_FORBIDDEN", 400, "Direct-type depot code cannot store inline address fields.");
+        return mm05Error(req, ctx, "MM05_DEPOT_ADDRESS_REQUIRED", 400, "VDC/DC code requires address and state.");
       }
       if (String((error as { message?: unknown })?.message ?? "").includes("MM05_STATE_MISMATCH")) {
         return mm05Error(req, ctx, "MM05_STATE_MISMATCH", 400, "Depot address state must match the selected parent company's state.");
@@ -404,20 +403,6 @@ export async function updateDepotCodeHandler(req: Request, ctx: OmHandlerContext
     if (body.pin_code !== undefined) updates.pin_code = toTrimmedString(body.pin_code) || null;
     if (body.gst_number !== undefined) updates.gst_number = toTrimmedString(body.gst_number) || null;
 
-    // 2026-08-22 fix — validate_fg_depot_code_row (DB trigger) hard-requires
-    // DIRECT (VDC) rows to carry NULL address_line/state/pin_code; the create
-    // path (createOrGetDepotCodeHandler) already forces this, but this update
-    // path never did, so editing a VDC with any of these set (even a stale
-    // value carried over from the form) hit the trigger's raised exception
-    // unhandled below and surfaced as a bare 500. dispatch_type itself is
-    // immutable via this handler, so the EXISTING row's type is authoritative.
-    const effectiveDispatchType = toUpperTrimmedString(existing.dispatch_type);
-    if (effectiveDispatchType === "DIRECT") {
-      if (updates.address_line !== undefined) updates.address_line = null;
-      if (updates.state !== undefined) updates.state = null;
-      if (updates.pin_code !== undefined) updates.pin_code = null;
-    }
-
     if (Object.keys(updates).length === 0) {
       return mm05Error(req, ctx, "MM05_NO_CHANGES", 400, "No changes provided.");
     }
@@ -439,10 +424,7 @@ export async function updateDepotCodeHandler(req: Request, ctx: OmHandlerContext
       // handler previously fell straight to the generic 500 below for these.
       const message = String((error as { message?: unknown })?.message ?? "");
       if (message.includes("MM05_DEPOT_ADDRESS_REQUIRED")) {
-        return mm05Error(req, ctx, "MM05_DEPOT_ADDRESS_REQUIRED", 400, "Depot-type code requires address and state.");
-      }
-      if (message.includes("MM05_DIRECT_DEPOT_INLINE_ADDRESS_FORBIDDEN")) {
-        return mm05Error(req, ctx, "MM05_DIRECT_DEPOT_INLINE_ADDRESS_FORBIDDEN", 400, "Direct-type depot code cannot store inline address fields.");
+        return mm05Error(req, ctx, "MM05_DEPOT_ADDRESS_REQUIRED", 400, "VDC/DC code requires address and state.");
       }
       if (message.includes("MM05_STATE_MISMATCH")) {
         return mm05Error(req, ctx, "MM05_STATE_MISMATCH", 400, "Depot address state must match the selected parent company's state.");

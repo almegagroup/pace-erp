@@ -22,6 +22,7 @@ import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import {
   computeLineValues,
   deriveSalesInvoiceGstType,
@@ -116,7 +117,44 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
       const { data, error } = await query;
       if (error) return doErrorResponse(req, ctx, "DO_SOURCE_LIST_FAILED", 500, "Unable to list source sales orders.");
 
-      const rows = (data ?? []) as JsonRecord[];
+      // Real gap fixed (2026-09-01, business owner) — this handler's own
+      // docstring always said "still have at least one unlocked line", but
+      // the actual query only ever filtered by status. A SO whose every
+      // line is already fully drawn into non-cancelled DOs stays status
+      // CREATED/ISSUED (only an explicit SO Close, §133.10, moves it to
+      // CLOSED) -- so it kept showing up here with nothing left to add,
+      // wasting a click. Every dc_line carries so_line_id regardless of
+      // source path (direct or via so_map_allocation_id -- see
+      // do_unified.handlers.ts's soLineId derivation), so a single
+      // so_line_id-keyed drawn-qty check covers every dispatch type.
+      const soRows = (data ?? []) as JsonRecord[];
+      const { data: candidateLines, error: linesError } = soRows.length
+        ? await serviceRoleClient.schema("erp_procurement").from("sales_order_line")
+            .select("id, so_id, base_qty, quantity").in("so_id", soRows.map((row) => String(row.id)))
+        : { data: [] as JsonRecord[], error: null };
+      if (linesError) return doErrorResponse(req, ctx, "DO_SOURCE_LIST_FAILED", 500, "Unable to list source sales orders.");
+      const lineRows = (candidateLines ?? []) as JsonRecord[];
+      const lineIds = lineRows.map((row) => String(row.id));
+      const drawnByLine = new Map<string, number>();
+      if (lineIds.length) {
+        const drawnRows = await fetchInChunks<JsonRecord>(lineIds, (chunk) =>
+          serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+            .select("so_line_id, quantity, delivery_challan!inner(status)")
+            .in("so_line_id", chunk).neq("delivery_challan.status", "CANCELLED"));
+        for (const row of drawnRows) {
+          const key = toTrimmedString(row.so_line_id);
+          if (!key) continue;
+          drawnByLine.set(key, (drawnByLine.get(key) ?? 0) + Number(row.quantity ?? 0));
+        }
+      }
+      const soHasRemaining = new Set<string>();
+      for (const line of lineRows) {
+        const total = Number(line.base_qty ?? line.quantity ?? 0);
+        const drawn = drawnByLine.get(String(line.id)) ?? 0;
+        if (total - drawn > 0.0001) soHasRemaining.add(toTrimmedString(line.so_id));
+      }
+      const rows = soRows.filter((row) => soHasRemaining.has(toTrimmedString(row.id)));
+
       const customerIds = [...new Set(rows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
       const { data: customers } = customerIds.length
         ? await serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)

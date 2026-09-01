@@ -2008,6 +2008,16 @@ const DISPATCH_TYPES = new Set([
   "INDEPENDENT_PARTY_ASIAN_BILLED", "DEPENDENT_NO_INBOUND",
 ]);
 const NO_INBOUND_SUB_TYPES = new Set(["DIRECT", "DEPOT"]);
+// §133.20 (2026-09-01) — a Dependent(Direct) SO's real Bill-To entity is a
+// user choice, not always the Parent Company: VDC (its own External Code +
+// address, now that VDC carries one) or the Parent Company itself.
+const BILL_TO_PARTY_CHOICES = new Set(["PARENT_COMPANY", "VDC"]);
+// §133.20 — Independent Party (Asian-billed) restructure: replaces the old
+// "Billing address to Depot? Yes/No" with an explicit VDC/DC/NONE choice
+// under the resolved Asian Parent Company. NONE = Parent Company itself is
+// Bill-To. DC = that Depot's own name/address (same as Dependent(Depot)).
+// VDC = the same BILL_TO_PARTY_CHOICES sub-choice as Dependent(Direct).
+const ASIAN_BILLED_CHOICES = new Set(["VDC", "DC", "NONE"]);
 const LINE_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "SFG", "FG"]);
 const FG_TYPES = new Set(["MTO", "HPS", "MTEST", "MTS"]);
 const RATE_BASES = new Set(["PACK_UOM", "BASE_UOM", "FIXED"]);
@@ -2089,13 +2099,20 @@ async function resolveBillToShipTo(body: JsonRecord, dispatchType: string): Prom
     const vdc = await fetchDepotCode(vdcId);
     if (toUpperTrimmedString(vdc.dispatch_type) !== "DIRECT") throw new Error("SO_VDC_TYPE_INVALID");
     if (toTrimmedString(vdc.parent_company_id) !== parentCompanyId) throw new Error("SO_VDC_PARENT_COMPANY_MISMATCH");
+    // §133.20 — Bill-To Party is now an explicit user choice (Parent Company
+    // itself, or this specific VDC using its own External Code + address).
+    const billToParty = toUpperTrimmedString(body.bill_to_party);
+    if (!BILL_TO_PARTY_CHOICES.has(billToParty)) throw new Error("SO_BILL_TO_PARTY_REQUIRED");
+    const billToIsVdc = billToParty === "VDC";
     return {
-      billToType: "PARENT_COMPANY", billToParentCompanyId: parentCompanyId, billToDepotCodeId: null,
-      billToVdcId: vdcId, billToName: toTrimmedString(parent.company_name) || null,
-      billToAddress: toTrimmedString(parent.full_address) || null, billToState: toTrimmedString(parent.state) || null,
-      billToGstNumber: toTrimmedString(parent.gst_number) || null, billingToDepot: null, customerId: null,
-      // Direct's final customer/address remains a SO Map decision. The VDC is
-      // under this Parent Company, so the Parent state is sufficient for GST.
+      billToType: billToIsVdc ? "VDC" : "PARENT_COMPANY",
+      billToParentCompanyId: parentCompanyId, billToDepotCodeId: null, billToVdcId: vdcId,
+      billToName: billToIsVdc ? (toTrimmedString(vdc.code) || null) : (toTrimmedString(parent.company_name) || null),
+      billToAddress: billToIsVdc ? (toTrimmedString(vdc.address_line) || null) : (toTrimmedString(parent.full_address) || null),
+      billToState: billToIsVdc ? (toTrimmedString(vdc.state) || null) : (toTrimmedString(parent.state) || null),
+      billToGstNumber: billToIsVdc ? (toTrimmedString(vdc.gst_number) || null) : (toTrimmedString(parent.gst_number) || null),
+      billingToDepot: null, customerId: null,
+      // Direct's final customer/address remains a SO Map decision.
       shipTo: null,
     };
   }
@@ -2139,15 +2156,55 @@ async function resolveBillToShipTo(body: JsonRecord, dispatchType: string): Prom
     if (!customerId || !parentCompanyId) throw new Error("SO_CUSTOMER_AND_PARENT_COMPANY_REQUIRED");
     const shipTo = await fetchResolvedCustomerAddress(toTrimmedString(body.ship_to_customer_address_id));
     if (shipTo.customerId !== customerId) throw new Error("SO_ADDRESS_CUSTOMER_MISMATCH");
-    const billTo = await fetchResolvedCustomerAddress(toTrimmedString(body.bill_to_customer_address_id));
-    const billToVdc = billTo.depotCodeId ? await fetchDepotCode(billTo.depotCodeId) : null;
-    if (!billToVdc || toTrimmedString(billToVdc.parent_company_id) !== parentCompanyId) throw new Error("SO_BILL_TO_ADDRESS_PARENT_COMPANY_MISMATCH");
 
+    // §133.20 — restructured (2026-09-01): replaces the old "Billing address
+    // to Depot? Yes/No" (routed through a customer_address's depot_code_id)
+    // with an explicit VDC/DC/NONE choice under the resolved Parent Company.
+    // Ship-To above is unaffected either way — it's always the selected
+    // Independent Customer, per the existing locked rule.
+    const asianBilledChoice = toUpperTrimmedString(body.asian_billed_choice);
+    if (!ASIAN_BILLED_CHOICES.has(asianBilledChoice)) throw new Error("SO_ASIAN_BILLED_CHOICE_REQUIRED");
+
+    if (asianBilledChoice === "NONE") {
+      const parent = await fetchParentCompany(parentCompanyId);
+      return {
+        billToType: "PARENT_COMPANY", billToParentCompanyId: parentCompanyId, billToDepotCodeId: null, billToVdcId: null,
+        billToName: toTrimmedString(parent.company_name) || null, billToAddress: toTrimmedString(parent.full_address) || null,
+        billToState: toTrimmedString(parent.state) || null, billToGstNumber: toTrimmedString(parent.gst_number) || null,
+        billingToDepot: null, customerId, shipTo,
+      };
+    }
+
+    const vdcDcId = toTrimmedString(body.asian_billed_vdc_dc_id);
+    if (!vdcDcId) throw new Error("SO_ASIAN_BILLED_VDC_DC_REQUIRED");
+    const vdcDc = await fetchDepotCode(vdcDcId);
+    if (toTrimmedString(vdcDc.parent_company_id) !== parentCompanyId) throw new Error("SO_ASIAN_BILLED_VDC_DC_PARENT_COMPANY_MISMATCH");
+
+    if (asianBilledChoice === "DC") {
+      if (toUpperTrimmedString(vdcDc.dispatch_type) !== "DEPOT") throw new Error("SO_ASIAN_BILLED_DC_TYPE_INVALID");
+      return {
+        billToType: "DEPOT", billToParentCompanyId: parentCompanyId, billToDepotCodeId: vdcDcId, billToVdcId: null,
+        billToName: toTrimmedString(vdcDc.description) || null, billToAddress: toTrimmedString(vdcDc.address_line) || null,
+        billToState: toTrimmedString(vdcDc.state) || null, billToGstNumber: toTrimmedString(vdcDc.gst_number) || null,
+        billingToDepot: null, customerId, shipTo,
+      };
+    }
+
+    // asianBilledChoice === "VDC" — same Bill-To Party sub-choice as
+    // Dependent(Direct) (§133.20's BILL_TO_PARTY_CHOICES).
+    if (toUpperTrimmedString(vdcDc.dispatch_type) !== "DIRECT") throw new Error("SO_ASIAN_BILLED_VDC_TYPE_INVALID");
+    const billToParty = toUpperTrimmedString(body.bill_to_party);
+    if (!BILL_TO_PARTY_CHOICES.has(billToParty)) throw new Error("SO_BILL_TO_PARTY_REQUIRED");
+    const billToIsVdc = billToParty === "VDC";
+    const parent = await fetchParentCompany(parentCompanyId);
     return {
-      billToType: "PARENT_COMPANY",
-      billToParentCompanyId: parentCompanyId, billToDepotCodeId: null, billToVdcId: billTo.depotCodeId,
-      billToName: billTo.ship_to_name, billToAddress: billTo.ship_to_address, billToState: billTo.ship_to_state,
-      billToGstNumber: billTo.ship_to_gst_number, billingToDepot: null, customerId, shipTo,
+      billToType: billToIsVdc ? "VDC" : "PARENT_COMPANY",
+      billToParentCompanyId: parentCompanyId, billToDepotCodeId: null, billToVdcId: vdcDcId,
+      billToName: billToIsVdc ? (toTrimmedString(vdcDc.code) || null) : (toTrimmedString(parent.company_name) || null),
+      billToAddress: billToIsVdc ? (toTrimmedString(vdcDc.address_line) || null) : (toTrimmedString(parent.full_address) || null),
+      billToState: billToIsVdc ? (toTrimmedString(vdcDc.state) || null) : (toTrimmedString(parent.state) || null),
+      billToGstNumber: billToIsVdc ? (toTrimmedString(vdcDc.gst_number) || null) : (toTrimmedString(parent.gst_number) || null),
+      billingToDepot: null, customerId, shipTo,
     };
   }
 
@@ -2250,6 +2307,14 @@ async function prepareUnifiedSoLine(
   const currencyCode = toTrimmedString(line.currency_code) || "INR";
   const hsnCode = toTrimmedString(line.hsn_code) || null;
   const remarks = toTrimmedString(line.remarks) || null;
+  // §133.21 (2026-09-01) — MTO/HPS FG lines only, purely informational (no
+  // required-check, no dispatch block): what Asian Paints itself declared as
+  // the Stroke for this Item, independent of whatever real Stroke the actual
+  // production batch later carries. Captured for later Reco reconciliation
+  // when Asian's reference turns out to be wrong/nonexistent in PACE.
+  const declaredStrokeNumber = lineMaterialType === "FG" && ["MTO", "HPS"].includes(toUpperTrimmedString(line.fg_type))
+    ? (toTrimmedString(line.declared_stroke_number) || null)
+    : null;
   // Round Off is entered per item line (business owner, 2026-09-01) — a pure
   // post-tax adjustment to match what Tally ultimately shows, never part of
   // the taxable/GST computation itself.
@@ -2294,7 +2359,11 @@ async function prepareUnifiedSoLine(
       perPackQty = parsePositiveNumber(line.per_pack_qty);
       packQty = perPackQty ? Number((baseQty / perPackQty).toFixed(6)) : null;
       packUomCode = toTrimmedString(line.pack_uom_code) || "BBL";
-      costingRateMonth = null;
+      // Corrected 2026-08-28 (business owner): MTEST used to hardcode this
+      // to NULL (auto-derived from SO Date client-side instead) -- now a
+      // user-chosen value, same dropdown+required-check as MTO/HPS.
+      costingRateMonth = toTrimmedString(line.costing_rate_month) || null;
+      if (!costingRateMonth) throw new Error("SO_LINE_COSTING_RATE_MONTH_REQUIRED");
     } else {
       packQty = parsePositiveNumber(line.pack_qty);
       perPackQty = parsePositiveNumber(line.per_pack_qty);
@@ -2364,6 +2433,7 @@ async function prepareUnifiedSoLine(
       batch_number: batchNumber,
       expiry_date: expiryDate,
       costing_rate_month: costingRateMonth,
+      declared_stroke_number: declaredStrokeNumber,
       packing_order_id: packingOrderId,
       remarks,
     },
@@ -2578,6 +2648,9 @@ export async function listSalesOrderFgSkuOptionsHandler(
           per_pack_qty: conversion?.conversion_factor ?? null,
           variable_conversion: Boolean(conversion?.variable_conversion),
           own_company_mapping: ownMaterialIds.has(toTrimmedString(sku.id)),
+          // §133.21 — SO01's Stroke Number red-dot check needs this SKU's own
+          // derived Prodshade, already computed above for stroke eligibility.
+          prodshade_material_id: prodshadeId || null,
         });
       }
     }
@@ -2587,6 +2660,37 @@ export async function listSalesOrderFgSkuOptionsHandler(
   } catch (err) {
     const code = err instanceof Error ? err.message : "SO_FG_SKU_OPTIONS_FAILED";
     return salesErrorResponse(req, ctx, code, 500, "FG SKU options could not be resolved.");
+  }
+}
+
+// §133.21 (2026-09-01) — SO01's MTO/HPS FG-line "Stroke Number" red-dot
+// check. Deliberately a NEW, Sales-owned endpoint rather than reusing
+// production/plan-feed's listStrokeOptionsHandler or stroke_master.handlers.ts's
+// listStrokeMastersHandler — both are gated by Production ACL resources
+// (PROD_PLAN_FEED / PROD_STROKE_MASTER) that SO01's own Accounts role has no
+// reason to hold. Returns every APPROVED MTO/HPS stroke's (prodshade, po_type,
+// stroke_number) once per company — frontend builds a Set client-side and
+// checks it live per line, same "fetch small reference set once" pattern
+// this file already uses for AC06 approved months.
+export async function listSalesOrderStrokeCheckOptionsHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const companyId = await getCompanyScope(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
+    if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("prodshade_material_id, po_type, stroke_number")
+      .eq("company_id", companyId).eq("status", "APPROVED")
+      .in("po_type", ["MTO", "HPS"]);
+    if (error) throw new Error("SO_FG_STROKE_CHECK_OPTIONS_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "SO_FG_STROKE_CHECK_OPTIONS_FAILED";
+    return salesErrorResponse(req, ctx, code, 500, "Stroke check options could not be resolved.");
   }
 }
 

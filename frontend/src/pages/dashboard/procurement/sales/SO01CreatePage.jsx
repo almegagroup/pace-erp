@@ -29,7 +29,7 @@ import { listFgParentCompanies, listFgDepotCodes } from "../../om/omApi.js";
 import { listAc06ApprovedMonths } from "../../production/prodApi.js";
 import { amountToWordsIndian } from "../../../../utils/numberToWordsIndian.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
-import { createSalesOrderUnified, listSalesOrderAddressOptions, listSalesOrderFgSkuOptions } from "../procurementApi.js";
+import { createSalesOrderUnified, listSalesOrderAddressOptions, listSalesOrderFgSkuOptions, listSalesOrderStrokeCheckOptions } from "../procurementApi.js";
 
 // §133.7 — 5 fixed dispatch types.
 const DISPATCH_TYPE_OPTIONS = [
@@ -81,11 +81,6 @@ function toNumber(value) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
-// §133.8-E — SO Date's own month/year, used as the MTEST auto-value (no dropdown, no manual entry).
-function monthStartFromDate(dateStr) {
-  const value = String(dateStr || "").slice(0, 7);
-  return /^\d{4}-\d{2}$/.test(value) ? `${value}-01` : "";
-}
 function formatMonthLabel(rateMonth) {
   const value = String(rateMonth || "");
   if (!/^\d{4}-\d{2}/.test(value)) return value || "-";
@@ -116,6 +111,7 @@ function makeLine(lineMaterialType) {
     batch_number: "",
     expiry_date: "",
     costing_rate_month: "",
+    declared_stroke_number: "",
     round_off_amount: "",
     remarks: "",
   };
@@ -255,7 +251,16 @@ export default function SO01CreatePage() {
   const [depotCodeId, setDepotCodeId] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [shipToCustomerAddressId, setShipToCustomerAddressId] = useState("");
-  const [billToCustomerAddressId, setBillToCustomerAddressId] = useState("");
+  // §133.20 (2026-09-01) — Bill-To Party choice (Parent Company vs the
+  // specific VDC, using its own External Code + address) for Dependent
+  // (Direct), Dependent(No Inbound)-Direct sub-case, and Independent Party
+  // (Asian-billed) when its own VDC/DC choice below resolves to VDC.
+  const [billToParty, setBillToParty] = useState("");
+  // §133.20 — replaces the old "Billing address to Depot? Yes/No" (which
+  // resolved via a customer_address's own depot_code_id mapping) with an
+  // explicit VDC/DC/No choice under the resolved Asian Parent Company.
+  const [asianBilledChoice, setAsianBilledChoice] = useState("");
+  const [asianBilledVdcDcId, setAsianBilledVdcDcId] = useState("");
   const [noInboundSubType, setNoInboundSubType] = useState("DIRECT");
   const [paymentTermId, setPaymentTermId] = useState("");
   const [externalSoNumber, setExternalSoNumber] = useState("");
@@ -286,6 +291,27 @@ export default function SO01CreatePage() {
   const fgSkuMap = useMemo(() => new Map(
     Object.values(fgSkusByType).flat().map((entry) => [entry.id, entry]),
   ), [fgSkusByType]);
+  // §133.21 — SO01 MTO/HPS FG-line Stroke Number red-dot check. Fetched once
+  // per company (small reference set), checked client-side per line —
+  // mirrors this file's own AC06-approved-months pattern.
+  const strokeCheckQuery = useQuery({
+    queryKey: ["so01-stroke-check-options", companyId],
+    queryFn: () => listSalesOrderStrokeCheckOptions({ company_id: companyId }),
+    enabled: Boolean(companyId && materialTypes.includes("FG")),
+    staleTime: 60_000,
+  });
+  const validStrokeKeys = useMemo(() => new Set(
+    (strokeCheckQuery.data ?? []).map((entry) => `${entry.prodshade_material_id}|${entry.po_type}|${entry.stroke_number}`),
+  ), [strokeCheckQuery.data]);
+  // true = resolved (green), false = red dot, null = not applicable (not an
+  // MTO/HPS FG line, or no item selected yet).
+  function strokeCheckStatus(line) {
+    if (line.line_material_type !== "FG" || !["MTO", "HPS"].includes(line.fg_type)) return null;
+    if (!line.material_id || !line.declared_stroke_number?.trim()) return false;
+    const prodshadeId = fgSkuMap.get(line.material_id)?.prodshade_material_id;
+    if (!prodshadeId) return false;
+    return validStrokeKeys.has(`${prodshadeId}|${line.fg_type}|${line.declared_stroke_number.trim()}`);
+  }
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const paymentTermOptions = useMemo(
     () => (paymentTermQuery.paymentTerms ?? []).map((entry) => ({ value: entry.id, label: `${entry.code || entry.name} | ${entry.name}` })),
@@ -305,13 +331,7 @@ export default function SO01CreatePage() {
     queryFn: () => listSalesOrderAddressOptions({ company_id: companyId, customer_id: customerId }),
     enabled: Boolean(companyId && customerId && (dispatchType === "INDEPENDENT_PARTY" || dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED")),
   });
-  const parentAddressQuery = useQuery({
-    queryKey: ["so01-address-options", companyId, "parent", parentCompanyId],
-    queryFn: () => listSalesOrderAddressOptions({ company_id: companyId, parent_company_id: parentCompanyId }),
-    enabled: Boolean(companyId && parentCompanyId && dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED"),
-  });
   const customerAddresses = Array.isArray(customerAddressQuery.data) ? customerAddressQuery.data : [];
-  const parentAddresses = Array.isArray(parentAddressQuery.data) ? parentAddressQuery.data : [];
   const addressLabel = (address) => [address?.customer?.customer_name, address?.site_name, address?.town, address?.address_line].filter(Boolean).join(" | ");
   const addressOptions = (addresses) => addresses.map((address) => ({ value: address.id, label: addressLabel(address) }));
 
@@ -350,11 +370,19 @@ export default function SO01CreatePage() {
   }, [companyId]);
   useEffect(() => {
     if (!parentCompanyId) { setDepotCodes([]); return; }
+    // §133.20 — Asian-billed needs both VDC and DC under the parent (user
+    // picks which), so no dispatch_type filter for that case.
+    if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
+      listFgDepotCodes({ parent_company_id: parentCompanyId })
+        .then((result) => setDepotCodes(Array.isArray(result?.data) ? result.data : []))
+        .catch(() => setDepotCodes([]));
+      return;
+    }
     const wantType = effectiveNoInboundType === "DEPENDENT_DEPOT" ? "DEPOT" : "DIRECT";
     listFgDepotCodes({ parent_company_id: parentCompanyId, dispatch_type: wantType })
       .then((result) => setDepotCodes(Array.isArray(result?.data) ? result.data : []))
       .catch(() => setDepotCodes([]));
-  }, [parentCompanyId, effectiveNoInboundType]);
+  }, [parentCompanyId, effectiveNoInboundType, dispatchType]);
 
   function toggleMaterialType(value) {
     setMaterialTypes((current) => (current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value]));
@@ -379,22 +407,15 @@ export default function SO01CreatePage() {
     setLines((current) => current.filter((line) => line.__key !== key));
   }
 
-  // §133.8-E — Costing Rate Month cell, shared by SFG and FG rows. MTEST = SO
-  // Date's own month/year (read-only, no selection). MTS = deferred/spec-only,
-  // PACE isn't dispatching MTS yet — placeholder only, never sent as a real
-  // value. MTO/HPS = dropdown of AC06 months where every item is approved,
-  // plus a fixed "Manual" entry.
+  // §133.8-E — Costing Rate Month cell, shared by SFG and FG rows. MTS =
+  // deferred/spec-only, PACE isn't dispatching MTS yet — placeholder only,
+  // never sent as a real value. MTO/HPS/MTEST = dropdown of AC06 months
+  // where every item is approved, plus a fixed "Manual" entry — user picks.
+  // MTEST corrected 2026-08-28 (business owner): was auto = SO Date's
+  // month/year with no selection; now the same user-chosen dropdown as
+  // MTO/HPS, since relying on pure auto-derivation gave no way to correct
+  // a wrong/approximate SO Date without also changing the SO's own header.
   function costingMonthCell(line, key) {
-    if (line.fg_type === "MTEST") {
-      return (
-        <input
-          value={soDate ? formatMonthLabel(monthStartFromDate(soDate)) : "—"}
-          readOnly
-          className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none"
-          title="Auto = SO Date's month/year"
-        />
-      );
-    }
     if (line.fg_type === "MTS") {
       return (
         <input
@@ -417,6 +438,21 @@ export default function SO01CreatePage() {
         ))}
         <option value="MANUAL">Manual</option>
       </select>
+    );
+  }
+
+  // §133.20 — shared Bill-To Party toggle (Parent Company vs the specific
+  // VDC), reused by Dependent(Direct), Dependent(No Inbound)-Direct
+  // sub-case, and Independent Party (Asian-billed) when its own VDC/DC
+  // choice resolves to VDC.
+  function billToPartyToggle() {
+    return (
+      <ErpDenseFormRow label="Bill-To Party?" required>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setBillToParty("PARENT_COMPANY")} className={`flex-1 px-3 py-2 text-xs font-semibold ${billToParty === "PARENT_COMPANY" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>Parent Company</button>
+          <button type="button" onClick={() => setBillToParty("VDC")} className={`flex-1 px-3 py-2 text-xs font-semibold ${billToParty === "VDC" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>VDC</button>
+        </div>
+      </ErpDenseFormRow>
     );
   }
 
@@ -559,6 +595,30 @@ export default function SO01CreatePage() {
           ) : null}
         </div>
       ) },
+      // §133.21 (2026-09-01) — MTO/HPS only. What Asian Paints itself
+      // declared as the Stroke for this Item — independent of whatever the
+      // real production batch later carries (FO->Batch->Process PO already
+      // gives that, separately, once production exists). Manual, purely
+      // informational (never blocks Create SO or dispatch) — Asian
+      // sometimes references an Item+Stroke combination PACE hasn't created
+      // yet; the dot flags that for later Reco reconciliation rather than
+      // hiding it. Red = Prodshade (derived from this SKU) + this exact
+      // Stroke Number don't resolve to a real APPROVED stroke_master row —
+      // always red for a manual/not-yet-real SKU, since no Prodshade can be
+      // derived at all. Green = resolved.
+      { key: "declared_stroke", label: "Stroke Number", width: "150px", render: (line) => {
+        if (!["MTO", "HPS"].includes(line.fg_type)) return <span className="text-xs text-slate-400">—</span>;
+        const status = strokeCheckStatus(line);
+        return (
+          <div className="flex items-center gap-1.5">
+            <span
+              title={status ? "Resolves to an approved Stroke Master row" : "Not found in Stroke Master for this Item's Prodshade — reconcile later"}
+              className={`inline-block h-2 w-2 shrink-0 rounded-full ${status ? "bg-emerald-500" : "bg-rose-500"}`}
+            />
+            {textInput(line.declared_stroke_number, (value) => updateLine(line.__key, { declared_stroke_number: value }), { placeholder: "Stroke No." })}
+          </div>
+        );
+      } },
       // §133.8-D — Document Name is distinct from External Code. A manual SKU line shows the
       // typed name here too, since that IS the document name until the SKU
       // gets added to Material Master.
@@ -631,6 +691,7 @@ export default function SO01CreatePage() {
     if (effectiveNoInboundType === "DEPENDENT_DIRECT") {
       payload.parent_company_id = parentCompanyId;
       payload.vdc_id = vdcId;
+      payload.bill_to_party = billToParty;
     } else if (effectiveNoInboundType === "DEPENDENT_DEPOT") {
       payload.parent_company_id = parentCompanyId;
       payload.depot_code_id = depotCodeId;
@@ -641,7 +702,11 @@ export default function SO01CreatePage() {
       payload.customer_id = customerId;
       payload.parent_company_id = parentCompanyId;
       payload.ship_to_customer_address_id = shipToCustomerAddressId;
-      payload.bill_to_customer_address_id = billToCustomerAddressId;
+      payload.asian_billed_choice = asianBilledChoice;
+      if (asianBilledChoice !== "NONE") {
+        payload.asian_billed_vdc_dc_id = asianBilledVdcDcId;
+        if (asianBilledChoice === "VDC") payload.bill_to_party = billToParty;
+      }
     }
     if (dispatchType === "DEPENDENT_NO_INBOUND") payload.no_inbound_sub_type = noInboundSubType;
     return payload;
@@ -669,7 +734,7 @@ export default function SO01CreatePage() {
       setError("HSN Code is required for an item that has no HSN in Material Master.");
       return;
     }
-    const missingMonthLine = lines.find((line) => line.line_material_type === "FG" && ["MTO", "HPS"].includes(line.fg_type) && !line.costing_rate_month);
+    const missingMonthLine = lines.find((line) => line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type) && !line.costing_rate_month);
     if (missingMonthLine) {
       setError(`Costing Rate Month is required for FG ${missingMonthLine.fg_type}. Select a month before creating the SO.`);
       return;
@@ -712,12 +777,11 @@ export default function SO01CreatePage() {
           batch_number: line.batch_number || null,
           expiry_date: line.expiry_date || null,
           round_off_amount: line.round_off_amount === "" ? 0 : Number(line.round_off_amount),
-          // §133.8-E: MTEST always auto-derives from SO Date (no dropdown to
-          // read from); MTS is deferred/spec-only and must never carry a real
-          // value yet; MTO/HPS send whatever the dropdown/Manual holds.
-          costing_rate_month: line.fg_type === "MTEST"
-            ? monthStartFromDate(soDate)
-            : line.fg_type === "MTS" ? null : (line.costing_rate_month || null),
+          // §133.8-E: MTS is deferred/spec-only and must never carry a real
+          // value yet; MTO/HPS/MTEST send whatever the dropdown/Manual holds
+          // (MTEST corrected 2026-08-28 — user-chosen now, not auto-derived).
+          costing_rate_month: line.fg_type === "MTS" ? null : (line.costing_rate_month || null),
+          declared_stroke_number: line.declared_stroke_number?.trim() || null,
           remarks: line.remarks || null,
         })),
       });
@@ -733,7 +797,12 @@ export default function SO01CreatePage() {
   const companyOptions = availableCompanies.map((entry) => ({ value: entry.id, label: entry.company_name || entry.company_code || entry.id }));
   const parentCompanyOptions = parentCompanies.map((entry) => ({ value: entry.id, label: entry.company_name }));
   const depotCodeOptions = depotCodes.map((entry) => ({ value: entry.id, label: `${entry.code || ""} — ${entry.description || ""}`.trim() }));
-  const missingFgCostingRateMonth = lines.some((line) => line.line_material_type === "FG" && ["MTO", "HPS"].includes(line.fg_type) && !line.costing_rate_month);
+  // §133.20 — Asian-billed's own VDC/DC dropdown, filtered to whichever
+  // sub-type the user picked (depotCodes here carries both, unfiltered).
+  const asianBilledVdcDcOptions = depotCodes
+    .filter((entry) => entry.dispatch_type === (asianBilledChoice === "DC" ? "DEPOT" : "DIRECT"))
+    .map((entry) => ({ value: entry.id, label: `${entry.code || ""} — ${entry.description || ""}`.trim() }));
+  const missingFgCostingRateMonth = lines.some((line) => line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type) && !line.costing_rate_month);
 
   return (
     <ErpScreenScaffold
@@ -747,7 +816,7 @@ export default function SO01CreatePage() {
       ]}
       notices={[
         ...(error ? [{ key: "so01-error", tone: "error", message: error }] : []),
-        ...(missingFgCostingRateMonth ? [{ key: "so01-fg-month-required", tone: "warning", message: "Create SO is unavailable: select Costing Rate Month for every FG MTO/HPS line." }] : []),
+        ...(missingFgCostingRateMonth ? [{ key: "so01-fg-month-required", tone: "warning", message: "Create SO is unavailable: select Costing Rate Month for every FG MTO/HPS/MTEST line." }] : []),
         ...(notice ? [{ key: "so01-notice", tone: "success", message: notice }] : []),
       ]}
     >
@@ -802,7 +871,8 @@ export default function SO01CreatePage() {
                 <ErpDenseFormRow label="VDC" required>
                   <ErpComboboxField value={vdcId} onChange={setVdcId} options={depotCodeOptions} blankLabel={parentCompanyId ? "Select VDC" : "Select Parent Company first"} />
                 </ErpDenseFormRow>
-                <p className="col-span-2 text-xs text-slate-500">Bill-To resolves now. Final MM04 Ship-To address resolves in SO Map; its state is the selected Parent Company&apos;s state.</p>
+                {billToPartyToggle()}
+                <p className="col-span-2 text-xs text-slate-500">Whichever Bill-To Party you pick becomes this SO&apos;s Bill-To name/address (VDC uses its own External Code + address). Final MM04 Ship-To address resolves in SO Map either way.</p>
               </div>
             ) : null}
             {effectiveNoInboundType === "DEPENDENT_DEPOT" && dispatchType !== "DEPENDENT_NO_INBOUND" ? (
@@ -834,11 +904,24 @@ export default function SO01CreatePage() {
                   <ErpComboboxField value={shipToCustomerAddressId} onChange={setShipToCustomerAddressId} options={addressOptions(customerAddresses)} blankLabel={customerId ? "Select customer address" : "Select Customer first"} />
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Asian Parent Company" required>
-                  <ErpComboboxField value={parentCompanyId} onChange={(value) => { setParentCompanyId(value); setBillToCustomerAddressId(""); }} options={parentCompanyOptions} blankLabel="Select Parent Company" />
+                  <ErpComboboxField value={parentCompanyId} onChange={(value) => { setParentCompanyId(value); setAsianBilledChoice(""); setAsianBilledVdcDcId(""); setBillToParty(""); }} options={parentCompanyOptions} blankLabel="Select Parent Company" />
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="Bill-To Address (MM04)" required>
-                  <ErpComboboxField value={billToCustomerAddressId} onChange={setBillToCustomerAddressId} options={addressOptions(parentAddresses)} blankLabel={parentCompanyId ? "Select Parent-side address" : "Select Parent Company first"} />
-                </ErpDenseFormRow>
+                {/* §133.20 (2026-09-01) — replaces the old Yes/No "Billing
+                    address to Depot?" with an explicit VDC/DC/No choice. */}
+                <div className="grid gap-1 text-xs font-semibold text-slate-700">
+                  <span>Bill-To — VDC, DC, or none (Parent Company)? <span className="text-rose-500">*</span></span>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => { setAsianBilledChoice("VDC"); setAsianBilledVdcDcId(""); }} className={`flex-1 px-3 py-2 text-xs font-semibold ${asianBilledChoice === "VDC" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>VDC</button>
+                    <button type="button" onClick={() => { setAsianBilledChoice("DC"); setAsianBilledVdcDcId(""); setBillToParty(""); }} className={`flex-1 px-3 py-2 text-xs font-semibold ${asianBilledChoice === "DC" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>DC</button>
+                    <button type="button" onClick={() => { setAsianBilledChoice("NONE"); setAsianBilledVdcDcId(""); setBillToParty(""); }} className={`flex-1 px-3 py-2 text-xs font-semibold ${asianBilledChoice === "NONE" ? "border border-slate-700 bg-slate-200 text-slate-950" : "border border-slate-300 bg-white text-slate-700"}`}>No</button>
+                  </div>
+                </div>
+                {asianBilledChoice === "VDC" || asianBilledChoice === "DC" ? (
+                  <ErpDenseFormRow label={asianBilledChoice === "DC" ? "DC" : "VDC"} required>
+                    <ErpComboboxField value={asianBilledVdcDcId} onChange={setAsianBilledVdcDcId} options={asianBilledVdcDcOptions} blankLabel={parentCompanyId ? `Select ${asianBilledChoice}` : "Select Parent Company first"} />
+                  </ErpDenseFormRow>
+                ) : null}
+                {asianBilledChoice === "VDC" ? billToPartyToggle() : null}
               </div>
             ) : null}
             {dispatchType === "DEPENDENT_NO_INBOUND" ? (
@@ -852,11 +935,12 @@ export default function SO01CreatePage() {
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
                   <ErpDenseFormRow label="Parent Company" required>
-                    <ErpComboboxField value={parentCompanyId} onChange={(value) => { setParentCompanyId(value); setVdcId(""); setDepotCodeId(""); }} options={parentCompanyOptions} blankLabel="Select Parent Company" />
+                    <ErpComboboxField value={parentCompanyId} onChange={(value) => { setParentCompanyId(value); setVdcId(""); setDepotCodeId(""); setBillToParty(""); }} options={parentCompanyOptions} blankLabel="Select Parent Company" />
                   </ErpDenseFormRow>
                   <ErpDenseFormRow label={noInboundSubType === "DIRECT" ? "VDC" : "Depot Code"} required>
                     <ErpComboboxField value={noInboundSubType === "DIRECT" ? vdcId : depotCodeId} onChange={noInboundSubType === "DIRECT" ? setVdcId : setDepotCodeId} options={depotCodeOptions} blankLabel={parentCompanyId ? "Select" : "Select Parent Company first"} />
                   </ErpDenseFormRow>
+                  {noInboundSubType === "DIRECT" ? billToPartyToggle() : null}
                 </div>
               </div>
             ) : null}

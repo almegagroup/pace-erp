@@ -97,6 +97,12 @@ export function listSalesOrderFgSkuOptions(params) {
   return fetchProcurement("GET", "/api/procurement/sales-orders/fg-sku-options", undefined, params);
 }
 
+// §133.21 — SO01 MTO/HPS FG-line Stroke Number red-dot check reference set
+// (one fetch per company, checked client-side per line).
+export function listSalesOrderStrokeCheckOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-orders/stroke-check-options", undefined, params);
+}
+
 export function listSalesOrderAddressOptions(params) {
   return fetchProcurement("GET", "/api/procurement/sales-orders/address-options", undefined, params);
 }
