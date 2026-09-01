@@ -21,6 +21,7 @@
 
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -260,7 +261,15 @@ function MapDrawer({ so, onClose, onChanged }) {
 
           <ErpSectionCard eyebrow="Step 1" title={destinationMode === "DEPOT" ? "Choose an Optional FO, or map directly to the Fixed Depot" : "Choose the FO or Customer Address (Ship-To) first"}>
             <div className="grid gap-2 md:grid-cols-2">
-              <select value={selectedFoId} onChange={(event) => chooseFo(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-xs"><option value="">Select FO Number</option>{foOptions.map((fo) => <option key={fo.id} value={fo.id}>{fo.fo_number} — {fo.party_name} (remaining {Number(fo.remaining_qty ?? 0).toFixed(2)} KG)</option>)}</select>
+              <ErpComboboxField
+                value={selectedFoId}
+                onChange={(value) => chooseFo(value)}
+                options={foOptions.map((fo) => ({
+                  value: fo.id,
+                  label: `${fo.fo_number} — ${fo.party_name} (remaining ${Number(fo.remaining_qty ?? 0).toFixed(2)} KG)`,
+                }))}
+                placeholder="Select FO Number"
+              />
               {destinationMode === "DIRECT" ? <select value={selectedAddressId} onChange={(event) => chooseAddress(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-xs"><option value="">No FO: select Customer Address</option>{addressOptions.map((address) => <option key={address.id} value={address.id}>{address.site_name} — {address.town}, {address.state}</option>)}</select> : <p className="self-center text-xs text-slate-600">No FO required: the Page 2 Depot is the fixed Ship-To.</p>}
             </div>
             {selectedFo ? <p className="mt-3 text-xs text-slate-600">FO Ship-To: {selectedFoAddress ? [selectedFoAddress.site_name, selectedFoAddress.address_line, selectedFoAddress.town, selectedFoAddress.state].filter(Boolean).join(", ") : "Address will resolve from this FO."}</p> : null}
