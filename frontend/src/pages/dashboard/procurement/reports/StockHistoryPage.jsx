@@ -162,9 +162,12 @@ export default function StockHistoryPage() {
         width: "110px",
         align: "right",
         render: (row) => formatBalanceQuantity(row.opening),
-        // §130.10 range-copy / §130.14 Excel export both read this instead
-        // of re-deriving text from the JSX `render` output.
+        // §130.10 range-copy reads this instead of re-deriving text from the JSX `render` output.
         copyValue: (row) => formatBalanceQuantity(row.opening),
+        // Excel export needs the raw number, not the display string above --
+        // ExcelJS writes a string-valued cell as text, which can't be SUM()'d.
+        excelValue: (row) => Number(row.opening ?? 0),
+        numFmt: "0.000",
       },
     ],
     [],
@@ -185,6 +188,8 @@ export default function StockHistoryPage() {
         const { fontArgb } = formatSignedQuantity(row.buckets?.[bucketCode]);
         return fontArgb ? { fontArgb } : null;
       },
+      excelValue: (row) => Number(row.buckets?.[bucketCode] ?? 0),
+      numFmt: "0.000;-0.000",
     })),
     [visibleBuckets],
   );
@@ -197,6 +202,8 @@ export default function StockHistoryPage() {
       align: "right",
       render: (row) => formatBalanceQuantity(row.closing),
       copyValue: (row) => formatBalanceQuantity(row.closing),
+      excelValue: (row) => Number(row.closing ?? 0),
+      numFmt: "0.000",
     }),
     [],
   );
@@ -287,7 +294,8 @@ export default function StockHistoryPage() {
         columns: gridColumns,
         rows,
         getCellValue: (row, column) =>
-          typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
+          typeof column.excelValue === "function" ? column.excelValue(row)
+            : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
         getCellColor: (row, column) =>
           typeof column.excelColor === "function" ? column.excelColor(row) : null,
         // §130.13 — the same distinct fill the Total row gets on screen.

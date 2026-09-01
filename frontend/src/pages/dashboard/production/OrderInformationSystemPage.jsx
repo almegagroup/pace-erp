@@ -108,6 +108,8 @@ const GRID_COLUMNS = [
       const { fontArgb } = formatSignedQuantity(r.quantity);
       return fontArgb ? { fontArgb } : null;
     },
+    excelValue: (r) => Number(r.quantity ?? 0),
+    numFmt: "0.000;-0.000",
   },
   // Only ever populated on the Packing PO's own FG-101 row (tier 3) — every other
   // row's num_packs/fill_qty_per_pack come back null from the backend and render blank.
@@ -142,6 +144,8 @@ const GRID_COLUMNS = [
       const { fontArgb } = formatSignedQuantity(r.standard_qty);
       return fontArgb ? { fontArgb } : null;
     },
+    excelValue: (r) => Number(r.standard_qty ?? 0),
+    numFmt: "0.000;-0.000",
   },
   { key: "dosage_pct", label: "Dosage %", align: "right", width: "90px", render: (r) => (r.dosage_pct == null ? <span className="text-slate-300">--</span> : `${Number(r.dosage_pct).toLocaleString(undefined, { maximumFractionDigits: 4 })}%`) },
   {
@@ -158,6 +162,8 @@ const GRID_COLUMNS = [
       const { fontArgb } = formatSignedQuantity(r.apl_qty);
       return fontArgb ? { fontArgb } : null;
     },
+    excelValue: (r) => Number(r.apl_qty ?? 0),
+    numFmt: "0.000;-0.000",
   },
   {
     key: "variance_qty",
@@ -173,6 +179,8 @@ const GRID_COLUMNS = [
       const { fontArgb } = formatSignedQuantity(r.variance_qty);
       return fontArgb ? { fontArgb } : null;
     },
+    excelValue: (r) => Number(r.variance_qty ?? 0),
+    numFmt: "0.000;-0.000",
   },
 ];
 
@@ -280,7 +288,8 @@ export default function OrderInformationSystemPage() {
         columns: GRID_COLUMNS,
         rows,
         getCellValue: (row, column) =>
-          typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
+          typeof column.excelValue === "function" ? column.excelValue(row)
+            : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
         getCellColor: (row, column) =>
           typeof column.excelColor === "function" ? column.excelColor(row) : null,
         getRowFillArgb: (row) => (row.is_group_start ? GROUP_START_ROW_FILL_ARGB : null),

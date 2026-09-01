@@ -768,18 +768,18 @@ export default function PlanFeedPage() {
     { key: "party_town", label: "Town", width: "120px" },
     { key: "sku", label: "SKU", width: "135px", render: (r) => <span className="font-mono">{r.sku || "--"}</span> },
     { key: "ordered_stroke_number", label: "Ordered Stroke", width: "135px", render: (r) => <span className="font-mono">{r.ordered_stroke_number || "--"}{r.ordered_stroke_missing ? " (Not in Stroke Master)" : ""}</span> },
-    { key: "ordered_qty_kg", label: "Ordered KG", width: "110px", align: "right", copyValue: (r) => fmt(r.ordered_qty_kg), render: (r) => <span className="font-mono">{fmt(r.ordered_qty_kg)}</span> },
-    { key: "pack_qty", label: "Pack Qty", width: "90px", align: "right", copyValue: (r) => r.pack_qty ?? "--", render: (r) => <span className="font-mono">{r.pack_qty ?? "--"}</span> },
-    { key: "allocated_qty_kg", label: "Mapped KG", width: "110px", align: "right", copyValue: (r) => fmt(r.allocated_qty_kg), render: (r) => <span className="font-mono">{fmt(r.allocated_qty_kg)}</span> },
+    { key: "ordered_qty_kg", label: "Ordered KG", width: "110px", align: "right", copyValue: (r) => fmt(r.ordered_qty_kg), excelValue: (r) => Number(r.ordered_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono">{fmt(r.ordered_qty_kg)}</span> },
+    { key: "pack_qty", label: "Pack Qty", width: "90px", align: "right", copyValue: (r) => r.pack_qty ?? "--", excelValue: (r) => (r.pack_qty ?? "" ) === "" ? "" : Number(r.pack_qty), render: (r) => <span className="font-mono">{r.pack_qty ?? "--"}</span> },
+    { key: "allocated_qty_kg", label: "Mapped KG", width: "110px", align: "right", copyValue: (r) => fmt(r.allocated_qty_kg), excelValue: (r) => Number(r.allocated_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono">{fmt(r.allocated_qty_kg)}</span> },
     { key: "mapped_batches", label: "Mapped Batch No(s)", width: "220px", copyValue: (r) => summaryListText(r.mapped_batch_numbers), render: (r) => <span className="font-mono">{summaryListText(r.mapped_batch_numbers) || "--"}</span> },
     { key: "production_status", label: "Production", width: "140px", copyValue: (r) => r.production_status?.replaceAll("_", " ") ?? "--", render: (r) => <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${productionStatusTone(r.production_status)}`}>{r.production_status?.replaceAll("_", " ")}</span> },
-    { key: "dispatched_qty_kg", label: "Dispatched KG", width: "120px", align: "right", copyValue: (r) => fmt(r.dispatched_qty_kg), render: (r) => <span className="font-mono text-emerald-700">{fmt(r.dispatched_qty_kg)}</span> },
+    { key: "dispatched_qty_kg", label: "Dispatched KG", width: "120px", align: "right", copyValue: (r) => fmt(r.dispatched_qty_kg), excelValue: (r) => Number(r.dispatched_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono text-emerald-700">{fmt(r.dispatched_qty_kg)}</span> },
     { key: "dispatch_status", label: "Dispatch", width: "150px", copyValue: (r) => r.dispatch_status?.replaceAll("_", " ") ?? "--", render: (r) => <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${dispatchStatusTone(r.dispatch_status)}`}>{r.dispatch_status?.replaceAll("_", " ")}</span> },
     { key: "delivery_orders", label: "DO Number", width: "145px", copyValue: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_number)), render: (r) => <span className="font-mono">{summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_number)) || "--"}</span> },
     { key: "delivery_order_dates", label: "DO Date", width: "115px", copyValue: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_date)), render: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_date)) || "--" },
     { key: "tally_invoice_numbers", label: "Tally Invoice No.", width: "160px", copyValue: (r) => summaryListText(r.tally_invoice_numbers), render: (r) => <span className="font-mono">{summaryListText(r.tally_invoice_numbers) || "--"}</span> },
     { key: "dispatch_dates", label: "Dispatch Date", width: "120px", copyValue: (r) => summaryListText(r.dispatch_dates), render: (r) => r.dispatch_dates?.length ? <span className="font-mono leading-5">{summaryDateLines(r.dispatch_dates)}</span> : "--" },
-    { key: "pending_dispatch_kg", label: "Pending KG", width: "110px", align: "right", copyValue: (r) => fmt(r.pending_dispatch_kg), render: (r) => <span className="font-mono text-amber-700">{fmt(r.pending_dispatch_kg)}</span> },
+    { key: "pending_dispatch_kg", label: "Pending KG", width: "110px", align: "right", copyValue: (r) => fmt(r.pending_dispatch_kg), excelValue: (r) => Number(r.pending_dispatch_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono text-amber-700">{fmt(r.pending_dispatch_kg)}</span> },
     { key: "order_date", label: "Order Date", width: "110px" },
     { key: "scheduled_delivery_date", label: "Del. Date", width: "110px" },
   ], []);
@@ -806,7 +806,11 @@ export default function PlanFeedPage() {
         sheetName: "Plan Feed Total",
         columns: totalColumns,
         rows: filteredSummary,
-        getCellValue: (row, column) => gridCellValue(row, column),
+        // gridCellValue always coerces to a display string (it also drives search/copy, which
+        // genuinely need one) -- Excel export must NOT do that for numeric columns, or every
+        // cell lands as text and can't be SUM()'d. excelValue (raw number) takes priority when set.
+        getCellValue: (row, column) =>
+          typeof column.excelValue === "function" ? column.excelValue(row) : gridCellValue(row, column),
       });
     } catch (err) { toast(err instanceof Error ? err.message : "PLAN_FEED_EXPORT_FAILED", "error"); }
     finally { setExportingTotal(false); }

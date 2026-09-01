@@ -108,6 +108,15 @@ function formatNumberOrBlank(value) {
   return Number.isFinite(num) ? num.toLocaleString("en-IN", { maximumFractionDigits: 4 }) : "";
 }
 
+// Excel export counterpart to formatNumberOrBlank -- same blank-on-missing
+// behavior, but returns the raw number (ExcelJS writes a string-valued cell
+// as text, which breaks SUM()/AutoSum in the exported file).
+function excelNumberOrBlank(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const num = Number(value);
+  return Number.isFinite(num) ? num : "";
+}
+
 // discrepancy_qty = ge_qty (Invoice Qty) - received_qty (GRN Qty), the exact
 // formula grn.handlers.ts's create-time calc already uses -- positive means
 // the invoice claimed more than what was actually received (shortage),
@@ -305,6 +314,8 @@ function buildColumns() {
       ),
       copyValue: (row) => `${formatNumberOrBlank(row.invoice_rate)}${row.rate_mismatch ? " (mismatch)" : ""}`,
       excelColor: (row) => (row.rate_mismatch ? { fontArgb: "FFBE123C", bold: true } : null),
+      excelValue: (row) => excelNumberOrBlank(row.invoice_rate),
+      numFmt: "#,##0.0000",
     },
     { key: "confirmed_rate", label: "Confirmed Rate", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.confirmed_rate) },
     { key: "currency", label: "Currency", width: "70px" },
@@ -320,21 +331,29 @@ function buildColumns() {
       // suggested value, silently ignoring a manager's override — same
       // override-aware value the cell itself renders.
       copyValue: (row) => formatNumberOrBlank(row.vendor_payable_override ?? row.vendor_suggested_payable),
+      excelValue: (row) => excelNumberOrBlank(row.vendor_payable_override ?? row.vendor_suggested_payable),
+      numFmt: "#,##0.00",
     },
     {
       key: "transporter_suggested_payable", label: "Transporter Payable", width: "140px", align: "right",
       render: (row) => formatNumberOrBlank(row.transporter_payable_override ?? row.transporter_suggested_payable),
       copyValue: (row) => formatNumberOrBlank(row.transporter_payable_override ?? row.transporter_suggested_payable),
+      excelValue: (row) => excelNumberOrBlank(row.transporter_payable_override ?? row.transporter_suggested_payable),
+      numFmt: "#,##0.00",
     },
     {
       key: "last_mile_suggested_payable", label: "Last Mile Payable", width: "140px", align: "right",
       render: (row) => formatNumberOrBlank(row.last_mile_payable_override ?? row.last_mile_suggested_payable),
       copyValue: (row) => formatNumberOrBlank(row.last_mile_payable_override ?? row.last_mile_suggested_payable),
+      excelValue: (row) => excelNumberOrBlank(row.last_mile_payable_override ?? row.last_mile_suggested_payable),
+      numFmt: "#,##0.00",
     },
     {
       key: "cha_suggested_payable", label: "CHA Payable", width: "120px", align: "right",
       render: (row) => formatNumberOrBlank(row.cha_payable_override ?? row.cha_suggested_payable),
       copyValue: (row) => formatNumberOrBlank(row.cha_payable_override ?? row.cha_suggested_payable),
+      excelValue: (row) => excelNumberOrBlank(row.cha_payable_override ?? row.cha_suggested_payable),
+      numFmt: "#,##0.00",
     },
     { key: "payment_days", label: "Payment Days", width: "90px", align: "right" },
     { key: "payment_type", label: "Payment Type", width: "140px" },
@@ -502,7 +521,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         columns,
         rows,
         getCellValue: (row, column) =>
-          typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
+          typeof column.excelValue === "function" ? column.excelValue(row)
+            : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
         getCellColor: (row, column) =>
           typeof column.excelColor === "function" ? column.excelColor(row) : null,
         getCellRichText: (row, column) =>
