@@ -13,6 +13,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -348,29 +349,40 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
     const destinationDepotById = new Map(((destinationDepotRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
 
     const foIds = ((foRows ?? []) as JsonRecord[]).map((row) => String(row.id));
-    const [{ data: allocRows, error: allocError }, { data: soMapAllocRows, error: soMapAllocError }] = await Promise.all([
-      foIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("fo_id, plan_feed_item_id, allocated_qty").in("fo_id", foIds).eq("status", "ACTIVE")
-        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-      foIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id, fo_id").in("fo_id", foIds)
-        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-    ]);
-    if (allocError) return soMapErrorResponse(req, ctx, "SO_MAP_ALLOCATION_FETCH_FAILED", 500, "Unable to load FO allocations.");
-    if (soMapAllocError) return soMapErrorResponse(req, ctx, "SO_MAP_ALLOCATION_FETCH_FAILED", 500, "Unable to load FO allocations.");
+    // §8E — foIds grows with every FO ever raised for this company (CMP006 already at 144 and
+    // climbing), so a plain .in() here is exactly the pattern that silently broke IN02/PR24 once
+    // a filter's id list crossed PostgREST's GET URL-length cliff. Chunked defensively even
+    // though today's counts are still comfortably under that threshold.
+    let allocRows: JsonRecord[];
+    let soMapAllocRows: JsonRecord[];
+    try {
+      [allocRows, soMapAllocRows] = await Promise.all([
+        fetchInChunks<JsonRecord>(foIds, (idChunk) =>
+          serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+            .select("fo_id, plan_feed_item_id, allocated_qty").in("fo_id", idChunk).eq("status", "ACTIVE")),
+        fetchInChunks<JsonRecord>(foIds, (idChunk) =>
+          serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+            .select("id, fo_id").in("fo_id", idChunk)),
+      ]);
+    } catch {
+      return soMapErrorResponse(req, ctx, "SO_MAP_ALLOCATION_FETCH_FAILED", 500, "Unable to load FO allocations.");
+    }
 
     // §133.18 -- an FO isn't pickable here unless (a) it already has at
     // least one Packing PO allocated (plan_feed_packing_order_allocation --
     // no point mapping an SO to demand nothing's been produced against yet)
     // and (b) it isn't already fully dispatched. Both were previously
     // unchecked -- this endpoint only excluded CANCELLED FOs.
-    const { data: pkoAllocRows, error: pkoAllocError } = foIds.length
-      ? await serviceRoleClient.schema("erp_production").from("plan_feed_packing_order_allocation")
-          .select("plan_feed_id, packing_order_id, allocated_qty_kg").in("plan_feed_id", foIds)
-      : { data: [] as JsonRecord[], error: null };
-    if (pkoAllocError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_PACKING_ALLOCATION_FETCH_FAILED", 500, "Unable to load FO Packing PO allocations.");
+    let pkoAllocRows: JsonRecord[];
+    try {
+      pkoAllocRows = await fetchInChunks<JsonRecord>(foIds, (idChunk) =>
+        serviceRoleClient.schema("erp_production").from("plan_feed_packing_order_allocation")
+          .select("plan_feed_id, packing_order_id, allocated_qty_kg").in("plan_feed_id", idChunk));
+    } catch {
+      return soMapErrorResponse(req, ctx, "SO_MAP_FO_PACKING_ALLOCATION_FETCH_FAILED", 500, "Unable to load FO Packing PO allocations.");
+    }
     const pkoCountByFo = new Map<string, number>();
-    for (const row of (pkoAllocRows ?? []) as JsonRecord[]) {
+    for (const row of pkoAllocRows) {
       const foId = toTrimmedString(row.plan_feed_id);
       pkoCountByFo.set(foId, (pkoCountByFo.get(foId) ?? 0) + 1);
     }
@@ -379,20 +391,30 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
     // Table (plan_feed.handlers.ts), duplicated locally rather than
     // cross-imported (small, domain-local helper, matches this codebase's
     // existing convention of not sharing handler internals across files).
-    const soMapAllocIds = ((soMapAllocRows ?? []) as JsonRecord[]).map((row) => String(row.id));
-    const foBySoMapAllocId = new Map(((soMapAllocRows ?? []) as JsonRecord[]).map((row) => [String(row.id), toTrimmedString(row.fo_id)]));
+    const soMapAllocIds = soMapAllocRows.map((row) => String(row.id));
+    const foBySoMapAllocId = new Map(soMapAllocRows.map((row) => [String(row.id), toTrimmedString(row.fo_id)]));
     const dispatchedByFo = new Map<string, number>();
     if (soMapAllocIds.length > 0) {
-      const { data: dcLineRows, error: dcLineError } = await serviceRoleClient
-        .schema("erp_procurement").from("delivery_challan_line").select("id, so_map_allocation_id").in("so_map_allocation_id", soMapAllocIds);
-      if (dcLineError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_DISPATCH_LOOKUP_FAILED", 500, "Unable to load DO lines for dispatch status.");
-      const foByDcLineId = new Map(((dcLineRows ?? []) as JsonRecord[]).map((row) => [String(row.id), foBySoMapAllocId.get(toTrimmedString(row.so_map_allocation_id)) ?? ""]));
+      let dcLineRows: JsonRecord[];
+      try {
+        dcLineRows = await fetchInChunks<JsonRecord>(soMapAllocIds, (idChunk) =>
+          serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+            .select("id, so_map_allocation_id").in("so_map_allocation_id", idChunk));
+      } catch {
+        return soMapErrorResponse(req, ctx, "SO_MAP_FO_DISPATCH_LOOKUP_FAILED", 500, "Unable to load DO lines for dispatch status.");
+      }
+      const foByDcLineId = new Map(dcLineRows.map((row) => [String(row.id), foBySoMapAllocId.get(toTrimmedString(row.so_map_allocation_id)) ?? ""]));
       const dcLineIds = [...foByDcLineId.keys()];
       if (dcLineIds.length > 0) {
-        const { data: invoiceLineRows, error: invoiceLineError } = await serviceRoleClient
-          .schema("erp_procurement").from("sales_invoice_line").select("dc_line_id, quantity, sales_invoice:invoice_id(status)").in("dc_line_id", dcLineIds);
-        if (invoiceLineError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_DISPATCH_LOOKUP_FAILED", 500, "Unable to load invoice lines for dispatch status.");
-        for (const row of (invoiceLineRows ?? []) as JsonRecord[]) {
+        let invoiceLineRows: JsonRecord[];
+        try {
+          invoiceLineRows = await fetchInChunks<JsonRecord>(dcLineIds, (idChunk) =>
+            serviceRoleClient.schema("erp_procurement").from("sales_invoice_line")
+              .select("dc_line_id, quantity, sales_invoice:invoice_id(status)").in("dc_line_id", idChunk));
+        } catch {
+          return soMapErrorResponse(req, ctx, "SO_MAP_FO_DISPATCH_LOOKUP_FAILED", 500, "Unable to load invoice lines for dispatch status.");
+        }
+        for (const row of invoiceLineRows) {
           if (toUpperTrimmedString((row.sales_invoice as JsonRecord | null)?.status) !== "POSTED") continue;
           const foId = foByDcLineId.get(toTrimmedString(row.dc_line_id));
           if (!foId) continue;
@@ -401,13 +423,17 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
       }
     }
 
-    const { data: foItemRows, error: foItemError } = foIds.length
-      ? await serviceRoleClient.schema("erp_production").from("plan_feed_item").select("id, plan_feed_id, material_id, sku, description, ordered_qty_kg").in("plan_feed_id", foIds)
-      : { data: [] as JsonRecord[], error: null };
-    if (foItemError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_ITEM_LOOKUP_FAILED", 500, "Unable to load FO items.");
+    let foItemRows: JsonRecord[];
+    try {
+      foItemRows = await fetchInChunks<JsonRecord>(foIds, (idChunk) =>
+        serviceRoleClient.schema("erp_production").from("plan_feed_item")
+          .select("id, plan_feed_id, material_id, sku, description, ordered_qty_kg").in("plan_feed_id", idChunk));
+    } catch {
+      return soMapErrorResponse(req, ctx, "SO_MAP_FO_ITEM_LOOKUP_FAILED", 500, "Unable to load FO items.");
+    }
     const allocatedByFo = new Map<string, number>();
     const allocatedByItem = new Map<string, number>();
-    for (const alloc of (allocRows ?? []) as JsonRecord[]) {
+    for (const alloc of allocRows) {
       const foId = String(alloc.fo_id);
       allocatedByFo.set(foId, (allocatedByFo.get(foId) ?? 0) + Number(alloc.allocated_qty ?? 0));
       const itemId = toTrimmedString(alloc.plan_feed_item_id);
@@ -419,21 +445,28 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
     // locked flow: "FO বেছে নিলে তবেই material/pack/volume দেখাবে, user নিজের
     // দরকার মতো change করতে পারে". Pulled from the allocated Packing POs'
     // own material_id/num_packs/fill_qty_per_pack/actual_qty_kg.
-    const pkoIdsForDetail = [...new Set(((pkoAllocRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.packing_order_id)).filter(Boolean))];
-    const { data: pkoDetailRows, error: pkoDetailError } = pkoIdsForDetail.length
-      ? await serviceRoleClient.schema("erp_production").from("packing_order")
-          .select("id, po_number, batch_number, material_id, num_packs, fill_qty_per_pack, actual_qty_kg, status").in("id", pkoIdsForDetail)
-      : { data: [] as JsonRecord[], error: null };
-    if (pkoDetailError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_PACKING_DETAIL_FETCH_FAILED", 500, "Unable to load Packing PO details.");
-    const pkoMaterialIds = [...new Set(((pkoDetailRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
-    const { data: pkoMaterialRows, error: pkoMaterialError } = pkoMaterialIds.length
-      ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name").in("id", pkoMaterialIds)
-      : { data: [] as JsonRecord[], error: null };
-    if (pkoMaterialError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_PACKING_DETAIL_FETCH_FAILED", 500, "Unable to load Packing PO material details.");
-    const pkoMaterialMap = new Map(((pkoMaterialRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
-    const pkoDetailMap = new Map(((pkoDetailRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+    const pkoIdsForDetail = [...new Set(pkoAllocRows.map((row) => toTrimmedString(row.packing_order_id)).filter(Boolean))];
+    let pkoDetailRows: JsonRecord[];
+    try {
+      pkoDetailRows = await fetchInChunks<JsonRecord>(pkoIdsForDetail, (idChunk) =>
+        serviceRoleClient.schema("erp_production").from("packing_order")
+          .select("id, po_number, batch_number, material_id, num_packs, fill_qty_per_pack, actual_qty_kg, status").in("id", idChunk));
+    } catch {
+      return soMapErrorResponse(req, ctx, "SO_MAP_FO_PACKING_DETAIL_FETCH_FAILED", 500, "Unable to load Packing PO details.");
+    }
+    const pkoMaterialIds = [...new Set(pkoDetailRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+    let pkoMaterialRows: JsonRecord[];
+    try {
+      pkoMaterialRows = await fetchInChunks<JsonRecord>(pkoMaterialIds, (idChunk) =>
+        serviceRoleClient.schema("erp_master").from("material_master")
+          .select("id, pace_code, material_name").in("id", idChunk));
+    } catch {
+      return soMapErrorResponse(req, ctx, "SO_MAP_FO_PACKING_DETAIL_FETCH_FAILED", 500, "Unable to load Packing PO material details.");
+    }
+    const pkoMaterialMap = new Map(pkoMaterialRows.map((row) => [String(row.id), row]));
+    const pkoDetailMap = new Map(pkoDetailRows.map((row) => [String(row.id), row]));
     const pkoDetailsByFo = new Map<string, JsonRecord[]>();
-    for (const row of (pkoAllocRows ?? []) as JsonRecord[]) {
+    for (const row of pkoAllocRows) {
       const foId = toTrimmedString(row.plan_feed_id);
       const pko = pkoDetailMap.get(toTrimmedString(row.packing_order_id));
       if (!pko || toUpperTrimmedString(pko.status) !== "FINAL") continue;

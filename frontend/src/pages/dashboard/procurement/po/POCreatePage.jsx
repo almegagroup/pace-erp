@@ -6,11 +6,12 @@ import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from 
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
+import ModalBase from "../../../../components/layer/ModalBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useCostCentersQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery, usePortOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { openScreen, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { getVendorMaterialInfo } from "../../om/omApi.js";
 import {
@@ -253,6 +254,11 @@ export default function POCreatePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  // Blocking, not just an inline error banner -- business owner lock (2026-09-01): a PO must
+  // never be creatable for a vendor whose Lead Time Master isn't set up yet, since the CSN's
+  // ETD/ETA cascade freezes wrong at creation and never self-corrects later. OK sends the user
+  // back to the PO list/main page instead of leaving them on a create form they can't submit.
+  const [leadTimeWarning, setLeadTimeWarning] = useState("");
 
   const availableCompanyIds = useMemo(
     () => new Set((runtimeContext?.availableCompanies ?? []).map((entry) => entry.id)),
@@ -596,7 +602,11 @@ export default function POCreatePage() {
         navigate(`/dashboard/procurement/purchase-orders/${encodeURIComponent(created?.id)}`);
       }
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PO_CREATE_FAILED");
+      if (saveError?.code === "PROCUREMENT_LEAD_TIME_MASTER_MISSING") {
+        setLeadTimeWarning(saveError.message || "Lead Time Master is not set up for this vendor. Configure it before creating this PO.");
+      } else {
+        setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PO_CREATE_FAILED");
+      }
     } finally {
       setSaving(false);
     }
@@ -1015,6 +1025,24 @@ export default function POCreatePage() {
           }
         }}
       />
+
+      <ModalBase
+        visible={Boolean(leadTimeWarning)}
+        eyebrow="Lead Time Master Missing"
+        title="Cannot Create This PO Yet"
+        onEscape={() => { setLeadTimeWarning(""); openScreen(OPERATION_SCREENS.PROC_PO_LIST.screen_code); navigate("/dashboard/procurement/purchase-orders"); }}
+        actions={
+          <button
+            type="button"
+            onClick={() => { setLeadTimeWarning(""); openScreen(OPERATION_SCREENS.PROC_PO_LIST.screen_code); navigate("/dashboard/procurement/purchase-orders"); }}
+            className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950"
+          >
+            OK
+          </button>
+        }
+      >
+        <p className="text-sm text-slate-700">{leadTimeWarning}</p>
+      </ModalBase>
 
     </>
   );

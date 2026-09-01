@@ -957,6 +957,19 @@ export async function createGateExitInboundHandler(
       return procurementErrorResponse(req, ctx, "GEX_ALREADY_EXISTS", 400, "Inbound gate exit already exists for this gate entry.");
     }
 
+    // Found live 2026-09-01 (business owner, SNF LIQUID GRN backfill): a vehicle exited the
+    // gate a day BEFORE its own Gate Entry date -- both rows were data-entered the same morning
+    // (backdating a real-world event days later), and nothing stopped the exit date from landing
+    // before the entry date it belongs to. Hard-block that ordering here.
+    const effectiveExitDate = toTrimmedString(body.exit_date) || todayIsoDate();
+    const gateEntryDate = toTrimmedString((gateEntry as GateEntryRow).ge_date);
+    if (gateEntryDate && effectiveExitDate < gateEntryDate) {
+      return procurementErrorResponse(
+        req, ctx, "GEX_EXIT_DATE_BEFORE_ENTRY", 400,
+        `Gate Exit date (${effectiveExitDate}) cannot be earlier than this Gate Entry's date (${gateEntryDate}).`,
+      );
+    }
+
     const grossWeightTotal = lines.reduce((sum, line) => sum + (parseNullableNumber(line.gross_weight) ?? 0), 0);
     const tareWeight = parseNullableNumber(body.tare_weight);
     const hasBulkLine = lines.some((line) => parseNullableNumber(line.gross_weight) !== null);
@@ -974,7 +987,7 @@ export async function createGateExitInboundHandler(
       .from("gate_exit_inbound")
       .insert({
         exit_number: exitNumber,
-        exit_date: toTrimmedString(body.exit_date) || todayIsoDate(),
+        exit_date: effectiveExitDate,
         exit_time: toTrimmedString(body.exit_time) || null,
         company_id: gateEntry.company_id,
         gate_entry_id: gateEntryId,

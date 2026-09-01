@@ -1032,7 +1032,7 @@ export async function approveStrokeMasterHandler(
 
     // A newly approved shared revision replaces the prior active formulation for
     // its own PO type. The database function performs the switch atomically.
-    const { error: activateError } = await serviceRoleClient.rpc("activate_stroke_po_type", {
+    const { error: activateError } = await serviceRoleClient.schema("erp_production").rpc("activate_stroke_po_type", {
       p_stroke_master_id: id,
       p_actor: ctx.auth_user_id,
     });
