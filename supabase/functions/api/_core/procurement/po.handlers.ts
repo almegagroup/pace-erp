@@ -1199,6 +1199,49 @@ export async function createPOHandler(
       }
     }
 
+    // Found live 2026-09-01 (CSN Tracker date-cascade audit, business owner): a CSN's ETD/ETA
+    // cascade is computed once at creation time and frozen -- if the vendor's Lead Time Master
+    // (Import: vendor + destination port; Domestic: vendor + company) doesn't exist yet, the
+    // cascade silently computes with sail_time/clearance_days/transit_days = 0 and never
+    // self-corrects even after someone adds the real config later (nothing re-triggers the
+    // calculation just because the master data changed). Hard-blocking here, before the PO or
+    // its CSNs can ever be created, is cheaper and safer than trying to catch every stale CSN
+    // after the fact. Skipped for opening POs -- those record already-completed historical
+    // transactions, not a live shipment whose ETA needs forward tracking.
+    const leadTimeQuery = isOpeningPo ? null : vendorType === "IMPORT"
+      ? serviceRoleClient
+        .schema("erp_master")
+        .from("lead_time_master_import")
+        .select("id")
+        .eq("vendor_id", vendorId)
+        .eq("port_of_discharge_id", destinationPortId)
+        .eq("active", true)
+        .limit(1)
+        .maybeSingle()
+      : serviceRoleClient
+        .schema("erp_master")
+        .from("lead_time_master_domestic")
+        .select("id")
+        .eq("vendor_id", vendorId)
+        .eq("company_id", companyId)
+        .eq("active", true)
+        .limit(1)
+        .maybeSingle();
+    if (leadTimeQuery) {
+      const { data: leadTimeRow, error: leadTimeError } = await leadTimeQuery;
+      if (leadTimeError) {
+        throw new Error("PROCUREMENT_LEAD_TIME_LOOKUP_FAILED");
+      }
+      if (!leadTimeRow) {
+        return procurementErrorResponse(
+          req, ctx, "PROCUREMENT_LEAD_TIME_MASTER_MISSING", 422,
+          vendorType === "IMPORT"
+            ? "Import Lead Time Master is not set up for this vendor and destination port. Configure it before creating this PO."
+            : "Domestic Lead Time Master is not set up for this vendor and company. Configure it before creating this PO.",
+        );
+      }
+    }
+
     const rawMaterials: unknown[] = Array.isArray(body.materials)
       ? body.materials
       : Array.isArray(body.lines)
