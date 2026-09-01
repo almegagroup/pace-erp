@@ -154,9 +154,10 @@ export default function SODetailPage() {
         cgstAmount: totals.cgstAmount + toNumber(line.cgst_amount),
         sgstAmount: totals.sgstAmount + toNumber(line.sgst_amount),
         igstAmount: totals.igstAmount + toNumber(line.igst_amount),
+        roundOffAmount: totals.roundOffAmount + toNumber(line.round_off_amount),
         totalValue: totals.totalValue + lineTotal,
       };
-    }, { netAmount: 0, cgstAmount: 0, sgstAmount: 0, igstAmount: 0, totalValue: 0 });
+    }, { netAmount: 0, cgstAmount: 0, sgstAmount: 0, igstAmount: 0, roundOffAmount: 0, totalValue: 0 });
   }, [detail?.lines]);
   const customers = customerQuery.customers;
   const materials = materialQuery.materials;
@@ -624,10 +625,15 @@ export default function SODetailPage() {
                       row.batch_number || "-"
                     ),
                 },
-                { key: "net_amount", label: "Net Amount", width: "110px", align: "right", render: (row) => formatMoney(toNumber(row.total_value) - toNumber(row.gst_amount)) },
+                { key: "net_amount", label: "Net Amount", width: "110px", align: "right", render: (row) => formatMoney(toNumber(row.total_value) - toNumber(row.gst_amount) - toNumber(row.round_off_amount)) },
                 { key: "cgst_amount", label: "CGST", width: "90px", align: "right", render: (row) => formatMoney(row.cgst_amount) },
                 { key: "sgst_amount", label: "SGST", width: "90px", align: "right", render: (row) => formatMoney(row.sgst_amount) },
                 { key: "igst_amount", label: "IGST", width: "90px", align: "right", render: (row) => formatMoney(row.igst_amount) },
+                // Read-only here — editing an existing line's commercial fields
+                // (rate/GST/round off) on this page doesn't recompute total_value
+                // server-side yet (a pre-existing gap, separate from Round Off
+                // itself); shows whatever is actually stored/posted.
+                { key: "round_off_amount", label: "Round Off", width: "90px", align: "right", render: (row) => formatMoney(row.round_off_amount) },
                 { key: "total_value", label: "Total Value", width: "110px", align: "right", render: (row) => formatMoney(row.total_value) },
                 {
                   key: "knock_off",
@@ -737,6 +743,7 @@ export default function SODetailPage() {
               <ErpFieldPreview label="CGST" value={formatMoney(commercialTotals.cgstAmount)} />
               <ErpFieldPreview label="SGST" value={formatMoney(commercialTotals.sgstAmount)} />
               <ErpFieldPreview label="IGST" value={formatMoney(commercialTotals.igstAmount)} />
+              <ErpFieldPreview label="Round Off" value={formatMoney(commercialTotals.roundOffAmount)} />
               <ErpFieldPreview label="Total Value" value={formatMoney(commercialTotals.totalValue)} tone="sky" />
             </div>
           </ErpSectionCard>
