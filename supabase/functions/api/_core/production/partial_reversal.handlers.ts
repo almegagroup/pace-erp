@@ -121,37 +121,80 @@ async function assertPartialReversalCompanyScope(ctx: ProdHandlerContext, compan
   if (error || !data) throw new Error("PR19_SCOPE_VIOLATION");
 }
 
-async function postStockMovement(params: {
+type MovementSpec = Record<string, unknown>;
+
+/*
+ * §8D / feasibility §107.8 — builds an entry for erp_inventory.post_document instead
+ * of posting straight away (this used to be a direct post_stock_movement() RPC call
+ * per line, each its own transaction). Same param shape as before, so every call
+ * site only needed its `await postStockMovement({...})` swapped for
+ * `movements.push(toMovement({...}, lineRef))`.
+ *
+ * `lineRef` is how each posting's resulting stock_ledger_id finds its way back to
+ * the right partial_batch_reversal_line row inside complete_partial_batch_reversal —
+ * a process_order_line id / packing_order_line id for RM/PM lines, or a fixed label
+ * (SFG_OUT / SFG_IN / SFG_OUT2 / SKU_OUT) for the header-level SFG/FG legs.
+ */
+function toMovement(params: {
   documentNumber: string; documentDate: string; postingDate: string;
   movementTypeCode: string; companyId: unknown; storageLocationId: unknown;
   materialId: unknown; quantity: number; baseUomCode: string; unitValue: number;
-  stockTypeCode: string; direction: "IN" | "OUT"; postedBy: string; reversalOfId?: string | null;
+  stockTypeCode: string; direction: "IN" | "OUT"; reversalOfId?: string | null;
   batchNumber?: string | null;
   // §106: Material Document identity (MBLNR+MJAHR) for this reversal event; the
   // PARTIAL_REV business number (documentNumber) is carried as the reference.
   matDoc?: MaterialDocumentRef;
-  referenceDocumentId?: string | null;
-}): Promise<{ stock_document_id: string; stock_ledger_id: string }> {
-  const { data, error } = await serviceRoleClient.schema("erp_inventory").rpc("post_stock_movement", {
-    p_document_number: params.documentNumber, p_document_date: params.documentDate,
-    p_posting_date: params.postingDate, p_movement_type_code: params.movementTypeCode,
-    p_company_id: params.companyId, p_storage_location_id: params.storageLocationId,
-    p_material_id: params.materialId, p_quantity: params.quantity,
-    p_base_uom_code: params.baseUomCode, p_unit_value: params.unitValue,
-    p_stock_type_code: params.stockTypeCode, p_direction: params.direction,
-    p_posted_by: params.postedBy, p_reversal_of_id: params.reversalOfId ?? null,
-    p_batch_number: params.batchNumber ?? null,
-    p_material_doc_number: params.matDoc?.docNumber ?? null,
-    p_material_doc_year: params.matDoc?.docYear ?? null,
-    p_reference_document_number: params.matDoc ? params.documentNumber : null,
-    p_reference_document_type: params.matDoc ? "PARTIAL_REV" : null,
-    p_reference_document_id: params.referenceDocumentId ?? null,
-  });
-  if (error || !Array.isArray(data) || data.length === 0) {
-    console.error("[partial_reversal.postStockMovement] rpc failed:", JSON.stringify(error));
-    throw new Error(`PR19_STOCK_POST_FAILED: ${params.movementTypeCode}`);
+}, lineRef: string): MovementSpec {
+  return {
+    line_ref: lineRef,
+    document_number: params.documentNumber,
+    document_date: params.documentDate,
+    posting_date: params.postingDate,
+    movement_type_code: params.movementTypeCode,
+    company_id: params.companyId,
+    storage_location_id: params.storageLocationId,
+    material_id: params.materialId,
+    quantity: params.quantity,
+    base_uom_code: params.baseUomCode,
+    unit_value: params.unitValue,
+    stock_type_code: params.stockTypeCode,
+    direction: params.direction,
+    reversal_of_id: params.reversalOfId ?? null,
+    batch_number: params.batchNumber ?? null,
+    material_doc_number: params.matDoc?.docNumber ?? null,
+    material_doc_year: params.matDoc?.docYear ?? null,
+    reference_document_number: params.matDoc ? params.documentNumber : null,
+  };
+}
+
+/*
+ * One round trip, one transaction (CLAUDE.md §8D, feasibility §107.8). Every
+ * movement plus the registered completion function (complete_partial_batch_reversal)
+ * run together inside erp_inventory.post_document — any failure rolls back all of
+ * it, so a half-posted reversal (stock moved but the Reco/Costing credit rows never
+ * written — the exact incident found live 2026-09-01, batch EV02625) is no longer
+ * possible.
+ */
+async function postDocument(args: {
+  referenceDocumentId: string;
+  movements: MovementSpec[];
+  postedBy: string;
+  context: Record<string, unknown>;
+}): Promise<void> {
+  const { error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .rpc("post_document", {
+      p_reference_document_type: "PARTIAL_REV",
+      p_reference_document_id: args.referenceDocumentId,
+      p_movements: args.movements,
+      p_posted_by: args.postedBy,
+      p_context: args.context,
+    });
+  if (error) {
+    console.error("[partial_reversal.postDocument] rpc failed:", JSON.stringify(error));
+    const dbReason = toTrimmedString((error as { message?: string } | null)?.message);
+    throw new Error(dbReason ? `PR19_POST_FAILED: ${dbReason}` : "PR19_POST_FAILED");
   }
-  return data[0] as { stock_document_id: string; stock_ledger_id: string };
 }
 
 // post_stock_movement()'s p_reversal_of_id references stock_document.id, not
@@ -557,6 +600,7 @@ type RmIntPreviewLine = {
   proportional_ap_approved_qty: number;
   proportional_variance_qty: number;
   storage_location_id: string | null;
+  approved_status: string;
 };
 
 // Shared by the Page 3 preview and the Create handler — always recomputed
@@ -580,7 +624,7 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
   const { data: recoRows, error: recoErr } = await serviceRoleClient
     .schema("erp_production")
     .from("process_order_line_reco")
-    .select("process_order_line_id, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, variance_qty")
+    .select("process_order_line_id, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, variance_qty, approved_status")
     .eq("process_order_id", processOrderId)
     .eq("is_voided", false)
     .in("source_txn_type", ["PRODUCTION", "OPENING", "PID_ADJUSTMENT"])
@@ -635,6 +679,7 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
       proportional_ap_approved_qty: apApprovedQty * ratio,
       proportional_variance_qty: varianceQty * ratio,
       storage_location_id: slocByLineId.get(String(row.process_order_line_id ?? "")) ?? null,
+      approved_status: String(row.approved_status ?? "YES"),
     };
   });
 }
@@ -854,15 +899,16 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
     const today = todayIso();
     const postedBy = ctx.auth_user_id;
     const lineInserts: JsonRecord[] = [];
+    const movements: MovementSpec[] = [];
+    // Populated inside whichever branch runs below, always with the correct
+    // batch-wide RM/INT ratio for that row type (SFG: reversalRatio itself;
+    // SKU: ratioRm) — reused as-is for the Reco credit rows after the branch,
+    // so buildRmIntPreview only runs once per request, not twice.
+    let rmIntLines: RmIntPreviewLine[] = [];
     let selectedMaterialId = "";
     let selectedStorageLocationId = "";
     let actualTotalOutput = 0;
     let reversalRatio = 0;
-    // §106 Phase 3: the RM/INT (batch-wide) ratio used for the Reco credit rows. For an
-    // SFG row this equals reversalRatio; for a SKU row reversalRatio is the PM ratio
-    // (per Packing PO) while RM/INT must credit against the whole batch — so track it
-    // separately rather than reusing reversalRatio.
-    let reversalRatioForReco = 0;
     const docNumber = await generateGlobalDocNumber("PARTIAL_REV");
     // §106: one Material Document (MBLNR+MJAHR) for this whole partial-reversal event —
     // every movement below (P102/P262/P261) is an item under it; the PARTIAL_REV business
@@ -886,7 +932,6 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       selectedStorageLocationId = sfgSlocId;
       actualTotalOutput = processOrderActualQty;
       reversalRatio = reverseQty / processOrderActualQty;
-      reversalRatioForReco = reversalRatio; // SFG row: RM ratio == the row's own ratio
 
       const materialMap = await getMaterialMapByIds([selectedMaterialId], "id, base_uom_code");
       const sfgBaseUom = String(materialMap.get(selectedMaterialId)?.base_uom_code ?? "KG");
@@ -899,29 +944,25 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         companyId, selectedMaterialId, sfgSlocId,
       );
 
-      // DEPENDENT: all postings share this brand-new document_number — see
-      // finalizePackingOrderHandler's own comment for why this must be
-      // sequential (post_stock_movement()'s item_number lock has nothing to
-      // lock on the first-ever posting for a document_number).
       // Step 1: SFG P102 — dissolve reverse_qty out of S003. OUT: snapshot consumes at the
       // current rate; carry the SFG's own booked rate (§104.8) for ledger value symmetry.
-      const step1 = await postStockMovement({
+      movements.push(toMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode: "P102", companyId, storageLocationId: sfgSlocId,
         materialId: selectedMaterialId, quantity: reverseQty, baseUomCode: sfgBaseUom, unitValue: fgRef.rate,
-        stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy, reversalOfId: fgRef.docId,
+        stockTypeCode: "UNRESTRICTED", direction: "OUT", reversalOfId: fgRef.docId,
         batchNumber: String(poData.batch_number ?? ""),
-        matDoc, referenceDocumentId: processOrderId,
-      });
+        matDoc,
+      }, "SFG_OUT"));
       lineInserts.push({
         line_type: "SFG", material_id: selectedMaterialId, formulation_material_id: null, included: true,
         qty: reverseQty, uom_code: sfgBaseUom, movement_type_code: "P102", direction: "OUT",
-        storage_location_id: sfgSlocId, stock_ledger_id: step1.stock_ledger_id, display_order: 1,
+        storage_location_id: sfgSlocId, line_ref: "SFG_OUT", display_order: 1,
       });
 
       // Step 2: RM/INT P262 — return proportionally to each material's own
       // original 261 issue location.
-      const rmIntLines = await buildRmIntPreview(processOrderId, reversalRatio);
+      rmIntLines = await buildRmIntPreview(processOrderId, reversalRatio);
       const { data: polRows, error: polErr } = await serviceRoleClient
         .schema("erp_production")
         .from("process_order_line")
@@ -949,18 +990,18 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
           toTrimmedString(pol?.stock_ledger_id), rmRefMap, companyId, effectiveMaterialId, slocId,
         );
 
-        const posting = await postStockMovement({
+        movements.push(toMovement({
           documentNumber: docNumber, documentDate: today, postingDate: today,
           movementTypeCode: "P262", companyId, storageLocationId: slocId,
           materialId: effectiveMaterialId, quantity: rmLine.proportional_actual_qty, baseUomCode: baseUom, unitValue: rmRef.rate,
-          stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId: rmRef.docId,
+          stockTypeCode: "UNRESTRICTED", direction: "IN", reversalOfId: rmRef.docId,
           batchNumber: null,
-          matDoc, referenceDocumentId: processOrderId,
-        });
+          matDoc,
+        }, rmLine.process_order_line_id));
         lineInserts.push({
           line_type: rmLine.line_material_type, material_id: effectiveMaterialId, formulation_material_id: rmLine.material_id,
           included: true, qty: rmLine.proportional_actual_qty, uom_code: baseUom, movement_type_code: "P262", direction: "IN",
-          storage_location_id: slocId, stock_ledger_id: posting.stock_ledger_id, display_order: displayOrder,
+          storage_location_id: slocId, line_ref: rmLine.process_order_line_id, display_order: displayOrder,
         });
         displayOrder += 1;
       }
@@ -1008,7 +1049,6 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       const ratioRm = sfgEquivalentQty / processOrderActualQty;
       const ratioPm = reverseQty / packingActualQty;
       reversalRatio = ratioPm;
-      reversalRatioForReco = ratioRm; // SKU row: RM/INT credit against the whole batch
 
       const { data: sfgLine, error: sfgLineErr } = await serviceRoleClient
         .schema("erp_production")
@@ -1040,39 +1080,37 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       const fgRef = await resolveLegRef(fgLedgerId, fgRefMap, companyId, selectedMaterialId, fgSlocId);
       const sfgRef = await resolveLegRef(sfgLedgerId, sfgRefMap, companyId, sfgMaterialId, sfgLineSlocId);
 
-      // DEPENDENT: see the SFG-row branch above for why this must stay
-      // sequential — same brand-new-document_number item_number race.
       // Step 1: SKU/FG P102 — dissolve reverse_qty out of F003. OUT: snapshot consumes at the
       // current rate; carry the FG's own booked rate (§104.8) for ledger value symmetry.
-      const step1 = await postStockMovement({
+      movements.push(toMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode: "P102", companyId, storageLocationId: fgSlocId,
         materialId: selectedMaterialId, quantity: reverseQty, baseUomCode: fgBaseUom, unitValue: fgRef.rate,
-        stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy, reversalOfId: fgRef.docId,
+        stockTypeCode: "UNRESTRICTED", direction: "OUT", reversalOfId: fgRef.docId,
         batchNumber: String(poData.batch_number ?? ""),
-        matDoc, referenceDocumentId: processOrderId,
-      });
+        matDoc,
+      }, "SKU_OUT"));
       lineInserts.push({
         line_type: "SKU", material_id: selectedMaterialId, formulation_material_id: null, included: true,
         qty: reverseQty, uom_code: fgBaseUom, movement_type_code: "P102", direction: "OUT",
-        storage_location_id: fgSlocId, stock_ledger_id: step1.stock_ledger_id, display_order: 1,
+        storage_location_id: fgSlocId, line_ref: "SKU_OUT", display_order: 1,
       });
 
       // Step 2: SFG P262 — reverses the original Packing-PO-Final P261, brings the SFG back
       // into existence at S003. IN: restore at the SFG's own booked rate (§104.8) so the
       // weighted average is not diluted toward zero.
-      const step2 = await postStockMovement({
+      movements.push(toMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode: "P262", companyId, storageLocationId: sfgLineSlocId,
         materialId: sfgMaterialId, quantity: sfgEquivalentQty, baseUomCode: sfgBaseUom, unitValue: sfgRef.rate,
-        stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId: sfgRef.docId,
+        stockTypeCode: "UNRESTRICTED", direction: "IN", reversalOfId: sfgRef.docId,
         batchNumber: String(poData.batch_number ?? ""),
-        matDoc, referenceDocumentId: processOrderId,
-      });
+        matDoc,
+      }, "SFG_IN"));
       lineInserts.push({
         line_type: "SFG", material_id: sfgMaterialId, formulation_material_id: null, included: true,
         qty: sfgEquivalentQty, uom_code: sfgBaseUom, movement_type_code: "P262", direction: "IN",
-        storage_location_id: sfgLineSlocId, stock_ledger_id: step2.stock_ledger_id, display_order: 2,
+        storage_location_id: sfgLineSlocId, line_ref: "SFG_IN", display_order: 2,
       });
 
       // Step 3: SFG P261 again, immediately — this is the reversal's own
@@ -1080,23 +1118,23 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       // No reversalOfId: it's a fresh issue, net SFG balance across steps
       // 2+3 is unchanged but the ledger keeps two distinguishable entries.
       // Same SFG rate as Step 2 so the +q/-q pair nets to zero value as well as zero qty.
-      const step3 = await postStockMovement({
+      movements.push(toMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode: "P261", companyId, storageLocationId: sfgLineSlocId,
         materialId: sfgMaterialId, quantity: sfgEquivalentQty, baseUomCode: sfgBaseUom, unitValue: sfgRef.rate,
-        stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy, reversalOfId: null,
+        stockTypeCode: "UNRESTRICTED", direction: "OUT", reversalOfId: null,
         batchNumber: String(poData.batch_number ?? ""),
-        matDoc, referenceDocumentId: processOrderId,
-      });
+        matDoc,
+      }, "SFG_OUT2"));
       lineInserts.push({
         line_type: "SFG", material_id: sfgMaterialId, formulation_material_id: null, included: true,
         qty: sfgEquivalentQty, uom_code: sfgBaseUom, movement_type_code: "P261", direction: "OUT",
-        storage_location_id: sfgLineSlocId, stock_ledger_id: step3.stock_ledger_id, display_order: 3,
+        storage_location_id: sfgLineSlocId, line_ref: "SFG_OUT2", display_order: 3,
       });
 
       // Step 4: RM/INT P262, proportional (from the original Process PO
       // batch's own Actual RM Ratio, ratioRm — batch-wide, not this one PO).
-      const rmIntLines = await buildRmIntPreview(processOrderId, ratioRm);
+      rmIntLines = await buildRmIntPreview(processOrderId, ratioRm);
       const { data: polRows, error: polErr } = await serviceRoleClient
         .schema("erp_production")
         .from("process_order_line")
@@ -1123,18 +1161,18 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
           toTrimmedString(pol?.stock_ledger_id), rmRefMap, companyId, effectiveMaterialId, slocId,
         );
 
-        const posting = await postStockMovement({
+        movements.push(toMovement({
           documentNumber: docNumber, documentDate: today, postingDate: today,
           movementTypeCode: "P262", companyId, storageLocationId: slocId,
           materialId: effectiveMaterialId, quantity: rmLine.proportional_actual_qty, baseUomCode: baseUom, unitValue: rmRef.rate,
-          stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId: rmRef.docId,
+          stockTypeCode: "UNRESTRICTED", direction: "IN", reversalOfId: rmRef.docId,
           batchNumber: null,
-          matDoc, referenceDocumentId: processOrderId,
-        });
+          matDoc,
+        }, rmLine.process_order_line_id));
         lineInserts.push({
           line_type: rmLine.line_material_type, material_id: effectiveMaterialId, formulation_material_id: rmLine.material_id,
           included: true, qty: rmLine.proportional_actual_qty, uom_code: baseUom, movement_type_code: "P262", direction: "IN",
-          storage_location_id: slocId, stock_ledger_id: posting.stock_ledger_id, display_order: displayOrder,
+          storage_location_id: slocId, line_ref: rmLine.process_order_line_id, display_order: displayOrder,
         });
         displayOrder += 1;
       }
@@ -1169,7 +1207,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
             line_type: "PM", material_id: effectiveMaterialId, formulation_material_id: String(pmLine.material_id ?? ""),
             included: false, qty: proportionalQty, uom_code: String(pmMaterialMap.get(effectiveMaterialId)?.base_uom_code ?? "KG"),
             movement_type_code: null, direction: null, storage_location_id: toTrimmedString(pmLine.issue_sloc_id) || null,
-            stock_ledger_id: null, display_order: displayOrder,
+            line_ref: null, display_order: displayOrder,
           });
           displayOrder += 1;
           continue;
@@ -1184,72 +1222,32 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
           toTrimmedString(pmLine.stock_ledger_id), pmRefMap, companyId, effectiveMaterialId, slocId,
         );
 
-        const posting = await postStockMovement({
+        movements.push(toMovement({
           documentNumber: docNumber, documentDate: today, postingDate: today,
           movementTypeCode: "P262", companyId, storageLocationId: slocId,
           materialId: effectiveMaterialId, quantity: proportionalQty, baseUomCode: baseUom, unitValue: pmRef.rate,
-          stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy, reversalOfId: pmRef.docId,
+          stockTypeCode: "UNRESTRICTED", direction: "IN", reversalOfId: pmRef.docId,
           batchNumber: null,
-          matDoc, referenceDocumentId: processOrderId,
-        });
+          matDoc,
+        }, pmLineId));
         lineInserts.push({
           line_type: "PM", material_id: effectiveMaterialId, formulation_material_id: String(pmLine.material_id ?? ""),
           included: true, qty: proportionalQty, uom_code: baseUom, movement_type_code: "P262", direction: "IN",
-          storage_location_id: slocId, stock_ledger_id: posting.stock_ledger_id, display_order: displayOrder,
+          storage_location_id: slocId, line_ref: pmLineId, display_order: displayOrder,
         });
         displayOrder += 1;
       }
     }
 
-    const { data: headerRow, error: headerErr } = await serviceRoleClient
-      .schema("erp_production")
-      .from("partial_batch_reversal")
-      .insert({
-        company_id: companyId,
-        document_number: docNumber,
-        po_type: String(poData.po_type ?? ""),
-        prodshade_material_id: String(poData.material_id ?? ""),
-        source_batch_number: String(poData.batch_number ?? ""),
-        source_process_order_id: processOrderId,
-        selected_row_type: rowType,
-        selected_material_id: selectedMaterialId,
-        selected_storage_location_id: selectedStorageLocationId,
-        selected_packing_order_id: rowType === "SKU" ? packingOrderId : null,
-        reverse_qty: reverseQty,
-        actual_total_output: actualTotalOutput,
-        reversal_ratio: reversalRatio,
-        salvage_batch_number: salvageBatchNumber,
-        salvage_process_order_id: salvageProcessOrderId,
-        status: "POSTED",
-        created_by: postedBy,
-      })
-      .select("id, document_number")
-      .single();
-    if (headerErr || !headerRow) {
-      console.error("[partial_reversal.createPartialBatchReversalHandler] header insert failed:", JSON.stringify(headerErr));
-      throw new Error("PR19_AUDIT_WRITE_FAILED");
-    }
-    const reversalId = String((headerRow as JsonRecord).id);
-
-    if (lineInserts.length > 0) {
-      const { error: linesErr } = await serviceRoleClient
-        .schema("erp_production")
-        .from("partial_batch_reversal_line")
-        .insert(lineInserts.map((line) => ({ ...line, reversal_id: reversalId })));
-      if (linesErr) {
-        console.error("[partial_reversal.createPartialBatchReversalHandler] line insert failed:", JSON.stringify(linesErr));
-        throw new Error("PR19_AUDIT_WRITE_FAILED");
-      }
-    }
-
-    // §106 Phase 3 (§106.6) — Reco/Costing credit rows. The Stock layer was unwound above;
-    // the Costing layer must be unwound too, or SUM()-based AP reco would still bill the
-    // full original consumption. Written as NEGATIVE (credit) RM/INT rows tagged
-    // source_txn_type='PARTIAL_REVERSAL', under their own Reco document, referencing this
-    // PARTIAL_REV business number. Net costing = SUM() then reconciles production − reversals.
-    // Mirrors the original PRODUCTION rows' denormalised header (COID-style flat table).
-    const recoReversalLines = await buildRmIntPreview(processOrderId, reversalRatioForReco);
-    const recoCreditRows = recoReversalLines
+    // §106 Phase 3 (§106.6) — Reco/Costing credit rows. The Stock layer was unwound above
+    // (as `movements`); the Costing layer must be unwound too, or SUM()-based AP reco would
+    // still bill the full original consumption. Written as NEGATIVE (credit) RM/INT rows
+    // tagged source_txn_type='PARTIAL_REVERSAL', under their own Reco document, referencing
+    // this PARTIAL_REV business number. Net costing = SUM() then reconciles production minus
+    // reversals. Mirrors the original PRODUCTION rows' denormalised header (COID-style flat
+    // table). Reuses `rmIntLines` from the branch above (already built at the correct ratio)
+    // instead of calling buildRmIntPreview a second time.
+    const recoCreditRows = rmIntLines
       .filter((line) => line.proportional_actual_qty > 0)
       .map((line) => ({
         company_id: companyId,
@@ -1262,36 +1260,53 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         process_order_line_id: line.process_order_line_id,
         material_id: line.material_id,
         line_material_type: line.line_material_type,
-        // Found live 2026-09-01: this row previously omitted standard_qty
-        // entirely (left NULL) -- process_order_line_reco's SUM()-reconciles
-        // design (see comment above) applies to every numeric column
-        // uniformly, so a partial reversal's credit row needs the same
-        // negative-proportional treatment here as actual_qty/ap_approved_qty,
-        // or SUM(standard_qty) for the batch stays wrong after any reversal.
         standard_qty: -line.proportional_standard_qty,
         actual_qty: -line.proportional_actual_qty,
+        approved_status: line.approved_status,
         ap_approved_qty: -line.proportional_ap_approved_qty,
         variance_qty: -line.proportional_variance_qty,
-        is_voided: false,
+        storage_location_id: line.storage_location_id,
         reco_document_number: recoDoc.docNumber,
         reco_document_year: recoDoc.docYear,
         source_txn_type: "PARTIAL_REVERSAL",
         reference_document_number: docNumber,
         reference_document_type: "PARTIAL_REV",
-        last_updated_at: new Date().toISOString(),
         last_updated_by: postedBy,
       }));
 
-    if (recoCreditRows.length > 0) {
-      const { error: recoErr } = await serviceRoleClient
-        .schema("erp_production")
-        .from("process_order_line_reco")
-        .insert(recoCreditRows);
-      if (recoErr) {
-        console.error("[partial_reversal.createPartialBatchReversalHandler] reco credit insert failed:", JSON.stringify(recoErr));
-        throw new Error("PR19_RECO_WRITE_FAILED");
-      }
-    }
+    // §8D / feasibility §107.8 — every movement above plus the header/line/reco writes
+    // now go through ONE transactional RPC (erp_production.complete_partial_batch_reversal,
+    // registered against reference_document_type='PARTIAL_REV'). A pre-generated id lets
+    // the completion function insert the header row with a known id up front.
+    const reversalId = crypto.randomUUID();
+    await postDocument({
+      referenceDocumentId: reversalId,
+      movements,
+      postedBy,
+      context: {
+        header: {
+          id: reversalId,
+          company_id: companyId,
+          document_number: docNumber,
+          po_type: String(poData.po_type ?? ""),
+          prodshade_material_id: String(poData.material_id ?? ""),
+          source_batch_number: String(poData.batch_number ?? ""),
+          source_process_order_id: processOrderId,
+          selected_row_type: rowType,
+          selected_material_id: selectedMaterialId,
+          selected_storage_location_id: selectedStorageLocationId,
+          selected_packing_order_id: rowType === "SKU" ? packingOrderId : null,
+          reverse_qty: reverseQty,
+          actual_total_output: actualTotalOutput,
+          reversal_ratio: reversalRatio,
+          salvage_batch_number: salvageBatchNumber,
+          salvage_process_order_id: salvageProcessOrderId,
+          created_by: postedBy,
+        },
+        lines: lineInserts,
+        reco_rows: recoCreditRows,
+      },
+    });
 
     return okResponse({
       data: {

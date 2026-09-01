@@ -107,6 +107,11 @@ export default function PartialBatchReversalPage() {
     queryFn: () => listPartialReversalStockLines({ process_order_id: resolvedPo.id }),
     enabled: Boolean(resolvedPo?.id && step === 2),
     select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+    // Availability changes every time a reversal posts (or partially posts —
+    // see handleSubmit's catch below), so a cached "available_qty" from an
+    // earlier visit must never be trusted here; always re-check on entry.
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   function handlePickRow(row) {
@@ -194,7 +199,13 @@ export default function PartialBatchReversalPage() {
       setSalvageBatchNumber("");
       setPmExclusions(new Set());
     } catch (error) {
-      toast(error.message || "Reversal failed.", "error");
+      // The stock postings and the trailing Reco/Costing write are not one atomic
+      // transaction (§8D) -- an error here can still mean the reversal actually
+      // posted and only a later step failed. Never leave Page 2's availability
+      // cached from before this attempt; force a fresh re-check so a retry can't
+      // blindly resubmit against stock that already moved.
+      qc.invalidateQueries({ queryKey: ["pr19-stock-lines"] });
+      toast(error.message || "Reversal failed. Re-checking available stock -- please re-verify before retrying.", "error");
     } finally {
       setSubmitting(false);
     }
