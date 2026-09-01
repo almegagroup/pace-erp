@@ -557,6 +557,7 @@ type RmIntPreviewLine = {
   proportional_ap_approved_qty: number;
   proportional_variance_qty: number;
   storage_location_id: string | null;
+  approved_status: string;
 };
 
 // Shared by the Page 3 preview and the Create handler — always recomputed
@@ -580,7 +581,7 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
   const { data: recoRows, error: recoErr } = await serviceRoleClient
     .schema("erp_production")
     .from("process_order_line_reco")
-    .select("process_order_line_id, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, variance_qty")
+    .select("process_order_line_id, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, variance_qty, approved_status")
     .eq("process_order_id", processOrderId)
     .eq("is_voided", false)
     .in("source_txn_type", ["PRODUCTION", "OPENING", "PID_ADJUSTMENT"])
@@ -635,6 +636,7 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
       proportional_ap_approved_qty: apApprovedQty * ratio,
       proportional_variance_qty: varianceQty * ratio,
       storage_location_id: slocByLineId.get(String(row.process_order_line_id ?? "")) ?? null,
+      approved_status: String(row.approved_status ?? "YES"),
     };
   });
 }
@@ -1270,8 +1272,10 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         // or SUM(standard_qty) for the batch stays wrong after any reversal.
         standard_qty: -line.proportional_standard_qty,
         actual_qty: -line.proportional_actual_qty,
+        approved_status: line.approved_status,
         ap_approved_qty: -line.proportional_ap_approved_qty,
         variance_qty: -line.proportional_variance_qty,
+        storage_location_id: line.storage_location_id,
         is_voided: false,
         reco_document_number: recoDoc.docNumber,
         reco_document_year: recoDoc.docYear,
