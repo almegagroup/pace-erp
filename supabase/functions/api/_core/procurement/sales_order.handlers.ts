@@ -2250,6 +2250,14 @@ async function prepareUnifiedSoLine(
   const currencyCode = toTrimmedString(line.currency_code) || "INR";
   const hsnCode = toTrimmedString(line.hsn_code) || null;
   const remarks = toTrimmedString(line.remarks) || null;
+  // Round Off is entered per item line (business owner, 2026-09-01) — a pure
+  // post-tax adjustment to match what Tally ultimately shows, never part of
+  // the taxable/GST computation itself.
+  const parsedRoundOffAmount = parseNullableNumber(line.round_off_amount);
+  if (line.round_off_amount !== undefined && line.round_off_amount !== "" && line.round_off_amount !== null && parsedRoundOffAmount === null) {
+    throw new Error("SO_LINE_ROUND_OFF_INVALID");
+  }
+  const roundOffAmount = parsedRoundOffAmount ?? 0;
 
   let baseQty: number | null = null;
   let packUomCode: string | null = null;
@@ -2321,7 +2329,7 @@ async function prepareUnifiedSoLine(
   const cgstAmount = gstType === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : 0;
   const sgstAmount = gstType === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : 0;
   const igstAmount = gstType === "IGST" ? gstAmount : 0;
-  const totalValue = Number((taxableValue + gstAmount).toFixed(4));
+  const totalValue = Number((taxableValue + gstAmount + roundOffAmount).toFixed(4));
 
   return {
     payload: {
@@ -2349,6 +2357,7 @@ async function prepareUnifiedSoLine(
       cgst_amount: cgstAmount,
       sgst_amount: sgstAmount,
       igst_amount: igstAmount,
+      round_off_amount: roundOffAmount,
       total_value: totalValue,
       balance_qty: baseQty,
       hsn_code: hsnCode,

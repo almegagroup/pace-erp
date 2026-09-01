@@ -116,6 +116,7 @@ function makeLine(lineMaterialType) {
     batch_number: "",
     expiry_date: "",
     costing_rate_month: "",
+    round_off_amount: "",
     remarks: "",
   };
 }
@@ -142,6 +143,19 @@ function getLineBaseQty(line) {
   return toNumber(line.base_qty || line.quantity);
 }
 
+// MTEST's own Pack Qty is derived the OPPOSITE way from every other FG type
+// (base_qty / per_pack_qty) and is never written back into line.pack_qty
+// state — the Pack Qty grid cell is a read-only computed display. Mirrors
+// the backend's own MTEST derivation (sales_order.handlers.ts,
+// prepareUnifiedSoLine's MTEST branch) so a Pack-UoM-rate MTEST line's
+// preview and the actual saved total never disagree. Used by both the grid
+// cell display and computeLinePreview so they can never drift apart.
+function getMtestPackQty(line) {
+  const perPackQty = toNumber(line.per_pack_qty);
+  if (!perPackQty) return 0;
+  return toNumber(line.base_qty) / perPackQty;
+}
+
 // Mirrors the backend's per-line taxable/GST computation closely enough for
 // a live preview (final numbers are always computed server-side). gstType
 // (from deriveGstTypeClientPreview) drives the CGST+SGST-vs-IGST split;
@@ -154,7 +168,9 @@ function computeLinePreview(line, gstType) {
   let taxableValue;
   let gstAmount;
   if (line.line_material_type === "FG") {
-    qtyForAmount = line.rate_basis === "PACK_UOM" ? toNumber(line.pack_qty) : getLineBaseQty(line);
+    qtyForAmount = line.rate_basis === "PACK_UOM"
+      ? (line.fg_type === "MTEST" ? getMtestPackQty(line) : toNumber(line.pack_qty))
+      : getLineBaseQty(line);
     if (line.fg_type === "MTEST" && line.rate_basis === "FIXED") {
       taxableValue = line.gst_treatment === "INCLUSIVE" ? rate / (1 + gstRate / 100) : rate;
       gstAmount = (taxableValue * gstRate) / 100;
@@ -168,7 +184,8 @@ function computeLinePreview(line, gstType) {
   const cgstAmount = gstType === "CGST_SGST" ? gstAmount / 2 : gstType === "IGST" ? 0 : null;
   const sgstAmount = gstType === "CGST_SGST" ? gstAmount / 2 : gstType === "IGST" ? 0 : null;
   const igstAmount = gstType === "IGST" ? gstAmount : gstType === "CGST_SGST" ? 0 : null;
-  return { taxableValue, gstAmount, totalValue: taxableValue + gstAmount, cgstAmount, sgstAmount, igstAmount };
+  const roundOff = toNumber(line.round_off_amount);
+  return { taxableValue, gstAmount, roundOff, totalValue: taxableValue + gstAmount + roundOff, cgstAmount, sgstAmount, igstAmount };
 }
 
 // §133.8-H — 3 read-only columns shared by every material type's item line
@@ -244,7 +261,6 @@ export default function SO01CreatePage() {
   const [externalSoNumber, setExternalSoNumber] = useState("");
   const [externalSoDate, setExternalSoDate] = useState("");
   const [freightTerm, setFreightTerm] = useState("FOR");
-  const [roundOffAmount, setRoundOffAmount] = useState("0");
   const [parentCompanies, setParentCompanies] = useState([]);
   const [depotCodes, setDepotCodes] = useState([]);
   const [ac06Months, setAc06Months] = useState([]);
@@ -475,6 +491,7 @@ export default function SO01CreatePage() {
         { key: "gst_rate", label: "GST %", width: "70px", render: (line) => numberInput(line.gst_rate, (value) => updateLine(line.__key, { gst_rate: value })) },
         { key: "amount", label: "Amount", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).taxableValue.toFixed(2) },
         ...gstSplitColumns(gstTypePreview),
+        { key: "round_off", label: "Round Off", width: "90px", render: (line) => numberInput(line.round_off_amount, (value) => updateLine(line.__key, { round_off_amount: value })) },
         { key: "total", label: "Total Value", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).totalValue.toFixed(2) },
         { key: "actions", label: "", width: "70px", render: (line) => (
           <button type="button" onClick={() => removeLine(line.__key)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button>
@@ -507,6 +524,7 @@ export default function SO01CreatePage() {
         { key: "gst_rate", label: "GST %", width: "70px", render: (line) => numberInput(line.gst_rate, (value) => updateLine(line.__key, { gst_rate: value })) },
         { key: "amount", label: "Amount", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).taxableValue.toFixed(2) },
         ...gstSplitColumns(gstTypePreview),
+        { key: "round_off", label: "Round Off", width: "90px", render: (line) => numberInput(line.round_off_amount, (value) => updateLine(line.__key, { round_off_amount: value })) },
         { key: "total", label: "Total Value", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).totalValue.toFixed(2) },
         { key: "actions", label: "", width: "70px", render: (line) => (
           <button type="button" onClick={() => removeLine(line.__key)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button>
@@ -555,7 +573,7 @@ export default function SO01CreatePage() {
       ) },
       { key: "pack_qty", label: "Pack Qty", width: "80px", render: (line) => (
         line.fg_type === "MTEST"
-          ? <input value={line.per_pack_qty ? (toNumber(line.base_qty) / toNumber(line.per_pack_qty)).toFixed(4) : ""} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
+          ? <input value={line.per_pack_qty ? getMtestPackQty(line).toFixed(4) : ""} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
           : numberInput(line.pack_qty, (value) => updateLine(line.__key, { pack_qty: value }))
       ) },
       { key: "per_pack", label: "Per Pack (KG)", width: "100px", render: (line) => numberInput(line.per_pack_qty, (value) => updateLine(line.__key, { per_pack_qty: value }), { readOnly: line.fg_type === "MTEST" || !line.__perPackVariable }) },
@@ -583,6 +601,7 @@ export default function SO01CreatePage() {
       { key: "amount", label: "Amount", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).taxableValue.toFixed(2) },
       ...gstSplitColumns(gstTypePreview),
       { key: "costing_month", label: "Costing Rate Month", width: "150px", render: (line) => costingMonthCell(line, line.__key) },
+      { key: "round_off", label: "Round Off", width: "90px", render: (line) => numberInput(line.round_off_amount, (value) => updateLine(line.__key, { round_off_amount: value })) },
       { key: "total", label: "Total Value", width: "100px", align: "right", render: (line) => computeLinePreview(line, gstTypePreview).totalValue.toFixed(2) },
       { key: "actions", label: "", width: "70px", render: (line) => (
         <button type="button" onClick={() => removeLine(line.__key)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button>
@@ -592,17 +611,20 @@ export default function SO01CreatePage() {
 
   // §133.8-I — Page 2 footer totals: Total Nett Value, GST Breakup (only
   // non-zero components shown, matches intra-state vs inter-state), Round
-  // Off (user-entered, with sign), Sales Order Value (headline), Amount in Words
-  // (display-only, never stored — §133.8-J's persistence principle).
+  // Off, Sales Order Value (headline), Amount in Words (display-only, never
+  // stored — §133.8-J's persistence principle).
+  // Round Off is entered per item line (each row's own "Round Off" column,
+  // business owner's explicit correction 2026-09-01 — not a single header
+  // field) — the header total below is the SUM of those line values, shown
+  // read-only, matching what the backend actually stores per line.
   const linePreviews = useMemo(() => lines.map((line) => computeLinePreview(line, gstTypePreview)), [lines, gstTypePreview]);
   const netTotal = linePreviews.reduce((sum, preview) => sum + preview.taxableValue, 0);
   const totalCgst = linePreviews.reduce((sum, preview) => sum + (preview.cgstAmount || 0), 0);
   const totalSgst = linePreviews.reduce((sum, preview) => sum + (preview.sgstAmount || 0), 0);
   const totalIgst = linePreviews.reduce((sum, preview) => sum + (preview.igstAmount || 0), 0);
   const totalGst = totalCgst + totalSgst + totalIgst;
-  const preRoundValue = netTotal + totalGst;
-  const roundOff = toNumber(roundOffAmount);
-  const soValue = preRoundValue + roundOff;
+  const roundOff = linePreviews.reduce((sum, preview) => sum + (preview.roundOff || 0), 0);
+  const soValue = netTotal + totalGst + roundOff;
 
   function buildBillToShipToPayload() {
     const payload = {};
@@ -689,6 +711,7 @@ export default function SO01CreatePage() {
           hsn_code: line.hsn_code || null,
           batch_number: line.batch_number || null,
           expiry_date: line.expiry_date || null,
+          round_off_amount: line.round_off_amount === "" ? 0 : Number(line.round_off_amount),
           // §133.8-E: MTEST always auto-derives from SO Date (no dropdown to
           // read from); MTS is deferred/spec-only and must never carry a real
           // value yet; MTO/HPS send whatever the dropdown/Manual holds.
@@ -883,7 +906,7 @@ export default function SO01CreatePage() {
               {totalSgst > 0 ? <div className="flex justify-between"><span className="text-slate-500">SGST</span><span className="font-mono">{totalSgst.toFixed(2)}</span></div> : null}
               {totalIgst > 0 ? <div className="flex justify-between"><span className="text-slate-500">IGST</span><span className="font-mono">{totalIgst.toFixed(2)}</span></div> : null}
               {gstTypePreview === null && lines.length > 0 ? <div className="text-xs text-amber-700">GST split unavailable — the selected dispatch destination has no resolvable state.</div> : null}
-              <label className="flex items-center justify-between gap-3"><span className="text-slate-500">Round Off</span>{numberInput(roundOffAmount, setRoundOffAmount, { step: "0.01", className: "h-8 w-28 border border-slate-300 bg-[#fffef7] px-2 text-right font-mono text-sm text-slate-900 outline-none focus:border-sky-500" })}</label>
+              <div className="flex justify-between"><span className="text-slate-500" title="Entered per item line — see each line's own Round Off column above">Round Off (sum of lines)</span><span className="font-mono">{roundOff.toFixed(2)}</span></div>
               <div className="mt-1 flex justify-between border-t border-slate-300 pt-1 text-base font-bold"><span>Sales Order Value</span><span className="font-mono">{soValue.toFixed(2)}</span></div>
               <div className="mt-1 text-xs italic text-slate-500">{amountToWordsIndian(soValue)}</div>
             </div>
