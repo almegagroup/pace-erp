@@ -1129,6 +1129,166 @@ export async function getCurrentStockHandler(
       }
     }
 
+    // In Transit (business owner lock, 2026-09-01): two sources feed the SAME
+    // number, both scoped to the RECEIVING company -- goods not yet physically
+    // on our own books but committed to arrive:
+    //   1. Inbound purchase consignments still at CSN status TRN (dispatched by
+    //      the vendor, not yet Gate-Entry'd/GRN'd -- consignee_company_id is the
+    //      receiving company; mother CSN rows excluded so a split shipment isn't
+    //      double-counted against its own children).
+    //   2. Plant Transfer Orders still at status IN_TRANSIT, target_company_id =
+    //      this company -- deliberately a SEPARATE query from the existing
+    //      IN_TRANSIT stock_snapshot rows below (those are the SOURCE company's
+    //      own view, posted at source_sloc_id; this is the destination
+    //      company's view of the same commitment, which has no stock_snapshot
+    //      row of its own since the material has no location here yet).
+    // Neither source has a real storage location (nothing has arrived), so each
+    // material's total is placed at: (a) the location its most recent P101 (GRN
+    // receipt) posted to for this company, or (b) if it's never been received
+    // here before, whichever location currently holds the most Unrestricted
+    // qty of that material, or (c) left blank if neither exists.
+    if (pathAMaterialIds.length > 0 && requestedStockTypes.includes("IN_TRANSIT")
+      && batchNumbers.length === 0 && packingPoNumbers.length === 0) {
+      const inTransitByMaterial = new Map<string, number>();
+      const addInTransit = (materialId: string, qty: number) => {
+        if (!materialId || !Number.isFinite(qty) || qty === 0) return;
+        inTransitByMaterial.set(materialId, normalizeNumber((inTransitByMaterial.get(materialId) ?? 0) + qty));
+      };
+
+      // Found live 2026-09-01: a CSN's receiving company is NOT uniformly one
+      // column. A plain vendor-PO CSN (sto_id null) has company_id ==
+      // consignee_company_id == the receiving company. An STO-linked CSN
+      // (sto_id set -- an inter-company transfer routed through the same
+      // gate/CSN tracking mechanism) has company_id == the SENDING company and
+      // consignee_company_id is null; its real receiving company only exists on
+      // stock_transfer_order.receiving_company_id. No company filter is pushed
+      // into this query for that reason -- TRN-status rows are always few
+      // (dev: 3 total) -- receiving company is resolved and filtered in JS below.
+      let csnRows: JsonRecord[];
+      let ptoRows: JsonRecord[];
+      try {
+        [csnRows, ptoRows] = await Promise.all([
+          fetchInChunks<JsonRecord>(pathAMaterialIds, (idChunk) =>
+            serviceRoleClient
+              .schema("erp_procurement")
+              .from("consignment_note")
+              .select("material_id, dispatch_qty, company_id, consignee_company_id, sto_id")
+              .eq("status", "TRN")
+              .not("is_mother_csn", "is", true)
+              .in("material_id", idChunk)),
+          fetchInChunks<JsonRecord>(pathAMaterialIds, (idChunk) =>
+            serviceRoleClient
+              .schema("erp_procurement")
+              .from("plant_transfer_order")
+              .select("material_id, transfer_qty")
+              .eq("target_company_id", companyId)
+              .eq("status", "IN_TRANSIT")
+              .in("material_id", idChunk)),
+        ]);
+      } catch {
+        return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+      }
+
+      const stoIds = [...new Set(csnRows.map((row) => toTrimmedString(row.sto_id)).filter(Boolean))];
+      const stoReceivingCompanyMap = new Map<string, string>();
+      if (stoIds.length > 0) {
+        let stoRows: JsonRecord[];
+        try {
+          stoRows = await fetchInChunks<JsonRecord>(stoIds, (idChunk) =>
+            serviceRoleClient
+              .schema("erp_procurement")
+              .from("stock_transfer_order")
+              .select("id, receiving_company_id")
+              .in("id", idChunk));
+        } catch {
+          return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+        }
+        for (const sto of stoRows) {
+          stoReceivingCompanyMap.set(toTrimmedString(sto.id), toTrimmedString(sto.receiving_company_id));
+        }
+      }
+
+      for (const csn of csnRows) {
+        const stoId = toTrimmedString(csn.sto_id);
+        const receivingCompanyId = stoId
+          ? stoReceivingCompanyMap.get(stoId) || ""
+          : toTrimmedString(csn.consignee_company_id) || toTrimmedString(csn.company_id);
+        if (receivingCompanyId !== companyId) continue;
+        addInTransit(toTrimmedString(csn.material_id), Number(csn.dispatch_qty ?? 0));
+      }
+      for (const pto of ptoRows) addInTransit(toTrimmedString(pto.material_id), Number(pto.transfer_qty ?? 0));
+
+      const inTransitMaterialIds = [...inTransitByMaterial.keys()].filter((id) => Math.abs(inTransitByMaterial.get(id) ?? 0) > 0.000001);
+      if (inTransitMaterialIds.length > 0) {
+        const placementByMaterial = new Map<string, string>();
+
+        let p101Rows: JsonRecord[];
+        try {
+          p101Rows = await fetchInChunks<JsonRecord>(inTransitMaterialIds, (idChunk) =>
+            serviceRoleClient
+              .schema("erp_inventory")
+              .from("stock_ledger")
+              .select("material_id, storage_location_id, ledger_seq")
+              .eq("company_id", companyId)
+              .eq("movement_type_code", "P101")
+              .eq("direction", "IN")
+              .in("material_id", idChunk)
+              .order("ledger_seq", { ascending: false }));
+        } catch {
+          return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+        }
+        // Rows arrive most-recent-first per the ORDER BY above; keeping only the
+        // first hit per material_id keeps the single most recent P101 location.
+        for (const p101 of p101Rows) {
+          const materialId = toTrimmedString(p101.material_id);
+          if (!materialId || placementByMaterial.has(materialId)) continue;
+          const slocId = toTrimmedString(p101.storage_location_id);
+          if (slocId) placementByMaterial.set(materialId, slocId);
+        }
+
+        const unresolvedMaterialIds = inTransitMaterialIds.filter((id) => !placementByMaterial.has(id));
+        if (unresolvedMaterialIds.length > 0) {
+          let unrestrictedRows: JsonRecord[];
+          try {
+            unrestrictedRows = await fetchInChunks<JsonRecord>(unresolvedMaterialIds, (idChunk) =>
+              serviceRoleClient
+                .schema("erp_inventory")
+                .from("stock_snapshot")
+                .select("material_id, storage_location_id, quantity")
+                .eq("company_id", companyId)
+                .eq("stock_type_code", "UNRESTRICTED")
+                .is("batch_id", null)
+                .in("material_id", idChunk)
+                .order("quantity", { ascending: false }));
+          } catch {
+            return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+          }
+          for (const snap of unrestrictedRows) {
+            const materialId = toTrimmedString(snap.material_id);
+            if (!materialId || placementByMaterial.has(materialId)) continue;
+            const slocId = toTrimmedString(snap.storage_location_id);
+            if (slocId) placementByMaterial.set(materialId, slocId);
+          }
+        }
+
+        for (const materialId of inTransitMaterialIds) {
+          const material = materialMap.get(materialId);
+          if (!material) continue;
+          const row = getOrCreateRow(initializeCurrentStockDraftRow({
+            company_id: companyId,
+            material_id: materialId,
+            storage_location_id: placementByMaterial.get(materialId) ?? "",
+            batch_number: null,
+            packing_po_number: null,
+            base_uom_code: material.base_uom_code || "",
+            material_type: material.material_type,
+            path_kind: "A",
+          }));
+          appendStockTypeQuantity(row, "IN_TRANSIT", inTransitByMaterial.get(materialId) ?? 0);
+        }
+      }
+    }
+
     let rows = [...draftRows.values()];
     if (!showZero) {
       rows = rows.filter((row) => !isZeroBalanceRow(row));
@@ -1245,9 +1405,12 @@ export async function getCurrentStockHandler(
       const blockedQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(row.blocked_qty, row.fill_qty_per_pack)
         : normalizeNumber(row.blocked_qty);
-      // Plain quantity, no reservation/net-available concept — In Transit is
-      // a Plant Transfer's interim state (P303 out / P305 in), not stock
-      // that can itself be reserved against.
+      // Plain quantity, no reservation/net-available concept — In Transit
+      // covers both a Plant Transfer's interim state (P303 out / P305 in, the
+      // source company's own stock_snapshot view) and, added 2026-09-01, this
+      // company's own receiving-side total (inbound CSN still at TRN + any PTO
+      // targeting this company) computed further up in this handler — neither
+      // is stock that can itself be reserved against.
       const intransitQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(row.intransit_qty, row.fill_qty_per_pack)
         : normalizeNumber(row.intransit_qty);
