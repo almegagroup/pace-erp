@@ -851,11 +851,25 @@ async function createCsnsForPo(
   }
 
   const lineIds = uniqueTrimmedStrings(poLines.map((line) => line.id));
+  // Found live 2026-09-01 (PO ACPL/AD94/2026-27): this used to be "does this line have ANY
+  // existing CSN at all" -- a PO amendment that raises ordered_qty after the line's original
+  // (already fully-received) CSN was created could then never get a new CSN for the incremental
+  // qty the vendor actually sent, because the line already had a row in existingLineIds and was
+  // skipped outright. Now tops up the gap between the line's CURRENT ordered_qty and what its
+  // still-active (not CAN/KOF) sibling CSNs already account for -- covers both the first-ever
+  // confirm (nothing accounted for yet, full ordered_qty gets one CSN, same as before) and a
+  // later amendment (only the fresh delta is new). Sums dispatch_qty, not po_qty -- po_qty on a
+  // CSN row is a snapshot of the line's ordered_qty *at that CSN's own creation time*, not that
+  // CSN's own share of it (every sibling CSN for one line carries the same po_qty value, so
+  // summing po_qty across siblings wildly overcounts). This is the exact same
+  // orderedQty - knockedOffQty - sum(dispatch_qty) formula computeDispatchQtyPreview already
+  // uses for the "Create CSN for Balance" manual flow -- reused here instead of invented fresh,
+  // for consistency and because it's the one already proven against real CSN data.
   const { data: existingRows, error: existingError } = lineIds.length > 0
     ? await serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
-      .select("po_line_id")
+      .select("po_line_id, dispatch_qty, status")
       .in("po_line_id", lineIds)
     : { data: [], error: null };
 
@@ -863,21 +877,30 @@ async function createCsnsForPo(
     throw new Error("PROCUREMENT_CSN_LOOKUP_FAILED");
   }
 
-  const existingLineIds = new Set(
-    (((existingRows as Array<Record<string, unknown>> | null) ?? []).map((row) =>
-      toTrimmedString(row.po_line_id)
-    )).filter(Boolean),
-  );
+  const accountedQtyByLineId = new Map<string, number>();
+  for (const row of ((existingRows as JsonRecord[] | null) ?? [])) {
+    const poLineId = toTrimmedString(row.po_line_id);
+    if (!poLineId) continue;
+    const status = toUpperTrimmedString(row.status);
+    if (status === "CAN" || status === "KOF") continue;
+    accountedQtyByLineId.set(poLineId, (accountedQtyByLineId.get(poLineId) ?? 0) + Number(row.dispatch_qty ?? 0));
+  }
   const materialCategoryByMaterialId = await getPrimaryMaterialCategoryIds(
     poLines.map((line) => toTrimmedString(line.material_id)),
   );
 
   await Promise.all(
     poLines
-      .filter((line) => !existingLineIds.has(toTrimmedString(line.id)))
-      .map(async (line) => {
-        const csnNumber = await generateProcurementDocNumber("CSN");
+      .map((line) => {
         const orderedQty = Number(line.ordered_qty ?? 0);
+        const knockedOffQty = Number(line.knocked_off_qty ?? 0);
+        const accountedQty = accountedQtyByLineId.get(toTrimmedString(line.id)) ?? 0;
+        return { line, deltaQty: Number((orderedQty - knockedOffQty - accountedQty).toFixed(6)) };
+      })
+      .filter(({ deltaQty }) => deltaQty > 0.000001)
+      .map(async ({ line, deltaQty }) => {
+        const csnNumber = await generateProcurementDocNumber("CSN");
+        const orderedQty = deltaQty;
         const materialId = toTrimmedString(line.material_id);
         const materialCategoryId = materialCategoryByMaterialId.get(materialId) ?? null;
         const csnType = deriveCsnType(po);
