@@ -250,7 +250,16 @@ export default function SO01CreatePage() {
   const [depotCodeId, setDepotCodeId] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [shipToCustomerAddressId, setShipToCustomerAddressId] = useState("");
-  const [billToCustomerAddressId, setBillToCustomerAddressId] = useState("");
+  // §133.20 (2026-09-01) — Bill-To Party choice (Parent Company vs the
+  // specific VDC, using its own External Code + address) for Dependent
+  // (Direct), Dependent(No Inbound)-Direct sub-case, and Independent Party
+  // (Asian-billed) when its own VDC/DC choice below resolves to VDC.
+  const [billToParty, setBillToParty] = useState("");
+  // §133.20 — replaces the old "Billing address to Depot? Yes/No" (which
+  // resolved via a customer_address's own depot_code_id mapping) with an
+  // explicit VDC/DC/No choice under the resolved Asian Parent Company.
+  const [asianBilledChoice, setAsianBilledChoice] = useState("");
+  const [asianBilledVdcDcId, setAsianBilledVdcDcId] = useState("");
   const [noInboundSubType, setNoInboundSubType] = useState("DIRECT");
   const [paymentTermId, setPaymentTermId] = useState("");
   const [externalSoNumber, setExternalSoNumber] = useState("");
@@ -300,13 +309,7 @@ export default function SO01CreatePage() {
     queryFn: () => listSalesOrderAddressOptions({ company_id: companyId, customer_id: customerId }),
     enabled: Boolean(companyId && customerId && (dispatchType === "INDEPENDENT_PARTY" || dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED")),
   });
-  const parentAddressQuery = useQuery({
-    queryKey: ["so01-address-options", companyId, "parent", parentCompanyId],
-    queryFn: () => listSalesOrderAddressOptions({ company_id: companyId, parent_company_id: parentCompanyId }),
-    enabled: Boolean(companyId && parentCompanyId && dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED"),
-  });
   const customerAddresses = Array.isArray(customerAddressQuery.data) ? customerAddressQuery.data : [];
-  const parentAddresses = Array.isArray(parentAddressQuery.data) ? parentAddressQuery.data : [];
   const addressLabel = (address) => [address?.customer?.customer_name, address?.site_name, address?.town, address?.address_line].filter(Boolean).join(" | ");
   const addressOptions = (addresses) => addresses.map((address) => ({ value: address.id, label: addressLabel(address) }));
 
@@ -345,11 +348,19 @@ export default function SO01CreatePage() {
   }, [companyId]);
   useEffect(() => {
     if (!parentCompanyId) { setDepotCodes([]); return; }
+    // §133.20 — Asian-billed needs both VDC and DC under the parent (user
+    // picks which), so no dispatch_type filter for that case.
+    if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
+      listFgDepotCodes({ parent_company_id: parentCompanyId })
+        .then((result) => setDepotCodes(Array.isArray(result?.data) ? result.data : []))
+        .catch(() => setDepotCodes([]));
+      return;
+    }
     const wantType = effectiveNoInboundType === "DEPENDENT_DEPOT" ? "DEPOT" : "DIRECT";
     listFgDepotCodes({ parent_company_id: parentCompanyId, dispatch_type: wantType })
       .then((result) => setDepotCodes(Array.isArray(result?.data) ? result.data : []))
       .catch(() => setDepotCodes([]));
-  }, [parentCompanyId, effectiveNoInboundType]);
+  }, [parentCompanyId, effectiveNoInboundType, dispatchType]);
 
   function toggleMaterialType(value) {
     setMaterialTypes((current) => (current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value]));
@@ -405,6 +416,21 @@ export default function SO01CreatePage() {
         ))}
         <option value="MANUAL">Manual</option>
       </select>
+    );
+  }
+
+  // §133.20 — shared Bill-To Party toggle (Parent Company vs the specific
+  // VDC), reused by Dependent(Direct), Dependent(No Inbound)-Direct
+  // sub-case, and Independent Party (Asian-billed) when its own VDC/DC
+  // choice resolves to VDC.
+  function billToPartyToggle() {
+    return (
+      <ErpDenseFormRow label="Bill-To Party?" required>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setBillToParty("PARENT_COMPANY")} className={`flex-1 px-3 py-2 text-xs font-semibold ${billToParty === "PARENT_COMPANY" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>Parent Company</button>
+          <button type="button" onClick={() => setBillToParty("VDC")} className={`flex-1 px-3 py-2 text-xs font-semibold ${billToParty === "VDC" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>VDC</button>
+        </div>
+      </ErpDenseFormRow>
     );
   }
 
@@ -619,6 +645,7 @@ export default function SO01CreatePage() {
     if (effectiveNoInboundType === "DEPENDENT_DIRECT") {
       payload.parent_company_id = parentCompanyId;
       payload.vdc_id = vdcId;
+      payload.bill_to_party = billToParty;
     } else if (effectiveNoInboundType === "DEPENDENT_DEPOT") {
       payload.parent_company_id = parentCompanyId;
       payload.depot_code_id = depotCodeId;
@@ -629,7 +656,11 @@ export default function SO01CreatePage() {
       payload.customer_id = customerId;
       payload.parent_company_id = parentCompanyId;
       payload.ship_to_customer_address_id = shipToCustomerAddressId;
-      payload.bill_to_customer_address_id = billToCustomerAddressId;
+      payload.asian_billed_choice = asianBilledChoice;
+      if (asianBilledChoice !== "NONE") {
+        payload.asian_billed_vdc_dc_id = asianBilledVdcDcId;
+        if (asianBilledChoice === "VDC") payload.bill_to_party = billToParty;
+      }
     }
     if (dispatchType === "DEPENDENT_NO_INBOUND") payload.no_inbound_sub_type = noInboundSubType;
     return payload;
@@ -719,6 +750,11 @@ export default function SO01CreatePage() {
   const companyOptions = availableCompanies.map((entry) => ({ value: entry.id, label: entry.company_name || entry.company_code || entry.id }));
   const parentCompanyOptions = parentCompanies.map((entry) => ({ value: entry.id, label: entry.company_name }));
   const depotCodeOptions = depotCodes.map((entry) => ({ value: entry.id, label: `${entry.code || ""} — ${entry.description || ""}`.trim() }));
+  // §133.20 — Asian-billed's own VDC/DC dropdown, filtered to whichever
+  // sub-type the user picked (depotCodes here carries both, unfiltered).
+  const asianBilledVdcDcOptions = depotCodes
+    .filter((entry) => entry.dispatch_type === (asianBilledChoice === "DC" ? "DEPOT" : "DIRECT"))
+    .map((entry) => ({ value: entry.id, label: `${entry.code || ""} — ${entry.description || ""}`.trim() }));
   const missingFgCostingRateMonth = lines.some((line) => line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type) && !line.costing_rate_month);
 
   return (
@@ -788,7 +824,8 @@ export default function SO01CreatePage() {
                 <ErpDenseFormRow label="VDC" required>
                   <ErpComboboxField value={vdcId} onChange={setVdcId} options={depotCodeOptions} blankLabel={parentCompanyId ? "Select VDC" : "Select Parent Company first"} />
                 </ErpDenseFormRow>
-                <p className="col-span-2 text-xs text-slate-500">Bill-To resolves now. Final MM04 Ship-To address resolves in SO Map; its state is the selected Parent Company&apos;s state.</p>
+                {billToPartyToggle()}
+                <p className="col-span-2 text-xs text-slate-500">Whichever Bill-To Party you pick becomes this SO&apos;s Bill-To name/address (VDC uses its own External Code + address). Final MM04 Ship-To address resolves in SO Map either way.</p>
               </div>
             ) : null}
             {effectiveNoInboundType === "DEPENDENT_DEPOT" && dispatchType !== "DEPENDENT_NO_INBOUND" ? (
@@ -820,11 +857,24 @@ export default function SO01CreatePage() {
                   <ErpComboboxField value={shipToCustomerAddressId} onChange={setShipToCustomerAddressId} options={addressOptions(customerAddresses)} blankLabel={customerId ? "Select customer address" : "Select Customer first"} />
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Asian Parent Company" required>
-                  <ErpComboboxField value={parentCompanyId} onChange={(value) => { setParentCompanyId(value); setBillToCustomerAddressId(""); }} options={parentCompanyOptions} blankLabel="Select Parent Company" />
+                  <ErpComboboxField value={parentCompanyId} onChange={(value) => { setParentCompanyId(value); setAsianBilledChoice(""); setAsianBilledVdcDcId(""); setBillToParty(""); }} options={parentCompanyOptions} blankLabel="Select Parent Company" />
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="Bill-To Address (MM04)" required>
-                  <ErpComboboxField value={billToCustomerAddressId} onChange={setBillToCustomerAddressId} options={addressOptions(parentAddresses)} blankLabel={parentCompanyId ? "Select Parent-side address" : "Select Parent Company first"} />
-                </ErpDenseFormRow>
+                {/* §133.20 (2026-09-01) — replaces the old Yes/No "Billing
+                    address to Depot?" with an explicit VDC/DC/No choice. */}
+                <div className="grid gap-1 text-xs font-semibold text-slate-700">
+                  <span>Bill-To — VDC, DC, or none (Parent Company)? <span className="text-rose-500">*</span></span>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => { setAsianBilledChoice("VDC"); setAsianBilledVdcDcId(""); }} className={`flex-1 px-3 py-2 text-xs font-semibold ${asianBilledChoice === "VDC" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>VDC</button>
+                    <button type="button" onClick={() => { setAsianBilledChoice("DC"); setAsianBilledVdcDcId(""); setBillToParty(""); }} className={`flex-1 px-3 py-2 text-xs font-semibold ${asianBilledChoice === "DC" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>DC</button>
+                    <button type="button" onClick={() => { setAsianBilledChoice("NONE"); setAsianBilledVdcDcId(""); setBillToParty(""); }} className={`flex-1 px-3 py-2 text-xs font-semibold ${asianBilledChoice === "NONE" ? "border border-slate-700 bg-slate-200 text-slate-950" : "border border-slate-300 bg-white text-slate-700"}`}>No</button>
+                  </div>
+                </div>
+                {asianBilledChoice === "VDC" || asianBilledChoice === "DC" ? (
+                  <ErpDenseFormRow label={asianBilledChoice === "DC" ? "DC" : "VDC"} required>
+                    <ErpComboboxField value={asianBilledVdcDcId} onChange={setAsianBilledVdcDcId} options={asianBilledVdcDcOptions} blankLabel={parentCompanyId ? `Select ${asianBilledChoice}` : "Select Parent Company first"} />
+                  </ErpDenseFormRow>
+                ) : null}
+                {asianBilledChoice === "VDC" ? billToPartyToggle() : null}
               </div>
             ) : null}
             {dispatchType === "DEPENDENT_NO_INBOUND" ? (
@@ -838,11 +888,12 @@ export default function SO01CreatePage() {
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
                   <ErpDenseFormRow label="Parent Company" required>
-                    <ErpComboboxField value={parentCompanyId} onChange={(value) => { setParentCompanyId(value); setVdcId(""); setDepotCodeId(""); }} options={parentCompanyOptions} blankLabel="Select Parent Company" />
+                    <ErpComboboxField value={parentCompanyId} onChange={(value) => { setParentCompanyId(value); setVdcId(""); setDepotCodeId(""); setBillToParty(""); }} options={parentCompanyOptions} blankLabel="Select Parent Company" />
                   </ErpDenseFormRow>
                   <ErpDenseFormRow label={noInboundSubType === "DIRECT" ? "VDC" : "Depot Code"} required>
                     <ErpComboboxField value={noInboundSubType === "DIRECT" ? vdcId : depotCodeId} onChange={noInboundSubType === "DIRECT" ? setVdcId : setDepotCodeId} options={depotCodeOptions} blankLabel={parentCompanyId ? "Select" : "Select Parent Company first"} />
                   </ErpDenseFormRow>
+                  {noInboundSubType === "DIRECT" ? billToPartyToggle() : null}
                 </div>
               </div>
             ) : null}

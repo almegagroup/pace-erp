@@ -598,86 +598,61 @@ export default function VdcParentCompanyMasterPage() {
                   <ErpDenseFormRow label="Dispatch Type">
                     <select
                       value={vdcForm.dispatch_type}
-                      onChange={(event) => setVdcForm((c) => ({
-                        ...c,
-                        dispatch_type: event.target.value,
-                        // 2026-08-22 fix -- DB trigger forbids a DIRECT (VDC)
-                        // row from carrying any of these; clear them the
-                        // moment the user switches type so a stale value from
-                        // DEPOT mode can never sneak into a DIRECT save.
-                        state: "",
-                        address_line: "",
-                        pin_code: "",
-                      }))}
+                      onChange={(event) => setVdcForm((c) => ({ ...c, dispatch_type: event.target.value }))}
                       className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                     >
                       <option value="DIRECT">Direct (VDC)</option>
                       <option value="DEPOT">Depot (DC)</option>
                     </select>
                   </ErpDenseFormRow>
-                  {vdcForm.dispatch_type === "DEPOT" ? (
-                    <>
-                      <ErpDenseFormRow label="State" required>
-                        <select
-                          value={vdcForm.state}
-                          onChange={(event) => setVdcForm((c) => ({ ...c, state: event.target.value }))}
-                          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        >
-                          <option value="">Select state</option>
-                          {INDIAN_STATES.map((state) => (
-                            <option key={state.code} value={state.name}>{state.name}</option>
-                          ))}
-                        </select>
-                        <p className="mt-1 text-xs text-slate-500">
-                          Must match the Parent Company's own state{activeParentState ? ` (${activeParentState})` : ""}.
-                        </p>
-                      </ErpDenseFormRow>
-                      <ErpDenseFormRow label="Billing / Ship-To Address" required>
-                        <textarea
-                          rows={2}
-                          value={vdcForm.address_line}
-                          onChange={(event) => setVdcForm((c) => ({ ...c, address_line: event.target.value }))}
-                          className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        />
-                      </ErpDenseFormRow>
-                      <ErpDenseFormRow label="Pin Code">
-                        <input
-                          value={vdcForm.pin_code}
-                          onChange={(event) => setVdcForm((c) => ({ ...c, pin_code: event.target.value }))}
-                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        />
-                      </ErpDenseFormRow>
-                      <GstCheckRow
-                        value={vdcForm.gst_number}
-                        onChange={(value) => setVdcForm((c) => ({ ...c, gst_number: value }))}
-                        onResolved={(profile) => setVdcForm((c) => ({
-                          ...c,
-                          state: profile.state_name || c.state,
-                          address_line: profile.full_address || c.address_line,
-                          pin_code: profile.pin_code || c.pin_code,
-                        }))}
-                      />
-                      <p className="text-xs text-slate-500">
-                        GST check fills the registered address. You may overwrite this billing/ship-to address for this Depot Code; multiple Depot Codes may use the same GST.
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <ErpDenseFormRow label="State">
-                        <div className="flex h-8 w-full items-center border border-slate-200 bg-slate-100 px-2 text-sm text-slate-600">
-                          {activeParentState || "— pick a Parent Company —"}
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                          From the Parent Company — a VDC (Direct dispatch) has no separate address of its own.
-                        </p>
-                      </ErpDenseFormRow>
-                      <GstCheckRow
-                        value={vdcForm.gst_number}
-                        onChange={(value) => setVdcForm((c) => ({ ...c, gst_number: value }))}
-                        onResolved={() => {}}
-                      />
-                    </>
-                  )}
+                  {/* §133.20 (2026-09-01) -- VDC now carries its own address
+                      too, same as DC: previously a VDC had no address field
+                      at all (inherited the Parent Company's state only),
+                      which meant a VDC could never be its own Bill-To
+                      identity. Both types now share this identical block. */}
+                  <ErpDenseFormRow label="State" required>
+                    <select
+                      value={vdcForm.state}
+                      onChange={(event) => setVdcForm((c) => ({ ...c, state: event.target.value }))}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    >
+                      <option value="">Select state</option>
+                      {INDIAN_STATES.map((state) => (
+                        <option key={state.code} value={state.name}>{state.name}</option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Must match the Parent Company's own state{activeParentState ? ` (${activeParentState})` : ""}.
+                    </p>
+                  </ErpDenseFormRow>
+                  <ErpDenseFormRow label="Billing / Ship-To Address" required>
+                    <textarea
+                      rows={2}
+                      value={vdcForm.address_line}
+                      onChange={(event) => setVdcForm((c) => ({ ...c, address_line: event.target.value }))}
+                      className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    />
+                  </ErpDenseFormRow>
+                  <ErpDenseFormRow label="Pin Code">
+                    <input
+                      value={vdcForm.pin_code}
+                      onChange={(event) => setVdcForm((c) => ({ ...c, pin_code: event.target.value }))}
+                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    />
+                  </ErpDenseFormRow>
+                  <GstCheckRow
+                    value={vdcForm.gst_number}
+                    onChange={(value) => setVdcForm((c) => ({ ...c, gst_number: value }))}
+                    onResolved={(profile) => setVdcForm((c) => ({
+                      ...c,
+                      state: profile.state_name || c.state,
+                      address_line: profile.full_address || c.address_line,
+                      pin_code: profile.pin_code || c.pin_code,
+                    }))}
+                  />
+                  <p className="text-xs text-slate-500">
+                    GST check fills the registered address. You may overwrite this billing/ship-to address for this {depotLabel(vdcForm.dispatch_type)}; multiple codes may use the same GST.
+                  </p>
                   <div className="flex justify-end gap-2">
                     <button type="button" onClick={() => { setSelectedVdcId(""); setCreatingVdcNew(false); }} className="h-8 border border-slate-300 bg-white px-3 text-xs text-slate-700">Cancel</button>
                     <button type="button" onClick={() => void handleSaveVdc()} disabled={savingVdc} className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50">

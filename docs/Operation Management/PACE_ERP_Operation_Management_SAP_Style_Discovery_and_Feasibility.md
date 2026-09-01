@@ -21621,11 +21621,11 @@ generate হয় না — এটাই **Dependent (No Inbound)**, নিচ
 
 | Dispatch Type | Selection flow | Bill-To | Ship-To |
 |---|---|---|---|
-| **Dependent (Direct)** | Parent Company select → সেই Parent Company-র under-এ VDC list (side drawer) → VDC select | Parent Company (এখনই resolve) | **পরে, আলাদা page-এ** নির্দিষ্ট Party select হলে সেটাই Ship-To (§133.5-এর VDC-first, Party-later insight-এর সাথে সঙ্গতিপূর্ণ) |
+| **Dependent (Direct)** | Parent Company select → সেই Parent Company-র under-এ VDC list (side drawer) → VDC select | ~~Parent Company (এখনই resolve)~~ **সংশোধিত §133.20 (2026-09-01): user-choice "Bill-To Party? Parent Company / VDC"** — VDC বাছলে VDC-র নিজের External Code (নাম) + VDC-র নিজের address; Parent Company বাছলে আগের behavior | **পরে, আলাদা page-এ** নির্দিষ্ট Party select হলে সেটাই Ship-To (§133.5-এর VDC-first, Party-later insight-এর সাথে সঙ্গতিপূর্ণ) |
 | **Dependent (Depot)** | Parent Company select → তার under-এ Depot list (side drawer) → Depot select | Depot-এর নিজের GST/Address | Depot-এর নিজের GST/Address (Bill-To = Ship-To, দুটোই Depot) |
 | **Independent Party** | Independent Customer list থেকে সরাসরি select, সব details চলে আসে | Customer-এর নিজের details | Default = Bill-To-র same (checkbox "Ship To same as Bill To", default checked)। Uncheck করলে Page 2-এই manual Ship-To Name → Address → State — এটা Customer Master-এ যায় না, শুধু সেই SO-তে manually বসে থাকে (record থাকে, master-এ save হয় না) |
-| **Independent Party (Asian-billed)** | Independent Customer list থেকে select। System customer-এর নিজের state দেখে সেই state-এর Asian Parent Company auto-resolve করে (না থাকলে error — "নেই, create করতে হবে")। তারপর প্রশ্ন: "Billing address to Depot?" (Yes/No) | Yes হলে সেই Parent Company-র under-এর Depot select করে তার address/GST; No হলে সরাসরি Parent Company-র address/GST | সবসময় সেই selected Independent Customer |
-| **Dependent (No Inbound)** | Parent Company select → তারপর sub-choice **Depot** না **Direct**। **Depot** হলে Depot Code drawer থেকে select। **Direct** হলে সেই Parent Company-র under-এর VDC select | **Depot** sub-case: Depot-এর নিজের address (Bill-To=Ship-To, Dependent(Depot)-এর মতোই)। **Direct** sub-case: Parent Company-র address | **Depot** sub-case: Depot-এর নিজের address। **Direct** sub-case: **সবসময় পরে, আলাদা page-এ** — VDC শুধু intermediate ধাপ, actual destination address পরের step-এ decide হয় (regular Dependent(Direct)-এর সাথে সঙ্গতিপূর্ণ) |
+| **Independent Party (Asian-billed)** | Independent Customer list থেকে select। System customer-এর নিজের state দেখে সেই state-এর Asian Parent Company auto-resolve করে (না থাকলে error — "নেই, create করতে হবে")। তারপর ~~প্রশ্ন: "Billing address to Depot?" (Yes/No)~~ **সংশোধিত §133.20: "VDC / DC / No" ৩-way choice** সেই Parent Company-র under-এর সব VDC/DC থেকে | **DC** বাছলে DC-র নিজের address/GST (Dependent(Depot)-এর একই resolution)। **No** বাছলে সরাসরি Parent Company-র address/GST। **VDC** বাছলে আবার Dependent(Direct)-এর একই "Bill-To Party: Parent Company/VDC" sub-choice — সেই অনুযায়ী resolve | সবসময় সেই selected Independent Customer (অপরিবর্তিত — Bill-To choice এটাকে touch করে না) |
+| **Dependent (No Inbound)** | Parent Company select → তারপর sub-choice **Depot** না **Direct**। **Depot** হলে Depot Code drawer থেকে select। **Direct** হলে সেই Parent Company-র under-এর VDC select | **Depot** sub-case: Depot-এর নিজের address (Bill-To=Ship-To, Dependent(Depot)-এর মতোই), অপরিবর্তিত। **Direct** sub-case: ~~Parent Company-র address~~ **সংশোধিত §133.20: Dependent(Direct)-এর একই "Bill-To Party" choice প্রযোজ্য** | **Depot** sub-case: Depot-এর নিজের address। **Direct** sub-case: **সবসময় পরে, আলাদা page-এ** — VDC শুধু intermediate ধাপ, actual destination address পরের step-এ decide হয় (regular Dependent(Direct)-এর সাথে সঙ্গতিপূর্ণ) |
 
 #### C. Payment Terms
 Dropdown — সরাসরি Payment Terms Master থেকে list আসবে।
@@ -22752,3 +22752,82 @@ and the submit payload's `costing_rate_month` derivation all extended from `["MT
 `eslint` clean on `SO01CreatePage.jsx`. All 10 CI guards (`stock-posting`, `company-scope` ×2,
 `hardcoded-role-check`, `wrong-company-source`, `route-acl-registry`, `approver-chain`,
 `resource-code-domain`, `frontend-payload`, `jsx-no-undef`) exit 0.
+
+### 133.20 — VDC gets its own address; Bill-To Party choice (Parent Company/VDC); Independent Party (Asian-billed) restructured to VDC/DC/No (✅ LOCKED + IMPLEMENTED — 2026-09-01)
+
+Business owner-directed change to Dependent(Direct)'s Bill-To resolution — previously it was
+**always** the Parent Company, no choice. A VDC's own identity (its External Code) needed to be
+usable as the real Bill-To in its own right.
+
+**1. VDC now carries its own address (`erp_master.fg_depot_code`, `dispatch_type='DIRECT'`).**
+Previously a DB trigger (`validate_fg_depot_code_row()`) **forbade** a DIRECT row from carrying
+`address_line`/`state`/`pin_code` at all (`MM05_DIRECT_DEPOT_INLINE_ADDRESS_FORBIDDEN`) — a VDC
+only ever inherited the Parent Company's state, no separate identity. **Business owner confirmed
+both:** address is now **mandatory** for VDC (same as DC) and VDC's **state must match its Parent
+Company's state** (same as DC) — no new relaxed rule, VDC and DC now share one identical
+validation path. Migration `20260901110000_vdc_own_address_bill_to_choice.sql` rewrites the
+trigger to drop the DEPOT-vs-DIRECT branching entirely (both types validated identically) and
+widens `sales_order.bill_to_type`'s CHECK constraint to add `'VDC'` alongside the existing
+`PARENT_COMPANY`/`DEPOT`/`CUSTOMER` values. Applied to dev, migration-integrity reconciled
+(`in_sync=true`, 518 files).
+
+**2. "External VDC Code" (`fg_depot_code.code`) is the field that becomes Bill-To Party Name**
+when VDC is chosen as Bill-To — already existed in the UI as "External VDC/DC Code", nothing new to
+build there, just newly load-bearing.
+
+**Backend (`fg_parent_company.handlers.ts`):** `createOrGetDepotCodeHandler`/`updateDepotCodeHandler`
+no longer force-null `address_line`/`state`/`pin_code` for DIRECT rows — both handlers now store
+whatever the caller sends, for both dispatch types uniformly. The now-unreachable
+`MM05_DIRECT_DEPOT_INLINE_ADDRESS_FORBIDDEN` error-code handling removed (dead code, the trigger
+can never raise it again).
+
+**Frontend (`VdcParentCompanyMasterPage.jsx`, MM04's VDC/DC tab):** the DEPOT-only address block
+(State/Address/Pin/GST-check-with-auto-fill) is now shown identically for both DIRECT and DEPOT —
+removed the old "a VDC has no separate address of its own" branch and its dispatch-type-switch
+field-clearing side effect (no longer needed once both types share the same fields).
+
+**3-5. SO01 Page 2 — new "Bill-To Party?" choice for Dependent(Direct)** (`sales_order.handlers.ts`'s
+`resolveBillToShipTo()`, `DEPENDENT_DIRECT` branch): after Parent Company + VDC are selected, a new
+required `bill_to_party` choice (`PARENT_COMPANY` | `VDC`, `BILL_TO_PARTY_CHOICES` Set) resolves
+Bill-To Name/Address/State/GST — VDC choice uses the VDC's own `code`/`address_line`/`state`/
+`gst_number`; Parent Company choice is the original, unchanged behavior. `billToVdcId` is always
+set to the selected VDC regardless of which is chosen as Bill-To (still needed for SO Map's own
+VDC-linkage, a separate concern from Bill-To identity). New `bill_to_type` value `'VDC'` stored
+when applicable.
+
+**6. Independent Party (Asian-billed) restructured** — the old "Billing address to Depot? Yes/No"
+(routed through a `customer_address.depot_code_id` mapping via `bill_to_customer_address_id`) is
+**replaced entirely** with an explicit 3-way choice under the resolved Asian Parent Company:
+**VDC** / **DC** / **No** (`ASIAN_BILLED_CHOICES` Set, new `asian_billed_choice` + conditional
+`asian_billed_vdc_dc_id` inputs). `NONE` → Bill-To = Parent Company directly (same resolution as
+Dependent(Direct)'s Parent Company branch). `DC` → Bill-To = that specific Depot's own name
+(`description`)/address (same resolution as Dependent(Depot)). `VDC` → validates the picked row is
+actually `dispatch_type='DIRECT'` under that parent, then applies the **same** `bill_to_party`
+sub-choice as point 3-5 (Parent Company vs this specific VDC). Ship-To is untouched throughout —
+always the selected Independent Customer's own address, per the pre-existing locked rule; the old
+`bill_to_customer_address_id`/`fetchResolvedCustomerAddress()`-for-Bill-To mechanism is fully
+retired for this dispatch type (still used for Ship-To resolution, unchanged).
+
+**7. Dependent (No Inbound) — Direct sub-case inherits automatically, no separate code.**
+`resolveBillToShipTo()` already collapses `DEPENDENT_NO_INBOUND`'s `Direct` sub-type into the same
+`DEPENDENT_DIRECT` branch (pre-existing `effectiveType` resolution) — so once that branch requires
+`bill_to_party`, both real Dependent(Direct) SOs and No-Inbound-Direct SOs get the new choice
+automatically. Depot sub-case is untouched (delegates to `DEPENDENT_DEPOT`, unaffected by this
+change).
+
+**Frontend (`SO01CreatePage.jsx`):** new shared `billToPartyToggle()` (two-button Parent
+Company/VDC choice, mirrors the existing IBN Yes/No and Direct/Depot sub-type button patterns) —
+rendered in the Dependent(Direct) block, the No-Inbound block (only when `noInboundSubType ===
+"DIRECT"`), and the Asian-billed block (only when its own VDC/DC choice resolves to `VDC`). The
+`depotCodes` fetch effect now fetches both VDC and DC (no `dispatch_type` filter) specifically for
+Asian-billed, since the user picks between them; a new `asianBilledVdcDcOptions` filters that
+combined list client-side by whichever sub-choice is active. The old `billToCustomerAddressId`
+state + its `listSalesOrderAddressOptions({parent_company_id})` query are removed entirely
+(replaced by the VDC/DC dropdown + `fetchDepotCode()` resolution server-side).
+
+**Verified:** `deno check` on `sales_order.handlers.ts`/`fg_parent_company.handlers.ts` — zero new
+errors (same 2 pre-existing `.range()` baseline). `eslint` clean on `SO01CreatePage.jsx`/
+`VdcParentCompanyMasterPage.jsx`. All 10 CI guards exit 0. Migration applied to dev only —
+**prod deploy still needs the same migration run** (pure schema change, travels with the next
+`supabase db push`/PR merge per CLAUDE.md §8A's MCP-vs-migration rule, no separate MCP data step
+needed here since this is DDL, not business/ACL data).
