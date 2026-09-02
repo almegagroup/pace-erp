@@ -404,6 +404,12 @@ export default function SalesInvoiceDetailPage() {
                 },
                 { key: "quantity", label: "Qty", width: "90px" },
                 {
+                  key: "pack_qty",
+                  label: "Pack Qty",
+                  width: "110px",
+                  render: (row) => (row.pack_qty != null ? `${row.pack_qty} ${row.pack_uom_code || ""}`.trim() : "-"),
+                },
+                {
                   key: "uom_code",
                   label: "Per",
                   width: "90px",
