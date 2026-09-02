@@ -2131,8 +2131,18 @@ async function resolveBillToShipTo(body: JsonRecord, dispatchType: string): Prom
     // create against it (SO_SHIP_TO_NAME_REQUIRED). Falls back to the
     // depot's own Code, matching how the VDC branch above already treats
     // Code as a legitimate display name.
+    const depotGstNumber = toTrimmedString(depot.gst_number) || null;
+    // Second landmine found in the same investigation: this object is
+    // validated by validateResolvedShipTo() (line 2760's caller), which --
+    // whenever ship_to_same_as_customer is false -- hard-requires
+    // ship_to_type to be REGISTERED/UNREGISTERED. This branch never asked
+    // the user for that (there's no such field on the Depot Code master
+    // either), and hardcoded null -- so EVERY Depot-type SO create would
+    // have failed SO_SHIP_TO_TYPE_INVALID right after the Name fix above.
+    // Derived the same way GST-lookup flows elsewhere in this codebase
+    // classify a party: registered if it has a GSTIN, unregistered if not.
     const depotAddress: ResolvedShipTo = {
-      ship_to_same_as_customer: false, ship_to_type: null, ship_to_gst_number: toTrimmedString(depot.gst_number) || null,
+      ship_to_same_as_customer: false, ship_to_type: depotGstNumber ? "REGISTERED" : "UNREGISTERED", ship_to_gst_number: depotGstNumber,
       ship_to_name: toTrimmedString(depot.description) || toTrimmedString(depot.code) || null, ship_to_address: toTrimmedString(depot.address_line) || null,
       ship_to_state: toTrimmedString(depot.state) || null, delivery_address: toTrimmedString(depot.address_line) || null,
     };
