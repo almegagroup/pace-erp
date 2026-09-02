@@ -625,6 +625,12 @@ type PreparedDoLine = {
   displayRateBasis: string | null;
   displayRate: number | null;
   displayUomCode: string | null;
+  // §133.21 follow-up (2026-09-02) -- this line's own pack count (this
+  // Packing PO's drawn quantity ÷ per_pack_qty), for the same
+  // display-only reason: delivery_challan_line never carried Pack Qty at
+  // all before this, so Invoice/PGI's preview only ever showed base KG.
+  packQty: number | null;
+  packUomCode: string | null;
   shipToCustomerId: string | null;
   shipToName: string | null;
   shipToAddress: string | null;
@@ -860,13 +866,18 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         : rateBasis === "BASE_UOM"
           ? (toTrimmedString(salesSourceLine?.uom_code) || null)
           : null;
+      // This specific line's own drawn pack count -- e.g. when an FO's
+      // Mapped Qty is split across two Packing POs, this is that ONE
+      // Packing PO's pack count, not the FO's overall total.
+      const packQty = perPackQty > 0 ? Number((quantity / perPackQty).toFixed(6)) : null;
+      const packUomCode = toTrimmedString(salesSourceLine?.pack_uom_code) || null;
       prepared.push({
         materialId, quantity, storageLocationId,
         soLineId: soLineId || (soMapAllocationId ? toTrimmedString(allocationMap.get(soMapAllocationId)?.so_line_id) : null) || null,
         stoLineId: stoLineId || null,
         soMapAllocationId: soMapAllocationId || null,
         batchNumber, expiryDate, packingOrderId, uomCode, unitValue, gstRate, gstAmount,
-        displayRateBasis, displayRate, displayUomCode,
+        displayRateBasis, displayRate, displayUomCode, packQty, packUomCode,
         shipToCustomerId: null, shipToName: null, shipToAddress: null, shipToState: null, shipToGstNumber: null,
         sourceType, sourceId,
       });
@@ -983,6 +994,8 @@ function buildDoAtomicPayload(
       display_rate_basis: line.displayRateBasis,
       display_rate: line.displayRate,
       display_uom_code: line.displayUomCode,
+      pack_qty: line.packQty,
+      pack_uom_code: line.packUomCode,
       ship_to_customer_id: line.shipToCustomerId,
       ship_to_name: line.shipToName,
       ship_to_address: line.shipToAddress,
@@ -1280,6 +1293,11 @@ type ProcInvoiceGroupLine = {
   display_rate_basis: string | null;
   display_rate: number | null;
   display_uom_code: string | null;
+  // §133.21 follow-up (2026-09-02) -- this line's own Packing PO's pack
+  // count, display-only. Null for older DO lines and for non-pack-driven
+  // (RM/PM/INT/STO) lines.
+  pack_qty: number | null;
+  pack_uom_code: string | null;
   gst_rate: number | null;
   gst_amount: number;
   line_total: number;
@@ -1495,6 +1513,8 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
         display_rate_basis: toTrimmedString(line.display_rate_basis) || null,
         display_rate: line.display_rate != null ? Number(line.display_rate) : null,
         display_uom_code: toTrimmedString(line.display_uom_code) || null,
+        pack_qty: line.pack_qty != null ? Number(line.pack_qty) : null,
+        pack_uom_code: toTrimmedString(line.pack_uom_code) || null,
         gst_rate: line.gst_rate != null ? Number(line.gst_rate) : null,
         gst_amount: Number(line.gst_amount ?? 0),
         line_total: Number(line.line_total ?? 0),
@@ -2241,6 +2261,8 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
           display_rate_basis: line.display_rate_basis,
           display_rate: line.display_rate,
           display_uom_code: line.display_uom_code,
+          pack_qty: line.pack_qty,
+          pack_uom_code: line.pack_uom_code,
           taxable_value: taxableValue,
           gst_rate: line.gst_rate,
           cgst_amount: cgstAmount,
