@@ -616,6 +616,15 @@ type PreparedDoLine = {
   unitValue: number;
   gstRate: number;
   gstAmount: number;
+  // §133.21 -- original SO-time rate choice, frozen here purely for
+  // Invoice/PGI preview display. unitValue/uomCode above stay per-base-UOM
+  // (what every downstream stock/value calculation actually uses); these
+  // three exist only so the invoice can show "Rate 500 / Per BBL" instead of
+  // always converting to a per-KG figure, even when the SO was entered as
+  // Pack UoM or Fixed. Null for STO lines (no rate_basis concept there).
+  displayRateBasis: string | null;
+  displayRate: number | null;
+  displayUomCode: string | null;
   shipToCustomerId: string | null;
   shipToName: string | null;
   shipToAddress: string | null;
@@ -826,12 +835,22 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
           : rawRate;
       const gstRate = Number(salesSourceLine?.gst_rate ?? 0);
       const gstAmount = Number((unitValue * quantity * gstRate / 100).toFixed(4));
+      // §133.21 -- freeze exactly what the SO line was entered as, for
+      // display only (see PreparedDoLine comment above).
+      const displayRateBasis = salesSourceLine ? (rateBasis || null) : null;
+      const displayRate = salesSourceLine ? rawRate : null;
+      const displayUomCode = rateBasis === "PACK_UOM"
+        ? (toTrimmedString(salesSourceLine?.pack_uom_code) || null)
+        : rateBasis === "BASE_UOM"
+          ? (toTrimmedString(salesSourceLine?.uom_code) || null)
+          : null;
       prepared.push({
         materialId, quantity, storageLocationId,
         soLineId: soLineId || (soMapAllocationId ? toTrimmedString(allocationMap.get(soMapAllocationId)?.so_line_id) : null) || null,
         stoLineId: stoLineId || null,
         soMapAllocationId: soMapAllocationId || null,
         batchNumber, expiryDate, packingOrderId, uomCode, unitValue, gstRate, gstAmount,
+        displayRateBasis, displayRate, displayUomCode,
         shipToCustomerId: null, shipToName: null, shipToAddress: null, shipToState: null, shipToGstNumber: null,
         sourceType, sourceId,
       });
@@ -945,6 +964,9 @@ function buildDoAtomicPayload(
       gst_rate: line.gstRate,
       gst_amount: line.gstAmount,
       line_total: Number((line.quantity * line.unitValue + line.gstAmount).toFixed(4)),
+      display_rate_basis: line.displayRateBasis,
+      display_rate: line.displayRate,
+      display_uom_code: line.displayUomCode,
       ship_to_customer_id: line.shipToCustomerId,
       ship_to_name: line.shipToName,
       ship_to_address: line.shipToAddress,
@@ -1237,6 +1259,11 @@ type ProcInvoiceGroupLine = {
   quantity: number;
   uom_code: string;
   unit_value: number;
+  // §133.21 -- original SO-time rate/basis/UOM, display-only. Fall back to
+  // unit_value/uom_code above for older DO lines saved before this existed.
+  display_rate_basis: string | null;
+  display_rate: number | null;
+  display_uom_code: string | null;
   gst_rate: number | null;
   gst_amount: number;
   line_total: number;
@@ -1449,6 +1476,9 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
         quantity: Number(line.quantity ?? 0),
         uom_code: toTrimmedString(line.uom_code),
         unit_value: Number(line.unit_value ?? 0),
+        display_rate_basis: toTrimmedString(line.display_rate_basis) || null,
+        display_rate: line.display_rate != null ? Number(line.display_rate) : null,
+        display_uom_code: toTrimmedString(line.display_uom_code) || null,
         gst_rate: line.gst_rate != null ? Number(line.gst_rate) : null,
         gst_amount: Number(line.gst_amount ?? 0),
         line_total: Number(line.line_total ?? 0),
@@ -2190,6 +2220,11 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
           quantity: line.quantity,
           uom_code: line.uom_code,
           rate: line.unit_value,
+          // §133.21 -- carried through to the permanent posted invoice line
+          // too, so the invoice detail view doesn't regress once posted.
+          display_rate_basis: line.display_rate_basis,
+          display_rate: line.display_rate,
+          display_uom_code: line.display_uom_code,
           taxable_value: taxableValue,
           gst_rate: line.gst_rate,
           cgst_amount: cgstAmount,
