@@ -616,6 +616,7 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
       .insert({
         company_id: companyId,
         fo_number: foNumber,
+        original_fo_number: foNumber,
         party_id: partyId,
         customer_address_id: customerAddressId,
         party_name: partyName,
@@ -664,9 +665,14 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
 
 // PATCH /api/production/plan-feed/:id
 // §83.18-REVISED field-level lock (replaces the old "any Packing PO exists -> whole
-// FO frozen" rule): FO Number is never editable (never accepted here, unchanged).
-// SKU/material/Description lock only once >=1 allocation exists. Everything else
-// (Party, Ordered Qty, Pack Qty, dates, Ordered Stroke) is always editable.
+// FO frozen" rule): SKU/material/Description lock only once >=1 allocation exists.
+// Everything else (Party, Ordered Qty, Pack Qty, dates, Ordered Stroke) is always
+// editable. FO Number itself was originally never-editable too -- corrected below
+// (revision session): it's a pure label, every real relationship (SO Map allocation,
+// Packing PO allocation, Dispatch Reco) keys off plan_feed.id, never fo_number, so a
+// revision here touches no mapping. original_fo_number (set once at create, never
+// touched again) preserves the "what was it originally" history the Total Table shows
+// alongside the current number.
 async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: boolean): Promise<Response> {
   try {
     const id = getIdFromPath(req);
@@ -674,7 +680,7 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
 
     const { data: existing, error: fetchErr } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
-      .select("id, status, company_id, party_id, customer_address_id, sku, material_id, description, ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date").eq("id", id).maybeSingle();
+      .select("id, status, company_id, fo_number, party_id, customer_address_id, sku, material_id, description, ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date").eq("id", id).maybeSingle();
 
     if (fetchErr) throw new Error("PROD_PLAN_FEED_FETCH_FAILED");
     if (!existing) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
@@ -798,6 +804,34 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
     }
     if (body.ordered_stroke_number !== undefined) {
       updates.ordered_stroke_number = toTrimmedString(body.ordered_stroke_number) || null;
+    }
+    if (body.order_confirmation_date !== undefined) {
+      const orderConfirmationDate = toTrimmedString(body.order_confirmation_date);
+      if (orderConfirmationDate && !isManualDocumentDateWithinWindow(orderConfirmationDate)) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+      }
+      updates.order_confirmation_date = orderConfirmationDate || null;
+    }
+    if (body.formula_confirmation_date !== undefined) {
+      const formulaConfirmationDate = toTrimmedString(body.formula_confirmation_date);
+      if (formulaConfirmationDate && !isManualDocumentDateWithinWindow(formulaConfirmationDate)) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+      }
+      updates.formula_confirmation_date = formulaConfirmationDate || null;
+    }
+    // Revision session -- see the function comment above for why a rename is safe.
+    // original_fo_number is deliberately never touched here.
+    if (body.fo_number !== undefined) {
+      const revisedFoNumber = toTrimmedString(body.fo_number);
+      if (!revisedFoNumber) return foErr(req, ctx, "PROD_PLAN_FEED_FO_NUMBER_REQUIRED", 422, "Revised FO Number cannot be empty.");
+      if (revisedFoNumber !== toTrimmedString(current.fo_number)) {
+        const { data: duplicateFo, error: duplicateFoError } = await serviceRoleClient
+          .schema("erp_production").from("plan_feed")
+          .select("id").eq("company_id", current.company_id as string).eq("fo_number", revisedFoNumber).neq("id", id).maybeSingle();
+        if (duplicateFoError) throw new Error("PROD_PLAN_FEED_FO_NUMBER_CHECK_FAILED");
+        if (duplicateFo) return foErr(req, ctx, "PROD_PLAN_FEED_FO_NUMBER_EXISTS", 409, "This FO Number is already used by another FO in this company.");
+        updates.fo_number = revisedFoNumber;
+      }
     }
 
     const { error } = await serviceRoleClient.schema("erp_production").from("plan_feed")
@@ -1480,9 +1514,9 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     let foQuery = serviceRoleClient
       .schema("erp_production").from("plan_feed")
       .select(`
-        id, company_id, fo_number, party_id, party_name, sku, description, material_id,
+        id, company_id, fo_number, original_fo_number, party_id, party_name, sku, description, material_id,
         ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date, status,
-        ordered_stroke_number
+        ordered_stroke_number, order_confirmation_date, formula_confirmation_date
       `)
       .neq("status", "CANCELLED");
     if (companyId) foQuery = foQuery.eq("company_id", companyId);
@@ -1729,6 +1763,9 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       return {
         id: foId,
         fo_number: fo.fo_number,
+        original_fo_number: fo.original_fo_number,
+        order_confirmation_date: fo.order_confirmation_date,
+        formula_confirmation_date: fo.formula_confirmation_date,
         party_name: fo.party_name,
         party_town: fo.party_id ? (townByPartyId.get(toTrimmedString(fo.party_id)) ?? null) : null,
         fo_customer_type: fo.party_id ? (foTypeByPartyId.get(toTrimmedString(fo.party_id)) ?? null) : null,
