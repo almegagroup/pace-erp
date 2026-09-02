@@ -493,6 +493,10 @@ export default function PlanFeedPage() {
   }, [editSearch]);
   const [editData, setEditData] = useState(null);
   const [editDraft, setEditDraft] = useState({});
+  // FO Number is a pure label (every real relationship keys off plan_feed.id) --
+  // checkbox-gated so a revision is always a deliberate action, never a stray edit.
+  const [reviseFoNumber, setReviseFoNumber] = useState(false);
+  const [revisedFoNumberDraft, setRevisedFoNumberDraft] = useState("");
   const [editLoading, setEditLoading] = useState(false);
   const [editDrawerOpen, setEditDrawerOpen] = useState(false);
   const [allocPoNumber, setAllocPoNumber] = useState("");
@@ -577,7 +581,11 @@ export default function PlanFeedPage() {
         order_date: row.order_date ?? "",
         scheduled_delivery_date: row.scheduled_delivery_date ?? "",
         ordered_stroke_number: row.ordered_stroke_number ?? "",
+        order_confirmation_date: row.order_confirmation_date ?? "",
+        formula_confirmation_date: row.formula_confirmation_date ?? "",
       });
+      setReviseFoNumber(false);
+      setRevisedFoNumberDraft(row.fo_number ?? "");
     } catch {
       toast("FO not found.", "error");
       setEditDrawerOpen(false);
@@ -598,6 +606,15 @@ export default function PlanFeedPage() {
       toast(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
       return;
     }
+    if ((editDraft.order_confirmation_date && !isManualDocumentDateWithinWindow(editDraft.order_confirmation_date))
+      || (editDraft.formula_confirmation_date && !isManualDocumentDateWithinWindow(editDraft.formula_confirmation_date))) {
+      toast(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
+      return;
+    }
+    if (reviseFoNumber && !revisedFoNumberDraft.trim()) {
+      toast("Enter the revised FO Number, or uncheck Revise FO Number.", "error");
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -608,7 +625,12 @@ export default function PlanFeedPage() {
         order_date: editDraft.order_date,
         scheduled_delivery_date: editDraft.scheduled_delivery_date,
         ordered_stroke_number: editDraft.ordered_stroke_number?.trim() || null,
+        order_confirmation_date: editDraft.order_confirmation_date || null,
+        formula_confirmation_date: editDraft.formula_confirmation_date || null,
       };
+      if (reviseFoNumber) {
+        payload.fo_number = revisedFoNumberDraft.trim();
+      }
       if (!skuLockedForEdit) {
         Object.assign(payload, {
           material_id: editDraft.material_id || null,
@@ -764,6 +786,7 @@ export default function PlanFeedPage() {
   const [exportingTotal, setExportingTotal] = useState(false);
   const totalColumns = useMemo(() => [
     { key: "fo_number", label: "FO #", width: "140px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.fo_number || "--"}</span> },
+    { key: "original_fo_number", label: "Original FO #", width: "140px", render: (r) => <span className="font-mono">{r.original_fo_number || r.fo_number || "--"}</span> },
     { key: "party_name", label: "Party", width: "200px" },
     { key: "party_town", label: "Town", width: "120px" },
     { key: "sku", label: "SKU", width: "135px", render: (r) => <span className="font-mono">{r.sku || "--"}</span> },
@@ -782,6 +805,8 @@ export default function PlanFeedPage() {
     { key: "pending_dispatch_kg", label: "Pending KG", width: "110px", align: "right", copyValue: (r) => fmt(r.pending_dispatch_kg), excelValue: (r) => Number(r.pending_dispatch_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono text-amber-700">{fmt(r.pending_dispatch_kg)}</span> },
     { key: "order_date", label: "Order Date", width: "110px" },
     { key: "scheduled_delivery_date", label: "Del. Date", width: "110px" },
+    { key: "order_confirmation_date", label: "Order Confirmation Date", width: "150px", render: (r) => r.order_confirmation_date || "--" },
+    { key: "formula_confirmation_date", label: "Formula Confirmation Date", width: "160px", render: (r) => r.formula_confirmation_date || "--" },
   ], []);
   const totalSuggestions = useMemo(() => [...new Set(summary.flatMap((row) => totalColumns.map((column) => gridCellValue(row, column)).filter(Boolean)))].sort((a, b) => a.localeCompare(b)).slice(0, 300), [summary, totalColumns]);
   const totalSuggestionsByColumn = useMemo(() => Object.fromEntries(totalColumns.map((column) => [column.key, [...new Set(summary.map((row) => gridCellValue(row, column)).filter(Boolean))].sort((a, b) => a.localeCompare(b)).slice(0, 150)])), [summary, totalColumns]);
@@ -1166,11 +1191,38 @@ export default function PlanFeedPage() {
                 )}
                 {!canEditSelectedFo && !planFeedCapabilityQ.isLoading && (
                   <p className="col-span-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                    This is not an MTEST FO. QA can view it, but only Production or ACL-MASTER can edit or map Packing POs.
+                    You can view this FO, but your access does not permit editing or mapping Packing POs against it.
                   </p>
                 )}
                 <form onSubmit={handleSaveEdit} className="grid grid-cols-2 gap-4 max-w-3xl">
                   <fieldset disabled={!canEditSelectedFo} className="contents disabled:opacity-55">
+                  <div className="col-span-2 flex flex-col gap-1 rounded border border-slate-200 bg-slate-50 p-3">
+                    <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={reviseFoNumber}
+                        onChange={(e) => {
+                          setReviseFoNumber(e.target.checked);
+                          if (e.target.checked) setRevisedFoNumberDraft(editData.fo_number ?? "");
+                        }}
+                        disabled={editData.status === "CANCELLED"}
+                      />
+                      Revise FO Number
+                    </label>
+                    {reviseFoNumber && (
+                      <>
+                        <input
+                          className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono max-w-xs"
+                          value={revisedFoNumberDraft}
+                          onChange={(e) => setRevisedFoNumberDraft(e.target.value)}
+                          disabled={editData.status === "CANCELLED"}
+                        />
+                        <p className="text-[11px] text-slate-500">
+                          Original FO Number ({editData.original_fo_number || editData.fo_number}) stays on record in the Total Table. Every mapping (Sales Order, Packing PO, Dispatch) follows this FO automatically — no re-mapping needed.
+                        </p>
+                      </>
+                    )}
+                  </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Party</label>
                     <ErpComboboxField
@@ -1303,6 +1355,14 @@ export default function PlanFeedPage() {
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">FO Delivery Date (Proposed Dispatch)</label>
                     <input key={`${editData.id}-delivery-date`} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.scheduled_delivery_date} onChange={e => setEditDraft(d => ({ ...d, scheduled_delivery_date: e.target.value }))} disabled={editData.status === "CANCELLED"} required />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-slate-600 font-medium">Order Confirmation Date</label>
+                    <input key={`${editData.id}-order-confirmation-date`} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.order_confirmation_date} onChange={e => setEditDraft(d => ({ ...d, order_confirmation_date: e.target.value }))} disabled={editData.status === "CANCELLED"} />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-slate-600 font-medium">Formula Confirmation Date</label>
+                    <input key={`${editData.id}-formula-confirmation-date`} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.formula_confirmation_date} onChange={e => setEditDraft(d => ({ ...d, formula_confirmation_date: e.target.value }))} disabled={editData.status === "CANCELLED"} />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Ordered Stroke</label>
