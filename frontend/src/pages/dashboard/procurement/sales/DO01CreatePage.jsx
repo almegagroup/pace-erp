@@ -316,11 +316,21 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, picks, onClose, onA
         __maxQty: option ? Math.min(lineBudget, toNumber(option.remaining_qty)) : lineBudget,
       }];
     }
+    // Found live 2026-09-02, same session as the split-into-rows fix above:
+    // Pack Qty/Base Qty here used to stay the LINE's own total (e.g. 87
+    // barrels for the whole 20010 KG FO need) on every sibling row, even
+    // though each row now represents ONE specific Packing PO whose own
+    // available pack count differs (44 vs 43) -- misleadingly showing the
+    // same "87" next to two different "Packing PO Avail" figures. Each
+    // row's Pack Qty/Base Qty now matches its OWN Packing PO's balance.
+    const perPackQty = toNumber(line.per_pack_qty);
     return options.map((option) => ({
       ...line,
       __rowKey: `${lineKey}::${option.packing_order_id}`,
       __option: option,
       __maxQty: Math.min(lineBudget, toNumber(option.remaining_qty)),
+      pack_qty: perPackQty > 0 ? Number((toNumber(option.remaining_qty) / perPackQty).toFixed(6)) : line.pack_qty,
+      base_qty: toNumber(option.remaining_qty),
     }));
   }
 
@@ -523,6 +533,16 @@ export default function DO01CreatePage() {
   }
 
   const netWeight = useMemo(() => Number(picks.reduce((sum, pick) => sum + toNumber(pick.qty), 0).toFixed(4)), [picks]);
+  // Found live 2026-09-02 (business owner) -- a truck with multiple lines
+  // (e.g. two Packing POs off the same FO) had no running total of how many
+  // packs/how much base qty had been set across the whole truck, only a
+  // per-line qty. totalPacks sums every pack-driven line's live Truck
+  // Packs count (qty ÷ its own per_pack_qty) -- deliberately a plain count
+  // across materials, since the truck-loading question is "how many
+  // barrels/packs total," not per-material.
+  const totalPacks = useMemo(() => Number(picks.reduce((sum, pick) => (
+    isPackDrivenFg(pick) && toNumber(pick.per_pack_qty) > 0 ? sum + toNumber(pick.qty) / toNumber(pick.per_pack_qty) : sum
+  ), 0).toFixed(3)), [picks]);
   const visiblePicks = useMemo(() => {
     const query = truckSearch.trim().toLowerCase();
     if (!query) return picks;
@@ -754,7 +774,10 @@ export default function DO01CreatePage() {
                 { key: "remove", label: "", width: "80px", render: (row) => <button type="button" onClick={() => removePick(row.__key)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button> },
               ]} rows={visiblePicks} rowKey={(row) => row.__key} emptyMessage="Choose items from a selected SO or STO." />
             </ErpSectionCard>
-            <div className="text-right text-sm text-slate-600">Truck Net Weight (auto): <span className="font-mono font-semibold">{formatFixed(netWeight)}</span></div>
+            <div className="flex justify-end gap-6 text-sm text-slate-600">
+              <span>Total Packs (auto): <span className="font-mono font-semibold">{formatFixed(totalPacks, 3)}</span></span>
+              <span>Truck Net Weight (auto): <span className="font-mono font-semibold">{formatFixed(netWeight)}</span></span>
+            </div>
           </div>
         ) : null}
       </ErpScreenScaffold>
