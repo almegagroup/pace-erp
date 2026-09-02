@@ -190,13 +190,19 @@ function SourceDocumentDrawer({ visible, sourceType, companyId, selectedIds, onT
   });
   const allItems = Array.isArray(query.data?.items) ? query.data.items : [];
   const normalizedSearch = search.trim().toLowerCase();
+  // Customer PO Number is often what the dispatcher actually has in hand
+  // (not PACE's own SO number) -- reference_display already reads
+  // "Customer PO <number>", so a plain substring match against it covers
+  // both a bare number and the full label.
   const items = normalizedSearch
-    ? allItems.filter((item) => String(item.document_number || "").toLowerCase().includes(normalizedSearch))
+    ? allItems.filter((item) => String(item.document_number || "").toLowerCase().includes(normalizedSearch)
+        || String(item.reference_display || "").toLowerCase().includes(normalizedSearch))
     : allItems;
 
   function handleSearchKeyDown(event) {
     if (event.key !== "Enter") return;
-    const exact = allItems.find((item) => String(item.document_number || "").toLowerCase() === normalizedSearch);
+    const exact = allItems.find((item) => String(item.document_number || "").toLowerCase() === normalizedSearch
+      || String(item.reference_display || "").toLowerCase().replace(/^customer po\s*/, "").trim() === normalizedSearch);
     if (exact) {
       setNoExactMatch(false);
       onToggle(exact);
@@ -259,7 +265,19 @@ function SourceDocumentDrawer({ visible, sourceType, companyId, selectedIds, onT
 // Item selection only chooses an SO Map/STO source for the truck. Quantity,
 // storage, and optional manual batch details are intentionally decided in the
 // picked-items grid so the picker never changes the SO Map allocation.
-function SourceItemsDrawer({ visible, sourceType, sourceRef, pickedSourceKeys, onClose, onAdd }) {
+//
+// §133.18 "balance barrel" -- one FO/material line can legitimately draw from
+// MORE THAN ONE Packing PO batch (e.g. 2 barrels off PO-A + rest off PO-B).
+// A line with >1 linked Packing PO used to render as ONE row with a nested
+// dropdown -- pick one PO, Add, and the whole line was marked "Added",
+// permanently hiding the other PO's own balance even though it was still
+// legitimately available. Found live 2026-09-02 (business owner, FO
+// 5157405986 split across two Packing POs whose Avail figures summed
+// exactly to the line's own Mapped Qty). Fixed: each linked Packing PO now
+// becomes its OWN addable row, sharing the line's Mapped Qty as one combined
+// budget across siblings (picking from one leaves correspondingly less on
+// the others) -- never more than that line's own Mapped Qty in total.
+function SourceItemsDrawer({ visible, sourceType, sourceRef, picks, onClose, onAdd }) {
   const isSo = sourceType === "SALES_ORDER";
   const query = useQuery({
     queryKey: ["procurement", "do01-add-options", sourceType, sourceRef?.id],
@@ -267,30 +285,49 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, pickedSourceKeys, o
     enabled: visible && Boolean(sourceRef?.id),
   });
   const groups = Array.isArray(query.data?.groups) ? query.data.groups : [];
-  const [packingOrderByLine, setPackingOrderByLine] = useState({});
 
-  function sourceKey(line) {
+  function lineSourceKey(line) {
     return line.source_kind === "SO_MAP_ALLOCATION"
       ? `allocation:${line.so_map_allocation_id}`
       : `${sourceType}:${line.id}`;
   }
-  function selectedPackingOrderId(line) {
-    const options = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
-    return packingOrderByLine[line.id] || (options.length === 1 ? options[0].packing_order_id : "");
+
+  // Already-picked quantity and row identity, both keyed off the underlying
+  // FO/material line (not the specific Packing PO) so the shared budget
+  // above accounts for everything already added from ANY sibling PO row.
+  const pickedQtyByLineKey = new Map();
+  const pickedRowKeys = new Set();
+  for (const pick of picks) {
+    const lineKey = pick.so_map_allocation_id ? `allocation:${pick.so_map_allocation_id}` : `${pick.__sourceType}:${pick.so_line_id || pick.sto_line_id}`;
+    pickedQtyByLineKey.set(lineKey, (pickedQtyByLineKey.get(lineKey) ?? 0) + toNumber(pick.qty));
+    pickedRowKeys.add(`${lineKey}::${pick.packing_order_id || "none"}`);
   }
 
-  function handleAdd(group, line) {
-    const packingPoOptions = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
-    const packingOrderId = selectedPackingOrderId(line);
-    let maxQty = toNumber(line.remaining_qty);
-    if (packingPoOptions.length > 0) {
-      if (!packingOrderId) return;
-      const selectedPko = packingPoOptions.find((option) => option.packing_order_id === packingOrderId);
-      if (!selectedPko) return;
-      maxQty = Math.min(maxQty, toNumber(selectedPko.remaining_qty));
+  function expandLine(line) {
+    const options = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
+    const lineKey = lineSourceKey(line);
+    const lineBudget = Math.max(0, toNumber(line.remaining_qty) - (pickedQtyByLineKey.get(lineKey) ?? 0));
+    if (options.length <= 1) {
+      const option = options[0] ?? null;
+      return [{
+        ...line,
+        __rowKey: `${lineKey}::${option?.packing_order_id || "none"}`,
+        __option: option,
+        __maxQty: option ? Math.min(lineBudget, toNumber(option.remaining_qty)) : lineBudget,
+      }];
     }
+    return options.map((option) => ({
+      ...line,
+      __rowKey: `${lineKey}::${option.packing_order_id}`,
+      __option: option,
+      __maxQty: Math.min(lineBudget, toNumber(option.remaining_qty)),
+    }));
+  }
+
+  function handleAdd(group, row) {
+    const option = row.__option;
+    const maxQty = row.__maxQty;
     if (maxQty <= QTY_TOL) return;
-    const selectedPko = packingPoOptions.find((option) => option.packing_order_id === packingOrderId);
     onAdd({
       __key: makeKey(),
       __groupLabel: group.label,
@@ -298,28 +335,28 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, pickedSourceKeys, o
       __shipTo: group.ship_to_display,
       __sourceId: sourceRef.id,
       __sourceType: sourceType,
-      source_kind: isSo ? (line.source_kind || "SO_LINE_DIRECT") : "STO_LINE_DIRECT",
-      so_line_id: isSo ? (line.source_kind === "SO_MAP_ALLOCATION" ? null : line.id) : null,
-      so_map_allocation_id: isSo && line.source_kind === "SO_MAP_ALLOCATION" ? line.so_map_allocation_id : null,
-      sto_line_id: !isSo ? line.id : null,
-      material_id: line.material_id,
-      material_display: line.material_display,
-      line_material_type: line.line_material_type,
-      fg_type: line.fg_type ?? null,
-      batch_number: selectedPko?.batch_number || line.batch_number || null,
+      source_kind: isSo ? (row.source_kind || "SO_LINE_DIRECT") : "STO_LINE_DIRECT",
+      so_line_id: isSo ? (row.source_kind === "SO_MAP_ALLOCATION" ? null : row.id) : null,
+      so_map_allocation_id: isSo && row.source_kind === "SO_MAP_ALLOCATION" ? row.so_map_allocation_id : null,
+      sto_line_id: !isSo ? row.id : null,
+      material_id: row.material_id,
+      material_display: row.material_display,
+      line_material_type: row.line_material_type,
+      fg_type: row.fg_type ?? null,
+      batch_number: option?.batch_number || row.batch_number || null,
       expiry_date: null,
-      packing_order_id: packingOrderId || line.packing_order_id || null,
-      packing_order_number: selectedPko?.po_number || null,
-      document_name: selectedPko?.document_name || null,
-      prodshade_display: selectedPko?.prodshade_display || null,
-      actual_stroke: selectedPko?.actual_stroke || null,
-      process_order_number: selectedPko?.process_order_number || null,
-      packing_code: selectedPko?.packing_code || null,
-      uom_code: line.uom_code,
-      pack_uom_code: line.pack_uom_code || null,
-      pack_qty: line.pack_qty ?? null,
-      per_pack_qty: line.per_pack_qty ?? null,
-      base_qty: line.base_qty ?? line.remaining_qty,
+      packing_order_id: option?.packing_order_id || row.packing_order_id || null,
+      packing_order_number: option?.po_number || null,
+      document_name: option?.document_name || null,
+      prodshade_display: option?.prodshade_display || null,
+      actual_stroke: option?.actual_stroke || null,
+      process_order_number: option?.process_order_number || null,
+      packing_code: option?.packing_code || null,
+      uom_code: row.uom_code,
+      pack_uom_code: row.pack_uom_code || null,
+      pack_qty: row.pack_qty ?? null,
+      per_pack_qty: row.per_pack_qty ?? null,
+      base_qty: row.base_qty ?? row.remaining_qty,
       maxQty,
       qty: maxQty,
     });
@@ -349,53 +386,34 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, pickedSourceKeys, o
                   cellNavigate
                   fitColumnWidths
                   columns={[
-                    { key: "material", label: "Material", width: "180px", render: (line) => line.material_display || line.material_id },
-                    {
-                      key: "packing_po",
-                      label: "Packing PO",
-                      width: "170px",
-                      render: (line) => {
-                        const options = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
-                        if (options.length === 0) return "-";
-                        if (options.length === 1) return <span className="font-mono text-xs">{options[0].po_number} ({options[0].batch_number})</span>;
-                        return (
-                          <select value={selectedPackingOrderId(line)} onChange={(event) => setPackingOrderByLine((current) => ({ ...current, [line.id]: event.target.value }))} className="h-8 w-full border border-slate-300 bg-white px-1 text-xs text-slate-900 outline-none focus:border-sky-500">
-                            <option value="">Select Packing PO</option>
-                            {options.map((option) => (
-                              <option key={option.packing_order_id} value={option.packing_order_id}>
-                                {option.po_number} ({option.batch_number}) — Avail {formatFixed(option.remaining_qty)}
-                              </option>
-                            ))}
-                          </select>
-                        );
-                      },
-                    },
-                    { key: "batch", label: "Batch Number", width: "130px", render: (line) => line.batch_number || "-" },
-                    { key: "mapped_qty", label: "Mapped Qty", width: "110px", render: (line) => `${formatFixed(line.remaining_qty)} ${line.uom_code}` },
-                    { key: "pack_uom", label: "Pack UOM", width: "85px", render: (line) => line.pack_uom_code || "-" },
-                    { key: "pack_qty", label: "Pack Qty", width: "90px", render: (line) => formatFixed(line.pack_qty) },
-                    { key: "per_pack", label: "Per Pack", width: "90px", render: (line) => formatFixed(line.per_pack_qty) },
-                    { key: "base_qty", label: "Base Qty", width: "100px", render: (line) => `${formatFixed(line.base_qty ?? line.remaining_qty)} ${line.uom_code}` },
-                    { key: "prodshade", label: "Prod Shade", width: "130px", render: (line) => selectedPackingOrderId(line) ? (Array.isArray(line.packing_po_options) ? line.packing_po_options.find((option) => option.packing_order_id === selectedPackingOrderId(line))?.prodshade_display || "-" : "-") : "-" },
-                    { key: "stroke", label: "Stroke", width: "80px", render: (line) => selectedPackingOrderId(line) ? (Array.isArray(line.packing_po_options) ? line.packing_po_options.find((option) => option.packing_order_id === selectedPackingOrderId(line))?.actual_stroke || "-" : "-") : "-" },
+                    { key: "material", label: "Material", width: "180px", render: (row) => row.material_display || row.material_id },
+                    { key: "packing_po", label: "Packing PO", width: "140px", render: (row) => row.__option ? <span className="font-mono text-xs">{row.__option.po_number}</span> : "-" },
+                    { key: "batch", label: "Batch Number", width: "120px", render: (row) => row.__option?.batch_number || row.batch_number || "-" },
+                    { key: "po_avail", label: "Packing PO Avail", width: "120px", render: (row) => row.__option ? `${formatFixed(row.__option.remaining_qty)} ${row.uom_code}` : "-" },
+                    { key: "mapped_qty", label: "Mapped Qty", width: "110px", render: (row) => `${formatFixed(row.remaining_qty)} ${row.uom_code}` },
+                    { key: "pack_uom", label: "Pack UOM", width: "85px", render: (row) => row.pack_uom_code || "-" },
+                    { key: "pack_qty", label: "Pack Qty", width: "90px", render: (row) => formatFixed(row.pack_qty) },
+                    { key: "per_pack", label: "Per Pack", width: "90px", render: (row) => formatFixed(row.per_pack_qty) },
+                    { key: "base_qty", label: "Base Qty", width: "100px", render: (row) => `${formatFixed(row.base_qty ?? row.remaining_qty)} ${row.uom_code}` },
+                    { key: "prodshade", label: "Prod Shade", width: "130px", render: (row) => row.__option?.prodshade_display || "-" },
+                    { key: "stroke", label: "Stroke", width: "80px", render: (row) => row.__option?.actual_stroke || "-" },
                     {
                       key: "actions",
                       label: "",
                       width: "80px",
-                      render: (line) => {
-                        const options = Array.isArray(line.packing_po_options) ? line.packing_po_options : [];
-                        const needsChoice = options.length > 1 && !selectedPackingOrderId(line);
-                        const alreadyPicked = pickedSourceKeys.has(sourceKey(line));
+                      render: (row) => {
+                        const alreadyPicked = pickedRowKeys.has(row.__rowKey);
+                        const disabled = alreadyPicked || row.__maxQty <= QTY_TOL;
                         return (
-                          <button type="button" disabled={needsChoice || alreadyPicked} onClick={() => handleAdd(group, line)} className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
+                          <button type="button" disabled={disabled} onClick={() => handleAdd(group, row)} className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
                             {alreadyPicked ? "Added" : "Add"}
                           </button>
                         );
                       },
                     },
                   ]}
-                  rows={group.lines}
-                  rowKey={(line) => line.id}
+                  rows={(group.lines ?? []).flatMap(expandLine)}
+                  rowKey={(row) => row.__rowKey}
                   emptyMessage="Nothing left to add from this group."
                 />
               )}
@@ -747,7 +765,7 @@ export default function DO01CreatePage() {
         visible={Boolean(pickingSourceRef)}
         sourceType={pickingSourceType}
         sourceRef={pickingSourceRef}
-        pickedSourceKeys={new Set(picks.map((pick) => pick.so_map_allocation_id ? `allocation:${pick.so_map_allocation_id}` : `${pick.__sourceType}:${pick.so_line_id || pick.sto_line_id}`))}
+        picks={picks}
         onClose={() => setPickingSourceRef(null)}
         onAdd={(pick) => {
           setPicks((current) => [...current, pick]);
