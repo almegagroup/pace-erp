@@ -721,6 +721,18 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
     ]));
     const pkoUsedInThisSubmission = new Map<string, number>();
     const foPkoUsedInThisSubmission = new Map<string, number>();
+    // Found live 2026-09-02 (business owner, FO 5157405986 -- an FO's Mapped
+    // Qty split exactly across two Packing POs): the PPO-pair maps above
+    // already prevent over-drawing a single (FO, Packing PO) pair across
+    // sibling lines in one submission, but this line's own SO Map allocation
+    // remaining-balance check (below) only ever compared against PRIOR DOs
+    // (drawnByAllocation, fetched once before this loop) -- never against a
+    // sibling line drawing from the SAME allocation via a DIFFERENT Packing
+    // PO in this same submission. Harmless while every FO's Packing-PO
+    // allocations happen to sum exactly to its own Mapped Qty (true today),
+    // but that's a Plan Feed-side invariant this handler shouldn't silently
+    // depend on -- this makes the <= check exact regardless.
+    const allocationUsedInThisSubmission = new Map<string, number>();
 
     // SO ids referenced (directly or via an allocation) + STO ids, for the
     // new delivery_challan_source rows (§133.12) and company-scope re-check
@@ -760,7 +772,8 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         materialId = toTrimmedString(sourceLine.material_id);
         salesSourceLine = sourceLine;
         uomCode = toTrimmedString(sourceLine.uom_code);
-        remaining = Number(allocation.allocated_qty ?? 0) - (drawnByAllocation.get(soMapAllocationId) ?? 0);
+        remaining = Number(allocation.allocated_qty ?? 0) - (drawnByAllocation.get(soMapAllocationId) ?? 0)
+          - (allocationUsedInThisSubmission.get(soMapAllocationId) ?? 0);
         sourceType = "SALES_ORDER";
         sourceId = toTrimmedString(allocation.so_id);
         if (!batchNumber) batchNumber = toTrimmedString(sourceLine.batch_number) || null;
@@ -815,6 +828,9 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
 
       if (quantity > remaining + QTY_TOL) {
         throw new Error("DO_QTY_EXCEEDS_BALANCE");
+      }
+      if (soMapAllocationId) {
+        allocationUsedInThisSubmission.set(soMapAllocationId, (allocationUsedInThisSubmission.get(soMapAllocationId) ?? 0) + quantity);
       }
       const available = await getAvailableQty(companyId, storageLocationId, materialId);
       if (quantity > available + QTY_TOL) {
