@@ -2620,13 +2620,31 @@ export async function listSalesOrderFgSkuOptionsHandler(
       if (key) prodshadeBySkuKey.set(key, toTrimmedString(config.material_id));
     }
 
+    // Found live 2026-09-02 (CMP006, Prodshade "6763HG43"/MAXIMOPLAST PC300):
+    // this used to check stroke_master.po_type directly, which only ever
+    // reflects a stroke's OWN original PO Type. The 2026-08-31 Stroke Share
+    // redesign (stroke_po_type_applicability) lets one APPROVED SFG stroke
+    // become usable for OTHER PO Types too (e.g. MTEST shared to MTO) WITHOUT
+    // creating a second stroke_master row for the simple share path -- so a
+    // stroke genuinely shared to MTO was invisible here, and its FG SKUs
+    // silently never appeared in SO01's dropdown even though Production had
+    // already done everything right. is_active on that table is this
+    // mechanism's own source of truth for "usable for this PO Type now."
     const { data: strokes, error: strokesError } = await serviceRoleClient
       .schema("erp_production").from("stroke_master")
-      .select("prodshade_material_id, po_type").eq("company_id", companyId).eq("status", "APPROVED")
-      .in("po_type", [...FG_TYPES]);
+      .select("id, prodshade_material_id").eq("company_id", companyId).eq("status", "APPROVED");
     if (strokesError) throw new Error("SO_FG_STROKE_LOOKUP_FAILED");
-    const validStrokeKeys = new Set(((strokes ?? []) as JsonRecord[]).map((row) =>
-      `${toTrimmedString(row.prodshade_material_id)}|${toUpperTrimmedString(row.po_type)}`,
+    const prodshadeByStrokeId = new Map(((strokes ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.prodshade_material_id)]));
+    const strokeIds = [...prodshadeByStrokeId.keys()];
+    const { data: applicabilities, error: applicabilityError } = strokeIds.length > 0
+      ? await serviceRoleClient
+        .schema("erp_production").from("stroke_po_type_applicability")
+        .select("stroke_master_id, target_po_type").eq("is_active", true)
+        .in("stroke_master_id", strokeIds).in("target_po_type", [...FG_TYPES])
+      : { data: [] as JsonRecord[], error: null };
+    if (applicabilityError) throw new Error("SO_FG_STROKE_LOOKUP_FAILED");
+    const validStrokeKeys = new Set(((applicabilities ?? []) as JsonRecord[]).map((row) =>
+      `${prodshadeByStrokeId.get(toTrimmedString(row.stroke_master_id)) ?? ""}|${toUpperTrimmedString(row.target_po_type)}`,
     ));
 
     const { data: conversions, error: conversionsError } = await serviceRoleClient
@@ -2698,13 +2716,33 @@ export async function listSalesOrderStrokeCheckOptionsHandler(
     const companyId = await getCompanyScope(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
     if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
 
-    const { data, error } = await serviceRoleClient
+    // Found live 2026-09-02, same root cause as listSalesOrderFgSkuOptionsHandler
+    // just above -- po_type on stroke_master is only the stroke's OWN original
+    // type; a stroke shared to MTO/HPS via stroke_po_type_applicability never
+    // shows up if this only looks at the source row's po_type directly.
+    const { data: strokes, error: strokesError } = await serviceRoleClient
       .schema("erp_production").from("stroke_master")
-      .select("prodshade_material_id, po_type, stroke_number")
-      .eq("company_id", companyId).eq("status", "APPROVED")
-      .in("po_type", ["MTO", "HPS"]);
-    if (error) throw new Error("SO_FG_STROKE_CHECK_OPTIONS_FAILED");
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+      .select("id, prodshade_material_id, stroke_number")
+      .eq("company_id", companyId).eq("status", "APPROVED");
+    if (strokesError) throw new Error("SO_FG_STROKE_CHECK_OPTIONS_FAILED");
+    const strokeById = new Map(((strokes ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const strokeIds = [...strokeById.keys()];
+    const { data: applicabilities, error: applicabilityError } = strokeIds.length > 0
+      ? await serviceRoleClient
+        .schema("erp_production").from("stroke_po_type_applicability")
+        .select("stroke_master_id, target_po_type").eq("is_active", true)
+        .in("stroke_master_id", strokeIds).in("target_po_type", ["MTO", "HPS"])
+      : { data: [] as JsonRecord[], error: null };
+    if (applicabilityError) throw new Error("SO_FG_STROKE_CHECK_OPTIONS_FAILED");
+    const output = ((applicabilities ?? []) as JsonRecord[]).map((row) => {
+      const stroke = strokeById.get(toTrimmedString(row.stroke_master_id));
+      return {
+        prodshade_material_id: stroke?.prodshade_material_id ?? null,
+        po_type: row.target_po_type,
+        stroke_number: stroke?.stroke_number ?? null,
+      };
+    });
+    return okResponse({ data: output }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "SO_FG_STROKE_CHECK_OPTIONS_FAILED";
     return salesErrorResponse(req, ctx, code, 500, "Stroke check options could not be resolved.");
