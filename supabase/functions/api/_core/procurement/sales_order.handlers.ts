@@ -2124,9 +2124,16 @@ async function resolveBillToShipTo(body: JsonRecord, dispatchType: string): Prom
     const depot = await fetchDepotCode(depotCodeId);
     if (toUpperTrimmedString(depot.dispatch_type) !== "DEPOT") throw new Error("SO_DEPOT_TYPE_INVALID");
     if (toTrimmedString(depot.parent_company_id) !== parentCompanyId) throw new Error("SO_DEPOT_PARENT_COMPANY_MISMATCH");
+    // Found live 2026-09-02 (CMP006, "APL MUMBAI LONAD - 1551"): Description
+    // is an optional field on the Depot Code master (fg_parent_company.
+    // handlers.ts never requires it), but was the ONLY source for Ship-To
+    // Name here -- a depot row saved without one silently 400'd every SO
+    // create against it (SO_SHIP_TO_NAME_REQUIRED). Falls back to the
+    // depot's own Code, matching how the VDC branch above already treats
+    // Code as a legitimate display name.
     const depotAddress: ResolvedShipTo = {
       ship_to_same_as_customer: false, ship_to_type: null, ship_to_gst_number: toTrimmedString(depot.gst_number) || null,
-      ship_to_name: toTrimmedString(depot.description) || null, ship_to_address: toTrimmedString(depot.address_line) || null,
+      ship_to_name: toTrimmedString(depot.description) || toTrimmedString(depot.code) || null, ship_to_address: toTrimmedString(depot.address_line) || null,
       ship_to_state: toTrimmedString(depot.state) || null, delivery_address: toTrimmedString(depot.address_line) || null,
     };
     return {
