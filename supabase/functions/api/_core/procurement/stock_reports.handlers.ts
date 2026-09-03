@@ -257,7 +257,33 @@ async function buildOpeningStockLotMap(docs: JsonRecord[]): Promise<Map<string, 
 // Shared by both IN02 (stock ledger) and IN03 (current stock) — same
 // fallback chain as fgStockBreakdownHandler's resolveLotRef(). Kept as one
 // function per the task brief's explicit "don't duplicate" instruction.
-function resolveLotRef(
+//
+// batchPoMap (added 2026-09-03) is the second line of defense, checked
+// AFTER source_lot_ref/PACK_PO/OS all miss, BEFORE falling through to the
+// current posting's own document_number. Found live: an IN13 Blocked ->
+// Unrestricted approval (reference_document_type='STOCK_STATUS_CHANGE') has
+// no source_lot_ref and isn't PACK_PO/OS, so it fell all the way through to
+// its OWN stock_document.document_number (e.g. "00000182") -- creating a
+// brand-new, unrelated "Packing PO Number" bucket for that same batch
+// instead of staying grouped under the batch's real originating Packing PO.
+// Same bug shape as the 2026-08-11 Opening-Stock fix above, except this one
+// is open-ended: ANY reference_document_type this function doesn't
+// specifically know about (STO, RTV, Location Transfer, future modules...)
+// hits the exact same fallthrough. A batch's link to its originating
+// Packing PO is permanent once established at Opening/PACK_PO receipt --
+// no later status-change/transfer/QA action ever changes it -- so instead
+// of special-casing every current and future reference type, this inherits
+// whatever PO the SAME (material, batch) already resolved to elsewhere in
+// the same result set. See buildBatchPoMap below for how it's populated;
+// only covers reference types that resolve within the CURRENT result set,
+// so an unusual stock-type-only filter that excludes every row carrying the
+// batch's real receipt could still fall through -- a real but narrower gap
+// than the one this closes.
+// Strict half of the chain: only ever returns a genuinely-earned PO number
+// (source_lot_ref / PACK_PO reference / Opening-Stock genealogy) or "" —
+// NEVER the document_number fallback. buildBatchPoMap below relies on that
+// distinction to tell "resolved" apart from "fell through".
+function resolveLotRefStrict(
   doc: JsonRecord | undefined,
   materialId: string,
   batchNumber: string | null,
@@ -275,7 +301,51 @@ function resolveLotRef(
     const openingPoNumber = openingLotMap.get(key);
     if (openingPoNumber) return openingPoNumber;
   }
+  return "";
+}
+
+function resolveLotRef(
+  doc: JsonRecord | undefined,
+  materialId: string,
+  batchNumber: string | null,
+  openingLotMap: Map<string, string>,
+  batchPoMap?: Map<string, string>,
+): string {
+  if (!doc) return "";
+  const strict = resolveLotRefStrict(doc, materialId, batchNumber, openingLotMap);
+  if (strict) return strict;
+  const trimmedBatch = toTrimmedString(batchNumber);
+  if (batchPoMap && trimmedBatch) {
+    const inherited = batchPoMap.get(`${materialId}::${trimmedBatch}`);
+    if (inherited) return inherited;
+  }
   return toTrimmedString(doc.document_number);
+}
+
+// Builds the materialId::batchNumber -> Packing PO map resolveLotRef's last
+// fallback uses. Runs ONLY the strict chain (source_lot_ref/PACK_PO/OS) over
+// every row in the current result set -- never the document_number
+// fallback itself, or a batch with zero genuinely-resolvable rows would let
+// its own fallthrough document number seed the map and "inherit" a lie.
+// Keeps the first PO found per batch (all rows for one real batch should
+// always agree, so first-wins is just a cheap way to skip already-mapped
+// keys).
+function buildBatchPoMap(
+  ledgerRows: JsonRecord[],
+  docMap: Map<string, JsonRecord>,
+  openingLotMap: Map<string, string>,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const row of ledgerRows) {
+    const materialId = toTrimmedString(row.material_id);
+    const batchNumber = toTrimmedString(row.batch_number);
+    if (!materialId || !batchNumber) continue;
+    const key = `${materialId}::${batchNumber}`;
+    if (map.has(key)) continue;
+    const resolved = resolveLotRefStrict(docMap.get(toTrimmedString(row.stock_document_id)), materialId, batchNumber, openingLotMap);
+    if (resolved) map.set(key, resolved);
+  }
+  return map;
 }
 
 function resolveAltUomConversion(material: JsonRecord | undefined, conversions: JsonRecord[]): JsonRecord | null {
@@ -667,6 +737,9 @@ export async function getStockLedgerReportHandler(
     }
     const openingLotMap = await buildOpeningStockLotMap(stockDocRows);
     const salesInvoicePackingMap = await buildSalesInvoicePackingMap(stockDocRows);
+    // Found live 2026-09-03 -- see resolveLotRef's own comment (same fix as
+    // getCurrentStockHandler/IN03 below).
+    const batchPoMap = buildBatchPoMap(ledgerRows, docMap, openingLotMap);
 
     const userIds = new Set<string>();
     const fgPoNumbers = new Set<string>();
@@ -682,7 +755,7 @@ export async function getStockLedgerReportHandler(
       }
       const material = materialMap.get(row.material_id);
       if (toTrimmedString(material?.material_type) === "FG") {
-        const poNumber = resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap);
+        const poNumber = resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap, batchPoMap);
         if (poNumber) fgPoNumbers.add(poNumber);
       }
       const packCode = toTrimmedString(material?.pack_code);
@@ -812,7 +885,7 @@ export async function getStockLedgerReportHandler(
       const conversion = resolveAltUomConversion(material, conversionsByMaterialId.get(row.material_id) ?? []);
       const altFactor = Number(conversion?.conversion_factor ?? 0);
       const fgPoNumber = materialType === "FG"
-        ? invoicePacking?.po_number || resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap)
+        ? invoicePacking?.po_number || resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap, batchPoMap)
         : "";
       const fgPo = fgPoNumber ? packingOrderMap.get(fgPoNumber) : null;
       const packUomCode = packCodeMap.get(toTrimmedString(material?.pack_code)) || null;
@@ -1036,6 +1109,13 @@ export async function getCurrentStockHandler(
       }
       const docMap = new Map(((docRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
       const openingLotMap = await buildOpeningStockLotMap((docRows ?? []) as JsonRecord[]);
+      // Found live 2026-09-03 -- see resolveLotRef's own comment. Without
+      // this, any posting whose reference_document_type isn't PACK_PO/OS
+      // (an IN13 Stock Status Change approval, in the case that surfaced
+      // this) invents a phantom "Packing PO Number" bucket from its own
+      // unrelated document_number instead of staying under the batch's real
+      // Packing PO.
+      const batchPoMap = buildBatchPoMap(typedLedgerRows, docMap, openingLotMap);
       const poNumbers = [...new Set(
         typedLedgerRows
           .map((row) => resolveLotRef(
@@ -1043,6 +1123,7 @@ export async function getCurrentStockHandler(
             toTrimmedString(row.material_id),
             toTrimmedString(row.batch_number) || null,
             openingLotMap,
+            batchPoMap,
           ))
           .filter(Boolean),
       )];
@@ -1071,6 +1152,7 @@ export async function getCurrentStockHandler(
           materialId,
           batchNumber,
           openingLotMap,
+          batchPoMap,
         ) || null;
         const packingOrder = resolvedPoNumber ? poMap.get(resolvedPoNumber) : undefined;
         const sourcePoType = toTrimmedString(packingOrder?.source_po_type).toUpperCase();
