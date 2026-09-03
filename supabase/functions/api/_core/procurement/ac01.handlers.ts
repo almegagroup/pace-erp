@@ -196,6 +196,73 @@ function computeSuggestedPayables(
   };
 }
 
+// Canonical display order for the dynamic per-component columns -- same
+// value order as AC01Page.jsx's DUTY_LINE_TYPES + CHARGE_COST_TYPES +
+// FINANCE_LINE_TYPES (backend has no reason to import the frontend's label
+// strings, only needs a stable ordering for the same codes). Deduction
+// columns are appended after these, sorted by their own name.
+const COST_TYPE_CANONICAL_ORDER = [
+  "IMPORT_DUTY", "EXCISE_DUTY", "CST", "CUSTOMS_EDN_CESS", "DUTY_SETOFF", "ENTRY_TAX", "CUSTOMS_DUTY",
+  "FREIGHT", "CLEARING_CHARGES_CHA", "CHA_CHARGES", "LOADING", "UNLOADING", "LAST_MILE_TRANSPORT",
+  "TRANSPORTER_CHARGE_OTHER_THAN_BASIC", "INSURANCE", "PORT_CHARGES", "OTHER",
+  "LC_CHARGES", "BANK_CHARGES",
+];
+
+// Business owner, 2026-09-03: AC01's list grid should show one column per
+// landed-cost COMPONENT actually used (Freight, CHA charges, a specific
+// deduction type, etc.), instead of only the single "Landed Cost Total"
+// column -- and the column SET must be "smart": derived from whatever
+// components are present in the current (filtered) result set, not a fixed
+// list, so an unused component never clutters the grid. Two explicit rules
+// from that same conversation: (1) a deduction line only ever becomes a
+// column when in_landed=true -- an unticked deduction never contributed to
+// Landed Cost and must not show as one either; (2) GST must never be part
+// of a component's value -- mirrors computeLivePreview's frontend "net"
+// math exactly (INCLUSIVE strips GST back out, EXCLUSIVE's stored amount is
+// already net, GST is only ever added for the separate Payable-to-party
+// figure). ADDITIONAL_DUTY_IGST is a GST/ITC line by definition (always
+// net=0 in that same frontend math) so it is never emitted as a component
+// at all, same as an un-ticked deduction.
+function computeComponentBreakdown(
+  grn: JsonRecord,
+  costLines: JsonRecord[],
+  deductionLines: JsonRecord[],
+  deductionTypeNameMap: Map<string, string>,
+): { breakdown: Record<string, number>; deductionLabels: Map<string, string> } {
+  const consideredQty = grn.considered_qty != null ? Number(grn.considered_qty) : Number(grn.received_qty ?? 0);
+  const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : null;
+  const consideredQtyBase = perPackQty != null && perPackQty > 0 ? consideredQty * perPackQty : consideredQty;
+
+  const breakdown: Record<string, number> = {};
+  for (const line of costLines) {
+    const costType = toTrimmedString(line.cost_type);
+    if (!costType || costType === "ADDITIONAL_DUTY_IGST") continue;
+    let net = Number(line.amount ?? 0);
+    if (Number.isNaN(net)) continue;
+    if (line.entry_mode === "PER_UOM") net *= consideredQtyBase;
+    const gstRate = line.gst_rate != null ? Number(line.gst_rate) : 0;
+    if (line.has_gst === true && gstRate > 0 && line.gst_treatment === "INCLUSIVE") {
+      net = net / (1 + gstRate / 100);
+    }
+    breakdown[costType] = (breakdown[costType] ?? 0) + net;
+  }
+
+  const deductionLabels = new Map<string, string>();
+  for (const line of deductionLines) {
+    if (line.in_landed !== true) continue;
+    if (line.amount == null) continue;
+    const deductionTypeId = toTrimmedString(line.deduction_type_id);
+    if (!deductionTypeId) continue;
+    const amount = Number(line.amount) + Number(line.round_off ?? 0);
+    if (Number.isNaN(amount)) continue;
+    const key = `deduction:${deductionTypeId}`;
+    breakdown[key] = (breakdown[key] ?? 0) + amount;
+    deductionLabels.set(key, deductionTypeNameMap.get(deductionTypeId) ?? "Deduction");
+  }
+
+  return { breakdown, deductionLabels };
+}
+
 function ac01ErrorResponse(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -321,6 +388,7 @@ function buildListRow(
   transporterMap: Map<string, JsonRecord>,
   costLinesByLc: Map<string, JsonRecord[]>,
   deductionLinesByLc: Map<string, JsonRecord[]>,
+  deductionTypeNameMap: Map<string, string>,
 ): JsonRecord {
   const material = materialMap.get(String(grn.material_id));
   const vendor = vendorMap.get(String(grn.vendor_id));
@@ -329,10 +397,11 @@ function buildListRow(
   const paymentTerms = po?.payment_term_id ? paymentTermsMap.get(String(po.payment_term_id)) : null;
   const csn = grn.gate_entry_line_id ? csnMap.get(String(grn.gate_entry_line_id)) : null;
   const landedCost = landedCostMap.get(String(grn.id));
-  const suggestedPayables = computeSuggestedPayables(
-    grn,
-    landedCost ? (costLinesByLc.get(String(landedCost.id)) ?? []) : [],
-    landedCost ? (deductionLinesByLc.get(String(landedCost.id)) ?? []) : [],
+  const rowCostLines = landedCost ? (costLinesByLc.get(String(landedCost.id)) ?? []) : [];
+  const rowDeductionLines = landedCost ? (deductionLinesByLc.get(String(landedCost.id)) ?? []) : [];
+  const suggestedPayables = computeSuggestedPayables(grn, rowCostLines, rowDeductionLines);
+  const { breakdown: componentBreakdown } = computeComponentBreakdown(
+    grn, rowCostLines, rowDeductionLines, deductionTypeNameMap,
   );
   // §8A Foundation Rule -- never show a raw UUID for business data. Found
   // live 2026-08-21: the Transporter column showed the raw transporter_id.
@@ -390,6 +459,11 @@ function buildListRow(
     gst_pct: grn.gst_pct,
     taxable_value: Number((effectiveRate * consideredQty).toFixed(4)),
     landed_cost_total: landedCostTotal,
+    // §126.x "smart" per-component breakdown -- keyed by cost_type (e.g.
+    // "FREIGHT") or "deduction:<deduction_type_id>". Only components that
+    // actually contribute to Landed Cost Total appear here at all -- see
+    // computeComponentBreakdown's own comment for the exact rules.
+    component_breakdown: componentBreakdown,
     cost_per_unit: Number(costPerUnit.toFixed(4)),
     vendor_payable: Number(vendorPayable.toFixed(4)),
     // Per-party suggested payable, strictly from this GRN's own cost/deduction
@@ -564,11 +638,32 @@ export async function listAC01GRNsHandler(
           .select("qa_document_id, usage_decision, decision_qty").in("qa_document_id", chunk)),
       fetchInChunks<JsonRecord>(lcIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("landed_cost_line")
-          .select("lc_id, amount, has_gst, gst_treatment, gst_rate, party_type").in("lc_id", chunk)),
+          // cost_type/entry_mode added 2026-09-03 for the per-component
+          // breakdown columns (computeComponentBreakdown below) -- this list
+          // query never used to need to know WHICH cost type a line was.
+          .select("lc_id, cost_type, amount, entry_mode, has_gst, gst_treatment, gst_rate, party_type").in("lc_id", chunk)),
       fetchInChunks<JsonRecord>(lcIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("landed_cost_deduction_line")
-          .select("lc_id, amount, round_off, party_type").in("lc_id", chunk)),
+          // deduction_type_id/in_landed added 2026-09-03, same reason as above.
+          .select("lc_id, deduction_type_id, amount, round_off, in_landed, party_type").in("lc_id", chunk)),
     ]);
+
+    // Per-component breakdown columns (business owner, 2026-09-03): the
+    // dynamic column set is driven by distinct deduction TYPE NAMES, which
+    // are per-company free-text data (deduction_type_master), not a fixed
+    // enum like cost_type -- must resolve id -> name here, same §8A rule as
+    // every other FK the list already resolves.
+    const deductionTypeIds = [...new Set(
+      deductionLineRows.map((row) => toTrimmedString(row.deduction_type_id)).filter(Boolean),
+    )];
+    const deductionTypeRows = deductionTypeIds.length > 0
+      ? await fetchInChunks<JsonRecord>(deductionTypeIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("deduction_type_master")
+          .select("id, name").in("id", chunk))
+      : [];
+    const deductionTypeNameMap = new Map(
+      deductionTypeRows.map((row) => [String(row.id), toTrimmedString(row.name) || "Deduction"]),
+    );
 
     const materialMap = toMap(materials);
     const vendorMap = toMap(vendors);
@@ -620,11 +715,36 @@ export async function listAC01GRNsHandler(
     const items = rows.map((row) =>
       buildListRow(
         row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap,
-        udStatusMap, transporterMap, costLinesByLc, deductionLinesByLc,
+        udStatusMap, transporterMap, costLinesByLc, deductionLinesByLc, deductionTypeNameMap,
       ),
     );
 
-    return okResponse({ items, total: count ?? items.length }, ctx.request_id, req);
+    // "Smart" component columns (business owner, 2026-09-03) -- the set of
+    // columns is derived from what's actually present in THIS (filtered)
+    // result set, never a fixed universe. Recomputed fresh per request, so
+    // changing a filter naturally changes which columns come back.
+    const usedCostTypeKeys = new Set<string>();
+    const usedDeductionLabels = new Map<string, string>();
+    for (const item of items) {
+      const breakdown = item.component_breakdown as Record<string, number>;
+      for (const key of Object.keys(breakdown)) {
+        if (key.startsWith("deduction:")) {
+          usedDeductionLabels.set(key, deductionTypeNameMap.get(key.slice("deduction:".length)) ?? "Deduction");
+        } else {
+          usedCostTypeKeys.add(key);
+        }
+      }
+    }
+    const components = [
+      ...COST_TYPE_CANONICAL_ORDER
+        .filter((key) => usedCostTypeKeys.has(key))
+        .map((key) => ({ key, kind: "cost" as const })),
+      ...[...usedDeductionLabels.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([key, label]) => ({ key, kind: "deduction" as const, label })),
+    ];
+
+    return okResponse({ items, total: count ?? items.length, components }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "AC01_LIST_FAILED";
     return ac01ErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);

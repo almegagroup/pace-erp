@@ -22,6 +22,7 @@ import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
+import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
 import {
   listStrokeMasters, getStrokeMaster, updateStrokeMaster,
   approveStrokeMaster, revertStrokeMaster, rejectStrokeMaster, deactivateStrokeMaster, reactivateStrokeMaster,
@@ -34,6 +35,25 @@ import {
 import { formatSum } from "./productionPrecision.js";
 
 const EMPTY_ARRAY = [];
+
+// Mirrors StrokeMasterPage.jsx (PR01) — the "Stroke Share" feature made these
+// 4 fields mandatory on create/update/approve everywhere, but this page never
+// exposed them, so any DRAFT stroke without them (all pre-2026-08-31 ones)
+// could never be edited or approved from here (found live 2026-09-01).
+const COMMUNICATION_TYPE_OPTIONS = [
+  { value: "EMAIL", label: "Email" },
+  { value: "WHATSAPP", label: "WhatsApp" },
+  { value: "VERBAL_COMMUNICATION", label: "Verbal Communication" },
+];
+const COMMUNICATION_DATE_BOUNDS = getManualDocumentDateBounds();
+function hasCommunicationDetails(data) {
+  return Boolean(
+    data?.communication_date
+    && data?.communication_type
+    && String(data?.communicator_name || "").trim()
+    && String(data?.communication_reference || "").trim(),
+  );
+}
 
 const STATUS_COLORS = {
   DRAFT:        "bg-amber-100 text-amber-800",
@@ -164,6 +184,10 @@ export default function StrokeApprovalPage() {
         conversion_uom_code: detail.conversion_uom_code ?? "",
         conversion_factor: detail.conversion_factor ?? "",
         default_storage_location_id: defaultStorageLocationId,
+        communication_date: detail.communication_date ?? "",
+        communication_type: detail.communication_type ?? "",
+        communicator_name: detail.communicator_name ?? "",
+        communication_reference: detail.communication_reference ?? "",
       });
       setEditLines((detail.lines ?? []).map((l) => ({
         line_material_type: l.line_material_type ?? "RM",
@@ -222,6 +246,14 @@ export default function StrokeApprovalPage() {
       toast("Default Storage Location is required.", "error");
       return;
     }
+    if (!hasCommunicationDetails(editForm)) {
+      toast("Communication Date, Type, Communicator Name, and Communication Reference are required.", "error");
+      return;
+    }
+    if (!isManualDocumentDateWithinWindow(editForm.communication_date)) {
+      toast(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
+      return;
+    }
     const sum = dosageSumOf(editLines);
     if (Math.abs(sum - 100) > 0.01) { toast(`Dosage must sum to 100. Current: ${formatSum(sum, "0")}%`, "error"); return; }
     setSaving(true);
@@ -233,6 +265,10 @@ export default function StrokeApprovalPage() {
         conversion_uom_code: editForm.conversion_uom_code,
         conversion_factor: editForm.conversion_factor,
         default_storage_location_id: editForm.default_storage_location_id,
+        communication_date: editForm.communication_date,
+        communication_type: editForm.communication_type,
+        communicator_name: editForm.communicator_name.trim(),
+        communication_reference: editForm.communication_reference.trim(),
         lines: editLines.map((l) => ({
           material_id: l.material_id,
           line_material_type: l.line_material_type,
@@ -488,6 +524,72 @@ export default function StrokeApprovalPage() {
                                 <div>
                                   <span className="text-slate-400 text-xs block mb-0.5">Description</span>
                                   <p className="font-medium">{s.description ?? "—"}</p>
+                                </div>
+                              )}
+
+                              {s.status === "DRAFT" ? (
+                                <Field label="Communication Date" required>
+                                  <input
+                                    type="date"
+                                    min={COMMUNICATION_DATE_BOUNDS.min}
+                                    max={COMMUNICATION_DATE_BOUNDS.max}
+                                    className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-full"
+                                    value={editForm.communication_date}
+                                    onChange={(e) => setEditForm((f) => ({ ...f, communication_date: e.target.value }))}
+                                  />
+                                </Field>
+                              ) : (
+                                <div>
+                                  <span className="text-slate-400 text-xs block mb-0.5">Communication Date</span>
+                                  <p className="font-medium">{s.communication_date ?? "—"}</p>
+                                </div>
+                              )}
+
+                              {s.status === "DRAFT" ? (
+                                <Field label="Communication Type" required>
+                                  <ErpComboboxField
+                                    value={editForm.communication_type}
+                                    onChange={(v) => setEditForm((f) => ({ ...f, communication_type: v }))}
+                                    options={COMMUNICATION_TYPE_OPTIONS}
+                                    placeholder="-- Select --"
+                                  />
+                                </Field>
+                              ) : (
+                                <div>
+                                  <span className="text-slate-400 text-xs block mb-0.5">Communication Type</span>
+                                  <p className="font-medium">{COMMUNICATION_TYPE_OPTIONS.find((o) => o.value === s.communication_type)?.label ?? "—"}</p>
+                                </div>
+                              )}
+
+                              {s.status === "DRAFT" ? (
+                                <Field label="Communicator Name" required>
+                                  <input
+                                    className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-full"
+                                    value={editForm.communicator_name}
+                                    onChange={(e) => setEditForm((f) => ({ ...f, communicator_name: e.target.value }))}
+                                    placeholder="Name of the communicator"
+                                  />
+                                </Field>
+                              ) : (
+                                <div>
+                                  <span className="text-slate-400 text-xs block mb-0.5">Communicator Name</span>
+                                  <p className="font-medium">{s.communicator_name ?? "—"}</p>
+                                </div>
+                              )}
+
+                              {s.status === "DRAFT" ? (
+                                <Field label="Communication Reference" required>
+                                  <input
+                                    className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-full"
+                                    value={editForm.communication_reference}
+                                    onChange={(e) => setEditForm((f) => ({ ...f, communication_reference: e.target.value }))}
+                                    placeholder="Email subject or communication reference"
+                                  />
+                                </Field>
+                              ) : (
+                                <div>
+                                  <span className="text-slate-400 text-xs block mb-0.5">Communication Reference (Email Subject)</span>
+                                  <p className="font-medium">{s.communication_reference ?? "—"}</p>
                                 </div>
                               )}
 
