@@ -198,7 +198,11 @@ export default function SAModuleMaster() {
   const [minApprovers, setMinApprovers] = useState(MIN_REQUIRED_APPROVERS);
   const [maxApprovers, setMaxApprovers] = useState(MAX_ALLOWED_APPROVERS);
   const [selectedModuleId, setSelectedModuleId] = useState("");
-  const [searchQuery, _setSearchQuery] = useState("");
+  // Found live 2026-09-03 (business owner sweep): applyQuickFilter/QuickFilterInput/
+  // searchInputRef/the "focusSearch" hotkey were ALL already wired up, but the
+  // <QuickFilterInput> itself was never rendered anywhere -- the setter's leading
+  // underscore marked it (accurately) as unused. searchQuery was permanently "".
+  const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -666,6 +670,14 @@ export default function SAModuleMaster() {
       bottomContent={
         <section className="grid gap-2">
           <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Module Inventory</div>
+          <QuickFilterInput
+            label="Search Modules"
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="Module code, name, project, approval type..."
+            hint="Alt+Shift+F to focus"
+            inputRef={searchInputRef}
+          />
           <div className="text-sm font-semibold text-slate-900">
             {loading
               ? "Loading module rows"

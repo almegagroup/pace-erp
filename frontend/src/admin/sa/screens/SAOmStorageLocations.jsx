@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
@@ -52,14 +52,56 @@ const TABS = [
 const LOCATION_TYPES = ["WAREHOUSE", "SHOP_FLOOR", "TRANSIT", "SCRAP", "EXTERNAL", "LOGICAL"];
 const EMPTY_CREATE = { location_code: "", location_name: "", location_type: "WAREHOUSE" };
 
+const LOCATION_COLUMNS = [
+  { key: "code", label: "Code" },
+  { key: "name", label: "Name" },
+  { key: "location_type", label: "Type" },
+  {
+    key: "active",
+    label: "Active",
+    render: (row) => (
+      <span className={`text-xs font-medium ${row.active ? "text-emerald-700" : "text-slate-400"}`}>
+        {row.active ? "YES" : "NO"}
+      </span>
+    ),
+    copyValue: (row) => (row.active ? "YES" : "NO"),
+  },
+];
+
+// Business owner ask (2026-09-03) — same pattern as every other report grid
+// this sweep touched.
+function getColumnFilterText(column, row) {
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  const raw = row?.[column.key];
+  return raw == null ? "" : String(raw);
+}
+
 export default function SAOmStorageLocations() {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("locations");
 
   /* ── Tab 1 state ── */
   const storageLocationsQuery = useStorageLocationsQuery({});
-  const rows = Array.isArray(storageLocationsQuery.data?.data) ? storageLocationsQuery.data.data : [];
+  const rows = useMemo(() => (Array.isArray(storageLocationsQuery.data?.data) ? storageLocationsQuery.data.data : []), [storageLocationsQuery.data]);
   const loading = storageLocationsQuery.isLoading;
+  const [globalSearch, setGlobalSearch] = useState("");
+  const globalSearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of rows) {
+      for (const column of LOCATION_COLUMNS) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 500) break outer;
+      }
+    }
+    return [...values].sort();
+  }, [rows]);
+  const hasActiveSearch = globalSearch.trim().length > 0;
+  const filteredRows = useMemo(() => {
+    const needle = globalSearch.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => LOCATION_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+  }, [rows, globalSearch]);
   const [form, setForm]         = useState(EMPTY_CREATE);
   const [editRow, setEditRow]   = useState(null);
   const [saving, setSaving]     = useState(false);
@@ -318,20 +360,29 @@ export default function SAOmStorageLocations() {
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
           {/* List */}
           <ErpSectionCard eyebrow="Location Register" title="All storage locations">
+            <div className="mb-2 flex items-center gap-2">
+              <input
+                list="sloc-search-options"
+                value={globalSearch}
+                onChange={(event) => setGlobalSearch(event.target.value)}
+                placeholder="Search across every column..."
+                className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+              />
+              <datalist id="sloc-search-options">
+                {globalSearchOptions.map((option) => <option key={option} value={option} />)}
+              </datalist>
+              {hasActiveSearch ? (
+                <>
+                  <button type="button" onClick={() => setGlobalSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                    Clear
+                  </button>
+                  <span className="text-xs text-slate-500">{filteredRows.length} of {rows.length} locations</span>
+                </>
+              ) : null}
+            </div>
             <ErpDenseGrid
               columns={[
-                { key: "code", label: "Code" },
-                { key: "name", label: "Name" },
-                { key: "location_type", label: "Type" },
-                {
-                  key: "active",
-                  label: "Active",
-                  render: (row) => (
-                    <span className={`text-xs font-medium ${row.active ? "text-emerald-700" : "text-slate-400"}`}>
-                      {row.active ? "YES" : "NO"}
-                    </span>
-                  ),
-                },
+                ...LOCATION_COLUMNS,
                 {
                   key: "_toggle",
                   label: "",
@@ -350,7 +401,7 @@ export default function SAOmStorageLocations() {
                   ),
                 },
               ]}
-              rows={rows}
+              rows={filteredRows}
               rowKey={(row) => row.id || row.code}
               onRowActivate={(row) => handleRowClick(row)}
               getRowProps={(row) => ({
@@ -359,7 +410,7 @@ export default function SAOmStorageLocations() {
                   ? "cursor-pointer bg-sky-50 border-l-2 border-l-sky-500"
                   : "cursor-pointer hover:bg-slate-50",
               })}
-              emptyMessage={loading ? "Loading locations..." : "No storage locations found."}
+              emptyMessage={loading ? "Loading locations..." : hasActiveSearch ? "No rows match this search." : "No storage locations found."}
               maxHeight="460px"
             />
             {!isEditMode && (
