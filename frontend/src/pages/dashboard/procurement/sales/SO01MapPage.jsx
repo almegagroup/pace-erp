@@ -363,6 +363,7 @@ export default function SO01MapPage() {
                 cellNavigate
                 columns={[
                   { key: "so_number", label: "SO Number", width: "140px", render: (row) => row.so_number },
+                  { key: "customer_po_number", label: "External SO Number", width: "150px", render: (row) => row.customer_po_number || "—" },
                   { key: "so_date", label: "SO Date", width: "100px", render: (row) => row.so_date },
                   { key: "dispatch_type", label: "Dispatch Type", width: "180px", render: (row) => row.dispatch_type },
                   { key: "total", label: "Total Qty", width: "90px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
