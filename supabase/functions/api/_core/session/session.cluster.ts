@@ -27,6 +27,82 @@ import {
 // "new window logout" investigation for the full trace.
 const JOIN_TICKET_TTL_MS = 5 * 60 * 1000;
 
+// All windows in one cluster share ONE session (same session_id at the
+// SESSION pipeline stage) -- so the session's own idle-timeout can never
+// reap a single dead window's ADMITTED row, since the session stays fresh
+// as long as ANY other window in the cluster keeps making requests. A window
+// that stops making requests entirely (browser crash, force-kill, forced OS
+// restart, network loss during beforeunload's keepalive close call) never
+// gets a chance to close cleanly, so its slot is orphaned FOREVER -- with
+// SESSION_CLUSTER_MAX_WINDOWS hard-capped at 3, this silently and
+// permanently blocks Shift+F8 for that user once 3 windows have died this
+// way over time, with no self-service recovery short of a full logout+login
+// (which replaces the whole cluster). Business requirement (2026-09-02):
+// Shift+F8 must never fail while the user is under their real, live window
+// count, no matter how many windows have died un-cleanly in the past.
+//
+// Fix: a window is "definitely dead, not just idle" once it has gone this
+// long without a single request touching its own last_seen_at
+// (touchSessionClusterWindow, called on every non-passive request carrying
+// its x-erp-window-token header -- see _pipeline/runner.ts). Background
+// polling alone (approval-inbox, menu snapshot, etc.) touches a genuinely
+// open-but-quiet tab far more often than this window, so a real window is
+// never at risk of being reclaimed out from under a still-working user.
+const STALE_WINDOW_MS = 20 * 60 * 1000;
+
+// Frees exactly one ADMITTED slot in the cluster by expiring its oldest
+// stale (dead-per-STALE_WINDOW_MS) window, if any exists. Called only at the
+// moment a new admission/ticket-issue would otherwise be blocked by
+// SESSION_CLUSTER_MAX_WINDOWS -- lazy, on-demand reclaim, no background job
+// needed, and it changes nothing about behavior except at the exact instant
+// it matters. Returns true if a slot was freed.
+async function reclaimStaleWindowSlot(clusterId: string): Promise<boolean> {
+  const staleBeforeIso = new Date(Date.now() - STALE_WINDOW_MS).toISOString();
+
+  const { data: staleWindow, error: staleLookupError } = await serviceRoleClient
+    .schema("erp_core")
+    .from("session_cluster_windows")
+    .select("cluster_window_id, last_seen_at")
+    .eq("cluster_id", clusterId)
+    .eq("status", SESSION_CLUSTER_WINDOW_STATE.ADMITTED)
+    .lt("last_seen_at", staleBeforeIso)
+    .order("last_seen_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (staleLookupError || !staleWindow?.cluster_window_id) {
+    return false;
+  }
+
+  const { error: reclaimError } = await serviceRoleClient
+    .schema("erp_core")
+    .from("session_cluster_windows")
+    .update({
+      status: SESSION_CLUSTER_WINDOW_STATE.EXPIRED,
+      revoked_at: new Date().toISOString(),
+      revoked_reason: "STALE_WINDOW_RECLAIMED",
+    })
+    .eq("cluster_window_id", staleWindow.cluster_window_id)
+    .eq("status", SESSION_CLUSTER_WINDOW_STATE.ADMITTED);
+
+  if (reclaimError) {
+    return false;
+  }
+
+  log({
+    level: "INFO",
+    event: "SESSION_CLUSTER_STALE_WINDOW_RECLAIMED",
+    meta: {
+      clusterId,
+      clusterWindowId: staleWindow.cluster_window_id,
+      lastSeenAt: staleWindow.last_seen_at,
+      staleForMs: STALE_WINDOW_MS,
+    },
+  });
+
+  return true;
+}
+
 type ClusterTerminationState =
   | SESSION_CLUSTER_STATE.REVOKED
   | SESSION_CLUSTER_STATE.REPLACED
@@ -379,7 +455,7 @@ export async function issueSessionClusterJoinTicket(
     throw new Error("SESSION_CLUSTER_WINDOW_COUNT_FAILED");
   }
 
-  if ((count ?? 0) >= SESSION_CLUSTER_MAX_WINDOWS) {
+  if ((count ?? 0) >= SESSION_CLUSTER_MAX_WINDOWS && !(await reclaimStaleWindowSlot(args.clusterId))) {
     log({
       level: "WARN",
       event: "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED_AT_TICKET_ISSUE",
@@ -499,24 +575,36 @@ export async function admitSessionClusterWindow(
     joinTicketId = rawTicket.join_token;
   }
 
-  const { data: admittedRows, error: admittedError } = await serviceRoleClient
-    .schema("erp_core")
-    .from("session_cluster_windows")
-    .select("window_slot")
-    .eq("cluster_id", args.clusterId)
-    .eq("status", SESSION_CLUSTER_WINDOW_STATE.ADMITTED);
+  async function fetchAdmittedSlots(): Promise<number[]> {
+    const { data: admittedRows, error: admittedError } = await serviceRoleClient
+      .schema("erp_core")
+      .from("session_cluster_windows")
+      .select("window_slot")
+      .eq("cluster_id", args.clusterId)
+      .eq("status", SESSION_CLUSTER_WINDOW_STATE.ADMITTED);
 
-  if (admittedError) {
-    throw new Error("SESSION_CLUSTER_ADMISSION_LOOKUP_FAILED");
+    if (admittedError) {
+      throw new Error("SESSION_CLUSTER_ADMISSION_LOOKUP_FAILED");
+    }
+
+    return (admittedRows ?? [])
+      .map((row) => row.window_slot)
+      .filter((value): value is number => typeof value === "number");
   }
 
-  const admittedSlots = (admittedRows ?? [])
-    .map((row) => row.window_slot)
-    .filter((value): value is number => typeof value === "number");
+  function resolveAvailableSlot(admittedSlots: number[]): number | null {
+    return existingWindow?.window_slot && !admittedSlots.includes(existingWindow.window_slot)
+      ? existingWindow.window_slot
+      : nextAvailableWindowSlot(admittedSlots);
+  }
 
-  const availableSlot = existingWindow?.window_slot && !admittedSlots.includes(existingWindow.window_slot)
-    ? existingWindow.window_slot
-    : nextAvailableWindowSlot(admittedSlots);
+  let admittedSlots = await fetchAdmittedSlots();
+  let availableSlot = resolveAvailableSlot(admittedSlots);
+
+  if (availableSlot == null && (await reclaimStaleWindowSlot(args.clusterId))) {
+    admittedSlots = await fetchAdmittedSlots();
+    availableSlot = resolveAvailableSlot(admittedSlots);
+  }
 
   if (availableSlot == null) {
     log({
