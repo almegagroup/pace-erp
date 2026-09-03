@@ -268,7 +268,39 @@ function computeLivePreview(grn, draft, costLines, deductionLines) {
   };
 }
 
-function buildColumns() {
+// Backend only returns a stable code (e.g. "FREIGHT") for cost-type
+// components -- it has no reason to duplicate these display labels, which
+// are frontend-only strings anyway (see ac01.handlers.ts's
+// COST_TYPE_CANONICAL_ORDER comment). Deduction components carry their own
+// label straight from the backend instead, since deduction type names are
+// per-company free text (deduction_type_master), not a fixed enum.
+const COST_TYPE_LABELS = new Map(
+  [...DUTY_LINE_TYPES, ...CHARGE_COST_TYPES, ...FINANCE_LINE_TYPES].map((option) => [option.value, option.label]),
+);
+
+// Business owner, 2026-09-03: one column per landed-cost component actually
+// used in the current (filtered) result set -- "smart" because the column
+// SET itself comes from the backend's `components` metadata (recomputed per
+// request from the current filters), not a fixed list. Sits right before
+// Landed Cost Total so a row's total is visibly the sum of its own shown
+// components.
+function buildComponentColumns(components) {
+  return (components ?? []).map((component) => {
+    const label = component.kind === "deduction" ? component.label : (COST_TYPE_LABELS.get(component.key) || component.key);
+    return {
+      key: `component:${component.key}`,
+      label,
+      width: "110px",
+      align: "right",
+      render: (row) => formatNumberOrBlank(row.component_breakdown?.[component.key]),
+      copyValue: (row) => formatNumberOrBlank(row.component_breakdown?.[component.key]),
+      excelValue: (row) => excelNumberOrBlank(row.component_breakdown?.[component.key]),
+      numFmt: "#,##0.00",
+    };
+  });
+}
+
+function buildColumns(components) {
   return [
     {
       key: "status", label: "Status", width: "70px",
@@ -322,6 +354,7 @@ function buildColumns() {
     { key: "currency", label: "Currency", width: "70px" },
     { key: "gst_pct", label: "GST %", width: "70px", align: "right", render: (row) => formatNumberOrBlank(row.gst_pct) },
     { key: "taxable_value", label: "Taxable Value", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.taxable_value) },
+    ...buildComponentColumns(components),
     { key: "landed_cost_total", label: "Landed Cost", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.landed_cost_total) },
     { key: "cost_per_unit", label: "Cost / Unit", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.cost_per_unit) },
     { key: "vendor_payable", label: "Vendor Payable (material)", width: "150px", align: "right", render: (row) => formatNumberOrBlank(row.vendor_payable) },
@@ -506,7 +539,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   });
 
   const rows = useMemo(() => (Array.isArray(listQuery.data?.items) ? listQuery.data.items : []), [listQuery.data]);
-  const columns = useMemo(() => buildColumns(), []);
+  const components = useMemo(() => (Array.isArray(listQuery.data?.components) ? listQuery.data.components : []), [listQuery.data]);
+  const columns = useMemo(() => buildColumns(components), [components]);
 
   const [exporting, setExporting] = useState(false);
   async function handleExportExcel() {
