@@ -3,7 +3,7 @@
  * (PROC_PI_DIFFERENCES, "everyone" per §119.5) — cross-document report, not a companion of any
  * single PID. Shows both posted AND pending differences (matches SAP MI20's review-before-post use).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -30,6 +30,73 @@ function toneForDifference(value) {
   if (value < 0) return "text-rose-700";
   if (value > 0) return "text-emerald-700";
   return "text-slate-500";
+}
+
+const GRID_COLUMNS = [
+  { key: "pi_document_number", label: "PID #", width: "130px" },
+  { key: "posting_date", label: "Posting Date", width: "110px", render: (row) => formatDate(row.posting_date) },
+  { key: "pi_status", label: "PID Status", width: "120px" },
+  { key: "company_code", label: "Company", width: "110px", render: (row) => row.company_code ?? "—" },
+  { key: "storage_location_name", label: "Location", width: "140px", render: (row) => row.storage_location_code ?? "—", copyValue: (row) => row.storage_location_code },
+  { key: "material_name", label: "Material", width: "260px", render: (row) => row.material_name ?? "—" },
+  { key: "material_external_code", label: "External Code", width: "150px", render: (row) => row.material_external_code ?? "—" },
+  { key: "batch_number", label: "Batch", width: "100px", render: (row) => row.batch_number ?? "—" },
+  { key: "stock_type", label: "Stock Type", width: "130px" },
+  { key: "book_qty", label: "Book Qty", width: "100px" },
+  { key: "physical_qty", label: "Physical Qty", width: "100px", render: (row) => row.physical_qty ?? "—" },
+  {
+    key: "difference_qty",
+    label: "Difference",
+    width: "100px",
+    render: (row) => <span className={`font-semibold ${toneForDifference(Number(row.difference_qty))}`}>{Number(row.difference_qty).toFixed(4)}</span>,
+    copyValue: (row) => Number(row.difference_qty).toFixed(4),
+  },
+  { key: "difference_pct", label: "Diff %", width: "80px", render: (row) => (row.difference_pct === null ? "—" : `${row.difference_pct}%`) },
+  {
+    key: "difference_value",
+    label: "Difference Value",
+    width: "130px",
+    align: "right",
+    // Matches SAP MI20's own Difference Value column. Posted rows
+    // show the rate actually used at posting (a fact); pending
+    // rows show today's live WAR as a preview (may still move
+    // before this actually posts).
+    render: (row) => (
+      <span className={`font-semibold ${toneForDifference(Number(row.difference_value))}`}>
+        {Number(row.difference_value ?? 0).toFixed(2)}
+        {row.status_label !== "POSTED" ? <span className="ml-1 font-normal text-slate-400">(est.)</span> : null}
+      </span>
+    ),
+    copyValue: (row) => Number(row.difference_value ?? 0).toFixed(2),
+  },
+  { key: "base_uom_code", label: "UoM", width: "70px" },
+  { key: "movement_type", label: "Movement", width: "90px", render: (row) => row.movement_type ?? "—" },
+  {
+    key: "status_label",
+    label: "Status",
+    width: "90px",
+    render: (row) => {
+      const tone = row.status_label === "POSTED"
+        ? "bg-emerald-100 text-emerald-800"
+        : row.status_label === "CANCELLED"
+        ? "bg-slate-200 text-slate-600"
+        : "bg-amber-100 text-amber-800";
+      return (
+        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${tone}`}>
+          {row.status_label === "POSTED" ? "Posted" : row.status_label === "CANCELLED" ? "Cancelled" : "Pending"}
+        </span>
+      );
+    },
+    copyValue: (row) => row.status_label,
+  },
+];
+
+// Business owner ask (2026-09-03) — reuses copyValue when present so a
+// JSX-rendered cell still filters against plain text.
+function getColumnFilterText(column, row) {
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  const raw = row?.[column.key];
+  return raw == null ? "" : String(raw);
 }
 
 export default function PIDifferenceReportPage() {
@@ -91,6 +158,25 @@ export default function PIDifferenceReportPage() {
   const gainCount = rows.filter((row) => Number(row.difference_qty) > 0).length;
   const lossCount = rows.filter((row) => Number(row.difference_qty) < 0).length;
   const pendingCount = rows.filter((row) => row.status_label === "PENDING").length;
+
+  const [globalSearch, setGlobalSearch] = useState("");
+  const globalSearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of rows) {
+      for (const column of GRID_COLUMNS) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 500) break outer;
+      }
+    }
+    return [...values].sort();
+  }, [rows]);
+  const hasActiveSearch = globalSearch.trim().length > 0;
+  const filteredRows = useMemo(() => {
+    const needle = globalSearch.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => GRID_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+  }, [rows, globalSearch]);
 
   return (
     <ErpScreenScaffold
@@ -174,66 +260,32 @@ export default function PIDifferenceReportPage() {
           </ErpSectionCard>
         ) : (
           <ErpSectionCard eyebrow="Page 2" title={loading ? "Loading Differences" : `${rows.length} Difference Row${rows.length === 1 ? "" : "s"}`}>
+            <div className="mb-2 flex items-center gap-2">
+              <input
+                list="pi-diff-search-options"
+                value={globalSearch}
+                onChange={(event) => setGlobalSearch(event.target.value)}
+                placeholder="Search across every column..."
+                className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+              />
+              <datalist id="pi-diff-search-options">
+                {globalSearchOptions.map((option) => <option key={option} value={option} />)}
+              </datalist>
+              {hasActiveSearch ? (
+                <>
+                  <button type="button" onClick={() => setGlobalSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                    Clear
+                  </button>
+                  <span className="text-xs text-slate-500">{filteredRows.length} of {rows.length} rows</span>
+                </>
+              ) : null}
+            </div>
             <ErpDenseGrid
               virtualize
-              columns={[
-                { key: "pi_document_number", label: "PID #", width: "130px" },
-                { key: "posting_date", label: "Posting Date", width: "110px", render: (row) => formatDate(row.posting_date) },
-                { key: "pi_status", label: "PID Status", width: "120px" },
-                { key: "company_code", label: "Company", width: "110px", render: (row) => row.company_code ?? "—" },
-                { key: "storage_location_name", label: "Location", width: "140px", render: (row) => row.storage_location_code ?? "—" },
-                { key: "material_name", label: "Material", width: "260px", render: (row) => row.material_name ?? "—" },
-                { key: "material_external_code", label: "External Code", width: "150px", render: (row) => row.material_external_code ?? "—" },
-                { key: "batch_number", label: "Batch", width: "100px", render: (row) => row.batch_number ?? "—" },
-                { key: "stock_type", label: "Stock Type", width: "130px" },
-                { key: "book_qty", label: "Book Qty", width: "100px" },
-                { key: "physical_qty", label: "Physical Qty", width: "100px", render: (row) => row.physical_qty ?? "—" },
-                {
-                  key: "difference_qty",
-                  label: "Difference",
-                  width: "100px",
-                  render: (row) => <span className={`font-semibold ${toneForDifference(Number(row.difference_qty))}`}>{Number(row.difference_qty).toFixed(4)}</span>,
-                },
-                { key: "difference_pct", label: "Diff %", width: "80px", render: (row) => (row.difference_pct === null ? "—" : `${row.difference_pct}%`) },
-                {
-                  key: "difference_value",
-                  label: "Difference Value",
-                  width: "130px",
-                  align: "right",
-                  // Matches SAP MI20's own Difference Value column. Posted rows
-                  // show the rate actually used at posting (a fact); pending
-                  // rows show today's live WAR as a preview (may still move
-                  // before this actually posts).
-                  render: (row) => (
-                    <span className={`font-semibold ${toneForDifference(Number(row.difference_value))}`}>
-                      {Number(row.difference_value ?? 0).toFixed(2)}
-                      {row.status_label !== "POSTED" ? <span className="ml-1 font-normal text-slate-400">(est.)</span> : null}
-                    </span>
-                  ),
-                },
-                { key: "base_uom_code", label: "UoM", width: "70px" },
-                { key: "movement_type", label: "Movement", width: "90px", render: (row) => row.movement_type ?? "—" },
-                {
-                  key: "status_label",
-                  label: "Status",
-                  width: "90px",
-                  render: (row) => {
-                    const tone = row.status_label === "POSTED"
-                      ? "bg-emerald-100 text-emerald-800"
-                      : row.status_label === "CANCELLED"
-                      ? "bg-slate-200 text-slate-600"
-                      : "bg-amber-100 text-amber-800";
-                    return (
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${tone}`}>
-                        {row.status_label === "POSTED" ? "Posted" : row.status_label === "CANCELLED" ? "Cancelled" : "Pending"}
-                      </span>
-                    );
-                  },
-                },
-              ]}
-              rows={rows}
+              columns={GRID_COLUMNS}
+              rows={filteredRows}
               rowKey={(row, index) => `${row.pi_document_id}-${index}`}
-              emptyMessage={loading ? "Loading differences..." : "No differences found for this filter."}
+              emptyMessage={loading ? "Loading differences..." : hasActiveSearch ? "No rows match this search." : "No differences found for this filter."}
               maxHeight="620px"
             />
           </ErpSectionCard>
