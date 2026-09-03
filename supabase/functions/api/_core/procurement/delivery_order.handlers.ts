@@ -766,50 +766,25 @@ export async function cancelDeliveryOrderHandler(req: Request, ctx: ProcurementH
       .eq("dc_id", dcId);
     if (dcLinesError) return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load delivery order lines.");
     const lineRows = (dcLines ?? []) as JsonRecord[];
-    const dcLineIds = lineRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
-    const sourceLineIds = lineRows.map((row) => toTrimmedString(row.so_line_id) || toTrimmedString(row.sto_line_id)).filter(Boolean);
 
     const nowIso = new Date().toISOString();
-    const { error: dcUpdateError } = await serviceRoleClient
+    // Found live 2026-09-03 (business owner, CMP006 DO 9100000048): this used
+    // to be two separate, non-transactional Supabase calls (delivery_challan
+    // status update, then reservation_document release) -- if the second
+    // ever failed after the first committed, the DO was left CANCELLED with
+    // its reservation permanently stuck OPEN, silently blocking Available
+    // for that material/location on the next DO. One RPC call now, same
+    // §133.12 dc_line_id-first / source_line_id-fallback release logic,
+    // both in one transaction (§8D).
+    const { error: cancelRpcError } = await serviceRoleClient
       .schema("erp_procurement")
-      .from("delivery_challan")
-      .update({
-        status: "CANCELLED",
-        cancellation_reason: reason,
-        cancelled_by: ctx.auth_user_id,
-        cancelled_at: nowIso,
-      })
-      .eq("id", dcId);
-    if (dcUpdateError) return doErrorResponse(req, ctx, "DO_CANCEL_FAILED", 500, "Unable to cancel delivery order.");
-
-    // Release the reservation so the SO/STO line's remaining balance frees
-    // up again. §133.12 fix -- release by dc_line_id (THIS DC's own lines
-    // only) first; only fall back to the old source_line_id-wide match for
-    // legacy rows with no dc_line_id (pre-migration, safe under the old
-    // model's exclusive per-line lock where a line never had more than one
-    // concurrent reservation). Doing this as two separate updates instead of
-    // one .or() avoids the OR-typing gap while staying precise: under
-    // §133.12's multi-source model, multiple DOs can legitimately hold
-    // separate OPEN reservations against the SAME source line at once, so a
-    // blanket source_line_id release would wrongly cancel another DO's hold.
-    if (dcLineIds.length > 0) {
-      const { error: reservationByDcLineError } = await serviceRoleClient
-        .schema("erp_production")
-        .from("reservation_document")
-        .update({ status: "CANCELLED", last_updated_by: ctx.auth_user_id, last_updated_at: nowIso })
-        .in("dc_line_id", dcLineIds)
-        .in("status", RESERVATION_OPEN_STATUSES);
-      if (reservationByDcLineError) return doErrorResponse(req, ctx, "DO_RESERVATION_RELEASE_FAILED", 500, "Unable to release reservation for cancelled delivery order.");
-    }
-    if (sourceLineIds.length > 0) {
-      const { error: reservationError } = await serviceRoleClient
-        .schema("erp_production")
-        .from("reservation_document")
-        .update({ status: "CANCELLED", last_updated_by: ctx.auth_user_id, last_updated_at: nowIso })
-        .is("dc_line_id", null)
-        .in("source_line_id", sourceLineIds)
-        .in("status", RESERVATION_OPEN_STATUSES);
-      if (reservationError) return doErrorResponse(req, ctx, "DO_RESERVATION_RELEASE_FAILED", 500, "Unable to release reservation for cancelled delivery order.");
+      .rpc("cancel_delivery_order_atomic", { p_dc_id: dcId, p_reason: reason, p_actor: ctx.auth_user_id });
+    if (cancelRpcError) {
+      const message = String(cancelRpcError.message ?? "");
+      if (message.includes("DO_CANCEL_BLOCKED")) {
+        return doErrorResponse(req, ctx, "DO_CANCEL_BLOCKED", 400, "Only a DO that has not yet been PGI'd/invoiced can be cancelled directly -- reverse the Invoice instead.");
+      }
+      return doErrorResponse(req, ctx, "DO_CANCEL_FAILED", 500, "Unable to cancel delivery order.");
     }
 
     await undoCsnDispatchForLines(lineRows, ctx.auth_user_id, nowIso);
