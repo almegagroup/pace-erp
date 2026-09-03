@@ -407,7 +407,11 @@ export default function SalesInvoiceDetailPage() {
                   key: "pack_qty",
                   label: "Pack Qty",
                   width: "110px",
-                  render: (row) => (row.pack_qty != null ? `${row.pack_qty} ${row.pack_uom_code || ""}`.trim() : "-"),
+                  // pack_uom_code is a billing UOM, not always a real pack-count
+                  // unit (Tanker's is "KG", since it's billed per-KG, not per
+                  // discrete container) -- appending it here read as "1 KG"
+                  // (confusable with a weight), so this shows the bare count.
+                  render: (row) => (row.pack_qty != null ? String(row.pack_qty) : "-"),
                 },
                 {
                   key: "uom_code",
