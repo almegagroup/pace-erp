@@ -7,7 +7,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -104,7 +104,7 @@ export default function StockStatusChangePage() {
     queryKey: ["ssc-balance", balanceQuery],
     enabled: Boolean(balanceQuery),
     queryFn: () => getStockStatusChangeBalance(balanceQuery),
-    select: (result) => result?.data ?? null,
+    select: (result) => result ?? null,
   });
 
   function handleCheckBalance() {
@@ -138,9 +138,24 @@ export default function StockStatusChangePage() {
     queryKey: ["ssc-postings", effectiveCompanyId],
     enabled: Boolean(effectiveCompanyId),
     queryFn: () => listStockStatusChangePostings({ company_id: effectiveCompanyId }),
-    select: (result) => result?.data ?? [],
+    select: (result) => (Array.isArray(result) ? result : []),
   });
   const postings = Array.isArray(postingsQuery.data) ? postingsQuery.data : [];
+
+  const lineBalanceQueries = useQueries({
+    queries: lines.map((line) => ({
+      queryKey: ["ssc-line-balance", effectiveCompanyId, line.materialId, line.storageLocationId, line.batchNumber],
+      enabled: Boolean(effectiveCompanyId && line.materialId && line.storageLocationId),
+      queryFn: () => getStockStatusChangeBalance({
+        company_id: effectiveCompanyId,
+        material_id: line.materialId,
+        storage_location_id: line.storageLocationId,
+        batch_number: line.batchNumber || undefined,
+      }),
+      select: (result) => result ?? null,
+      staleTime: 15000,
+    })),
+  });
 
   async function handlePostLines() {
     setError("");
@@ -308,10 +323,13 @@ export default function StockStatusChangePage() {
                 </tr>
               </thead>
               <tbody>
-                {lines.map((line) => {
+                {lines.map((line, lineIndex) => {
                   const selectedMaterial = materialOptions.find((option) => option.value === line.materialId);
                   const isFg = Boolean(selectedMaterial?.isFg);
                   const toOptions = line.fromStockType ? VALID_TRANSITIONS[line.fromStockType] ?? [] : [];
+                  const lineBalance = lineBalanceQueries[lineIndex]?.data ?? null;
+                  const lineBalanceLoading = lineBalanceQueries[lineIndex]?.isFetching ?? false;
+                  const availableForFrom = line.fromStockType ? lineBalance?.[line.fromStockType]?.quantity : null;
                   return (
                     <tr key={line.key} className="border-t border-slate-200 odd:bg-slate-50">
                       <td className="px-2 py-1">
@@ -368,6 +386,13 @@ export default function StockStatusChangePage() {
                           blankLabel="Select"
                           inputClassName="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
                         />
+                        {line.materialId && line.storageLocationId && line.fromStockType ? (
+                          <div className="mt-1 text-[10px] text-slate-500">
+                            {lineBalanceLoading
+                              ? "Checking…"
+                              : `Avail (${STOCK_TYPE_LABELS[line.fromStockType]}): ${formatQuantity(availableForFrom)}`}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-2 py-1">
                         <ErpComboboxField
