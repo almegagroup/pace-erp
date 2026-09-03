@@ -128,7 +128,12 @@ function defaultGroupInput(group) {
     e_way_bill_number: posted.e_way_bill_number || "",
     freight: { to_pay: posted.freight_to_pay === true, included: posted.freight_included === true, mode: posted.freight_mode || "AD_HOC", amount: posted.freight_amount ?? "", rate: posted.freight_rate ?? "", gst_included: posted.freight_gst_included === true, gst_treatment: posted.freight_gst_treatment || "EXCLUSIVE", gst_rate: posted.freight_gst_rate ?? "" },
     additional_costs: [],
-    round_off_amount: posted.round_off_amount ?? "",
+    // Found live 2026-09-03 (business owner) -- SO01's own per-line Round
+    // Off never carried through here; this field always started blank
+    // regardless of what was entered at SO creation. Defaults to the SO's
+    // own round off for this group (0 if the SO never set one) before a
+    // posted invoice exists; once posted, the posted value is authoritative.
+    round_off_amount: posted.round_off_amount ?? group.so_round_off_amount ?? "",
     remarks: posted.remarks || "",
     __groupSnapshot: group,
   };
@@ -297,7 +302,7 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
                 const rateDisplay = invoiceLineRateDisplay(line);
                 return (
                 <tbody key={line.dc_line_id}>
-                  <tr><td className="border border-slate-300 p-2 align-top">{index + 1}</td><td className="border border-slate-300 p-2 align-top"><strong>{invoiceLineDescription(line)}</strong>{line.batch_number ? <div className="mt-1 text-slate-500">Batch: {line.batch_number}</div> : null}</td><td className="border border-slate-300 p-2 align-top">{line.hsn_code || "—"}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(line.quantity, 3)}</td><td className="border border-slate-300 p-2 text-right align-top">{line.pack_qty != null ? `${formatFixed(line.pack_qty, 3)} ${line.pack_uom_code || ""}`.trim() : "—"}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(rateDisplay.rate, 4)}</td><td className="border border-slate-300 p-2 align-top">{rateDisplay.per}</td><td className="border border-slate-300 p-2 text-right align-top font-semibold">{formatFixed(toNumber(line.quantity) * toNumber(line.unit_value))}</td></tr>
+                  <tr><td className="border border-slate-300 p-2 align-top">{index + 1}</td><td className="border border-slate-300 p-2 align-top"><strong>{invoiceLineDescription(line)}</strong>{line.batch_number ? <div className="mt-1 text-slate-500">Batch: {line.batch_number}</div> : null}</td><td className="border border-slate-300 p-2 align-top">{line.hsn_code || "—"}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(line.quantity, 3)}</td><td className="border border-slate-300 p-2 text-right align-top">{line.pack_qty != null ? formatFixed(line.pack_qty, 3) : "—"}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(rateDisplay.rate, 4)}</td><td className="border border-slate-300 p-2 align-top">{rateDisplay.per}</td><td className="border border-slate-300 p-2 text-right align-top font-semibold">{formatFixed(toNumber(line.quantity) * toNumber(line.unit_value))}</td></tr>
                   {itemTaxBreakup(line, group.gst_type).map((tax) => <tr key={`${line.dc_line_id}-${tax.label}`}><td className="border-x border-slate-300" /><td colSpan="5" className="border-x border-slate-300 px-2 py-1 text-right italic">Output {tax.label} @ {formatFixed(tax.rate, 2)}%</td><td className="border-x border-slate-300 p-1">{tax.label}</td><td className="border-x border-slate-300 p-1 text-right font-semibold">{formatFixed(tax.amount)}</td></tr>)}
                 </tbody>
                 );

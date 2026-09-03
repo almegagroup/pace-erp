@@ -1345,6 +1345,14 @@ type ProcInvoiceGroup = {
   total_sgst_amount: number;
   total_igst_amount: number;
   gst_type: "CGST_SGST" | "IGST";
+  // Found live 2026-09-03 (business owner) -- SO01's own per-line Round Off
+  // (§ sales_order_line.round_off_amount, entered whether the SO has one
+  // line or several) never carried through to PGI/Invoice, which has its
+  // own separate, always-empty Round Off input. Sum of the underlying SO
+  // lines' round_off_amount for THIS group only (a group can be a subset of
+  // the SO's lines under IBN grouping) -- the frontend defaults its Round
+  // Off field to this, still editable before posting.
+  so_round_off_amount: number;
 };
 
 // Groups a DO's lines into invoice-groups per the rule above. Used by both
@@ -1368,7 +1376,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
 
   const [stoLineRows, soLineRows, mapAllocRows] = await Promise.all([
     stoLineIds.length ? fetchInChunks<JsonRecord>(stoLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line").select("id, sto_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
-    soLineIds.length ? fetchInChunks<JsonRecord>(soLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, so_id, hsn_code").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
+    soLineIds.length ? fetchInChunks<JsonRecord>(soLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, so_id, hsn_code, round_off_amount").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     soMapAllocationIds.length ? fetchInChunks<JsonRecord>(soMapAllocationIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id, so_id, fo_id, customer_address_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
   ]);
   const stoLineToSto = new Map(stoLineRows.map((r) => [String(r.id), toTrimmedString(r.sto_id)]));
@@ -1629,6 +1637,12 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
     const totalCgstAmount = gstType === "CGST_SGST" ? Number((totalGstAmount / 2).toFixed(4)) : 0;
     const totalSgstAmount = gstType === "CGST_SGST" ? Number((totalGstAmount / 2).toFixed(4)) : 0;
     const totalIgstAmount = gstType === "IGST" ? totalGstAmount : 0;
+    // round_off_amount lives on the SO LINE, not per dispatch -- dedupe by
+    // so_line_id first (a line split across multiple DC lines, e.g. two
+    // Packing POs off one FO, must only count its own round off once).
+    const soRoundOffAmount = Number([...new Set(groupLines.map((l) => l.so_line_id).filter(Boolean))]
+      .reduce((sum, id) => sum + Number(soLineById.get(id as string)?.round_off_amount ?? 0), 0)
+      .toFixed(4));
 
     groups.push({
       group_key: groupKey,
@@ -1660,6 +1674,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       total_sgst_amount: totalSgstAmount,
       total_igst_amount: totalIgstAmount,
       gst_type: gstType,
+      so_round_off_amount: soRoundOffAmount,
     });
   }
 
