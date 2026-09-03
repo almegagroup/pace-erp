@@ -128,7 +128,12 @@ function defaultGroupInput(group) {
     e_way_bill_number: posted.e_way_bill_number || "",
     freight: { to_pay: posted.freight_to_pay === true, included: posted.freight_included === true, mode: posted.freight_mode || "AD_HOC", amount: posted.freight_amount ?? "", rate: posted.freight_rate ?? "", gst_included: posted.freight_gst_included === true, gst_treatment: posted.freight_gst_treatment || "EXCLUSIVE", gst_rate: posted.freight_gst_rate ?? "" },
     additional_costs: [],
-    round_off_amount: posted.round_off_amount ?? "",
+    // Found live 2026-09-03 (business owner) -- SO01's own per-line Round
+    // Off never carried through here; this field always started blank
+    // regardless of what was entered at SO creation. Defaults to the SO's
+    // own round off for this group (0 if the SO never set one) before a
+    // posted invoice exists; once posted, the posted value is authoritative.
+    round_off_amount: posted.round_off_amount ?? group.so_round_off_amount ?? "",
     remarks: posted.remarks || "",
     __groupSnapshot: group,
   };
