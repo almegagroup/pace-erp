@@ -591,29 +591,38 @@ export async function getBatchCountsReportHandler(req: Request, ctx: ProdHandler
       return okResponse({ data: [] }, ctx.request_id, req);
     }
 
+    // No batch_started_at filter here — fetched once, unrestricted by date, so the
+    // SAME row set can be grouped into both the selected-range count and the
+    // "Till Date" (all-time) count below without a second round trip.
     let pq = serviceRoleClient.schema("erp_production").from("process_order")
-      .select("company_id, stroke_master_id, material_id, batch_number")
+      .select("company_id, stroke_master_id, material_id, batch_number, batch_started_at")
       .not("batch_number", "is", null)
       .neq("status", "REVERSED");
-    // .gte/.lt aren't in this codebase's DbQueryBuilder type (same pre-existing
-    // Supabase-client typing gap as .range/.or/.gt/.ilike elsewhere) but exist at
-    // runtime -- same cast pattern as this file's own bypassDateRange block above.
-    pq = (pq as unknown as { gte: (c: string, v: string) => typeof pq }).gte("batch_started_at", `${dateFrom}T00:00:00Z`);
-    pq = (pq as unknown as { lt: (c: string, v: string) => typeof pq }).lt("batch_started_at", toExclusive);
     if (companyIds) pq = pq.in("company_id", companyIds);
     const { data, error } = await pq;
     if (error) throw new Error("PROD_OIS_BATCH_COUNTS_FAILED");
 
+    const rangeStartMs = new Date(`${dateFrom}T00:00:00Z`).getTime();
+    const rangeEndExclusiveMs = new Date(toExclusive).getTime();
     const rows = (data ?? []) as JsonRecord[];
-    type GroupAgg = { companyId: string; strokeMasterId: string | null; materialId: string; batchNumbers: Set<string> };
+    // "Till Date" (business owner, 2026-09-03) — the same group's all-time total
+    // batch count, next to the selected-range count, regardless of which range
+    // was picked in the modal.
+    type GroupAgg = { companyId: string; strokeMasterId: string | null; materialId: string; batchNumbersInRange: Set<string>; batchNumbersTillDate: Set<string> };
     const groups = new Map<string, GroupAgg>();
     for (const row of rows) {
       const companyId = String(row.company_id);
       const strokeMasterId = toTrimmedString(row.stroke_master_id) || null;
       const materialId = String(row.material_id);
       const key = `${companyId}::${strokeMasterId ?? ""}::${materialId}`;
-      if (!groups.has(key)) groups.set(key, { companyId, strokeMasterId, materialId, batchNumbers: new Set() });
-      groups.get(key)!.batchNumbers.add(toTrimmedString(row.batch_number));
+      if (!groups.has(key)) groups.set(key, { companyId, strokeMasterId, materialId, batchNumbersInRange: new Set(), batchNumbersTillDate: new Set() });
+      const group = groups.get(key)!;
+      const batchNumber = toTrimmedString(row.batch_number);
+      const batchStartedAtMs = row.batch_started_at ? new Date(String(row.batch_started_at)).getTime() : NaN;
+      group.batchNumbersTillDate.add(batchNumber);
+      if (Number.isFinite(batchStartedAtMs) && batchStartedAtMs >= rangeStartMs && batchStartedAtMs < rangeEndExclusiveMs) {
+        group.batchNumbersInRange.add(batchNumber);
+      }
     }
 
     const groupList = [...groups.values()];
@@ -645,21 +654,29 @@ export async function getBatchCountsReportHandler(req: Request, ctx: ProdHandler
     const materialMap = new Map(materialRows.map((r) => [String(r.id), r]));
     const companyMap = new Map(companyRows.map((r) => [String(r.id), r]));
 
-    const result = groupList.map((g) => {
-      const material = materialMap.get(g.materialId);
-      const company = companyMap.get(g.companyId);
-      return {
-        company_id: g.companyId,
-        company_code: company?.company_code ?? null,
-        stroke_master_id: g.strokeMasterId,
-        stroke_number: g.strokeMasterId ? strokeMap.get(g.strokeMasterId) ?? null : null,
-        material_id: g.materialId,
-        material_name: material?.material_name ?? null,
-        external_code: material?.external_code || material?.pace_code || null,
-        material_type: material?.material_type ?? null,
-        batch_count: g.batchNumbers.size,
-      };
-    });
+    // Row inclusion stays exactly what it was before Till Date existed: only groups
+    // with at least one batch actually started IN the selected range. Till Date is
+    // an extra column on those same rows, not a reason to widen the row set to
+    // every SFG/Stroke combo ever made — that would drown the range the user asked
+    // for in all-time noise.
+    const result = groupList
+      .filter((g) => g.batchNumbersInRange.size > 0)
+      .map((g) => {
+        const material = materialMap.get(g.materialId);
+        const company = companyMap.get(g.companyId);
+        return {
+          company_id: g.companyId,
+          company_code: company?.company_code ?? null,
+          stroke_master_id: g.strokeMasterId,
+          stroke_number: g.strokeMasterId ? strokeMap.get(g.strokeMasterId) ?? null : null,
+          material_id: g.materialId,
+          material_name: material?.material_name ?? null,
+          external_code: material?.external_code || material?.pace_code || null,
+          material_type: material?.material_type ?? null,
+          batch_count: g.batchNumbersInRange.size,
+          till_date_count: g.batchNumbersTillDate.size,
+        };
+      });
     result.sort((a, b) => {
       const companyCompare = String(a.company_code ?? "").localeCompare(String(b.company_code ?? ""));
       if (companyCompare !== 0) return companyCompare;

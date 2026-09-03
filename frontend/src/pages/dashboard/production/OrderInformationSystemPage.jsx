@@ -196,6 +196,7 @@ const BATCH_COUNTS_COLUMNS = [
   { key: "external_code", label: "External Code", render: (r) => r.external_code || "--" },
   { key: "material_type", label: "Item Type", width: "80px", render: (r) => r.material_type || "--" },
   { key: "batch_count", label: "Batch Count", width: "100px", align: "right", render: (r) => Number(r.batch_count ?? 0).toLocaleString() },
+  { key: "till_date_count", label: "Till Date", width: "100px", align: "right", render: (r) => Number(r.till_date_count ?? 0).toLocaleString() },
 ];
 
 function BatchCountsModal({ dateFrom, dateTo, error, onChange, onSubmit, onClose }) {
