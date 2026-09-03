@@ -47,6 +47,25 @@ function formatQuantity(value) {
   return Number.isFinite(amount) ? amount.toFixed(3) : "—";
 }
 
+const POSTINGS_COLUMNS = [
+  { key: "movement_type_code", label: "MvT", width: "80px" },
+  { key: "quantity", label: "Qty", width: "110px", align: "right", render: (row) => formatQuantity(row.quantity) },
+  { key: "material", label: "Material", width: "220px" },
+  { key: "batch_number", label: "Batch", width: "120px" },
+  { key: "reason", label: "Reason", width: "220px" },
+  { key: "created_by", label: "Posted By", width: "200px" },
+  { key: "created_at", label: "Posted At", width: "170px" },
+  { key: "status", label: "Status", width: "130px" },
+];
+
+// Business owner ask (2026-09-03) — same pattern as every other report grid
+// this sweep touched.
+function getColumnFilterText(column, row) {
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  const raw = row?.[column.key];
+  return raw == null ? "" : String(raw);
+}
+
 function emptyLine() {
   return {
     key: crypto.randomUUID(),
@@ -140,7 +159,26 @@ export default function StockStatusChangePage() {
     queryFn: () => listStockStatusChangePostings({ company_id: effectiveCompanyId }),
     select: (result) => (Array.isArray(result) ? result : []),
   });
-  const postings = Array.isArray(postingsQuery.data) ? postingsQuery.data : [];
+  const postings = useMemo(() => (Array.isArray(postingsQuery.data) ? postingsQuery.data : []), [postingsQuery.data]);
+
+  const [postingsSearch, setPostingsSearch] = useState("");
+  const postingsSearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of postings) {
+      for (const column of POSTINGS_COLUMNS) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 500) break outer;
+      }
+    }
+    return [...values].sort();
+  }, [postings]);
+  const hasActivePostingsSearch = postingsSearch.trim().length > 0;
+  const filteredPostings = useMemo(() => {
+    const needle = postingsSearch.trim().toLowerCase();
+    if (!needle) return postings;
+    return postings.filter((row) => POSTINGS_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+  }, [postings, postingsSearch]);
 
   const lineBalanceQueries = useQueries({
     queries: lines.map((line) => ({
@@ -459,16 +497,29 @@ export default function StockStatusChangePage() {
         </ErpSectionCard>
 
         <ErpSectionCard eyebrow="Recent postings" title="History">
+          <div className="mb-2 flex items-center gap-2">
+            <input
+              list="ssc-postings-search-options"
+              value={postingsSearch}
+              onChange={(event) => setPostingsSearch(event.target.value)}
+              placeholder="Search across every column..."
+              className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+            />
+            <datalist id="ssc-postings-search-options">
+              {postingsSearchOptions.map((option) => <option key={option} value={option} />)}
+            </datalist>
+            {hasActivePostingsSearch ? (
+              <>
+                <button type="button" onClick={() => setPostingsSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                  Clear
+                </button>
+                <span className="text-xs text-slate-500">{filteredPostings.length} of {postings.length} postings</span>
+              </>
+            ) : null}
+          </div>
           <ErpDenseGrid
             columns={[
-              { key: "movement_type_code", label: "MvT", width: "80px" },
-              { key: "quantity", label: "Qty", width: "110px", align: "right", render: (row) => formatQuantity(row.quantity) },
-              { key: "material", label: "Material", width: "220px" },
-              { key: "batch_number", label: "Batch", width: "120px" },
-              { key: "reason", label: "Reason", width: "220px" },
-              { key: "created_by", label: "Posted By", width: "200px" },
-              { key: "created_at", label: "Posted At", width: "170px" },
-              { key: "status", label: "Status", width: "130px" },
+              ...POSTINGS_COLUMNS,
               {
                 key: "actions",
                 label: "",
@@ -500,9 +551,9 @@ export default function StockStatusChangePage() {
                 },
               },
             ]}
-            rows={postings}
+            rows={filteredPostings}
             rowKey={(row) => row.id}
-            emptyMessage="No recent postings."
+            emptyMessage={hasActivePostingsSearch ? "No rows match this search." : "No recent postings."}
           />
         </ErpSectionCard>
       </div>

@@ -61,6 +61,14 @@ function fiscalMonthOptions(anchorMonth) {
   return options;
 }
 
+// Business owner ask (2026-09-03) — same pattern as every other report grid
+// this sweep touched.
+function getColumnFilterText(column, row) {
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  const raw = row?.[column.key];
+  return raw == null ? "" : String(raw);
+}
+
 function pageSlice(rows, page, pageSize) {
   const totalItems = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
@@ -183,7 +191,6 @@ export default function MtsSkuMonthlyRatePage() {
     })
   ), [draftRows, entryQuery.data]);
 
-  const entryPageData = pageSlice(mergedRows, page, 14);
   const pendingDraftPageData = pageSlice(pendingDraftsQuery.data ?? [], draftPage, 10);
 
   function updateDraft(materialId, patch) {
@@ -302,6 +309,7 @@ export default function MtsSkuMonthlyRatePage() {
           ))}
         </select>
       ),
+      copyValue: (row) => row.draft_dispatch_uom_code,
     },
     {
       key: "rate",
@@ -318,6 +326,7 @@ export default function MtsSkuMonthlyRatePage() {
           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-right text-xs text-slate-900 outline-none focus:border-sky-500"
         />
       ),
+      copyValue: (row) => row.draft_rate,
     },
     {
       key: "rate_per_kg",
@@ -335,8 +344,31 @@ export default function MtsSkuMonthlyRatePage() {
           {row.status}
         </span>
       ) : <span className="text-slate-400">New</span>,
+      copyValue: (row) => row.status || "New",
     },
   ];
+
+  const [entrySearch, setEntrySearch] = useState("");
+  const entrySearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of mergedRows) {
+      for (const column of entryColumns) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 500) break outer;
+      }
+    }
+    return [...values].sort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mergedRows]);
+  const hasActiveEntrySearch = entrySearch.trim().length > 0;
+  const filteredMergedRows = useMemo(() => {
+    const needle = entrySearch.trim().toLowerCase();
+    if (!needle) return mergedRows;
+    return mergedRows.filter((row) => entryColumns.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mergedRows, entrySearch]);
+  const entryPageData = pageSlice(filteredMergedRows, page, 14);
 
   const draftColumns = [
     { key: "rate_month", label: "Month", width: "160px" },
@@ -411,6 +443,26 @@ export default function MtsSkuMonthlyRatePage() {
             <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
               Only MTS SKU items for the selected company appear here. Rate is entered in Dispatch UOM and the system resolves the per-KG value before save.
             </div>
+            <div className="flex items-center gap-2">
+              <input
+                list="mts-rate-search-options"
+                value={entrySearch}
+                onChange={(event) => { setEntrySearch(event.target.value); setPage(1); }}
+                placeholder="Search across every column..."
+                className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+              />
+              <datalist id="mts-rate-search-options">
+                {entrySearchOptions.map((option) => <option key={option} value={option} />)}
+              </datalist>
+              {hasActiveEntrySearch ? (
+                <>
+                  <button type="button" onClick={() => setEntrySearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                    Clear
+                  </button>
+                  <span className="text-xs text-slate-500">{filteredMergedRows.length} of {mergedRows.length} SKUs</span>
+                </>
+              ) : null}
+            </div>
             <ErpPaginationStrip
               page={entryPageData.page}
               setPage={setPage}
@@ -424,7 +476,7 @@ export default function MtsSkuMonthlyRatePage() {
               rows={entryPageData.rows}
               rowKey={(row) => row.material_id}
               maxHeight="520px"
-              emptyMessage={entryQuery.isLoading ? "Loading MTS SKU list..." : "No MTS SKU is configured for this company."}
+              emptyMessage={entryQuery.isLoading ? "Loading MTS SKU list..." : hasActiveEntrySearch ? "No rows match this search." : "No MTS SKU is configured for this company."}
             />
           </div>
         ) : (

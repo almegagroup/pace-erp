@@ -19,7 +19,7 @@
  * from day one. Rewritten to useQuery, reading the resolved value directly.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -314,6 +314,25 @@ function MapDrawer({ so, onClose, onChanged }) {
   );
 }
 
+const SO_MAP_COLUMNS = [
+  { key: "so_number", label: "SO Number", width: "140px", render: (row) => row.so_number },
+  { key: "customer_po_number", label: "External SO Number", width: "150px", render: (row) => row.customer_po_number || "—" },
+  { key: "so_date", label: "SO Date", width: "100px", render: (row) => row.so_date },
+  { key: "dispatch_type", label: "Dispatch Type", width: "180px", render: (row) => row.dispatch_type },
+  { key: "total", label: "Total Qty", width: "90px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
+  { key: "mapped", label: "Mapped Qty", width: "90px", align: "right", render: (row) => Number(row.mapped_qty ?? 0).toFixed(2) },
+  { key: "status", label: "Status", width: "120px", render: (row) => <StatusPill status={row.map_status} />, copyValue: (row) => row.map_status },
+];
+
+// Business owner ask (2026-09-03), same pattern as every other report this
+// session — reuses copyValue when present so a JSX-rendered cell (Status)
+// still filters against plain text.
+function getColumnFilterText(column, row) {
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  const raw = row?.[column.key];
+  return raw == null ? "" : String(raw);
+}
+
 export default function SO01MapPage() {
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
@@ -328,9 +347,28 @@ export default function SO01MapPage() {
   // listSoForMapHandler returns a bare array via okResponse(array, ...) —
   // fetchProcurement's unwrap already resolves to it directly (see file
   // header note); no `.data` to read off listQuery.data itself.
-  const rows = Array.isArray(listQuery.data) ? listQuery.data : [];
+  const rows = useMemo(() => (Array.isArray(listQuery.data) ? listQuery.data : []), [listQuery.data]);
   const loading = listQuery.isLoading;
   const error = listQuery.error instanceof Error ? listQuery.error.message : "";
+
+  const [globalSearch, setGlobalSearch] = useState("");
+  const globalSearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of rows) {
+      for (const column of SO_MAP_COLUMNS) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 500) break outer;
+      }
+    }
+    return [...values].sort();
+  }, [rows]);
+  const hasActiveSearch = globalSearch.trim().length > 0;
+  const filteredRows = useMemo(() => {
+    const needle = globalSearch.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => SO_MAP_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+  }, [rows, globalSearch]);
 
   useErpScreenHotkeys({
     refresh: { disabled: loading, perform: () => void listQuery.refetch() },
@@ -359,23 +397,37 @@ export default function SO01MapPage() {
               </div>
             </ErpSectionCard>
             <ErpSectionCard eyebrow="Pending" title="SOs needing mapping (Dependent Direct/Depot/No-Inbound)">
+              <div className="mb-2 flex items-center gap-2">
+                <input
+                  list="so-map-search-options"
+                  value={globalSearch}
+                  onChange={(event) => setGlobalSearch(event.target.value)}
+                  placeholder="Search across every column..."
+                  className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+                />
+                <datalist id="so-map-search-options">
+                  {globalSearchOptions.map((option) => <option key={option} value={option} />)}
+                </datalist>
+                {hasActiveSearch ? (
+                  <button type="button" onClick={() => setGlobalSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                    Clear
+                  </button>
+                ) : null}
+                {hasActiveSearch ? (
+                  <span className="text-xs text-slate-500">{filteredRows.length} of {rows.length} SOs</span>
+                ) : null}
+              </div>
               <ErpDenseGrid
                 cellNavigate
                 columns={[
-                  { key: "so_number", label: "SO Number", width: "140px", render: (row) => row.so_number },
-                  { key: "customer_po_number", label: "External SO Number", width: "150px", render: (row) => row.customer_po_number || "—" },
-                  { key: "so_date", label: "SO Date", width: "100px", render: (row) => row.so_date },
-                  { key: "dispatch_type", label: "Dispatch Type", width: "180px", render: (row) => row.dispatch_type },
-                  { key: "total", label: "Total Qty", width: "90px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
-                  { key: "mapped", label: "Mapped Qty", width: "90px", align: "right", render: (row) => Number(row.mapped_qty ?? 0).toFixed(2) },
-                  { key: "status", label: "Status", width: "120px", render: (row) => <StatusPill status={row.map_status} /> },
+                  ...SO_MAP_COLUMNS,
                   { key: "actions", label: "", width: "80px", render: (row) => (
                     <button type="button" onClick={() => setActiveSo(row)} className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-950">Map</button>
                   ) },
                 ]}
-                rows={rows}
+                rows={filteredRows}
                 rowKey={(row) => row.id}
-                emptyMessage="No SOs pending mapping."
+                emptyMessage={hasActiveSearch ? "No rows match this search." : "No SOs pending mapping."}
               />
             </ErpSectionCard>
           </div>

@@ -94,6 +94,7 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
     const url = new URL(req.url);
     const sourceType = toUpperTrimmedString(url.searchParams.get("source_type"));
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
+    const search = toTrimmedString(url.searchParams.get("search"));
     if (!DO_SOURCE_TYPES.has(sourceType)) {
       return doErrorResponse(req, ctx, "DO_SOURCE_TYPE_INVALID", 400, "source_type must be SALES_ORDER or STO.");
     }
@@ -106,6 +107,13 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
     }
 
     if (sourceType === "SALES_ORDER") {
+      // §113 picker's flat .limit(100)/created_at-desc had no search — an
+      // older-but-still-open SO simply vanished once 100+ others were
+      // touched more recently (found live 2026-09-03: SO 9000000006, ranked
+      // #143 by created_at, never appeared no matter how the drawer was
+      // scrolled). A blank search still returns the 100 most recent (same
+      // as before); a real search filters server-side by so_number/PO
+      // number first, so an old-but-open SO is reachable by typing it in.
       let query = serviceRoleClient
         .schema("erp_procurement")
         .from("sales_order")
@@ -114,6 +122,7 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
         .order("created_at", { ascending: false })
         .limit(100);
       if (companyId) query = query.eq("company_id", companyId);
+      if (search) query = query.or(`so_number.ilike.%${search}%,customer_po_number.ilike.%${search}%`);
       const { data, error } = await query;
       if (error) return doErrorResponse(req, ctx, "DO_SOURCE_LIST_FAILED", 500, "Unable to list source sales orders.");
 
@@ -186,6 +195,7 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
       .order("created_at", { ascending: false })
       .limit(100);
     if (companyId) query = query.eq("sending_company_id", companyId);
+    if (search) query = query.ilike("sto_number", `%${search}%`);
     const { data, error } = await query;
     if (error) return doErrorResponse(req, ctx, "DO_SOURCE_LIST_FAILED", 500, "Unable to list source STOs.");
 

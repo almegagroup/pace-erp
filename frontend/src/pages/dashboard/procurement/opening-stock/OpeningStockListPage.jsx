@@ -36,6 +36,14 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString("en-GB");
 }
 
+// Business owner ask (2026-09-03) — same pattern as every other report grid
+// this sweep touched.
+function getColumnFilterText(column, row) {
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  const raw = row?.[column.key];
+  return raw == null ? "" : String(raw);
+}
+
 export default function OpeningStockListPage() {
   const { runtimeContext } = useMenu();
   const runtimeCompanyId = useMemo(
@@ -63,11 +71,11 @@ export default function OpeningStockListPage() {
     () => (Array.isArray(companiesQuery.data) ? companiesQuery.data : []),
     [companiesQuery.data],
   );
-  const rows = Array.isArray(documentQuery.data?.items)
+  const rows = useMemo(() => (Array.isArray(documentQuery.data?.items)
     ? documentQuery.data.items
     : Array.isArray(documentQuery.data)
     ? documentQuery.data
-    : [];
+    : []), [documentQuery.data]);
   const loading = documentQuery.isLoading || companiesQuery.isLoading;
 
   useEffect(() => {
@@ -114,6 +122,63 @@ export default function OpeningStockListPage() {
     companiesQuery.error?.message ||
     "";
   const requiresPoType = form.material_type === "SFG" || form.material_type === "FG";
+
+  const columns = useMemo(() => [
+    { key: "document_number", label: "Document #", width: "150px" },
+    {
+      key: "company",
+      label: "Company",
+      render: (row) => companyMap.get(row.company_id) ?? row.company_id,
+      copyValue: (row) => companyMap.get(row.company_id) ?? "",
+    },
+    {
+      key: "cut_off_date",
+      label: "Cut-off Date",
+      width: "120px",
+      render: (row) => formatDate(row.cut_off_date),
+    },
+    { key: "line_count", label: "Lines", width: "70px" },
+    {
+      key: "status",
+      label: "Status",
+      width: "100px",
+      render: (row) => (
+        <span
+          className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
+            row.status === "DRAFT"
+              ? "bg-slate-200 text-slate-800"
+              : row.status === "SUBMITTED"
+              ? "bg-amber-100 text-amber-800"
+              : row.status === "APPROVED"
+              ? "bg-sky-100 text-sky-800"
+              : "bg-emerald-100 text-emerald-800"
+          }`}
+        >
+          {row.status}
+        </span>
+      ),
+      copyValue: (row) => row.status,
+    },
+  ], [companyMap]);
+
+  const [globalSearch, setGlobalSearch] = useState("");
+  const globalSearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of rows) {
+      for (const column of columns) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 500) break outer;
+      }
+    }
+    return [...values].sort();
+  }, [rows, columns]);
+  const hasActiveSearch = globalSearch.trim().length > 0;
+  const filteredRows = useMemo(() => {
+    const needle = globalSearch.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => columns.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+  }, [rows, columns, globalSearch]);
 
   async function handleCreateDocument() {
     if (!form.company_id || !form.cut_off_date || !form.material_type) {
@@ -250,41 +315,29 @@ export default function OpeningStockListPage() {
                 </ErpDenseFormRow>
               </div>
 
+              <div className="flex items-center gap-2">
+                <input
+                  list="opening-stock-search-options"
+                  value={globalSearch}
+                  onChange={(event) => setGlobalSearch(event.target.value)}
+                  placeholder="Search across every column..."
+                  className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+                />
+                <datalist id="opening-stock-search-options">
+                  {globalSearchOptions.map((option) => <option key={option} value={option} />)}
+                </datalist>
+                {hasActiveSearch ? (
+                  <>
+                    <button type="button" onClick={() => setGlobalSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                      Clear
+                    </button>
+                    <span className="text-xs text-slate-500">{filteredRows.length} of {rows.length} documents</span>
+                  </>
+                ) : null}
+              </div>
               <ErpDenseGrid
                 columns={[
-                  { key: "document_number", label: "Document #", width: "150px" },
-                  {
-                    key: "company",
-                    label: "Company",
-                    render: (row) => companyMap.get(row.company_id) ?? row.company_id,
-                  },
-                  {
-                    key: "cut_off_date",
-                    label: "Cut-off Date",
-                    width: "120px",
-                    render: (row) => formatDate(row.cut_off_date),
-                  },
-                  { key: "line_count", label: "Lines", width: "70px" },
-                  {
-                    key: "status",
-                    label: "Status",
-                    width: "100px",
-                    render: (row) => (
-                      <span
-                        className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
-                          row.status === "DRAFT"
-                            ? "bg-slate-200 text-slate-800"
-                            : row.status === "SUBMITTED"
-                            ? "bg-amber-100 text-amber-800"
-                            : row.status === "APPROVED"
-                            ? "bg-sky-100 text-sky-800"
-                            : "bg-emerald-100 text-emerald-800"
-                        }`}
-                      >
-                        {row.status}
-                      </span>
-                    ),
-                  },
+                  ...columns,
                   {
                     key: "action",
                     label: "Action",
@@ -302,9 +355,9 @@ export default function OpeningStockListPage() {
                     ),
                   },
                 ]}
-                rows={rows}
+                rows={filteredRows}
                 rowKey={(row) => row.id}
-                emptyMessage={loading ? "Loading opening stock documents..." : "No opening stock documents found."}
+                emptyMessage={loading ? "Loading opening stock documents..." : hasActiveSearch ? "No rows match this search." : "No opening stock documents found."}
                 maxHeight="420px"
               />
             </div>

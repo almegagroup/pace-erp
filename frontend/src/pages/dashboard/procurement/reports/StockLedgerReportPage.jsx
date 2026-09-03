@@ -91,6 +91,17 @@ function buildReportParams(filters) {
   };
 }
 
+// Business owner ask (2026-09-03), same pattern as PR24/PR14 — a single search
+// box, client-side, on top of this report's own (already extensive) server-side
+// filters. Filters against whichever columns are CURRENTLY VISIBLE (gridColumns
+// reacts to the saved-layout/column-visibility picker), not the full column
+// universe, so it always matches what's actually on screen.
+function getColumnFilterText(column, row) {
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  const raw = row?.[column.key];
+  return raw == null ? "" : String(raw);
+}
+
 function findLayout(layouts, layoutId) {
   return layouts.find((layout) => layout.id === layoutId) || null;
 }
@@ -303,13 +314,35 @@ export default function StockLedgerReportPage() {
     [activeLayoutId, columnDefinitions, columnSelectionTouched, layoutsQuery.data, visibleColumns],
   );
 
-  const reportRows = Array.isArray(reportQuery.data) ? reportQuery.data : [];
+  const reportRows = useMemo(() => (Array.isArray(reportQuery.data) ? reportQuery.data : []), [reportQuery.data]);
   const searchDisabled = !companyId || !dateFrom || !dateTo || dateSpanTooWide(dateFrom, dateTo) || dateRangeInvalid(dateFrom, dateTo);
   const activeError = error || (reportQuery.error instanceof Error ? reportQuery.error.message : "");
+
+  // Single global search across every currently-visible column (business owner,
+  // 2026-09-03) — client-side, on top of the server-side filters above.
+  const [globalSearch, setGlobalSearch] = useState("");
+  const globalSearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of reportRows) {
+      for (const column of gridColumns) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 500) break outer;
+      }
+    }
+    return [...values].sort();
+  }, [reportRows, gridColumns]);
+  const hasActiveSearch = globalSearch.trim().length > 0;
+  const filteredRows = useMemo(() => {
+    const needle = globalSearch.trim().toLowerCase();
+    if (!needle) return reportRows;
+    return reportRows.filter((row) => gridColumns.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+  }, [reportRows, gridColumns, globalSearch]);
 
   async function handleSearch() {
     setError("");
     setNotice("");
+    setGlobalSearch("");
     if (!companyId) {
       setError("Select a company first.");
       return;
@@ -429,14 +462,16 @@ export default function StockLedgerReportPage() {
   }
 
   function handleExport() {
-    if (reportRows.length === 0) {
+    if (filteredRows.length === 0) {
       return;
     }
     const csvColumns = gridColumns.map((column) => ({ key: column.key, label: column.label }));
     downloadCsvFile({
       fileName: `stock_ledger_${dateFrom || "from"}_${dateTo || "to"}.csv`,
       columns: csvColumns,
-      rows: reportRows,
+      // Exports whatever the search box currently shows, not the full fetch —
+      // matches ordinary spreadsheet "export what I see" expectations.
+      rows: filteredRows,
     });
   }
 
@@ -476,7 +511,7 @@ export default function StockLedgerReportPage() {
                 key: "export",
                 label: "Export Excel",
                 onClick: handleExport,
-                disabled: reportRows.length === 0,
+                disabled: filteredRows.length === 0,
               },
               {
                 key: "search",
@@ -601,15 +636,42 @@ export default function StockLedgerReportPage() {
             </button>
             <div className="text-sm text-slate-600">
               {submittedFilters
-                ? `${reportRows.length} rows loaded`
+                ? hasActiveSearch
+                  ? `${filteredRows.length} of ${reportRows.length} rows (filtered)`
+                  : `${reportRows.length} rows loaded`
                 : "Set filters and click Search to load the stock ledger."}
             </div>
           </div>
+          {submittedFilters ? (
+            <div className="mb-3 flex items-center gap-2">
+              <input
+                list="stock-ledger-search-options"
+                value={globalSearch}
+                onChange={(event) => setGlobalSearch(event.target.value)}
+                placeholder="Search across every visible column..."
+                className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+              />
+              <datalist id="stock-ledger-search-options">
+                {globalSearchOptions.map((option) => <option key={option} value={option} />)}
+              </datalist>
+              {hasActiveSearch ? (
+                <button type="button" onClick={() => setGlobalSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                  Clear
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           <ErpDenseGrid
             columns={gridColumns}
-            rows={reportRows}
+            rows={filteredRows}
             rowKey={(row) => row.row_key || row.id}
-            emptyMessage={reportQuery.isFetching ? "Loading stock ledger..." : "No stock ledger rows matched the selected filters."}
+            emptyMessage={
+              reportQuery.isFetching
+                ? "Loading stock ledger..."
+                : hasActiveSearch
+                  ? "No rows match this search."
+                  : "No stock ledger rows matched the selected filters."
+            }
             virtualize
             rangeSelect
           />

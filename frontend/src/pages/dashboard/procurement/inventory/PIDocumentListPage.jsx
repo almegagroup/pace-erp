@@ -23,6 +23,44 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString("en-GB");
 }
 
+const GRID_COLUMNS = [
+  { key: "document_number", label: "Document #", width: "140px" },
+  { key: "company_name", label: "Company", width: "160px", render: (row) => row.company_name ?? row.company_code ?? "—" },
+  { key: "mode", label: "Mode", width: "120px" },
+  { key: "count_date", label: "Count Date", width: "110px", render: (row) => formatDate(row.count_date) },
+  { key: "posting_date", label: "Posting Date", width: "110px", render: (row) => formatDate(row.posting_date) },
+  { key: "item_count", label: "Items", width: "70px" },
+  { key: "counted_count", label: "Counted", width: "80px", render: (row) => `${row.counted_count ?? 0}/${row.item_count ?? 0}` },
+  {
+    key: "is_opening_stock_source",
+    label: "Opening Src",
+    width: "90px",
+    render: (row) => (row.is_opening_stock_source ? "Yes" : "—"),
+  },
+  {
+    key: "status",
+    label: "Status",
+    width: "130px",
+    render: (row) => {
+      const statusMeta = getPIStatusMeta(row.status);
+      return (
+        <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${statusMeta.badgeClassName}`}>
+          {statusMeta.label}
+        </span>
+      );
+    },
+    copyValue: (row) => getPIStatusMeta(row.status).label,
+  },
+];
+
+// Business owner ask (2026-09-03) — same pattern as every other report grid
+// this sweep touched.
+function getColumnFilterText(column, row) {
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  const raw = row?.[column.key];
+  return raw == null ? "" : String(raw);
+}
+
 export default function PIDocumentListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
@@ -70,6 +108,25 @@ export default function PIDocumentListPage() {
     ],
     [rows],
   );
+
+  const [globalSearch, setGlobalSearch] = useState("");
+  const globalSearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of rows) {
+      for (const column of GRID_COLUMNS) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 500) break outer;
+      }
+    }
+    return [...values].sort();
+  }, [rows]);
+  const hasActiveSearch = globalSearch.trim().length > 0;
+  const filteredRows = useMemo(() => {
+    const needle = globalSearch.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => GRID_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+  }, [rows, globalSearch]);
 
   async function applyFilters(patch) {
     const next = { ...filters, ...patch };
@@ -191,43 +248,42 @@ export default function PIDocumentListPage() {
                 </select>
               </ErpDenseFormRow>
             </div>
+            <div className="flex items-center gap-2">
+              <input
+                list="pi-list-search-options"
+                value={globalSearch}
+                onChange={(event) => setGlobalSearch(event.target.value)}
+                placeholder="Search across every column..."
+                className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+              />
+              <datalist id="pi-list-search-options">
+                {globalSearchOptions.map((option) => <option key={option} value={option} />)}
+              </datalist>
+              {hasActiveSearch ? (
+                <>
+                  <button type="button" onClick={() => setGlobalSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                    Clear
+                  </button>
+                  <span className="text-xs text-slate-500">{filteredRows.length} of {rows.length} documents</span>
+                </>
+              ) : null}
+            </div>
             <ErpDenseGrid
-              columns={[
-                { key: "document_number", label: "Document #", width: "140px" },
-                { key: "company_name", label: "Company", width: "160px", render: (row) => row.company_name ?? row.company_code ?? "—" },
-                { key: "mode", label: "Mode", width: "120px" },
-                { key: "count_date", label: "Count Date", width: "110px", render: (row) => formatDate(row.count_date) },
-                { key: "posting_date", label: "Posting Date", width: "110px", render: (row) => formatDate(row.posting_date) },
-                { key: "item_count", label: "Items", width: "70px" },
-                { key: "counted_count", label: "Counted", width: "80px", render: (row) => `${row.counted_count ?? 0}/${row.item_count ?? 0}` },
-                {
-                  key: "is_opening_stock_source",
-                  label: "Opening Src",
-                  width: "90px",
-                  render: (row) => (row.is_opening_stock_source ? "Yes" : "—"),
-                },
-                {
-                  key: "status",
-                  label: "Status",
-                  width: "130px",
-                  render: (row) => {
-                    const statusMeta = getPIStatusMeta(row.status);
-                    return (
-                      <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${statusMeta.badgeClassName}`}>
-                        {statusMeta.label}
-                      </span>
-                    );
-                  },
-                },
-              ]}
-              rows={rows}
+              columns={GRID_COLUMNS}
+              rows={filteredRows}
               rowKey={(row) => row.id}
               onRowActivate={openDetail}
               getRowProps={(row) => ({
                 onDoubleClick: () => openDetail(row),
                 className: "cursor-pointer hover:bg-sky-50",
               })}
-              emptyMessage={loading ? "Loading physical inventory documents..." : effectiveCompanyId ? "No physical inventory documents found." : "No company resolved for this session."}
+              emptyMessage={
+                loading
+                  ? "Loading physical inventory documents..."
+                  : hasActiveSearch
+                    ? "No rows match this search."
+                    : effectiveCompanyId ? "No physical inventory documents found." : "No company resolved for this session."
+              }
               maxHeight="560px"
               />
             </div>
