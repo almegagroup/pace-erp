@@ -260,6 +260,7 @@ function computeLivePreview(grn, draft, costLines, deductionLines) {
     itemValue: purchaseCost,
     landedCostTotal,
     landedCostPerUnit,
+    consideredQtyBase,
     vendorSuggested: purchaseCostGross + chargesGross.VENDOR - deductionsFlat.VENDOR,
     transporterSuggested: chargesGross.TRANSPORTER - deductionsFlat.TRANSPORTER,
     lastMileSuggested: chargesGross.LAST_MILE_TRANSPORTER - deductionsFlat.LAST_MILE_TRANSPORTER,
@@ -1046,9 +1047,9 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                           title={line.entry_mode === "PER_UOM" ? "Rate per Base UoM unit — multiplied by received qty automatically" : "Total amount"}
                           className={inputCls}
                         />
-                        {line.entry_mode === "PER_UOM" && line.amount !== "" && !Number.isNaN(Number(line.amount)) && grnDetailQuery.data?.received_qty ? (
+                        {line.entry_mode === "PER_UOM" && line.amount !== "" && !Number.isNaN(Number(line.amount)) && livePreview?.consideredQtyBase ? (
                           <span className="text-[9px] text-slate-400">
-                            = {formatNumberOrBlank(Number(line.amount) * Number(grnDetailQuery.data.received_qty))} total ({formatNumberOrBlank(grnDetailQuery.data.received_qty)} {grnDetailQuery.data.base_uom_code || "units"})
+                            = {formatNumberOrBlank(Number(line.amount) * livePreview.consideredQtyBase)} total ({formatNumberOrBlank(livePreview.consideredQtyBase)} {grnDetailQuery.data?.base_uom_code || "units"})
                           </span>
                         ) : null}
                       </div>
