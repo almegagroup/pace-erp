@@ -182,18 +182,33 @@ function TransporterPicker({ transporterId, transporterName, onSelect, onClear, 
 // exact-match resolution is a pure client-side lookup, no extra round trip.
 function SourceDocumentDrawer({ visible, sourceType, companyId, selectedIds, onToggle, onConfirm, onClose }) {
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [noExactMatch, setNoExactMatch] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+  // The unfiltered fetch is capped to the 100 most recently-touched open
+  // documents server-side — filtering only that already-truncated list
+  // client-side (the original approach here) meant an older-but-still-open
+  // SO past the cap could never be found no matter what was typed, even
+  // though the list visually looked "searchable". Found live 2026-09-03:
+  // SO 9000000006 (CMP006), ranked #143 by created_at, never appeared.
+  // Once a real search term exists, it's now sent to the server instead
+  // (delivery_order.handlers.ts's listDOSourceDocumentsHandler), which
+  // searches past the cap; a blank search keeps the prior 100-most-recent
+  // browse behavior.
   const query = useQuery({
-    queryKey: ["procurement", "do01-source-documents", sourceType, companyId],
-    queryFn: () => listDOSourceDocuments({ source_type: sourceType, company_id: companyId }),
+    queryKey: ["procurement", "do01-source-documents", sourceType, companyId, debouncedSearch],
+    queryFn: () => listDOSourceDocuments({ source_type: sourceType, company_id: companyId, search: debouncedSearch || undefined }),
     enabled: visible,
   });
   const allItems = Array.isArray(query.data?.items) ? query.data.items : [];
   const normalizedSearch = search.trim().toLowerCase();
-  // Customer PO Number is often what the dispatcher actually has in hand
-  // (not PACE's own SO number) -- reference_display already reads
-  // "Customer PO <number>", so a plain substring match against it covers
-  // both a bare number and the full label.
+  // Search itself now happens server-side (above); this is just a
+  // same-keystroke client-side narrowing of whatever the server already
+  // returned, so the list doesn't visually flash while the debounce timer
+  // for the next server round-trip is still pending.
   const items = normalizedSearch
     ? allItems.filter((item) => String(item.document_number || "").toLowerCase().includes(normalizedSearch)
         || String(item.reference_display || "").toLowerCase().includes(normalizedSearch))
