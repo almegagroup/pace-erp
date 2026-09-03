@@ -642,7 +642,7 @@ export async function getBatchCountsReportHandler(req: Request, ctx: ProdHandler
           : Promise.resolve([]),
         fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
           serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, external_code, material_name, material_type").in("id", idChunk)),
+            .select("id, pace_code, external_code, material_name, document_name, material_category, material_type").in("id", idChunk)),
         fetchInChunks<JsonRecord>(companyIdsInResult, (idChunk) =>
           serviceRoleClient.schema("erp_master").from("companies")
             .select("id, company_code").in("id", idChunk)),
@@ -671,7 +671,8 @@ export async function getBatchCountsReportHandler(req: Request, ctx: ProdHandler
           stroke_number: g.strokeMasterId ? strokeMap.get(g.strokeMasterId) ?? null : null,
           material_id: g.materialId,
           material_name: material?.material_name ?? null,
-          external_code: material?.external_code || material?.pace_code || null,
+          document_name: material?.document_name || material?.material_name || null,
+          material_category: material?.material_category ?? null,
           material_type: material?.material_type ?? null,
           batch_count: g.batchNumbersInRange.size,
           till_date_count: g.batchNumbersTillDate.size,
