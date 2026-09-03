@@ -19,7 +19,7 @@ import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useScreenBackInterceptor } from "../../../hooks/useScreenBackInterceptor.js";
 import { buildTransactionCompanyList } from "../../../components/inputs/transactionCompanyRuntime.js";
-import { getOrderInformationReport, listStrokeMasters } from "./prodApi.js";
+import { getBatchCountsReport, getOrderInformationReport, listStrokeMasters } from "./prodApi.js";
 import { listMachines } from "../om/omApi.js";
 
 const PROCESS_ORDER_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
@@ -86,6 +86,8 @@ const GRID_COLUMNS = [
   { key: "posting_date", label: "Posting Date", width: "100px" },
   { key: "material_name", label: "Material", render: (r) => r.material_name || "--" },
   { key: "external_code", label: "External Code", render: (r) => r.external_code || "--" },
+  { key: "material_type", label: "Item Type", width: "80px", render: (r) => r.material_type || "--" },
+  { key: "stroke_number", label: "Stroke", width: "80px", render: (r) => (r.stroke_number == null ? "--" : String(r.stroke_number)) },
   { key: "movement_type_code", label: "Movement", width: "80px" },
   {
     key: "direction",
@@ -184,6 +186,43 @@ const GRID_COLUMNS = [
   },
 ];
 
+// "Batch Counts" sub-report (business owner, 2026-09-03) — per SFG per Stroke, how
+// many batches were made in a date range. Separate full-page view from the main
+// movement ledger above, reached via its own button + Date Range modal.
+const BATCH_COUNTS_COLUMNS = [
+  { key: "company_code", label: "Co.", width: "70px", render: (r) => <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">{r.company_code || "--"}</span> },
+  { key: "stroke_number", label: "Stroke", width: "90px", render: (r) => (r.stroke_number == null ? "--" : String(r.stroke_number)) },
+  { key: "material_name", label: "SFG Material", render: (r) => r.material_name || "--" },
+  { key: "external_code", label: "External Code", render: (r) => r.external_code || "--" },
+  { key: "material_type", label: "Item Type", width: "80px", render: (r) => r.material_type || "--" },
+  { key: "batch_count", label: "Batch Count", width: "100px", align: "right", render: (r) => Number(r.batch_count ?? 0).toLocaleString() },
+];
+
+function BatchCountsModal({ dateFrom, dateTo, error, onChange, onSubmit, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+      <div className="w-full max-w-sm rounded border border-slate-200 bg-white p-4 shadow-lg">
+        <h3 className="mb-3 text-sm font-semibold text-slate-800">Batch Counts — select date range</h3>
+        {error ? <p className="mb-2 text-xs font-medium text-rose-600">{error}</p> : null}
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-slate-500">Date From</label>
+            <input type="date" className="rounded border border-slate-300 px-2 py-1 text-sm" value={dateFrom} onChange={(e) => onChange("dateFrom", e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-slate-500">Date To</label>
+            <input type="date" className="rounded border border-slate-300 px-2 py-1 text-sm" value={dateTo} onChange={(e) => onChange("dateTo", e.target.value)} />
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+          <button type="button" onClick={onSubmit} className="rounded bg-sky-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-sky-700">View Report</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OrderInformationSystemPage() {
   const { runtimeContext } = useMenu();
   const companies = useMemo(() => buildTransactionCompanyList(runtimeContext), [runtimeContext]);
@@ -191,9 +230,17 @@ export default function OrderInformationSystemPage() {
   const [filters, setFilters] = useState(emptyFilters);
   const [submittedParams, setSubmittedParams] = useState(null);
   const [error, setError] = useState("");
-  // Page 1 (Filters) and Page 2 (Output Grid) are separate full-page views — never both
-  // visible at once, same as IN02/IN03.
+  // Page 1 (Filters), Page 2 (Output Grid) and "BATCH_COUNTS" (the Batch Counts
+  // sub-report) are separate full-page views — never more than one visible at
+  // once, same as IN02/IN03.
   const [page, setPage] = useState(1);
+
+  // Batch Counts sub-report — its own tiny modal (Date Range only) + full-page grid,
+  // reached from Page 1 without disturbing the main filters above.
+  const [batchCountsModalOpen, setBatchCountsModalOpen] = useState(false);
+  const [batchCountsRange, setBatchCountsRange] = useState({ dateFrom: daysAgoIso(30), dateTo: todayIso() });
+  const [batchCountsParams, setBatchCountsParams] = useState(null);
+  const [batchCountsError, setBatchCountsError] = useState("");
 
   const singleCompanyId = filters.companyIds.length === 1 ? filters.companyIds[0] : companies[0]?.id;
 
@@ -217,6 +264,33 @@ export default function OrderInformationSystemPage() {
     select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
   });
   const rows = reportQ.data ?? [];
+
+  const batchCountsQ = useQuery({
+    queryKey: ["ois-batch-counts", batchCountsParams],
+    queryFn: () => getBatchCountsReport(batchCountsParams),
+    enabled: Boolean(batchCountsParams),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+  });
+  const batchCountsRows = batchCountsQ.data ?? [];
+
+  function handleOpenBatchCountsModal() {
+    setBatchCountsError("");
+    setBatchCountsModalOpen(true);
+  }
+  function handleSubmitBatchCounts() {
+    if (!batchCountsRange.dateFrom || !batchCountsRange.dateTo) {
+      setBatchCountsError("Both dates are required.");
+      return;
+    }
+    if (new Date(batchCountsRange.dateTo) < new Date(batchCountsRange.dateFrom)) {
+      setBatchCountsError("Date To cannot be before Date From.");
+      return;
+    }
+    setBatchCountsError("");
+    setBatchCountsModalOpen(false);
+    setBatchCountsParams({ date_from: batchCountsRange.dateFrom, date_to: batchCountsRange.dateTo });
+    setPage("BATCH_COUNTS");
+  }
 
   function updateFilter(key, value) {
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -303,19 +377,24 @@ export default function OrderInformationSystemPage() {
 
   // Esc / shell Back returns to the filter page instead of leaving the screen entirely.
   useScreenBackInterceptor(() => {
-    if (page !== 2) return false;
+    if (page === 1) return false;
     setPage(1);
     return true;
   });
 
   useErpScreenHotkeys({
     focusPrimary: { perform: () => handleExecute() },
-    refresh: { disabled: page !== 2, perform: () => void reportQ.refetch() },
+    refresh: {
+      disabled: page === 1,
+      perform: () => (page === "BATCH_COUNTS" ? void batchCountsQ.refetch() : void reportQ.refetch()),
+    },
   });
 
   const statusOptions = filters.tab === "PROCESS" ? PROCESS_STATUSES : PACKING_STATUSES;
   const orderTypeOptions = filters.tab === "PROCESS" ? PROCESS_ORDER_TYPES : PACKING_ORDER_TYPES;
-  const activeError = error || (reportQ.error instanceof Error ? reportQ.error.message : "");
+  const activeError = page === "BATCH_COUNTS"
+    ? batchCountsError || (batchCountsQ.error instanceof Error ? batchCountsQ.error.message : "")
+    : error || (reportQ.error instanceof Error ? reportQ.error.message : "");
 
   return (
     <ErpScreenScaffold
@@ -325,8 +404,14 @@ export default function OrderInformationSystemPage() {
       actions={
         page === 1
           ? [
+              { key: "batch-counts", label: "Batch Counts", onClick: handleOpenBatchCountsModal },
               { key: "reset", label: "Reset", onClick: handleReset },
               { key: "execute", label: "Execute", tone: "primary", onClick: handleExecute },
+            ]
+          : page === "BATCH_COUNTS"
+          ? [
+              { key: "back", label: "Back to Filters", hint: "Esc", onClick: () => setPage(1) },
+              { key: "change-range", label: "Change Date Range", onClick: handleOpenBatchCountsModal },
             ]
           : [
               { key: "back", label: "Back to Filters", hint: "Esc", onClick: () => setPage(1) },
@@ -468,6 +553,28 @@ export default function OrderInformationSystemPage() {
           </div>
         </ErpSectionCard>
       </div>
+      ) : page === "BATCH_COUNTS" ? (
+      <div className="grid gap-4">
+        <ErpSectionCard eyebrow="Batch Counts" title={`Batches made per SFG per Stroke (${batchCountsParams?.date_from ?? ""} to ${batchCountsParams?.date_to ?? ""})`}>
+          <div className="mb-2 flex items-center justify-between">
+            <button type="button" onClick={() => setPage(1)} className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
+              Back to Filters
+            </button>
+            <span className="text-xs text-slate-500">
+              {batchCountsQ.isLoading ? "Loading..." : `${batchCountsRows.length} SFG/Stroke combination${batchCountsRows.length === 1 ? "" : "s"}`}
+            </span>
+          </div>
+          <ErpDenseGrid
+            columns={BATCH_COUNTS_COLUMNS}
+            rows={batchCountsRows}
+            rowKey={(row) => `${row.company_id}::${row.stroke_master_id ?? ""}::${row.material_id}`}
+            virtualize
+            rangeSelect
+            maxHeight="calc(100vh - 260px)"
+            emptyMessage={batchCountsQ.isLoading ? "Loading..." : "No batches were started in this date range."}
+          />
+        </ErpSectionCard>
+      </div>
       ) : (
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Page 2" title="Order Transaction Report">
@@ -501,6 +608,16 @@ export default function OrderInformationSystemPage() {
         </ErpSectionCard>
       </div>
       )}
+      {batchCountsModalOpen ? (
+        <BatchCountsModal
+          dateFrom={batchCountsRange.dateFrom}
+          dateTo={batchCountsRange.dateTo}
+          error={batchCountsError}
+          onChange={(key, value) => setBatchCountsRange((prev) => ({ ...prev, [key]: value }))}
+          onSubmit={handleSubmitBatchCounts}
+          onClose={() => setBatchCountsModalOpen(false)}
+        />
+      ) : null}
     </ErpScreenScaffold>
   );
 }

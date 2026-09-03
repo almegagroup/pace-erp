@@ -123,7 +123,7 @@ import {
   reverseProcessOrderHandler,
   pruneProcessOrderHandler,
 } from "../_core/production/process_order.handlers.ts";
-import { getOrderInformationReportHandler } from "../_core/production/order_information_system.handlers.ts";
+import { getOrderInformationReportHandler, getBatchCountsReportHandler } from "../_core/production/order_information_system.handlers.ts";
 import { searchBatchVarianceHandler, getBatchVarianceDetailHandler } from "../_core/production/batch_variance_report.handlers.ts";
 import {
   listPackingOrdersHandler,
@@ -315,6 +315,8 @@ export async function dispatchProductionRoutes(
     // PR24 Order Information System
     case "GET:/api/production/order-information-system":
       return await getOrderInformationReportHandler(req, ctx);
+    case "GET:/api/production/order-information-system/batch-counts":
+      return await getBatchCountsReportHandler(req, ctx);
 
     // PR14 Batch Variance Report
     case "GET:/api/production/batch-variance-report":
