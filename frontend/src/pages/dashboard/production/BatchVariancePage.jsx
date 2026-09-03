@@ -62,6 +62,15 @@ function sanitizeForFileName(value) {
   return String(value ?? "").trim().replace(/[\\/:*?"<>|]+/g, "-");
 }
 
+// Same global-search-across-every-column pattern as PR24 (OrderInformationSystemPage.jsx),
+// business owner ask 2026-09-03 — reuses each column's own copyValue when present so a
+// badge/JSX-rendered cell still filters against plain text, not "[object Object]".
+function getColumnFilterText(column, row) {
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  const raw = row?.[column.key];
+  return raw == null ? "" : String(raw);
+}
+
 const emptyFilters = () => ({
   poNumber: "",
   companyIds: [],
@@ -75,7 +84,12 @@ const emptyFilters = () => ({
 
 const LIST_COLUMNS = [
   { key: "po_number", label: "Process PO", width: "110px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.po_number}</span> },
-  { key: "prodshade", label: "Prodshade", render: (r) => (r.prodshade_external_code || r.prodshade_description ? `${r.prodshade_external_code ?? "—"} — ${r.prodshade_description ?? "—"}` : "—") },
+  {
+    key: "prodshade",
+    label: "Prodshade",
+    render: (r) => (r.prodshade_external_code || r.prodshade_description ? `${r.prodshade_external_code ?? "—"} — ${r.prodshade_description ?? "—"}` : "—"),
+    copyValue: (r) => [r.prodshade_external_code, r.prodshade_description].filter(Boolean).join(" — "),
+  },
   {
     key: "packing_orders",
     label: "Packing PO",
@@ -85,6 +99,7 @@ const LIST_COLUMNS = [
       const first = list[0].po_number;
       return list.length > 1 ? `${first} +${list.length - 1} more` : first;
     },
+    copyValue: (r) => (Array.isArray(r.packing_orders) ? r.packing_orders.map((po) => po.po_number).filter(Boolean).join(", ") : ""),
   },
   {
     key: "sku",
@@ -94,6 +109,7 @@ const LIST_COLUMNS = [
       if (!first) return <span className="text-slate-300">—</span>;
       return first.sku_external_code || first.sku_description || "—";
     },
+    copyValue: (r) => (Array.isArray(r.packing_orders) ? r.packing_orders.map((po) => [po.sku_external_code, po.sku_description].filter(Boolean).join(" — ")).filter(Boolean).join(", ") : ""),
   },
   { key: "batch_number", label: "Batch #", width: "100px", render: (r) => <span className="font-mono">{r.batch_number || "—"}</span> },
   { key: "status", label: "Status", width: "90px", render: (r) => <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-600">{r.status}</span> },
@@ -302,7 +318,28 @@ export default function BatchVariancePage() {
     enabled: Boolean(submittedParams),
     select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
   });
-  const rows = listQ.data ?? [];
+  const rows = useMemo(() => listQ.data ?? [], [listQ.data]);
+
+  // Single global search across every LIST_COLUMNS entry — same pattern as PR24
+  // (OrderInformationSystemPage.jsx), business owner ask 2026-09-03.
+  const [globalSearch, setGlobalSearch] = useState("");
+  const globalSearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of rows) {
+      for (const column of LIST_COLUMNS) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 500) break outer;
+      }
+    }
+    return [...values].sort();
+  }, [rows]);
+  const hasActiveSearch = globalSearch.trim().length > 0;
+  const filteredRows = useMemo(() => {
+    const needle = globalSearch.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => LIST_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+  }, [rows, globalSearch]);
 
   const detailQ = useQuery({
     queryKey: ["batch-variance-detail", selectedOrderId],
@@ -339,11 +376,13 @@ export default function BatchVariancePage() {
     setSubmittedParams(null);
     setSelectedOrderId(null);
     setError("");
+    setGlobalSearch("");
     setPage(1);
   }
 
   function handleExecute() {
     setError("");
+    setGlobalSearch("");
     if (!filters.poNumber) {
       if (!filters.dateFrom || !filters.dateTo) {
         setError("Posting Date range is required unless a PO Number is given.");
@@ -507,17 +546,44 @@ export default function BatchVariancePage() {
                 Back to Filters
               </button>
               <span className="text-xs text-slate-500">
-                {listQ.isLoading ? "Loading..." : `${rows.length} batch${rows.length === 1 ? "" : "es"} — press Enter or double-click a row to open its Batch Record`}
+                {listQ.isLoading
+                  ? "Loading..."
+                  : hasActiveSearch
+                    ? `${filteredRows.length} of ${rows.length} batch${rows.length === 1 ? "" : "es"} (filtered) — press Enter or double-click a row to open its Batch Record`
+                    : `${rows.length} batch${rows.length === 1 ? "" : "es"} — press Enter or double-click a row to open its Batch Record`}
               </span>
+            </div>
+            <div className="mb-2 flex items-center gap-2">
+              <input
+                list="batvar-search-options"
+                value={globalSearch}
+                onChange={(e) => setGlobalSearch(e.target.value)}
+                placeholder="Search across every column..."
+                className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+              />
+              <datalist id="batvar-search-options">
+                {globalSearchOptions.map((option) => <option key={option} value={option} />)}
+              </datalist>
+              {hasActiveSearch ? (
+                <button type="button" onClick={() => setGlobalSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                  Clear
+                </button>
+              ) : null}
             </div>
             <ErpDenseGrid
               columns={LIST_COLUMNS}
-              rows={rows}
+              rows={filteredRows}
               rowKey={(row) => row.id}
               onRowActivate={openBatchRecord}
               getRowProps={(row) => ({ onDoubleClick: () => openBatchRecord(row), className: "cursor-pointer hover:bg-sky-50" })}
               maxHeight="calc(100vh - 260px)"
-              emptyMessage={listQ.isLoading ? "Loading..." : "No VERIFIED batches match this criteria."}
+              emptyMessage={
+                listQ.isLoading
+                  ? "Loading..."
+                  : hasActiveSearch
+                    ? "No rows match this search."
+                    : "No VERIFIED batches match this criteria."
+              }
             />
           </ErpSectionCard>
         </div>
