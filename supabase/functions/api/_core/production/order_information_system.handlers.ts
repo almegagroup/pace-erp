@@ -134,14 +134,14 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
         if (processOrderIds.length > 0) {
           const { data: parents, error: parentErr } = await serviceRoleClient
             .schema("erp_production").from("process_order")
-            .select("id, company_id, po_number, po_type, batch_number, status")
+            .select("id, company_id, po_number, po_type, batch_number, status, stroke_master_id")
             .in("id", processOrderIds);
           if (parentErr) throw new Error("PROD_OIS_LOOKUP_FAILED");
           processOrders = (parents ?? []) as JsonRecord[];
         }
       } else {
         let pq = serviceRoleClient.schema("erp_production").from("process_order")
-          .select("id, company_id, po_number, po_type, batch_number, status")
+          .select("id, company_id, po_number, po_type, batch_number, status, stroke_master_id")
           .eq("po_number", poNumber);
         if (companyIds) pq = pq.in("company_id", companyIds);
         const { data, error } = await pq;
@@ -182,7 +182,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       if (processOrderIds.length > 0) {
         const { data: parents, error: parentErr } = await serviceRoleClient
           .schema("erp_production").from("process_order")
-          .select("id, company_id, po_number, po_type, batch_number, status")
+          .select("id, company_id, po_number, po_type, batch_number, status, stroke_master_id")
           .in("id", processOrderIds);
         if (parentErr) throw new Error("PROD_OIS_LOOKUP_FAILED");
         processOrders = (parents ?? []) as JsonRecord[];
@@ -423,6 +423,19 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     //   6. Packing PO's SFG P261 (the SFG being consumed to make that FG — closes the loop)
     // Anything not matching any of the above (e.g. a bare P262 reversal leg) falls into a
     // catch-all last tier rather than silently breaking the sort.
+    // Stroke Number column (business owner, 2026-09-03) -- resolved from each row's
+    // owning Process Order's stroke_master_id, same "owningOrder" every row already
+    // computes below for grouping. SFG/FG rows on an INT/MTEST order (no stroke) get
+    // null, same as every other "not applicable" field on this report.
+    const strokeMasterIds = [...new Set(processOrders.map((o) => toTrimmedString(o.stroke_master_id)).filter(Boolean))];
+    const strokeRows = strokeMasterIds.length > 0
+      ? await fetchInChunks<JsonRecord>(strokeMasterIds, (idChunk) =>
+          serviceRoleClient.schema("erp_production").from("stroke_master")
+            .select("id, stroke_number").in("id", idChunk))
+          .catch(() => { throw new Error("PROD_OIS_ENRICH_FAILED"); })
+      : [];
+    const strokeNumberById = new Map(strokeRows.map((r) => [String(r.id), r.stroke_number]));
+
     const processOrderById = new Map(processOrders.map((o) => [String(o.id), o]));
     const processOrderByBatch = new Map(
       processOrders.filter((o) => toTrimmedString(o.batch_number)).map((o) => [toTrimmedString(o.batch_number), o]),
@@ -483,6 +496,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
         external_code: material?.external_code || material?.pace_code || null,
         pace_code: material?.pace_code ?? null,
         material_type: material?.material_type ?? null,
+        stroke_number: owningOrder ? strokeNumberById.get(toTrimmedString(owningOrder.stroke_master_id)) ?? null : null,
         movement_type_code: row.movement_type_code,
         direction: row.direction,
         // Signed: negative for OUT, positive for IN (posted_quantity is a GENERATED column
@@ -536,5 +550,144 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_OIS_REPORT_FAILED";
     return oisErr(req, ctx, code, 500, "Order Information System report failed");
+  }
+}
+
+// GET /api/production/order-information-system/batch-counts
+// Business owner ask (2026-09-03): a PR24 "Batch Counts" button opens a Date Range
+// modal, then a full-page report of how many batches were made per SFG per Stroke
+// in that range. "Made" = batch_started_at (the moment a real batch NUMBER is
+// generated at Start Batch, per §83.4 — the same event that makes a batch a batch,
+// regardless of how far it later got). REVERSED excluded — a reversed batch's
+// number is voided (§83.4 "Reverse... makes the batch number permanently dead" /
+// RELEASED-for-reuse mechanism), so it never produced real output. Same
+// no-rank/company-boundary-only access as the main report above.
+export async function getBatchCountsReportHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const requestedCompanyIds = parseMultiValueParams(url, "company_ids", "company_id");
+    const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
+    const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+
+    if (!dateFrom || !dateTo) {
+      return oisErr(req, ctx, "PROD_OIS_DATE_RANGE_REQUIRED", 400, "Date range is required.");
+    }
+    const from = parseIsoDate(dateFrom);
+    const to = parseIsoDate(dateTo);
+    if (!from || !to || to.getTime() < from.getTime()) {
+      return oisErr(req, ctx, "PROD_OIS_DATE_RANGE_INVALID", 400, "date_from/date_to are invalid.");
+    }
+    const diffDays = Math.floor((to.getTime() - from.getTime()) / 86400000);
+    if (diffDays > MAX_DATE_RANGE_DAYS) {
+      return oisErr(req, ctx, "PROD_OIS_DATE_RANGE_TOO_WIDE", 400, "Date range cannot exceed 365 days.");
+    }
+    // batch_started_at is a timestamptz; date_to must include the whole day.
+    const toExclusive = new Date(to.getTime() + 86400000).toISOString();
+
+    const allowedCompanyIds = await resolveAllowedCompanyIds(ctx);
+    const companyIds = scopeCompanyIds(allowedCompanyIds, requestedCompanyIds);
+    if (companyIds !== null && companyIds.length === 0 && requestedCompanyIds.length > 0) {
+      return okResponse({ data: [] }, ctx.request_id, req);
+    }
+
+    // No batch_started_at filter here — fetched once, unrestricted by date, so the
+    // SAME row set can be grouped into both the selected-range count and the
+    // "Till Date" (all-time) count below without a second round trip.
+    let pq = serviceRoleClient.schema("erp_production").from("process_order")
+      .select("company_id, stroke_master_id, material_id, batch_number, batch_started_at")
+      .not("batch_number", "is", null)
+      .neq("status", "REVERSED");
+    if (companyIds) pq = pq.in("company_id", companyIds);
+    const { data, error } = await pq;
+    if (error) throw new Error("PROD_OIS_BATCH_COUNTS_FAILED");
+
+    const rangeStartMs = new Date(`${dateFrom}T00:00:00Z`).getTime();
+    const rangeEndExclusiveMs = new Date(toExclusive).getTime();
+    const rows = (data ?? []) as JsonRecord[];
+    // "Till Date" (business owner, 2026-09-03) — the same group's all-time total
+    // batch count, next to the selected-range count, regardless of which range
+    // was picked in the modal.
+    type GroupAgg = { companyId: string; strokeMasterId: string | null; materialId: string; batchNumbersInRange: Set<string>; batchNumbersTillDate: Set<string> };
+    const groups = new Map<string, GroupAgg>();
+    for (const row of rows) {
+      const companyId = String(row.company_id);
+      const strokeMasterId = toTrimmedString(row.stroke_master_id) || null;
+      const materialId = String(row.material_id);
+      const key = `${companyId}::${strokeMasterId ?? ""}::${materialId}`;
+      if (!groups.has(key)) groups.set(key, { companyId, strokeMasterId, materialId, batchNumbersInRange: new Set(), batchNumbersTillDate: new Set() });
+      const group = groups.get(key)!;
+      const batchNumber = toTrimmedString(row.batch_number);
+      const batchStartedAtMs = row.batch_started_at ? new Date(String(row.batch_started_at)).getTime() : NaN;
+      group.batchNumbersTillDate.add(batchNumber);
+      if (Number.isFinite(batchStartedAtMs) && batchStartedAtMs >= rangeStartMs && batchStartedAtMs < rangeEndExclusiveMs) {
+        group.batchNumbersInRange.add(batchNumber);
+      }
+    }
+
+    const groupList = [...groups.values()];
+    const strokeMasterIds = [...new Set(groupList.map((g) => g.strokeMasterId).filter((v): v is string => Boolean(v)))];
+    const materialIds = [...new Set(groupList.map((g) => g.materialId))];
+    const companyIdsInResult = [...new Set(groupList.map((g) => g.companyId))];
+
+    let strokeRows: JsonRecord[];
+    let materialRows: JsonRecord[];
+    let companyRows: JsonRecord[];
+    try {
+      [strokeRows, materialRows, companyRows] = await Promise.all([
+        strokeMasterIds.length > 0
+          ? fetchInChunks<JsonRecord>(strokeMasterIds, (idChunk) =>
+              serviceRoleClient.schema("erp_production").from("stroke_master")
+                .select("id, stroke_number").in("id", idChunk))
+          : Promise.resolve([]),
+        fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
+          serviceRoleClient.schema("erp_master").from("material_master")
+            .select("id, pace_code, external_code, material_name, material_type").in("id", idChunk)),
+        fetchInChunks<JsonRecord>(companyIdsInResult, (idChunk) =>
+          serviceRoleClient.schema("erp_master").from("companies")
+            .select("id, company_code").in("id", idChunk)),
+      ]);
+    } catch {
+      throw new Error("PROD_OIS_BATCH_COUNTS_ENRICH_FAILED");
+    }
+    const strokeMap = new Map(strokeRows.map((r) => [String(r.id), r.stroke_number]));
+    const materialMap = new Map(materialRows.map((r) => [String(r.id), r]));
+    const companyMap = new Map(companyRows.map((r) => [String(r.id), r]));
+
+    // Row inclusion stays exactly what it was before Till Date existed: only groups
+    // with at least one batch actually started IN the selected range. Till Date is
+    // an extra column on those same rows, not a reason to widen the row set to
+    // every SFG/Stroke combo ever made — that would drown the range the user asked
+    // for in all-time noise.
+    const result = groupList
+      .filter((g) => g.batchNumbersInRange.size > 0)
+      .map((g) => {
+        const material = materialMap.get(g.materialId);
+        const company = companyMap.get(g.companyId);
+        return {
+          company_id: g.companyId,
+          company_code: company?.company_code ?? null,
+          stroke_master_id: g.strokeMasterId,
+          stroke_number: g.strokeMasterId ? strokeMap.get(g.strokeMasterId) ?? null : null,
+          material_id: g.materialId,
+          material_name: material?.material_name ?? null,
+          external_code: material?.external_code || material?.pace_code || null,
+          material_type: material?.material_type ?? null,
+          batch_count: g.batchNumbersInRange.size,
+          till_date_count: g.batchNumbersTillDate.size,
+        };
+      });
+    result.sort((a, b) => {
+      const companyCompare = String(a.company_code ?? "").localeCompare(String(b.company_code ?? ""));
+      if (companyCompare !== 0) return companyCompare;
+      const strokeCompare = String(a.stroke_number ?? "").localeCompare(String(b.stroke_number ?? ""), undefined, { numeric: true });
+      if (strokeCompare !== 0) return strokeCompare;
+      return String(a.material_name ?? "").localeCompare(String(b.material_name ?? ""));
+    });
+
+    return okResponse({ data: result }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_OIS_BATCH_COUNTS_FAILED";
+    return oisErr(req, ctx, code, 500, "Batch Counts report failed");
   }
 }
