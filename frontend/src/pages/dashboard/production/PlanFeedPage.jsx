@@ -1530,7 +1530,17 @@ export default function PlanFeedPage() {
                     )}
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-slate-600 font-medium">Packing PO Number</label>
-                      <input className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono w-48" value={allocPoNumber} onChange={e => setAllocPoNumber(e.target.value)} />
+                      {/* Found live 2026-09-03 (business owner): a plain white input with only a
+                          faint slate-300 border visually disappeared into this section's own
+                          white background. Same "important editable field" tint SO01MapPage.jsx
+                          already uses (bg-[#fffef7]) plus a stronger border, so this specific
+                          box -- the one that actually maps the Packing PO -- reads as an input,
+                          not part of the surrounding card. */}
+                      <input
+                        className="w-48 rounded border-2 border-sky-400 bg-[#fffef7] px-2 py-1.5 font-mono text-sm outline-none focus:border-sky-600"
+                        value={allocPoNumber}
+                        onChange={e => setAllocPoNumber(e.target.value)}
+                      />
                     </div>
                     <button type="button" onClick={handleFindAllocationCandidate} disabled={allocSearching} className="px-3 py-1.5 border border-slate-300 text-sm rounded hover:bg-slate-50">
                       {allocSearching ? "Searching..." : "Find"}
