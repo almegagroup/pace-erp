@@ -201,9 +201,10 @@ const GRID_COLUMNS = [
 // movement ledger above, reached via its own button + Date Range modal.
 const BATCH_COUNTS_COLUMNS = [
   { key: "company_code", label: "Co.", width: "70px", render: (r) => <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">{r.company_code || "--"}</span> },
-  { key: "stroke_number", label: "Stroke", width: "90px", render: (r) => (r.stroke_number == null ? "--" : String(r.stroke_number)) },
-  { key: "material_name", label: "SFG Material", render: (r) => r.material_name || "--" },
-  { key: "external_code", label: "External Code", render: (r) => r.external_code || "--" },
+  { key: "stroke_number", label: "Stroke", width: "70px", render: (r) => (r.stroke_number == null ? "--" : String(r.stroke_number)) },
+  { key: "material_name", label: "SFG Material", width: "160px", render: (r) => r.material_name || "--" },
+  { key: "document_name", label: "Document Name", width: "220px", render: (r) => r.document_name || "--" },
+  { key: "material_category", label: "Category", width: "110px", render: (r) => r.material_category || "--" },
   { key: "material_type", label: "Item Type", width: "80px", render: (r) => r.material_type || "--" },
   { key: "batch_count", label: "Batch Count", width: "100px", align: "right", render: (r) => Number(r.batch_count ?? 0).toLocaleString() },
   { key: "till_date_count", label: "Till Date", width: "100px", align: "right", render: (r) => Number(r.till_date_count ?? 0).toLocaleString() },
@@ -276,45 +277,32 @@ export default function OrderInformationSystemPage() {
   });
   const rows = useMemo(() => reportQ.data ?? [], [reportQ.data]);
 
-  // Per-column auto-suggest filters (business owner, 2026-09-03) — client-side,
-  // since the report already loads its full result set into the browser for
-  // virtualization/range-select. One text input per GRID_COLUMNS entry, each
-  // backed by a <datalist> of that column's own distinct values in the CURRENT
-  // result set (so suggestions always match what Execute actually returned).
-  const [columnFilters, setColumnFilters] = useState({});
-  const columnFilterOptions = useMemo(() => {
-    const map = {};
-    for (const column of GRID_COLUMNS) {
-      const values = new Set();
-      for (const row of rows) {
+  // Single global search (business owner, 2026-09-03 — replaced an earlier
+  // per-column filter row after feedback that 17 separate boxes was too much).
+  // Client-side, since the report already loads its full result set into the
+  // browser for virtualization/range-select. One text box, matches if ANY
+  // column's own plain-text value contains it. The <datalist> suggestion pool
+  // is every column's distinct values flattened together, capped defensively.
+  const [globalSearch, setGlobalSearch] = useState("");
+  const globalSearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of rows) {
+      for (const column of GRID_COLUMNS) {
         const text = getColumnFilterText(column, row);
         if (text) values.add(text);
-        if (values.size >= 300) break; // defensive cap — a datalist this large stops being useful anyway
+        if (values.size >= 500) break outer;
       }
-      map[column.key] = [...values].sort();
     }
-    return map;
+    return [...values].sort();
   }, [rows]);
-  const activeColumnFilters = useMemo(
-    () => Object.entries(columnFilters).filter(([, value]) => value && value.trim()),
-    [columnFilters],
-  );
+  const hasActiveSearch = globalSearch.trim().length > 0;
   const filteredRows = useMemo(() => {
-    if (activeColumnFilters.length === 0) return rows;
-    const columnByKey = new Map(GRID_COLUMNS.map((c) => [c.key, c]));
-    return rows.filter((row) =>
-      activeColumnFilters.every(([key, value]) => {
-        const column = columnByKey.get(key);
-        if (!column) return true;
-        return getColumnFilterText(column, row).toLowerCase().includes(value.trim().toLowerCase());
-      }),
-    );
-  }, [rows, activeColumnFilters]);
-  function updateColumnFilter(key, value) {
-    setColumnFilters((prev) => ({ ...prev, [key]: value }));
-  }
+    const needle = globalSearch.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => GRID_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+  }, [rows, globalSearch]);
   function clearColumnFilters() {
-    setColumnFilters({});
+    setGlobalSearch("");
   }
 
   const batchCountsQ = useQuery({
@@ -431,6 +419,28 @@ export default function OrderInformationSystemPage() {
     }
   }
 
+  const [exportingBatchCounts, setExportingBatchCounts] = useState(false);
+  async function handleExportBatchCounts() {
+    if (batchCountsRows.length === 0) return;
+    setExportingBatchCounts(true);
+    try {
+      const { downloadColoredExcelFile } = await import("../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `batch_counts_${batchCountsParams?.date_from ?? "from"}_${batchCountsParams?.date_to ?? "to"}.xlsx`,
+        sheetName: "Batch Counts",
+        columns: BATCH_COUNTS_COLUMNS,
+        rows: batchCountsRows,
+        getCellValue: (row, column) =>
+          typeof column.excelValue === "function" ? column.excelValue(row)
+            : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
+      });
+    } catch (exportError) {
+      setBatchCountsError(exportError instanceof Error ? exportError.message : "BATCH_COUNTS_EXPORT_FAILED");
+    } finally {
+      setExportingBatchCounts(false);
+    }
+  }
+
   // Esc / shell Back returns to the filter page instead of leaving the screen entirely.
   useScreenBackInterceptor(() => {
     if (page === 1) return false;
@@ -468,6 +478,12 @@ export default function OrderInformationSystemPage() {
           ? [
               { key: "back", label: "Back to Filters", hint: "Esc", onClick: () => setPage(1) },
               { key: "change-range", label: "Change Date Range", onClick: handleOpenBatchCountsModal },
+              {
+                key: "export",
+                label: exportingBatchCounts ? "Exporting..." : "Export Excel",
+                onClick: () => void handleExportBatchCounts(),
+                disabled: exportingBatchCounts || batchCountsRows.length === 0,
+              },
             ]
           : [
               { key: "back", label: "Back to Filters", hint: "Esc", onClick: () => setPage(1) },
@@ -642,7 +658,7 @@ export default function OrderInformationSystemPage() {
             <span className="text-xs text-slate-500">
               {reportQ.isLoading
                 ? "Loading..."
-                : activeColumnFilters.length > 0
+                : hasActiveSearch
                   ? `${filteredRows.length} of ${rows.length} movement${rows.length === 1 ? "" : "s"} (filtered)`
                   : `${rows.length} movement${rows.length === 1 ? "" : "s"}`}
             </span>
@@ -651,25 +667,20 @@ export default function OrderInformationSystemPage() {
             Click and drag (or Shift+Click / Shift+Arrow) to select a range, then Ctrl+C to copy — same as Excel. The
             shaded row at the top of each block marks where that order's group begins.
           </div>
-          <div className="mb-2 flex flex-wrap items-end gap-2 border border-slate-200 bg-slate-50 p-2">
-            {GRID_COLUMNS.map((column) => (
-              <div key={column.key} className="flex flex-col gap-0.5">
-                <label className="text-[9px] font-semibold uppercase tracking-wide text-slate-500">{column.label}</label>
-                <input
-                  list={`ois-filter-options-${column.key}`}
-                  value={columnFilters[column.key] ?? ""}
-                  onChange={(e) => updateColumnFilter(column.key, e.target.value)}
-                  placeholder="Filter..."
-                  className="h-[24px] w-[110px] rounded border border-slate-300 bg-white px-1.5 text-[10px] text-slate-800 outline-none focus:border-sky-500"
-                />
-                <datalist id={`ois-filter-options-${column.key}`}>
-                  {(columnFilterOptions[column.key] ?? []).map((option) => <option key={option} value={option} />)}
-                </datalist>
-              </div>
-            ))}
-            {activeColumnFilters.length > 0 ? (
-              <button type="button" onClick={clearColumnFilters} className="h-[24px] self-end rounded border border-slate-300 bg-white px-2 text-[10px] font-semibold text-slate-600 hover:bg-slate-100">
-                Clear filters
+          <div className="mb-2 flex items-center gap-2">
+            <input
+              list="ois-search-options"
+              value={globalSearch}
+              onChange={(e) => setGlobalSearch(e.target.value)}
+              placeholder="Search across every column..."
+              className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+            />
+            <datalist id="ois-search-options">
+              {globalSearchOptions.map((option) => <option key={option} value={option} />)}
+            </datalist>
+            {hasActiveSearch ? (
+              <button type="button" onClick={clearColumnFilters} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                Clear
               </button>
             ) : null}
           </div>
@@ -689,8 +700,8 @@ export default function OrderInformationSystemPage() {
             emptyMessage={
               reportQ.isLoading
                 ? "Loading..."
-                : activeColumnFilters.length > 0
-                  ? "No rows match the current column filters."
+                : hasActiveSearch
+                  ? "No rows match this search."
                   : "No movements match this criteria."
             }
           />
