@@ -56,6 +56,16 @@ function formatSignedQuantity(value) {
     : { text: `-${text}`, className: "text-rose-700 font-medium", fontArgb: NEGATIVE_FONT_ARGB };
 }
 
+// Shared by the column-filter row below and nothing else — reuses each column's
+// own copyValue (the same plain-text derivation Ctrl+C copy and Excel export
+// already use) so a badge/JSX-rendered cell (Dir, Ref. Document) still filters
+// against sensible text instead of "[object Object]".
+function getColumnFilterText(column, row) {
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  const raw = row?.[column.key];
+  return raw == null ? "" : String(raw);
+}
+
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -264,7 +274,48 @@ export default function OrderInformationSystemPage() {
     enabled: Boolean(submittedParams),
     select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
   });
-  const rows = reportQ.data ?? [];
+  const rows = useMemo(() => reportQ.data ?? [], [reportQ.data]);
+
+  // Per-column auto-suggest filters (business owner, 2026-09-03) — client-side,
+  // since the report already loads its full result set into the browser for
+  // virtualization/range-select. One text input per GRID_COLUMNS entry, each
+  // backed by a <datalist> of that column's own distinct values in the CURRENT
+  // result set (so suggestions always match what Execute actually returned).
+  const [columnFilters, setColumnFilters] = useState({});
+  const columnFilterOptions = useMemo(() => {
+    const map = {};
+    for (const column of GRID_COLUMNS) {
+      const values = new Set();
+      for (const row of rows) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 300) break; // defensive cap — a datalist this large stops being useful anyway
+      }
+      map[column.key] = [...values].sort();
+    }
+    return map;
+  }, [rows]);
+  const activeColumnFilters = useMemo(
+    () => Object.entries(columnFilters).filter(([, value]) => value && value.trim()),
+    [columnFilters],
+  );
+  const filteredRows = useMemo(() => {
+    if (activeColumnFilters.length === 0) return rows;
+    const columnByKey = new Map(GRID_COLUMNS.map((c) => [c.key, c]));
+    return rows.filter((row) =>
+      activeColumnFilters.every(([key, value]) => {
+        const column = columnByKey.get(key);
+        if (!column) return true;
+        return getColumnFilterText(column, row).toLowerCase().includes(value.trim().toLowerCase());
+      }),
+    );
+  }, [rows, activeColumnFilters]);
+  function updateColumnFilter(key, value) {
+    setColumnFilters((prev) => ({ ...prev, [key]: value }));
+  }
+  function clearColumnFilters() {
+    setColumnFilters({});
+  }
 
   const batchCountsQ = useQuery({
     queryKey: ["ois-batch-counts", batchCountsParams],
@@ -310,11 +361,13 @@ export default function OrderInformationSystemPage() {
     setFilters(emptyFilters());
     setSubmittedParams(null);
     setError("");
+    clearColumnFilters();
     setPage(1);
   }
 
   function handleExecute() {
     setError("");
+    clearColumnFilters();
     if (!filters.poNumber) {
       if (!filters.dateFrom || !filters.dateTo) {
         setError("Posting Date range is required unless a PO Number is given.");
@@ -351,7 +404,7 @@ export default function OrderInformationSystemPage() {
 
   const [exporting, setExporting] = useState(false);
   async function handleExport() {
-    if (rows.length === 0) return;
+    if (filteredRows.length === 0) return;
     setExporting(true);
     try {
       // Dynamic import — exceljs only ever loads once Export is actually clicked,
@@ -361,7 +414,9 @@ export default function OrderInformationSystemPage() {
         fileName: `order_information_system_${filters.dateFrom || "from"}_${filters.dateTo || "to"}.xlsx`,
         sheetName: "Order Information System",
         columns: GRID_COLUMNS,
-        rows,
+        // Exports whatever the column filters currently show, not the full unfiltered
+        // fetch — matches ordinary spreadsheet expectations ("export what I see").
+        rows: filteredRows,
         getCellValue: (row, column) =>
           typeof column.excelValue === "function" ? column.excelValue(row)
             : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
@@ -416,7 +471,8 @@ export default function OrderInformationSystemPage() {
             ]
           : [
               { key: "back", label: "Back to Filters", hint: "Esc", onClick: () => setPage(1) },
-              { key: "export", label: exporting ? "Exporting..." : "Export Excel", onClick: () => void handleExport(), disabled: exporting || rows.length === 0 },
+              { key: "batch-counts", label: "Batch Counts", onClick: handleOpenBatchCountsModal },
+              { key: "export", label: exporting ? "Exporting..." : "Export Excel", onClick: () => void handleExport(), disabled: exporting || filteredRows.length === 0 },
               {
                 key: "execute",
                 label: reportQ.isFetching ? "Executing..." : "Execute Again",
@@ -584,16 +640,42 @@ export default function OrderInformationSystemPage() {
               Back to Filters
             </button>
             <span className="text-xs text-slate-500">
-              {reportQ.isLoading ? "Loading..." : `${rows.length} movement${rows.length === 1 ? "" : "s"}`}
+              {reportQ.isLoading
+                ? "Loading..."
+                : activeColumnFilters.length > 0
+                  ? `${filteredRows.length} of ${rows.length} movement${rows.length === 1 ? "" : "s"} (filtered)`
+                  : `${rows.length} movement${rows.length === 1 ? "" : "s"}`}
             </span>
           </div>
           <div className="mb-2 text-xs text-slate-500">
             Click and drag (or Shift+Click / Shift+Arrow) to select a range, then Ctrl+C to copy — same as Excel. The
             shaded row at the top of each block marks where that order's group begins.
           </div>
+          <div className="mb-2 flex flex-wrap items-end gap-2 border border-slate-200 bg-slate-50 p-2">
+            {GRID_COLUMNS.map((column) => (
+              <div key={column.key} className="flex flex-col gap-0.5">
+                <label className="text-[9px] font-semibold uppercase tracking-wide text-slate-500">{column.label}</label>
+                <input
+                  list={`ois-filter-options-${column.key}`}
+                  value={columnFilters[column.key] ?? ""}
+                  onChange={(e) => updateColumnFilter(column.key, e.target.value)}
+                  placeholder="Filter..."
+                  className="h-[24px] w-[110px] rounded border border-slate-300 bg-white px-1.5 text-[10px] text-slate-800 outline-none focus:border-sky-500"
+                />
+                <datalist id={`ois-filter-options-${column.key}`}>
+                  {(columnFilterOptions[column.key] ?? []).map((option) => <option key={option} value={option} />)}
+                </datalist>
+              </div>
+            ))}
+            {activeColumnFilters.length > 0 ? (
+              <button type="button" onClick={clearColumnFilters} className="h-[24px] self-end rounded border border-slate-300 bg-white px-2 text-[10px] font-semibold text-slate-600 hover:bg-slate-100">
+                Clear filters
+              </button>
+            ) : null}
+          </div>
           <ErpDenseGrid
             columns={GRID_COLUMNS}
-            rows={rows}
+            rows={filteredRows}
             rowKey={(row) => row.id}
             virtualize
             rangeSelect
@@ -604,7 +686,13 @@ export default function OrderInformationSystemPage() {
             // Also matches the Excel export's fill color exactly now (see GROUP_START_ROW_FILL_ARGB).
             getRowProps={(row) => (row.is_group_start ? { className: "bg-sky-100" } : {})}
             maxHeight="calc(100vh - 260px)"
-            emptyMessage={reportQ.isLoading ? "Loading..." : "No movements match this criteria."}
+            emptyMessage={
+              reportQ.isLoading
+                ? "Loading..."
+                : activeColumnFilters.length > 0
+                  ? "No rows match the current column filters."
+                  : "No movements match this criteria."
+            }
           />
         </ErpSectionCard>
       </div>
