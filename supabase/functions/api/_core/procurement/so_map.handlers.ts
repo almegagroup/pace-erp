@@ -190,7 +190,7 @@ export async function listSoForMapHandler(req: Request, ctx: ProcurementHandlerC
 
     const { data: sos, error: soError } = await serviceRoleClient
       .schema("erp_procurement").from("sales_order")
-      .select("id, so_number, so_date, dispatch_type, status, material_types")
+      .select("id, so_number, so_date, customer_po_number, dispatch_type, status, material_types")
       .eq("company_id", companyId)
       .in("dispatch_type", Array.from(MAPPABLE_DISPATCH_TYPES))
       .not("status", "in", "(CANCELLED,CLOSED)")
