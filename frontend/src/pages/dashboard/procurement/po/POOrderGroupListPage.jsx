@@ -12,6 +12,14 @@ import { openScreenWithContext } from "../../../../navigation/screenStackEngine.
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listPOOrderGroups } from "../procurementApi.js";
 
+// Business owner ask (2026-09-03) — same pattern as every other report grid
+// this sweep touched.
+function getColumnFilterText(column, row) {
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  const raw = row?.[column.key];
+  return raw == null ? "" : String(raw);
+}
+
 function getStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
     case "PENDING_APPROVAL":
@@ -41,7 +49,7 @@ export default function POOrderGroupListPage() {
     queryKey: ["procurement", "po-order-groups", groupParams],
     queryFn: () => listPOOrderGroups(groupParams),
   });
-  const rows = Array.isArray(groupQuery.data?.data) ? groupQuery.data.data : [];
+  const rows = useMemo(() => (Array.isArray(groupQuery.data?.data) ? groupQuery.data.data : []), [groupQuery.data]);
   const vendors = vendorQuery.vendors;
   const loading = groupQuery.isLoading || vendorQuery.isLoading;
   const error =
@@ -64,6 +72,48 @@ export default function POOrderGroupListPage() {
     () => new Map((runtimeContext?.availableCompanies ?? []).map((entry) => [entry.id, entry])),
     [runtimeContext?.availableCompanies]
   );
+
+  const columns = useMemo(() => [
+    { key: "created_at", label: "Created", width: "140px", render: (row) => (row.created_at || "").slice(0, 10) },
+    { key: "vendor_name", label: "Vendor", render: (row) => vendorMap.get(row.vendor_id)?.vendor_name || row.vendor_id || "-", copyValue: (row) => vendorMap.get(row.vendor_id)?.vendor_name || "" },
+    { key: "company_name", label: "Company", render: (row) => companyMap.get(row.company_id)?.company_name || row.company_id || "-", copyValue: (row) => companyMap.get(row.company_id)?.company_name || "" },
+    { key: "po_count", label: "POs", width: "80px", render: (row) => (Array.isArray(row.purchase_orders) ? row.purchase_orders.length : 0) },
+    {
+      key: "po_numbers",
+      label: "PO Numbers",
+      render: (row) => (Array.isArray(row.purchase_orders) ? row.purchase_orders.map((p) => p.po_number).join(", ") : "-"),
+    },
+    {
+      key: "status",
+      label: "Status",
+      width: "150px",
+      render: (row) => (
+        <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getStatusTone(row.status)}`}>
+          {row.status}
+        </span>
+      ),
+      copyValue: (row) => row.status,
+    },
+  ], [vendorMap, companyMap]);
+
+  const [globalSearch, setGlobalSearch] = useState("");
+  const globalSearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of rows) {
+      for (const column of columns) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 500) break outer;
+      }
+    }
+    return [...values].sort();
+  }, [rows, columns]);
+  const hasActiveSearch = globalSearch.trim().length > 0;
+  const filteredRows = useMemo(() => {
+    const needle = globalSearch.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => columns.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+  }, [rows, columns, globalSearch]);
 
   function openDetail(row) {
     if (String(row?.doc_type || "").toUpperCase() === "STO") {
@@ -120,33 +170,33 @@ export default function POOrderGroupListPage() {
       </ErpSectionCard>
 
       <ErpSectionCard eyebrow="Orders" title={loading ? "Loading..." : `${rows.length} order(s)`}>
+        <div className="mb-2 flex items-center gap-2">
+          <input
+            list="po-order-group-search-options"
+            value={globalSearch}
+            onChange={(event) => setGlobalSearch(event.target.value)}
+            placeholder="Search across every column..."
+            className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+          />
+          <datalist id="po-order-group-search-options">
+            {globalSearchOptions.map((option) => <option key={option} value={option} />)}
+          </datalist>
+          {hasActiveSearch ? (
+            <>
+              <button type="button" onClick={() => setGlobalSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                Clear
+              </button>
+              <span className="text-xs text-slate-500">{filteredRows.length} of {rows.length} orders</span>
+            </>
+          ) : null}
+        </div>
         <ErpDenseGrid
-          columns={[
-            { key: "created_at", label: "Created", width: "140px", render: (row) => (row.created_at || "").slice(0, 10) },
-            { key: "vendor_name", label: "Vendor", render: (row) => vendorMap.get(row.vendor_id)?.vendor_name || row.vendor_id || "-" },
-            { key: "company_name", label: "Company", render: (row) => companyMap.get(row.company_id)?.company_name || row.company_id || "-" },
-            { key: "po_count", label: "POs", width: "80px", render: (row) => (Array.isArray(row.purchase_orders) ? row.purchase_orders.length : 0) },
-            {
-              key: "po_numbers",
-              label: "PO Numbers",
-              render: (row) => (Array.isArray(row.purchase_orders) ? row.purchase_orders.map((p) => p.po_number).join(", ") : "-"),
-            },
-            {
-              key: "status",
-              label: "Status",
-              width: "150px",
-              render: (row) => (
-                <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getStatusTone(row.status)}`}>
-                  {row.status}
-                </span>
-              ),
-            },
-          ]}
-          rows={rows}
+          columns={columns}
+          rows={filteredRows}
           rowKey={(row) => row.id}
           onRowActivate={openDetail}
           getRowProps={(row) => ({ onDoubleClick: () => openDetail(row), className: "cursor-pointer hover:bg-sky-50" })}
-          emptyMessage={loading ? "Loading..." : "No order groups found for this status."}
+          emptyMessage={loading ? "Loading..." : hasActiveSearch ? "No rows match this search." : "No order groups found for this status."}
         />
       </ErpSectionCard>
     </ErpScreenScaffold>
