@@ -466,7 +466,16 @@ function picksFromExistingDo(detail) {
     material_id: line.material_id,
     material_display: line.material_display,
     line_material_type: line.line_material_type,
-    fg_type: null,
+    // §133.12 Edit real gap fixed (2026-09-03) — used to hardcode null,
+    // silently dropping isPackDrivenFg()'s Pack Qty/Total Packs treatment for
+    // any FG/SFG line reopened via Edit. hydrateDeliveryOrderUnified now
+    // resolves all three off the line's own already-stored so_line_id/
+    // packing_order_id (see that function's own comment for the join path).
+    fg_type: line.fg_type ?? null,
+    per_pack_qty: line.per_pack_qty ?? null,
+    packing_code: line.packing_code ?? null,
+    pack_qty: line.pack_qty ?? null,
+    pack_uom_code: line.pack_uom_code ?? null,
     batch_number: line.batch_number ?? null,
     expiry_date: line.expiry_date ?? null,
     packing_order_id: line.packing_order_id ?? null,

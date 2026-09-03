@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
+import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
+import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
@@ -15,8 +17,13 @@ import {
   issueSOStock,
   knockOffSOLine,
   listSalesInvoices,
+  listSalesOrderAddressOptions,
+  listSalesOrderFgSkuOptions,
+  listSalesOrderStrokeCheckOptions,
   updateSalesOrderUnified,
 } from "../procurementApi.js";
+import { listFgDepotCodes, listFgParentCompanies } from "../../om/omApi.js";
+import { listAc06ApprovedMonths } from "../../production/prodApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
@@ -41,8 +48,10 @@ const MANUAL_DATE_BOUNDS = getManualDocumentDateBounds();
 function makeNewSoLine(lineMaterialType) {
   return {
     __key: `${lineMaterialType}-${Math.random().toString(36).slice(2)}`,
+    __manualSku: false,
     line_material_type: lineMaterialType,
     material_id: "",
+    manual_sku_name: "",
     fg_type: lineMaterialType === "FG" || lineMaterialType === "SFG" ? "" : null,
     quantity: "",
     base_qty: "",
@@ -55,7 +64,17 @@ function makeNewSoLine(lineMaterialType) {
     hsn_code: "",
     batch_number: "",
     expiry_date: "",
+    costing_rate_month: "",
+    declared_stroke_number: "",
+    round_off_amount: "",
   };
+}
+
+function formatMonthLabel(rateMonth) {
+  const value = String(rateMonth || "");
+  if (!/^\d{4}-\d{2}/.test(value)) return value || "-";
+  const [year, month] = value.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
 function getStatusTone(status) {
@@ -108,15 +127,34 @@ export default function SODetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  // §133.10 — Edit/Cancel/Close (unified redesign). Header/line edit state is
-  // only meaningful pre-terminal-status; Bill-To/Ship-To/dispatch_type are
-  // never editable here (Cancel + new SO is the only path for those).
-  const [headerEdit, setHeaderEdit] = useState({ so_date: "", payment_term_id: "", freight_term: "" });
+  // §136 (2026-09-03 "professional standard" relock) — Edit/Cancel/Close
+  // (unified redesign). Company/Dispatch Type/Material Types are NEVER
+  // editable here (Cancel + new SO is the only path). Customer/Bill-To/
+  // Ship-To/VDC lock document-wide the moment ANY line is Mapped in SO Map
+  // (detail.has_active_mapping) — see updateSalesOrderUnifiedHandler.
+  // Everything else, per line, locks only for that specific Mapped line
+  // (row.is_mapped) — unmap just that line to edit it again.
+  const [headerEdit, setHeaderEdit] = useState({
+    so_date: "", payment_term_id: "", freight_term: "", customer_po_number: "", customer_po_date: "",
+  });
   const [lineEdits, setLineEdits] = useState({});
   const [removedLineIds, setRemovedLineIds] = useState(() => new Set());
   const [newLines, setNewLines] = useState([]);
   const [savingHeader, setSavingHeader] = useState(false);
   const [savingLines, setSavingLines] = useState(false);
+  // §136 Identity (Edit) — Customer/Bill-To/Ship-To/VDC. Mirrors
+  // SO01CreatePage.jsx's own Page 2 Bill-To/Ship-To state + branching
+  // exactly (same resolveBillToShipTo() shape on the backend), scoped down
+  // to just this SO's own already-fixed dispatch_type (never re-chosen here).
+  const [identityEdit, setIdentityEdit] = useState({
+    parent_company_id: "", vdc_id: "", depot_code_id: "", customer_id: "",
+    ship_to_customer_address_id: "", bill_to_party: "", asian_billed_choice: "",
+    asian_billed_vdc_dc_id: "", no_inbound_sub_type: "DIRECT",
+  });
+  const [savingIdentity, setSavingIdentity] = useState(false);
+  const [parentCompanies, setParentCompanies] = useState([]);
+  const [depotCodes, setDepotCodes] = useState([]);
+  const [ac06Months, setAc06Months] = useState([]);
   const customerQuery = useCustomerOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
@@ -211,12 +249,15 @@ export default function SODetailPage() {
       so_date: detail.so_date || "",
       payment_term_id: detail.payment_term_id || "",
       freight_term: detail.freight_term || "FOR",
+      customer_po_number: detail.customer_po_number || "",
+      customer_po_date: detail.customer_po_date || "",
     });
     setLineEdits(
       Object.fromEntries(
         (Array.isArray(detail.lines) ? detail.lines : []).map((line) => [
           line.id,
           {
+            material_id: line.material_id || "",
             rate: line.rate ?? "",
             base_qty: line.base_qty ?? line.quantity ?? "",
             gst_treatment: line.gst_treatment || "EXCLUSIVE",
@@ -231,7 +272,182 @@ export default function SODetailPage() {
     );
     setRemovedLineIds(new Set());
     setNewLines([]);
+    // §136 — reconstruct the identity form's state from whatever
+    // resolveBillToShipTo() already resolved and stored (bill_to_type tells
+    // us which branch was originally taken; dispatch_type itself never
+    // changes). ship_to_customer_address_id has no stored source id (only
+    // the resolved snapshot), so INDEPENDENT_* re-editing asks the user to
+    // re-pick the MM04 address — the current resolved Ship-To stays visible
+    // in the read-only card above either way.
+    const billToType = detail.bill_to_type || "";
+    setIdentityEdit({
+      parent_company_id: detail.bill_to_parent_company_id || "",
+      vdc_id: billToType === "VDC" ? (detail.bill_to_vdc_id || "") : "",
+      depot_code_id: billToType === "DEPOT" ? (detail.bill_to_depot_code_id || "") : "",
+      customer_id: detail.customer_id || "",
+      ship_to_customer_address_id: "",
+      bill_to_party: billToType === "VDC" ? "VDC" : billToType === "PARENT_COMPANY" ? "PARENT_COMPANY" : "",
+      asian_billed_choice: detail.dispatch_type === "INDEPENDENT_PARTY_ASIAN_BILLED"
+        ? (billToType === "DEPOT" ? "DC" : billToType === "VDC" ? "VDC" : "NONE")
+        : "",
+      asian_billed_vdc_dc_id: detail.dispatch_type === "INDEPENDENT_PARTY_ASIAN_BILLED"
+        ? (detail.bill_to_vdc_id || detail.bill_to_depot_code_id || "")
+        : "",
+      no_inbound_sub_type: detail.dispatch_type === "DEPENDENT_NO_INBOUND"
+        ? (billToType === "DEPOT" ? "DEPOT" : "DIRECT")
+        : "DIRECT",
+    });
   }, [detail]);
+
+  const dispatchType = detail?.dispatch_type || "";
+  const effectiveNoInboundType = dispatchType === "DEPENDENT_NO_INBOUND"
+    ? (identityEdit.no_inbound_sub_type === "DIRECT" ? "DEPENDENT_DIRECT" : "DEPENDENT_DEPOT")
+    : dispatchType;
+
+  useEffect(() => {
+    if (!(effectiveNoInboundType === "DEPENDENT_DIRECT" || effectiveNoInboundType === "DEPENDENT_DEPOT" || dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED")) return;
+    listFgParentCompanies({}).then((result) => setParentCompanies(Array.isArray(result?.data) ? result.data : [])).catch(() => setParentCompanies([]));
+  }, [dispatchType, effectiveNoInboundType]);
+
+  useEffect(() => {
+    if (!identityEdit.parent_company_id) { setDepotCodes([]); return; }
+    if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
+      listFgDepotCodes({ parent_company_id: identityEdit.parent_company_id })
+        .then((result) => setDepotCodes(Array.isArray(result?.data) ? result.data : []))
+        .catch(() => setDepotCodes([]));
+      return;
+    }
+    const wantType = effectiveNoInboundType === "DEPENDENT_DEPOT" ? "DEPOT" : "DIRECT";
+    listFgDepotCodes({ parent_company_id: identityEdit.parent_company_id, dispatch_type: wantType })
+      .then((result) => setDepotCodes(Array.isArray(result?.data) ? result.data : []))
+      .catch(() => setDepotCodes([]));
+  }, [identityEdit.parent_company_id, effectiveNoInboundType, dispatchType]);
+
+  // §133.8-E's Costing Rate Month dropdown, reused here so "Add Line"'s FG/SFG
+  // MTO/HPS/MTEST rows have the same mandatory field Create requires.
+  useEffect(() => {
+    if (!detail?.company_id) { setAc06Months([]); return; }
+    listAc06ApprovedMonths({ company_id: detail.company_id })
+      .then((result) => setAc06Months(Array.isArray(result) ? result : []))
+      .catch(() => setAc06Months([]));
+  }, [detail?.company_id]);
+
+  // 2026-09-04 real gap closed — "Add Line"'s FG Item picker used the generic
+  // material list (every FG material, no fg_type filter) instead of
+  // SO01CreatePage.jsx's own dispatch-eligible, fg_type-scoped FG SKU
+  // options, and had no Stroke Number red/green resolution dot at all.
+  // Mirrors that page's exact fgSkuQuery/strokeCheckQuery/validStrokeKeys
+  // mechanism so a new FG line added here gets the same picker + the same
+  // reconciliation signal as one added at Create.
+  const materialTypesForDetail = Array.isArray(detail?.material_types) ? detail.material_types : [];
+  const fgSkuQuery = useQuery({
+    queryKey: ["procurement", "so01-fg-sku-options", detail?.company_id],
+    queryFn: () => listSalesOrderFgSkuOptions({ company_id: detail?.company_id }),
+    enabled: Boolean(detail?.company_id && materialTypesForDetail.includes("FG")),
+    staleTime: 60_000,
+  });
+  const fgSkusByType = useMemo(() => Object.fromEntries(
+    FG_TYPE_OPTIONS.map((fgType) => [fgType, (fgSkuQuery.data ?? []).filter((entry) => entry.fg_type === fgType)]),
+  ), [fgSkuQuery.data]);
+  const fgSkuMap = useMemo(() => new Map(
+    Object.values(fgSkusByType).flat().map((entry) => [entry.id, entry]),
+  ), [fgSkusByType]);
+  const strokeCheckQuery = useQuery({
+    queryKey: ["procurement", "so01-stroke-check-options", detail?.company_id],
+    queryFn: () => listSalesOrderStrokeCheckOptions({ company_id: detail?.company_id }),
+    enabled: Boolean(detail?.company_id && materialTypesForDetail.includes("FG")),
+    staleTime: 60_000,
+  });
+  const validStrokeKeys = useMemo(() => new Set(
+    (strokeCheckQuery.data ?? []).map((entry) => `${entry.prodshade_material_id}|${entry.po_type}|${entry.stroke_number}`),
+  ), [strokeCheckQuery.data]);
+  function strokeCheckStatus(line) {
+    if (line.line_material_type !== "FG" || !["MTO", "HPS"].includes(line.fg_type)) return null;
+    if (!line.material_id || !line.declared_stroke_number?.trim()) return false;
+    const prodshadeId = fgSkuMap.get(line.material_id)?.prodshade_material_id;
+    if (!prodshadeId) return false;
+    return validStrokeKeys.has(`${prodshadeId}|${line.fg_type}|${line.declared_stroke_number.trim()}`);
+  }
+
+  const identityCustomerQuery = useCustomerOptionsQuery(
+    { company_id: detail?.company_id, limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" },
+    { enabled: Boolean(detail?.company_id) && (dispatchType === "INDEPENDENT_PARTY" || dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") }
+  );
+  const identityCustomerOptions = useMemo(
+    () => (identityCustomerQuery.customers ?? []).map((entry) => ({ value: entry.id, label: `${entry.customer_code || ""} — ${entry.customer_name || ""}`.trim() })),
+    [identityCustomerQuery.customers]
+  );
+  const identityAddressQuery = useQuery({
+    queryKey: ["procurement", "so01-address-options", detail?.company_id, "customer", identityEdit.customer_id],
+    queryFn: () => listSalesOrderAddressOptions({ company_id: detail?.company_id, customer_id: identityEdit.customer_id }),
+    enabled: Boolean(detail?.company_id && identityEdit.customer_id && (dispatchType === "INDEPENDENT_PARTY" || dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED")),
+  });
+  const identityCustomerAddresses = Array.isArray(identityAddressQuery.data) ? identityAddressQuery.data : [];
+  const identityAddressOptions = identityCustomerAddresses.map((address) => ({
+    value: address.id,
+    label: [address?.customer?.customer_name, address?.site_name, address?.town, address?.address_line].filter(Boolean).join(" | "),
+  }));
+  const identityParentCompanyOptions = parentCompanies.map((entry) => ({ value: entry.id, label: entry.company_name }));
+  const identityDepotCodeOptions = depotCodes.map((entry) => ({ value: entry.id, label: `${entry.code || ""} — ${entry.description || ""}`.trim() }));
+  const identityAsianBilledVdcDcOptions = depotCodes
+    .filter((entry) => entry.dispatch_type === (identityEdit.asian_billed_choice === "DC" ? "DEPOT" : "DIRECT"))
+    .map((entry) => ({ value: entry.id, label: `${entry.code || ""} — ${entry.description || ""}`.trim() }));
+
+  function updateIdentityEdit(patch) {
+    setIdentityEdit((current) => ({ ...current, ...patch }));
+  }
+
+  function buildIdentityPayload() {
+    const payload = {};
+    if (effectiveNoInboundType === "DEPENDENT_DIRECT") {
+      payload.parent_company_id = identityEdit.parent_company_id;
+      payload.vdc_id = identityEdit.vdc_id;
+      payload.bill_to_party = identityEdit.bill_to_party;
+    } else if (effectiveNoInboundType === "DEPENDENT_DEPOT") {
+      payload.parent_company_id = identityEdit.parent_company_id;
+      payload.depot_code_id = identityEdit.depot_code_id;
+    } else if (dispatchType === "INDEPENDENT_PARTY") {
+      payload.customer_id = identityEdit.customer_id;
+      payload.ship_to_customer_address_id = identityEdit.ship_to_customer_address_id;
+    } else if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
+      payload.customer_id = identityEdit.customer_id;
+      payload.parent_company_id = identityEdit.parent_company_id;
+      payload.ship_to_customer_address_id = identityEdit.ship_to_customer_address_id;
+      payload.asian_billed_choice = identityEdit.asian_billed_choice;
+      if (identityEdit.asian_billed_choice !== "NONE") {
+        payload.asian_billed_vdc_dc_id = identityEdit.asian_billed_vdc_dc_id;
+        if (identityEdit.asian_billed_choice === "VDC") payload.bill_to_party = identityEdit.bill_to_party;
+      }
+    }
+    if (dispatchType === "DEPENDENT_NO_INBOUND") payload.no_inbound_sub_type = identityEdit.no_inbound_sub_type;
+    return payload;
+  }
+
+  async function handleSaveIdentity() {
+    setSavingIdentity(true);
+    setError("");
+    setNotice("");
+    try {
+      await updateSalesOrderUnified(id, buildIdentityPayload());
+      setNotice("Customer/Bill-To/Ship-To updated.");
+      await detailQuery.refetch();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "SO_EDIT_IDENTITY_FAILED");
+    } finally {
+      setSavingIdentity(false);
+    }
+  }
+
+  function identityBillToPartyToggle() {
+    return (
+      <ErpDenseFormRow label="Bill-To Party?" required>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => updateIdentityEdit({ bill_to_party: "PARENT_COMPANY" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${identityEdit.bill_to_party === "PARENT_COMPANY" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>Parent Company</button>
+          <button type="button" onClick={() => updateIdentityEdit({ bill_to_party: "VDC" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${identityEdit.bill_to_party === "VDC" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>VDC</button>
+        </div>
+      </ErpDenseFormRow>
+    );
+  }
 
   function updateLineEdit(lineId, patch) {
     setLineEdits((current) => ({ ...current, [lineId]: { ...current[lineId], ...patch } }));
@@ -268,12 +484,21 @@ export default function SODetailPage() {
     setNewLines((current) => current.filter((line) => line.__key !== key));
   }
   function handleNewLineMaterialSelect(key, materialId) {
-    const material = materialMap.get(materialId);
+    const material = fgSkuMap.get(materialId) ?? materialMap.get(materialId);
     updateNewLine(key, {
       material_id: materialId,
       hsn_code: material?.hsn_code || "",
       gst_rate: material?.gst_rate != null ? String(material.gst_rate) : "",
     });
+  }
+  function materialOptionsForNewLine(line) {
+    if (line.line_material_type === "FG") {
+      return (fgSkusByType[line.fg_type] ?? []).map((entry) => ({
+        value: entry.id,
+        label: [entry.pace_code, entry.external_code, entry.document_name || entry.material_name].filter(Boolean).join(" | "),
+      }));
+    }
+    return materialOptionsForType.get(line.line_material_type) ?? [];
   }
 
   async function handleSaveHeader() {
@@ -289,6 +514,8 @@ export default function SODetailPage() {
         so_date: headerEdit.so_date || undefined,
         payment_term_id: headerEdit.payment_term_id || null,
         freight_term: headerEdit.freight_term || null,
+        customer_po_number: headerEdit.customer_po_number || undefined,
+        customer_po_date: headerEdit.customer_po_date || null,
       });
       setNotice("SO header updated.");
       await detailQuery.refetch();
@@ -300,8 +527,12 @@ export default function SODetailPage() {
   }
 
   async function handleSaveLines() {
-    if (newLines.some((line) => !line.material_id)) {
-      setError("Every new line needs an item selected.");
+    if (newLines.some((line) => !line.material_id && !(line.line_material_type === "FG" && line.__manualSku && line.manual_sku_name.trim()))) {
+      setError("Every new line needs an item selected (or a manual SKU name for FG).");
+      return;
+    }
+    if (newLines.some((line) => line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type) && !line.costing_rate_month)) {
+      setError("Select Costing Rate Month for every new FG MTO/HPS/MTEST line.");
       return;
     }
     setSavingLines(true);
@@ -315,6 +546,7 @@ export default function SODetailPage() {
         .filter(([lineId]) => !removedLineIds.has(lineId))
         .map(([lineId, edit]) => ({
           id: lineId,
+          material_id: edit.material_id || undefined,
           rate: edit.rate === "" ? undefined : Number(edit.rate),
           base_qty: edit.base_qty === "" ? undefined : Number(edit.base_qty),
           gst_treatment: edit.gst_treatment || "EXCLUSIVE",
@@ -326,7 +558,8 @@ export default function SODetailPage() {
         }));
       const addedLines = newLines.map((line) => ({
         line_material_type: line.line_material_type,
-        material_id: line.material_id,
+        material_id: line.__manualSku ? null : line.material_id,
+        manual_sku_name: line.__manualSku ? line.manual_sku_name || null : null,
         fg_type: line.fg_type || null,
         // Backend only reads quantity (RM/PM/INT/SFG) or base_qty (FG MTEST
         // only — non-MTEST FG derives base_qty from pack_qty*per_pack_qty
@@ -342,6 +575,9 @@ export default function SODetailPage() {
         hsn_code: line.hsn_code || null,
         batch_number: line.batch_number || null,
         expiry_date: line.expiry_date || null,
+        costing_rate_month: line.costing_rate_month || null,
+        declared_stroke_number: line.declared_stroke_number || null,
+        round_off_amount: line.round_off_amount === "" ? null : Number(line.round_off_amount),
       }));
       await updateSalesOrderUnified(id, { lines: [...existingLines, ...addedLines] });
       setNotice("SO lines updated.");
@@ -443,6 +679,12 @@ export default function SODetailPage() {
   const latestDc = Array.isArray(detail?.delivery_challans) ? detail.delivery_challans[0] : null;
   const latestGxo = Array.isArray(detail?.gate_exit_outbound) ? detail.gate_exit_outbound[0] : null;
   const isEditable = Boolean(detail) && !SO_TERMINAL_STATUSES.has(String(detail?.status || "").toUpperCase());
+  // §136 — identity (Customer/Bill-To/Ship-To/VDC) locks the moment ANY line
+  // is Mapped in SO Map; a specific line's own fields lock only for that line.
+  const identityEditable = isEditable && !detail?.has_active_mapping;
+  function isLineEditable(row) {
+    return isEditable && !row.is_mapped;
+  }
 
   return (
     <ErpScreenScaffold
@@ -480,11 +722,19 @@ export default function SODetailPage() {
           </ErpSectionCard>
 
           {isEditable ? (
-            <ErpSectionCard eyebrow="Header (Edit)" title="§133.10 — top-level fields editable pre-terminal; Bill-To/Ship-To/Dispatch Type never change here">
+            <ErpSectionCard eyebrow="Header (Edit)" title="Always editable — no downstream commitment depends on these">
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   SO Date
                   <input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={headerEdit.so_date} onChange={(event) => setHeaderEdit((current) => ({ ...current, so_date: event.target.value }))} className="h-9 border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Customer PO Number
+                  <input value={headerEdit.customer_po_number} onChange={(event) => setHeaderEdit((current) => ({ ...current, customer_po_number: event.target.value }))} className="h-9 border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Customer PO Date
+                  <input type="date" value={headerEdit.customer_po_date} onChange={(event) => setHeaderEdit((current) => ({ ...current, customer_po_date: event.target.value }))} className="h-9 border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
                 </label>
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Payment Terms
@@ -508,7 +758,17 @@ export default function SODetailPage() {
             </ErpSectionCard>
           ) : null}
 
-          <ErpSectionCard eyebrow="Ship-To" title="Place of supply — determines CGST+SGST vs IGST on the invoice (§113.16)">
+          <ErpSectionCard
+            eyebrow="Ship-To"
+            title="Place of supply — determines CGST+SGST vs IGST on the invoice (§113.16)"
+          >
+            {isEditable ? (
+              <div className={`mb-3 border px-3 py-2 text-xs font-semibold ${identityEditable ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-amber-300 bg-amber-50 text-amber-800"}`}>
+                {identityEditable
+                  ? "Editable — no line is Mapped yet in SO Map."
+                  : "Locked — at least one line is already Mapped in SO Map. Unmap every line first to reopen Customer/Bill-To/Ship-To."}
+              </div>
+            ) : null}
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
               <ErpFieldPreview label="Same as Customer" value={detail.ship_to_same_as_customer ? "Yes" : "No"} />
               <ErpFieldPreview label="Ship-To Name" value={detail.ship_to_name || "-"} />
@@ -517,6 +777,94 @@ export default function SODetailPage() {
               <ErpFieldPreview label="Ship-To GST Number" value={detail.ship_to_gst_number || "-"} />
               <ErpFieldPreview label="Ship-To Address" value={detail.ship_to_address || "-"} />
             </div>
+
+            {identityEditable ? (
+              <div className="mt-4 grid gap-3 border-t border-slate-200 pt-4">
+                {effectiveNoInboundType === "DEPENDENT_DIRECT" && dispatchType !== "DEPENDENT_NO_INBOUND" ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <ErpDenseFormRow label="Parent Company" required>
+                      <ErpComboboxField value={identityEdit.parent_company_id} onChange={(value) => updateIdentityEdit({ parent_company_id: value, vdc_id: "" })} options={identityParentCompanyOptions} blankLabel="Select Parent Company" />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="VDC" required>
+                      <ErpComboboxField value={identityEdit.vdc_id} onChange={(value) => updateIdentityEdit({ vdc_id: value })} options={identityDepotCodeOptions} blankLabel={identityEdit.parent_company_id ? "Select VDC" : "Select Parent Company first"} />
+                    </ErpDenseFormRow>
+                    {identityBillToPartyToggle()}
+                  </div>
+                ) : null}
+                {effectiveNoInboundType === "DEPENDENT_DEPOT" && dispatchType !== "DEPENDENT_NO_INBOUND" ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <ErpDenseFormRow label="Parent Company" required>
+                      <ErpComboboxField value={identityEdit.parent_company_id} onChange={(value) => updateIdentityEdit({ parent_company_id: value, depot_code_id: "" })} options={identityParentCompanyOptions} blankLabel="Select Parent Company" />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Depot Code" required>
+                      <ErpComboboxField value={identityEdit.depot_code_id} onChange={(value) => updateIdentityEdit({ depot_code_id: value })} options={identityDepotCodeOptions} blankLabel={identityEdit.parent_company_id ? "Select Depot" : "Select Parent Company first"} />
+                    </ErpDenseFormRow>
+                  </div>
+                ) : null}
+                {dispatchType === "INDEPENDENT_PARTY" ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <ErpDenseFormRow label="Customer" required>
+                      <ErpComboboxField value={identityEdit.customer_id} onChange={(value) => updateIdentityEdit({ customer_id: value, ship_to_customer_address_id: "" })} options={identityCustomerOptions} blankLabel="Select Customer" />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Bill-To / Ship-To Address (MM04)" required>
+                      <ErpComboboxField value={identityEdit.ship_to_customer_address_id} onChange={(value) => updateIdentityEdit({ ship_to_customer_address_id: value })} options={identityAddressOptions} blankLabel={identityEdit.customer_id ? "Select customer address" : "Select Customer first"} />
+                    </ErpDenseFormRow>
+                  </div>
+                ) : null}
+                {dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED" ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <ErpDenseFormRow label="Customer" required>
+                      <ErpComboboxField value={identityEdit.customer_id} onChange={(value) => updateIdentityEdit({ customer_id: value, ship_to_customer_address_id: "" })} options={identityCustomerOptions} blankLabel="Select Customer" />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Ship-To Address (MM04)" required>
+                      <ErpComboboxField value={identityEdit.ship_to_customer_address_id} onChange={(value) => updateIdentityEdit({ ship_to_customer_address_id: value })} options={identityAddressOptions} blankLabel={identityEdit.customer_id ? "Select customer address" : "Select Customer first"} />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Asian Parent Company" required>
+                      <ErpComboboxField value={identityEdit.parent_company_id} onChange={(value) => updateIdentityEdit({ parent_company_id: value, asian_billed_choice: "", asian_billed_vdc_dc_id: "", bill_to_party: "" })} options={identityParentCompanyOptions} blankLabel="Select Parent Company" />
+                    </ErpDenseFormRow>
+                    <div className="grid gap-1 text-xs font-semibold text-slate-700">
+                      <span>Bill-To — VDC, DC, or none (Parent Company)? <span className="text-rose-500">*</span></span>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => updateIdentityEdit({ asian_billed_choice: "VDC", asian_billed_vdc_dc_id: "" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${identityEdit.asian_billed_choice === "VDC" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>VDC</button>
+                        <button type="button" onClick={() => updateIdentityEdit({ asian_billed_choice: "DC", asian_billed_vdc_dc_id: "", bill_to_party: "" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${identityEdit.asian_billed_choice === "DC" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>DC</button>
+                        <button type="button" onClick={() => updateIdentityEdit({ asian_billed_choice: "NONE", asian_billed_vdc_dc_id: "", bill_to_party: "" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${identityEdit.asian_billed_choice === "NONE" ? "border border-slate-700 bg-slate-200 text-slate-950" : "border border-slate-300 bg-white text-slate-700"}`}>No</button>
+                      </div>
+                    </div>
+                    {identityEdit.asian_billed_choice === "VDC" || identityEdit.asian_billed_choice === "DC" ? (
+                      <ErpDenseFormRow label={identityEdit.asian_billed_choice === "DC" ? "DC" : "VDC"} required>
+                        <ErpComboboxField value={identityEdit.asian_billed_vdc_dc_id} onChange={(value) => updateIdentityEdit({ asian_billed_vdc_dc_id: value })} options={identityAsianBilledVdcDcOptions} blankLabel={identityEdit.parent_company_id ? `Select ${identityEdit.asian_billed_choice}` : "Select Parent Company first"} />
+                      </ErpDenseFormRow>
+                    ) : null}
+                    {identityEdit.asian_billed_choice === "VDC" ? identityBillToPartyToggle() : null}
+                  </div>
+                ) : null}
+                {dispatchType === "DEPENDENT_NO_INBOUND" ? (
+                  <div className="grid gap-3">
+                    <div className="grid gap-1 text-xs font-semibold text-slate-700">
+                      <span>Direct or Depot?</span>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => updateIdentityEdit({ no_inbound_sub_type: "DIRECT" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${identityEdit.no_inbound_sub_type === "DIRECT" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>Direct</button>
+                        <button type="button" onClick={() => updateIdentityEdit({ no_inbound_sub_type: "DEPOT" })} className={`flex-1 px-3 py-2 text-xs font-semibold ${identityEdit.no_inbound_sub_type === "DEPOT" ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>Depot</button>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <ErpDenseFormRow label="Parent Company" required>
+                        <ErpComboboxField value={identityEdit.parent_company_id} onChange={(value) => updateIdentityEdit({ parent_company_id: value, vdc_id: "", depot_code_id: "", bill_to_party: "" })} options={identityParentCompanyOptions} blankLabel="Select Parent Company" />
+                      </ErpDenseFormRow>
+                      <ErpDenseFormRow label={identityEdit.no_inbound_sub_type === "DIRECT" ? "VDC" : "Depot Code"} required>
+                        <ErpComboboxField value={identityEdit.no_inbound_sub_type === "DIRECT" ? identityEdit.vdc_id : identityEdit.depot_code_id} onChange={(value) => updateIdentityEdit(identityEdit.no_inbound_sub_type === "DIRECT" ? { vdc_id: value } : { depot_code_id: value })} options={identityDepotCodeOptions} blankLabel={identityEdit.parent_company_id ? "Select" : "Select Parent Company first"} />
+                      </ErpDenseFormRow>
+                      {identityEdit.no_inbound_sub_type === "DIRECT" ? identityBillToPartyToggle() : null}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="flex justify-end">
+                  <button type="button" onClick={() => void handleSaveIdentity()} disabled={savingIdentity} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
+                    {savingIdentity ? "Saving..." : "Save Customer/Bill-To/Ship-To"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </ErpSectionCard>
 
           {(detail.status === "CREATED" || detail.status === "ISSUED") && (latestDc?.dc_number || latestGxo?.exit_number) ? (
@@ -531,16 +879,37 @@ export default function SODetailPage() {
               columns={[
                 { key: "line_number", label: "Line", width: "70px" },
                 {
+                  key: "mapped",
+                  label: "Mapped",
+                  width: "90px",
+                  render: (row) =>
+                    row.is_mapped ? (
+                      <span className="inline-flex rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-amber-800" title={`Mapped qty: ${row.mapped_qty}`}>
+                        Mapped
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    ),
+                },
+                {
                   key: "material_name",
                   label: "Material",
-                  render: (row) => materialMap.get(row.material_id)?.material_name || materialMap.get(row.material_id)?.pace_code || row.material_id || "-",
+                  render: (row) =>
+                    isLineEditable(row) ? (
+                      <select value={lineEdits[row.id]?.material_id ?? ""} onChange={(event) => updateLineEdit(row.id, { material_id: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
+                        <option value="">Select item</option>
+                        {(materialOptionsForType.get(String(row.line_material_type || "").toUpperCase()) ?? []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </select>
+                    ) : (
+                      materialMap.get(row.material_id)?.material_name || materialMap.get(row.material_id)?.pace_code || row.material_id || "-"
+                    ),
                 },
                 {
                   key: "quantity",
                   label: "Qty",
                   width: "100px",
                   render: (row) =>
-                    isEditable ? (
+                    isLineEditable(row) ? (
                       <input type="number" step="0.0001" value={lineEdits[row.id]?.base_qty ?? ""} onChange={(event) => updateLineEdit(row.id, { base_qty: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
                     ) : (
                       row.quantity
@@ -572,7 +941,7 @@ export default function SODetailPage() {
                   label: "Rate",
                   width: "100px",
                   render: (row) =>
-                    isEditable ? (
+                    isLineEditable(row) ? (
                       <input type="number" step="0.0001" value={lineEdits[row.id]?.rate ?? ""} onChange={(event) => updateLineEdit(row.id, { rate: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
                     ) : (
                       row.rate
@@ -583,7 +952,7 @@ export default function SODetailPage() {
                   label: "GST",
                   width: "100px",
                   render: (row) =>
-                    isEditable ? (
+                    isLineEditable(row) ? (
                       <select value={lineEdits[row.id]?.gst_treatment ?? "EXCLUSIVE"} onChange={(event) => updateLineEdit(row.id, { gst_treatment: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
                         <option value="EXCLUSIVE">Exclusive</option>
                         <option value="INCLUSIVE">Inclusive</option>
@@ -597,7 +966,7 @@ export default function SODetailPage() {
                   label: "GST %",
                   width: "80px",
                   render: (row) =>
-                    isEditable ? (
+                    isLineEditable(row) ? (
                       <input type="number" step="0.01" value={lineEdits[row.id]?.gst_rate ?? ""} onChange={(event) => updateLineEdit(row.id, { gst_rate: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
                     ) : (
                       row.gst_rate
@@ -608,7 +977,7 @@ export default function SODetailPage() {
                   label: "HSN Code",
                   width: "100px",
                   render: (row) =>
-                    isEditable ? (
+                    isLineEditable(row) ? (
                       <input value={lineEdits[row.id]?.hsn_code ?? ""} onChange={(event) => updateLineEdit(row.id, { hsn_code: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
                     ) : (
                       row.hsn_code || "-"
@@ -619,20 +988,27 @@ export default function SODetailPage() {
                   label: "Batch No.",
                   width: "110px",
                   render: (row) =>
-                    isEditable ? (
+                    isLineEditable(row) ? (
                       <input value={lineEdits[row.id]?.batch_number ?? ""} onChange={(event) => updateLineEdit(row.id, { batch_number: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
                     ) : (
                       row.batch_number || "-"
+                    ),
+                },
+                {
+                  key: "remarks",
+                  label: "Remarks",
+                  width: "140px",
+                  render: (row) =>
+                    isLineEditable(row) ? (
+                      <input value={lineEdits[row.id]?.remarks ?? ""} onChange={(event) => updateLineEdit(row.id, { remarks: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
+                    ) : (
+                      row.remarks || "-"
                     ),
                 },
                 { key: "net_amount", label: "Net Amount", width: "110px", align: "right", render: (row) => formatMoney(toNumber(row.total_value) - toNumber(row.gst_amount) - toNumber(row.round_off_amount)) },
                 { key: "cgst_amount", label: "CGST", width: "90px", align: "right", render: (row) => formatMoney(row.cgst_amount) },
                 { key: "sgst_amount", label: "SGST", width: "90px", align: "right", render: (row) => formatMoney(row.sgst_amount) },
                 { key: "igst_amount", label: "IGST", width: "90px", align: "right", render: (row) => formatMoney(row.igst_amount) },
-                // Read-only here — editing an existing line's commercial fields
-                // (rate/GST/round off) on this page doesn't recompute total_value
-                // server-side yet (a pre-existing gap, separate from Round Off
-                // itself); shows whatever is actually stored/posted.
                 { key: "round_off_amount", label: "Round Off", width: "90px", align: "right", render: (row) => formatMoney(row.round_off_amount) },
                 { key: "total_value", label: "Total Value", width: "110px", align: "right", render: (row) => formatMoney(row.total_value) },
                 {
@@ -656,15 +1032,18 @@ export default function SODetailPage() {
                   key: "remove_line",
                   label: "",
                   width: "90px",
-                  render: (row) => (
-                    <button
-                      type="button"
-                      onClick={() => toggleRemoveExistingLine(row.id)}
-                      className={`border px-2 py-1 text-[11px] font-semibold ${removedLineIds.has(row.id) ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-rose-300 bg-white text-rose-700"}`}
-                    >
-                      {removedLineIds.has(row.id) ? "Undo" : "Remove"}
-                    </button>
-                  ),
+                  render: (row) =>
+                    row.is_mapped ? (
+                      <span className="text-[11px] text-slate-400" title="Unmap in SO Map first">locked</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => toggleRemoveExistingLine(row.id)}
+                        className={`border px-2 py-1 text-[11px] font-semibold ${removedLineIds.has(row.id) ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-rose-300 bg-white text-rose-700"}`}
+                      >
+                        {removedLineIds.has(row.id) ? "Undo" : "Remove"}
+                      </button>
+                    ),
                 }] : []),
               ]}
               rows={detail.lines ?? []}
@@ -690,36 +1069,95 @@ export default function SODetailPage() {
                       // forward, matching §133.8-E); MTEST + everything else
                       // enters a plain qty directly into base_qty/quantity.
                       const isFgWithPack = line.line_material_type === "FG" && line.fg_type && line.fg_type !== "MTEST";
+                      const isFg = line.line_material_type === "FG";
+                      const needsCostingMonth = ["FG", "SFG"].includes(line.line_material_type) && ["MTO", "HPS", "MTEST"].includes(line.fg_type);
+                      const inputCls = "h-8 w-28 border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500";
                       return (
-                        <div key={line.__key} className="grid grid-cols-[90px_1fr_90px_90px_90px_80px_100px_80px_90px_100px_80px] items-center gap-2 border border-sky-200 bg-sky-50 px-2 py-1.5">
-                          <span className="text-[11px] font-semibold text-slate-600">{line.line_material_type}</span>
-                          <select value={line.material_id} onChange={(event) => handleNewLineMaterialSelect(line.__key, event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
-                            <option value="">Select item</option>
-                            {(materialOptionsForType.get(line.line_material_type) ?? []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                          </select>
+                        <div key={line.__key} className="flex flex-wrap items-end gap-2 border border-sky-200 bg-sky-50 px-2 py-2">
+                          <span className="mb-1.5 text-[11px] font-semibold text-slate-600">{line.line_material_type}</span>
+                          <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">
+                            Item
+                            {isFg && line.__manualSku ? (
+                              <input placeholder="Type SKU name" value={line.manual_sku_name} onChange={(event) => updateNewLine(line.__key, { manual_sku_name: event.target.value })} className="h-8 w-40 border border-amber-400 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
+                            ) : (
+                              <select value={line.material_id} onChange={(event) => handleNewLineMaterialSelect(line.__key, event.target.value)} className="h-8 w-40 border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
+                                <option value="">{isFg && !line.fg_type ? "Select FG Type first" : "Select item"}</option>
+                                {materialOptionsForNewLine(line).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                              </select>
+                            )}
+                            {isFg ? (
+                              <button type="button" onClick={() => updateNewLine(line.__key, { __manualSku: !line.__manualSku, material_id: "", manual_sku_name: "" })} className="text-left text-[10px] font-semibold text-sky-700 underline">
+                                {line.__manualSku ? "Select from Master instead" : "Not in list? Enter manually"}
+                              </button>
+                            ) : null}
+                          </label>
                           {(line.line_material_type === "FG" || line.line_material_type === "SFG") ? (
-                            <select value={line.fg_type || ""} onChange={(event) => updateNewLine(line.__key, { fg_type: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
-                              <option value="">Type</option>
-                              {FG_TYPE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                            </select>
-                          ) : <span />}
+                            <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">
+                              Type
+                              <select value={line.fg_type || ""} onChange={(event) => updateNewLine(line.__key, { fg_type: event.target.value })} className={inputCls}>
+                                <option value="">Type</option>
+                                {FG_TYPE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                              </select>
+                            </label>
+                          ) : null}
+                          {isFg && ["MTO", "HPS"].includes(line.fg_type) ? (
+                            <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">
+                              Stroke Number
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  title={strokeCheckStatus(line) ? "Resolves to an approved Stroke Master row" : "Not found in Stroke Master for this Item's Prodshade — reconcile later"}
+                                  className={`inline-block h-2 w-2 shrink-0 rounded-full ${strokeCheckStatus(line) ? "bg-emerald-500" : "bg-rose-500"}`}
+                                />
+                                <input placeholder="Stroke No." value={line.declared_stroke_number} onChange={(event) => updateNewLine(line.__key, { declared_stroke_number: event.target.value })} className={inputCls} />
+                              </div>
+                            </label>
+                          ) : null}
                           {isFgWithPack ? (
                             <>
-                              <input type="number" step="0.0001" placeholder="Pack Qty" value={line.pack_qty} onChange={(event) => updateNewLine(line.__key, { pack_qty: event.target.value, rate_basis: line.rate_basis || "BASE_UOM" })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
-                              <input type="number" step="0.0001" placeholder="Per Pack" value={line.per_pack_qty} onChange={(event) => updateNewLine(line.__key, { per_pack_qty: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
+                              <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">Pack Qty
+                                <input type="number" step="0.0001" placeholder="Pack Qty" value={line.pack_qty} onChange={(event) => updateNewLine(line.__key, { pack_qty: event.target.value, rate_basis: line.rate_basis || "BASE_UOM" })} className={inputCls} />
+                              </label>
+                              <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">Per Pack
+                                <input type="number" step="0.0001" placeholder="Per Pack" value={line.per_pack_qty} onChange={(event) => updateNewLine(line.__key, { per_pack_qty: event.target.value })} className={inputCls} />
+                              </label>
                             </>
                           ) : (
-                            <input type="number" step="0.0001" placeholder="Qty" value={line.quantity} onChange={(event) => updateNewLine(line.__key, { quantity: event.target.value, base_qty: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500 col-span-2" />
+                            <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">Qty
+                              <input type="number" step="0.0001" placeholder="Qty" value={line.quantity} onChange={(event) => updateNewLine(line.__key, { quantity: event.target.value, base_qty: event.target.value })} className={inputCls} />
+                            </label>
                           )}
-                          <input type="number" step="0.0001" placeholder="Rate" value={line.rate} onChange={(event) => updateNewLine(line.__key, { rate: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
-                          <select value={line.gst_treatment} onChange={(event) => updateNewLine(line.__key, { gst_treatment: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
-                            <option value="EXCLUSIVE">GST Exclusive</option>
-                            <option value="INCLUSIVE">GST Inclusive</option>
-                          </select>
-                          <input type="number" step="0.01" placeholder="GST%" value={line.gst_rate} onChange={(event) => updateNewLine(line.__key, { gst_rate: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
-                          <input placeholder="HSN" value={line.hsn_code} onChange={(event) => updateNewLine(line.__key, { hsn_code: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
-                          <input placeholder="Batch" value={line.batch_number} onChange={(event) => updateNewLine(line.__key, { batch_number: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
-                          <button type="button" onClick={() => removeNewLine(line.__key)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button>
+                          <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">Rate
+                            <input type="number" step="0.0001" placeholder="Rate" value={line.rate} onChange={(event) => updateNewLine(line.__key, { rate: event.target.value })} className={inputCls} />
+                          </label>
+                          <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">GST
+                            <select value={line.gst_treatment} onChange={(event) => updateNewLine(line.__key, { gst_treatment: event.target.value })} className={inputCls}>
+                              <option value="EXCLUSIVE">GST Exclusive</option>
+                              <option value="INCLUSIVE">GST Inclusive</option>
+                            </select>
+                          </label>
+                          <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">GST %
+                            <input type="number" step="0.01" placeholder="GST%" value={line.gst_rate} onChange={(event) => updateNewLine(line.__key, { gst_rate: event.target.value })} className={inputCls} />
+                          </label>
+                          <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">HSN
+                            <input placeholder="HSN" value={line.hsn_code} onChange={(event) => updateNewLine(line.__key, { hsn_code: event.target.value })} className={inputCls} />
+                          </label>
+                          <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">Batch
+                            <input placeholder="Batch" value={line.batch_number} onChange={(event) => updateNewLine(line.__key, { batch_number: event.target.value })} className={inputCls} />
+                          </label>
+                          {needsCostingMonth ? (
+                            <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">
+                              Costing Rate Month
+                              <select value={line.costing_rate_month || ""} onChange={(event) => updateNewLine(line.__key, { costing_rate_month: event.target.value })} className="h-8 w-36 border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
+                                <option value="">Select month</option>
+                                {ac06Months.map((entry) => <option key={entry.rate_month} value={entry.rate_month}>{formatMonthLabel(entry.rate_month)}</option>)}
+                                <option value="MANUAL">Manual</option>
+                              </select>
+                            </label>
+                          ) : null}
+                          <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">Round Off
+                            <input type="number" step="0.01" placeholder="Round Off" value={line.round_off_amount} onChange={(event) => updateNewLine(line.__key, { round_off_amount: event.target.value })} className={inputCls} />
+                          </label>
+                          <button type="button" onClick={() => removeNewLine(line.__key)} className="h-8 border border-rose-300 bg-white px-2 text-[11px] font-semibold text-rose-700">Remove</button>
                         </div>
                       );
                     })}

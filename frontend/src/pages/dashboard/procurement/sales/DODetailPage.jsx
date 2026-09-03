@@ -8,9 +8,15 @@
  *          sales_order_id/sto_id, so one detail view correctly serves both
  *          shapes without branching here. Cancel is unchanged (the shared
  *          cancelDeliveryOrderHandler route/endpoint already handles both).
- *          Edit (§133.12, backend done) has no UI entry point yet — flagged,
- *          not yet built; re-opening the 3-page wizard pre-loaded with an
- *          existing DO's lines is its own follow-up increment.
+ *          Edit (§133.12) IS built — "Edit DO" (pre-PGI, status CREATED)
+ *          reopens the 3-page wizard pre-seeded from this DO's own saved
+ *          lines (DO01CreatePage's picksFromExistingDo). Post-PGI (status
+ *          DISPATCHED), the lighter "Amend Dispatch Details" panel below
+ *          covers Transporter/Vehicle/LR/Reason only. (Corrected 2026-09-03
+ *          — this comment previously and incorrectly claimed Edit had no UI
+ *          entry point; it was already wired, just under-exercised because a
+ *          real fg_type reconstruction bug made FG-line edits look broken —
+ *          see hydrateDeliveryOrderUnified's own comment for that fix.)
  * Authority: Frontend
  */
 
@@ -35,7 +41,13 @@ export default function DODetailPage() {
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
   const [amendOpen, setAmendOpen] = useState(false);
-  const [amendment, setAmendment] = useState({ transporter_id: "", vehicle_number: "", lr_number: "", lr_date: "", reason: "" });
+  // §136 (2026-09-03) — extended beyond Transporter/Vehicle/LR to also cover
+  // Driver Number/Contact, Remarks, Gross Weight (same low-risk logistics
+  // class, previously uncorrectable once a DO reached DISPATCHED).
+  const [amendment, setAmendment] = useState({
+    transporter_id: "", vehicle_number: "", lr_number: "", lr_date: "",
+    driver_number: "", driver_contact_number: "", remarks: "", gross_weight: "", reason: "",
+  });
 
   const doQuery = useQuery({
     queryKey: ["procurement", "delivery-order-v2", id],
@@ -92,7 +104,17 @@ export default function DODetailPage() {
 
   function openAmendment() {
     setActionError("");
-    setAmendment({ transporter_id: data.transporter_id || "", vehicle_number: data.vehicle_number || "", lr_number: data.lr_number || "", lr_date: data.lr_date || "", reason: "" });
+    setAmendment({
+      transporter_id: data.transporter_id || "",
+      vehicle_number: data.vehicle_number || "",
+      lr_number: data.lr_number || "",
+      lr_date: data.lr_date || "",
+      driver_number: data.driver_number || "",
+      driver_contact_number: data.driver_contact_number || "",
+      remarks: data.remarks || "",
+      gross_weight: data.gross_weight ?? "",
+      reason: "",
+    });
     setAmendOpen(true);
   }
 
@@ -158,12 +180,16 @@ export default function DODetailPage() {
           </ErpSectionCard>
 
           {amendOpen ? (
-            <ErpSectionCard eyebrow="Post-PGI Amendment" title="Correct transporter / vehicle / LR details only">
+            <ErpSectionCard eyebrow="Post-PGI Amendment" title="Correct logistics-only details — stock, invoice value and reconciliation never change">
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">Transporter</span><select value={amendment.transporter_id} onChange={(event) => setAmendment((current) => ({ ...current, transporter_id: event.target.value }))} className="h-9 border border-slate-300 bg-white px-2"><option value="">No transporter</option>{transporters.map((transporter) => <option key={transporter.id} value={transporter.id}>{transporter.transporter_name}</option>)}</select></label>
                 <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">Vehicle Number</span><input value={amendment.vehicle_number} onChange={(event) => setAmendment((current) => ({ ...current, vehicle_number: event.target.value }))} className="h-9 border border-slate-300 px-2" /></label>
                 <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">LR Number</span><input value={amendment.lr_number} onChange={(event) => setAmendment((current) => ({ ...current, lr_number: event.target.value }))} className="h-9 border border-slate-300 px-2" /></label>
                 <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">LR Date</span><input type="date" value={amendment.lr_date} onChange={(event) => setAmendment((current) => ({ ...current, lr_date: event.target.value }))} className="h-9 border border-slate-300 px-2" /></label>
+                <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">Driver Number</span><input value={amendment.driver_number} onChange={(event) => setAmendment((current) => ({ ...current, driver_number: event.target.value }))} className="h-9 border border-slate-300 px-2" /></label>
+                <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">Driver Contact Number</span><input value={amendment.driver_contact_number} onChange={(event) => setAmendment((current) => ({ ...current, driver_contact_number: event.target.value }))} className="h-9 border border-slate-300 px-2" /></label>
+                <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">Gross Weight</span><input type="number" step="0.0001" value={amendment.gross_weight} onChange={(event) => setAmendment((current) => ({ ...current, gross_weight: event.target.value }))} className="h-9 border border-slate-300 px-2" /></label>
+                <label className="grid gap-1 text-sm"><span className="text-xs text-slate-500">Remarks</span><input value={amendment.remarks} onChange={(event) => setAmendment((current) => ({ ...current, remarks: event.target.value }))} className="h-9 border border-slate-300 px-2" /></label>
                 <label className="grid gap-1 text-sm md:col-span-2"><span className="text-xs text-slate-500">Reason</span><input value={amendment.reason} onChange={(event) => setAmendment((current) => ({ ...current, reason: event.target.value }))} className="h-9 border border-slate-300 px-2" placeholder="Why are these dispatch details changing?" /></label>
                 <div className="flex gap-2 md:col-span-2"><button type="button" onClick={() => setAmendOpen(false)} className="border border-slate-300 bg-white px-4 py-2 text-xs font-semibold">Close</button><button type="button" disabled={saving} onClick={() => void saveAmendment()} className="border border-slate-800 bg-slate-800 px-4 py-2 text-xs font-semibold text-white">Save Amendment</button></div>
               </div>
@@ -172,7 +198,22 @@ export default function DODetailPage() {
 
           {Array.isArray(data.dispatch_amendments) && data.dispatch_amendments.length > 0 ? (
             <ErpSectionCard eyebrow="Audit" title="Dispatch amendment history">
-              <ErpDenseGrid cellNavigate columns={[{ key: "amended_at", label: "When", width: "180px" }, { key: "amendment_reason", label: "Reason" }, { key: "old_lr_number", label: "Old LR", width: "120px" }, { key: "new_lr_number", label: "New LR", width: "120px" }, { key: "old_vehicle_number", label: "Old Vehicle", width: "130px" }, { key: "new_vehicle_number", label: "New Vehicle", width: "130px" }]} rows={data.dispatch_amendments} rowKey={(row) => row.id} />
+              <ErpDenseGrid cellNavigate columns={[
+                { key: "amended_at", label: "When", width: "160px" },
+                { key: "amendment_reason", label: "Reason" },
+                { key: "old_lr_number", label: "Old LR", width: "110px" },
+                { key: "new_lr_number", label: "New LR", width: "110px" },
+                { key: "old_vehicle_number", label: "Old Vehicle", width: "120px" },
+                { key: "new_vehicle_number", label: "New Vehicle", width: "120px" },
+                { key: "old_driver_number", label: "Old Driver", width: "110px" },
+                { key: "new_driver_number", label: "New Driver", width: "110px" },
+                { key: "old_driver_contact_number", label: "Old Driver Contact", width: "140px" },
+                { key: "new_driver_contact_number", label: "New Driver Contact", width: "140px" },
+                { key: "old_gross_weight", label: "Old Gross Wt.", width: "110px" },
+                { key: "new_gross_weight", label: "New Gross Wt.", width: "110px" },
+                { key: "old_remarks", label: "Old Remarks", width: "150px" },
+                { key: "new_remarks", label: "New Remarks", width: "150px" },
+              ]} rows={data.dispatch_amendments} rowKey={(row) => row.id} />
             </ErpSectionCard>
           ) : null}
 

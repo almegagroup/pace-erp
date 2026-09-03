@@ -1136,7 +1136,27 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
   const soIds = sourceRows.filter((s) => s.source_type === "SALES_ORDER").map((s) => toTrimmedString(s.source_id));
   const stoIds = sourceRows.filter((s) => s.source_type === "STO").map((s) => toTrimmedString(s.source_id));
   const locationIds = [...new Set(lineRows.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
-  const [{ data: sos, error: sosError }, { data: stos, error: stosError }, { data: transporter, error: transporterError }, hydratedLines, { data: locations, error: locationsError }] = await Promise.all([
+  // §133.12 Edit real gap closed (2026-09-03) — a DO line never persists its
+  // own fg_type/per_pack_qty/packing_code (only pack_qty and packing_order_id
+  // are stored, per createDeliveryOrderUnifiedHandler's insert payload), so
+  // reopening an existing FG/SFG line for Edit had nothing to reconstruct
+  // isPackDrivenFg() from and silently lost its Pack Qty/Total Packs
+  // treatment. fg_type/per_pack_qty come back off the same so_line_id
+  // already stored on the line (sales_order_line still has both, in the
+  // exact MTO/HPS/MTEST vocabulary the frontend expects); packing_code comes
+  // off the same packing_order_id via pack_code_master, matching exactly how
+  // listDoAddSoOptionsHandler resolves it for a brand-new pick.
+  const soLineIds = [...new Set(lineRows.map((row) => toTrimmedString(row.so_line_id)).filter(Boolean))];
+  const packingOrderIds = [...new Set(lineRows.map((row) => toTrimmedString(row.packing_order_id)).filter(Boolean))];
+  const [
+    { data: sos, error: sosError },
+    { data: stos, error: stosError },
+    { data: transporter, error: transporterError },
+    hydratedLines,
+    { data: locations, error: locationsError },
+    { data: soLineExtras, error: soLineExtrasError },
+    { data: packingOrders, error: packingOrdersError },
+  ] = await Promise.all([
     soIds.length ? serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, so_date, customer_id, bill_to_name, ship_to_name").in("id", soIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
     stoIds.length ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, sto_date, receiving_company_id").in("id", stoIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
     dc.transporter_id
@@ -1144,12 +1164,24 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
       : Promise.resolve({ data: null as JsonRecord | null, error: null }),
     attachMaterialDisplay(lineRows),
     locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    soLineIds.length ? serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, fg_type, per_pack_qty").in("id", soLineIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    packingOrderIds.length ? serviceRoleClient.schema("erp_production").from("packing_order").select("id, pack_code_id").in("id", packingOrderIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
   ]);
   if (sosError) throw new Error("DO_SO_LOOKUP_FAILED");
   if (stosError) throw new Error("DO_STO_LOOKUP_FAILED");
   if (transporterError) throw new Error("DO_TRANSPORTER_LOOKUP_FAILED");
   if (locationsError) throw new Error("DO_LOCATION_LOOKUP_FAILED");
+  if (soLineExtrasError) throw new Error("DO_SO_LINE_LOOKUP_FAILED");
+  if (packingOrdersError) throw new Error("DO_PACKING_ORDER_LOOKUP_FAILED");
   const locationMap = new Map(((locations ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const soLineExtraMap = new Map(((soLineExtras ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const packingOrderMap = new Map(((packingOrders ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const packCodeIds = [...new Set(((packingOrders ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.pack_code_id)).filter(Boolean))];
+  const { data: packCodeRows, error: packCodeError } = packCodeIds.length
+    ? await serviceRoleClient.schema("erp_production").from("pack_code_master").select("id, pack_code").in("id", packCodeIds)
+    : { data: [] as JsonRecord[], error: null };
+  if (packCodeError) throw new Error("DO_PACK_CODE_LOOKUP_FAILED");
+  const packCodeMap = new Map(((packCodeRows ?? []) as JsonRecord[]).map((row) => [String(row.id), toTrimmedString(row.pack_code)]));
   const soRows = (sos ?? []) as JsonRecord[];
   const stoRows = (stos ?? []) as JsonRecord[];
 
@@ -1167,7 +1199,7 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
   if (receivingCompaniesError) throw new Error("DO_RECEIVING_COMPANY_LOOKUP_FAILED");
   const { data: amendments, error: amendmentsError } = await serviceRoleClient.schema("erp_procurement")
     .from("delivery_challan_dispatch_amendment")
-    .select("id, amendment_reason, old_transporter_id, new_transporter_id, old_vehicle_number, new_vehicle_number, old_lr_number, new_lr_number, old_lr_date, new_lr_date, amended_by, amended_at")
+    .select("id, amendment_reason, old_transporter_id, new_transporter_id, old_vehicle_number, new_vehicle_number, old_lr_number, new_lr_number, old_lr_date, new_lr_date, old_driver_number, new_driver_number, old_driver_contact_number, new_driver_contact_number, old_remarks, new_remarks, old_gross_weight, new_gross_weight, amended_by, amended_at")
     .eq("dc_id", dcId).order("amended_at", { ascending: false });
   if (amendmentsError) throw new Error("DO_DISPATCH_AMENDMENT_FETCH_FAILED");
   const customerMap = new Map(((customers ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
@@ -1193,7 +1225,15 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
     ],
     lines: hydratedLines.map((row) => {
       const location = locationMap.get(toTrimmedString(row.storage_location_id));
-      return { ...row, storage_location_display: location ? `${location.code ?? ""} — ${location.name ?? ""}`.trim() : null };
+      const soLineExtra = soLineExtraMap.get(toTrimmedString(row.so_line_id));
+      const packingOrder = packingOrderMap.get(toTrimmedString(row.packing_order_id));
+      return {
+        ...row,
+        storage_location_display: location ? `${location.code ?? ""} — ${location.name ?? ""}`.trim() : null,
+        fg_type: soLineExtra?.fg_type ?? null,
+        per_pack_qty: soLineExtra?.per_pack_qty ?? null,
+        packing_code: packingOrder ? (packCodeMap.get(toTrimmedString(packingOrder.pack_code_id)) ?? null) : null,
+      };
     }),
     dispatch_amendments: (amendments ?? []) as JsonRecord[],
   };
@@ -1986,8 +2026,12 @@ export async function cancelPgiInvoiceGroupsHandler(req: Request, ctx: Procureme
   }
 }
 
-// A posted DO may receive logistics-only corrections.  Freight, quantity,
+// A posted DO may receive logistics-only corrections. Freight, quantity,
 // stock and invoice values are intentionally absent from this payload.
+// §136 (2026-09-03) — extended to also cover Driver Number/Contact, Remarks,
+// and Gross Weight: same class of low-risk logistics field (never touches
+// stock or invoice value) as Transporter/Vehicle/LR, previously left with no
+// correction path at all once a DO reached DISPATCHED.
 export async function amendDispatchDetailsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const dcId = getIdFromPath(req);
@@ -1996,7 +2040,7 @@ export async function amendDispatchDetailsHandler(req: Request, ctx: Procurement
     const reason = toTrimmedString(body.reason);
     if (!reason) return doErrorResponse(req, ctx, "DISPATCH_AMENDMENT_REASON_REQUIRED", 400, "Amendment reason is required.");
     const { data: dc, error: dcError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
-      .select("id, selling_company_id, status, transporter_id, vehicle_number, lr_number, lr_date").eq("id", dcId).single();
+      .select("id, selling_company_id, status, transporter_id, vehicle_number, lr_number, lr_date, driver_number, driver_contact_number, remarks, gross_weight").eq("id", dcId).single();
     if (dcError || !dc) return doErrorResponse(req, ctx, "DO_NOT_FOUND", 404, "Delivery order not found.");
     const current = dc as JsonRecord;
     const companyId = toTrimmedString(current.selling_company_id);
@@ -2004,11 +2048,19 @@ export async function amendDispatchDetailsHandler(req: Request, ctx: Procurement
     if (!(await canMaintainSalesInvoice(ctx, companyId, "EDIT"))) return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI amendment access at this company.");
     if (toUpperTrimmedString(current.status) !== "DISPATCHED") return doErrorResponse(req, ctx, "DISPATCH_AMENDMENT_BLOCKED", 400, "Dispatch details can be amended only after PGI.");
 
+    const grossWeight = parseNullableNumber(body.gross_weight);
+    if (body.gross_weight !== undefined && body.gross_weight !== "" && body.gross_weight !== null && grossWeight === null) {
+      return doErrorResponse(req, ctx, "DISPATCH_AMENDMENT_GROSS_WEIGHT_INVALID", 400, "Gross Weight must be a valid number.");
+    }
     const next = {
       transporter_id: toTrimmedString(body.transporter_id) || null,
       vehicle_number: toTrimmedString(body.vehicle_number) || null,
       lr_number: toTrimmedString(body.lr_number) || null,
       lr_date: toTrimmedString(body.lr_date) || null,
+      driver_number: toTrimmedString(body.driver_number) || null,
+      driver_contact_number: toTrimmedString(body.driver_contact_number) || null,
+      remarks: toTrimmedString(body.remarks) || null,
+      gross_weight: grossWeight,
     };
     if (next.lr_date && !isManualDocumentDateWithinWindow(next.lr_date)) {
       return doErrorResponse(req, ctx, "DO_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
@@ -2016,8 +2068,12 @@ export async function amendDispatchDetailsHandler(req: Request, ctx: Procurement
     const changed = toTrimmedString(current.transporter_id) !== toTrimmedString(next.transporter_id)
       || toTrimmedString(current.vehicle_number) !== toTrimmedString(next.vehicle_number)
       || toTrimmedString(current.lr_number) !== toTrimmedString(next.lr_number)
-      || toTrimmedString(current.lr_date) !== toTrimmedString(next.lr_date);
-    if (!changed) return doErrorResponse(req, ctx, "DISPATCH_AMENDMENT_NO_CHANGE", 400, "Change at least one transport, vehicle, LR number, or LR date.");
+      || toTrimmedString(current.lr_date) !== toTrimmedString(next.lr_date)
+      || toTrimmedString(current.driver_number) !== toTrimmedString(next.driver_number)
+      || toTrimmedString(current.driver_contact_number) !== toTrimmedString(next.driver_contact_number)
+      || toTrimmedString(current.remarks) !== toTrimmedString(next.remarks)
+      || Number(current.gross_weight ?? 0) !== Number(next.gross_weight ?? 0);
+    if (!changed) return doErrorResponse(req, ctx, "DISPATCH_AMENDMENT_NO_CHANGE", 400, "Change at least one dispatch detail field.");
 
     const { error: amendmentError } = await serviceRoleClient.schema("erp_procurement").rpc("amend_delivery_challan_dispatch_details", {
       p_dc_id: dcId,
@@ -2025,6 +2081,10 @@ export async function amendDispatchDetailsHandler(req: Request, ctx: Procurement
       p_vehicle_number: next.vehicle_number,
       p_lr_number: next.lr_number,
       p_lr_date: next.lr_date,
+      p_driver_number: next.driver_number,
+      p_driver_contact_number: next.driver_contact_number,
+      p_remarks: next.remarks,
+      p_gross_weight: next.gross_weight,
       p_reason: reason,
       p_amended_by: ctx.auth_user_id,
     });

@@ -367,7 +367,7 @@ async function hydrateSo(soId: string, ctx?: ProcurementHandlerContext): Promise
     await assertSoVisibleToContext(ctx, so);
   }
 
-  const [linesResp, dcResp, gxoResp] = await Promise.all([
+  const [linesResp, dcResp, gxoResp, allocations] = await Promise.all([
     serviceRoleClient
       .schema("erp_procurement")
       .from("sales_order_line")
@@ -388,15 +388,31 @@ async function hydrateSo(soId: string, ctx?: ProcurementHandlerContext): Promise
       // never a real column, so this query 500'd on every SO create/fetch.
       .eq("sales_order_id", soId)
       .order("created_at", { ascending: false }),
+    fetchActiveMapAllocationsForSo(soId),
   ]);
 
   if (linesResp.error) throw new Error("SO_LINE_FETCH_FAILED");
   if (dcResp.error) throw new Error("SO_DC_FETCH_FAILED");
   if (gxoResp.error) throw new Error("SO_GXO_FETCH_FAILED");
 
+  // §136 — the Edit UI needs to know, per line, whether it is Mapped (locks
+  // that line's own fields) and, for the header, whether ANY line is Mapped
+  // (locks Customer/Bill-To/Ship-To document-wide) — see
+  // updateSalesOrderUnifiedHandler's own lock rules, which this mirrors.
+  const mappedQtyByLine = new Map<string, number>();
+  for (const alloc of allocations) {
+    const lineId = toTrimmedString(alloc.so_line_id);
+    mappedQtyByLine.set(lineId, (mappedQtyByLine.get(lineId) ?? 0) + Number(alloc.allocated_qty ?? 0));
+  }
+  const lines = ((linesResp.data ?? []) as JsonRecord[]).map((line) => {
+    const mappedQty = mappedQtyByLine.get(toTrimmedString((line as JsonRecord).id)) ?? 0;
+    return { ...(line as JsonRecord), mapped_qty: mappedQty, is_mapped: mappedQty > 0.0001 };
+  });
+
   return {
     ...so,
-    lines: linesResp.data ?? [],
+    lines,
+    has_active_mapping: allocations.length > 0,
     delivery_challans: dcResp.data ?? [],
     gate_exit_outbound: gxoResp.data ?? [],
   };
@@ -2932,12 +2948,23 @@ async function fetchActiveMapAllocationsForSo(soId: string): Promise<JsonRecord[
   return (data ?? []) as JsonRecord[];
 }
 
-// §133.10 — top-to-bottom editable except Bill-To/Ship-To identity (never
-// read from body here — dispatch_type/bill_to_*/ship_to_* changes must go
-// through Cancel + a new SO). Per-line: Mapped qty can't be reduced below
-// its already-mapped amount, and a Mapped line can't be removed outright.
-// DO/Invoice-level locks will extend this once those stages exist for the
-// unified flow (today only the SO-Map allocation table exists to check).
+// §136 (2026-09-03, business owner "professional standard" relock,
+// supersedes §133.10's older per-field lock list) — Company/Dispatch Type/
+// Material Types are NEVER read from body here (these decide the whole
+// document's identity -- ACL scope, numbering, which line-type forms even
+// apply -- Cancel + a new SO is the only path). Everything else is free
+// UNTIL a line is Mapped in SO Map:
+//   - Customer/Bill-To/Ship-To (incl. VDC/Parent Company/Depot) are
+//     header-level, so they lock document-wide the moment ANY line carries
+//     an ACTIVE SO Map allocation -- unmap every line to reopen them.
+//   - Every other per-line field (material_id included, qty/rate/GST/HSN/
+//     batch/declared stroke/costing month/round off/remarks/...) locks only
+//     for THAT specific line once it is Mapped -- unmap just that line to
+//     edit it again; the rest of the SO is unaffected. A Mapped line can
+//     also never be removed outright.
+//   - SO Date, Payment Term, Freight Term, Round Off, Customer PO
+//     Number/Date, and adding brand-new lines are always free -- no
+//     downstream commitment depends on them.
 export async function updateSalesOrderUnifiedHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const soId = getIdFromPath(req);
@@ -2963,6 +2990,64 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
       const lineId = toTrimmedString(alloc.so_line_id);
       mappedByLine.set(lineId, (mappedByLine.get(lineId) ?? 0) + Number(alloc.allocated_qty ?? 0));
     }
+    const hasAnyActiveMapping = allocations.length > 0;
+
+    const headerUpdate: JsonRecord = { last_updated_at: new Date().toISOString(), last_updated_by: ctx.auth_user_id };
+
+    // Customer/Bill-To/Ship-To identity — header-level, so it locks
+    // document-wide the moment any line is Mapped (not per-line).
+    const identityKeysPresent = [
+      "customer_id", "parent_company_id", "vdc_id", "depot_code_id", "bill_to_party",
+      "no_inbound_sub_type", "asian_billed_choice", "asian_billed_vdc_dc_id",
+      "ship_to_customer_address_id",
+    ].some((key) => body[key] !== undefined);
+    if (identityKeysPresent) {
+      if (hasAnyActiveMapping) {
+        return salesErrorResponse(req, ctx, "SO_HEADER_IDENTITY_LOCKED", 409,
+          "Customer/Bill-To/Ship-To is locked — at least one line is Mapped in SO Map. Unmap every line first.");
+      }
+      const dispatchType = toUpperTrimmedString(so.dispatch_type);
+      if (dispatchType === "INDEPENDENT_PARTY" || dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
+        const customerId = toTrimmedString(body.customer_id);
+        if (customerId) await assertCustomerMappedToCompany(customerId, soCompanyId);
+      }
+      let resolved: ResolvedBillToShipTo;
+      try {
+        resolved = await resolveBillToShipTo(body, dispatchType);
+      } catch (resolveError) {
+        const code = resolveError instanceof Error ? resolveError.message : "SO_BILL_TO_RESOLUTION_FAILED";
+        return salesErrorResponse(req, ctx, code, 400, code);
+      }
+      if (resolved.shipTo) {
+        const shipToValidationError = validateResolvedShipTo(resolved.shipTo);
+        if (shipToValidationError) {
+          return salesErrorResponse(req, ctx, shipToValidationError, 400, "Ship-To details are incomplete.");
+        }
+      }
+      headerUpdate.customer_id = resolved.customerId;
+      headerUpdate.bill_to_type = resolved.billToType;
+      headerUpdate.bill_to_parent_company_id = resolved.billToParentCompanyId;
+      headerUpdate.bill_to_depot_code_id = resolved.billToDepotCodeId;
+      headerUpdate.bill_to_vdc_id = resolved.billToVdcId;
+      headerUpdate.bill_to_name = resolved.billToName;
+      headerUpdate.bill_to_address = resolved.billToAddress;
+      headerUpdate.bill_to_state = resolved.billToState;
+      headerUpdate.bill_to_gst_number = resolved.billToGstNumber;
+      headerUpdate.billing_to_depot = resolved.billingToDepot;
+      headerUpdate.ship_to_same_as_customer = resolved.shipTo?.ship_to_same_as_customer ?? false;
+      headerUpdate.ship_to_type = resolved.shipTo?.ship_to_type ?? null;
+      headerUpdate.ship_to_gst_number = resolved.shipTo?.ship_to_gst_number ?? null;
+      headerUpdate.ship_to_name = resolved.shipTo?.ship_to_name ?? null;
+      headerUpdate.ship_to_address = resolved.shipTo?.ship_to_address ?? null;
+      headerUpdate.ship_to_state = resolved.shipTo?.ship_to_state ?? null;
+      headerUpdate.delivery_address = resolved.shipTo?.delivery_address ?? null;
+    }
+    // Line GST needs the EFFECTIVE Ship-To/Bill-To state -- the freshly
+    // resolved one if identity was touched this same request, else the SO's
+    // own already-stored value.
+    const effectiveShipToOrBillState = identityKeysPresent
+      ? (toTrimmedString(headerUpdate.ship_to_state as string | null) || toTrimmedString(headerUpdate.bill_to_state as string | null) || null)
+      : (toTrimmedString(so.ship_to_state) || toTrimmedString(so.bill_to_state) || null);
 
     const submittedLines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
     const submittedIds = new Set(submittedLines.map((line) => toTrimmedString(line.id)).filter(Boolean));
@@ -2977,28 +3062,50 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
       }
     }
 
+    const existingLineMap = new Map(lines.map((line) => [toTrimmedString(line.id), line]));
+    const materialTypes = Array.isArray(so.material_types) ? (so.material_types as string[]) : [];
+    let companyStateName: string | null = null;
+    if (submittedLines.length > 0) {
+      const { data: company, error: companyError } = await serviceRoleClient
+        .schema("erp_master").from("companies").select("state_name").eq("id", soCompanyId).maybeSingle();
+      if (companyError || !company) return salesErrorResponse(req, ctx, "SO_COMPANY_LOOKUP_FAILED", 500, "Unable to load company for GST derivation.");
+      companyStateName = toTrimmedString((company as JsonRecord).state_name) || null;
+    }
+    const hsnWriteBacks: Array<{ materialId: string; hsnCode: string }> = [];
+
+    // Existing, unmapped lines — fully editable (material_id included, same
+    // prepareUnifiedSoLine() Create uses, so GST/total_value always
+    // recompute correctly). A Mapped line is skipped here regardless of what
+    // was submitted for it — the UI never offers inputs for one, so nothing
+    // meaningful should ever differ; this is a safety net, not the primary
+    // gate. line_material_type is always forced back to its existing value —
+    // that composition is set once at Create and never changes per line.
     for (const submitted of submittedLines) {
       const lineId = toTrimmedString(submitted.id);
       if (!lineId) continue;
+      const existingLine = existingLineMap.get(lineId);
+      if (!existingLine) continue;
       const mappedQty = mappedByLine.get(lineId) ?? 0;
-      const newQty = Number(submitted.base_qty ?? submitted.quantity);
-      if (mappedQty > QTY_TOL_SO_EDIT && Number.isFinite(newQty) && newQty < mappedQty - QTY_TOL_SO_EDIT) {
-        return salesErrorResponse(req, ctx, "SO_EDIT_QTY_BELOW_MAPPED", 422,
-          `Line's new qty (${newQty}) is below what is already Mapped (${mappedQty}) — unmap the excess in SO Map first.`);
+      if (mappedQty > QTY_TOL_SO_EDIT) continue;
+
+      const merged: JsonRecord = { ...existingLine, ...submitted, line_material_type: existingLine.line_material_type };
+      let prepared: Awaited<ReturnType<typeof prepareUnifiedSoLine>>;
+      try {
+        prepared = await prepareUnifiedSoLine(
+          merged,
+          Number(existingLine.line_number ?? 1) - 1,
+          materialTypes,
+          companyStateName,
+          effectiveShipToOrBillState,
+        );
+      } catch (lineError) {
+        const code = lineError instanceof Error ? lineError.message : "SO_LINE_INVALID";
+        return salesErrorResponse(req, ctx, code, 400, `${code} (line ${existingLine.line_number}).`);
       }
+      if (prepared.hsnWriteBack) hsnWriteBacks.push(prepared.hsnWriteBack);
       const { error: updateError } = await serviceRoleClient
         .schema("erp_procurement").from("sales_order_line")
-        .update({
-          rate: submitted.rate !== undefined ? Number(submitted.rate) : undefined,
-          base_qty: submitted.base_qty !== undefined ? Number(submitted.base_qty) : undefined,
-          quantity: submitted.base_qty !== undefined ? Number(submitted.base_qty) : undefined,
-          gst_rate: submitted.gst_rate !== undefined ? Number(submitted.gst_rate) : undefined,
-          hsn_code: submitted.hsn_code !== undefined ? toTrimmedString(submitted.hsn_code) || null : undefined,
-          batch_number: submitted.batch_number !== undefined ? toTrimmedString(submitted.batch_number) || null : undefined,
-          expiry_date: submitted.expiry_date !== undefined ? toTrimmedString(submitted.expiry_date) || null : undefined,
-          remarks: submitted.remarks !== undefined ? toTrimmedString(submitted.remarks) || null : undefined,
-          last_updated_at: new Date().toISOString(),
-        })
+        .update({ ...prepared.payload, last_updated_at: new Date().toISOString() })
         .eq("id", lineId).eq("so_id", soId);
       if (updateError) return salesErrorResponse(req, ctx, "SO_EDIT_LINE_UPDATE_FAILED", 500, "Unable to update SO line.");
     }
@@ -3025,20 +3132,12 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
 
     const newLines = submittedLines.filter((submitted) => !toTrimmedString(submitted.id));
     if (newLines.length > 0) {
-      const { data: company, error: companyError } = await serviceRoleClient
-        .schema("erp_master").from("companies").select("state_name").eq("id", soCompanyId).maybeSingle();
-      if (companyError || !company) return salesErrorResponse(req, ctx, "SO_COMPANY_LOOKUP_FAILED", 500, "Unable to load company for GST derivation.");
-      const companyStateName = toTrimmedString((company as JsonRecord).state_name) || null;
-      const resolvedShipToOrBillState = toTrimmedString(so.ship_to_state) || toTrimmedString(so.bill_to_state) || null;
-      const materialTypes = Array.isArray(so.material_types) ? (so.material_types as string[]) : [];
       const maxLineNumber = lines.reduce((max, line) => Math.max(max, Number(line.line_number ?? 0)), 0);
-
       const newLinePayload: JsonRecord[] = [];
-      const hsnWriteBacks: Array<{ materialId: string; hsnCode: string }> = [];
       for (let i = 0; i < newLines.length; i += 1) {
         let prepared: Awaited<ReturnType<typeof prepareUnifiedSoLine>>;
         try {
-          prepared = await prepareUnifiedSoLine(newLines[i], maxLineNumber + i, materialTypes, companyStateName, resolvedShipToOrBillState);
+          prepared = await prepareUnifiedSoLine(newLines[i], maxLineNumber + i, materialTypes, companyStateName, effectiveShipToOrBillState);
         } catch (lineError) {
           const code = lineError instanceof Error ? lineError.message : "SO_LINE_INVALID";
           return salesErrorResponse(req, ctx, code, 400, `${code} (new line ${i + 1}).`);
@@ -3046,20 +3145,29 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
         newLinePayload.push({ ...prepared.payload, so_id: soId });
         if (prepared.hsnWriteBack) hsnWriteBacks.push(prepared.hsnWriteBack);
       }
-      await persistMissingMaterialHsns(hsnWriteBacks);
       const { error: insertError } = await serviceRoleClient
         .schema("erp_procurement").from("sales_order_line").insert(newLinePayload);
       if (insertError) return salesErrorResponse(req, ctx, "SO_EDIT_LINE_CREATE_FAILED", 500, "Unable to add new SO line.");
     }
+    await persistMissingMaterialHsns(hsnWriteBacks);
 
-    // Header fields — never dispatch_type/bill_to_*/ship_to_*/vdc (§133.10 identity lock).
-    const headerUpdate: JsonRecord = { last_updated_at: new Date().toISOString(), last_updated_by: ctx.auth_user_id };
+    // Header fields — always free (no downstream commitment). Company/
+    // Dispatch Type/Material Types are never read from body here.
     if (body.so_date !== undefined) {
       const soDate = toTrimmedString(body.so_date);
       if (!isManualDocumentDateWithinWindow(soDate)) {
         return salesErrorResponse(req, ctx, "SO_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
       }
       headerUpdate.so_date = soDate;
+    }
+    if (body.customer_po_number !== undefined) {
+      const customerPoNumber = toTrimmedString(body.customer_po_number);
+      if (!customerPoNumber) return salesErrorResponse(req, ctx, "SO_CUSTOMER_PO_REQUIRED", 400, "External SO Number is required.");
+      headerUpdate.customer_po_number = customerPoNumber;
+    }
+    if (body.customer_po_date !== undefined) {
+      const customerPoDate = toTrimmedString(body.customer_po_date);
+      headerUpdate.customer_po_date = customerPoDate || null;
     }
     if (body.payment_term_id !== undefined) headerUpdate.payment_term_id = toTrimmedString(body.payment_term_id) || null;
     if (body.freight_term !== undefined) headerUpdate.freight_term = toUpperTrimmedString(body.freight_term) || null;
@@ -3068,6 +3176,8 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
       if (roundOffAmount === null) return salesErrorResponse(req, ctx, "SO_ROUND_OFF_INVALID", 400, "Round Off must be a valid number.");
       headerUpdate.round_off_amount = roundOffAmount;
     }
+    if (body.remarks !== undefined) headerUpdate.remarks = toTrimmedString(body.remarks) || null;
+
     const { error: headerError } = await serviceRoleClient
       .schema("erp_procurement").from("sales_order").update(headerUpdate).eq("id", soId);
     if (headerError) return salesErrorResponse(req, ctx, "SO_EDIT_HEADER_UPDATE_FAILED", 500, "Unable to update SO header.");
