@@ -50,9 +50,20 @@ function formatFixed(value, digits = 3) {
 }
 
 function SourcePickerDrawer({ visible, sourceType, companyId, onClose, onPick }) {
+  // The default (blank-search) list is capped to the 100 most recently
+  // touched open documents server-side — an older-but-still-open one can
+  // fall past that cap once enough others exist (found live 2026-09-03: SO
+  // 9000000006, still open, ranked #143). Typing a number here searches
+  // server-side instead of just filtering the same truncated 100.
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
   const query = useQuery({
-    queryKey: ["procurement", "do-source-documents", sourceType, companyId],
-    queryFn: () => listDOSourceDocuments({ source_type: sourceType, company_id: companyId }),
+    queryKey: ["procurement", "do-source-documents", sourceType, companyId, debouncedSearch],
+    queryFn: () => listDOSourceDocuments({ source_type: sourceType, company_id: companyId, search: debouncedSearch || undefined }),
     enabled: visible,
   });
   const items = Array.isArray(query.data?.items) ? query.data.items : [];
@@ -65,6 +76,13 @@ function SourcePickerDrawer({ visible, sourceType, companyId, onClose, onPick })
       onClose={onClose}
       width="min(560px, calc(100vw - 24px))"
     >
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={sourceType === "SALES_ORDER" ? "Search SO number or Customer PO..." : "Search STO number..."}
+        className="mb-2 h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+      />
       {query.isLoading ? (
         <div className="px-2 py-6 text-sm text-slate-500">Loading open documents...</div>
       ) : items.length === 0 ? (
