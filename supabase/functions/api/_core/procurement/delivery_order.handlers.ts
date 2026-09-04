@@ -1010,7 +1010,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     const dcIds = rows.map((row) => String(row.id));
     const [{ data: sourceLinks, error: sourceLinksError }, { data: dispatchLines, error: dispatchLinesError }] = await Promise.all([
       dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").select("dc_id, source_type, source_id").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_line").select("dc_id, ship_to_name, ship_to_address, ship_to_state, line_total").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_line").select("dc_id, ship_to_name, ship_to_address, ship_to_state, line_total, material_id, so_line_id, quantity, pack_qty").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
     ]);
     if (sourceLinksError) return doErrorResponse(req, ctx, "DO_SOURCE_FETCH_FAILED", 500, "Unable to load delivery order sources.");
     if (dispatchLinesError) return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load delivery order lines.");
@@ -1018,6 +1018,24 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     for (const link of (sourceLinks ?? []) as JsonRecord[]) sourceByDc.set(toTrimmedString(link.dc_id), [...(sourceByDc.get(toTrimmedString(link.dc_id)) ?? []), link]);
     const linesByDc = new Map<string, JsonRecord[]>();
     for (const line of (dispatchLines ?? []) as JsonRecord[]) linesByDc.set(toTrimmedString(line.dc_id), [...(linesByDc.get(toTrimmedString(line.dc_id)) ?? []), line]);
+
+    // Business owner ask (2026-09-04) -- SO01/SO03/SO02 lists all need
+    // Dispatch Category + Total Qty (SO01/SO03) and FG Type + Total Pack +
+    // Total Base (SO02), so this line-level material classification is
+    // resolved once here and reused by every column across all three list
+    // pages that share this one handler.
+    const lineMaterialIds = [...new Set(((dispatchLines ?? []) as JsonRecord[]).map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
+    const lineSoLineIds = [...new Set(((dispatchLines ?? []) as JsonRecord[]).map((line) => toTrimmedString(line.so_line_id)).filter(Boolean))];
+    const [lineMaterialRows, lineSoLineRows] = await Promise.all([
+      lineMaterialIds.length
+        ? fetchInChunks<JsonRecord>(lineMaterialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master").select("id, material_type").in("id", chunk))
+        : Promise.resolve([] as JsonRecord[]),
+      lineSoLineIds.length
+        ? fetchInChunks<JsonRecord>(lineSoLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, fg_type").in("id", chunk))
+        : Promise.resolve([] as JsonRecord[]),
+    ]);
+    const materialTypeById = new Map(lineMaterialRows.map((row) => [String(row.id), toTrimmedString(row.material_type)]));
+    const fgTypeBySoLineId = new Map(lineSoLineRows.map((row) => [String(row.id), toTrimmedString(row.fg_type)]));
     const customerIds = [...new Set(rows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
     // STO-sourced DO rows have no customer_id at all (customer_id is only
     // ever set for dc_type SALES, per createDeliveryOrderHandler) -- the
@@ -1044,7 +1062,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     const transporterIds = [...new Set(rows.map((row) => toTrimmedString(row.transporter_id)).filter(Boolean))];
     const [{ data: sos }, { data: stos }, { data: transporters }] = await Promise.all([
       soIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, customer_po_number, bill_to_name, bill_to_address, bill_to_parent_company_id, bill_to_vdc_id, ibn_required").in("id", soIds)
+        ? serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, customer_po_number, bill_to_name, bill_to_address, bill_to_parent_company_id, bill_to_vdc_id, ibn_required, dispatch_category").in("id", soIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       stoIds.length
         ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number").in("id", stoIds)
@@ -1105,6 +1123,25 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       const shipTo = [...new Set(lineSnapshots.map((line) => [line.ship_to_name, line.ship_to_address, line.ship_to_state].filter(Boolean).join(" — ")).filter(Boolean))].join(" | ") || null;
       const transporter = transporterMap.get(toTrimmedString(row.transporter_id));
       const invoice = invoiceMap.get(String(row.id));
+      // Business owner ask (2026-09-04) -- Dispatch Category comes from the
+      // DO's own source SO(s) (a plain STO-sourced DO has none, since §133.14
+      // is Sales-Order-scoped); Total Qty/Total Pack are this DO's own line
+      // totals; FG Type is this DO's own line-level material/fg_type mix,
+      // distinct from Dispatch Category (which is SO-line-composition-based,
+      // not DO-line-based -- a DO can legitimately draw only a subset of its
+      // source SO's material types).
+      const dispatchCategoryDisplay = [...new Set(effectiveSos.map((entry) => toTrimmedString(entry.dispatch_category)).filter(Boolean))].join(" + ") || null;
+      const totalQty = lineSnapshots.reduce((sum, line) => sum + Number(line.quantity ?? 0), 0);
+      const totalPackQty = lineSnapshots.reduce((sum, line) => sum + Number(line.pack_qty ?? 0), 0);
+      const fgTypeDisplay = [...new Set(lineSnapshots.map((line) => {
+        const materialType = materialTypeById.get(toTrimmedString(line.material_id)) || null;
+        if (!materialType) return null;
+        if (materialType === "FG") {
+          const fgType = fgTypeBySoLineId.get(toTrimmedString(line.so_line_id));
+          return fgType ? `FG (${fgType})` : "FG";
+        }
+        return materialType;
+      }).filter(Boolean))].join(" + ") || null;
       return {
         ...row,
         source_display: sourceTypes.join(" + ") || (row.sales_order_id ? "SALES_ORDER" : row.sto_id ? "STO" : null),
@@ -1124,6 +1161,10 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         tally_invoice_date: invoice?.tally_invoice_date ?? null,
         inbound_number: invoice?.inbound_number ?? null,
         total_value: row.total_value ?? lineSnapshots.reduce((sum, line) => sum + Number(line.line_total ?? 0), 0),
+        dispatch_category: dispatchCategoryDisplay,
+        total_qty: Number(totalQty.toFixed(4)),
+        total_pack_qty: Number(totalPackQty.toFixed(4)),
+        fg_type_display: fgTypeDisplay,
       };
     });
 

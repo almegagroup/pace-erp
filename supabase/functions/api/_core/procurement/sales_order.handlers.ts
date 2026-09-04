@@ -945,7 +945,7 @@ export async function listSOsHandler(
     // the register so its commercial columns never depend on invoice data.
     const { data: commercialLineData, error: commercialLineError } = soIds.length
       ? await serviceRoleClient.schema("erp_procurement").from("sales_order_line")
-        .select("so_id, total_value, gst_amount, cgst_amount, sgst_amount, igst_amount")
+        .select("so_id, total_value, gst_amount, cgst_amount, sgst_amount, igst_amount, base_qty, quantity")
         .in("so_id", soIds)
       : { data: [], error: null };
     if (commercialLineError) {
@@ -958,12 +958,13 @@ export async function listSOsHandler(
       sgstAmount: number;
       igstAmount: number;
       totalValue: number;
+      totalQty: number;
     }>();
     for (const line of (commercialLineData ?? []) as JsonRecord[]) {
       const soId = toTrimmedString(line.so_id);
       if (!soId) continue;
       const current = commercialBySoId.get(soId) ?? {
-        netAmount: 0, gstAmount: 0, cgstAmount: 0, sgstAmount: 0, igstAmount: 0, totalValue: 0,
+        netAmount: 0, gstAmount: 0, cgstAmount: 0, sgstAmount: 0, igstAmount: 0, totalValue: 0, totalQty: 0,
       };
       const totalValue = parseNullableNumber(line.total_value) ?? 0;
       const gstAmount = parseNullableNumber(line.gst_amount) ?? 0;
@@ -973,6 +974,7 @@ export async function listSOsHandler(
       current.sgstAmount += parseNullableNumber(line.sgst_amount) ?? 0;
       current.igstAmount += parseNullableNumber(line.igst_amount) ?? 0;
       current.totalValue += totalValue;
+      current.totalQty += parseNullableNumber(line.base_qty) ?? parseNullableNumber(line.quantity) ?? 0;
       commercialBySoId.set(soId, current);
     }
 
@@ -1047,7 +1049,7 @@ export async function listSOsHandler(
       const parent = parentMap.get(toTrimmedString(row.bill_to_parent_company_id));
       const depot = depotMap.get(toTrimmedString(row.bill_to_vdc_id)) ?? depotMap.get(toTrimmedString(row.bill_to_depot_code_id));
       const commercial = commercialBySoId.get(toTrimmedString(row.id)) ?? {
-        netAmount: 0, gstAmount: 0, cgstAmount: 0, sgstAmount: 0, igstAmount: 0, totalValue: 0,
+        netAmount: 0, gstAmount: 0, cgstAmount: 0, sgstAmount: 0, igstAmount: 0, totalValue: 0, totalQty: 0,
       };
       return {
         ...row,
@@ -1057,6 +1059,7 @@ export async function listSOsHandler(
         sgst_amount: Number(commercial.sgstAmount.toFixed(4)),
         igst_amount: Number(commercial.igstAmount.toFixed(4)),
         total_value: Number(commercial.totalValue.toFixed(4)),
+        total_qty: Number(commercial.totalQty.toFixed(4)),
         customer_display: formatCustomer(customer) || (mappedConsignees.length === 1 ? mappedConsignees[0].split(" | ")[0] : null),
         ship_to_display: headerShipTo || mappedConsignees.join("; ") || null,
         company_display: company ? String(company.company_name ?? company.company_code ?? "") : null,
