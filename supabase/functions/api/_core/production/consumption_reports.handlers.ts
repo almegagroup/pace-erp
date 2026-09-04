@@ -35,7 +35,7 @@ async function resolveMaterialMap(materialIds: string[]): Promise<Map<string, Js
   if (ids.length === 0) return map;
   const rows = await fetchInChunks<JsonRecord>(ids, (chunk) =>
     serviceRoleClient.schema("erp_master").from("material_master")
-      .select("id, external_code, material_name, document_name").in("id", chunk));
+      .select("id, external_code, material_name, document_name, material_type").in("id", chunk));
   for (const row of rows) map.set(String(row.id), row);
   return map;
 }
@@ -137,6 +137,7 @@ export async function listRmPmSaleReportHandler(req: Request, ctx: ProdHandlerCo
       return {
         month: b.month,
         material_id: b.material_id,
+        item_type: toTrimmedString(material?.material_type) || null,
         item_name: toTrimmedString(material?.material_name) || null,
         external_code: toTrimmedString(material?.external_code) || null,
         document_name: toTrimmedString(material?.document_name) || null,
@@ -154,7 +155,8 @@ export async function listRmPmSaleReportHandler(req: Request, ctx: ProdHandlerCo
       rows = rows.filter((r) =>
         (r.item_name ?? "").toLowerCase().includes(search) ||
         (r.external_code ?? "").toLowerCase().includes(search) ||
-        (r.document_name ?? "").toLowerCase().includes(search));
+        (r.document_name ?? "").toLowerCase().includes(search) ||
+        (r.item_type ?? "").toLowerCase().includes(search));
     }
 
     rows.sort((a, b) => (a.month === b.month ? (a.item_name ?? "").localeCompare(b.item_name ?? "") : a.month.localeCompare(b.month)));
@@ -222,6 +224,7 @@ export async function listExcessConsumptionReportHandler(req: Request, ctx: Prod
       return {
         month: monthOf(toTrimmedString(r.invoice_date)),
         order_number: toTrimmedString(r.process_order_number) || null,
+        item_type: toTrimmedString(material?.material_type) || null,
         item_name: toTrimmedString(material?.material_name) || null,
         external_code: toTrimmedString(material?.external_code) || null,
         document_name: toTrimmedString(material?.document_name) || null,
