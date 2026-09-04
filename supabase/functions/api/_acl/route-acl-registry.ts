@@ -1553,6 +1553,14 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "APPROVE" } },
   },
   {
+    // §136 (2026-09-04) — Urgent-only gate between QA_APPROVED and Start
+    // Batch. Deliberately its own action (not QA's own APPROVE) so it can be
+    // granted to a different, higher tier (L2/L3 Manager) than plain QA
+    // approval — same shape as PR17's own split above.
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/manager-approve$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "MANAGER_APPROVE" } },
+  },
+  {
     // Was PROD_BATCH_RELEASE (shared with PR17's "release a voided batch
     // number" — a QA/Manager-tier oversight function). Split onto its own
     // resource code (2026-07-29) — Start Batch is Production's own action,

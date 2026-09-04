@@ -23,7 +23,12 @@ export type VwedAction =
   | "EDIT"
   | "DELETE"
   | "APPROVE"
-  | "EXPORT";
+  | "EXPORT"
+  // Non-VWED custom action codes (route-level only — these never map to a
+  // can_* column here; the live decision path is the snapshot-based
+  // readAclSnapshotDecisionAny() in _pipeline/acl.ts, which treats action as
+  // a free-form string against precomputed_acl_view.action_code).
+  | "MANAGER_APPROVE";
 
 export type VwedPermissionRow = {
   resource_code: string;
@@ -53,6 +58,8 @@ function actionToColumn(action: VwedAction): keyof VwedPermissionRow {
       return "can_approve";
     case "EXPORT":
       return "can_export";
+    case "MANAGER_APPROVE":
+      return "can_approve";
     default:
       // exhaustive safety
       throw new Error("VWED_UNKNOWN_ACTION");

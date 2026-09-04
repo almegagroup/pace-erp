@@ -18,9 +18,19 @@
  */
 
 // Every date-cutoff lives here, nowhere else -- change/remove in one place.
+// §136 (2026-09-04, business owner) -- schedule compressed: Grace Period
+// (Phase 2) collapsed into Phase 1's own end date, so Phase 3 (permanent
+// strict same-day enforcement) now starts 8 Sept 2026 instead of 16 Sept.
+// This was deliberately timed to land together with the new Urgent-dispatch
+// exception (DO-line urgent_decision, see do_unified.handlers.ts's PGI
+// posting-date resolution) -- Phase 3 alone, without that exception built,
+// would wrongly hard-block every legitimate Urgent order's PGI. Both must
+// ship together for 8 Sept.
 const PHASE_1_END = "2026-09-07"; // Phase 1: automated posting-date resolution (this file's own rules)
-const PHASE_2_END = "2026-09-15"; // Phase 2: grace period, real-time posting expected but not enforced
-// Phase 3 (after PHASE_2_END): strict enforcement, this file's resolution logic no longer applies at all.
+const PHASE_2_END = "2026-09-07"; // Phase 2 collapsed to zero width -- see note above; kept as its own constant (not deleted) so the 3-phase shape stays intact if a future gap is ever needed again
+// Phase 3 (after PHASE_2_END, i.e. from 8 Sept 2026): strict enforcement,
+// this file's resolution logic no longer applies at all -- except the
+// separate, permanent Urgent-dispatch exception (not part of this file).
 // Only August invoices are historical catch-up. A new September dispatch must retain its
 // own invoice date even while Phase 1 remains open for August backfill.
 const HISTORICAL_BACKFILL_INVOICE_END = "2026-08-31";

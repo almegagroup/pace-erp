@@ -384,6 +384,12 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, picks, onClose, onA
       base_qty: row.base_qty ?? row.remaining_qty,
       maxQty,
       qty: maxQty,
+      // §136 (2026-09-04) -- mandatory Yes/No whenever this Packing PO traces
+      // back to an Urgent-priority Process PO (default blank, not inherited
+      // automatically -- one urgent batch can legitimately split across an
+      // urgent FO and a completely normal one).
+      is_urgent: Boolean(option?.is_urgent),
+      urgent_dispatch_decision: null,
     });
   }
 
@@ -479,6 +485,10 @@ function picksFromExistingDo(detail) {
     batch_number: line.batch_number ?? null,
     expiry_date: line.expiry_date ?? null,
     packing_order_id: line.packing_order_id ?? null,
+    // §136 (2026-09-04) -- re-editing an existing urgent-sourced line keeps
+    // its already-saved Yes/No decision instead of forcing it blank again.
+    is_urgent: Boolean(line.is_urgent),
+    urgent_dispatch_decision: line.urgent_dispatch_decision ?? null,
     uom_code: line.uom_code,
     maxQty: Number(line.quantity ?? 0),
     qty: Number(line.quantity ?? 0),
@@ -619,6 +629,12 @@ export default function DO01CreatePage() {
         setError(`${pick.material_display || pick.material_id}: select a storage location for every picked row.`);
         return false;
       }
+      // §136 (2026-09-04) -- mirrors the backend's own mandatory check so the
+      // user sees a clear message here instead of a raw API error.
+      if (pick.is_urgent && pick.urgent_dispatch_decision !== "YES" && pick.urgent_dispatch_decision !== "NO") {
+        setError(`${pick.material_display || pick.material_id}: this Packing PO is Urgent-sourced — select Yes/No in the Urgent? column before saving.`);
+        return false;
+      }
     }
     return true;
   }
@@ -633,6 +649,7 @@ export default function DO01CreatePage() {
       batch_number: pick.batch_number || null,
       expiry_date: pick.expiry_date || null,
       packing_order_id: pick.packing_order_id || null,
+      urgent_dispatch_decision: pick.is_urgent ? pick.urgent_dispatch_decision : null,
     }));
   }
 
@@ -781,6 +798,18 @@ export default function DO01CreatePage() {
                 { key: "ship_to", label: "Ship-To", width: "280px", wrap: true, className: "whitespace-normal leading-4", render: (row) => <AddressCell value={row.__shipTo} /> },
                 { key: "material_display", label: "Material", width: "155px", wrap: true, className: "whitespace-normal leading-4", render: (row) => row.material_display || "—" },
                 { key: "packing_order", label: "Packing PO", width: "125px", render: (row) => row.packing_order_number || row.packing_order_id || "-" },
+                // §136 (2026-09-04) -- mandatory whenever this pick's Packing PO
+                // traces back to an Urgent-priority Process PO; PGI hard-blocks
+                // a same-day Tally-date mismatch unless this is Yes.
+                { key: "urgent", label: "Urgent?", width: "90px", render: (row) => (
+                  row.is_urgent ? (
+                    <select value={row.urgent_dispatch_decision || ""} onChange={(event) => updatePick(row.__key, { urgent_dispatch_decision: event.target.value || null })} className={`h-7 w-full border px-1 text-xs ${row.urgent_dispatch_decision ? "border-slate-300 bg-white" : "border-rose-400 bg-rose-50"}`}>
+                      <option value="">Select</option>
+                      <option value="YES">Yes</option>
+                      <option value="NO">No</option>
+                    </select>
+                  ) : "—"
+                ) },
                 { key: "document_name", label: "Document Name", width: "155px", render: (row) => row.document_name || "-" },
                 { key: "prodshade", label: "Prod Shade", width: "135px", render: (row) => row.prodshade_display || "-" },
                 { key: "stroke", label: "Actual Stroke", width: "95px", render: (row) => row.actual_stroke || "-" },

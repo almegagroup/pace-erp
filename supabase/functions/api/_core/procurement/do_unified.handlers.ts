@@ -359,7 +359,7 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
       const processOrderIds = [...new Set(pkoRows.map((row) => toTrimmedString(row.process_order_id)).filter(Boolean))];
       const processOrderRows = processOrderIds.length
         ? await fetchInChunks<JsonRecord>(processOrderIds, (chunk) => serviceRoleClient.schema("erp_production").from("process_order")
-          .select("id, po_number, stroke_master_id").in("id", chunk))
+          .select("id, po_number, stroke_master_id, priority").in("id", chunk))
         : [];
       const processOrderMap = new Map(processOrderRows.map((row) => [String(row.id), row]));
       const strokeMasterIds = [...new Set(processOrderRows.map((row) => toTrimmedString(row.stroke_master_id)).filter(Boolean))];
@@ -397,6 +397,9 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
           actual_stroke: strokeMaster ? toTrimmedString(strokeMaster.stroke_number) || null : null,
           process_order_number: processOrder ? toTrimmedString(processOrder.po_number) || null : null,
           packing_code: packCodeMap.get(toTrimmedString(pko.pack_code_id)) || null,
+          // §136 (2026-09-04) -- lets the picker ask for the mandatory
+          // Urgent Yes/No decision right when this Packing PO is picked.
+          is_urgent: processOrder?.priority === "URGENT",
         });
       }
     }
@@ -625,6 +628,10 @@ type PreparedDoLine = {
   displayRateBasis: string | null;
   displayRate: number | null;
   displayUomCode: string | null;
+  // §136 (2026-09-04) -- YES/NO, mandatory whenever this line draws from a
+  // Packing PO whose source Process PO is priority=URGENT; null otherwise
+  // (not asked). PGI's own posting-date resolution reads this per line.
+  urgentDispatchDecision: "YES" | "NO" | null;
   // §133.21 follow-up (2026-09-02) -- this line's own pack count (this
   // Packing PO's drawn quantity ÷ per_pack_qty), for the same
   // display-only reason: delivery_challan_line never carried Pack Qty at
@@ -716,6 +723,25 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       computeDrawnQtyByColumn("packing_order_id", submittedPkoIds, excludeDcId),
       computeDrawnQtyByFoPackingOrder(submittedPkoIds, excludeDcId),
     ]);
+
+    // §136 (2026-09-04) -- which of these Packing POs trace back to an
+    // URGENT-priority Process PO (only ones that even carry a process_order_id
+    // are relevant -- MTS/MTEST-sourced batches never get this treatment).
+    const urgentPkoIdSet = new Set<string>();
+    if (submittedPkoIds.length) {
+      const pkoWithSourceRows = await fetchInChunks<JsonRecord>(submittedPkoIds, (chunk) =>
+        serviceRoleClient.schema("erp_production").from("packing_order").select("id, process_order_id").in("id", chunk));
+      const sourceProcessOrderIds = [...new Set(pkoWithSourceRows.map((row) => toTrimmedString(row.process_order_id)).filter(Boolean))];
+      const urgentProcessOrderIdSet = new Set<string>();
+      if (sourceProcessOrderIds.length) {
+        const urgentSourceRows = await fetchInChunks<JsonRecord>(sourceProcessOrderIds, (chunk) =>
+          serviceRoleClient.schema("erp_production").from("process_order").select("id").eq("priority", "URGENT").in("id", chunk));
+        for (const row of urgentSourceRows) urgentProcessOrderIdSet.add(String(row.id));
+      }
+      for (const row of pkoWithSourceRows) {
+        if (urgentProcessOrderIdSet.has(toTrimmedString(row.process_order_id))) urgentPkoIdSet.add(String(row.id));
+      }
+    }
     const validFoPkoPairSet = new Set(validFoPkoPairs.map((row) => `${toTrimmedString(row.plan_feed_id)}:${toTrimmedString(row.packing_order_id)}`));
     const allocatedByFoPko = new Map(validFoPkoPairs.map((row) => [
       `${toTrimmedString(row.plan_feed_id)}:${toTrimmedString(row.packing_order_id)}`,
@@ -871,6 +897,21 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       // Packing PO's pack count, not the FO's overall total.
       const packQty = perPackQty > 0 ? Number((quantity / perPackQty).toFixed(6)) : null;
       const packUomCode = toTrimmedString(salesSourceLine?.pack_uom_code) || null;
+
+      // §136 (2026-09-04) -- mandatory Yes/No whenever this line is
+      // urgent-sourced (never inherited automatically -- one urgent batch
+      // can legitimately split across an urgent FO and a completely normal
+      // one, confirmed with the business owner); ignored/null otherwise.
+      const isUrgentSourced = Boolean(packingOrderId && urgentPkoIdSet.has(packingOrderId));
+      const submittedUrgentDecision = toUpperTrimmedString(raw.urgent_dispatch_decision);
+      let urgentDispatchDecision: "YES" | "NO" | null = null;
+      if (isUrgentSourced) {
+        if (submittedUrgentDecision !== "YES" && submittedUrgentDecision !== "NO") {
+          throw new Error("DO_LINE_URGENT_DECISION_REQUIRED");
+        }
+        urgentDispatchDecision = submittedUrgentDecision;
+      }
+
       prepared.push({
         materialId, quantity, storageLocationId,
         soLineId: soLineId || (soMapAllocationId ? toTrimmedString(allocationMap.get(soMapAllocationId)?.so_line_id) : null) || null,
@@ -879,7 +920,7 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         batchNumber, expiryDate, packingOrderId, uomCode, unitValue, gstRate, gstAmount,
         displayRateBasis, displayRate, displayUomCode, packQty, packUomCode,
         shipToCustomerId: null, shipToName: null, shipToAddress: null, shipToState: null, shipToGstNumber: null,
-        sourceType, sourceId,
+        sourceType, sourceId, urgentDispatchDecision,
       });
     }
 
@@ -1003,6 +1044,7 @@ function buildDoAtomicPayload(
       ship_to_gst_number: line.shipToGstNumber,
       source_type: line.sourceType,
       source_id: line.sourceId,
+      urgent_dispatch_decision: line.urgentDispatchDecision,
     })),
   };
 }
@@ -1165,7 +1207,7 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
     attachMaterialDisplay(lineRows),
     locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
     soLineIds.length ? serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, fg_type, per_pack_qty").in("id", soLineIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-    packingOrderIds.length ? serviceRoleClient.schema("erp_production").from("packing_order").select("id, pack_code_id").in("id", packingOrderIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    packingOrderIds.length ? serviceRoleClient.schema("erp_production").from("packing_order").select("id, pack_code_id, process_order_id").in("id", packingOrderIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
   ]);
   if (sosError) throw new Error("DO_SO_LOOKUP_FAILED");
   if (stosError) throw new Error("DO_STO_LOOKUP_FAILED");
@@ -1182,6 +1224,17 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
     : { data: [] as JsonRecord[], error: null };
   if (packCodeError) throw new Error("DO_PACK_CODE_LOOKUP_FAILED");
   const packCodeMap = new Map(((packCodeRows ?? []) as JsonRecord[]).map((row) => [String(row.id), toTrimmedString(row.pack_code)]));
+  // §136 (2026-09-04) -- same is_urgent resolution listDoAddSoOptionsHandler
+  // uses for a brand-new pick, so re-editing an existing line still shows
+  // whether it needs the Urgent Yes/No decision.
+  const sourceProcessOrderIds = [...new Set(((packingOrders ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.process_order_id)).filter(Boolean))];
+  const { data: sourceProcessOrders, error: sourceProcessOrdersError } = sourceProcessOrderIds.length
+    ? await serviceRoleClient.schema("erp_production").from("process_order").select("id, priority").in("id", sourceProcessOrderIds)
+    : { data: [] as JsonRecord[], error: null };
+  if (sourceProcessOrdersError) throw new Error("DO_PROCESS_ORDER_LOOKUP_FAILED");
+  const urgentProcessOrderIdSet = new Set(
+    ((sourceProcessOrders ?? []) as JsonRecord[]).filter((row) => row.priority === "URGENT").map((row) => String(row.id)),
+  );
   const soRows = (sos ?? []) as JsonRecord[];
   const stoRows = (stos ?? []) as JsonRecord[];
 
@@ -1233,6 +1286,7 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
         fg_type: soLineExtra?.fg_type ?? null,
         per_pack_qty: soLineExtra?.per_pack_qty ?? null,
         packing_code: packingOrder ? (packCodeMap.get(toTrimmedString(packingOrder.pack_code_id)) ?? null) : null,
+        is_urgent: packingOrder ? urgentProcessOrderIdSet.has(toTrimmedString(packingOrder.process_order_id)) : false,
       };
     }),
     dispatch_amendments: (amendments ?? []) as JsonRecord[],
@@ -1351,6 +1405,8 @@ type ProcInvoiceGroupLine = {
   // them, which is exactly the signal Dispatch-Reco uses to pick which of
   // its two write shapes applies to a given line.
   packing_order_id: string | null;
+  // §136 (2026-09-04) -- YES/NO/null, straight off delivery_challan_line.
+  urgent_dispatch_decision: "YES" | "NO" | null;
 };
 
 type ProcPartyDetail = { name: string | null; address: string | null; state: string | null; gst_number: string | null };
@@ -1571,6 +1627,9 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
         so_line_id: toTrimmedString(line.so_line_id) || null,
         sto_line_id: toTrimmedString(line.sto_line_id) || null,
         packing_order_id: toTrimmedString(line.packing_order_id) || null,
+        // §136 (2026-09-04) -- lets the Page 3 preview show whether the group
+        // needs (and has) the Urgent bypass before the user even tries to post.
+        urgent_dispatch_decision: (line.urgent_dispatch_decision as "YES" | "NO" | null) ?? null,
       };
     });
 
@@ -2258,7 +2317,24 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       const today = todayIsoDate();
       const backfillPhase = resolveBackfillPhase(today);
       let resolvedPostingDate = today;
-      if (backfillPhase === "PHASE_1" && isHistoricalBackfillInvoiceDate(tallyInvoiceDate)) {
+
+      // §136 (2026-09-04) -- permanent Urgent Dispatch exception, independent
+      // of the backfill phase above (that mechanism is a separate, one-time
+      // go-live catch-up device -- see dispatchBackfillPosting.ts's own
+      // note). Any line in this group whose DO line was marked
+      // urgent_dispatch_decision=YES means the whole group posts at the
+      // Tally Invoice Date, bypassing the same-day match rule entirely.
+      const groupDcLineIds = [...new Set(group.lines.map((l) => l.dc_line_id).filter(Boolean))];
+      const urgentDecisionRows = groupDcLineIds.length
+        ? await fetchInChunks<JsonRecord>(groupDcLineIds, (chunk) =>
+            serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+              .select("id, urgent_dispatch_decision").in("id", chunk))
+        : [];
+      const groupHasUrgentYes = urgentDecisionRows.some((row) => row.urgent_dispatch_decision === "YES");
+
+      if (groupHasUrgentYes) {
+        resolvedPostingDate = tallyInvoiceDate;
+      } else if (backfillPhase === "PHASE_1" && isHistoricalBackfillInvoiceDate(tallyInvoiceDate)) {
         const batchPkoIds = [...new Set(group.lines.map((l) => l.packing_order_id).filter((id): id is string => Boolean(id)))];
         const { data: backfillPkoRows, error: backfillPkoError } = batchPkoIds.length
           ? await serviceRoleClient.schema("erp_production").from("packing_order").select("id, po_type, finalized_at").in("id", batchPkoIds)

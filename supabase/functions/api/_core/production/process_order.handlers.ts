@@ -59,6 +59,18 @@ function todayIso(): string {
   return todayIsoInKolkata();
 }
 
+// §136 (2026-09-04) — Urgent-only Verify posting date. Always Current date−1,
+// automatic, no manual entry (business owner corrected 2026-09-04: no date
+// input at Verify at all). Real execution still happens right now, in real
+// chronological order; this is only a posting_date label — matching how
+// dispatchBackfillPosting.ts's own Phase 1 already works, so WAR stays
+// correct with no special ripple-recalculation.
+function addDaysIso(input: string, days: number): string {
+  const date = new Date(`${input}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 function poErr(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
 }
@@ -1510,8 +1522,8 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
       .select(`
         id, company_id, po_number, po_type, segment_code,
         material_id, stroke_master_id, machine_id, batch_number,
-        planned_qty, actual_qty, status,
-        qa_decided_by, qa_decided_at,
+        planned_qty, actual_qty, status, priority,
+        qa_decided_by, qa_decided_at, manager_decided_by, manager_decided_at,
         batch_started_at, finalized_at, verified_at, created_by, created_at
       `, { count: "exact" })
       .order("created_at", { ascending: false });
@@ -2237,12 +2249,23 @@ export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandle
       return poErr(req, ctx, "PROD_PO_NO_LINES", 422, "Cannot approve without RM lines");
     }
 
+    // §136 (2026-09-04) — QA sets Priority here (Normal default, Urgent
+    // opt-in). Urgent routes through a new Manager Approval gate before
+    // Start Batch (see managerApproveProcessOrderHandler/startBatchHandler)
+    // and later unlocks the urgent_posting_date override at Verify.
+    const body = await parseBody(req);
+    const priority = toUpperTrimmedString(body.priority) || "NORMAL";
+    if (!["NORMAL", "URGENT"].includes(priority)) {
+      return poErr(req, ctx, "PROD_PO_PRIORITY_INVALID", 400, "priority must be NORMAL or URGENT");
+    }
+
     const now = new Date().toISOString();
     const { error } = await serviceRoleClient
       .schema("erp_production")
       .from("process_order")
       .update({
         status: "QA_APPROVED",
+        priority,
         qa_decided_by: ctx.auth_user_id,
         qa_decided_at: now,
         last_updated_at: now,
@@ -2254,10 +2277,64 @@ export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandle
       throw new Error("PROD_PO_QA_APPROVE_FAILED");
     }
 
-    return okResponse({ id, status: "QA_APPROVED" }, ctx.request_id, req);
+    return okResponse({ id, status: "QA_APPROVED", priority }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PO_QA_APPROVE_FAILED";
     return poErr(req, ctx, code, 500, "QA approve failed");
+  }
+}
+
+// §136 (2026-09-04) — Urgent-only gate between QA_APPROVED and Start Batch.
+// Gated by role-level ACL capability (CAP_QA_PLANTHEAD/CAP_QA_TIER_L3MGR,
+// same shape as IN13's Block->Unrestricted maker-checker) — NOT by work
+// context, since Plant Head (L3_MANAGER) frequently has no QUALITY work
+// context assigned (verified live, prod, CMP003 + CMP006) but does carry
+// these capabilities directly on the role. Same person who QA-approved can
+// also Manager-approve, if they hold L2/L3 rank themselves — no distinct-
+// person requirement (business owner's explicit choice).
+export async function managerApproveProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    const id = getIdFromPath(req);
+    if (!id) return poErr(req, ctx, "PROD_PO_ID_MISSING", 400, "ID required");
+
+    const po = await fetchProcessOrder(id);
+    if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_QA_QUEUE", "MANAGER_APPROVE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Manager Approval access for this company.");
+    }
+    if (po.priority !== "URGENT") {
+      return poErr(req, ctx, "PROD_PO_MANAGER_APPROVAL_NOT_APPLICABLE", 422, "Manager Approval only applies to Urgent Process Orders.");
+    }
+    if (po.status !== "QA_APPROVED") {
+      return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected QA_APPROVED, got ${po.status}`);
+    }
+
+    const now = new Date().toISOString();
+    const { error } = await serviceRoleClient
+      .schema("erp_production")
+      .from("process_order")
+      .update({
+        status: "MANAGER_APPROVED",
+        manager_decided_by: ctx.auth_user_id,
+        manager_decided_at: now,
+        last_updated_at: now,
+        last_updated_by: ctx.auth_user_id,
+      })
+      .eq("id", id);
+    if (error) {
+      console.error("[process_order.managerApproveProcessOrder] update failed:", JSON.stringify(error));
+      throw new Error("PROD_PO_MANAGER_APPROVE_FAILED");
+    }
+
+    return okResponse({ id, status: "MANAGER_APPROVED" }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PO_MANAGER_APPROVE_FAILED";
+    return poErr(req, ctx, code, 500, "Manager approve failed");
   }
 }
 
@@ -2343,7 +2420,11 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
 
     // §131.1 (2026-08-26): MTEST joins MTS in skipping the QA_APPROVED gate — QA is the
     // only actor on an MTEST PO end to end, so there is no separate "QA approves" step to wait for.
-    const requiredStatus = (po.po_type === "MTS" || po.po_type === "MTEST") ? "STANDARD" : "QA_APPROVED";
+    // §136 (2026-09-04): an URGENT MTO/HPS PO must clear Manager Approval first —
+    // MANAGER_APPROVED replaces QA_APPROVED as the required status for it specifically.
+    const requiredStatus = (po.po_type === "MTS" || po.po_type === "MTEST")
+      ? "STANDARD"
+      : (po.priority === "URGENT" ? "MANAGER_APPROVED" : "QA_APPROVED");
     if (po.status !== requiredStatus) {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Must be ${requiredStatus} to start batch`);
     }
@@ -3068,7 +3149,11 @@ async function runProcessOrderVerify(
       return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
     }
 
-    const today = todayIso();
+    // §136 (2026-09-04) — URGENT priority posts at Current date−1 automatically,
+    // no manual entry. Everything else (documentDate/postingDate throughout this
+    // function, conversion-rate resolution) reads this same `today` value.
+    const realToday = todayIso();
+    const today = po.priority === "URGENT" ? addDaysIso(realToday, -1) : realToday;
     const docNumber = String(po.po_number);
     const postedBy = ctx.auth_user_id;
     const batchNumber = toTrimmedString(po.batch_number) || null;
@@ -3326,6 +3411,7 @@ async function runProcessOrderVerify(
           verified_by: ctx.auth_user_id,
           last_updated_by: ctx.auth_user_id,
           has_unapproved_deviation: hasUnapprovedDeviation,
+          urgent_posting_date: po.priority === "URGENT" ? today : null,
         },
         reservations: reservationUpdates,
         reco_rows: recoRows,
