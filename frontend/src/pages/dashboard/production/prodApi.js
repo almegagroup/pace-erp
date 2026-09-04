@@ -109,6 +109,10 @@ export const getBatchCountsReport = (p) => fetchProd("GET", "/api/production/ord
 export const searchBatchVarianceReport = (p) => fetchProd("GET", "/api/production/batch-variance-report", undefined, p);
 export const getBatchVarianceDetail = (id) => fetchProd("GET", `/api/production/batch-variance-report/${id}`);
 
+// ── PR25 RM/PM Sale Report + PR26 Excess Consumption Report ────────────────────
+export const listRmPmSaleReport = (p) => fetchProd("GET", "/api/production/rm-pm-sale-report", undefined, p);
+export const listExcessConsumptionReport = (p) => fetchProd("GET", "/api/production/excess-consumption-report", undefined, p);
+
 // ── Stroke Masters ────────────────────────────────────────────────────────────
 export const listStrokeMasters = (p) => fetchProd("GET", "/api/production/stroke-masters", undefined, p);
 export const getStrokeMaster = (id) => fetchProd("GET", `/api/production/stroke-masters/${id}`);
