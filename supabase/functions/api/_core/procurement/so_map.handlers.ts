@@ -204,7 +204,7 @@ export async function listSoForMapHandler(req: Request, ctx: ProcurementHandlerC
         ? serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, so_id, quantity, base_qty").in("so_id", soIds)
         : Promise.resolve({ data: [], error: null }),
       soIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("so_id, so_line_id, allocated_qty").in("so_id", soIds).eq("status", "ACTIVE")
+        ? serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("so_id, so_line_id, allocated_qty, fo_id").in("so_id", soIds).eq("status", "ACTIVE")
         : Promise.resolve({ data: [], error: null }),
     ]);
     if (lineResp.error) return soMapErrorResponse(req, ctx, "SO_MAP_LINE_FETCH_FAILED", 500, "Unable to load SO lines.");
@@ -217,19 +217,64 @@ export async function listSoForMapHandler(req: Request, ctx: ProcurementHandlerC
       totalBySoId.set(soId, (totalBySoId.get(soId) ?? 0) + qty);
     }
     const mappedBySoId = new Map<string, number>();
+    const foIdsBySoId = new Map<string, Set<string>>();
     for (const alloc of (allocResp.data ?? []) as JsonRecord[]) {
       const soId = String(alloc.so_id);
       mappedBySoId.set(soId, (mappedBySoId.get(soId) ?? 0) + Number(alloc.allocated_qty ?? 0));
+      const foId = toTrimmedString(alloc.fo_id);
+      if (foId) {
+        if (!foIdsBySoId.has(soId)) foIdsBySoId.set(soId, new Set());
+        foIdsBySoId.get(soId)!.add(foId);
+      }
+    }
+
+    // Business owner ask (2026-09-04) -- show which FO(s) and, per FO, which
+    // Packing PO(s) are actually mapped to each SO, so a Dependent SO's
+    // fulfillment source is visible without opening the Map drawer.
+    const allFoIds = [...new Set([...foIdsBySoId.values()].flatMap((set) => [...set]))];
+    let foNumberById = new Map<string, string>();
+    let poNumbersByFoId = new Map<string, string[]>();
+    if (allFoIds.length) {
+      const [foRows, pkoAllocRows] = await Promise.all([
+        fetchInChunks<JsonRecord>(allFoIds, (idChunk) =>
+          serviceRoleClient.schema("erp_production").from("plan_feed").select("id, fo_number").in("id", idChunk)),
+        fetchInChunks<JsonRecord>(allFoIds, (idChunk) =>
+          serviceRoleClient.schema("erp_production").from("plan_feed_packing_order_allocation").select("plan_feed_id, packing_order_id").in("plan_feed_id", idChunk)),
+      ]);
+      foNumberById = new Map(foRows.map((row) => [String(row.id), toTrimmedString(row.fo_number)]));
+      const packingOrderIds = [...new Set(pkoAllocRows.map((row) => toTrimmedString(row.packing_order_id)).filter(Boolean))];
+      const poNumberById = new Map<string, string>();
+      if (packingOrderIds.length) {
+        const poRows = await fetchInChunks<JsonRecord>(packingOrderIds, (idChunk) =>
+          serviceRoleClient.schema("erp_production").from("packing_order").select("id, po_number").in("id", idChunk));
+        for (const row of poRows) poNumberById.set(String(row.id), toTrimmedString(row.po_number));
+      }
+      const poIdsByFoId = new Map<string, Set<string>>();
+      for (const row of pkoAllocRows) {
+        const foId = toTrimmedString(row.plan_feed_id);
+        const poId = toTrimmedString(row.packing_order_id);
+        if (!foId || !poId) continue;
+        if (!poIdsByFoId.has(foId)) poIdsByFoId.set(foId, new Set());
+        poIdsByFoId.get(foId)!.add(poId);
+      }
+      poNumbersByFoId = new Map(
+        [...poIdsByFoId.entries()].map(([foId, poIds]) => [foId, [...poIds].map((poId) => poNumberById.get(poId)).filter((value): value is string => Boolean(value)).sort()]),
+      );
     }
 
     const result = soRows.map((row) => {
       const total = totalBySoId.get(String(row.id)) ?? 0;
       const mapped = mappedBySoId.get(String(row.id)) ?? 0;
+      const foIds = [...(foIdsBySoId.get(String(row.id)) ?? [])];
+      const foPackingPoGroups = foIds
+        .map((foId) => ({ fo_number: foNumberById.get(foId) || foId, po_numbers: poNumbersByFoId.get(foId) ?? [] }))
+        .sort((a, b) => a.fo_number.localeCompare(b.fo_number));
       return {
         ...row,
         total_qty: total,
         mapped_qty: mapped,
         map_status: mapped <= QTY_TOL ? "UNMAPPED" : mapped >= total - QTY_TOL ? "FULLY_MAPPED" : "PARTIALLY_MAPPED",
+        fo_packing_po_groups: foPackingPoGroups,
       };
     });
     return okResponse(result, ctx.request_id, req);

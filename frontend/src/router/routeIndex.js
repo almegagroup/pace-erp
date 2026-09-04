@@ -129,6 +129,12 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/sales-orders/create",     "/dashboard/procurement/sales-orders/:id"],
     ["/dashboard/procurement/delivery-orders",         "/dashboard/procurement/delivery-orders/:id"],
     ["/dashboard/procurement/delivery-orders/create",  "/dashboard/procurement/delivery-orders/:id"],
+    // Edit DO (§133.12, 2026-09-03) reopens DO01CreatePage at .../:id/edit —
+    // never registered here, so every "Edit DO" click bounced straight back
+    // to the dashboard (found live 2026-09-04, business owner). Same shape
+    // as the AC06/§129.8/§119.4 companion-route gaps above.
+    ["/dashboard/procurement/delivery-orders",         "/dashboard/procurement/delivery-orders/:id/edit"],
+    ["/dashboard/procurement/delivery-orders/create",  "/dashboard/procurement/delivery-orders/:id/edit"],
     ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/:id"],
     ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/pgi/create"],
     ["/dashboard/procurement/physical-inventory",      "/dashboard/procurement/physical-inventory/:id"],
