@@ -22,6 +22,7 @@ import {
   getProcessOrder,
   listBatchNumbers,
   listProcessOrders,
+  managerApproveProcessOrder,
   qaApproveProcessOrder,
   qaRejectProcessOrder,
   startBatch,
@@ -73,6 +74,9 @@ export default function QAQueuePage() {
   const [rejectOrderId, setRejectOrderId] = useState("");
   const [rejectReason, setRejectReason] = useState("");
   const [startBatchOrder, setStartBatchOrder] = useState(null);
+  // §136 (2026-09-04) -- Normal/Urgent choice at QA Approve time, per order
+  // (only meaningful before that order is actually approved).
+  const [priorityByOrderId, setPriorityByOrderId] = useState({});
 
   const { runtimeContext } = useMenu();
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
@@ -112,8 +116,27 @@ export default function QAQueuePage() {
   async function handleApprove(orderId) {
     setSaving(true);
     try {
-      await qaApproveProcessOrder(orderId);
-      toast("Process Order approved by QA.");
+      const priority = priorityByOrderId[orderId] || "NORMAL";
+      await qaApproveProcessOrder(orderId, { priority });
+      toast(priority === "URGENT" ? "Process Order approved by QA — Urgent, Manager Approval required before Start Batch." : "Process Order approved by QA.");
+      qc.invalidateQueries({ queryKey: ["qa-queue"] });
+      qc.invalidateQueries({ queryKey: ["qa-queue-detail", orderId] });
+    } catch (error) {
+      toast(friendlyError(error), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // §136 (2026-09-04) -- Urgent-only gate between QA_APPROVED and Start Batch.
+  // Access is role-level ACL (CAP_QA_PLANTHEAD/CAP_QA_TIER_L3MGR), enforced
+  // server-side — this button is always shown for an Urgent QA_APPROVED
+  // order and the backend rejects if the caller lacks the capability.
+  async function handleManagerApprove(orderId) {
+    setSaving(true);
+    try {
+      await managerApproveProcessOrder(orderId);
+      toast("Manager Approval recorded — Start Batch is now available.");
       qc.invalidateQueries({ queryKey: ["qa-queue"] });
       qc.invalidateQueries({ queryKey: ["qa-queue-detail", orderId] });
     } catch (error) {
@@ -243,6 +266,7 @@ export default function QAQueuePage() {
                   <th className="border-b px-3 py-2 text-right">Target Qty</th>
                   <th className="border-b px-3 py-2 text-left">Created By</th>
                   <th className="border-b px-3 py-2 text-left">Status</th>
+                  <th className="border-b px-3 py-2 text-left">Priority</th>
                   <th className="border-b px-3 py-2 text-right">Actions</th>
                 </tr>
               </thead>
@@ -266,6 +290,26 @@ export default function QAQueuePage() {
                           <span className={`inline-flex rounded px-2 py-1 text-xs font-medium ${statusTone(order.status)}`}>
                             {order.status ?? "--"}
                           </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          {order.status === "STANDARD" && !skipsQaApproval(order.po_type) ? (
+                            <select
+                              value={priorityByOrderId[order.id] || "NORMAL"}
+                              onChange={(event) => {
+                                event.stopPropagation();
+                                setPriorityByOrderId((current) => ({ ...current, [order.id]: event.target.value }));
+                              }}
+                              onClick={(event) => event.stopPropagation()}
+                              className="rounded border border-slate-300 px-2 py-1 text-xs"
+                            >
+                              <option value="NORMAL">Normal</option>
+                              <option value="URGENT">Urgent</option>
+                            </select>
+                          ) : order.priority === "URGENT" ? (
+                            <span className="inline-flex rounded bg-rose-100 px-2 py-1 text-xs font-semibold text-rose-700">Urgent</span>
+                          ) : (
+                            <span className="text-xs text-slate-400">Normal</span>
+                          )}
                         </td>
                         <td
                           className="px-3 py-2 text-right"
@@ -293,6 +337,17 @@ export default function QAQueuePage() {
                                 </button>
                               </>
                             )}
+                            {/* §136 (2026-09-04) -- Urgent-only gate; Start Batch stays hidden
+                                for this status+priority combo until Manager Approval clears it. */}
+                            {order.status === "QA_APPROVED" && order.priority === "URGENT" && (
+                              <button
+                                onClick={() => handleManagerApprove(order.id)}
+                                disabled={saving}
+                                className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                              >
+                                Manager Approve
+                              </button>
+                            )}
                             {order.status === "STANDARD" && skipsQaApproval(order.po_type) && (
                               <>
                                 <button
@@ -314,7 +369,18 @@ export default function QAQueuePage() {
                                 </button>
                               </>
                             )}
-                            {order.status === "QA_APPROVED" && (
+                            {/* §136 -- Start Batch for QA_APPROVED only when NOT Urgent;
+                                an Urgent order must clear MANAGER_APPROVED first. */}
+                            {order.status === "QA_APPROVED" && order.priority !== "URGENT" && (
+                              <button
+                                onClick={() => setStartBatchOrder(order)}
+                                disabled={saving}
+                                className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                              >
+                                Start Batch
+                              </button>
+                            )}
+                            {order.status === "MANAGER_APPROVED" && (
                               <button
                                 onClick={() => setStartBatchOrder(order)}
                                 disabled={saving}
@@ -328,7 +394,7 @@ export default function QAQueuePage() {
                       </tr>
                       {expanded && (
                         <tr className="bg-slate-50/80">
-                          <td colSpan={9} className="px-4 py-4">
+                          <td colSpan={10} className="px-4 py-4">
                             {detailQ.isLoading ? (
                               <p className="text-sm text-slate-500">Loading line details...</p>
                             ) : detailQ.data?.id !== order.id ? (

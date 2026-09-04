@@ -187,10 +187,34 @@ function groupInputIsValid(group, input) {
   return !groupInputValidationMessage(group, input);
 }
 
+// §136 (2026-09-04) -- mirrors the backend's own bypass exactly: a group
+// posts at a mismatched Tally Invoice Date only when at least one of its
+// lines was marked Urgent=YES at DO creation (see do_unified.handlers.ts's
+// postPgiInvoiceGroupsHandler). Proactively disables the Post button here
+// instead of only surfacing the backend's own rejection after the click.
+//
+// PHASE_3_START mirrors dispatchBackfillPosting.ts's own PHASE_2_END+1 --
+// that file is the single source of truth for the actual cutover date;
+// this is duplicated here only because the temporary backfill leniency
+// (any date accepted, unconditionally) is a backend-only mechanism with no
+// separate frontend signal. Delete this constant and the phase check below
+// together with that file once Phase 3 is the sole, permanent state.
+const PHASE_3_START = "2026-09-08";
+function groupHasUrgentYes(group) {
+  return (group.lines || []).some((line) => line.urgent_dispatch_decision === "YES");
+}
+function isTodayIso(dateStr) {
+  return dateStr === new Date().toISOString().slice(0, 10);
+}
+
 function groupInputValidationMessage(group, input) {
   if (!input) return "Invoice group input is unavailable. Reload and try again.";
   if (!input.tally_invoice_number.trim() || !input.tally_invoice_date) return "Tally Invoice Number and Date are required.";
   if (!isManualDocumentDateWithinWindow(input.tally_invoice_date)) return MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE;
+  const pastBackfillWindow = new Date().toISOString().slice(0, 10) >= PHASE_3_START;
+  if (pastBackfillWindow && !isTodayIso(input.tally_invoice_date) && !groupHasUrgentYes(group)) {
+    return "Tally Invoice Date must equal today's date, unless this dispatch was marked Urgent (Yes) at DO creation.";
+  }
   if (group.ibn_required && !input.inbound_number.trim()) return "Inbound Number (IBN) is required for this invoice group.";
 
   const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));

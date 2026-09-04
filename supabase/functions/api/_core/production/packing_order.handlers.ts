@@ -2319,7 +2319,22 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     }
 
     const poData = po as JsonRecord;
-    const today = todayIso();
+    // §136 (2026-09-04) — inherits the parent Process PO's own urgent_posting_date
+    // exactly (never recomputed independently here) -- the two steps can happen
+    // on different real days, so only the value actually stored on the source
+    // Process PO is authoritative. NORMAL-priority (or no linked Process PO,
+    // e.g. an MTS/MTEST-sourced batch) falls back to today, unchanged.
+    let today = todayIso();
+    if (toTrimmedString(poData.process_order_id)) {
+      const { data: sourceProcessOrder } = await serviceRoleClient
+        .schema("erp_production").from("process_order")
+        .select("priority, urgent_posting_date").eq("id", poData.process_order_id).maybeSingle();
+      const sourcePriority = (sourceProcessOrder as JsonRecord | null)?.priority;
+      const sourceUrgentDate = toTrimmedString((sourceProcessOrder as JsonRecord | null)?.urgent_posting_date);
+      if (sourcePriority === "URGENT" && sourceUrgentDate) {
+        today = sourceUrgentDate;
+      }
+    }
     const docNumber = poData.po_number as string;
 
     const { data: segConfig } = await serviceRoleClient

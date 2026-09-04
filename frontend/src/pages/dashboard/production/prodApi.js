@@ -178,8 +178,10 @@ export const createProcessOrder = (body) => fetchProd(
 );
 export const updateProcessOrderLines = (id, body) => fetchProd("PATCH", `/api/production/process-orders/${id}/lines`, body);
 export const editProcessOrder = (id, body) => fetchProd("PATCH", `/api/production/process-orders/${id}/edit`, body);
-export const qaApproveProcessOrder = (id) => fetchProd("POST", `/api/production/process-orders/${id}/qa-approve`);
+export const qaApproveProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/qa-approve`, body);
 export const qaRejectProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/qa-reject`, body);
+// §136 (2026-09-04) -- Urgent-only gate between QA_APPROVED and Start Batch.
+export const managerApproveProcessOrder = (id) => fetchProd("POST", `/api/production/process-orders/${id}/manager-approve`);
 export const startBatch = (id, body, poType) => fetchProd(
   "POST",
   `/api/production/process-orders/${id}/${poType === "MTEST" ? "start-batch-mtest" : "start-batch"}`,
