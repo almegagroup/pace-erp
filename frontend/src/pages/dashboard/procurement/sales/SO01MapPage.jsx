@@ -314,11 +314,37 @@ function MapDrawer({ so, onClose, onChanged }) {
   );
 }
 
+// Business owner ask (2026-09-04) -- show which FO(s), and per FO which
+// Packing PO(s), are actually mapped to this SO, without opening the Map
+// drawer. One SO can split across multiple FOs (each with its own Packing
+// PO set) -- each FO gets its own line; its Packing PO numbers are
+// comma-joined on that same line.
+function FoPackingPoCell({ groups }) {
+  if (!groups || groups.length === 0) return <span className="text-slate-400">—</span>;
+  return (
+    <div className="grid gap-0.5 py-0.5">
+      {groups.map((group) => (
+        <div key={group.fo_number} className="whitespace-nowrap">
+          <span className="font-semibold text-slate-800">FO {group.fo_number}</span>
+          <span className="text-slate-500">: {group.po_numbers.length ? group.po_numbers.join(", ") : "no Packing PO yet"}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function foPackingPoFilterText(row) {
+  return (row.fo_packing_po_groups ?? [])
+    .map((group) => `FO ${group.fo_number} ${group.po_numbers.join(" ")}`)
+    .join(" ");
+}
+
 const SO_MAP_COLUMNS = [
   { key: "so_number", label: "SO Number", width: "140px", render: (row) => row.so_number },
   { key: "customer_po_number", label: "External SO Number", width: "150px", render: (row) => row.customer_po_number || "—" },
   { key: "so_date", label: "SO Date", width: "100px", render: (row) => row.so_date },
   { key: "dispatch_type", label: "Dispatch Type", width: "180px", render: (row) => row.dispatch_type },
+  { key: "fo_packing_po", label: "FO / Packing PO", width: "260px", render: (row) => <FoPackingPoCell groups={row.fo_packing_po_groups} />, copyValue: foPackingPoFilterText },
   { key: "total", label: "Total Qty", width: "90px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
   { key: "mapped", label: "Mapped Qty", width: "90px", align: "right", render: (row) => Number(row.mapped_qty ?? 0).toFixed(2) },
   { key: "status", label: "Status", width: "120px", render: (row) => <StatusPill status={row.map_status} />, copyValue: (row) => row.map_status },
