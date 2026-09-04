@@ -110,10 +110,19 @@ export async function listRmPmSaleReportHandler(req: Request, ctx: ProdHandlerCo
 
     // 2. MTEST-derived RM/PM/INT content -- dispatch_reco already carries the
     // batch-ratio-derived Standard/Actual/AP-Approved per material per invoice line.
+    // Found live 2026-09-04 (business owner, CMP006) -- dispatch_reco.po_type is
+    // populated from the PACKING order's own po_type (computeDispatchRecoRows in
+    // do_unified.handlers.ts reads pko.po_type), which uses the packing-PO naming
+    // convention (PMTO/PHPS/PMTS/PTEST), never the process-PO naming (MTO/HPS/
+    // MTS/MTEST/INT). Filtering on "MTEST" here could never match a single row,
+    // for any company -- confirmed live: dispatch_reco's only real po_type values
+    // across the whole table are PTEST and PMTO, and CMP006's one real MTEST PGI
+    // (invoice 9200000002) already has 13 correctly-computed dispatch_reco rows
+    // sitting there with po_type='PTEST', invisible to this report the whole time.
     let recoQuery = serviceRoleClient
       .schema("erp_production").from("dispatch_reco")
       .select("material_id, invoice_date, standard_qty, actual_qty, ap_approved_qty")
-      .eq("company_id", companyId).eq("po_type", "MTEST").eq("is_voided", false);
+      .eq("company_id", companyId).eq("po_type", "PTEST").eq("is_voided", false);
     recoQuery = (recoQuery as unknown as { gte: (c: string, v: string) => typeof recoQuery }).gte("invoice_date", dateFrom);
     recoQuery = (recoQuery as unknown as { lte: (c: string, v: string) => typeof recoQuery }).lte("invoice_date", dateTo);
     const { data: recoRows, error: recoErr } = await recoQuery;
