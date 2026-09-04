@@ -82,6 +82,10 @@ import {
   listOldPackingPoBatchesHandler,
 } from "../_core/production/opening_genealogy.handlers.ts";
 import {
+  listRmPmSaleReportHandler,
+  listExcessConsumptionReportHandler,
+} from "../_core/production/consumption_reports.handlers.ts";
+import {
   listPlanFeedHandler,
   getPlanFeedHandler,
   createPlanFeedHandler,
@@ -322,6 +326,12 @@ export async function dispatchProductionRoutes(
     // PR14 Batch Variance Report
     case "GET:/api/production/batch-variance-report":
       return await searchBatchVarianceHandler(req, ctx);
+
+    // PR25 RM/PM Sale Report + PR26 Excess Consumption Report
+    case "GET:/api/production/rm-pm-sale-report":
+      return await listRmPmSaleReportHandler(req, ctx);
+    case "GET:/api/production/excess-consumption-report":
+      return await listExcessConsumptionReportHandler(req, ctx);
 
     // Process Orders
     case "GET:/api/production/process-orders":

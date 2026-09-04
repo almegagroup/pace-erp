@@ -482,6 +482,10 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/order-information-system/batch-counts": { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
   // PR14 §123 — Batch Variance Report, its own resource (report page, CAP_EVERYONE_REPORTS).
   "GET:/api/production/batch-variance-report":        { skipAcl: false, resourceCode: "PROD_BATCH_VARIANCE", action: "VIEW" },
+  // PR25/PR26 — RM/PM Sale Report + Excess Consumption Report, both read-only "Everyone
+  // Reports" (CAP_EVERYONE_REPORTS), sourced from dispatch_reco (§133.14).
+  "GET:/api/production/rm-pm-sale-report":            { skipAcl: false, resourceCode: "PROD_RM_PM_SALE_REPORT", action: "VIEW" },
+  "GET:/api/production/excess-consumption-report":    { skipAcl: false, resourceCode: "PROD_EXCESS_CONSUMPTION_REPORT", action: "VIEW" },
   "GET:/api/production/process-orders":              { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   "GET:/api/production/process-orders/availability-preview": { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   // §131.2 (2026-08-26) — read-only self-capability check (two booleans, nothing else),

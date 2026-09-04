@@ -224,6 +224,8 @@ import SlocCostingGroupPage from "../pages/dashboard/production/SlocCostingGroup
 import OldProcessPoPage from "../pages/dashboard/production/OldProcessPoPage.jsx";
 import OldPackingPoPage from "../pages/dashboard/production/OldPackingPoPage.jsx";
 import PartialReversalReportPage from "../pages/dashboard/production/PartialReversalReportPage.jsx";
+import RmPmSaleReportPage from "../pages/dashboard/production/RmPmSaleReportPage.jsx";
+import ExcessConsumptionReportPage from "../pages/dashboard/production/ExcessConsumptionReportPage.jsx";
 
 export default function AppRouter() {
   return (
@@ -911,6 +913,8 @@ export default function AppRouter() {
                   <Route path="production/fg-stock-breakdown" element={<FgStockBreakdownPage />} />
                   <Route path="production/partial-batch-reversal" element={<PartialBatchReversalPage />} />
                   <Route path="production/partial-reversal-report" element={<PartialReversalReportPage />} />
+                  <Route path="production/rm-pm-sale-report" element={<RmPmSaleReportPage />} />
+                  <Route path="production/excess-consumption-report" element={<ExcessConsumptionReportPage />} />
                   <Route path="production/conversion-cost" element={<ConversionCostPage />} />
                   <Route path="production/mts-sku-monthly-rate" element={<MtsSkuMonthlyRatePage />} />
                   <Route path="production/sloc-costing-group" element={<SlocCostingGroupPage />} />

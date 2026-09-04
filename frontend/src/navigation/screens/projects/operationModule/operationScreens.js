@@ -952,6 +952,22 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROD_RM_PM_SALE_REPORT: {
+    screen_code: "PROD_RM_PM_SALE_REPORT",
+    route: "/dashboard/production/rm-pm-sale-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_EXCESS_CONSUMPTION_REPORT: {
+    screen_code: "PROD_EXCESS_CONSUMPTION_REPORT",
+    route: "/dashboard/production/excess-consumption-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   ACC_CONVERSION_COST: {
     screen_code: "ACC_CONVERSION_COST",
     route: "/dashboard/production/conversion-cost",
