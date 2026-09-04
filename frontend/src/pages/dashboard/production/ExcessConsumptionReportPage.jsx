@@ -90,6 +90,23 @@ const COLUMNS = [
     excelValue: (row) => excelNum(row.actual_usage_qty), numFmt: "#,##0.000",
   },
   {
+    // APL - STD in base qty (kg) -- the absolute variance, alongside the existing
+    // percentage-based Excess % column. Both figures derived client-side from the
+    // same two API fields, no backend change needed.
+    key: "apl_minus_std_qty", label: "APL - STD (kg)", width: "120px", align: "right",
+    render: (row) => {
+      const value = Number(row.actual_usage_qty ?? 0) - Number(row.standard_qty ?? 0);
+      return (
+        <span className={value > 0 ? "font-semibold text-rose-600" : value < 0 ? "text-emerald-600" : ""}>
+          {formatQty(value)}
+        </span>
+      );
+    },
+    copyValue: (row) => formatQty(Number(row.actual_usage_qty ?? 0) - Number(row.standard_qty ?? 0)),
+    excelValue: (row) => excelNum(Number(row.actual_usage_qty ?? 0) - Number(row.standard_qty ?? 0)),
+    numFmt: "#,##0.000",
+  },
+  {
     key: "excess_pct", label: "Excess %", width: "100px", align: "right",
     render: (row) => (
       <span className={Number(row.excess_pct) > 0 ? "font-semibold text-rose-600" : Number(row.excess_pct) < 0 ? "text-emerald-600" : ""}>
@@ -110,24 +127,45 @@ export default function ExcessConsumptionReportPage() {
   const [search, setSearch] = useState("");
   const [dateFrom, setDateFrom] = useState(firstDayOfMonthsAgo(1));
   const [dateTo, setDateTo] = useState(today());
+  const [onlyVariance, setOnlyVariance] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
 
   const effectiveCompanyId = companyId || defaultCompanyId;
 
   const listQuery = useQuery({
-    queryKey: ["pr26", "excess-consumption-report", { companyId: effectiveCompanyId, search, dateFrom, dateTo }],
+    // No `search` here -- it's applied client-side across every column below,
+    // so typing never triggers a refetch (true instant/auto-suggest feel) and
+    // isn't limited to whichever few fields a server-side filter happened to check.
+    queryKey: ["pr26", "excess-consumption-report", { companyId: effectiveCompanyId, dateFrom, dateTo }],
     queryFn: () =>
       listExcessConsumptionReport({
         company_id: effectiveCompanyId,
-        search: search || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       }),
     enabled: Boolean(effectiveCompanyId && dateFrom && dateTo),
   });
 
-  const rows = useMemo(() => (Array.isArray(listQuery.data) ? listQuery.data : []), [listQuery.data]);
+  const allRows = useMemo(() => (Array.isArray(listQuery.data) ? listQuery.data : []), [listQuery.data]);
+  // Both filters are pure client-side -- the full fetch already has every field
+  // needed, so no extra round trip for either toggle/keystroke.
+  // "Only variance": excess_pct != 0. Search: every column, via each column's own
+  // copyValue (same text the grid/Excel export already show) -- so it matches
+  // formatted dates/percentages/qty exactly as displayed, and any column added
+  // later is automatically covered too, not just a hand-picked few fields.
+  const rows = useMemo(() => {
+    let result = onlyVariance ? allRows.filter((row) => Math.abs(Number(row.excess_pct ?? 0)) > 0.005) : allRows;
+    const term = search.trim().toLowerCase();
+    if (term) {
+      result = result.filter((row) =>
+        COLUMNS.some((column) => {
+          const value = typeof column.copyValue === "function" ? column.copyValue(row) : row[column.key];
+          return String(value ?? "").toLowerCase().includes(term);
+        }));
+    }
+    return result;
+  }, [allRows, onlyVariance, search]);
 
   async function handleExportExcel() {
     setExporting(true);
@@ -169,7 +207,7 @@ export default function ExcessConsumptionReportPage() {
         eyebrow: "",
         title: "",
         children: (
-          <div className="grid gap-2 xl:grid-cols-[200px_260px_150px_150px] items-end">
+          <div className="grid gap-2 xl:grid-cols-[200px_260px_150px_150px_170px] items-end">
             <TransactionCompanySelector
               runtimeContext={runtimeContext}
               value={effectiveCompanyId}
@@ -177,11 +215,11 @@ export default function ExcessConsumptionReportPage() {
               label="Company"
             />
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Search
+              Search (all columns)
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Item, SKU, order/SO/FO number..."
+                placeholder="Type to filter any column..."
                 className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500"
               />
             </label>
@@ -192,6 +230,15 @@ export default function ExcessConsumptionReportPage() {
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               To date (Invoice)
               <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+            </label>
+            <label className="flex h-[26px] items-center gap-1.5 text-[11px] font-medium text-slate-600">
+              <input
+                type="checkbox"
+                checked={onlyVariance}
+                onChange={(event) => setOnlyVariance(event.target.checked)}
+                className="h-3.5 w-3.5"
+              />
+              Only variance rows
             </label>
           </div>
         ),
@@ -209,6 +256,9 @@ export default function ExcessConsumptionReportPage() {
             emptyMessage={
               !effectiveCompanyId ? "Select a company to view the report."
                 : listQuery.isLoading ? "Loading..."
+                : allRows.length === 0 ? "No batch-linked dispatches found for this range."
+                : search.trim() ? "No rows match this search."
+                : onlyVariance ? "No variance rows — every dispatch in this range matched its Standard dosage."
                 : "No batch-linked dispatches found for this range."
             }
           />
