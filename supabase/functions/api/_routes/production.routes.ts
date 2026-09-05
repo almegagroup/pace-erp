@@ -76,6 +76,12 @@ import {
   verifyAc06RatesHandler,
 } from "../_core/production/ac06_workspace.handlers.ts";
 import {
+  getAc07CostingHandler,
+  listAc07MonthsHandler,
+  listAc07SkusHandler,
+  listAc07StrokesHandler,
+} from "../_core/production/ac07_costing.handlers.ts";
+import {
   createOldProcessPoHandler,
   listOldProcessPoBatchesHandler,
   createOldPackingPoHandler,
@@ -276,6 +282,16 @@ export async function dispatchProductionRoutes(
       return await getAc06HistoryHandler(req, ctx);
     case "GET:/api/production/ac06/approved-months":
       return await listAc06ApprovedMonthsHandler(req, ctx);
+
+    // AC07 Admixture Costing (read-only report)
+    case "GET:/api/production/ac07/skus":
+      return await listAc07SkusHandler(req, ctx);
+    case "GET:/api/production/ac07/strokes":
+      return await listAc07StrokesHandler(req, ctx);
+    case "GET:/api/production/ac07/months":
+      return await listAc07MonthsHandler(req, ctx);
+    case "GET:/api/production/ac07/costing":
+      return await getAc07CostingHandler(req, ctx);
 
     // Opening Genealogy (§104.9) — PR22 Old Process PO + PR23 Old Packing PO (no stock movement)
     case "POST:/api/production/old-process-po":

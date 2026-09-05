@@ -1,12 +1,12 @@
 -- AC06 "Wastage %/OTHER" column -- business owner directive 2026-09-05, after
 -- reverse-engineering a real manual costing worksheet (SKU 6763PH70599) that
 -- reconciled to the last paisa against a Sales Order rate. The worksheet
--- applies a fixed multiplicative buffer on top of each item's approved AC06
--- rate before it feeds RMC/PMC: RM/INT get +0.5% (an assumed yield/wastage
--- factor applied to the whole dosage-weighted RM cost), PM/packaging items
--- get their own +5% (or, for the outer container itself -- barrels/drums --
--- a materially larger +10%, since unloading/handling loss is higher for a
--- bulky container than a label). This was never captured anywhere before --
+-- stores the adjustment used on top of each item's approved AC06 rate before
+-- it feeds RMC/PMC. Despite the legacy column name, the business meaning is
+-- row-dependent: RM/INT and ordinary PM values are percentages, while a
+-- Barrel's OTHER value is a flat currency amount per Barrel unit (for example,
+-- 10 means Rs 10, never 10%). AC07 must read the stored monthly value and must
+-- not hardcode a Barrel amount. This was never captured anywhere before --
 -- AC06's own rate alone reproduced every RM line exactly, but the FG cost
 -- computed from it undershot the real SO rate by ~0.35% until this factor
 -- is included.

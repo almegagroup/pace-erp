@@ -294,6 +294,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/ac06/history":                { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
   // SO01 needs only the approved month labels while creating an order, not AC06 rates.
   "GET:/api/production/ac06/approved-months":        { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
+  // AC07 Admixture Costing — read-only report, no write path (Manual month/Per Pack Qty recompute client-side only)
+  "GET:/api/production/ac07/skus":                   { skipAcl: false, resourceCode: "ACC_AC07_ADMIX_COSTING", action: "VIEW" },
+  "GET:/api/production/ac07/strokes":                 { skipAcl: false, resourceCode: "ACC_AC07_ADMIX_COSTING", action: "VIEW" },
+  "GET:/api/production/ac07/months":                  { skipAcl: false, resourceCode: "ACC_AC07_ADMIX_COSTING", action: "VIEW" },
+  "GET:/api/production/ac07/costing":                 { skipAcl: false, resourceCode: "ACC_AC07_ADMIX_COSTING", action: "VIEW" },
   "GET:/api/procurement/chas":                        { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "VIEW"  },
   "POST:/api/procurement/chas":                       { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "WRITE" },
   "POST:/api/procurement/chas/toggle":                { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "EDIT"  },

@@ -992,6 +992,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  ACC_AC07_ADMIX_COSTING: {
+    screen_code: "ACC_AC07_ADMIX_COSTING",
+    route: "/dashboard/production/admix-costing",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   ACC_MTS_SKU_MONTHLY_RATE: {
     screen_code: "ACC_MTS_SKU_MONTHLY_RATE",
     route: "/dashboard/production/mts-sku-monthly-rate",
