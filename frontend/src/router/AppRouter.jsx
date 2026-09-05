@@ -181,6 +181,7 @@ import PgiInvoiceGroupsCreatePage from "../pages/dashboard/procurement/sales/Pgi
 import DODetailPage from "../pages/dashboard/procurement/sales/DODetailPage.jsx";
 import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvoiceListPage.jsx";
 import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
+import DispatchReportPage from "../pages/dashboard/procurement/sales/DispatchReportPage.jsx";
 import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocumentListPage.jsx";
 import PIDocumentCreatePage from "../pages/dashboard/procurement/inventory/PIDocumentCreatePage.jsx";
 import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
@@ -822,6 +823,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/sales-invoices/:id"
                     element={<SalesInvoiceDetailPage />}
+                  />
+                  <Route
+                    path="procurement/sales/dispatch-report"
+                    element={<DispatchReportPage />}
                   />
                   <Route
                     path="procurement/opening-stock"

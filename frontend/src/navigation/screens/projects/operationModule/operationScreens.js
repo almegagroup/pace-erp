@@ -568,6 +568,16 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // SO04 -- item-wise Dispatch Report (Tally reconciliation view), same
+  // GRP_ACL_SALES group as SO01/SO02/SO03.
+  PROC_DISPATCH_REPORT: {
+    screen_code: "PROC_DISPATCH_REPORT",
+    route: "/dashboard/procurement/sales/dispatch-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   // §113.15 -- Stage 3 PGI + Invoice creation flow, entered from SO02
   // (PROC_INV_LIST, now the DO/PGI queue) by picking a CREATED DO.
   PROC_INV_PGI_CREATE: {
