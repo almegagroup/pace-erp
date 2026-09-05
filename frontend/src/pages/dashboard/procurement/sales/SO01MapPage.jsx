@@ -29,6 +29,7 @@ import { resolveDefaultTransactionCompanyId } from "../../../../components/input
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
+import { openConfirmPrompt } from "../../../../store/actionPrompt.js";
 import {
   getSoMapStatus,
   listCustomerAddressesForSo,
@@ -174,7 +175,15 @@ function MapDrawer({ so, onClose, onChanged }) {
 
   async function handleUnmapGroup(group) {
     const itemCount = group.rows?.length ?? 0;
-    if (!window.confirm(`Unmap ${itemCount} item${itemCount === 1 ? "" : "s"} from ${group.source_display || "this destination"}? This is blocked if a Delivery Order already uses the mapping.`)) return;
+    // PACE's own Modal, not the browser's native confirm() (business owner
+    // ask 2026-09-05 -- same pattern as SAMaterialMaster.jsx's delete confirm).
+    const confirmed = await openConfirmPrompt({
+      eyebrow: "SO Map",
+      title: "Unmap this mapping?",
+      message: `Unmap ${itemCount} item${itemCount === 1 ? "" : "s"} from ${group.source_display || "this destination"}? This is blocked if a Delivery Order already uses the mapping.`,
+      confirmLabel: "Unmap",
+    });
+    if (!confirmed) return;
     setSaving(true); setActionError("");
     try {
       await releaseExistingMapping(group);

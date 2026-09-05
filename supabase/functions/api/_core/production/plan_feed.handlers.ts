@@ -1578,16 +1578,41 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       foTypeByPartyId.set(String(row.id), rawType === "ZTEST" ? "MTEST" : (rawType || null));
     }
 
+    // Business owner ask (2026-09-05) -- a stroke created under one PO Type
+    // (e.g. MTEST) is not automatically usable under another (e.g. MTO):
+    // Process PO Create's own gate checks erp_production.stroke_po_type_
+    // applicability (stroke_master_id + target_po_type + is_active), not
+    // just "does this stroke number exist anywhere for this prodshade" --
+    // that mismatch used to let an FO save with an unshared stroke showing
+    // no warning here, only to fail later at Process PO Create. This now
+    // mirrors that same applicability check, and names the PO Type(s) the
+    // stroke IS active under when it needs sharing rather than just saying
+    // "not in Stroke Master".
     const prodshadeIds = [...new Set([...prodshadeMap.values(), ...skuProdshadeMap.values()])];
-    const existingStrokePairs = new Set<string>();
+    const strokesByKey = new Map<string, JsonRecord[]>();
+    const activePoTypesByStrokeId = new Map<string, Set<string>>();
     if (prodshadeIds.length > 0) {
       const { data: strokeRows, error: strokeErr } = await serviceRoleClient
         .schema("erp_production").from("stroke_master")
-        .select("company_id, prodshade_material_id, stroke_number")
+        .select("id, company_id, prodshade_material_id, stroke_number, po_type")
         .in("prodshade_material_id", prodshadeIds);
       if (strokeErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
+      const strokeIds: string[] = [];
       for (const s of (strokeRows ?? []) as JsonRecord[]) {
-        existingStrokePairs.add(`${s.company_id}|${s.prodshade_material_id}|${s.stroke_number}`);
+        const key = `${s.company_id}|${s.prodshade_material_id}|${s.stroke_number}`;
+        if (!strokesByKey.has(key)) strokesByKey.set(key, []);
+        strokesByKey.get(key)!.push(s);
+        strokeIds.push(String(s.id));
+      }
+      if (strokeIds.length > 0) {
+        const applicabilityRows = await fetchInChunks<JsonRecord>(strokeIds, (chunk) => serviceRoleClient
+          .schema("erp_production").from("stroke_po_type_applicability")
+          .select("stroke_master_id, target_po_type").eq("is_active", true).in("stroke_master_id", chunk));
+        for (const row of applicabilityRows) {
+          const strokeId = String(row.stroke_master_id);
+          if (!activePoTypesByStrokeId.has(strokeId)) activePoTypesByStrokeId.set(strokeId, new Set());
+          activePoTypesByStrokeId.get(strokeId)!.add(toUpperTrimmedString(row.target_po_type));
+        }
       }
     }
 
@@ -1758,8 +1783,33 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       const prodshadeId = materialId
         ? prodshadeMap.get(materialId)
         : skuProdshadeMap.get(String(fo.sku ?? ""));
-      const orderedStrokeMissing = Boolean(strokeNumber) &&
-        !existingStrokePairs.has(`${fo.company_id}|${prodshadeId}|${strokeNumber}`);
+      const foPoType = fo.party_id ? (foTypeByPartyId.get(toTrimmedString(fo.party_id)) ?? null) : null;
+      // customer_master.fo_customer_type is never plain "MTO" or "HPS" on its
+      // own -- real values are "MTO_HPS" (§132), "MTS", or "ZTEST" (already
+      // normalized to "MTEST" above). stroke_po_type_applicability.target_po_type
+      // is always the specific type though, so "MTO_HPS" must accept either.
+      const acceptablePoTypes = foPoType === "MTO_HPS" ? ["MTO", "HPS"] : foPoType ? [foPoType] : [];
+      const candidateStrokes = strokeNumber ? (strokesByKey.get(`${fo.company_id}|${prodshadeId}|${strokeNumber}`) ?? []) : [];
+      let orderedStrokeMissing = false;
+      let orderedStrokeNote: string | null = null;
+      if (strokeNumber) {
+        if (candidateStrokes.length === 0) {
+          orderedStrokeMissing = true;
+          orderedStrokeNote = "Not in Stroke Master";
+        } else if (acceptablePoTypes.length > 0) {
+          const activeForFoPoType = candidateStrokes.some((s) => {
+            const active = activePoTypesByStrokeId.get(String(s.id)) ?? new Set();
+            return acceptablePoTypes.some((pt) => active.has(pt));
+          });
+          if (!activeForFoPoType) {
+            orderedStrokeMissing = true;
+            const existingTypes = [...new Set(candidateStrokes.flatMap((s) => [...(activePoTypesByStrokeId.get(String(s.id)) ?? new Set())]))];
+            orderedStrokeNote = existingTypes.length > 0
+              ? `Exists in ${existingTypes.join("/")} -- needs sharing to ${(foPoType ?? "").replaceAll("_", "/")}`
+              : "Not approved/active for any PO Type";
+          }
+        }
+      }
       return {
         id: foId,
         fo_number: fo.fo_number,
@@ -1778,6 +1828,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         status: fo.status,
         ordered_stroke_number: strokeNumber || null,
         ordered_stroke_missing: orderedStrokeMissing,
+        ordered_stroke_note: orderedStrokeNote,
         allocated_qty_kg: allocatedKg,
         packing_po_count: foAllocs.length,
         mapped_batch_numbers: mappedBatchNumbers,

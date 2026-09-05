@@ -790,7 +790,16 @@ export default function PlanFeedPage() {
     { key: "party_name", label: "Party", width: "200px" },
     { key: "party_town", label: "Town", width: "120px" },
     { key: "sku", label: "SKU", width: "135px", render: (r) => <span className="font-mono">{r.sku || "--"}</span> },
-    { key: "ordered_stroke_number", label: "Ordered Stroke", width: "135px", render: (r) => <span className="font-mono">{r.ordered_stroke_number || "--"}{r.ordered_stroke_missing ? " (Not in Stroke Master)" : ""}</span> },
+    // Business owner ask (2026-09-05) -- the material's own Document Name
+    // (already saved as plan_feed.description at Create time, auto-filled
+    // from Material Master's Document Name/material_name), just never
+    // surfaced as its own column in this Total Table before.
+    { key: "description", label: "Product Name", width: "180px", render: (r) => r.description || "--" },
+    // Business owner ask (2026-09-05) -- po_type-aware now (matches Process PO
+    // Create's own stroke_po_type_applicability gate): a stroke that exists
+    // under a DIFFERENT PO Type says exactly which one(s) and that it needs
+    // sharing, instead of the old blanket "Not in Stroke Master".
+    { key: "ordered_stroke_number", label: "Ordered Stroke", width: "170px", render: (r) => <span className="font-mono">{r.ordered_stroke_number || "--"}{r.ordered_stroke_missing && r.ordered_stroke_note ? ` (${r.ordered_stroke_note})` : ""}</span> },
     { key: "ordered_qty_kg", label: "Ordered KG", width: "110px", align: "right", copyValue: (r) => fmt(r.ordered_qty_kg), excelValue: (r) => Number(r.ordered_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono">{fmt(r.ordered_qty_kg)}</span> },
     { key: "pack_qty", label: "Pack Qty", width: "90px", align: "right", copyValue: (r) => r.pack_qty ?? "--", excelValue: (r) => (r.pack_qty ?? "" ) === "" ? "" : Number(r.pack_qty), render: (r) => <span className="font-mono">{r.pack_qty ?? "--"}</span> },
     { key: "allocated_qty_kg", label: "Mapped KG", width: "110px", align: "right", copyValue: (r) => fmt(r.allocated_qty_kg), excelValue: (r) => Number(r.allocated_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono">{fmt(r.allocated_qty_kg)}</span> },
