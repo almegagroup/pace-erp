@@ -80,6 +80,16 @@ function StrokeCell({ entries }) {
   );
 }
 
+// The grid's own StrokeCell renders the ⚠ marker via JSX, so Excel export
+// (which reads copyValue/excelValue, never the rendered element) silently
+// dropped it -- an invalid stroke looked identical to a valid one in the
+// exported file. Business owner ask (2026-09-05): keep the same "⚠" marker
+// text in the export.
+function strokeExportValue(row) {
+  if (!Array.isArray(row.so_stroke_entries)) return "";
+  return row.so_stroke_entries.map((entry) => `${entry.value}${entry.invalid ? " ⚠" : ""}`).join(", ");
+}
+
 function getColumnFilterText(column, row) {
   if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
   const raw = row?.[column.key];
@@ -88,6 +98,7 @@ function getColumnFilterText(column, row) {
 
 const GRID_COLUMNS = [
   { key: "month_year", label: "Month-Year", width: "90px" },
+  { key: "invoice_number", label: "PACE Invoice #", width: "130px", render: (r) => r.invoice_number || "—" },
   { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px" },
   { key: "tally_invoice_number", label: "Tally Invoice #", width: "130px" },
   { key: "inbound_number", label: "IBN", width: "110px", render: (r) => r.inbound_number || "—" },
@@ -106,7 +117,7 @@ const GRID_COLUMNS = [
   {
     key: "so_stroke", label: "SO Stroke", width: "110px",
     render: (r) => <StrokeCell entries={r.so_stroke_entries} />,
-    copyValue: (r) => (Array.isArray(r.so_stroke_entries) ? r.so_stroke_entries.map((e) => e.value).join(", ") : ""),
+    copyValue: strokeExportValue,
   },
   { key: "actual_stroke", label: "Actual Stroke", width: "100px", render: (r) => r.actual_stroke || "—" },
   { key: "pack_qty", label: "Pack Qty", align: "right", width: "90px", render: (r) => formatQty(r.pack_qty), excelValue: (r) => Number(r.pack_qty ?? 0), numFmt: "0.000" },
@@ -122,6 +133,16 @@ const GRID_COLUMNS = [
   { key: "bill_to_party_name", label: "Bill-To Party", width: "200px", render: (r) => r.bill_to_party_name || "—" },
   { key: "ship_to_party_name", label: "Ship-To Party", width: "200px", render: (r) => r.ship_to_party_name || "—" },
   { key: "ship_to_site_town", label: "Ship-To Site / Town", width: "180px", render: (r) => r.ship_to_site_town || "—" },
+  // Business owner ask (2026-09-05) -- the dispatching DO's own header data.
+  // Driver Name + Contact Number are combined into one column; every other
+  // transporter/vehicle/LR field gets its own column.
+  { key: "transporter_name", label: "Transporter", width: "170px", render: (r) => r.transporter_name || "—" },
+  { key: "vehicle_number", label: "Vehicle Number", width: "120px", render: (r) => r.vehicle_number || "—" },
+  { key: "lr_number", label: "LR Number", width: "110px", render: (r) => r.lr_number || "—" },
+  { key: "lr_date", label: "LR Date", width: "100px", render: (r) => r.lr_date || "—" },
+  { key: "gross_weight", label: "Gross Weight", align: "right", width: "100px", render: (r) => formatQty(r.gross_weight), excelValue: (r) => Number(r.gross_weight ?? 0), numFmt: "0.000" },
+  { key: "net_weight", label: "Net Weight", align: "right", width: "100px", render: (r) => formatQty(r.net_weight), excelValue: (r) => Number(r.net_weight ?? 0), numFmt: "0.000" },
+  { key: "driver_display", label: "Driver (Contact)", width: "160px", render: (r) => r.driver_display || "—" },
 ];
 
 const emptyFilters = () => ({
