@@ -178,9 +178,23 @@ export async function getDispatchReportHandler(
     const dcLineIds = uniqueValues(invoiceLines.map((row) => row.dc_line_id));
     const dcLines = await fetchInChunks<JsonRecord>(dcLineIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("delivery_challan_line")
-      .select("id, so_line_id, sto_line_id, material_id, so_map_allocation_id, batch_number, packing_order_id, pack_qty, pack_uom_code")
+      .select("id, dc_id, so_line_id, sto_line_id, material_id, so_map_allocation_id, batch_number, packing_order_id, pack_qty, pack_uom_code")
       .in("id", chunk));
     const dcLineById = new Map(dcLines.map((row) => [textValue(row.id), row]));
+
+    // Business owner ask (2026-09-05) -- every DO's own transporter/vehicle/
+    // LR/driver header data, per item line.
+    const dcIds = uniqueValues([...invoices.map((row) => row.dc_id), ...dcLines.map((row) => row.dc_id)]);
+    const dcHeaders = await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("delivery_challan")
+      .select("id, transporter_id, transporter_name_freetext, vehicle_number, lr_number, lr_date, gross_weight, net_weight, driver_name, driver_number, driver_contact_number")
+      .in("id", chunk));
+    const dcHeaderById = new Map(dcHeaders.map((row) => [textValue(row.id), row]));
+    const transporterIds = uniqueValues(dcHeaders.map((row) => row.transporter_id));
+    const transporters = await fetchInChunks<JsonRecord>(transporterIds, (chunk) => serviceRoleClient
+      .schema("erp_master").from("transporter_master")
+      .select("id, transporter_code, transporter_name").in("id", chunk));
+    const transporterById = new Map(transporters.map((row) => [textValue(row.id), row]));
 
     const soLineIds = uniqueValues(invoiceLines.flatMap((line) => [line.so_line_id, dcLineById.get(textValue(line.dc_line_id))?.so_line_id]));
     const soLines = await fetchInChunks<JsonRecord>(soLineIds, (chunk) => serviceRoleClient
@@ -266,6 +280,8 @@ export async function getDispatchReportHandler(
         const allocation = allocationById.get(textValue(dcLine.so_map_allocation_id)) ?? {};
         const feed = feedById.get(textValue(allocation.fo_id || invoice.fo_id)) ?? {};
         const address = addressById.get(textValue(allocation.customer_address_id || feed.customer_address_id)) ?? {};
+        const dc = dcHeaderById.get(textValue(dcLine.dc_id || invoice.dc_id)) ?? {};
+        const transporter = transporterById.get(textValue(dc.transporter_id));
         const declaredStroke = textValue(soLine.declared_stroke_number);
         const fgType = upperValue(soLine.fg_type);
         const prodshadeId = prodshadeBySkuMaterialId.get(materialId) ?? "";
@@ -273,7 +289,7 @@ export async function getDispatchReportHandler(
           prodshadeId && declaredStroke && ["MTO", "HPS"].includes(fgType)
           && !validStrokeKeys.has(`${prodshadeId}|${fgType}|${upperValue(declaredStroke)}`),
         );
-        return { line, dcLine, soLine, so, packing, process, allocation, feed, address, declaredStroke, invalidStroke };
+        return { line, dcLine, soLine, so, packing, process, allocation, feed, address, dc, transporter, declaredStroke, invalidStroke };
       });
 
       const strokeEntryMap = new Map<string, StrokeEntry>();
@@ -293,6 +309,7 @@ export async function getDispatchReportHandler(
         dispatch_type: joined(lineDetails.map((entry) => entry.so.dispatch_type || (invoice.sto_id ? "STO" : ""))),
         dispatch_category: joined(lineDetails.map((entry) => entry.so.dispatch_category)),
         external_so_number: joined(lineDetails.map((entry) => entry.so.customer_po_number)),
+        invoice_number: textValue(invoice.invoice_number),
         tally_invoice_number: textValue(invoice.tally_invoice_number),
         tally_invoice_date: tallyDate,
         inbound_number: textValue(invoice.inbound_number),
@@ -319,6 +336,34 @@ export async function getDispatchReportHandler(
         bill_to_party_name: textValue(invoice.bill_to_name),
         ship_to_party_name: textValue(invoice.ship_to_name),
         ship_to_site_town: joined(lineDetails.map((entry) => [textValue(entry.address.site_name), textValue(entry.address.town)].filter(Boolean).join(" — "))),
+        // Business owner ask (2026-09-05) -- the dispatching DO's own
+        // transporter/vehicle/LR/driver header data, per item line.
+        // Transporter Code and Transporter Name are separate columns
+        // (business owner ask, same day) -- a freetext transporter (no
+        // transporter_master row) has no code at all, name-only.
+        transporter_code: joined(lineDetails.map((entry) => entry.transporter?.transporter_code)),
+        transporter_name: joined(lineDetails.map((entry) => (entry.transporter
+          ? textValue(entry.transporter.transporter_name)
+          : textValue(entry.dc.transporter_name_freetext)))),
+        vehicle_number: joined(lineDetails.map((entry) => entry.dc.vehicle_number)),
+        lr_number: joined(lineDetails.map((entry) => entry.dc.lr_number)),
+        lr_date: joined(lineDetails.map((entry) => entry.dc.lr_date)),
+        gross_weight: joined(lineDetails.map((entry) => entry.dc.gross_weight)),
+        net_weight: joined(lineDetails.map((entry) => entry.dc.net_weight)),
+        // Driver Name + Contact Number combined into one column (business
+        // owner ask) -- e.g. "Miraj (8767645020)".
+        // Verified against real prod data (2026-09-05): delivery_challan.
+        // driver_name is NULL on every real row -- despite the column name,
+        // driver_number is where this app's own DO forms actually store the
+        // driver's NAME ("MIRAJ", "KULMENDRASINGH", ...), and
+        // driver_contact_number holds the phone number. driver_name is kept
+        // as the first choice only in case a future row ever populates it.
+        driver_display: joined(lineDetails.map((entry) => {
+          const name = textValue(entry.dc.driver_name || entry.dc.driver_number);
+          const contact = textValue(entry.dc.driver_contact_number);
+          if (!name && !contact) return "";
+          return contact ? `${name} (${contact})`.trim() : name;
+        })),
       };
     });
 

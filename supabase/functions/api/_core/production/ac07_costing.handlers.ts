@@ -373,12 +373,11 @@ export async function getAc07CostingHandler(req: Request, ctx: ProdHandlerContex
         wastage_other_pct: rateInfo?.wastage_other_pct ?? null,
         // Despite the legacy column name, a Barrel's OTHER value is a flat
         // currency amount per unit; every non-Barrel row remains percentage.
-        // Reference-only either way -- AC06's own rate already has this
-        // baked in (confirmed 2026-09-05 against the real costing worksheet:
-        // its "NET COST/KG" = D(base)+E(%wastage)+F(unloading) IS the stored
-        // rate, nothing is re-applied downstream). Re-applying it here
-        // double-counts, which is exactly what silently inflated FG Cost by
-        // ~₹0.27/pack until this fix.
+        // The frontend formula always adds this on top of Rate (same as
+        // RM/INT) -- for a material whose AC06 Rate already bakes the
+        // wastage in historically, the fix is zeroing that material's own
+        // AC06 Wastage/OTHR value (done for CMP003/CMP006's existing PM
+        // lines, 2026-09-05), not skipping the add here.
         wastage_other_mode: /BARREL/i.test(toTrimmedString(material?.material_name)) ? "FLAT_OTHER" : "PERCENT",
         qty_per_pack: Number(line.qty ?? line.qty_per_pack ?? 1),
       };
