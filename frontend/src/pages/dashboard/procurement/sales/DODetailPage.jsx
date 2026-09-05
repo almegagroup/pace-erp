@@ -26,7 +26,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { getActiveScreenContext, openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
@@ -76,6 +76,10 @@ export default function DODetailPage() {
   const canEdit = data.status === "CREATED";
 
   function openEdit() {
+    // Must push a real stack entry before navigating -- see PROC_DO_EDIT's
+    // own registration comment in operationScreens.js for why a bare
+    // navigate() here caused a flicker back to this same detail page.
+    openScreen(OPERATION_SCREENS.PROC_DO_EDIT.screen_code, { context: { id } });
     navigate(`/dashboard/procurement/delivery-orders/${encodeURIComponent(id)}/edit`);
   }
 

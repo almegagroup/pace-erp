@@ -536,6 +536,22 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // §133.12 Edit DO -- reopens DO01CreatePage at .../:id/edit. This screen
+  // code was missing entirely: DODetailPage's openEdit() called plain
+  // navigate() without ever pushing a matching stack entry, so the "active
+  // screen" stayed PROC_DO_DETAIL (pointing at the non-/edit route) while
+  // the URL moved to /edit -- every other full-page navigation in this app
+  // pushes its own screen code first (see PROC_DO_CREATE/PROC_DO_DETAIL
+  // above). Found live 2026-09-05, business owner (flicker, stays on
+  // detail page, no console error).
+  PROC_DO_EDIT: {
+    screen_code: "PROC_DO_EDIT",
+    route: "/dashboard/procurement/delivery-orders/:id/edit",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_INV_LIST: {
     screen_code: "PROC_INV_LIST",
     route: "/dashboard/procurement/sales-invoices",
