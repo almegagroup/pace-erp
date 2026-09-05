@@ -964,25 +964,43 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         sourceId = toTrimmedString(allocation.so_id);
         if (!batchNumber) batchNumber = toTrimmedString(sourceLine.batch_number) || null;
         if (!packingOrderId) packingOrderId = toTrimmedString(sourceLine.packing_order_id) || null;
-        // §133.18 -- manual Packing PO choice for an FO-linked line: verify
-        // it's actually one of THIS FO's own allocated Packing POs (not some
-        // other FO's), and that it has enough remaining balance left after
-        // accounting for both earlier DOs and any other line in this same
-        // submission already drawing from it.
+        // §133.18 -- manual Packing PO choice for an SO-Map-allocation line:
+        // verify it's a real, balance-remaining Packing PO. Two shapes share
+        // this branch (both source_kind SO_MAP_ALLOCATION): an FO-linked
+        // allocation (allocation.fo_id set) and a Fixed-Depot/No-Inbound
+        // allocation (§133.9, fo_id NULL -- routed through SO Map but with
+        // no FO/plan_feed_packing_order_allocation pairing to check at all).
+        // Found live 2026-09-05 (business owner, CMP003, Fixed Depot group):
+        // this always required allocation.fo_id whenever a Packing PO was
+        // picked, hard-blocking every Depot line with DO_PACKING_ORDER_
+        // NOT_ALLOCATED_TO_FO even though it never had -- or needed -- an FO.
         if (packingOrderId) {
           const foId = toTrimmedString(allocation.fo_id);
-          if (!foId || !validFoPkoPairSet.has(`${foId}:${packingOrderId}`)) {
-            throw new Error("DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO");
+          if (foId) {
+            // FO-linked: must be one of THIS FO's own allocated Packing POs
+            // (not some other FO's).
+            if (!validFoPkoPairSet.has(`${foId}:${packingOrderId}`)) {
+              throw new Error("DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO");
+            }
+          } else {
+            // No FO at all -- same never-trust-the-client material check the
+            // plain non-FO (soLineId) branch below already does, since there
+            // is no FO-side pairing/mismatch-confirmation mechanism here.
+            if (pkoMaterialForValidation.get(packingOrderId) !== materialId) {
+              throw new Error("DO_PACKING_ORDER_MATERIAL_MISMATCH");
+            }
           }
-          // §133.9 SKU-mismatch: once a specific Packing PO is chosen, the
-          // physically dispatched material is THAT Packing PO's own material,
-          // not necessarily the SO line's ordered material -- a confirmed
-          // mismatch means these can legitimately differ (found live
-          // 2026-09-05, FO 5158064918: SO line ordered FG-00291 "Admix
-          // sample 10 kg", actual Packing PO 9400000190 was FG-00292 "Admix
-          // sample 20 kg"). Never trust sourceLine.material_id once a real
-          // Packing PO is on the line -- storage-location lookup and the
-          // stock-availability check below must run against the real material.
+          // §133.9 SKU-mismatch (FO-linked only): once a specific Packing PO
+          // is chosen, the physically dispatched material is THAT Packing
+          // PO's own material, not necessarily the SO line's ordered
+          // material -- a confirmed mismatch means these can legitimately
+          // differ (found live 2026-09-05, FO 5158064918: SO line ordered
+          // FG-00291 "Admix sample 10 kg", actual Packing PO 9400000190 was
+          // FG-00292 "Admix sample 20 kg"). Never trust sourceLine.material_id
+          // once a real Packing PO is on the line -- storage-location lookup
+          // and the stock-availability check below must run against the
+          // real material. Harmless no-op for the No-FO branch above, which
+          // already asserted the two are equal.
           const pkoMaterialId = pkoMaterialForValidation.get(packingOrderId);
           if (pkoMaterialId) materialId = pkoMaterialId;
           const alreadyUsed = pkoUsedInThisSubmission.get(packingOrderId) ?? 0;
@@ -990,15 +1008,17 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
           if (pkoRemaining < quantity - QTY_TOL) {
             throw new Error("DO_PACKING_ORDER_INSUFFICIENT_BALANCE");
           }
-          const foPkoKey = `${foId}:${packingOrderId}`;
-          const foAlreadyUsed = foPkoUsedInThisSubmission.get(foPkoKey) ?? 0;
-          const foAllocationRemaining = (allocatedByFoPko.get(foPkoKey) ?? 0)
-            - (drawnByFoPko.get(foPkoKey) ?? 0) - foAlreadyUsed;
-          if (foAllocationRemaining < quantity - QTY_TOL) {
-            throw new Error("DO_PACKING_ORDER_ALLOCATION_EXCEEDED");
-          }
           pkoUsedInThisSubmission.set(packingOrderId, alreadyUsed + quantity);
-          foPkoUsedInThisSubmission.set(foPkoKey, foAlreadyUsed + quantity);
+          if (foId) {
+            const foPkoKey = `${foId}:${packingOrderId}`;
+            const foAlreadyUsed = foPkoUsedInThisSubmission.get(foPkoKey) ?? 0;
+            const foAllocationRemaining = (allocatedByFoPko.get(foPkoKey) ?? 0)
+              - (drawnByFoPko.get(foPkoKey) ?? 0) - foAlreadyUsed;
+            if (foAllocationRemaining < quantity - QTY_TOL) {
+              throw new Error("DO_PACKING_ORDER_ALLOCATION_EXCEEDED");
+            }
+            foPkoUsedInThisSubmission.set(foPkoKey, foAlreadyUsed + quantity);
+          }
         }
       } else if (soLineId) {
         const sourceLine = soLineMap.get(soLineId);
