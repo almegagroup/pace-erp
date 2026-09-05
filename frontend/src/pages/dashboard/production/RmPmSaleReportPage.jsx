@@ -49,6 +49,7 @@ function buildColumns() {
   });
   return [
     { key: "month", label: "Month", width: "90px" },
+    { key: "item_type", label: "Item Type", width: "90px" },
     { key: "item_name", label: "Item Name", width: "220px" },
     { key: "external_code", label: "External Code", width: "120px" },
     { key: "document_name", label: "Document Name", width: "220px" },
@@ -63,6 +64,7 @@ function buildColumns() {
 }
 
 const COLUMNS = buildColumns();
+const ITEM_TYPE_OPTIONS = ["RM", "PM", "INT"];
 
 export default function RmPmSaleReportPage() {
   const { runtimeContext } = useMenu();
@@ -70,6 +72,7 @@ export default function RmPmSaleReportPage() {
 
   const [companyId, setCompanyId] = useState(defaultCompanyId || "");
   const [search, setSearch] = useState("");
+  const [itemType, setItemType] = useState("");
   const [dateFrom, setDateFrom] = useState(firstDayOfMonthsAgo(1));
   const [dateTo, setDateTo] = useState(today());
   const [exporting, setExporting] = useState(false);
@@ -78,18 +81,31 @@ export default function RmPmSaleReportPage() {
   const effectiveCompanyId = companyId || defaultCompanyId;
 
   const listQuery = useQuery({
-    queryKey: ["pr25", "rm-pm-sale-report", { companyId: effectiveCompanyId, search, dateFrom, dateTo }],
+    // No `search` here -- filtered client-side across every column below (see
+    // PR26's own note for why), so typing never triggers a refetch.
+    queryKey: ["pr25", "rm-pm-sale-report", { companyId: effectiveCompanyId, dateFrom, dateTo }],
     queryFn: () =>
       listRmPmSaleReport({
         company_id: effectiveCompanyId,
-        search: search || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       }),
     enabled: Boolean(effectiveCompanyId && dateFrom && dateTo),
   });
 
-  const rows = useMemo(() => (Array.isArray(listQuery.data) ? listQuery.data : []), [listQuery.data]);
+  const allRows = useMemo(() => (Array.isArray(listQuery.data) ? listQuery.data : []), [listQuery.data]);
+  const rows = useMemo(() => {
+    let result = itemType ? allRows.filter((row) => row.item_type === itemType) : allRows;
+    const term = search.trim().toLowerCase();
+    if (term) {
+      result = result.filter((row) =>
+        COLUMNS.some((column) => {
+          const value = typeof column.copyValue === "function" ? column.copyValue(row) : row[column.key];
+          return String(value ?? "").toLowerCase().includes(term);
+        }));
+    }
+    return result;
+  }, [allRows, itemType, search]);
 
   async function handleExportExcel() {
     setExporting(true);
@@ -129,7 +145,7 @@ export default function RmPmSaleReportPage() {
         eyebrow: "",
         title: "",
         children: (
-          <div className="grid gap-2 xl:grid-cols-[200px_260px_150px_150px] items-end">
+          <div className="grid gap-2 xl:grid-cols-[200px_120px_260px_150px_150px] items-end">
             <TransactionCompanySelector
               runtimeContext={runtimeContext}
               value={effectiveCompanyId}
@@ -137,11 +153,18 @@ export default function RmPmSaleReportPage() {
               label="Company"
             />
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Search
+              Item Type
+              <select value={itemType} onChange={(event) => setItemType(event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
+                <option value="">All</option>
+                {ITEM_TYPE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
+              Search (all columns)
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Item name, external code, document name..."
+                placeholder="Type to filter any column..."
                 className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500"
               />
             </label>
@@ -169,7 +192,8 @@ export default function RmPmSaleReportPage() {
             emptyMessage={
               !effectiveCompanyId ? "Select a company to view the report."
                 : listQuery.isLoading ? "Loading..."
-                : "No RM/PM/INT sale or MTEST dispatch found for this range."
+                : allRows.length === 0 ? "No RM/PM/INT sale or MTEST dispatch found for this range."
+                : "No rows match the current filter."
             }
           />
         ),

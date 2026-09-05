@@ -54,6 +54,7 @@ function excelNum(value) {
 const COLUMNS = [
   { key: "month", label: "Month", width: "80px" },
   { key: "order_number", label: "Order Number", width: "110px" },
+  { key: "item_type", label: "Item Type", width: "90px" },
   { key: "item_name", label: "Item Name", width: "200px" },
   { key: "external_code", label: "External Code", width: "110px" },
   { key: "document_name", label: "Document Name", width: "200px" },
@@ -118,6 +119,7 @@ const COLUMNS = [
     excelColor: (row) => (Number(row.excess_pct) > 0 ? { fontArgb: "FFBE123C", bold: true } : null),
   },
 ];
+const ITEM_TYPE_OPTIONS = ["RM", "PM", "INT"];
 
 export default function ExcessConsumptionReportPage() {
   const { runtimeContext } = useMenu();
@@ -125,6 +127,7 @@ export default function ExcessConsumptionReportPage() {
 
   const [companyId, setCompanyId] = useState(defaultCompanyId || "");
   const [search, setSearch] = useState("");
+  const [itemType, setItemType] = useState("");
   const [dateFrom, setDateFrom] = useState(firstDayOfMonthsAgo(1));
   const [dateTo, setDateTo] = useState(today());
   const [onlyVariance, setOnlyVariance] = useState(false);
@@ -156,6 +159,7 @@ export default function ExcessConsumptionReportPage() {
   // later is automatically covered too, not just a hand-picked few fields.
   const rows = useMemo(() => {
     let result = onlyVariance ? allRows.filter((row) => Math.abs(Number(row.excess_pct ?? 0)) > 0.005) : allRows;
+    if (itemType) result = result.filter((row) => row.item_type === itemType);
     const term = search.trim().toLowerCase();
     if (term) {
       result = result.filter((row) =>
@@ -165,7 +169,7 @@ export default function ExcessConsumptionReportPage() {
         }));
     }
     return result;
-  }, [allRows, onlyVariance, search]);
+  }, [allRows, onlyVariance, itemType, search]);
 
   async function handleExportExcel() {
     setExporting(true);
@@ -207,13 +211,20 @@ export default function ExcessConsumptionReportPage() {
         eyebrow: "",
         title: "",
         children: (
-          <div className="grid gap-2 xl:grid-cols-[200px_260px_150px_150px_170px] items-end">
+          <div className="grid gap-2 xl:grid-cols-[200px_120px_260px_150px_150px_170px] items-end">
             <TransactionCompanySelector
               runtimeContext={runtimeContext}
               value={effectiveCompanyId}
               onChange={(value) => setCompanyId(value)}
               label="Company"
             />
+            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
+              Item Type
+              <select value={itemType} onChange={(event) => setItemType(event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
+                <option value="">All</option>
+                {ITEM_TYPE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Search (all columns)
               <input

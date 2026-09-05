@@ -39,17 +39,26 @@ const SO_EXPORT_COLUMNS = [
   { key: "ship_to_display", label: "Ship-To Address" },
   { key: "customer_po_number", label: "Customer PO" },
   { key: "dispatch_type", label: "Dispatch Type" },
+  { key: "dispatch_category", label: "Dispatch Category" },
   { key: "parent_company_display", label: "Parent Company" },
   { key: "depot_code_display", label: "VDC / DC" },
   { key: "so_date", label: "SO Date" },
   { key: "status", label: "Status" },
   { key: "company_display", label: "Company" },
+  { key: "total_qty", label: "Total Qty" },
   { key: "net_amount", label: "Net Amount" },
   { key: "cgst_amount", label: "CGST" },
   { key: "sgst_amount", label: "SGST" },
   { key: "igst_amount", label: "IGST" },
   { key: "total_value", label: "Total Value" },
 ];
+
+// Business owner ask (2026-09-04) -- autosuggest search across every visible
+// column, same pattern already used on SO01MapPage.jsx. This list is
+// server-paginated (§113.10), so suggestions only reflect the currently
+// loaded page -- narrower than a full-dataset suggestion set, but zero extra
+// round trips and consistent with the existing search-is-server-side design.
+const SO_SEARCH_COLUMN_KEYS = ["so_number", "customer_display", "customer_po_number", "dispatch_type", "dispatch_category", "parent_company_display", "depot_code_display", "status", "company_display"];
 
 function soStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -100,12 +109,23 @@ export default function SOListPage() {
     enabled: Boolean(effectiveCompanyId),
   });
 
-  const rows = Array.isArray(soQuery.data?.items) ? soQuery.data.items : [];
+  const rows = useMemo(() => (Array.isArray(soQuery.data?.items) ? soQuery.data.items : []), [soQuery.data]);
   const total = Number(soQuery.data?.total ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
   const loading = soQuery.isLoading;
+
+  const searchOptions = useMemo(() => {
+    const values = new Set();
+    for (const row of rows) {
+      for (const key of SO_SEARCH_COLUMN_KEYS) {
+        const text = row[key];
+        if (text) values.add(String(text));
+      }
+    }
+    return [...values].sort();
+  }, [rows]);
 
   function openCreateSO() {
     openScreen(OPERATION_SCREENS.PROC_SO_CREATE.screen_code);
@@ -175,7 +195,11 @@ export default function SOListPage() {
               onChange={(value) => { setSearch(value); setPage(1); }}
               primaryFocus
               placeholder="SO number, customer PO number"
+              inputProps={{ list: "so-list-search-options" }}
             />
+            <datalist id="so-list-search-options">
+              {searchOptions.map((option) => <option key={option} value={option} />)}
+            </datalist>
           </div>
         ),
       }}
@@ -195,6 +219,7 @@ export default function SOListPage() {
                   { key: "ship_to_display", label: "Ship-To Address", width: "280px", render: (row) => row.ship_to_display || "—" },
                   { key: "customer_po_number", label: "Customer PO", width: "140px" },
                   { key: "dispatch_type", label: "Dispatch Type", width: "180px", render: (row) => row.dispatch_type || "—" },
+                  { key: "dispatch_category", label: "Dispatch Category", width: "140px", render: (row) => row.dispatch_category || "—" },
                   { key: "parent_company_display", label: "Parent Company", width: "220px", render: (row) => row.parent_company_display || "—" },
                   { key: "depot_code_display", label: "VDC / DC", width: "180px", render: (row) => row.depot_code_display || "—" },
                   { key: "so_date", label: "SO Date", width: "110px" },
@@ -209,6 +234,7 @@ export default function SOListPage() {
                     ),
                   },
                   { key: "company_display", label: "Company", render: (row) => row.company_display || "—" },
+                  { key: "total_qty", label: "Total Qty", width: "100px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
                   { key: "net_amount", label: "Net Amount", width: "120px", align: "right", render: (row) => formatMoney(row.net_amount) },
                   { key: "cgst_amount", label: "CGST", width: "100px", align: "right", render: (row) => formatMoney(row.cgst_amount) },
                   { key: "sgst_amount", label: "SGST", width: "100px", align: "right", render: (row) => formatMoney(row.sgst_amount) },

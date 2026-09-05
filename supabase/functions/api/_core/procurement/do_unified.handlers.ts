@@ -435,6 +435,7 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
         ...sourceLine,
         source_kind: "SO_MAP_ALLOCATION",
         so_map_allocation_id: alloc.id,
+        plan_feed_item_id: toTrimmedString(alloc.plan_feed_item_id) || null,
         remaining_qty: Number(remaining.toFixed(6)),
       });
     }
@@ -449,10 +450,17 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
     // (actual_qty_kg minus whatever earlier non-cancelled DO lines already
     // drew from that specific Packing PO).
     const packingPoOptionsByFoAndMaterial = new Map<string, JsonRecord[]>();
+    // Precise join for the §133.9 SKU-mismatch case (SO line's own material_id
+    // deliberately differs from the physical Packing PO's material_id, e.g.
+    // FO 5157392976 on CMP006 — the FO item that both this SO Map allocation
+    // AND the Packing PO allocation point at, regardless of material). Falls
+    // back to the material-based map above only for legacy rows that predate
+    // plan_feed_item_id (migration 20260829080000) and were never backfilled.
+    const packingPoOptionsByPlanFeedItem = new Map<string, JsonRecord[]>();
     if (foIds.length > 0) {
       const foAllocRows = await fetchInChunks<JsonRecord>(foIds, (chunk) =>
         serviceRoleClient.schema("erp_production").from("plan_feed_packing_order_allocation")
-          .select("plan_feed_id, packing_order_id, allocated_qty_kg").in("plan_feed_id", chunk));
+          .select("plan_feed_id, packing_order_id, allocated_qty_kg, plan_feed_item_id").in("plan_feed_id", chunk));
       const pkoIds = [...new Set(foAllocRows.map((row) => toTrimmedString(row.packing_order_id)).filter(Boolean))];
       const [pkoRows, drawnByPko, drawnByFoPko] = await Promise.all([
         pkoIds.length
@@ -500,10 +508,12 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
         if (remaining <= QTY_TOL) continue;
         const key = `${toTrimmedString(alloc.plan_feed_id)}:${toTrimmedString(pko.material_id)}`;
         if (!packingPoOptionsByFoAndMaterial.has(key)) packingPoOptionsByFoAndMaterial.set(key, []);
+        const itemId = toTrimmedString(alloc.plan_feed_item_id);
+        if (itemId && !packingPoOptionsByPlanFeedItem.has(itemId)) packingPoOptionsByPlanFeedItem.set(itemId, []);
         const processOrder = processOrderMap.get(toTrimmedString(pko.process_order_id));
         const strokeMaster = processOrder ? strokeMasterMap.get(toTrimmedString(processOrder.stroke_master_id)) : null;
         const prodshade = strokeMaster ? prodshadeMaterialMap.get(toTrimmedString(strokeMaster.prodshade_material_id)) : null;
-        packingPoOptionsByFoAndMaterial.get(key)!.push({
+        const optionRecord = {
           packing_order_id: pko.id,
           po_number: pko.po_number,
           batch_number: pko.batch_number,
@@ -517,7 +527,9 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
           // §136 (2026-09-04) -- lets the picker ask for the mandatory
           // Urgent Yes/No decision right when this Packing PO is picked.
           is_urgent: processOrder?.priority === "URGENT",
-        });
+        };
+        packingPoOptionsByFoAndMaterial.get(key)!.push(optionRecord);
+        if (itemId) packingPoOptionsByPlanFeedItem.get(itemId)!.push(optionRecord);
       }
     }
 
@@ -525,18 +537,23 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
       [...groups.values()].map(async (group) => ({ ...group, lines: await attachMaterialDisplay(group.lines) })),
     );
 
-    // Attach packing_po_options per line, keyed by (this line's own group's
-    // FO id, this line's material_id) -- done as a second pass since
-    // attachMaterialDisplay (above) is what resolves material_id -> type,
-    // and the FO id lives on the allocation, not the line itself.
+    // Attach packing_po_options per line. Preferred key: plan_feed_item_id
+    // (the real FO-item link both this SO Map allocation and the Packing PO
+    // allocation share — correct even under a confirmed §133.9 SKU mismatch,
+    // where the line's own material_id deliberately differs from the
+    // Packing PO's own material_id). Falls back to (FO id, material_id) only
+    // for legacy allocations with no plan_feed_item_id.
     for (const groupKey of groups.keys()) {
       const foId = groupKey.startsWith("fo:") ? groupKey.slice(3) : null;
       const resolvedGroup = groupList.find((g) => g.key === groupKey);
       if (!resolvedGroup) continue;
       if (foId) {
         resolvedGroup.lines = resolvedGroup.lines.map((line) => {
+          const itemId = toTrimmedString(line.plan_feed_item_id);
           const materialId = toTrimmedString(line.material_id);
-          const options = packingPoOptionsByFoAndMaterial.get(`${foId}:${materialId}`) ?? [];
+          const options = itemId
+            ? (packingPoOptionsByPlanFeedItem.get(itemId) ?? [])
+            : (packingPoOptionsByFoAndMaterial.get(`${foId}:${materialId}`) ?? []);
           return options.length > 0 ? { ...line, packing_po_options: options } : line;
         });
       } else {

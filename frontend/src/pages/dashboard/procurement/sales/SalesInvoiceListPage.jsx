@@ -38,6 +38,11 @@ const DO_QUEUE_EXPORT_COLUMNS = [
   { key: "ship_to_display", label: "Ship-To" },
   { key: "dc_date", label: "DO Date" },
   { key: "status", label: "Status" },
+  { key: "dc_type", label: "Type" },
+  { key: "fg_type_display", label: "FG Type" },
+  { key: "dispatch_category", label: "Dispatch Category" },
+  { key: "total_pack_qty", label: "Total Pack" },
+  { key: "total_qty", label: "Total Base" },
   { key: "total_value", label: "Total Value" },
   { key: "invoice_number", label: "Invoice Number" },
   { key: "invoice_date", label: "Invoice Date" },
@@ -45,6 +50,12 @@ const DO_QUEUE_EXPORT_COLUMNS = [
   { key: "tally_invoice_date", label: "Tally Invoice Date" },
   { key: "inbound_number", label: "Inbound Number" },
 ];
+
+// Business owner ask (2026-09-04) -- autosuggest search across every visible
+// column, same pattern as SO01MapPage.jsx. This page already loads a bounded
+// batch client-side (DO_QUEUE fetch below), so suggestions genuinely cover
+// the full loaded set, not just one page.
+const DO_QUEUE_SEARCH_COLUMN_KEYS = ["dc_number", "source_display", "source_document_number", "customer_display", "invoice_number", "tally_invoice_number", "status", "dc_type", "fg_type_display", "dispatch_category"];
 
 function getStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -117,11 +128,21 @@ export default function SalesInvoiceListPage() {
     return () => { active = false; };
   }, [effectiveCompanyId, reloadTick]);
 
+  const searchOptions = useMemo(() => {
+    const values = new Set();
+    for (const row of rows) {
+      for (const key of DO_QUEUE_SEARCH_COLUMN_KEYS) {
+        const text = row[key];
+        if (text) values.add(String(text));
+      }
+    }
+    return [...values].sort();
+  }, [rows]);
+
   const filteredRows = useMemo(() => {
     if (!debouncedSearch) return rows;
     return rows.filter((row) => {
-      const haystack = [row.dc_number, row.source_document_number, row.customer_display, row.invoice_number, row.tally_invoice_number]
-        .filter(Boolean).join(" ").toLowerCase();
+      const haystack = DO_QUEUE_SEARCH_COLUMN_KEYS.map((key) => row[key]).filter(Boolean).join(" ").toLowerCase();
       return haystack.includes(debouncedSearch);
     });
   }, [debouncedSearch, rows]);
@@ -178,7 +199,10 @@ export default function SalesInvoiceListPage() {
               onChange={(nextValue) => { setCompanyId(nextValue); setPage(1); }}
               label="Company"
             />
-            <QuickFilterInput label="Search" value={search} onChange={setSearch} primaryFocus placeholder="DO number, SO/STO number, invoice number, or customer" />
+            <QuickFilterInput label="Search" value={search} onChange={setSearch} primaryFocus placeholder="DO number, SO/STO number, invoice number, or customer" inputProps={{ list: "do-queue-search-options" }} />
+            <datalist id="do-queue-search-options">
+              {searchOptions.map((option) => <option key={option} value={option} />)}
+            </datalist>
           </div>
         ),
       }}
@@ -206,6 +230,11 @@ export default function SalesInvoiceListPage() {
                   width: "130px",
                   render: (row) => <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getStatusTone(row.status)}`}>{row.status === "CREATED" ? "PENDING PGI" : row.status}</span>,
                 },
+                { key: "dc_type", label: "Type", width: "90px", render: (row) => row.dc_type || "—" },
+                { key: "fg_type_display", label: "FG Type", width: "130px", render: (row) => row.fg_type_display || "—" },
+                { key: "dispatch_category", label: "Dispatch Category", width: "140px", render: (row) => row.dispatch_category || "—" },
+                { key: "total_pack_qty", label: "Total Pack", width: "100px", align: "right", render: (row) => Number(row.total_pack_qty ?? 0).toFixed(2) },
+                { key: "total_qty", label: "Total Base", width: "100px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
                  { key: "total_value", label: "DO Value", width: "120px", render: (row) => (Number.isFinite(Number(row.total_value)) ? Number(row.total_value).toFixed(2) : "-") },
                 {
                   key: "actions",

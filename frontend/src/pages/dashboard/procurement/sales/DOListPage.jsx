@@ -9,6 +9,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -35,8 +36,19 @@ const DO_EXPORT_COLUMNS = [
   { key: "transporter_display", label: "Transporter" },
   { key: "lr_number", label: "LR Number" },
   { key: "status", label: "Status" },
+  { key: "dispatch_category", label: "Dispatch Category" },
+  { key: "total_qty", label: "Total Qty" },
   { key: "total_value", label: "Total Value" },
 ];
+
+// Business owner ask (2026-09-04) -- this handler never had a search param
+// (unlike SO01/§113.10), so this page mirrors SalesInvoiceListPage.jsx's
+// already-established fetch-a-bounded-batch-then-filter-client-side pattern
+// against this exact same listDeliveryOrders() call, rather than restricting
+// the new autosuggest search to whatever 50 rows happen to be on the current
+// server page.
+const DO_FETCH_CAP = 2000;
+const DO_SEARCH_COLUMN_KEYS = ["dc_number", "source_display", "source_document_number", "customer_display", "ship_to_display", "vehicle_number", "transporter_display", "lr_number", "status", "dispatch_category"];
 
 function doStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -53,12 +65,17 @@ export default function DOListPage() {
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const [status, setStatus] = useState("");
+  const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
+  // Business owner ask (2026-09-04) -- fetch a bounded larger batch once
+  // (this handler has no server-side search param) and filter/paginate it
+  // client-side, so the new autosuggest search covers more than one 50-row
+  // server page. Company/status still narrow the fetch itself.
   const params = useMemo(
-    () => ({ company_id: effectiveCompanyId || undefined, status: status || undefined, limit: LIMIT, offset: (page - 1) * LIMIT }),
-    [effectiveCompanyId, status, page]
+    () => ({ company_id: effectiveCompanyId || undefined, status: status || undefined, limit: DO_FETCH_CAP, offset: 0 }),
+    [effectiveCompanyId, status]
   );
 
   const doQuery = useQuery({
@@ -67,12 +84,31 @@ export default function DOListPage() {
     enabled: Boolean(effectiveCompanyId),
   });
 
-  const rows = Array.isArray(doQuery.data?.items) ? doQuery.data.items : [];
-  const total = Number(doQuery.data?.total ?? 0);
+  const allRows = useMemo(() => (Array.isArray(doQuery.data?.items) ? doQuery.data.items : []), [doQuery.data]);
+  const loading = doQuery.isLoading;
+
+  const searchOptions = useMemo(() => {
+    const values = new Set();
+    for (const row of allRows) {
+      for (const key of DO_SEARCH_COLUMN_KEYS) {
+        const text = row[key];
+        if (text) values.add(String(text));
+      }
+    }
+    return [...values].sort();
+  }, [allRows]);
+
+  const filteredRows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return allRows;
+    return allRows.filter((row) => DO_SEARCH_COLUMN_KEYS.some((key) => String(row[key] ?? "").toLowerCase().includes(needle)));
+  }, [allRows, search]);
+
+  const total = filteredRows.length;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
-  const loading = doQuery.isLoading;
+  const rows = useMemo(() => filteredRows.slice((page - 1) * LIMIT, page * LIMIT), [filteredRows, page]);
 
   useErpScreenHotkeys({
     refresh: { disabled: loading, perform: () => void doQuery.refetch() },
@@ -126,6 +162,16 @@ export default function DOListPage() {
                 {["CREATED", "DISPATCHED", "CLOSED", "CANCELLED"].map((entry) => <option key={entry} value={entry}>{entry}</option>)}
               </select>
             </label>
+            <QuickFilterInput
+              label="Search"
+              value={search}
+              onChange={(value) => { setSearch(value); setPage(1); }}
+              placeholder="DO number, SO/STO number, customer, status..."
+              inputProps={{ list: "do-list-search-options" }}
+            />
+            <datalist id="do-list-search-options">
+              {searchOptions.map((option) => <option key={option} value={option} />)}
+            </datalist>
           </div>
         ),
       }}
@@ -156,6 +202,8 @@ export default function DOListPage() {
                     width: "130px",
                     render: (row) => <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${doStatusTone(row.status)}`}>{row.status}</span>,
                   },
+                  { key: "dispatch_category", label: "Dispatch Category", width: "140px", render: (row) => row.dispatch_category || "—" },
+                  { key: "total_qty", label: "Total Qty", width: "100px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
                   { key: "total_value", label: "Total Value", width: "120px", render: (row) => (Number.isFinite(Number(row.total_value)) ? Number(row.total_value).toFixed(2) : "-") },
                 ]}
                 rows={rows}

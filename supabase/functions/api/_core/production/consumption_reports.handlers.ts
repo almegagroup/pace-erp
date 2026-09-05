@@ -35,7 +35,7 @@ async function resolveMaterialMap(materialIds: string[]): Promise<Map<string, Js
   if (ids.length === 0) return map;
   const rows = await fetchInChunks<JsonRecord>(ids, (chunk) =>
     serviceRoleClient.schema("erp_master").from("material_master")
-      .select("id, external_code, material_name, document_name").in("id", chunk));
+      .select("id, external_code, material_name, document_name, material_type").in("id", chunk));
   for (const row of rows) map.set(String(row.id), row);
   return map;
 }
@@ -110,10 +110,19 @@ export async function listRmPmSaleReportHandler(req: Request, ctx: ProdHandlerCo
 
     // 2. MTEST-derived RM/PM/INT content -- dispatch_reco already carries the
     // batch-ratio-derived Standard/Actual/AP-Approved per material per invoice line.
+    // Found live 2026-09-04 (business owner, CMP006) -- dispatch_reco.po_type is
+    // populated from the PACKING order's own po_type (computeDispatchRecoRows in
+    // do_unified.handlers.ts reads pko.po_type), which uses the packing-PO naming
+    // convention (PMTO/PHPS/PMTS/PTEST), never the process-PO naming (MTO/HPS/
+    // MTS/MTEST/INT). Filtering on "MTEST" here could never match a single row,
+    // for any company -- confirmed live: dispatch_reco's only real po_type values
+    // across the whole table are PTEST and PMTO, and CMP006's one real MTEST PGI
+    // (invoice 9200000002) already has 13 correctly-computed dispatch_reco rows
+    // sitting there with po_type='PTEST', invisible to this report the whole time.
     let recoQuery = serviceRoleClient
       .schema("erp_production").from("dispatch_reco")
       .select("material_id, invoice_date, standard_qty, actual_qty, ap_approved_qty")
-      .eq("company_id", companyId).eq("po_type", "MTEST").eq("is_voided", false);
+      .eq("company_id", companyId).eq("po_type", "PTEST").eq("is_voided", false);
     recoQuery = (recoQuery as unknown as { gte: (c: string, v: string) => typeof recoQuery }).gte("invoice_date", dateFrom);
     recoQuery = (recoQuery as unknown as { lte: (c: string, v: string) => typeof recoQuery }).lte("invoice_date", dateTo);
     const { data: recoRows, error: recoErr } = await recoQuery;
@@ -137,6 +146,7 @@ export async function listRmPmSaleReportHandler(req: Request, ctx: ProdHandlerCo
       return {
         month: b.month,
         material_id: b.material_id,
+        item_type: toTrimmedString(material?.material_type) || null,
         item_name: toTrimmedString(material?.material_name) || null,
         external_code: toTrimmedString(material?.external_code) || null,
         document_name: toTrimmedString(material?.document_name) || null,
@@ -154,7 +164,8 @@ export async function listRmPmSaleReportHandler(req: Request, ctx: ProdHandlerCo
       rows = rows.filter((r) =>
         (r.item_name ?? "").toLowerCase().includes(search) ||
         (r.external_code ?? "").toLowerCase().includes(search) ||
-        (r.document_name ?? "").toLowerCase().includes(search));
+        (r.document_name ?? "").toLowerCase().includes(search) ||
+        (r.item_type ?? "").toLowerCase().includes(search));
     }
 
     rows.sort((a, b) => (a.month === b.month ? (a.item_name ?? "").localeCompare(b.item_name ?? "") : a.month.localeCompare(b.month)));
@@ -222,6 +233,7 @@ export async function listExcessConsumptionReportHandler(req: Request, ctx: Prod
       return {
         month: monthOf(toTrimmedString(r.invoice_date)),
         order_number: toTrimmedString(r.process_order_number) || null,
+        item_type: toTrimmedString(material?.material_type) || null,
         item_name: toTrimmedString(material?.material_name) || null,
         external_code: toTrimmedString(material?.external_code) || null,
         document_name: toTrimmedString(material?.document_name) || null,
