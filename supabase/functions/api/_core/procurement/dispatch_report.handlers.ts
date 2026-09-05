@@ -338,8 +338,12 @@ export async function getDispatchReportHandler(
         ship_to_site_town: joined(lineDetails.map((entry) => [textValue(entry.address.site_name), textValue(entry.address.town)].filter(Boolean).join(" — "))),
         // Business owner ask (2026-09-05) -- the dispatching DO's own
         // transporter/vehicle/LR/driver header data, per item line.
+        // Transporter Code and Transporter Name are separate columns
+        // (business owner ask, same day) -- a freetext transporter (no
+        // transporter_master row) has no code at all, name-only.
+        transporter_code: joined(lineDetails.map((entry) => entry.transporter?.transporter_code)),
         transporter_name: joined(lineDetails.map((entry) => (entry.transporter
-          ? `${entry.transporter.transporter_code ?? ""} — ${entry.transporter.transporter_name ?? ""}`.trim()
+          ? textValue(entry.transporter.transporter_name)
           : textValue(entry.dc.transporter_name_freetext)))),
         vehicle_number: joined(lineDetails.map((entry) => entry.dc.vehicle_number)),
         lr_number: joined(lineDetails.map((entry) => entry.dc.lr_number)),

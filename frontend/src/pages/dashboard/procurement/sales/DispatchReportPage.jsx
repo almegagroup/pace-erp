@@ -135,8 +135,10 @@ const GRID_COLUMNS = [
   { key: "ship_to_site_town", label: "Ship-To Site / Town", width: "180px", render: (r) => r.ship_to_site_town || "—" },
   // Business owner ask (2026-09-05) -- the dispatching DO's own header data.
   // Driver Name + Contact Number are combined into one column; every other
-  // transporter/vehicle/LR field gets its own column.
-  { key: "transporter_name", label: "Transporter", width: "170px", render: (r) => r.transporter_name || "—" },
+  // transporter/vehicle/LR field gets its own column. Transporter Code and
+  // Transporter Name are separate columns too (same-day follow-up ask).
+  { key: "transporter_code", label: "Transporter Code", width: "130px", render: (r) => r.transporter_code || "—" },
+  { key: "transporter_name", label: "Transporter Name", width: "170px", render: (r) => r.transporter_name || "—" },
   { key: "vehicle_number", label: "Vehicle Number", width: "120px", render: (r) => r.vehicle_number || "—" },
   { key: "lr_number", label: "LR Number", width: "110px", render: (r) => r.lr_number || "—" },
   { key: "lr_date", label: "LR Date", width: "100px", render: (r) => r.lr_date || "—" },
